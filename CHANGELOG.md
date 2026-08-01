@@ -2,6 +2,34 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **Generated C no longer straddles the int64 carrier and a pointer at a
+  monomorphized constructor's field slot or at a fn-value return site.** Four
+  programs (`conv-defstruct-option-fn-element`, `hkt-ap-fn-in-container`,
+  `defalias-composite`, `fn-value-matrix-ok-rows`) failed to compile on any
+  toolchain that promotes `-Wint-conversion` to an error -- Apple clang >= 15
+  and gcc >= 14 -- while the older gcc on the CI Linux leg merely warned. This
+  was the sole remaining cause of the standing red `Test (macos-latest)` job.
+  Both halves come down to not re-deriving an emitted C type from a `Type`: the
+  constructor's real parameter C type is now recorded when the ADT application
+  is registered and looked up at the call site, and the return-site bridge asks
+  the typed AST whether the tail expression emits the carrier rather than
+  pattern-matching the emitted string. No codegen snapshot moved.
+
+### Internal
+
+- Six GC / `Rc` / weak-reference fixtures carry `requires.cc`. They assert on a
+  process-wide live-heap byte count, which only measures the program's heap when
+  the program owns its process. Under one-process `tur jit` the program shares
+  the compiler's allocator, and on a sanitized Debug build -- the configuration
+  CI's JIT job uses -- ASan becomes the default malloc zone and its quarantine
+  makes the delta arbitrarily large. The `cc` path still runs all six. This was
+  the whole of the `JIT engine (macos-latest)` redness; it was never a GC, `Rc`,
+  weak-reference, or JIT-codegen defect.
+
 ## [0.32.7] -- 2026-08-01
 
 ### Added

@@ -192,13 +192,20 @@ for an actual Windows user and is a prerequisite for WIN2 above. See
   and Apple clang >= 15. **Correction (2026-07-31): the `-Wno-error=`
   workaround this plan previously cited is gone** -- both downgrades were
   deliberately removed (`src/main.c:5231-5251`) on the grounds that every
-  straddle was bridged at emit time. Five remain under gcc 16.1.0, so that claim
-  does not hold; do not re-add the downgrades, the removal is what exposed them.
-  Tracked in
-  [docs/reported/macos-int-conversion-carrier-pointer-straddles.md](../../reported/macos-int-conversion-carrier-pointer-straddles.md)
-  (not macOS-specific despite the filename -- it is "any toolchain new enough").
-  The older gcc-14 reports are resolved and archived under
-  `docs/archive/history/`.
+  straddle was bridged at emit time. Five remained under gcc 16.1.0, so that
+  claim did not hold; do not re-add the downgrades, the removal is what exposed
+  them.
+
+  **Update (2026-08-01): four of the five are fixed and archived** --
+  [docs/archive/macos-int-conversion-carrier-pointer-straddles.md](../../archive/macos-int-conversion-carrier-pointer-straddles.md)
+  (not macOS-specific despite the filename -- it is "any toolchain new enough";
+  verified on Apple clang 21, which promotes `-Wint-conversion` the same way
+  gcc >= 14 does). The fifth, `data-literal-nested`, was never a straddle but a
+  wrong-monomorph selection that gcc's promoted `-Wincompatible-pointer-types`
+  catches and clang's does not; re-filed as
+  [docs/reported/vec-empty-like-monomorph-selects-int-element.md](../../reported/vec-empty-like-monomorph-selects-int-element.md)
+  and **still expected to fail the Windows build**. The older gcc-14 reports are
+  resolved and archived under `docs/archive/history/`.
 - **`-O0` link failure -- RESOLVED.** Generated C referenced
   `tur_get_contract_handler` / `tur_set_contract_handler` with no definition.
   Both are now defined in `src/runtime/contract_handler.c:21,30`.

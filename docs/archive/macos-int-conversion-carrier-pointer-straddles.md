@@ -1,0 +1,235 @@
+# Residual carrier<->pointer straddles are hard errors on modern toolchains
+
+**RESOLVED 2026-08-01** (arm64 macOS, Apple clang 21, macOS 27, at `54fef281d`).
+All four open fixtures build clean and match their expected output; the whole
+corpus is `2500 passed, 0 failed` on a toolchain where `-Wint-conversion` is a
+hard error, and the JIT corpus is `2415 passed, 0 failed, 47 skipped`. See
+**Resolution** below.
+
+The one thing this report carried that is NOT fixed -- `data-literal-nested`,
+which was never a straddle -- is split out as
+[`vec-empty-like-monomorph-selects-int-element`](../reported/vec-empty-like-monomorph-selects-int-element.md).
+
+---
+
+**Severity was: medium (build breakage on any sufficiently new toolchain, five
+fixtures).** The affected programs failed to compile at the `cc` step. They
+built fine on the Linux CI leg, so the suite was green there and this was
+invisible to the release gate.
+
+Found 2026-07-30 on arm64 macOS (Apple clang 21.0.0, macOS 27.0) while checking
+`claude/j0-jit-engine-plan-znqibo` for regressions after
+`66c3bb7c4` (merge of `origin/main` into the JIT engine branch).
+
+**Confirmed 2026-07-31 on Windows** (MSYS2/UCRT64, gcc 16.1.0, main at
+`f630230e5`) during a Windows-support sweep. This is NOT a macOS/clang quirk:
+it is "any toolchain new enough to promote the diagnostic."
+
+## Why Linux CI could not catch this
+
+`-Wint-conversion` (assigning/passing an `int64_t` where a pointer is expected,
+or the reverse) has been an **error by default** since clang 15, and Apple clang
+21 enforces it. GCC promoted `-Wint-conversion` and
+`-Wincompatible-pointer-types` to errors in GCC 14. The gcc on the CI Linux leg
+is older than that, so every one of these emitted a warning there and compiled
+clean. This class has bitten before -- see the "Apple clang 17
+`-Werror=int-conversion`" entry in `CHANGELOG.md`.
+
+`.github/workflows/ci.yml:30` runs a `macos-latest` leg, and it was red on
+`main` on exactly these four from run 2202 (job 91324836416, head `8b1ea4380`)
+onward:
+
+```
+summary: 2495 passed, 4 failed
+  - conv-defstruct-option-fn-element (build failed)
+  - defalias-composite (build failed)
+  - fn-value-matrix-ok-rows (build failed)
+  - hkt-ap-fn-in-container (build failed)
+```
+
+Note that the two `-Wno-error=` downgrades that used to hide this were
+deliberately removed (`src/main.c:5231-5241`). Do not re-add them; the removal
+is correct and these were the genuine remaining straddles it exposed.
+
+## Repro (historical)
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF
+cmake --build build -j
+./build/tur build tests/fixtures/hkt-ap-fn-in-container/input.tur
+```
+
+(`-DTUR_DEBUG_SANITIZE=OFF` avoids the unrelated macOS ASan startup deadlock
+documented in `CLAUDE.md`.) Off a promoting toolchain the check was
+`./build/tur build tests/fixtures/<name>/input.tur 2>&1 | grep int-conversion`.
+
+## Case A -- monomorphized ctor carrier field
+
+`conv-defstruct-option-fn-element`, `hkt-ap-fn-in-container`.
+
+```
+error: incompatible pointer to integer conversion passing 'void *'
+       to parameter of type 'int64_t'
+  tur_adt_Option__fn1_float__float __ps_213 =
+      (ctor_Option__fn1_float__float(true, x));
+```
+
+An ABI-specialized clone spells its monomorphized fn-typed parameter `void *`
+(`some__spec__...Option__fn1_float__float_void__(void * x)`), but the ctor slot
+it feeds is the int64 carrier.
+
+### Why every earlier attempt fell through
+
+The root cause is that **the ctor's field slot C type cannot be re-derived from
+the field's Type.** `type_c_name` for `TY_FN` (`types.c:3147-3175`) branches on
+`cfnptr`/`boxed`, which carry no type identity, and `append_type_mangle` for
+`TY_FN` (`types.c:907-915`) mangles only arity + arg kinds + result kind --
+**not** `boxed`/`cfnptr` -- with `type_eq` comparing the same triple. So the two
+`Option` monomorphs' payload slots genuinely differ:
+
+```c
+static tur_adt_Option__fn1_int__int   ctor_Option__fn1_int__int  (bool, void *);
+static tur_adt_Option__fn1_float__float ctor_Option__fn1_float__float(bool, int64_t);
+```
+
+while racing for one typedef. Every cast in the ctor-argument block of
+`emit_value_dispatch` re-derives the slot type and so collapses the two: a
+blanket int64 cast fixes the float monomorph and breaks the int one (this was
+observed directly -- fixing case A's first error moved it to the mirror-image
+error on the sibling monomorph). Three separate attempts died here, including
+one routed through `adt_field_type_for_app`, which resolves correctly but whose
+consumer bottoms out in the same `type_c_name`.
+
+## Case B -- return-site straddle
+
+`defalias-composite`:
+
+```
+error: incompatible integer to pointer conversion returning 'int64_t'
+       from a function with result type 'tur_adt_Cons__int *'
+  return cons(..., ...);
+```
+
+`fn-value-matrix-ok-rows` is the same shape in the other direction (`return v;`
+and `return __env___env_1376->c;` from a `void *`-returning function).
+
+The return-site bridge at `src/compiler/emit_fns.c:4264-4281` existed; the three
+sites fell through two gaps in its guard:
+
+- `fn-value-matrix-ok-rows`: `emit_fns.c:4266` explicitly excluded `void *`
+  return types.
+- `defalias-composite`: the value is a bare carrier-ctor *call* (`cons(...)`),
+  which is neither `(int64_t)`-prefixed nor a bare recorded ident, so neither
+  disjunct at `:4268-4271` matched.
+
+An earlier attempt removed the `void *` exclusion alone; it fixed nothing,
+because all three sites also fail the guard's *value*-side test -- a parameter,
+a closure-env field read and a call expression are all absent from the localvar
+table. It was correctly backed out, along with a recorded warning **not** to
+register parameters in that table (it is keyed by bare C name and reset per
+PROGRAM, so one function's `v` would define the type every other function's `v`
+resolves to).
+
+---
+
+## Resolution (2026-08-01)
+
+Both cases were fixed by the same principle the earlier attempts kept missing:
+**stop re-deriving an emitted C type from a Type, and consult ground truth.**
+
+### Case B -- ask the typed AST, not the emitted string
+
+`fn_tail_emits_int64_carrier` (`src/compiler/emit_fns.c`) decides from the AST
+whether the tail expression is emitted as the int64 carrier, which the string
+sniff structurally cannot:
+
+- `EX_VAR` -- a fn-typed binding is carried as the int64 fn-ABI carrier both as
+  a parameter (the `TY_FN` param branch, `emit_fns.c:3416`) and as a
+  closure-env field (`emit_expr.c` pins `TY_FN` captures to `int64_t`). Two
+  spellings opt out and keep a concrete C type -- a rank-2 poly param
+  (`tur_poly_fn_t`) and a `cfnptr` -- so both are excluded.
+- `EX_BUILTIN` -- a `BS_FUNC_CALL` builtin whose declared result is `TY_INT`
+  emits a call to a preamble helper returning `int64_t` (`cons` is
+  `builtins.c:152`).
+
+The `void *` exclusion in the guard is dropped **only** for a tail this
+predicate recognizes; the string-sniff disjuncts keep it, so nothing that used
+to be left alone starts getting cast.
+
+This is the "consult the typed AST" fix the backed-out attempt's note asked for,
+and it needed neither a function-scoped localvar table nor any parameter
+registration.
+
+### Case A -- record the ctor's real param C type at registration
+
+`emit_sig_record_param_ctype` / `emit_sig_lookup_param_ctype` already existed
+alongside the return-type recording. `record_adt_app_ctor_sigs` (`types.c`) now
+records each ctor param's C type from the same `adt_field_c_type(def, fld, args)`
+call `emit_registered_adt_app_rec` renders the prototype from, and a final
+normalization pass in the ctor-argument block of `emit_value_dispatch`
+(`emit_expr.c`) bridges the arg to the recorded slot type.
+
+It fires **only** on an int64<->pointer straddle, and only when the argument's
+own emitted C type is known for certain: an explicit `(T)(intptr_t)` cast the
+block already applied, or a bare reference to a parameter of the active ABI spec
+(resolved through `emit_var_spec_arg_type`, whose result is by construction the
+clone signature's C type). A pointer->pointer mismatch is deliberately left
+alone -- that means a mis-selected monomorph, and a cast would paper it over.
+
+One prerequisite made this work where the earlier attempt had not. Recording at
+registration time was recording the **wrong** type: `type_register_adt_app`
+called `record_adt_app_ctor_sigs` on the *incoming* `t` before the dedup lookup,
+and since `type_eq` ignores `boxed`/`cfnptr`, an equal-but-differently-boxed `t`
+would file `int64_t` against a slot the emission renders `void *`. Recording now
+happens off the **canonical** `g_adt_apps[i].type`, so the recorded string is
+always the one the prototype will carry.
+
+This is the report's own "low risk" fix level. The "proper" level -- putting
+`boxed`/`cfnptr` into the `TY_FN` mangle and `type_eq` so a boxed and an
+unboxed `(fn [int] int)` get distinct names rather than racing -- is still the
+real removal of the latent silent-layout merge, and is still worth doing on its
+own merits. It is no longer load-bearing for any known failure.
+
+### Validation
+
+| Check | Result |
+| --- | --- |
+| The four fixtures, `tur build` on Apple clang 21 | build clean, stdout matches `expected.stdout` |
+| `bash tests/run.sh` (macOS arm64) | `2500 passed, 0 failed` |
+| `tur run regen-snapshots -- --check` | `140 snapshots are up to date` -- **zero** codegen drift |
+| `tests/run-jit.sh` (Release + `-DTUR_JIT=ON`, macOS arm64) | `2415 passed, 0 failed, 47 skipped` |
+
+Zero snapshot drift is the notable one: both fixes are strictly additive
+branches that fire only on shapes that previously emitted invalid C, so no
+already-valid emission moved.
+
+`tools/check_crossing_routing.py` counts one new `emit_var_spec_arg_type` call
+site; the registry and the audit table in
+`docs/archive/history/carrier-crossing-recovery-routing-plan.md` were updated in
+the same change.
+
+### What this closes
+
+[`ci-macos-suites-fail-while-linux-passes`](ci-macos-suites-fail-while-linux-passes.md)
+-- this was the sole remaining blocker on its AOT half, so
+`Test (macos-latest)` goes green with it.
+
+### What this does NOT close
+
+`data-literal-nested` was listed in this report's Windows section as a fifth
+member of the class. It is not a straddle at all but a wrong-monomorph
+selection bug (`vec_empty_like__`'s `Map` monomorph calls the `int`-element
+`vec_new` spec), and it is deliberately untouched -- the new bridge does not
+fire on pointer->pointer. Re-filed standalone as
+[`vec-empty-like-monomorph-selects-int-element`](../reported/vec-empty-like-monomorph-selects-int-element.md).
+
+Its "the clang-still-warns half of that story is inferred, not measured -- worth
+one check on a macOS box" note is now measured: Apple clang 21 warns
+(`-Wincompatible-pointer-types`, not promoted to an error the way
+`-Wint-conversion` was) and the fixture builds and passes.
+
+## Guide upkeep -- done
+
+The open-cells row in
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+moved to the closed-cells table with a resolution note in the same change.

@@ -1419,6 +1419,8 @@ static void append_adt_app_type_suffix(Buf *b, const AdtDef *def,
  * already public in types.h. */
 void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
                                const char *ctype);
+void emit_sig_record_param_ctype(const char *cname, uint32_t idx,
+                                 uint32_t n_params, const char *ctype);
 static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
                                      Type t) {
     Buf name; buf_init(&name);
@@ -1449,6 +1451,20 @@ static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
         if (off + suffix.len < sizeof ctor_sym)
             memcpy(ctor_sym + off, suffix.data, suffix.len);   /* includes NUL */
         emit_sig_record_ret_ctype(ctor_sym, ctor->n_fields, ctor_ret);
+        /* macos-int-conversion-carrier-pointer-straddles (case A): also
+         * record each ctor PARAM's C type, mirroring `val_ctype[fi]` in
+         * emit_registered_adt_app_rec below.  The call site cannot re-derive
+         * it: type_c_name(TY_FN) branches on the `boxed` flag, which carries
+         * no type identity, so two monomorphs of the same fn-typed field
+         * genuinely differ (`ctor_Option__fn1_int__int(bool, void *)` vs
+         * `ctor_Option__fn1_float__float(bool, int64_t)`) while any
+         * type-based re-derivation collapses them.  Recording the string the
+         * prototype actually carries is the same "stop re-deriving" discipline
+         * the return-type recording above already follows. */
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
+            emit_sig_record_param_ctype(ctor_sym, fi, ctor->n_fields,
+                                        adt_field_c_type(def, &ctor->fields[fi],
+                                                         args));
     }
     buf_free(&suffix);
     buf_free(&name);
@@ -1464,11 +1480,25 @@ const char *type_register_adt_app(Type t) {
     for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
     }
-    record_adt_app_ctor_sigs(def, args, n_args, t);
     /* Look for an existing registration. */
     for (uint32_t i = 0; i < g_n_adt_apps; i++) {
-        if (type_eq(g_adt_apps[i].type, t)) return g_adt_apps[i].name;
+        if (type_eq(g_adt_apps[i].type, t)) {
+            /* macos-int-conversion-carrier-pointer-straddles (case A):
+             * record off the CANONICAL entry's type, never the incoming one.
+             * type_eq (and append_type_mangle) ignore TY_FN's `boxed`/`cfnptr`
+             * flags, so an equal-but-differently-boxed `t` lands on this entry
+             * -- and recording from `t` would file a ctor signature the
+             * emission, which renders g_adt_apps[i].type, never produces
+             * (`int64_t` recorded against a `void *` slot).  The call-site
+             * bridge trusts these strings, so a stale one is worse than none. */
+            Type ct = g_adt_apps[i].type;
+            AdtDef *cdef = NULL; Type cargs[16]; uint8_t cn_args = 0;
+            if (type_extract_adt_app(&ct, &cdef, cargs, &cn_args) && cdef)
+                record_adt_app_ctor_sigs(cdef, cargs, cn_args, ct);
+            return g_adt_apps[i].name;
+        }
     }
+    record_adt_app_ctor_sigs(def, args, n_args, t);
     /* Grow the registry if needed. */
     if (g_n_adt_apps >= g_cap_adt_apps) {
         uint32_t new_cap = g_cap_adt_apps ? g_cap_adt_apps * 2 : 8;

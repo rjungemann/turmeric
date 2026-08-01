@@ -5148,6 +5148,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     suffix = emit_hkt_spec_ctor_suffix(ctx, e);
                 if (!suffix && rty.kind == TY_APP)
                     suffix = type_adt_app_ctor_suffix(rty);  /* last resort: prior behaviour */
+                /* macos-int-conversion-carrier-pointer-straddles (case A):
+                 * the emitted C name of the ctor being called, for the
+                 * signature-table lookup at the end of the arg loop. */
+                char *ctor_cname;
+                {
+                    char *_lmc = mangle_field_name(fn_binding->name->name);
+                    Buf cnb; buf_init(&cnb);
+                    buf_printf(&cnb, "ctor_%s%s", _lmc, suffix ? suffix : "");
+                    buf_putc(&cnb, '\0');
+                    ctor_cname = strdup(cnb.data);
+                    buf_free(&cnb);
+                    free(_lmc);
+                }
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
@@ -5573,7 +5586,63 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             free(tmp);
                         }
                     }
+                    /* macos-int-conversion-carrier-pointer-straddles (case A):
+                     * last word on the pointer<->carrier straddle at a
+                     * monomorphized ctor's field slot.  Every cast above
+                     * re-derives the slot's C type from the field's Type, and
+                     * for a fn-typed field that re-derivation is ambiguous --
+                     * type_c_name(TY_FN) branches on the `boxed` flag, which is
+                     * absent from both the TY_FN mangle and type_eq, so
+                     * `ctor_Option__fn1_int__int` (slot `void *`) and
+                     * `ctor_Option__fn1_float__float` (slot `int64_t`) are
+                     * indistinguishable by type alone.  The signature side
+                     * table records the string each prototype actually carries
+                     * (types.c record_adt_app_ctor_sigs), so consult that.
+                     *
+                     * Fires ONLY on an int64<->pointer straddle, and only when
+                     * the argument's own emitted C type is known for certain:
+                     * an explicit `(T)(intptr_t)` cast this block already
+                     * applied, or a bare reference to a parameter of the active
+                     * ABI spec (whose C type is emit_type_c_name of the spec's
+                     * arg type, by construction of the clone's signature).  A
+                     * pointer->pointer mismatch is deliberately left alone: it
+                     * means a mis-selected monomorph, and a cast would paper it
+                     * over rather than fix it (see data-literal-nested). */
+                    const char *slot_cty =
+                        emit_sig_lookup_param_ctype(ctor_cname, i);
+                    if (slot_cty && arg_strs[i]) {
+                        const char *av = arg_strs[i];
+                        const char *arg_cty = NULL;
+                        if (strncmp(av, "(int64_t)(intptr_t)", 19) == 0) {
+                            arg_cty = "int64_t";
+                        } else if (av[0] == '(' && strstr(av, " *)(intptr_t)")) {
+                            arg_cty = "*";   /* some concrete pointer */
+                        } else if (arg && arg->kind == EX_VAR) {
+                            Type sp;
+                            if (emit_var_spec_arg_type(ctx, arg, &sp))
+                                arg_cty = emit_type_c_name(ctx, sp);
+                        }
+                        if (arg_cty) {
+                            size_t sl = strlen(slot_cty);
+                            bool slot_is_ptr = sl && slot_cty[sl - 1] == '*';
+                            size_t al = strlen(arg_cty);
+                            bool arg_is_ptr = al && arg_cty[al - 1] == '*';
+                            bool arg_is_i64 = strcmp(arg_cty, "int64_t") == 0;
+                            bool slot_is_i64 = strcmp(slot_cty, "int64_t") == 0;
+                            if ((slot_is_i64 && arg_is_ptr) ||
+                                (slot_is_ptr && arg_is_i64)) {
+                                Buf c; buf_init(&c);
+                                buf_printf(&c, "(%s)(intptr_t)(%s)",
+                                           slot_cty, arg_strs[i]);
+                                buf_putc(&c, '\0');
+                                free(arg_strs[i]);
+                                arg_strs[i] = strdup(c.data);
+                                buf_free(&c);
+                            }
+                        }
+                    }
                 }
+                free(ctor_cname);
                 char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);
                 if (suffix) {

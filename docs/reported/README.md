@@ -5,7 +5,7 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of twenty-three. Keep
+This index exists so a triage pass reads one file instead of twenty-one. Keep
 it current when you file, absorb, or archive a report -- a row here is cheaper
 than re-deriving the grouping.
 
@@ -25,7 +25,7 @@ and `main`'s tip).
 
 The scoreboard for this family is the open-cells table in
 [docs/guides/value-representations-guide.md](../guides/value-representations-guide.md),
-not this file -- these four each have a row there, and the guide carries the
+not this file -- these each have a row there, and the guide carries the
 matrix, the structural note about which `TypeKind` switch is authoritative, and
 the plan links. File a new repr cell there as well as here.
 
@@ -33,13 +33,15 @@ the plan links. File a new repr cell there as well as here.
 | --- | --- | --- |
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **partially** fixed -- tyvar-in-signature and effect-row rows still crash |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
-| [macos-int-conversion-carrier-pointer-straddles](macos-int-conversion-carrier-pointer-straddles.md) | medium | `int64_t`/`void *` straddles at monomorphized-ctor args and fn-value returns; hard errors on Apple clang, warnings on Linux. **Sole cause of the standing red `Test (macos-latest)` CI job** -- fixing it turns that leg green. Reproducible on Linux; no macOS box needed |
 | [contract-type-arg-not-peeled-to-base](contract-type-arg-not-peeled-to-base.md) | medium | a contract in type-ARGUMENT position is never peeled; blocks `TY_CONTRACT` from the repr-row arrangement |
 
 These are one campaign but **not** duplicates -- each has its own pinned
 investigation and its own fix (a calling-convention change; a generic
-instantiation + ctor-emission bug; ctor-arg cast gating; a peel site). Do not
-merge them; the investigations are the expensive part.
+instantiation + ctor-emission bug; a peel site). Do not merge them; the
+investigations are the expensive part. A fourth,
+`macos-int-conversion-carrier-pointer-straddles`, was resolved 2026-08-01 and
+moved to [docs/archive](../archive/macos-int-conversion-carrier-pointer-straddles.md);
+its resolution note is the closed-cells row in the guide.
 
 ## Effect handlers
 
@@ -86,8 +88,6 @@ the single red line in `tests/run-turi.sh`.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [windows-ci-leg-installs-nonexistent-libedit](windows-ci-leg-installs-nonexistent-libedit.md) | medium | the `Windows build (MSYS2/UCRT64)` job dies at `pacman -S` on `mingw-w64-ucrt-x86_64-libedit` (no such target), before Configure/Build/smoke. **The Windows leg has produced zero signal since it was added** -- the three Windows port reports below are unwatched by CI. Optional dep made hard-required; one-line fix |
-| [ci-macos-suites-fail-while-linux-passes](ci-macos-suites-fail-while-linux-passes.md) | medium | **both halves diagnosed 2026-08-01, neither is a macOS defect.** JIT half **fixed and confirmed** (`run-jit.sh:308` called bare `timeout`, absent on stock macOS; 407 failures -> 6). AOT half is exactly the four straddle fixtures above. Closes when the straddles are fixed |
-| [jit-macos-gc-rc-weak-fixtures-fail](jit-macos-gc-rc-weak-fixtures-fail.md) | medium | the 6 residuals the harness bug was hiding: GC / `Rc` / weak-ref fixtures failing under the JIT engine on macOS arm64 only (Linux JIT green, both AOT legs green). Needs a macOS box |
 | [ci-cps-tramp-turi-timeouts-under-load](ci-cps-tramp-turi-timeouts-under-load.md) | low | `cps-tramp-resume-*` time out under suite parallelism; **did not reproduce** in two full runs on 2026-08-01, but nothing was fixed |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 
@@ -108,6 +108,7 @@ see the `libedit` row above, which is why the Windows leg never compiles.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [term-set-cooked-restores-zeroed-state](term-set-cooked-restores-zeroed-state.md) | medium | `term/set-cooked` restores zeroed state, not what `term/set-raw` saved -- each declares its own function-local `static` of the same name, and the docstring claims the opposite. **All platforms**, POSIX `termios` path included; found during the Windows port but not caused by it |
+| [vec-empty-like-monomorph-selects-int-element](vec-empty-like-monomorph-selects-int-element.md) | medium | both monomorphs of `vec-empty-like__` call the `int`-element `vec_new` spec -- the `Map` one is never interned or emitted. A **hard error on gcc >= 14**, a warning on Apple clang, silent on the CI Linux leg. Split out of the straddle report 2026-08-01; do NOT "fix" it with a return-site cast |
 
 ## Filing conventions
 
