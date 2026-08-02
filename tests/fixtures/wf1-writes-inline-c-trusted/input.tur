@@ -1,0 +1,41 @@
+;; WF1/WF2: an inline-C body keeps its frame TRUSTED-with-declaration.
+;;
+;; `grow!` plainly writes through `b`, and its declared frame says so -- but
+;; the frame walk cannot see into a ```c``` body, so it neither confirms nor
+;; refutes the claim.  The tier split is checked-when-checkable, never
+;; checked-by-pretending: this must NOT report TUR-E0382 (there is no evidence
+;; of a violation), and it must NOT be marked checked either (there is no
+;; evidence of compliance), so nothing downstream may optimize on it.
+;;
+;; `lie!` is the same shape with a frame that is flatly false -- it writes `b`
+;; while declaring the empty frame.  It compiles, and that is the POINT: this
+;; fixture pins the trust boundary.  If a future change makes inline-C bodies
+;; walkable, `lie!` becomes TUR-E0382 and this fixture moves to errors/.
+;;
+;; Expected: compiles clean under --enable=write-frames and prints 0.
+(defopaque Buf :int)
+
+(defn buf-new [cap : int] #fx{} : Buf
+  ```c
+  int64_t* p = (int64_t*)malloc((2 + cap) * sizeof(int64_t));
+  p[0] = cap;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn grow! [^mut b : Buf ncap : int] #writes [b] : int
+  ```c
+  (void)b; (void)ncap; return 0;
+  ```)
+
+(defn lie! [^mut b : Buf] #writes [] : int
+  ```c
+  int64_t* p = (int64_t*)(intptr_t)b;
+  p[0] = 99;
+  return 0;
+  ```)
+
+(defn main [] : int
+  (let [^mut b (buf-new 4)]
+    (grow! b 8)
+    (println 0))
+  0)

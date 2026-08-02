@@ -1,0 +1,45 @@
+;; WF1/WF2: a `#writes` frame the body HONORS, exercising all three spellings
+;; and both non-violating write channels.
+;;
+;;   bump!   -- `#writes [a]`, a direct place-expression write through `a`
+;;   both!   -- a two-parameter frame; each write lands in it
+;;   single  -- the bare `#writes a` spelling (no brackets)
+;;   peek    -- `#writes []`, the EMPTY frame: a positive claim that the body
+;;              writes nothing.  This is the one a single-symbol-only syntax
+;;              could not express, and it is the frame WF3/WF4 most want.
+;;   drive!  -- passes `a` to a callee whose CHECKED frame covers exactly `a`,
+;;              which is the transitive channel; declaring `[a]` honors it.
+;;
+;; Expected: compiles clean under --enable=write-frames and prints 0.
+;;
+;; It prints 0, not 3, and that is the by-value semantics the analysis rests
+;; on rather than an oversight: `c` is passed to `drive!` by value, so the
+;; writes inside never reach main's `c`.  A write frame is about what a body
+;; MAY write, and it stays an upper bound whether or not the write is
+;; observable from any particular caller.
+(defstruct Ctr [n : int])
+
+(defn bump! [^mut a : Ctr] #writes [a] : int
+  (set! (.n a) 1)
+  0)
+
+(defn both! [^mut a : Ctr ^mut b : Ctr] #writes [a b] : int
+  (set! (.n a) 1)
+  (set! (.n b) 2)
+  0)
+
+(defn single [^mut a : Ctr] #writes a : int
+  (set! (.n a) 3)
+  0)
+
+(defn peek [^borrow a : Ctr] #writes [] : int
+  (.n a))
+
+(defn drive! [^mut a : Ctr] #writes [a] : int
+  (single a))
+
+(defn main [] : int
+  (let [^mut c (Ctr 0)]
+    (drive! c)
+    (println (peek c)))
+  0)

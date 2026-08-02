@@ -98,6 +98,13 @@ typedef enum FxProvenance {
      * body expression.  A read-frame is not an effect row; see
      * docs/guides/stateful-refinements-guide.md. */
     PROV_READS,              /* (reads <sym>) from #reads <sym> */
+    /* WF1 / #writes: stamps the `(writes <sym>...)` F_LIST produced by
+     * `#writes <sym>` or `#writes [<sym>...]`.  Same role as PROV_READS -- it
+     * is what lets the defn signature walk tell a write-frame annotation apart
+     * from a body expression -- but the frame is a SET of parameters, not one,
+     * because a function may legitimately write more than one argument.  See
+     * docs/upcoming/checked-write-frames-plan.md (WF1). */
+    PROV_WRITES,             /* (writes <sym>...) from #writes <sym>|[<sym>...] */
 } FxProvenance;
 
 struct Form;

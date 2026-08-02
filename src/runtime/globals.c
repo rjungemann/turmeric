@@ -258,6 +258,13 @@ bool g_opt_jit = false;
  * without breaking consumers who have not enabled the experiment. */
 bool g_opt_sealed_opaque = false;
 
+/* write-frames (docs/upcoming/checked-write-frames-plan.md): `#writes w` /
+ * `#writes [a b]` declares which of a function's arguments its body may write.
+ * Off by default; when off the annotation still PARSES and is recorded but
+ * nothing checks it and nothing acts on it, so a spice can adopt it without
+ * breaking consumers who have not enabled the experiment. */
+bool g_opt_write_frames = false;
+
 /* --strict-refine: hard-fail on any obligation the chain could not prove. */
 bool g_strict_refine = false;
 

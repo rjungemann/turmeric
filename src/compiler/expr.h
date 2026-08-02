@@ -294,6 +294,36 @@ struct Binding {
      * the same forward-declared Binding as the refine_* fields, so it is
      * visible to call sites elaborated before the defn. */
     uint32_t            reads_param_plus1;
+    /* WF1 / #writes: the per-argument WRITE frame -- which parameters' mutable
+     * state this function's body may write.  A bitmask (bit i = parameter i is
+     * in the frame) rather than `#reads`'s single 1-based index, because a
+     * function may legitimately write more than one of its arguments.
+     *
+     * `writes_declared` is what carries the meaning, and the two states are NOT
+     * interchangeable:
+     *   - not declared (`writes_declared == false`) -- UNKNOWN.  Assume the
+     *     body may write anything; this is the conservative default a
+     *     memset-zeroed Binding gets, and it is what every function that
+     *     predates WF1 means.
+     *   - declared with an empty mask (`#writes []`) -- writes NOTHING.  A
+     *     positive, checkable claim, and the strongest frame there is.
+     * Collapsing these two into "mask == 0" would silently upgrade every
+     * un-annotated function to "writes nothing", which is exactly the stale-
+     * hypothesis-proves-a-fresh-lie failure mode WF3 guards against.
+     *
+     * Capped at 32 parameters by the mask width; a `#writes` naming a parameter
+     * beyond that is rejected (TUR-E0378) rather than silently dropped.
+     * See docs/upcoming/checked-write-frames-plan.md (WF1/WF2). */
+#define WF_MAX_FRAME_PARAMS 32u   /* mask width; see writes_param_mask below */
+    uint32_t            writes_param_mask;
+    bool                writes_declared;
+    /* WF2: true when this function's frame was VERIFIED against its body (a
+     * body with no inline C), false when it is trusted-with-declaration (an
+     * inline-C body, which the frame walk cannot see into).  Only a checked
+     * frame may back an optimization -- elision, reordering, CSE all act on the
+     * claim, so they need it checked rather than promised.  WF3's callee-frame
+     * widening and WF4's entry-check elision both gate on this bit. */
+    bool                writes_checked;
     /* RT4: the refinement this function's RESULT satisfies -- either declared
      * (`: #refine{ r : T | q }`) or inferred by template propagation.  A call
      * appearing inside a predicate or an argument asserts it about the value
