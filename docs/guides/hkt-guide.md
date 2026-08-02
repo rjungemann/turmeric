@@ -520,6 +520,9 @@ or `defn`:
 ```
 
 ```sweet-exp
+defopaque Position :int
+defopaque Velocity :int
+
 defstruct Query [^&components]
   world :int
 
