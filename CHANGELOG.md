@@ -52,7 +52,8 @@ All notable changes to Turmeric are documented here.
   dependency on the compiler's critical path. Because every refinement is a
   contract type first, it already has a runtime meaning, so a partial
   discharger may answer `Unknown` on any obligation and stay sound -- which is
-  why no shipped artifact links a solver. Dependent types remain deferred on
+  what made an in-house solver shippable, and why the *external* SMT dependency
+  the deferral feared never materialized. Dependent types remain deferred on
   unchanged grounds.
 
 ## [0.32.8] -- 2026-08-01

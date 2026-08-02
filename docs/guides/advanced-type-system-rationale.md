@@ -491,11 +491,16 @@ normalization and syntactic entailment, congruence closure, Fourier-Motzkin
 over exact rationals, Nelson-Oppen equality exchange, bounded cube expansion --
 each stage useful on its own and each free to decline.
 
-The consequence for the deferral argument: **there is no SMT dependency.** No
-shipped artifact links a solver. A Z3 backend existed for a while as a
-development-only oracle, cross-checking the in-house chain's verdicts; once it
-had agreed on every VC a real program generated, it was retired and deleted in
-0.32.5. The risk that was correctly identified turned out to be avoidable
+The consequence for the deferral argument: **there is no *external* SMT
+dependency.** The solver itself is real and it ships -- the staged chain above
+is `src/compiler/refine_solver*.c`, compiled into `tur`, and since 0.33.0 it
+runs on every compile. What no shipped artifact links is a *third-party* prover:
+there is no `libz3` to find at configure time, no solver subprocess, and
+nothing on the compiler's critical path that a user has to install. A Z3 backend
+existed for a while as a development-only oracle, cross-checking the in-house
+chain's verdicts; once it had agreed on every VC a real program generated, it
+was retired and deleted in 0.32.5. The risk that was correctly identified --
+an external dependency, not entailment as such -- turned out to be avoidable
 rather than merely worth postponing.
 
 Contract types plus `assert!`/`require!`/`ensure!` still cover the practical
@@ -549,8 +554,9 @@ The result is a type system that is powerful enough for systems programming
 arrays), expressive enough for functional programming (effect rows, union types,
 GADTs), and safe enough for API boundaries (contracts, and refinements proved
 where they can be) -- without the research risk of dependent unification, and
-without an SMT dependency: the solver that discharges refinements is in-house,
-and no shipped artifact links one.
+without an *external* SMT dependency: the solver that discharges refinements is
+in-house and compiled into `tur`, so there is no third-party prover to install
+or link.
 
 ---
 
