@@ -1352,6 +1352,151 @@ void wf_resolve_write_frames(Elab *e) {
 }
 
 /* ------------------------------------------------------------------------- *
+ * WF3 widening: borrow-aware disjointness, backed by CHECKED callee frames.
+ *
+ * The landed WF3 slice declines a whole caller body the moment an assigned
+ * name is also BORROWED, on the grounds that "a borrowed local is the one way a
+ * callee could write this frame's slot".  That is true, and until WF2 it was
+ * also the end of the conversation -- there was no way to ask what a callee
+ * does, so assuming the worst was the only sound answer.
+ *
+ * With a checked frame there is now a question to ask instead of an assumption
+ * to make.  A borrow is dangerous only if it REACHES a callee that writes
+ * through it, so the decline can be lifted when every borrow of the assigned
+ * name is provably write-free.  Two shapes are recognized, and everything else
+ * keeps the old decline:
+ *
+ *   (f ... (& acc) ...)          -- passed straight into a call slot; safe iff
+ *                                   that slot cannot be written.
+ *   (let [b (& acc)] body)       -- `b` aliases the borrow, so every occurrence
+ *                                   of `b` in `body` must itself sit in a slot
+ *                                   that cannot be written.  Zero occurrences
+ *                                   is the common case and trivially safe --
+ *                                   that is the `frozen` region idiom, whose
+ *                                   `(& w)` exists only to lock w down and is
+ *                                   never passed anywhere.
+ *
+ * "Cannot be written" has exactly three sources, in descending strength:
+ *   - a `^borrow` parameter, which the borrow checker already forbids writing
+ *     through.  A fact, independent of any annotation.
+ *   - a CHECKED `#writes` frame that excludes the slot.  A fact, because WF2
+ *     walked the body.
+ *   - nothing else.  An unresolvable callee, an unannotated non-borrow slot, or
+ *     a DECLARED-but-unchecked frame all answer "assume it writes".  The last
+ *     of those is the point of the tier split: acting on a trusted frame here
+ *     would let a promise elide a check, which is the thing the checked tier
+ *     exists to prevent.
+ *
+ * Gated on the experiment, because it consumes WF2's verdicts and changes which
+ * programs prove. */
+
+/* Can the callee named `head` write the argument it receives in `slot`
+ * (0-based)?  Conservative: true unless something positively says otherwise. */
+static bool wf_call_slot_writes(Elab *e, const Symbol *head, uint32_t slot) {
+    Binding *callee = head ? scope_lookup(&e->global, head) : NULL;
+    if (!callee) return true;              /* unresolvable: assume the worst */
+    if (callee->writes_declared) {
+        if (!callee->writes_checked) return true;   /* a promise, not a fact */
+        return slot >= WF_MAX_FRAME_PARAMS ||
+               (callee->writes_param_mask & ((uint32_t)1u << slot)) != 0;
+    }
+    const FnDef *fd = callee->source_fn_def;
+    if (!fd || slot >= fd->n_params || !fd->params[slot]) return true;
+    return !fd->params[slot]->is_borrow;
+}
+
+/* Every occurrence of `alias` in `f` sits in a call slot the callee cannot
+ * write.  A bare occurrence anywhere else -- returned, stored, assigned, used
+ * as a callee -- is not accounted for and answers false. */
+static bool wf_alias_write_free(Elab *e, const Form *f, const char *alias,
+                                uint32_t depth) {
+    if (!f) return true;
+    if (depth >= WF_SCAN_MAX_DEPTH) return false;   /* too deep to vouch for */
+    if (f->tag == F_SYM) return !rt_sym_is(f, alias);
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_alias_write_free(e, mx, alias, depth);
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 1 && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        if (rt_sym_is(f->as.list.items[0], alias))
+            return false;                  /* the borrow itself is the callee */
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            const Form *a = f->as.list.items[i];
+            if (a && a->tag == F_SYM && rt_sym_is(a, alias)) {
+                if (wf_call_slot_writes(e, head, i - 1)) return false;
+                continue;                  /* this occurrence is accounted for */
+            }
+            if (!wf_alias_write_free(e, a, alias, depth + 1)) return false;
+        }
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!wf_alias_write_free(e, f->as.list.items[i], alias, depth + 1))
+            return false;
+    return true;
+}
+
+/* True when every borrow of `name` in `f` is provably write-free. */
+static bool wf_borrow_write_free(Elab *e, const Form *f, const char *name,
+                                 uint32_t depth) {
+    if (!f) return true;
+    if (depth >= WF_SCAN_MAX_DEPTH) return false;   /* too deep to vouch for */
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_borrow_write_free(e, mx, name, depth);
+    }
+    /* `(let [b (& name)] body)`: b aliases the borrow for the whole body. */
+    if (rt_head_is(f, "let") && f->as.list.len == 3) {
+        const Form *binds = f->as.list.items[1];
+        const Form *body  = f->as.list.items[2];
+        if (binds && binds->tag == F_VEC && binds->as.list.len == 2) {
+            const Form *x = binds->as.list.items[0];
+            const Form *v = binds->as.list.items[1];
+            if (v && v->tag == F_LIST && v->as.list.len >= 2 &&
+                rt_sym_is(v->as.list.items[0], "&") &&
+                rt_sym_is(v->as.list.items[1], name)) {
+                if (!x || x->tag != F_SYM || !x->as.sym) return false;
+                if (!wf_alias_write_free(e, body, x->as.sym->name, 0)) return false;
+                /* The body may borrow `name` AGAIN, independently. */
+                return wf_borrow_write_free(e, body, name, depth + 1);
+            }
+        }
+    }
+    /* A bare `(& name)`.  Checked BEFORE the call branch below, which would
+     * otherwise walk this very form as a call to `&` and find nothing wrong
+     * with it.  Reaching here means no enclosing form accounted for the
+     * borrow, so there is no answer about where it goes. */
+    if (f->tag == F_LIST && f->as.list.len >= 2 &&
+        rt_sym_is(f->as.list.items[0], "&") &&
+        rt_sym_is(f->as.list.items[1], name))
+        return false;
+    /* `(g ... (& name) ...)`: handed straight to a call slot. */
+    if (f->tag == F_LIST && f->as.list.len >= 1 && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            const Form *a = f->as.list.items[i];
+            if (a && a->tag == F_LIST && a->as.list.len >= 2 &&
+                rt_sym_is(a->as.list.items[0], "&") &&
+                rt_sym_is(a->as.list.items[1], name)) {
+                if (wf_call_slot_writes(e, head, i - 1)) return false;
+                continue;                  /* this borrow is accounted for */
+            }
+            if (!wf_borrow_write_free(e, a, name, depth + 1)) return false;
+        }
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!wf_borrow_write_free(e, f->as.list.items[i], name, depth + 1))
+            return false;
+    return true;
+}
+
+/* ------------------------------------------------------------------------- *
  * A datatype theory for match arms.
  *
  * The VC term language has no constructors and no selectors, and it is not
@@ -2307,9 +2452,15 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     uint32_t nw = 0;
     if (!rt_collect_set_targets(e, cs->caller_body, 0, wtgt, &nw)) return saved;
     /* A borrowed local is the one way a callee could write this frame's slot,
-     * so an assigned name that is also borrowed is not provably disjoint. */
+     * so an assigned name that is also borrowed is not provably disjoint --
+     * unless every borrow of it provably goes nowhere that writes, which is
+     * the question WF2's checked frames made askable.  Without the experiment
+     * there are no checked frames to ask, so the guard stays unconditional. */
     for (uint32_t i = 0; i < nw; i++)
-        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0)) return saved;
+        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0) &&
+            !(g_opt_write_frames &&
+              wf_borrow_write_free(e, cs->caller_body, wtgt[i], 0)))
+            return saved;
 
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
 
