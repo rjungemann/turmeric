@@ -250,12 +250,28 @@ jobs:
           # summary, every FAIL line, ctest's own verdict, and the cc-fallback
           # fixtures BY NAME (two archived JIT reports track exactly which
           # fixtures fall back, and the count alone does not say which moved).
-          # The full unfiltered log stays in jit-ctest.log for a follow-up
-          # artifact upload if one is ever added.
           #
-          # ctest's status is captured BEFORE the filter runs, so neither the
-          # grep's exit code (1 when nothing matches) nor the redirection can
-          # mask a failing suite.
+          # STREAMED, not redirected-then-filtered.  This step used to do
+          # `ctest > jit-ctest.log` and run the grep afterwards, which is fine
+          # for a run that finishes and useless for one that does not: when the
+          # job hits `timeout-minutes: 45` ctest is killed, the grep never runs,
+          # and the log dies with the runner -- so a HANG printed literally
+          # nothing and there was no way to tell how far it got.  That is not
+          # hypothetical; it is how both `main` (f865097db, 2026-08-02 19:52)
+          # and a PR leg burned 45 minutes each with zero diagnostic output.
+          # `tee` keeps the full log on disk as it goes (so the artifact below
+          # survives a kill) and `grep --line-buffered` emits each interesting
+          # line as it appears.
+          #
+          # `Start <n>: <name>` lines are in the filter so a hang says WHICH
+          # ctest test it is inside.  That is coarse -- one ctest test is a
+          # whole ~2500-fixture harness run -- so per-fixture resolution comes
+          # from the uploaded artifact, not from the console.
+          #
+          # ctest's status is taken from PIPESTATUS[0], so neither the grep's
+          # exit code (1 when nothing matches) nor the pipe can mask a failing
+          # suite -- the property the old `rc=$?`-before-grep ordering had, kept
+          # across the change to a pipeline.
           #
           # --no-tests=error because a `-R` that matches NOTHING exits 0.  The
           # "Verify the JIT engine is actually present" step above catches the
@@ -265,11 +281,22 @@ jobs:
           # exists to prevent.
           set +e
           ctest --test-dir build -V --no-tests=error \
-                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' \
-                > jit-ctest.log 2>&1
-          rc=$?
-          grep -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|[0-9]+% tests passed|\*\*\*|Errors while running CTest' jit-ctest.log
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' 2>&1 \
+            | tee jit-ctest.log \
+            | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
+          rc=${PIPESTATUS[0]}
           exit $rc
+
+      # `always()` covers the cancellation a `timeout-minutes` kill produces, so
+      # the partial log from a HANG is uploaded too -- which is the case the
+      # console filter cannot serve and the whole reason this exists.
+      - name: Upload JIT ctest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jit-ctest-log-${{ matrix.os }}
+          path: jit-ctest.log
+          if-no-files-found: warn
 
       - name: Save ccache
         if: always()
