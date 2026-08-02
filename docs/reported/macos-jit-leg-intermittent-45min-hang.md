@@ -135,12 +135,53 @@ containment, not a cure: with `gtimeout` present the fixture dies at its
 per-fixture timeout and reports a FAIL you can act on, instead of eating the
 job.
 
+### Confirmed end to end (run 30770432376)
+
+The first run with `coreutils` installed did exactly what the diagnosis
+predicted:
+
+```
+FAIL httpd-async-limit -- timed out (>10s)
+summary: 2521 passed, 1 failed
+```
+
+`JIT engine (macos-latest)` went green in the same run. So the 45-minute silent
+hang is now a 10-second named failure, on the very fixture the artifact diff
+fingered. That is the containment working; it is not a fix.
+
+**Note the honest cost of the change:** this converts an intermittent invisible
+hang into an intermittent visible FAIL. macOS CI can now go red on a flake that
+was previously either passing or eating the job in silence. That is the better
+failure mode -- a red line you can read beats a 45-minute stall that tells you
+nothing -- but it does mean the fixture's flakiness is now everyone's problem
+until it is fixed.
+
 ## Still open: why `httpd-async-limit` hangs at all
 
-The flakiness itself is unfixed and is the real bug. It passes far more often
-than it hangs (it is green in the two successful macOS runs above), so it wants
-a loop-until-it-reproduces run rather than a single repro attempt. Suspects, in
-order: the accept loop when in-flight is already at the cap (the 503 path is
-the fixture's whole point and the least-exercised branch), a client thread
-blocking in `connect()` against a listen backlog, and port reuse across
-concurrent fixtures on the same runner.
+The flakiness itself is unfixed and is the real bug.
+
+**It does not reproduce locally.** Three consecutive `TUR_TEST_FILTER` runs on
+an Apple Silicon laptop: 1 passed / 0 failed, every time. It is also green in
+the successful macOS CI runs above. So this wants a loop-until-it-reproduces
+run, ideally on a loaded machine, rather than a single repro attempt.
+
+**A timeout bump is the wrong fix**, and worth ruling out explicitly before
+someone reaches for it: the fixture did not merely exceed 10 seconds, it ran
+unkilled for **36 minutes 35 seconds** in the JIT leg (last output 21:43:37,
+job killed 22:20:12). That is a hang, not slowness, so `expected.timeout` would
+only change how long CI waits before reporting the same thing.
+
+Suspects, in order:
+
+1. The accept loop when in-flight is already at the cap. The 503 path is the
+   fixture's whole point and the least-exercised branch in the server.
+2. A client thread blocking in `connect()` against a listen backlog that the
+   capped server never drains.
+3. Port reuse across fixtures running concurrently on the same runner -- the
+   harness fans out across `nproc`, and a fixed port would collide.
+
+If it needs to be quarantined while that is investigated, note there is no
+OS-scoped `requires.*` marker today (the existing ones are `requires.tsan`,
+`requires.interp`, `requires.dedicated-runner`, `requires.spices`,
+`requires.compiled`, `requires.cc`, `requires.posix-apis`), so quarantining it
+on macOS specifically would mean adding one.
