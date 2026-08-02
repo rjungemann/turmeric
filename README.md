@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.33.0` -- refinement types graduate: `#refine{...}` predicates are discharged statically on every compile, and a refinement in type-argument position no longer breaks the program.
+**Latest release:** `v0.33.1` -- refinement hypotheses now survive an assignment that provably cannot disturb them, so accumulator `set!`s in `for-each-alive!` bodies and `while`-loop counters no longer drop the facts around them.
 
 ## What
 

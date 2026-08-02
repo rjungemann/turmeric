@@ -2,6 +2,52 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.33.1] -- 2026-08-02
+
+### Changed
+
+- **A refinement hypothesis now survives an assignment that provably cannot
+  disturb it.** A crossing's path conditions were dropped wholesale the moment
+  *any* `set!`/`swap!`/`reset!` appeared anywhere in the caller body -- the
+  coarsest correct rule, and the binding constraint on two shipped surfaces:
+  `for-each-alive!` accepts only pure bodies, so an accumulator `set!` about
+  `acc` dropped hypotheses about the world and the entity, and every
+  `while`-lowered loop lost facts its counter never touched. A hypothesis now
+  survives iff every assignment in the body targets a plain symbol the
+  hypothesis does not mention, and the body never borrows that symbol. A
+  place-expression target (`(set! (.n w) 9)`), an assignment symbol the scan
+  cannot attribute, depth or slot exhaustion, or a borrowed target all restore
+  the old whole-body decline. The assignment's *value* needs no check: a
+  hypothesis is only believed when its terms are congruent, and congruence is
+  granted only to a pure measure or to a `#reads` measure inside a region
+  freezing its argument -- neither of which a call in value position can stale.
+
+### Fixed
+
+- **`TUR-E0371`'s explainer no longer recommends a retired flag.** It closed
+  with "Enable with: `tur build --enable=refined myfile.tur`" -- user-facing
+  text pointing at a flag that has been a `TUR-W0063` no-op since refinement
+  types graduated in 0.33.0.
+
+### Docs
+
+- **Type-Level Rows (`#row{...}`) added to the HKT guide**, plus a followups
+  plan for row types and a report on the stale mono-specs header comment.
+- **The refinement solver's shipping status is stated correctly.**
+  `advanced-type-system-rationale.md` claimed "there is no SMT dependency. No
+  shipped artifact links a solver." The staged decision procedure
+  (`refine_solver{_s0,_euf,_arith,_no}.c`) ships compiled into `tur` and runs on
+  every compile; what no artifact links is a *third-party* prover -- no libz3 at
+  configure time, no subprocess, nothing a user installs. Corrected there and in
+  the 0.33.0 CHANGELOG bullet that had inherited the sentence.
+- **Refinement plans reconciled with the graduation.** Several documents still
+  read as open work or as gated behind `--enable=refined`; status banners,
+  prerequisite rows, and struck-through constraints are now dated and accurate.
+- A report filed on `pkg_manifest_read` conflating "no manifest" with "broken
+  manifest", which degrades a manifest typo into an unrelated `module not found`
+  whose hint leads away from the cause -- and on `tur check` printing
+  `TUR-E0620` at `error:` severity while exiting 0.
+
 ## [0.33.0] -- 2026-08-01
 
 ### Fixed
