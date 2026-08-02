@@ -580,6 +580,56 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
     return turi_struct_val(s);
 }
 
+/* Copy a BY-VALUE struct argument as it is bound to a parameter.
+ *
+ * Turmeric passes by value: the compiled backend hands a callee its own copy of
+ * a `defstruct` value, so `(set! (.f p) v)` inside the callee mutates that copy
+ * and the caller never sees it.  The interpreter stores a struct as a heap
+ * `TuriStruct*` and used to bind the pointer straight through, which made the
+ * same write visible to the caller -- one program printing 0 compiled and 3
+ * interpreted.  See
+ * docs/reported/struct-param-mutation-backend-divergence.md.
+ *
+ * Three kinds of value must NOT be copied, because for them sharing IS the
+ * semantics rather than an artifact of the representation:
+ *
+ *   - an `rc<T>`, represented structurally as an `__rc` wrapper.  Reference
+ *     counting is the whole point; copying the wrapper would fork the count.
+ *   - a `:heap` struct, which is interior-mutable by declaration -- a callee's
+ *     mutation IS meant to reach the caller.
+ *   - anything that is not a TURI_STRUCT.  A `&Struct` borrow arrives as
+ *     TURI_REF and is a genuine reference; leave it alone.
+ *
+ * The copy RECURSES through by-value struct fields, because that is what the
+ * compiled backend does: an `Outer` holding an `Inner` by value is one flat C
+ * struct, so copying the outer copies the inner, and
+ * `(set! (.n (.inner p)) v)` is just as invisible to the caller as the
+ * one-level write.  The recursion uses the same three stop conditions, which
+ * is exactly the by-value/shared frontier -- an `rc<T>` field copies as a
+ * shared handle, matching the compiled pointer copy.
+ *
+ * The recursion cannot run away.  A by-value struct cannot be recursive (it
+ * would have infinite size), so anything self-referential reaches an rc or a
+ * `:heap` field and stops -- stdlib's `Cons` and `Vec` are both `:heap`, so a
+ * list or vector argument is not walked at all.  Depth is therefore the
+ * by-value nesting depth of a declared type, which is small and finite. */
+static TuriValue turi_copy_byvalue_struct_arg(TuriEnv *env, TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return v;
+    const TuriStruct *src = v.as_struct;
+    if (src->name && strcmp(src->name, "__rc") == 0) return v;   /* rc: shared */
+    if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return v;
+    TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
+    s->name     = src->name;
+    s->n_fields = src->n_fields;
+    s->ctor     = src->ctor;
+    s->fields   = src->n_fields
+                    ? (TuriValue *)turi_val_alloc(env, src->n_fields * sizeof(TuriValue))
+                    : NULL;
+    for (uint32_t i = 0; i < src->n_fields; i++)
+        s->fields[i] = turi_copy_byvalue_struct_arg(env, src->fields[i]);
+    return turi_struct_val(s);
+}
+
 /* collection-multiword-element-boxing (interpreter parity): a GENERIC content
  * comparator for two struct/ADT KEYS, the interpreter analogue of the compiled
  * runtime's tur_hamt_box_key_eq.  A multi-word struct Map key / Set element uses
@@ -5721,7 +5771,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
             for (uint32_t i = 0; i < n; i++)
                 frame_bind(env, call_frame,
-                           fn->params[param_offset + i]->name->name, acc[i]);
+                           fn->params[param_offset + i]->name->name,
+                           turi_copy_byvalue_struct_arg(env, acc[i]));
             free(acc);
             DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_RET, .frame = call_frame,
                                      .aux = env->defer_stack,
@@ -6784,7 +6835,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 for (uint32_t i = 0; i < effective_params; i++)
                     frame_bind(env, call_frame,
                                fn->params[param_offset + i]->name->name,
-                               acc[arg_base + i]);
+                               turi_copy_byvalue_struct_arg(env, acc[arg_base + i]));
                 free(acc);
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
@@ -7151,7 +7202,8 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
      * calls reuse this activation's DK_CALL_RET. */
     EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
     for (uint32_t i = 0; i < n_args; i++)
-        frame_bind(env, call_frame, fn->params[param_offset + i]->name->name, args[i]);
+        frame_bind(env, call_frame, fn->params[param_offset + i]->name->name,
+                   turi_copy_byvalue_struct_arg(env, args[i]));
 
     DriveSeed seed = {
         .defer_mark    = (DeferItem *)env->defer_stack,

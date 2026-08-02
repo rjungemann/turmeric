@@ -1,0 +1,57 @@
+;; Turmeric passes structs BY VALUE: a callee gets its own copy, so a write
+;; through a struct parameter is invisible to the caller.  This fixture pins
+;; that, and it pins it under BOTH harnesses -- it is the regression test for
+;; docs/reported/struct-param-mutation-backend-divergence.md, where the
+;; compiled backend said 0 and the turi interpreter said 3 for the same
+;; program because turi bound the struct pointer straight through.
+;;
+;; Four cases, and the contrast between them is the point:
+;;
+;;   set-it!    -- one-level write through a parameter.  NOT visible: 0.
+;;   poke!      -- write through a NESTED by-value field.  Also not visible: 0.
+;;                 An Outer holding an Inner by value is one flat struct, so
+;;                 copying the outer copies the inner.
+;;   in-body    -- the write IS visible to the function that made it.  This is
+;;                 what `^mut` on a parameter means under a by-value model: a
+;;                 mutable local seeded from the argument.  A fix that made
+;;                 parameter writes disappear entirely would break this, which
+;;                 is why it is here.
+;;   via-rc     -- an rc<Ctr> IS shared, and must stay shared.  Reference
+;;                 counting is the semantics, not an artifact, so the copy
+;;                 must stop at an `__rc` wrapper.  (`:heap` structs are the
+;;                 other shared case; stdlib's Cons and Vec are both :heap.)
+;;
+;; Expected: 0 0 3 7 -- identical compiled and interpreted.
+(defstruct Ctr [n : int])
+(defstruct Inner [n : int])
+(defstruct Outer [inner : Inner])
+
+(defn set-it! [^mut a : Ctr] : int
+  (set! (.n a) 3)
+  0)
+
+(defn poke! [^mut o : Outer] : int
+  (set! (.n (.inner o)) 9)
+  0)
+
+(defn in-body [^mut a : Ctr] : int
+  (set! (.n a) 3)
+  (.n a))
+
+(defn via-rc! [a : rc<Ctr>] : int
+  (set! (.n a) 7)
+  0)
+
+(defn main [] : int
+  (let [^mut c (Ctr 0)]
+    (set-it! c)
+    (println (.n c)))
+  (let [^mut o (Outer (Inner 0))]
+    (poke! o)
+    (println (.n (.inner o))))
+  (let [^mut d (Ctr 0)]
+    (println (in-body d)))
+  (let [r (rc/of (Ctr 0))]
+    (via-rc! (rc/clone r))
+    (println (.n r)))
+  0)

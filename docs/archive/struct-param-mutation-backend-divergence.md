@@ -1,5 +1,38 @@
 # `set!` on a by-value struct parameter: a silent no-op compiled, a write interpreted
 
+> **RESOLVED 2026-08-02.** turi now copies a by-value struct argument when it
+> binds it to a parameter (`turi_copy_byvalue_struct_arg`, `src/turi/eval.c`,
+> called from the three call-frame `frame_bind` loops), so both backends agree:
+> a callee's write through a struct parameter is invisible to the caller.
+> The copy recurses through by-value struct fields -- matching the compiled
+> backend, where an `Outer` holding an `Inner` by value is one flat struct --
+> and stops at an `__rc` wrapper or a `:heap` struct, where sharing IS the
+> semantics. It cannot run away: a by-value struct cannot be recursive, and
+> stdlib's `Cons` and `Vec` are both `:heap`, so a list or vector argument is
+> not walked at all.
+>
+> Pinned by `tests/fixtures/struct-param-byvalue-not-shared`, which asserts all
+> four cases -- one-level write invisible, nested write invisible, in-body write
+> still visible, `rc<Ctr>` still shared -- and runs under both harnesses.
+> Suites after the fix: `run.sh` 2522 passed / 0 failed; `run-turi.sh` 1713
+> passed / 0 failed, wall clock 87s (no regression -- the copy is cheap because
+> it stops at the shared frontier).
+>
+> **The "diagnose the no-op write" direction in Fix directions below was WRONG,
+> and is not what shipped.** It rested on the write always being dead. It is
+> not: `(defn f [^mut a : Ctr] (set! (.n a) 3) (.n a))` returns 3 in both
+> backends, because `^mut` on a parameter means "a mutable local seeded from
+> the argument" under a by-value model. Rejecting the pattern would have broken
+> correct code. Only the interpreter was ever wrong; the compiled backend
+> always matched the documented model.
+>
+> The documentation gaps this report identified were fixed alongside:
+> `structs-guide.md` gained a "Structs are passed by value" section stating the
+> rule and pointing at `rc<T>` / `:heap`; the `uniqueness-types-guide.md`
+> passage calling `^unique ^mut` "the ownership-transfer equivalent of
+> `&mut T`" is corrected; and the `turi-parity-guide.md` Structs/ADTs row now
+> names parameter passing instead of a bare "OK".
+
 **Severity: medium-high.** Two defects, and the second is the one that bites:
 
 1. **The same program prints different answers** under `tur run` and

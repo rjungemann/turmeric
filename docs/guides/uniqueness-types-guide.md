@@ -113,10 +113,29 @@ binding is consumed, just like a move.
 
 ---
 
-## Unique mutable references: `^unique ^mut`
+## Unique mutable parameters: `^unique ^mut`
 
-Combine `^unique` with `^mut` for exclusive mutable access. This is the ownership-
-transfer equivalent of `&mut T` borrows.
+Combine `^unique` with `^mut` for exclusive mutable access: the argument is
+moved in, and the parameter is mutable inside the body.
+
+> **`^mut` on a parameter does NOT make it an out-parameter.** Turmeric passes
+> by value, so `^mut` means "this binding is mutable *inside this body*", not
+> "the caller will see my writes". A `defstruct` argument is copied into the
+> callee, so `(set! (.field p) v)` mutates the callee's copy and the caller's
+> value is unchanged -- in both the compiled backend and the interpreter.
+> That is why `increment!` below *returns* `n` rather than relying on the
+> mutation being visible.
+>
+> To let a callee mutate a value the caller can observe, use `rc<T>` (shared,
+> reference-counted) or a `:heap` struct (interior-mutable by declaration).
+> A `&Struct` receiver is rejected outright: `set! (.field s)` requires a
+> struct or an `rc<Struct>`.
+>
+> Earlier revisions of this section called `^unique ^mut` "the
+> ownership-transfer equivalent of `&mut T`" and said such a parameter "may
+> mutate the value in place". Read plainly that promised caller-visible
+> mutation, which the language does not provide by this route; the wording is
+> corrected here.
 
 ```turmeric
 (defn increment! [^unique ^mut n : int] : ^unique int
@@ -132,7 +151,8 @@ defn increment! [^unique ^mut n : int] : ^unique int
 
 Rules:
 
-- A `^unique ^mut` parameter may mutate the value in place and return a new `^unique T`.
+- A `^unique ^mut` parameter may mutate its own binding and return a new
+  `^unique T`. Returning it is how the new value reaches the caller.
 - You cannot create a `^unique ^mut` reference while any `&T` or `&mut T` borrows are live.
 
 ---
