@@ -95,7 +95,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[gadts-cookbook.md](gadts-cookbook.md)** -- GADTs cookbook: practical patterns and recipes
 - **[existential-types-guide.md](existential-types-guide.md)** -- Existential types: pack/open, typeclass constraints, hiding concrete types behind opaque boundaries
 - **[opaques-guide.md](opaques-guide.md)** -- Named nominal newtypes over a representation type -- what they are, what they're for, and how to construct, unwrap, and combine them
-- **[advanced-type-system-rationale.md](advanced-type-system-rationale.md)** -- Why Turmeric chose the type system features it did, and why dependent and refinement types were correctly deferred
+- **[advanced-type-system-rationale.md](advanced-type-system-rationale.md)** -- Why Turmeric chose the type system features it did, why dependent types remain deferred, and how refinement types went from deferred to shipped
 
 ## Type Safety
 
