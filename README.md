@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.33.1` -- refinement hypotheses now survive an assignment that provably cannot disturb them, so accumulator `set!`s in `for-each-alive!` bodies and `while`-loop counters no longer drop the facts around them.
+**Latest release:** `v0.33.2` -- `#writes` write frames land behind `--enable=write-frames`, giving a checked per-argument write declaration that refinement hypotheses widen against; and the interpreter now copies by-value struct arguments, so a struct write no longer diverges between backends.
 
 ## What
 
