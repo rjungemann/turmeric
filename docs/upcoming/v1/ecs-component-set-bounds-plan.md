@@ -6,8 +6,10 @@ description: The third polymorphism encoding for ECS systems -- a structural "th
 
 # ECS Component-Set Bounds (`ECB`)
 
-**Status:** not started, and deliberately unscheduled -- see "Why this is not
-urgent". Split out of
+**Status:** the cheap step (3) is **done 2026-08-01** -- shipped spice-side as
+`defworld-classes`, though not in the shape this plan recommended; see the note
+under "Why this is not urgent". The structural `(has ...)` bound itself is not
+started and remains deliberately unscheduled. Split out of
 [`ecs-refinement-typed-apis-plan.md`](ecs-refinement-typed-apis-plan.md),
 where it was tracked as a refinement type and should not have been.
 
@@ -78,6 +80,38 @@ Stated plainly so it does not get picked up by momentum:
 Doing (3) first is the recommendation. It is small, it is entirely spice-side,
 and it makes the remaining case for (c) purely about the indirection -- which
 is the part that needs the profile.
+
+> **Step (3) DONE 2026-08-01 -- shipped as `defworld-classes`, not as a change
+> to `defworld`.** `turmeric-spices` `a4cb1b9` adds a macro that emits the
+> world struct plus `defcomponent-class` + `defcomponent-class-instance` for
+> every component, collapsing `1 + 2N` declarations to one. Test:
+> `spices/ecs/tests/defworld-classes.tur`; suite 70/70 -> 71/71.
+>
+> **Emitting from `defworld` itself -- as this section recommends -- is a
+> breaking change, and that was not known when the recommendation was
+> written.** `defcomponent-class-instance` expands to cap-mint helpers that
+> name `ecs/cap` symbols *at the call site*, so folding it into `defworld`
+> forces every caller to import
+> `WriteCap`/`ReadCap`/`make-write-cap`/`make-read-cap` or fail with
+> `unknown function or operator 'make-write-cap'`.
+>
+> The premise is also weaker than stated. "Most of the boilerplate is
+> `defcomponent-class-instance` per `(world, component)` pair" assumes the two
+> surfaces overlap; measured in the spice, they are **disjoint** -- 16 files
+> call `defworld`, exactly 1 touches the typeclass surface, and 0 do both. The
+> single typeclass consumer (`tests/has-component-polymorphic.tur`) declares
+> its worlds with raw `defstruct` rather than `defworld`, because it wants a
+> world with no `gens` field. So auto-emission would have broken 15 in-repo
+> call sites and every downstream `defworld` user to serve none of them.
+>
+> Two facts the design relies on were probed rather than assumed: redeclaring a
+> component's class is tolerated (two worlds may share a component, each
+> re-emitting `defcomponent-class C`), and a duplicate `(world, comp)` instance
+> is tolerated (the macro composes with hand-written declarations instead of
+> colliding). Both hold on v0.33.0.
+>
+> This does **not** change the status of (c) below, which still does not start
+> without a profile.
 
 ## Sketch, if it is built
 
