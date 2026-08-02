@@ -47,7 +47,16 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install libedit ccache || true
+        # coreutils is for `gtimeout`, and it is load-bearing, not a nicety.
+        # Stock macOS ships no `timeout(1)`; both tests/run.sh and
+        # tests/run-jit.sh detect `timeout` then `gtimeout` and, finding
+        # NEITHER, run every fixture UNTIMED -- a tradeoff their own comments
+        # spell out ("a hung fixture then hangs the run").  On this runner that
+        # turned one flaky networking fixture into a 45-minute job kill with no
+        # FAIL line, three times on 2026-08-02.  With gtimeout present the same
+        # fixture dies at its per-fixture timeout and reports as a FAIL, which
+        # is a result you can act on.
+        run: brew install libedit ccache coreutils || true
 
       # Restore + explicit save (not the combined cache action): the combined
       # action's post-save defaults to save-always:false, so it would skip
@@ -153,7 +162,16 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install libedit ccache || true
+        # coreutils is for `gtimeout`, and it is load-bearing, not a nicety.
+        # Stock macOS ships no `timeout(1)`; both tests/run.sh and
+        # tests/run-jit.sh detect `timeout` then `gtimeout` and, finding
+        # NEITHER, run every fixture UNTIMED -- a tradeoff their own comments
+        # spell out ("a hung fixture then hangs the run").  On this runner that
+        # turned one flaky networking fixture into a 45-minute job kill with no
+        # FAIL line, three times on 2026-08-02.  With gtimeout present the same
+        # fixture dies at its per-fixture timeout and reports as a FAIL, which
+        # is a result you can act on.
+        run: brew install libedit ccache coreutils || true
 
       - name: Restore ccache
         uses: actions/cache/restore@v4

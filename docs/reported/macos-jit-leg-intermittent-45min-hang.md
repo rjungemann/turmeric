@@ -82,13 +82,65 @@ guessing:
    phase. The `(via cc fallback)` fixtures are the ones that shell out to `cc`
    and are the natural first suspects on a macOS box.
 
-## Suspicions, unverified
+## ROOT CAUSE (found 2026-08-02, third occurrence)
 
-- **Runner-side.** Both hangs are on `macos-latest`, and the same commits'
-  ubuntu legs passed. macOS runners were also visibly slow that evening (the
-  branch's leg spent ~26 minutes queued before starting).
-- **A `cc` invocation wedging.** Many JIT fixtures fall back to `cc`; a hung
-  compiler or a linker waiting on a lock would stall an untimed phase exactly
-  this way.
-- Not investigated: whether `brew install libedit ccache` or the ccache restore
-  can wedge, though both are separate steps and both completed.
+The third hang was the first one with the streamed log and artifact in place,
+and they answered it. Diffing the killed run's fixture set against a successful
+run's:
+
+- 2484 fixtures in the good run, 2046 in the hung one.
+- The 438 missing are **all 437 `errors/*` fixtures** -- the hung run reached
+  *zero* of them -- **plus exactly one other: `httpd-async-limit`.**
+
+So the harness finished every non-`errors/` fixture except `httpd-async-limit`,
+stalled there, and never started the `errors/` phase.
+
+`httpd-async-limit` is a TCP networking fixture: it starts the async HTTP
+server with `max-in-flight=2` and a 100ms slow handler, spawns four client
+threads that open real sockets, and asserts 2 succeed + 2 get a 503. A socket
+accept/connect race or a port-bind conflict hanging intermittently is entirely
+ordinary for that shape.
+
+**What turns a flaky fixture into a 45-minute job kill is the missing timeout
+binary.** `tests/run-jit.sh` (and `tests/run.sh`) detect `timeout`, then
+`gtimeout`, and run **UNTIMED** when neither exists:
+
+```sh
+_tur_timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then _tur_timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then _tur_timeout_bin="gtimeout"; fi
+_run_timed() {
+    local secs="$1"; shift
+    if [ "$secs" -le 0 ] || [ -z "$_tur_timeout_bin" ]; then "$@"
+    else "$_tur_timeout_bin" "$secs" "$@"; fi
+}
+```
+
+Their own comment names the consequence: *"run untimed if neither exists (a
+hung fixture then hangs the run, which is the pre-existing tradeoff run.sh
+already makes)"*. Stock macOS ships no `timeout(1)`, `gtimeout` comes from
+Homebrew coreutils, and the macOS CI steps installed only `libedit ccache`.
+The repo already knew macOS lacks it -- the `test` job's smoke check uses
+`perl -e 'alarm 10'` for exactly this reason -- but the fixture harnesses were
+left on the untimed path.
+
+That explains every observation: macOS-only (Linux has `timeout`), intermittent
+(the fixture is a flaky network race), always exactly 45 minutes (the JOB
+timeout, since no fixture timeout ever fires), and a hang rather than a FAIL.
+It also explains why `Test (macos-latest)` began hanging in the same window --
+same harness, same missing binary.
+
+**Fixed** by adding `coreutils` to both macOS dependency steps. That is
+containment, not a cure: with `gtimeout` present the fixture dies at its
+per-fixture timeout and reports a FAIL you can act on, instead of eating the
+job.
+
+## Still open: why `httpd-async-limit` hangs at all
+
+The flakiness itself is unfixed and is the real bug. It passes far more often
+than it hangs (it is green in the two successful macOS runs above), so it wants
+a loop-until-it-reproduces run rather than a single repro attempt. Suspects, in
+order: the accept loop when in-flight is already at the cap (the 503 path is
+the fixture's whole point and the least-exercised branch), a client thread
+blocking in `connect()` against a listen backlog, and port reuse across
+concurrent fixtures on the same runner.
