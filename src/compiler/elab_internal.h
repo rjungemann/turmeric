@@ -845,6 +845,11 @@ typedef struct Elab {
     struct RefineCallSite *refine_call_sites;
     uint32_t               n_refine_call_sites;
     uint32_t               cap_refine_call_sites;
+    /* WF2: `#writes`-annotated functions awaiting the deferred frame walk.  See
+     * WriteFrameSite below for why this is deferred rather than checked inline. */
+    struct WriteFrameSite *wf_frame_sites;
+    uint32_t               n_wf_frame_sites;
+    uint32_t               cap_wf_frame_sites;
     /* Open-addressed (callee, call_form) -> index+1 set, so deduplicating a
      * re-elaborated call site stays O(1) instead of rescanning every crossing
      * recorded so far -- which would make an opted-in build quadratic in its
@@ -971,6 +976,31 @@ typedef struct RefineCallSite {
  * hypotheses over the range its body produced. */
 uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                                const Form *call_form, uint32_t arg_offset);
+
+/* WF2 (checked-write-frames-plan): one `#writes`-annotated function, recorded
+ * during elaboration and verified AFTER it (wf_resolve_write_frames).  The
+ * deferral is load-bearing for the same reason it is for refinement crossings:
+ * "every callee's declared frame stays inside this one" is a question about
+ * functions that may be defined later in the file, and a check that answered it
+ * differently depending on definition order would be worthless. */
+typedef struct WriteFrameSite {
+    Binding      *fn;          /* the annotated function; where the verdict lands */
+    Binding     **params;      /* its parameters, for arg -> frame-slot mapping */
+    uint32_t      n_params;
+    const Form   *defn_form;   /* the whole `(defn ...)`; the body is a suffix */
+    uint32_t      body_start;  /* index of the first body form within defn_form */
+    const Form   *annot;       /* the `#writes` form, for the diagnostic span */
+} WriteFrameSite;
+
+/* Record an annotated function for the deferred WF2 walk.  No-op unless the
+ * `write-frames` experiment is on. */
+void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
+                        const Form *defn_form, uint32_t body_start,
+                        const Form *annot);
+
+/* Verify every recorded frame against its body, stamping `writes_checked` on
+ * the ones that hold and emitting TUR-E0382 on the ones that do not. */
+void wf_resolve_write_frames(Elab *e);
 
 /* Record that macro-call form `call` elaborated to `expansion`, so the
  * crossing path walk can traverse INTO the expansion (macro-GENERATED

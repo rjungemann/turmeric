@@ -1,0 +1,55 @@
+;; WF1/WF2: a `#writes` frame the body HONORS, exercising all three spellings
+;; and both non-violating write channels.
+;;
+;;   bump!   -- `#writes [a]`, a direct place-expression write through `a`
+;;   both!   -- a two-parameter frame; each write lands in it
+;;   single  -- the bare `#writes a` spelling (no brackets)
+;;   peek    -- `#writes []`, the EMPTY frame: a positive claim that the body
+;;              writes nothing.  This is the one a single-symbol-only syntax
+;;              could not express, and it is the frame WF3/WF4 most want.
+;;   drive!  -- passes `a` to a callee whose CHECKED frame covers exactly `a`,
+;;              which is the transitive channel; declaring `[a]` honors it.
+;;
+;; Expected: compiles clean under --enable=write-frames and prints 0.
+;;
+;; `main` deliberately does NOT read a struct back after mutating it through a
+;; callee, and prints a freshly-constructed value instead.  Whether such a
+;; write is observable in the caller is exactly where the compiled backend and
+;; the turi interpreter disagree today (compiled: by-value, prints 0;
+;; interpreted: by-reference, prints 3 -- see
+;; docs/reported/struct-param-mutation-backend-divergence.md).  That divergence
+;; has nothing to do with write frames, and a frame fixture that depended on it
+;; would be asserting the wrong thing in one backend or the other.
+;;
+;; The frame is an upper bound on what a body MAY write; it stays correct
+;; whether or not the write is observable from any particular caller, so
+;; nothing here needs to observe one.
+(defstruct Ctr [n : int])
+
+(defn bump! [^mut a : Ctr] #writes [a] : int
+  (set! (.n a) 1)
+  0)
+
+(defn both! [^mut a : Ctr ^mut b : Ctr] #writes [a b] : int
+  (set! (.n a) 1)
+  (set! (.n b) 2)
+  0)
+
+(defn single [^mut a : Ctr] #writes a : int
+  (set! (.n a) 3)
+  0)
+
+(defn peek [^borrow a : Ctr] #writes [] : int
+  (.n a))
+
+(defn drive! [^mut a : Ctr] #writes [a] : int
+  (single a))
+
+(defn main [] : int
+  (let [^mut c (Ctr 0)]
+    (let [^mut d (Ctr 0)]
+      (drive! c)
+      (bump! c)
+      (both! c d)))
+  (println (peek (Ctr 3)))
+  0)

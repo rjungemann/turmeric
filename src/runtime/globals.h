@@ -237,6 +237,17 @@ extern bool g_opt_jit;
  * enabled the experiment.  See docs/upcoming/sealed-opaque-plan.md. */
 extern bool g_opt_sealed_opaque;
 
+/* write-frames (WF1/WF2, docs/upcoming/checked-write-frames-plan.md): gates the
+ * `#writes` write-frame annotation -- its CHECKING (WF2's TUR-E0382) and every
+ * consumer that acts on a checked frame (WF3's callee-frame widening, WF4's
+ * entry-check elision).  The annotation itself always PARSES so that adding one
+ * is not a breaking change for a consumer who has not enabled the experiment;
+ * what the gate withholds is the checking and the acting.
+ *
+ * `#reads` lived under the `refined` experiment, but that graduated 2026-08-01,
+ * so this feature needs its own lifecycle home rather than a retired one. */
+extern bool g_opt_write_frames;
+
 /* lang-layers L4: true once a project manifest declared an `:experiments`
  * key (even the empty list), i.e. the project owner scoped the experiment set.
  * A `#lang <base> <semantic-layer>` file whose backing experiment is absent

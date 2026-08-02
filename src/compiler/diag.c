@@ -252,6 +252,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0378_REFINE_IN_FN_TYPE:         return "TUR-E0378";
         case TUR_I0379_REFINE_ORACLE_MISMATCH:    return "TUR-I0379";
         case TUR_W0380_REFINE_TYPE_ARG_UNENFORCED: return "TUR-W0380";
+        case TUR_E0381_WRITES_FRAME_INVALID:       return "TUR-E0381";
+        case TUR_E0382_WRITES_FRAME_EXCEEDED:      return "TUR-E0382";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
@@ -407,6 +409,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0378") == 0) return TUR_E0378_REFINE_IN_FN_TYPE;
     if (strcmp(s, "TUR-I0379") == 0) return TUR_I0379_REFINE_ORACLE_MISMATCH;
     if (strcmp(s, "TUR-W0380") == 0) return TUR_W0380_REFINE_TYPE_ARG_UNENFORCED;
+    if (strcmp(s, "TUR-E0381") == 0) return TUR_E0381_WRITES_FRAME_INVALID;
+    if (strcmp(s, "TUR-E0382") == 0) return TUR_E0382_WRITES_FRAME_EXCEEDED;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
@@ -1510,6 +1514,47 @@ static const DiagExplanation diag_explanations_[] = {
       "    (defn unwrap [b : Box] : #refine{ v : int | (> v 0) } ...)\n"
       "\n"
       "or check the payload after unpacking it.\n" },
+    { TUR_E0381_WRITES_FRAME_INVALID,
+      "TUR-E0381: Malformed `#writes` frame\n"
+      "\n"
+      "A `#writes` annotation names the parameters whose mutable state the\n"
+      "body may write.  It is spelled either as one parameter or as a vector\n"
+      "of them, and every name must be a parameter of THIS function:\n"
+      "\n"
+      "    (defn move! [^mut w : World dt : float] #writes w : void ...)\n"
+      "    (defn swap2! [^mut a : Buf ^mut b : Buf] #writes [a b] : void ...)\n"
+      "    (defn peek [^borrow w : World] #writes [] : int ...)\n"
+      "\n"
+      "`#writes []` is the empty frame -- a positive claim that the body\n"
+      "writes nothing.  It is NOT the same as omitting the annotation, which\n"
+      "means \"unknown, assume anything\".\n"
+      "\n"
+      "This is an error rather than an ignored decoration because a frame that\n"
+      "does not resolve cannot be checked against the body, and downstream\n"
+      "code is entitled to believe a declaration that compiled.\n" },
+    { TUR_E0382_WRITES_FRAME_EXCEEDED,
+      "TUR-E0382: Body writes outside its declared `#writes` frame\n"
+      "\n"
+      "The function declared a write frame, and its body writes something the\n"
+      "frame does not cover:\n"
+      "\n"
+      "    (defn bump! [^mut a : Ctr ^mut b : Ctr] #writes [a] : void\n"
+      "      (set! (.n a) 1)\n"
+      "      (set! (.n b) 2))   ;; TUR-E0382: `b` is not in the frame\n"
+      "\n"
+      "A declared frame the body exceeds is an error, not a silent widening --\n"
+      "the same rule `#reads` follows.  Widening it silently would make the\n"
+      "annotation unfalsifiable, and the whole point of the checked tier is\n"
+      "that an optimization may act on the claim.\n"
+      "\n"
+      "Three write channels are checked: a direct `set!`/`swap!`/`reset!`, an\n"
+      "argument passed `^mut` to a callee, and a callee's own declared frame.\n"
+      "Fix it by widening the declaration to what the body actually writes, or\n"
+      "by narrowing the body.\n"
+      "\n"
+      "Only a body with no inline C is checked.  An inline-C body cannot be\n"
+      "walked, so its frame stays trusted-with-declaration and never reports\n"
+      "this code -- checked-when-checkable, never checked-by-pretending.\n" },
     { TUR_W0373_REFINE_NONLINEAR,
       "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
       "\n"

@@ -2,7 +2,8 @@
 #include "elab_internal.h"
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
-#include "globals.h"            /* repr-trace: g_emit_abi_trace */
+#include "globals.h"            /* repr-trace: g_emit_abi_trace; WF1: g_opt_write_frames */
+#include "experiments.h"        /* WF1: experiment_warn_if_used("write-frames") */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
  * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
@@ -653,6 +654,14 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * congruence when that argument is frozen at the call site. */
     out->reads_param_plus1 = b->reads_param_plus1;
 
+    /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
+     * CHECKED.  A consumer that acts on the frame (WF3, WF4) must gate on
+     * `writes_checked`; a trusted frame documents intent but has not been
+     * verified against a body, so eliding on it would be trusting a promise. */
+    out->writes_param_mask = b->writes_param_mask;
+    out->writes_declared   = b->writes_declared;
+    out->writes_checked    = b->writes_checked;
+
     /* PURITY, which decides whether two occurrences of this call may be
      * modelled as the same value.  See rt_binding_is_pure above: the declared
      * effect row is only a veto, the real evidence is a default-deny walk of
@@ -1029,6 +1038,479 @@ static bool rt_form_borrows_name(const Elab *e, const Form *f,
         if (rt_form_borrows_name(e, f->as.list.items[i], name, depth + 1))
             return true;
     return false;
+}
+
+/* ------------------------------------------------------------------------- *
+ * WF2: the checked tier for `#writes` frames.
+ *
+ * A body with no inline C is walkable, so a declared frame can be VERIFIED
+ * rather than believed.  That distinction is the whole point: `#reads` is step
+ * 1 of the trajectory (trusted, sound because it changes nothing at runtime),
+ * and every step past it -- WF3's callee-frame widening, WF4's entry-check
+ * elision -- ELIDES or REORDERS real work on the strength of the claim.  A
+ * promise cannot back that; a checked fact can.
+ *
+ * The walk classifies each function into exactly one of three outcomes:
+ *
+ *   - VERIFIED    -- every write channel was visible and landed inside the
+ *                    frame.  `writes_checked = true`; consumers may act on it.
+ *   - EXCEEDED    -- a write outside the frame was seen.  TUR-E0382, because a
+ *                    declared frame the body exceeds is an error and not a
+ *                    silent widening (the `#reads` rule).  `writes_checked`
+ *                    stays false.
+ *   - UNVERIFIED  -- something in the body could not be vouched for: inline C,
+ *                    a callee that does not resolve, a resolvable callee with
+ *                    no declared frame that receives a frame-relevant argument,
+ *                    or the scan running out of depth.  NO diagnostic --
+ *                    `writes_checked` simply stays false, so the declaration
+ *                    still documents intent and nothing optimizes on it.
+ *
+ * Making the third case a downgrade rather than an error is what keeps
+ * `#writes` adoptable: an error would mean no function could carry a frame
+ * until its entire transitive callee set carried one too.  It is also the
+ * honest answer -- "I could not check this" is not "you did something wrong".
+ *
+ * Three write channels are checked, matching the plan's WF2 list:
+ *   1. a direct `set!`/`swap!`/`reset!` through a parameter;
+ *   2. an argument passed to a `^mut` parameter of a callee;
+ *   3. a callee's own declared `#writes` frame, mapped back through the
+ *      argument list to this function's parameters.
+ *
+ * What is deliberately NOT a write: assigning a parameter's own bare symbol
+ * (`(set! p 5)`).  Turmeric passes by value, so that rebinds this function's
+ * local slot and the caller cannot observe it -- the same by-value argument
+ * the WF3 slice above already rests on.  Keeping these two consistent matters:
+ * if a bare-symbol assignment could escape, WF3's "a plain symbol target
+ * cannot alias" rule would be unsound too.
+ *
+ * A PLACE expression rooted at a parameter (`(set! (.n w) 9)`) DOES count.
+ * Note this is an OVER-approximation, not an equivalence, and an earlier
+ * version of this comment overstated it as "does reach the caller's object":
+ *
+ *   - through an `rc<Struct>` or a `:heap` struct receiver it genuinely does
+ *     reach the caller's object, which is the case the rule exists for;
+ *   - through a plain by-value struct parameter it reaches a COPY, and the
+ *     compiled backend emits a store the C compiler then deletes outright.
+ *     Counting it is therefore pessimistic there -- it can force a frame wider
+ *     than the caller could ever observe.
+ *
+ * Pessimism is the safe direction for a frame (it over-declares, never
+ * under-declares), so the rule stands.  But the by-value case is a silent
+ * no-op in the compiled backend and a write-through in the turi interpreter,
+ * which is a live divergence -- see
+ * docs/reported/struct-param-mutation-backend-divergence.md.  If that is
+ * resolved by rejecting the no-op write, this branch narrows to the rc/heap
+ * receivers and stops being an over-approximation at all. */
+#define WF_SCAN_MAX_DEPTH 24   /* matches RT_SET_SCAN_MAX_DEPTH; same tradeoff */
+
+typedef enum WfVerdict {
+    WF_VERIFIED = 0,   /* every channel seen, all inside the frame */
+    WF_UNVERIFIED,     /* something could not be vouched for; no diagnostic */
+    WF_EXCEEDED,       /* a definite write outside the frame; TUR-E0382 */
+} WfVerdict;
+
+/* The 0-based parameter index `f` names, or -1 when `f` is not a bare symbol
+ * naming one of `params`.  Compared by interned Symbol identity, not spelling,
+ * so a local that shadows a parameter's name does not masquerade as it. */
+static int wf_param_index(const Form *f, Binding *const *params, uint32_t n_params) {
+    if (!f || f->tag != F_SYM || !f->as.sym) return -1;
+    for (uint32_t i = 0; i < n_params; i++)
+        if (params[i] && params[i]->name == f->as.sym) return (int)i;
+    return -1;
+}
+
+/* The parameter a PLACE expression is rooted at, or -1.
+ *
+ * `(.n w)` roots at `w`; `(.n (.inner w))` roots at `w` too.  A place whose
+ * root is not a bare symbol (a call result, an index into a computed value)
+ * returns -1 and is reported by the caller as unverifiable rather than safe --
+ * it may well reach a parameter by a route this scan cannot follow. */
+static int wf_place_root_param(const Form *f, Binding *const *params,
+                               uint32_t n_params, uint32_t depth, bool *opaque) {
+    if (!f) { *opaque = true; return -1; }
+    if (depth >= WF_SCAN_MAX_DEPTH) { *opaque = true; return -1; }
+    if (f->tag == F_SYM) {
+        int pi = wf_param_index(f, params, n_params);
+        if (pi < 0) return -1;      /* a local: not in the frame vocabulary */
+        return pi;
+    }
+    if (f->tag != F_LIST || f->as.list.len < 2) { *opaque = true; return -1; }
+    /* An accessor form `(<place-op> <subject> ...)`: recurse on the subject.
+     * Which head it is does not matter -- field access, index, deref all put
+     * the thing being written into slot 1. */
+    return wf_place_root_param(f->as.list.items[1], params, n_params,
+                               depth + 1, opaque);
+}
+
+static WfVerdict wf_worse(WfVerdict a, WfVerdict b) { return a > b ? a : b; }
+
+/* Walk `f`, accumulating the verdict for a frame of `mask` over `params`. */
+static WfVerdict wf_walk(Elab *e, const Form *f, Binding *const *params,
+                         uint32_t n_params, uint32_t mask, uint32_t depth,
+                         const Form **witness) {
+    if (!f) return WF_VERIFIED;
+    if (depth >= WF_SCAN_MAX_DEPTH) return WF_UNVERIFIED;
+    /* An inline-C body is opaque by construction.  This is the trust boundary
+     * `#reads` already draws and the plan keeps: checked-when-checkable, never
+     * checked-by-pretending. */
+    if (f->tag == F_CBLOCK) return WF_UNVERIFIED;
+    if (f->tag == F_SYM && f->as.sym) {
+        /* A bare assignment symbol that is not the head of a form recognized
+         * below: it may be aliased or applied, and its target is not readable
+         * from here. */
+        const char *n = f->as.sym->name;
+        if (strcmp(n, "set!") == 0 || strcmp(n, "swap!") == 0 ||
+            strcmp(n, "reset!") == 0)
+            return WF_UNVERIFIED;
+        return WF_VERIFIED;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return WF_VERIFIED;
+    /* A macro call walks as its EXPANSION, exactly as the WF3 scanners do: the
+     * source spelling may show no write at all, but the code that runs is the
+     * expansion, and a frame that ignored a write hidden in a template would be
+     * a frame the body exceeds without anyone hearing about it.  The hop does
+     * not consume depth (a lateral move to fresh nodes, not nesting). */
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_walk(e, mx, params, n_params, mask, depth, witness);
+    }
+    if (f->as.list.len == 0) return WF_VERIFIED;
+
+    WfVerdict v = WF_VERIFIED;
+
+    /* --- channel 1: a direct assignment ---------------------------------- */
+    if (f->as.list.len >= 2 &&
+        (rt_sym_is(f->as.list.items[0], "set!") ||
+         rt_sym_is(f->as.list.items[0], "swap!") ||
+         rt_sym_is(f->as.list.items[0], "reset!"))) {
+        const Form *target = f->as.list.items[1];
+        if (target && target->tag == F_SYM) {
+            /* Bare symbol: a local rebind, in-frame by the by-value argument
+             * above -- whether or not it happens to spell a parameter. */
+        } else {
+            bool opaque = false;
+            int pi = wf_place_root_param(target, params, n_params, 0, &opaque);
+            if (opaque) {
+                v = wf_worse(v, WF_UNVERIFIED);
+            } else if (pi >= 0 && !(mask & ((uint32_t)1u << pi))) {
+                if (witness && !*witness) *witness = f;
+                v = wf_worse(v, WF_EXCEEDED);
+            }
+        }
+        for (uint32_t i = 2; i < f->as.list.len; i++)
+            v = wf_worse(v, wf_walk(e, f->as.list.items[i], params, n_params,
+                                    mask, depth + 1, witness));
+        return v;
+    }
+
+    /* --- channels 2 and 3: a call ---------------------------------------- */
+    if (f->tag == F_LIST && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        /* Only a call that hands this function's own parameters onward can
+         * write this frame at all, so a call with no parameter-rooted argument
+         * needs no callee knowledge -- which is what keeps the common case
+         * (calling an unannotated helper on locals) verifiable. */
+        bool passes_param = false;
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            bool opaque = false;
+            if (wf_place_root_param(f->as.list.items[i], params, n_params, 0,
+                                    &opaque) >= 0)
+                passes_param = true;
+        }
+        if (passes_param) {
+            Binding *callee = scope_lookup(&e->global, head);
+            if (!callee) {
+                /* Not resolvable here (a local fn value, a typeclass method, a
+                 * builtin): no frame to consult, so no vouching. */
+                v = wf_worse(v, WF_UNVERIFIED);
+            } else {
+                /* `source_fn_def` is the defn's own parameter list, which is
+                 * where the `^mut`/`^borrow` modes live -- the binding's TY_FN
+                 * carries only kinds. */
+                const FnDef *fd = callee->source_fn_def;
+                uint32_t cn = fd ? fd->n_params : 0;
+                for (uint32_t i = 1; i < f->as.list.len; i++) {
+                    uint32_t slot = i - 1;   /* 0-based callee parameter */
+                    bool opaque = false;
+                    int pi = wf_place_root_param(f->as.list.items[i], params,
+                                                 n_params, 0, &opaque);
+                    if (opaque) { v = wf_worse(v, WF_UNVERIFIED); continue; }
+                    if (pi < 0) continue;    /* a local: not in this vocabulary */
+                    bool callee_writes_slot;
+                    if (callee->writes_declared) {
+                        /* Channel 3: the callee said what it writes.  Only a
+                         * CHECKED frame may narrow us -- a trusted one is a
+                         * promise, and a chain of promises is what the checked
+                         * tier exists to replace. */
+                        if (!callee->writes_checked) {
+                            v = wf_worse(v, WF_UNVERIFIED);
+                            continue;
+                        }
+                        callee_writes_slot =
+                            slot < WF_MAX_FRAME_PARAMS &&
+                            (callee->writes_param_mask & ((uint32_t)1u << slot)) != 0;
+                    } else if (fd && slot < cn && fd->params[slot]) {
+                        /* Channel 2: no declared frame, so fall back to the
+                         * parameter MODE, which is itself a declaration.
+                         *
+                         *   ^borrow -- safe, and not merely assumed safe: the
+                         *     borrow checker already forbids writing through
+                         *     it, so this is a fact the frame may rely on.
+                         *   ^mut    -- a DEFINITE write channel.  The callee
+                         *     asked for mutable access and the language grants
+                         *     it, so handing a parameter here writes it,
+                         *     whether or not the callee happens to use it.
+                         *     Treating it as merely-possible would let a frame
+                         *     be silently exceeded through the one channel the
+                         *     language spells out.
+                         *   anything else -- UNVERIFIED.  A plain by-value slot
+                         *     may still be an opaque handle the callee writes
+                         *     through, which is exactly what this scan cannot
+                         *     see.  Not a definite write, so not E0382; just
+                         *     not vouchable. */
+                        if (fd->params[slot]->is_borrow) continue;
+                        if (!fd->params[slot]->is_mut) {
+                            v = wf_worse(v, WF_UNVERIFIED);
+                            continue;
+                        }
+                        callee_writes_slot = true;
+                    } else {
+                        v = wf_worse(v, WF_UNVERIFIED);
+                        continue;
+                    }
+                    if (callee_writes_slot && !(mask & ((uint32_t)1u << pi))) {
+                        if (witness && !*witness) *witness = f;
+                        v = wf_worse(v, WF_EXCEEDED);
+                    }
+                }
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        v = wf_worse(v, wf_walk(e, f->as.list.items[i], params, n_params, mask,
+                                depth + 1, witness));
+    return v;
+}
+
+void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
+                        const Form *defn_form, uint32_t body_start,
+                        const Form *annot) {
+    if (!e || !fn || !g_opt_write_frames) return;
+    if (e->n_wf_frame_sites == e->cap_wf_frame_sites) {
+        uint32_t ncap = e->cap_wf_frame_sites ? e->cap_wf_frame_sites * 2 : 8;
+        WriteFrameSite *nb = (WriteFrameSite *)arena_alloc(
+            e->arena, ncap * sizeof(WriteFrameSite));
+        if (e->wf_frame_sites)
+            memcpy(nb, e->wf_frame_sites,
+                   e->n_wf_frame_sites * sizeof(WriteFrameSite));
+        e->wf_frame_sites     = nb;
+        e->cap_wf_frame_sites = ncap;
+    }
+    WriteFrameSite *s = &e->wf_frame_sites[e->n_wf_frame_sites++];
+    s->fn         = fn;
+    s->params     = params;
+    s->n_params   = n_params;
+    s->defn_form  = defn_form;
+    s->body_start = body_start;
+    s->annot      = annot;
+}
+
+void wf_resolve_write_frames(Elab *e) {
+    if (!e || !g_opt_write_frames || e->n_wf_frame_sites == 0) return;
+    /* Iterate to a fixed point: channel 3 consults a callee's `writes_checked`,
+     * which a later pass may raise, so one linear sweep would under-verify a
+     * caller purely because its callee had not been visited yet.  Verdicts only
+     * ever move from unverified to verified, so this terminates; the bound is
+     * belt-and-braces against a future non-monotone edit.  Definite violations
+     * are reported once, on the LAST round, so a caller cannot be blamed twice
+     * for the same write. */
+    uint32_t rounds = e->n_wf_frame_sites + 1;
+    for (uint32_t round = 0; round < rounds; round++) {
+        bool progress = false;
+        for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
+            WriteFrameSite *s = &e->wf_frame_sites[i];
+            if (!s->fn || s->fn->writes_checked) continue;
+            const Form *witness = NULL;
+            WfVerdict v = WF_VERIFIED;
+            const Form *d = s->defn_form;
+            for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
+                v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
+                                        s->n_params, s->fn->writes_param_mask,
+                                        0, &witness));
+            if (v == WF_VERIFIED) { s->fn->writes_checked = true; progress = true; }
+        }
+        if (!progress) break;
+    }
+    /* Final sweep: report the frames that are definitely exceeded. */
+    for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
+        WriteFrameSite *s = &e->wf_frame_sites[i];
+        if (!s->fn || s->fn->writes_checked) continue;
+        const Form *witness = NULL;
+        WfVerdict v = WF_VERIFIED;
+        const Form *d = s->defn_form;
+        for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
+            v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
+                                    s->n_params, s->fn->writes_param_mask, 0,
+                                    &witness));
+        if (v != WF_EXCEEDED) continue;
+        Span at = witness ? witness->span
+                          : (s->annot ? s->annot->span : d->span);
+        diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
+                            "this writes outside the `#writes` frame declared by "
+                            "'%s'",
+                            s->fn->name ? s->fn->name->name : "<fn>");
+        if (s->annot)
+            diag_emit(DIAG_NOTE, s->annot->span,
+                      "the declared frame is here; widen it to what the body "
+                      "writes, or narrow the body");
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * WF3 widening: borrow-aware disjointness, backed by CHECKED callee frames.
+ *
+ * The landed WF3 slice declines a whole caller body the moment an assigned
+ * name is also BORROWED, on the grounds that "a borrowed local is the one way a
+ * callee could write this frame's slot".  That is true, and until WF2 it was
+ * also the end of the conversation -- there was no way to ask what a callee
+ * does, so assuming the worst was the only sound answer.
+ *
+ * With a checked frame there is now a question to ask instead of an assumption
+ * to make.  A borrow is dangerous only if it REACHES a callee that writes
+ * through it, so the decline can be lifted when every borrow of the assigned
+ * name is provably write-free.  Two shapes are recognized, and everything else
+ * keeps the old decline:
+ *
+ *   (f ... (& acc) ...)          -- passed straight into a call slot; safe iff
+ *                                   that slot cannot be written.
+ *   (let [b (& acc)] body)       -- `b` aliases the borrow, so every occurrence
+ *                                   of `b` in `body` must itself sit in a slot
+ *                                   that cannot be written.  Zero occurrences
+ *                                   is the common case and trivially safe --
+ *                                   that is the `frozen` region idiom, whose
+ *                                   `(& w)` exists only to lock w down and is
+ *                                   never passed anywhere.
+ *
+ * "Cannot be written" has exactly three sources, in descending strength:
+ *   - a `^borrow` parameter, which the borrow checker already forbids writing
+ *     through.  A fact, independent of any annotation.
+ *   - a CHECKED `#writes` frame that excludes the slot.  A fact, because WF2
+ *     walked the body.
+ *   - nothing else.  An unresolvable callee, an unannotated non-borrow slot, or
+ *     a DECLARED-but-unchecked frame all answer "assume it writes".  The last
+ *     of those is the point of the tier split: acting on a trusted frame here
+ *     would let a promise elide a check, which is the thing the checked tier
+ *     exists to prevent.
+ *
+ * Gated on the experiment, because it consumes WF2's verdicts and changes which
+ * programs prove. */
+
+/* Can the callee named `head` write the argument it receives in `slot`
+ * (0-based)?  Conservative: true unless something positively says otherwise. */
+static bool wf_call_slot_writes(Elab *e, const Symbol *head, uint32_t slot) {
+    Binding *callee = head ? scope_lookup(&e->global, head) : NULL;
+    if (!callee) return true;              /* unresolvable: assume the worst */
+    if (callee->writes_declared) {
+        if (!callee->writes_checked) return true;   /* a promise, not a fact */
+        return slot >= WF_MAX_FRAME_PARAMS ||
+               (callee->writes_param_mask & ((uint32_t)1u << slot)) != 0;
+    }
+    const FnDef *fd = callee->source_fn_def;
+    if (!fd || slot >= fd->n_params || !fd->params[slot]) return true;
+    return !fd->params[slot]->is_borrow;
+}
+
+/* Every occurrence of `alias` in `f` sits in a call slot the callee cannot
+ * write.  A bare occurrence anywhere else -- returned, stored, assigned, used
+ * as a callee -- is not accounted for and answers false. */
+static bool wf_alias_write_free(Elab *e, const Form *f, const char *alias,
+                                uint32_t depth) {
+    if (!f) return true;
+    if (depth >= WF_SCAN_MAX_DEPTH) return false;   /* too deep to vouch for */
+    if (f->tag == F_SYM) return !rt_sym_is(f, alias);
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_alias_write_free(e, mx, alias, depth);
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 1 && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        if (rt_sym_is(f->as.list.items[0], alias))
+            return false;                  /* the borrow itself is the callee */
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            const Form *a = f->as.list.items[i];
+            if (a && a->tag == F_SYM && rt_sym_is(a, alias)) {
+                if (wf_call_slot_writes(e, head, i - 1)) return false;
+                continue;                  /* this occurrence is accounted for */
+            }
+            if (!wf_alias_write_free(e, a, alias, depth + 1)) return false;
+        }
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!wf_alias_write_free(e, f->as.list.items[i], alias, depth + 1))
+            return false;
+    return true;
+}
+
+/* True when every borrow of `name` in `f` is provably write-free. */
+static bool wf_borrow_write_free(Elab *e, const Form *f, const char *name,
+                                 uint32_t depth) {
+    if (!f) return true;
+    if (depth >= WF_SCAN_MAX_DEPTH) return false;   /* too deep to vouch for */
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_borrow_write_free(e, mx, name, depth);
+    }
+    /* `(let [b (& name)] body)`: b aliases the borrow for the whole body. */
+    if (rt_head_is(f, "let") && f->as.list.len == 3) {
+        const Form *binds = f->as.list.items[1];
+        const Form *body  = f->as.list.items[2];
+        if (binds && binds->tag == F_VEC && binds->as.list.len == 2) {
+            const Form *x = binds->as.list.items[0];
+            const Form *v = binds->as.list.items[1];
+            if (v && v->tag == F_LIST && v->as.list.len >= 2 &&
+                rt_sym_is(v->as.list.items[0], "&") &&
+                rt_sym_is(v->as.list.items[1], name)) {
+                if (!x || x->tag != F_SYM || !x->as.sym) return false;
+                if (!wf_alias_write_free(e, body, x->as.sym->name, 0)) return false;
+                /* The body may borrow `name` AGAIN, independently. */
+                return wf_borrow_write_free(e, body, name, depth + 1);
+            }
+        }
+    }
+    /* A bare `(& name)`.  Checked BEFORE the call branch below, which would
+     * otherwise walk this very form as a call to `&` and find nothing wrong
+     * with it.  Reaching here means no enclosing form accounted for the
+     * borrow, so there is no answer about where it goes. */
+    if (f->tag == F_LIST && f->as.list.len >= 2 &&
+        rt_sym_is(f->as.list.items[0], "&") &&
+        rt_sym_is(f->as.list.items[1], name))
+        return false;
+    /* `(g ... (& name) ...)`: handed straight to a call slot. */
+    if (f->tag == F_LIST && f->as.list.len >= 1 && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            const Form *a = f->as.list.items[i];
+            if (a && a->tag == F_LIST && a->as.list.len >= 2 &&
+                rt_sym_is(a->as.list.items[0], "&") &&
+                rt_sym_is(a->as.list.items[1], name)) {
+                if (wf_call_slot_writes(e, head, i - 1)) return false;
+                continue;                  /* this borrow is accounted for */
+            }
+            if (!wf_borrow_write_free(e, a, name, depth + 1)) return false;
+        }
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!wf_borrow_write_free(e, f->as.list.items[i], name, depth + 1))
+            return false;
+    return true;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -1987,9 +2469,15 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     uint32_t nw = 0;
     if (!rt_collect_set_targets(e, cs->caller_body, 0, wtgt, &nw)) return saved;
     /* A borrowed local is the one way a callee could write this frame's slot,
-     * so an assigned name that is also borrowed is not provably disjoint. */
+     * so an assigned name that is also borrowed is not provably disjoint --
+     * unless every borrow of it provably goes nowhere that writes, which is
+     * the question WF2's checked frames made askable.  Without the experiment
+     * there are no checked frames to ask, so the guard stays unconditional. */
     for (uint32_t i = 0; i < nw; i++)
-        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0)) return saved;
+        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0) &&
+            !(g_opt_write_frames &&
+              wf_borrow_write_free(e, cs->caller_body, wtgt[i], 0)))
+            return saved;
 
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
 
@@ -4404,6 +4892,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
     uint32_t reads_param_plus1_defn = 0;
+    /* WF1 / #writes: the write frame, captured here and stamped alongside.
+     * `declared` is separate from the mask because an empty mask is a real
+     * frame ("writes nothing"), not the absence of one -- see expr.h. */
+    uint32_t writes_mask_defn     = 0;
+    bool     writes_declared_defn = false;
+    const Form *writes_annot_defn = NULL;   /* for the WF2 diagnostic's span */
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
@@ -4433,19 +4927,26 @@ Expr *elab_defn(Elab *e, const Form *call) {
             body_start++;  /* skip past the effect row map */
         }
     }
-    /* C2 / #reads <sym>: a read-frame annotation at the same signature position
-     * as #fx{...} (and, when both are present, after it).  Resolve the named
-     * symbol to a parameter index and record it on the binding; the refinement
-     * encoder consults it to grant congruence inside a frozen region.  Inert
-     * until that grant lands. */
-    if (call->as.list.len >= body_start + 1) {
-        Form *maybe_reads = call->as.list.items[body_start];
-        if (maybe_reads->tag == F_LIST &&
-            maybe_reads->fx_prov == (uint8_t)PROV_READS) {
-            const Form *psym = (maybe_reads->as.list.len == 2)
-                                   ? maybe_reads->as.list.items[1] : NULL;
+    /* C2 / #reads <sym> and WF1 / #writes <sym>|[<sym>...]: the frame
+     * annotations, at the same signature position as #fx{...} and (when it is
+     * present) after it.  Each resolves its named symbols to parameter indices
+     * and records them on the binding; the refinement encoder consults `#reads`
+     * to grant congruence inside a frozen region, and WF2/WF3/WF4 consult
+     * `#writes`.
+     *
+     * The loop accepts the two in EITHER order.  There is no reason to prefer
+     * one spelling, and a fixed order would turn a reader's stylistic choice
+     * into "unknown function or operator 'writes'" -- the annotation would fall
+     * through to the body walk and elaborate as a call. */
+    for (int annot_slot = 0; annot_slot < 2; annot_slot++) {
+        if (call->as.list.len < body_start + 1) break;
+        Form *maybe = call->as.list.items[body_start];
+        if (maybe->tag != F_LIST) break;
+        if (maybe->fx_prov == (uint8_t)PROV_READS) {
+            const Form *psym = (maybe->as.list.len == 2)
+                                   ? maybe->as.list.items[1] : NULL;
             if (!psym || psym->tag != F_SYM || !psym->as.sym) {
-                diag_emit(DIAG_ERROR, maybe_reads->span,
+                diag_emit(DIAG_ERROR, maybe->span,
                           "#reads must name a parameter: `#reads <param>`");
             } else {
                 uint32_t found = 0;
@@ -4464,6 +4965,60 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             body_start++;  /* skip past the #reads annotation */
+        } else if (maybe->fx_prov == (uint8_t)PROV_WRITES) {
+            experiment_warn_if_used("write-frames");
+            if (writes_declared_defn) {
+                diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                    TUR_E0381_WRITES_FRAME_INVALID,
+                                    "duplicate `#writes` frame on this function; "
+                                    "name every written parameter in one "
+                                    "`#writes [...]`");
+            }
+            /* Declared even when a name inside fails to resolve: the intent to
+             * carry a frame is unambiguous, and treating a typo'd frame as "no
+             * frame" would silently downgrade the function to UNKNOWN-writes
+             * after already reporting the typo -- two answers to one mistake. */
+            writes_declared_defn = true;
+            writes_annot_defn    = maybe;
+            for (uint32_t ai = 1; ai < maybe->as.list.len; ai++) {
+                const Form *psym = maybe->as.list.items[ai];
+                if (!psym || psym->tag != F_SYM || !psym->as.sym) {
+                    diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                        TUR_E0381_WRITES_FRAME_INVALID,
+                                        "#writes must name parameters: "
+                                        "`#writes <param>` or `#writes [<param> ...]`");
+                    continue;
+                }
+                uint32_t found = 0;
+                for (uint32_t pi = 0; pi < n_params; pi++) {
+                    if (params[pi] && params[pi]->name == psym->as.sym) {
+                        found = pi + 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    diag_emit_with_code(DIAG_ERROR, psym->span,
+                                        TUR_E0381_WRITES_FRAME_INVALID,
+                                        "#writes names '%s', which is not a parameter "
+                                        "of this function",
+                                        psym->as.sym->name);
+                } else if (found > WF_MAX_FRAME_PARAMS) {
+                    /* The mask is 32 bits wide.  Rejected rather than dropped:
+                     * a silently ignored frame member is a frame the body can
+                     * exceed without anyone hearing about it. */
+                    diag_emit_with_code(DIAG_ERROR, psym->span,
+                                        TUR_E0381_WRITES_FRAME_INVALID,
+                                        "#writes names '%s', parameter %u -- a write "
+                                        "frame covers at most the first %u parameters",
+                                        psym->as.sym->name, found,
+                                        (unsigned)WF_MAX_FRAME_PARAMS);
+                } else {
+                    writes_mask_defn |= (uint32_t)1u << (found - 1);
+                }
+            }
+            body_start++;  /* skip past the #writes annotation */
+        } else {
+            break;         /* neither annotation: the body starts here */
         }
     }
     bool fn_declared_unsafe =
@@ -5994,6 +6549,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
      * refinements, so this must not sit inside the block above. */
     b->reads_param_plus1 = reads_param_plus1_defn;
+    /* WF1 / #writes: same placement rationale as `#reads` -- a write frame is
+     * independent of param refinements.  `writes_checked` starts false and is
+     * raised by the DEFERRED WF2 pass (wf_resolve_write_frames), which is where
+     * it has to happen: "every callee's own declared #writes frame stays inside
+     * this frame" is a question about functions that may be defined later in
+     * the file, and the answer must not depend on definition order. */
+    b->writes_param_mask = writes_mask_defn;
+    b->writes_declared   = writes_declared_defn;
+    b->writes_checked    = false;
+    if (writes_declared_defn)
+        wf_note_frame_site(e, b, params, n_params, call, body_start,
+                           writes_annot_defn);
     /* A declared return refinement wins -- but only when something actually
      * enforces it (see rt_ret_guaranteed).  An INFERRED one is always safe to
      * publish: RT4 only records what a backend proved. */

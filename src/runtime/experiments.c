@@ -202,6 +202,22 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
                                   *   shelve, or bump */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_sealed_opaque },
+    /* write-frames: step 2 of the trajectory stateful-refinements-guide.md
+     * sketches ("trusted now -> checkable later -> effect-row eventually").
+     * `#reads` is step 1 and graduated with `refined`; this is the checked
+     * tier, which is what an optimization may act on.  Gated because the
+     * CHECKING can reject a body that compiles today (TUR-E0382) and because
+     * WF4 ELIDES a runtime check on the strength of the frame -- neither should
+     * arrive unasked-for.  The annotation parses either way. */
+    { "write-frames",
+      "`#writes w` / `#writes [a b]` -- a checked per-argument write frame; "
+      "backs frame-aware hypothesis invalidation and entry-check elision",
+      "docs/upcoming/checked-write-frames-plan.md",
+      "0.34.0",                  /* introduced */
+      "0.38.0",                  /* expires_at -- review at that cut: graduate,
+                                  *   shelve, or bump */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_write_frames },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

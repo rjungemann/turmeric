@@ -1,0 +1,42 @@
+;; WF3 widening: a borrowed assignment target is rescued when every borrow of
+;; it provably goes nowhere that writes.
+;;
+;; This is byte-for-byte errors/refine-wf3-borrowed-target -- the fixture that
+;; pins the UN-widened behavior -- plus `--enable=write-frames`.  There, the
+;; `(& acc)` borrow forces the whole-body decline on the grounds that a callee
+;; could write `acc`'s slot through it.  True, and until WF2 there was no way
+;; to ask whether one actually does, so assuming the worst was the only sound
+;; answer.
+;;
+;; With checked frames there is a question to ask.  `__b` is never passed
+;; anywhere -- it is never used at all -- so no callee receives the borrow and
+;; none can write through it.  The frame is disjoint after all and the guarded
+;; read proves.
+;;
+;; The paired negative is errors/wf3-borrow-reaches-writer, where the borrow
+;; IS handed to a writer and the decline correctly returns.  Both fixtures
+;; matter: this one alone would pass just as well if the guard were deleted
+;; outright.
+;;
+;; Expected: refine proves; the program prints 7.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [^mut acc 0]
+      (let [__b (& acc)]
+        (let [__f (& w)]
+          (if (alive? w 0)
+            (do (set! acc (+ acc (get! w 0))) acc)
+            -1))))))
+
+(defn main [] : int
+  (println (run))
+  0)

@@ -88,6 +88,16 @@ typedef struct RefineFnInfo {
      * body is impure.  Sound only because the callee's own entry check is never
      * elided; see docs/guides/stateful-refinements-guide.md. */
     uint32_t     reads_param_plus1;
+    /* WF1/WF2 / #writes: this callee's declared write frame, mirroring the
+     * Binding fields of the same names.  `writes_declared` distinguishes "the
+     * frame is empty" from "there is no frame" -- see expr.h.  WF3 uses these
+     * to decide whether a CALL in a caller body can stale a hypothesis; a frame
+     * that is not `writes_checked` is a promise, so it may not back that
+     * decision (a trusted frame can still document intent, but eliding on it
+     * would be trusting an unverified claim). */
+    uint32_t     writes_param_mask;
+    bool         writes_declared;
+    bool         writes_checked;
 } RefineFnInfo;
 
 /* Resolve a called name.  Returns false when the name does not resolve to a

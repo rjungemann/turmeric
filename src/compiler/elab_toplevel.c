@@ -2133,6 +2133,13 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * session back to the caller is not a reason to leave them undischarged --
      * that would silently skip static checking for every session-based
      * elaboration. */
+    /* WF2 (checked-write-frames-plan): verify every `#writes` frame against its
+     * body.  Runs BEFORE the crossing resolution below, because that is where a
+     * checked frame is CONSUMED -- WF3 asks "can this callee stale my
+     * hypothesis?" and may only believe a frame that has already been checked.
+     * Same deferral rationale as the crossings themselves: a frame's callees may
+     * be defined later in the unit. */
+    wf_resolve_write_frames(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);
 

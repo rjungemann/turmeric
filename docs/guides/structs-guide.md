@@ -79,6 +79,51 @@ The compiler enforces that a `:copy` struct's fields are all themselves
 copy-compatible types. Using a non-copy field (such as `:ref<int>`) in a
 `:copy` struct is a compile error.
 
+### Structs are passed by value
+
+A struct argument is **copied into the callee**, at every copy kind. A callee
+therefore mutates its own copy, and the caller's value is unchanged:
+
+```turmeric
+(defstruct Ctr [n : int])
+
+(defn set-it! [^mut a : Ctr] : int
+  (set! (.n a) 3)     ; mutates the CALLEE's copy
+  0)
+
+(defn main [] : int
+  (let [^mut c (Ctr 0)]
+    (set-it! c)
+    (println (.n c)))  ; => 0, not 3
+  0)
+```
+
+**`^mut` on a parameter is not an out-parameter.** It means "this binding is
+mutable inside this body" -- useful for treating a parameter as a mutable local
+seeded from the argument, which *is* observable within the function:
+
+```turmeric
+(defn bump-and-read [^mut a : Ctr] : int
+  (set! (.n a) 3)
+  (.n a))             ; => 3; the write is visible HERE, just not to the caller
+```
+
+Nesting does not change this: an `Outer` holding an `Inner` by value is one
+flat value, so copying the outer copies the inner and
+`(set! (.n (.inner o)) v)` is equally invisible to the caller.
+
+To let a callee mutate something the caller can observe, reach for a type whose
+sharing is part of its meaning:
+
+| you want | use |
+|---|---|
+| shared, reference-counted mutation | `rc<T>` -- see [Reference-counted structs](#reference-counted-structs) |
+| interior mutability by declaration | a `:heap` struct |
+| to return the new value instead | an ordinary return, which is usually clearest |
+
+A `&Struct` receiver is rejected outright -- `set! (.field s)` requires a struct
+or an `rc<Struct>` -- so the reference route is not available by accident.
+
 ---
 
 ## Supported field types

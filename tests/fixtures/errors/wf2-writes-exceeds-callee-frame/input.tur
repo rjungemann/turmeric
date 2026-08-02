@@ -1,0 +1,32 @@
+;; WF2 negative, write channel 3 of 3: a callee's own DECLARED frame.
+;;
+;; `outer!` hands its parameter `a` to `inner!`, whose CHECKED frame says that
+;; slot is written.  `outer!` declares the empty frame, so `a` is written and
+;; the frame does not cover it.
+;;
+;; This is the channel that needs WF1 to exist at all.  `inner!`'s parameter is
+;; NOT `^mut`, so channel 2 has nothing to say about this call, and with no
+;; declared frame the only sound answer would be "cannot vouch" -- no error,
+;; no verification, nothing.  The declaration is what turns an unverifiable
+;; call into a decidable one, which is the whole reason WF2/WF3/WF4 all wait
+;; on WF1.
+;;
+;; `inner!` declaring more than it writes is fine and is not what is under
+;; test: a frame is an UPPER BOUND, so a body that writes less than it declared
+;; honors it.  What matters here is that the bound is what callers must respect.
+;;
+;; Note the blame lands on the CALLER.  `inner!` is impeccable -- it does no
+;; more than it said -- and reporting it would be blaming a function for its
+;; caller's understated frame.
+;;
+;; `inner!` is defined AFTER `outer!` on purpose: the check is deferred until
+;; after elaboration precisely so definition order cannot change the answer.
+(defstruct Ctr [n : int])
+
+(defn outer! [a : Ctr] #writes [] : int
+  (inner! a))
+
+(defn inner! [b : Ctr] #writes [b] : int
+  0)
+
+(defn main [] : int 0)

@@ -266,6 +266,17 @@ typedef enum DiagCode {
      * checked when they are not.  See
      * docs/archive/contract-type-arg-not-peeled-to-base.md. */
     TUR_W0380_REFINE_TYPE_ARG_UNENFORCED,
+    /* WF1/WF2 (checked-write-frames-plan): the `#writes` write-frame annotation.
+     * E0381 -- the annotation itself is malformed, or names something that is
+     *          not a parameter of this function.  A frame that does not resolve
+     *          cannot be checked against anything, so it is an error rather
+     *          than a silently ignored decoration.
+     * E0382 -- the body WRITES outside the frame it declared.  This is the WF2
+     *          checked tier: a declared frame the body exceeds is an error, not
+     *          a silent widening, for the same reason `#reads` is -- downstream
+     *          code is entitled to believe the declaration. */
+    TUR_E0381_WRITES_FRAME_INVALID,
+    TUR_E0382_WRITES_FRAME_EXCEEDED,
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */

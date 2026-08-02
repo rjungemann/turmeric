@@ -972,6 +972,51 @@ static Form *read_reads_annot(Reader *r) {
     return lst;
 }
 
+/* WF1 / #writes: `#writes <sym>` or `#writes [<sym> ...]` names the parameters
+ * whose mutable state this function's body may write.  Sits at the same
+ * signature position as `#reads` (after `#fx{...}`, either order relative to
+ * `#reads`) and is consumed by elab_defn.  Returns `(writes <sym>...)` stamped
+ * PROV_WRITES.
+ *
+ * Why a bracketed list and not a greedy symbol run: the annotation is followed
+ * by the return-type marker `:`, which reads as a symbol, so a greedy scan
+ * could not tell where the frame ends.  The vector form is unambiguous, and it
+ * gives `#writes []` -- "this body writes nothing" -- a spelling, which is the
+ * frame WF2 most wants to check and which a single-symbol-only syntax could
+ * not express.  See docs/upcoming/checked-write-frames-plan.md (WF1). */
+static Form *read_writes_annot(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col  = r->col;
+    size_t   start_off  = r->pos;
+    advance(r); advance(r); advance(r);   /* '#' 'w' 'r' */
+    advance(r); advance(r); advance(r);   /* 'i' 't' 'e' */
+    advance(r);                           /* 's' */
+    skip_ws_and_comments(r);
+    Form  *vec = NULL;
+    Form  *one = NULL;
+    if (peek(r) == '[') {
+        vec = read_seq(r, '[', ']', F_VEC,
+                       "unterminated #writes frame (missing ']')");
+        if (!vec) return NULL;            /* error already emitted */
+    } else {
+        one = read_symbol_or_minus(r);    /* the single parameter name */
+        if (!one) return NULL;            /* error already emitted */
+    }
+    uint32_t n = vec ? vec->as.list.len : 1;
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    Form *head = form_sym(r->arena, span, symtab_intern(r->st, strslice("writes", 6)));
+    Form **items = (Form **)arena_alloc(r->arena, (n + 1) * sizeof(Form *));
+    items[0] = head;
+    if (vec) {
+        for (uint32_t i = 0; i < n; i++) items[i + 1] = vec->as.list.items[i];
+    } else {
+        items[1] = one;
+    }
+    Form *lst = form_list(r->arena, span, items, n + 1);
+    lst->fx_prov = (uint8_t)PROV_WRITES;
+    return lst;
+}
+
 static Form *read_set(Reader *r) {
     advance(r); /* consume '#' */
     advance(r); /* consume 's' */
@@ -3161,6 +3206,16 @@ static Form *read_form(Reader *r) {
     if (c == '#' && peek2(r) == 'r' && peek3(r) == 'e' && peek_at(r, 3) == 'a' &&
         peek_at(r, 4) == 'd' && peek_at(r, 5) == 's' && !is_sym_cont(peek_at(r, 6))) {
         return read_reads_annot(r);
+    }
+    /* WF1 / #writes: `#writes <sym>` / `#writes [<sym> ...]` write-frame
+     * annotation.  Same window and same reasoning as `#reads` above -- it must
+     * precede try_read_data_literal, and no other reader literal spells
+     * `#writes` (the `#w` prefix is otherwise unclaimed).  is_sym_cont at 7
+     * guards a longer identifier like `#writesx`. */
+    if (c == '#' && peek2(r) == 'w' && peek3(r) == 'r' && peek_at(r, 3) == 'i' &&
+        peek_at(r, 4) == 't' && peek_at(r, 5) == 'e' && peek_at(r, 6) == 's' &&
+        !is_sym_cont(peek_at(r, 7))) {
+        return read_writes_annot(r);
     }
     if (c == '#' && peek2(r) == '{') {
         return read_map(r);
