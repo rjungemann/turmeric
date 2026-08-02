@@ -97,6 +97,7 @@ the single red line in `tests/run-turi.sh`.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
+| [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | `JIT engine (macos-latest)` intermittently hangs to its 45-min timeout inside `Run JIT suites` -- twice on 2026-08-02 (once on `main`), with five ~9-min successes either side. It GATES. The step produced zero output on both hangs; that is fixed (streamed log + `if: always()` artifact), so the next occurrence should name the fixture it stalled after |
 
 ## Windows port
 
