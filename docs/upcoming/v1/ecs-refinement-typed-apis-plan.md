@@ -184,9 +184,22 @@ rather than re-checked per access. Both are opt-in; the existing accessor family
 keeps its shape and its call sites stay correct.
 
 Explicitly **not** a goal: making refinement types the default way to use
-`tur-ecs`. The experiment expires at `0.34.0` and its graduation is a separate
-decision ([`refined-graduation-plan.md`](refined-graduation-plan.md)); an ECS
-that requires it is an ECS that cannot ship on the near side of that decision.
+`tur-ecs`. The refined accessors stay a surface you opt into by importing
+`ecs/refined-world` or calling `sized-defworld-refined`; the forgiving
+`get-<Comp>` family keeps its shape either way.
+
+> **Correction 2026-08-01 -- the flag-gating rationale is gone.** This
+> paragraph used to read "The experiment expires at `0.34.0` and its graduation
+> is a separate decision; an ECS that requires it is an ECS that cannot ship on
+> the near side of that decision." That constraint shaped this plan's whole
+> sequencing, and it no longer exists: `refined` **graduated 2026-08-01**
+> (`bb7cbef61`, shipped v0.33.0). Static `#refine{...}` discharge is
+> unconditional, the `EXPERIMENTS[]` and `LANG_LAYERS[]` rows are deleted, and
+> a lingering `--enable=refined` / `#lang turmeric refined` is a no-op
+> (TUR-W0063 / TUR-W0064) whose shim ages out one minor line later. So the
+> refined surface no longer costs its consumers a flag, and "opt-in" here means
+> an API choice rather than a compiler gate. See
+> [`refined-graduation-plan.md`](refined-graduation-plan.md).
 
 ---
 
@@ -199,7 +212,7 @@ it.
 | # | Gap | Needed for | Plan |
 |---|---|---|---|
 | C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
-| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md) |
+| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
 | C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md) |
 
 **C1 is not strictly blocking** -- probe 2 shows the `(= (alive-i w x) 1)`
@@ -222,9 +235,21 @@ ECS whose accessor signatures read
 > unwrappers pure primitives the purity walk accepts. Fold this into the C2
 > design rather than treating C1 as sufficient on its own.
 
-**C2 is hard-blocking for RE1.** There is no encoding of a mutable-state
+~~**C2 is hard-blocking for RE1.** There is no encoding of a mutable-state
 predicate that discharges today, and there should not be one until the design
-question is answered.
+question is answered.~~
+
+> **Resolved 2026-07-26 -- C2 landed; RE1 is not blocked.** The struck text
+> above was true when written and is kept for the record. The design question
+> was answered by `#reads` plus the borrow-based `frozen` region: an impure
+> measure declares the state it reads, and inside a region holding `(& w)` it
+> is congruent, because a mutator declared `^unique ^mut w` cannot be called
+> there (`TUR-E0200`). That is in the shipped compiler --
+> `enc_reads_arg_frozen` (`src/compiler/refine_collect.c:234`, granted at
+> `:470`) and `rt_pred_reads_measure` (`src/compiler/elab_fns.c:794`) -- and
+> every acceptance fixture in the C2 plan is marked DONE. RE1 is complete and
+> promoted to the real sized-world stack as `ecs/sized-refined`; see the RE1
+> phase banners below.
 
 **C3 is blocking for RE2 only.** RE1 does not need it.
 

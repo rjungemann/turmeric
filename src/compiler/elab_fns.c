@@ -82,8 +82,9 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f);
 /* CT1: a contract predicate whose EVALUATION does something observable.
  *
  * Checks are conditional on the build: `--no-contracts` strips them, a release
- * build drops them unless --keep-contracts, and `--enable=refined` elides the
- * ones it can prove.  A predicate with side effects therefore makes program
+ * build drops them unless --keep-contracts, and static refinement discharge
+ * elides the ones it can prove (unconditional since `refined` graduated in
+ * v0.33.0).  A predicate with side effects therefore makes program
  * behaviour depend on whether its own contracts were compiled in --
  * `(>= (tick) 0)` advances a counter every time it is checked and not at all
  * when it is not.  That is a bug in the contract, not in any of those flags.

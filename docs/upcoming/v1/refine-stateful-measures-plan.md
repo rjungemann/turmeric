@@ -6,14 +6,24 @@ description: A measure must be provably pure to be congruent, which makes every 
 
 # Refinements Over Mutable State (`RM-S`)
 
-**Status:** RM-S0 (dogfooding) **done 2026-07-26**; the A-vs-B decision is
-**awaiting sign-off** (RM-S1/RM-S2 do not start without it). This plan states
-the problem and two candidate answers; RM-S0 wrote both surfaces by hand in
-`tur-ecs`, ran the epoch one, and produced a recommendation -- see the status
-block below.
+**Status: LANDED (Candidate B).** `#reads` plus the borrow-based `frozen`
+region ship in the compiler; every acceptance fixture below is marked DONE and
+the guide is out of spec-mode. RM-S1 (Candidate A, epochs) was **not pursued**.
+This plan states the problem and the two candidate answers, and keeps the
+dogfooding evidence and the design spikes that chose between them -- read the
+dated blocks below as a record, not as open work.
 **Depends on:** [refinement-types-plan.md](refinement-types-plan.md).
 **Feeds:** [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md)
-gap C2 -- hard-blocking for that plan's RE1.
+gap C2 -- **satisfied**; that plan's RE1 is complete.
+
+> **Reconciled 2026-08-01.** The header used to say the A-vs-B decision was
+> "awaiting sign-off". It was decided on 2026-07-26 (Candidate B) and built the
+> same day, but the top banner and several "Remaining"/"pending sign-off"
+> paragraphs further down were never updated, so this file read as open work
+> for a week. Where prose below still says something is remaining, trust the
+> shipped code and the DONE-marked acceptance list instead:
+> `enc_reads_arg_frozen` (`src/compiler/refine_collect.c:234`, granted at
+> `:470`) and `rt_pred_reads_measure` (`src/compiler/elab_fns.c:794`).
 
 > **Status 2026-07-26 -- RM-S0 done, recommending Candidate B; decision open.**
 > Both surfaces were written and read in `tur-ecs` (full artifact:
@@ -127,6 +137,11 @@ gap C2 -- hard-blocking for that plan's RE1.
 > invalidation. (The "foundation runtime-check fix" is off the list -- it was a
 > Release-`tur` artifact; a Debug `tur` fires the checks, suite 2360/1.) See
 > "Cap-uniqueness investigation" in the spike.
+>
+> **Both landed 2026-07-26 -- nothing remains for B3.** The declared relation
+> shipped as the trusted `#reads w` annotation and the encoder grant shipped as
+> `enc_reads_arg_frozen` (`refine_collect.c:234`, granted at `:470`), with the
+> entry-contract suppression in `rt_pred_reads_measure` (`elab_fns.c:794`).
 
 ## The problem
 
@@ -354,7 +369,10 @@ Only if RM-S0 says so. Three pieces, in order, each independently useful:
    that. **[B3 SPIKED 2026-07-26 -- not shippable yet; three soundness blockers
    (region invisible to encoder, no declared world-measure relation, live
    aliasing hole) + a broken-runtime-check foundation caveat. See the B3 design
-   spike below for the sound sequence.]**
+   spike below for the sound sequence.]** **[SHIPPED 2026-07-26 -- all three
+   blockers closed; the foundation caveat was a Release-`tur` artifact, not a
+   defect. The shared invalidation predicate this item asks for is
+   `enc_reads_arg_frozen`.]**
 
 ### B3 design spike (2026-07-26) -- what a sound implementation requires, and why it is not one change
 
@@ -420,11 +438,17 @@ the cap-uniqueness investigation (below) and the foundation re-check:
 **~~(ii) inline region form~~ DONE** (the sound `frozen` region, no compiler
 change, closed blockers 1 and 3 together) and **~~(i) foundation runtime-check
 fix~~ NOT NEEDED** (it was a Release-`tur` artifact; the runtime fallback fires
-under a Debug `tur`). Remaining: (iii) add the declared world-measure relation;
-(iv) then, and only then, the scoped congruence grant + region-exit invalidation
-in `enc_measure` -- keyed off the region's live `(& w)` borrow -- behind
-`--enable=refined`, not landable until the `stateful` differential fuzzer
-sabotage is green (validate it with a **Debug** `tur`, per the foundation note).
+under a Debug `tur`). ~~Remaining: (iii) add the declared world-measure
+relation; (iv) then, and only then, the scoped congruence grant + region-exit
+invalidation in `enc_measure` -- keyed off the region's live `(& w)` borrow --
+behind `--enable=refined`, not landable until the `stateful` differential fuzzer
+sabotage is green (validate it with a **Debug** `tur`, per the foundation
+note).~~ **(iii) and (iv) both landed 2026-07-26**, in that order and with that
+gate honoured: the sabotage was run (making the frozen check always-true made
+`errors/refine-stateful-shadow-despawn` and `errors/refine-stateful-no-region`
+wrongly prove, and the hook was removed before commit), and the `stateful`
+fuzzer shape is green. The `--enable=refined` qualifier is moot -- `refined`
+graduated 2026-08-01 and discharge is unconditional.
 
 ### Cap-uniqueness investigation (2026-07-26) -- blockers 1 and 3 are one problem, and the cap should be retired
 
@@ -478,7 +502,8 @@ frame that despawns owns the world).
 **What remains for B3:** (2) the declared measure-over-`W` relation -- **designed
 2026-07-26** as a *trusted* `#reads w` annotation, sound because B3 elides only
 the crossing check, never the accessor's kept entry check (see "Blocker 2
-design"); pending sign-off, as it departs from the literal "no trusted attribute"
+design"); ~~pending sign-off~~ **signed off and shipped 2026-07-26**, as it
+departs from the literal "no trusted attribute"
 line. And the encoder logic to *recognize* the region's `(& w)` borrow and grant
 a `#reads w` measure a stable symbol inside + region-exit invalidation -- which
 lands *with* blocker 2 (the annotation is inert without it). The region form is
