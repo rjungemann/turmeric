@@ -478,6 +478,155 @@ definstance Bifunctor [pair]
     __bimap_pair(container fn-left fn-right)
 ```
 
+## Type-Level Rows (`#row{...}`)
+
+A **row** is a compile-time list of types, written `#row{A B C}`. Rows are the
+variadic member of the kind family: where `^f` marks a type parameter of kind
+`* -> *` and `^^f` marks `* -> * -> *`, `^&r` marks a parameter of kind `[*]`
+-- "list of types".
+
+Rows exist to let a type record *which* types a value is indexed by, when the
+count is not fixed in advance: an ECS query parameterised by its component set,
+a data frame parameterised by its column schema, a SQL row type. They were
+built for the ECS query layer and are used today by the `frame`, `sqlite`,
+`httpd`, and `postgres` spices.
+
+### Rows are type-level only
+
+This is the single most important fact about rows, and the source of most
+confusion:
+
+> A row is a **phantom type argument**. It exists during type checking and is
+> **completely erased at codegen**. A row is never the type of a runtime value.
+
+`(Query #row{Position Velocity})` and `(Query #row{Health})` are distinct
+*types*, but the compiled C for both carries only the struct's real fields --
+the row never appears in a field, a signature, or a runtime tag. Rows cost
+nothing at runtime because at runtime they do not exist.
+
+### Declaring a row parameter
+
+Mark the parameter with `^&` on `defstruct`, `deftype`, `defdata`, `defgadt`,
+or `defn`:
+
+```turmeric
+(defopaque Position :int)
+(defopaque Velocity :int)
+
+(defstruct Query [^&components] (world :int))
+
+(defn run-system [q : (Query #row{Position Velocity})] : int
+  (.world q))
+```
+
+```sweet-exp
+defstruct Query [^&components]
+  world :int
+
+defn run-system [q : (Query #row{Position Velocity})] : int
+  .world(q)
+```
+
+On `defn`, `^&r` introduces a **row-polymorphic** function. The `^&` is
+stripped, so the annotations reference the bare name:
+
+```turmeric
+(defstruct Frame [^&cols] (n :int))
+
+(defn frame-id [^&r] [f : (Frame r)] : (Frame r) f)
+```
+
+### Two literal forms
+
+**Bare positional** -- slots are element types:
+
+```turmeric
+#row{Position Velocity Health}
+```
+
+**Typed-field** -- slots carry a field name *and* an element type. Field names
+participate in type equality, so two rows with identical element types but
+different names are distinct:
+
+```turmeric
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn make-users [n : int] : (Tbl #row{id : int  name : cstr})
+  (:: (make-struct Tbl n) (Tbl #row{id : int  name : cstr})))
+```
+
+The two forms cannot be mixed inside one literal (`TUR-E0290`), and duplicate
+field names are rejected (`TUR-E0291`). An empty `#row{}` is the unit row.
+Rows are order-significant, keep duplicates, do not nest-flatten, and cap at
+255 elements.
+
+### Row algebra
+
+Four operators compute new rows from old ones, entirely at compile time:
+
+| Operator | Meaning |
+|---|---|
+| `(row-concat A B ...)` | `A ++ B`, order-preserving, duplicates kept |
+| `(row-union A B ...)` | set-union (deduplicated join) |
+| `(row-intersect A B ...)` | elements common to all operands |
+| `(row-canon R)` | canonical copy, sorted by type name |
+
+A computed row is just a type, so it can appear anywhere a literal can. Two
+queries compose by `row-union`:
+
+```turmeric
+(defn query [w : int] : (Query (row-union #row{Position Velocity}
+                                          #row{Velocity Health}))
+  (:: (make-struct Query w) (Query #row{Position Velocity Health})))
+```
+
+Ordinary row equality is **order-sensitive**. `row-canon` is the opt-in escape
+hatch when column order should not matter: `(row-canon #row{int bool})` and
+`(row-canon #row{bool int})` reduce to the same row, so ordinary type equality
+then agrees. Use it on both sides of the boundary you want to be
+permutation-insensitive.
+
+### Where a row may not appear
+
+Rows are rejected in three positions, each deliberately:
+
+1. **As a value expression.** `#row{...}` in expression position is an error:
+   *"is a type-level row and can only appear in a type annotation."*
+2. **As the type of a value** -- `TUR-E0012`: *"a value cannot have row type. A
+   row may only appear as a type argument to a row-kinded (`^&`) constructor
+   parameter."* This fires in every value-type sub-position: parameters,
+   returns, struct fields, let bindings, arrow arguments.
+3. **Applied to something.** A row has kind `[*]`, not an arrow kind, so it
+   cannot be applied, and passing a row where kind `*` is expected (or a
+   non-row where `^&` is expected) is a kind error.
+
+These are guards, not gaps. Guard 2 exists because a row in value-type
+position was once silently accepted and *lost its elements*; the check now
+sits in the shared wrapper so it cannot be bypassed. There is no `Row r`
+value-wrapper type, and adding one is not a small change: because rows erase,
+distinguishing two rows at a value boundary would require passing runtime
+**witnesses**, which is exactly the indirection rows were designed to avoid.
+
+If you want to operate on a row's contents at runtime, you do not want a row
+-- you want a real value (a vector, a struct, a tuple). Reach for the row when
+you want the *type checker* to track a set of types with zero runtime cost.
+
+### Current limits
+
+- **No term-level row operations.** There is no `(k in r)` membership
+  predicate and no generic `column-of` accessor; per-column accessors are
+  hand-written and hand-typed.
+- **No extensible records.** Rows are not the `{ x : int | r }` open-row
+  system from the ML/PureScript tradition -- there is no record extension,
+  field insert/delete, or row restriction. "Row-polymorphic" here means a type
+  parameter of kind `[*]` threaded phantom-ly.
+- **Permutation equality is opt-in only.** The checker never applies it
+  implicitly; `row-canon` is the only route.
+- **Element resolution is lenient** in some positions -- an unregistered
+  element name can produce an opaque placeholder rather than an error.
+- **`deftype` carries no per-parameter kind array**, so its application sites
+  fall back to arity-only checking.
+
 ## Performance
 
 ### Dispatch model: dictionary passing
@@ -726,6 +875,10 @@ and `free-run`.
    See `docs/archive/hkt-opaque-dispatch-plan.md` for background.
 
 2. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
+
+3. **Rows are type-level only**: `#row{...}` cannot be a value or the type of a
+   value. See [Type-Level Rows](#type-level-rows-row) above for the full rules
+   and the reasoning behind them.
 
 ## See also
 
