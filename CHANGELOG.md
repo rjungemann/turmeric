@@ -4,6 +4,22 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A refinement in type-argument position no longer breaks the program.**
+  `(Box #refine{ v : int | (> v 0) })` stored the contract node whole and
+  nothing peeled it, so the payload a `match` arm binds stayed contract-typed
+  and every ordinary use of it failed -- `(+ v 1)` was `TUR-E0006` "first arg
+  type { v : int | ... }", `println` found no overload, and a float base was
+  `TUR-E0707` "declares float but returns { v : float | ... }" because the
+  register-class check compares kinds without peeling. The annotation broke the
+  program rather than merely failing to help it. It is now peeled to its base,
+  with a new **`TUR-W0380`** stating that the payload predicate is not enforced
+  -- inert, but not silently so. Actually checking a container payload needs the
+  refinement to survive to the unpacking binder, which is a feature and is not
+  built. `TY_CONTRACT` now also delegates to its base in
+  `type_has_concrete_codegen_layout`, which this was the last thing blocking.
+
 ### Changed
 
 - **Refinement types graduated: `#refine{...}` predicates are now discharged

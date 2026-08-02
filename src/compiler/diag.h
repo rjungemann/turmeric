@@ -258,6 +258,14 @@ typedef enum DiagCode {
                                        * dev-only oracle whose disagreements this
                                        * reported is gone. Code reserved, no longer
                                        * emitted. */
+    /* A refinement written in TYPE-ARGUMENT position -- `(Box #refine{...})`.
+     * The contract is peeled to its base type so the payload behaves like the
+     * ordinary value it is; the predicate is NOT enforced on the payload.
+     * Warned rather than dropped silently: an annotation that quietly does
+     * nothing is how a reader ends up believing a container's contents are
+     * checked when they are not.  See
+     * docs/archive/contract-type-arg-not-peeled-to-base.md. */
+    TUR_W0380_REFINE_TYPE_ARG_UNENFORCED,
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */

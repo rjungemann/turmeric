@@ -35,15 +35,23 @@ the plan links. File a new repr cell there as well as here.
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
 | [fat-sink-shim-box-leaks-per-call](fat-sink-shim-box-leaks-per-call.md) | medium | a bare fn passed to a `^fat` sink mallocs a `{shim, orig}` box per CALL and never frees it -- 1002 MiB over 5e6 iterations. Pre-existing; the same leak at a normalized nominal param is fixed (static box), but `^fat` has no ownership contract so the caller cannot choose |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
-| [contract-type-arg-not-peeled-to-base](contract-type-arg-not-peeled-to-base.md) | medium | a contract in type-ARGUMENT position is never peeled; blocks `TY_CONTRACT` from the repr-row arrangement |
+| [borrow-param-passed-as-unique-mut-undiagnosed](borrow-param-passed-as-unique-mut-undiagnosed.md) | medium-high | a `^borrow` PARAMETER can be handed to a `^unique ^mut` parameter with no diagnostic; the exclusive mutation is observable through the shared borrow. `(& x)` in-frame is caught, the parameter mode is not |
 
-These are one campaign but **not** duplicates -- each has its own pinned
-investigation and its own fix (a calling-convention change; a generic
-instantiation + ctor-emission bug; a peel site). Do not merge them; the
-investigations are the expensive part. A fourth,
-`macos-int-conversion-carrier-pointer-straddles`, was resolved 2026-08-01 and
-moved to [docs/archive](../archive/macos-int-conversion-carrier-pointer-straddles.md);
-its resolution note is the closed-cells row in the guide.
+The first three are one campaign but **not** duplicates -- each has its own
+pinned investigation and its own fix (a calling-convention change; a generic
+instantiation + ctor-emission bug; a per-call box with no ownership contract).
+Do not merge them; the investigations are the expensive part. Two others have
+since been resolved and moved to [docs/archive](../archive/):
+`macos-int-conversion-carrier-pointer-straddles` (2026-08-01) and
+`contract-type-arg-not-peeled-to-base` (2026-08-01, fixed by
+`rt_peel_type_arg_contract` + `TUR-W0380`, which also unblocked `TY_CONTRACT`
+joining `type_has_concrete_codegen_layout`); both resolution notes are
+closed-cells rows in the guide.
+
+`borrow-param-passed-as-unique-mut-undiagnosed` is **not** part of that
+campaign -- it is a uniqueness/borrow-checking gap, not a representation one,
+and it is listed here only because this table is the repr-adjacent index. It
+does not share an investigation with the three above.
 
 ## Effect handlers
 

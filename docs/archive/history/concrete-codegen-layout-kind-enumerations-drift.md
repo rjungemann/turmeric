@@ -344,7 +344,7 @@ nothing peels the declared `(Box contract)` to it, so admitting contracts
 splits one carrier into two by-value monomorphs that no crossing reconciles.
 On the carrier both collapse to one C type and the mismatch cannot arise. The
 missing peel is filed as
-[contract-type-arg-not-peeled-to-base](../../reported/contract-type-arg-not-peeled-to-base.md),
+[contract-type-arg-not-peeled-to-base](../contract-type-arg-not-peeled-to-base.md),
 which is also what blocks the float base (`TUR-E0707`); flipping this arm is a
 two-line follow-on once that lands, and
 `tests/check-monomorph-name-collision.sh` already carries the repro. The arm
@@ -424,7 +424,7 @@ its base. `(match b (MkBox v) (+ v 1))` trips `TUR-E0006` (operator lookup on
 finds no overload, and admitting `TY_CONTRACT` to the concrete list splits the
 monomorph. Parameters, returns and `let` annotations all peel already; this
 fifth site does not. Filed as
-[contract-type-arg-not-peeled-to-base](../../reported/contract-type-arg-not-peeled-to-base.md).
+[contract-type-arg-not-peeled-to-base](../contract-type-arg-not-peeled-to-base.md).
 The layouts and names are right now; the surface still needs the peel.
 
 ## Fix directions

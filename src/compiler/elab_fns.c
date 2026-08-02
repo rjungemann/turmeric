@@ -2275,6 +2275,11 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                                           type_params, type_param_kinds, n_type_params);
             }
             if (!arg) return NULL;
+            /* Same peel type_expr_from_form's app loop does -- this loop is the
+             * one a `defn`/`fn` parameter annotation actually goes through, so
+             * fixing only the other one leaves `(Box #refine{...})` broken in
+             * the position people write it. */
+            arg = rt_peel_type_arg_contract(arg, arg_form->span);
             if (!check_row_type_arg_kind(head_type, (uint8_t)(i - 1), *arg,
                                          form->as.list.items[i]->span))
                 return NULL;

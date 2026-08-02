@@ -7,7 +7,45 @@ blocking `TY_CONTRACT` from joining `type_has_concrete_codegen_layout` (see
 [concrete-codegen-layout-kind-enumerations-drift](../archive/history/concrete-codegen-layout-kind-enumerations-drift.md)
 Finding 2, where this was recorded as "not fixed here").
 
-**Status:** open.
+**Status: RESOLVED 2026-08-01** via fix direction 1 (peel at the type-argument
+site), with a warning rather than a silent drop.
+
+`rt_peel_type_arg_contract` (defined in `elab_types.c`, declared in
+`elab_internal.h`) peels a `TY_CONTRACT` in type-argument position to its base
+and emits **`TUR-W0380`** saying the payload predicate is not enforced. Peeling
+makes the annotation inert instead of actively breaking the program; the
+warning is what keeps "inert" from being "silent", since an annotation that
+quietly does nothing is how a reader ends up believing a container's contents
+are checked.
+
+**This report identified one peel site; there are two.** `elab_types.c`'s
+`type_expr_from_form` has a type-application loop, and `elab_fns.c`'s
+`fn_type_from_form_impl` has its own -- which "never reaches
+type_expr_from_form's app path", per its own comment. The second is the one a
+`defn`/`fn` **parameter annotation** goes through, i.e. the position this bug is
+actually written in, so patching only the site named above changed nothing
+observable. Hence a shared helper called from both, rather than a peel inlined
+at one.
+
+All three symptoms are gone; `tests/fixtures/refine-type-arg-peeled` pins the
+int base, the float base, and the declared-return shape. The follow-on landed in
+the same change: `TY_CONTRACT` now delegates to its base in
+`type_has_concrete_codegen_layout`, because a contract can no longer reach a
+type-argument slot and the two monomorph names can no longer diverge.
+`tests/check-monomorph-name-collision.sh` passes -- its `contract-base` repro
+now expects `tur_adt_Box__int` / `tur_adt_Box__float` instead of
+`..._contract_int` / `..._contract_float`. The property it defends is unchanged
+(two contracts over different bases must be two distinct monomorphs with the
+right field widths: `int64_t _0` and `double _0`); only the spelling moved.
+
+Not fixed, deliberately: the payload predicate is still never checked. That
+needs fix direction 2 -- the refinement surviving as a type argument down to the
+unpacking binder, plus a checked crossing where a ctor call's result type is
+matched against a declared one. `TUR-W0380` is the standing marker for it. The
+"Adjacent gap" below (a contract cannot be a `defdata` field type at all) is
+likewise untouched and wants the same work.
+
+Suite 2510 passed / 0 failed.
 
 ## The shape of the problem
 

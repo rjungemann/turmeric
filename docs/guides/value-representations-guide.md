@@ -152,14 +152,6 @@ and the `^fat` leak row was filed.
 | capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
 | bare fn -> `^fat` sink: a `{ shim, orig }` box is malloc'd per call and never freed (1002 MiB over 5e6 iterations); `^fat` has no ownership contract, so the caller cannot pick a representation | [`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/fat-sink-shim-box-leaks-per-call.md) |
-| `TY_CONTRACT` in type-ARGUMENT position -- never peeled to its base, so the payload keeps a live contract type at every downstream boundary | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/contract-type-arg-not-peeled-to-base.md) |
-
-The **contract** row is new to this table, not a new defect -- it was filed
-before the table existed as an index, and it belongs here rather than where its
-title suggests: it is the one prerequisite blocking `TY_CONTRACT` from joining
-`type_has_concrete_codegen_layout`, i.e. from getting a row in the arrangement
-described immediately below. A repr-decision gap wearing an elaboration-error
-costume.
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --
@@ -167,6 +159,7 @@ the next cell in this family is usually adjacent to one of them.
 
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
+| `TY_CONTRACT` in type-ARGUMENT position -- the payload kept a live contract type at every downstream boundary | peeled to its base in BOTH type-application loops (`rt_peel_type_arg_contract`), warning `TUR-W0380` that the payload predicate is not enforced; `TY_CONTRACT` then joined `type_has_concrete_codegen_layout` by delegating to its base | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/contract-type-arg-not-peeled-to-base.md) |
 | method result (carrier) -> typed `(Result A B)` defn boundary | increment 2: continuation-wrapper ABI paired with the entry point dispatch actually selects | [`result-monad-bind-typed-boundary-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/result-monad-bind-typed-boundary-miscompiles.md) |
 | by-value aggregate returned by a CAPTURING continuation -> int64 `tur_poly_fn_t.fn` carrier sink (nested `bind` / multi-step `do-m`) | signature-keyed fat spill shim: reads the real entry point out of the closure env's `__fn` slot and boxes the aggregate, the fat twin of the row above (which only covered named wrappers) | [`nested-bind-over-result-typed-boundary-segfaults`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/nested-bind-over-result-typed-boundary-segfaults.md) |
 | method result (carrier) -> generic call argument | increment 2 | [`class-method-result-into-generic-invalid-c`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/class-method-result-into-generic-invalid-c.md) |

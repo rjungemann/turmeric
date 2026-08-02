@@ -613,6 +613,43 @@ Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
  * CT0's note on `rt_peel_contract` lists the first three.  This one is not a
  * missing peel -- there is nowhere for the predicate to ride -- so it gets a
  * diagnostic that says what is actually unsupported. */
+/* Peel a contract written in TYPE-ARGUMENT position -- `(Box #refine{...})`.
+ *
+ * This is the fifth annotation site to need a peel (the comment above
+ * reject_fn_type_contract counts the first four).  Storing the TY_CONTRACT node
+ * whole is what the old behavior did, and nothing between here and codegen
+ * peeled it, so the payload a `match` arm binds stayed contract-typed and every
+ * ordinary use of it failed: operator lookup (TUR-E0006), overload resolution,
+ * and the register-class check (TUR-E0707) all compare kinds without peeling,
+ * so a float-based contract even read as "non-float".  Peeling makes the
+ * annotation inert instead of actively breaking the program.
+ *
+ * It WARNS rather than dropping the predicate quietly: peeling here gives up on
+ * ever checking the payload, and an annotation that silently does nothing is
+ * how a reader ends up believing a container's contents are checked.  Enforcing
+ * it needs the refinement to survive as a type argument down to the unpacking
+ * binder, plus a checked crossing where a ctor call's result type is matched
+ * against a declared one -- a real feature, not a patch.
+ *
+ * Shared because there are TWO type-application loops: type_expr_from_form's
+ * and fn_type_from_form_impl's (the latter never reaches the former's app
+ * path).  Fixing only one leaves the parameter-annotation position broken,
+ * which is the position that actually gets written.
+ * See docs/archive/contract-type-arg-not-peeled-to-base.md. */
+Type *rt_peel_type_arg_contract(Type *arg_type, Span at) {
+    if (!arg_type || arg_type->kind != TY_CONTRACT) return arg_type;
+    Type *peeled = rt_peel_contract(arg_type, NULL, NULL);
+    if (peeled == arg_type) return arg_type;   /* malformed contract: leave it */
+    diag_emit_with_code(DIAG_WARNING, at,
+        TUR_W0380_REFINE_TYPE_ARG_UNENFORCED,
+        "refinement in type-argument position is not enforced; the payload is "
+        "treated as '%s'", type_name(*peeled));
+    diag_emit(DIAG_NOTE, at,
+        "refine a parameter, a return type, or a `let` binding instead -- "
+        "those positions emit a check");
+    return peeled;
+}
+
 static void reject_fn_type_contract(Elab *e, Type *t, const Form *slot,
                                     const char *what) {
     (void)e;
@@ -2150,6 +2187,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                                   type_params, type_param_kinds, n_type_params);
             }
             if (!arg_type) return NULL;
+            arg_type = rt_peel_type_arg_contract(arg_type, arg_form->span);
 
             /* Variadic HKT rows: enforce that a row-of-types argument lands in
              * a row-kinded parameter slot (and vice versa). ctor_type is the

@@ -129,8 +129,17 @@ EOF
 # contracts over different bases are two different layouts. They shared one
 # `tur_adt_Box__contract` typedef whose surviving field was `int64_t`, while
 # the float arm's match read it back with a `(double)` conversion.
-repro contract-base "--enable=refined" \
-      tur_adt_Box__contract_int tur_adt_Box__contract_float <<'EOF'
+#
+# The expected names are the BASE ones, not `..._contract_int` /
+# `..._contract_float`. A refinement in type-argument position is now peeled to
+# its base (rt_peel_type_arg_contract, TUR-W0380), so `(Box #refine{x : int})`
+# is `(Box int)` before it ever reaches the mangler. The property this repro
+# defends is unchanged and still the whole point -- two contracts over
+# different bases must be two distinct monomorphs carrying the right field
+# widths -- and it still holds: `tur_adt_Box__int` gets `int64_t _0`,
+# `tur_adt_Box__float` gets `double _0`. Only the spelling of the names moved.
+repro contract-base "" \
+      tur_adt_Box__int tur_adt_Box__float <<'EOF'
 (defdata Box [a] (MkBox a))
 (defn take-ci [b : (Box #refine{x : int   | (> x 0)})]   : int (match b (MkBox v) 1))
 (defn take-cf [b : (Box #refine{y : float | (> y 0.0)})] : int (match b (MkBox v) 2))

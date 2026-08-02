@@ -887,6 +887,13 @@ static inline Type *rt_peel_contract(Type *ann, const Form **out_pred,
     return ann;
 }
 
+/* Peel a contract in TYPE-ARGUMENT position (`(Box #refine{...})`) to its base
+ * type, warning TUR-W0380 that the payload predicate is not enforced.  Called
+ * from BOTH type-application loops -- type_expr_from_form's and
+ * fn_type_from_form_impl's; see the definition in elab_types.c for why there
+ * are two and why this warns rather than dropping the predicate silently. */
+Type *rt_peel_type_arg_contract(Type *arg_type, Span at);
+
 /* CT1: wrap a function body so its RESULT is checked against `pred`.  Shared by
  * `defn` and typeclass instance methods; see elab_fns.c for why it is not
  * hand-rolled per site. */

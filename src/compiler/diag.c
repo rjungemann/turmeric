@@ -251,6 +251,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0377_REFINE_INSTANCE_LENIENCY:  return "TUR-W0377";
         case TUR_E0378_REFINE_IN_FN_TYPE:         return "TUR-E0378";
         case TUR_I0379_REFINE_ORACLE_MISMATCH:    return "TUR-I0379";
+        case TUR_W0380_REFINE_TYPE_ARG_UNENFORCED: return "TUR-W0380";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
@@ -405,6 +406,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0377") == 0) return TUR_W0377_REFINE_INSTANCE_LENIENCY;
     if (strcmp(s, "TUR-E0378") == 0) return TUR_E0378_REFINE_IN_FN_TYPE;
     if (strcmp(s, "TUR-I0379") == 0) return TUR_I0379_REFINE_ORACLE_MISMATCH;
+    if (strcmp(s, "TUR-W0380") == 0) return TUR_W0380_REFINE_TYPE_ARG_UNENFORCED;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
@@ -1480,6 +1482,33 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Only a DEFINITE violation warns: the argument has to be one the class\n"
       "predicate rejects outright, not merely one it cannot prove.\n" },
+    { TUR_W0380_REFINE_TYPE_ARG_UNENFORCED,
+      "TUR-W0380: Refinement in type-argument position is not enforced\n"
+      "\n"
+      "A refinement written as a TYPE ARGUMENT -- the payload slot of a\n"
+      "container -- is peeled to its base type and the predicate is dropped:\n"
+      "\n"
+      "    (defn f [b : (Box #refine{ v : int | (> v 0) })] : int ...)\n"
+      "    ;; behaves exactly as (Box int); nothing checks the payload\n"
+      "\n"
+      "The refinement is not silently honored and it is not an error either.\n"
+      "It is peeled because leaving it in place is worse: a live contract type\n"
+      "inside a type application makes every ordinary use of the payload fail\n"
+      "(operator lookup, overload resolution, and return-type checking all\n"
+      "compare kinds without peeling), so the annotation would break the\n"
+      "program rather than merely fail to help it.\n"
+      "\n"
+      "Enforcing it needs a refinement to survive as a type argument all the\n"
+      "way to the binder that unpacks the container, plus a checked crossing\n"
+      "where a constructor call's result is matched against a declared type.\n"
+      "That is a real feature, not an oversight, and it is not built.\n"
+      "\n"
+      "To actually check the value, refine at a position that IS enforced --\n"
+      "a parameter, a return type, or a `let` annotation:\n"
+      "\n"
+      "    (defn unwrap [b : Box] : #refine{ v : int | (> v 0) } ...)\n"
+      "\n"
+      "or check the payload after unpacking it.\n" },
     { TUR_W0373_REFINE_NONLINEAR,
       "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
       "\n"

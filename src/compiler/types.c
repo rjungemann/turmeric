@@ -539,30 +539,32 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_HANDLER:
             return true;
         /* concrete-codegen-layout-kind-enumerations-drift Finding 2 proposed
-         * delegating this to the base type, since type_c_name does.  It does
-         * not belong here YET, and the reason is measured, not theoretical:
-         * with `return type_has_concrete_codegen_layout(base)` here,
+         * delegating this to the base type, since type_c_name does.  Done: a
+         * contract IS its base type at the representation level, and saying so
+         * here keeps this switch agreeing with type_c_name instead of quietly
+         * dropping a refined value onto the int64 carrier.
+         *
+         * The blocker was that admitting contracts split one carrier into two
+         * by-value monomorphs that no crossing reconciled --
          *
          *   (defn mk [] : (Box #refine{ v : int | (> v 0) }) (MkBox 5))
          *
-         * stops compiling -- `cc` reports "incompatible types when returning
-         * 'tur_adt_Box__int' but 'tur_adt_Box__contract_int' was expected".
-         * The ctor call is typed from its argument, `(Box int)`, and nothing
-         * peels the declared `(Box contract)` to it, so admitting contracts
-         * splits one carrier into two by-value monomorphs that no crossing
-         * reconciles.  Today both collapse to the int64 carrier and the
-         * mismatch is invisible.  See
-         * docs/reported/contract-type-arg-not-peeled-to-base.md; that peel is
-         * the prerequisite, and it also unblocks the float base, which is
-         * separately stuck behind TUR-E0707.
+         * failed with `cc`: "incompatible types when returning
+         * 'tur_adt_Box__int' but 'tur_adt_Box__contract_int' was expected",
+         * because the ctor call is typed from its argument, `(Box int)`, and
+         * nothing peeled the declared `(Box contract)` to it.  That peel now
+         * exists (rt_peel_type_arg_contract, called from both type-application
+         * loops), so a contract can no longer reach a type-argument slot and
+         * the two names can no longer diverge.  Verified: the program above
+         * compiles and prints 5.
          *
-         * Nothing about the collision fix depends on this: the correct per-base
-         * FIELD width comes from type_c_name, and the distinct monomorph NAMES
-         * come from the type_eq / append_type_mangle arms.  Both hold with
-         * contracts on the carrier -- `tur_adt_Box__contract_int` still gets an
-         * int64_t field and `tur_adt_Box__contract_float` a double. */
+         * The collision fix never depended on this either way: the per-base
+         * FIELD width comes from type_c_name, and distinct monomorph NAMES come
+         * from the type_eq / append_type_mangle arms. */
         case TY_CONTRACT:
-            return false;
+            return t->as.contract_.base_type
+                 ? type_has_concrete_codegen_layout(t->as.contract_.base_type)
+                 : false;
         case TY_APP:
             /* structdef-retirement DS-D: a struct-headed TY_APP can never form
              * (no Type has kind TY_STRUCT), so a parametric-struct monomorph has

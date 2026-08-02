@@ -76,10 +76,17 @@ This is sound by construction, and needs no new machinery:
 - Read-only accessors take `[^borrow w]` and coexist with the region borrow, so
   reads stay callable inside; only the exclusive mutator is locked out.
 
-Requirements: `w` is an **owned** `^mut` local (the frame that mutates owns the
-value); a `^borrow` parameter does not register the borrow the region needs. The
-region body is a plain `let` body -- any result type, and elaborated *inline*
-(not a closure), which is what lets the refinement encoder see it.
+Requirements: the region body is a plain `let` body -- any result type, and
+elaborated *inline* (not a closure), which is what lets the refinement encoder
+see it.
+
+`w` does **not** have to be an owned `^mut` local. A `^borrow` parameter
+registers the region borrow just as well, on both paths: the crossing
+discharges inside `(frozen w ...)` and falls back to `TUR-W0372` without it,
+and a `despawn!` needing `^unique ^mut w` inside the region is still
+`TUR-E0200`. So a helper that takes `[^borrow w : World]` and opens a region on
+its parameter works, which is what makes regions usable below the frame that
+owns the world.
 
 > `frozen` is exported by `ecs/freeze` in `tur-ecs`. It is world-agnostic -- the
 > same shape freezes a file handle, a buffer, a lock, or a transaction, given a
