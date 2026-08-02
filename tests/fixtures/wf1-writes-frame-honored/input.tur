@@ -12,11 +12,18 @@
 ;;
 ;; Expected: compiles clean under --enable=write-frames and prints 0.
 ;;
-;; It prints 0, not 3, and that is the by-value semantics the analysis rests
-;; on rather than an oversight: `c` is passed to `drive!` by value, so the
-;; writes inside never reach main's `c`.  A write frame is about what a body
-;; MAY write, and it stays an upper bound whether or not the write is
-;; observable from any particular caller.
+;; `main` deliberately does NOT read a struct back after mutating it through a
+;; callee, and prints a freshly-constructed value instead.  Whether such a
+;; write is observable in the caller is exactly where the compiled backend and
+;; the turi interpreter disagree today (compiled: by-value, prints 0;
+;; interpreted: by-reference, prints 3 -- see
+;; docs/reported/struct-param-mutation-backend-divergence.md).  That divergence
+;; has nothing to do with write frames, and a frame fixture that depended on it
+;; would be asserting the wrong thing in one backend or the other.
+;;
+;; The frame is an upper bound on what a body MAY write; it stays correct
+;; whether or not the write is observable from any particular caller, so
+;; nothing here needs to observe one.
 (defstruct Ctr [n : int])
 
 (defn bump! [^mut a : Ctr] #writes [a] : int
@@ -40,6 +47,9 @@
 
 (defn main [] : int
   (let [^mut c (Ctr 0)]
-    (drive! c)
-    (println (peek c)))
+    (let [^mut d (Ctr 0)]
+      (drive! c)
+      (bump! c)
+      (both! c d)))
+  (println (peek (Ctr 3)))
   0)
