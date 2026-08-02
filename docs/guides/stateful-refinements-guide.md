@@ -309,12 +309,22 @@ semantics break:
    bounds work.
 
 Treat today's `#reads` as step 1 of that path, not as a finished `reads`-clause
-feature. Step 2 now has a written plan --
-[`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/checked-write-frames-plan.md):
-`#writes` declarations, a checked tier for pure-Turmeric bodies, and
-frame-aware hypothesis invalidation replacing the coarse whole-body `set!`
-decline (the binding constraint on side-effecting `for-each-alive!` bodies
-and `while`-lowered loops).
+feature. **Step 2 has landed behind `--enable=write-frames`** --
+`#writes w` / `#writes [a b]` declares which arguments a body may write, and a
+frame on a body with no inline C is *checked* rather than believed. See
+[`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/checked-write-frames-plan.md).
+
+`#reads` itself is unchanged by it: still trusted, still refinement-only,
+still step 1. What a checked `#writes` frame buys today is on the
+*invalidation* side -- a borrowed local no longer forces every hypothesis in
+the body to be dropped when the borrow provably reaches nothing that writes.
+
+It does **not** buy elision, and the row in the quick reference below still
+says so. The plan originally proposed one (WF4) on the strength of this
+guide's "the accessor's own internal check is the backstop" line; that check
+is the author's own code inside an inline-C body, which no frame can license
+removing -- and inline-C is exactly what the checked tier cannot see into.
+WF4 is retired.
 
 ## Quick reference
 
