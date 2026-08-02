@@ -1,15 +1,68 @@
 # Graduating the `refined` experiment
 
-**Status:** preconditions partly met; the flip itself is not started. The
-feature is implemented, so this is mostly a decision plan -- but two of the four
-preconditions are now closed and one prerequisite has been BUILT ahead of time.
+**Status: EXECUTED 2026-08-01, targeting v0.33.0.** All four preconditions
+closed and the flip has landed. What follows is kept as the record of the
+decision and the evidence behind it; the mechanical checklist below is done.
 
 | precondition | state |
 |---|---|
 | 1. suite survives it | **measured** -- one fixture affected, and it is repurposed rather than deleted |
 | 2. cost is acceptable | **MEASURED on a real program (2026-07-26)** -- tur-ecs, ~5400 lines / 22 modules / 66 tests: **1.004x** on unannotated code, worst per-file delta +1ms, zero `TUR-E0371`, all obligations behave as designed; see [refined-dogfood-ecs-report.md](refined-dogfood-ecs-report.md) |
-| 3. nothing still moving | **waiting** -- sit clock RESTARTED 2026-07-26 (macro-expansion path walk, `#reads` entry-contract suppression, template-emitter fixes); see the decision review below for the sit-through-0.32.x recommendation |
+| 3. nothing still moving | **MET 2026-08-01** -- the sit clock restarted 2026-07-26 and ran through the whole 0.32.x line (0.32.5 through 0.32.8) with the `ecs/sized-refined` surface exercising the three changes that restarted it. Nothing moved again; the flip lands in 0.33.0 as the recommended timeline said |
 | 4. exclusions documented as permanent | **DONE** -- every Limits entry tagged |
+
+**What landed (2026-08-01).** `"refined"` added to `GRADUATED[]`
+(`src/runtime/experiments.c`) and `GRADUATED_LAYERS[]`
+(`src/compiler/lang_layers.c`); both its `EXPERIMENTS[]` and `LANG_LAYERS[]`
+rows deleted; all 15 `g_opt_refined` conditionals and the global itself
+removed, along with the four `experiment_warn_if_used("refined")` calls.
+`LANG_LAYERS[]` now holds `stringed` alone and no semantic layer.
+
+Fixtures: `refine-off-is-contracts-only` was repurposed in both directions --
+`refine-runtime-check-still-fires` (`--keep-contracts`, pins that the runtime
+entry check is still emitted and still fires) and
+`refine-no-contracts-strips-runtime-check` (`--no-contracts`, pins that the two
+halves stayed separable). Both use a solver-opaque violating value so the
+program still compiles under unconditional discharge. `refine-lang-layer`
+became `refine-graduated-lang-layer-noop` (`TUR-W0064`) and
+`refine-graduated-enable-noop` is new (`TUR-W0063`) -- the two compatibility
+acceptance fixtures. The now-redundant `--enable=refined` was stripped from 73
+fixture `flags` files (48 rewritten, 25 deleted as empty), deliberately: left
+in place they would all have broken at once when the `GRADUATED[]` entry ages
+out, and the shim is better exercised by two fixtures that test it on purpose
+than by 73 that depend on it incidentally.
+
+**Not in the checklist, and nearly missed: the source-level fuzzer needed a new
+reference leg.** `tests/refine-fuzz-src.py` compiles each generated program
+twice and compares; its reference leg was spelled "omit `--enable=refined`".
+Graduation makes that flag a no-op, so both legs became identical builds -- the
+harness would have gone on reporting PASS while proving nothing, which is worse
+than failing. This is the only place graduation cost real coverage, and it is
+load-bearing: the corpus README calls this fuzzer half the standing
+solver-soundness coverage, and three archived bugs were found by it.
+
+No shipping flag reconstructs the leg. `--no-contracts` emits NO checks;
+`--keep-contracts` emits checks MINUS whatever discharge elided; and the elided
+set is exactly what the miscompile property is about (both known refinement
+soundness bugs proved something false and dropped the check that would have
+caught it). So `TUR_REFINE_NO_DISCHARGE` was added as an **env-only test
+seam** -- not an experiment, not a CLI flag, no `EXPERIMENTS[]` row, alongside
+the existing `TUR_REFINE_STATS`/`TUR_REFINE_DUMP`. It is one early return in
+`refine_collect_obligation`, the single chokepoint every obligation flows
+through; all six callers already treat a NULL obligation as "not proven", so
+nothing is decided, nothing is elided, and no refinement diagnostic fires.
+
+Yes, this re-adds a conditional the flip otherwise deleted. The rule it bends
+("delete the conditionals rather than hard-coding the global") is about not
+leaving a dead *feature gate* for readers to wonder about; this is a documented
+testing seam with one caller and a comment saying so.
+
+Verified after the change: self-test PASS with the reference leg genuinely
+aborting (`off=abort` on the two impure fixtures -- degenerate legs would have
+shown `off=reject`), and n=100 on seeds 1 and 2 both clean, 0 soundness bugs
+and 0 other BUG classes, with the legs visibly diverging (40 `agree_abort` and
+44/37 `agree_rejected_early` per seed). That closes the plan's "source-level
+fuzzer clean across at least two seeds" acceptance criterion.
 
 **Z3 retirement: DONE, executed 2026-07-30 in 0.32.5.** The input was banked
 2026-07-26 -- the oracle build (system Z3 4.15.4) re-checked every VC the

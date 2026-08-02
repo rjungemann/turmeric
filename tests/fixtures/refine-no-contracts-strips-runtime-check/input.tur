@@ -1,0 +1,25 @@
+;; RT0 (graduated 2026-08-01): `--no-contracts` still strips the RUNTIME half
+;; of a refinement, even though the STATIC half is now unconditional.  The two
+;; halves stayed separable across graduation, which is the distinction the
+;; retired `refine-off-is-contracts-only` fixture used to document via the
+;; `refined` gate -- there is no gate to turn off any more, but the
+;; distinction did not go away, it moved here.
+;;
+;; Same program as the sibling `refine-runtime-check-still-fires`, same
+;; solver-opaque violating value; only the flag differs.  With
+;; `--keep-contracts` the entry check panics on `(double-pos (opaque-zero))`.
+;; With `--no-contracts` no check is emitted, so the call runs through and the
+;; program reaches the end.
+(defn opaque-zero [] : int
+  ```c
+  return 0;
+  ```)
+
+(defn double-pos [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
+  (* x 2))
+
+(defn main [] : int
+  (println (double-pos 5))
+  (println (double-pos (opaque-zero)))
+  (println "reached the end")
+  0)

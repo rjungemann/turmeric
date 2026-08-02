@@ -10,6 +10,7 @@
 #include "refine_collect.h"
 
 #include <stdio.h>
+#include <stdlib.h>   /* getenv -- TUR_REFINE_NO_DISCHARGE test seam */
 #include <string.h>
 
 /* ------------------------------------------------------------------------- *
@@ -75,6 +76,32 @@ void refine_obligations_init(RefineObligationVec *v, Arena *a) {
     v->obs = NULL; v->n = 0; v->cap = 0; v->arena = a;
 }
 
+/* TUR_REFINE_NO_DISCHARGE -- a TEST SEAM, not a feature gate.  There is no
+ * `--enable`, no EXPERIMENTS[] row and no CLI flag; it lives alongside
+ * TUR_REFINE_STATS / TUR_REFINE_DUMP as an env-only knob.
+ *
+ * It exists because the source-level differential fuzzer
+ * (tests/refine-fuzz-src.py) needs a reference build in which every refinement
+ * keeps its runtime check -- the ground truth for "does this program actually
+ * violate its own refinement".  That is what the `refined` experiment gate gave
+ * it until refinement types graduated in v0.33.0.  No shipping flag
+ * reconstructs it: `--no-contracts` emits NO checks and `--keep-contracts`
+ * emits checks MINUS whatever discharge elided, and it is precisely the elided
+ * set that the fuzzer's miscompile property is about (both known refinement
+ * soundness bugs proved something false and dropped the check that would have
+ * caught it).
+ *
+ * Suppressing obligations HERE, at the one chokepoint every obligation flows
+ * through, is what keeps this to a single conditional: all six callers already
+ * treat a NULL obligation as "not proven", so nothing is decided, nothing is
+ * elided, and no refinement diagnostic fires -- exactly the old gate-off
+ * behavior. */
+static bool refine_discharge_disabled(void) {
+    static int cached = -1;
+    if (cached < 0) cached = getenv("TUR_REFINE_NO_DISCHARGE") ? 1 : 0;
+    return cached == 1;
+}
+
 RefineObligation *refine_collect_obligation(RefineObligationVec *v,
                                             const Form *predicate,
                                             const char *var_name,
@@ -86,6 +113,7 @@ RefineObligation *refine_collect_obligation(RefineObligationVec *v,
                                             const char *what,
                                             const char *fn_name) {
     if (!v || !v->arena || !predicate) return NULL;
+    if (refine_discharge_disabled()) return NULL;
     RefineObligation *ob = (RefineObligation *)arena_alloc(v->arena, sizeof(RefineObligation));
     memset(ob, 0, sizeof(*ob));
     ob->predicate      = predicate;

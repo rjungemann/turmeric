@@ -153,8 +153,9 @@ whose slot has been despawned reads the old bits. Compare generations
 yourself when a handle may have outlived its entity.
 
 A strict-aliveness API that makes use-after-despawn a *compile* error
-**ships as an opt-in surface** (2026-07-26, behind `--enable=refined` /
-`#lang turmeric refined`): the `ecs/refined-world` module's accessor
+**ships as an opt-in module** -- you opt in by importing it, not by
+setting a flag; refinement checking itself is unconditional in every
+build. The `ecs/refined-world` module's accessor
 `rgworld-get-x!` refines its entity parameter with the impure `#reads`
 measure `rgworld-alive?`, and the read compiles only where aliveness is
 proven -- a guard inside a `frozen` region (which locks out
@@ -318,9 +319,10 @@ raylib is on the cmake-deps path.
   for the underlying cap machinery.
 - **Aliveness**: runtime by default, via generation comparison --
   performed by `sized-alive?` on sized worlds, and **not** performed by
-  the unsized `defcomponent-accessors` read path. Opt-in compile-time
-  strict aliveness ships on the `ecs/refined-world` facade under
-  `--enable=refined` (see "Entities" above).
+  the unsized `defcomponent-accessors` read path. Compile-time strict
+  aliveness ships on the `ecs/refined-world` facade -- opting in means
+  importing that module rather than the forgiving one; no flag is
+  involved (see "Entities" above).
 
 ## Cross-world systems
 

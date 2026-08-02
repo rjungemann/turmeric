@@ -3,7 +3,7 @@
 **Date:** 2026-07-26. **Program:** `turmeric-spices/spices/ecs` -- ~5400 lines
 across 22 modules, 66-test suite, 66/66 green, carrying the shipped RE1
 refined surface (`ecs/refined-world`, `for-each-alive!`, 8 refined test
-files). This is the report `hold/refined-dogfooding-plan.md` specifies; it
+files). This is the report `../archive/refined-dogfooding-plan.md` specifies; it
 feeds `refined-graduation-plan.md` precondition 2 (cost on a real program) and
 the Z3 retirement decision.
 

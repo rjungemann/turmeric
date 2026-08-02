@@ -605,7 +605,7 @@ parameter.
 
 ## Relationship to the graduation decision
 
-[`refined-dogfooding-plan.md`](../hold/refined-dogfooding-plan.md) is on hold
+[`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md) is on hold
 "waiting on a program to exist, not on effort", and feeds graduation
 precondition 2 (cost on something that is not a fixture).
 
@@ -648,7 +648,7 @@ work), then RE1 as the dogfooding vehicle, then C3/RE2 only against a profile.
 - [`refinement-types-plan.md`](refinement-types-plan.md) -- what landed
 - [`refinement-types-guide.md`](../../guides/refinement-types-guide.md) -- the surface
 - [`refined-graduation-plan.md`](refined-graduation-plan.md)
-- [`refined-dogfooding-plan.md`](../hold/refined-dogfooding-plan.md)
+- [`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md)
 - [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md)
 - `docs/guides/ecs-guide.md`, `docs/guides/ecs-vs-haskell-ecs.md`,
   `docs/guides/ecs-storage-guide.md`

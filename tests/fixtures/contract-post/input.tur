@@ -1,8 +1,23 @@
 ;; CT1: :post clause on defn -- postcondition checks on return value
+;;
+;; The doubling goes through an inline-C helper on purpose.  Refinement
+;; discharge graduated in v0.33.0 and now runs on every compile, so a `:post`
+;; the solver can REFUTE is a compile error (TUR-E0371) rather than a runtime
+;; check -- and `:post (>= result 0)` over a plain `n : int` is refutable at
+;; n = -2.  That was a false contract that only survived because nothing
+;; checked it statically, not a passing test.  A body the solver cannot model
+;; keeps the obligation Unknown, so it falls back to the runtime check this
+;; fixture exists to exercise.
+;;
+;; See errors/refine-messages-return for the refuted-postcondition direction.
+(defn opaque-double [n : int] : int
+  ```c
+  return n * 2;
+  ```)
 
 (defn double-nonneg [n : int] : int
   :post (>= result 0)
-  (* n 2))
+  (opaque-double n))
 
 (defn main [] : int
   (println (double-nonneg 5))

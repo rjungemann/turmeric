@@ -711,5 +711,5 @@ regression in its own right.
   the linear/borrow machinery Candidate B leans on
 - [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md) -- the
   consumer
-- [refined-dogfooding-plan.md](../hold/refined-dogfooding-plan.md) -- RM-S0 is
+- [refined-dogfooding-plan.md](../../archive/refined-dogfooding-plan.md) -- RM-S0 is
   a slice of it

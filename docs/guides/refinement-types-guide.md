@@ -1,23 +1,22 @@
 # Refinement Types
 
-> **Status:** prototype, behind the `refined` experiment.
-> Enable with `--enable=refined` on the command line, `:experiments [:refined]`
-> in `build.tur`, or `#lang turmeric refined` at the top of a single file.
-> See [contract-types-guide.md](contract-types-guide.md) for the always-on
-> runtime half, and
+> **Status:** shipping, always on (graduated in v0.33.0; the `refined`
+> experiment gate is gone). No flag is needed.
+> See [contract-types-guide.md](contract-types-guide.md) for the runtime half,
+> and
 > [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md)
 > for the design.
 
 Contract types (`#refine{ x : T | p }`) check their predicate at **runtime**.
-Refinement types go one step further: with the `refined` experiment on, the
-compiler tries to **prove** the predicate at compile time, and emits a runtime
-check only where the proof fails.
+Refinement types go one step further: the compiler tries to **prove** the
+predicate at compile time, and emits a runtime check only where the proof
+fails.
 
 The single fact that shapes the whole feature: **every refinement already has a
 runtime meaning.** So the static discharger is allowed to give up on any
 obligation and stay sound -- the obligation just falls back to the check it
 would have had anyway. That is why a partial, hand-rolled solver is a real
-feature rather than a broken one, and why turning `refined` on can never make a
+feature rather than a broken one, and why static discharge can never make a
 correct program wrong.
 
 ```turmeric
@@ -30,23 +29,26 @@ correct program wrong.
 
 ## Turning it on
 
-| Spelling | Scope |
+Nothing to turn on -- static discharge runs on every compile. Write a
+`#refine{...}` and the compiler tries to prove it.
+
+It graduated from the `refined` experiment in v0.33.0. If you opted in
+earlier, the old spellings still work and are now no-ops you can delete:
+
+| Old spelling | What it does now |
 |---|---|
-| `--enable=refined` | this compiler invocation |
-| `:experiments [:refined]` in `build.tur` | the project |
-| `#lang turmeric refined` (first line of a file) | that file |
-| `~/.config/turmeric/experiments.tur` `:enable [:refined]` | the user |
+| `--enable=refined` | accepted, `TUR-W0063`, no effect |
+| `:experiments [:refined]` in `build.tur` | accepted, `TUR-W0063`, no effect |
+| `~/.config/turmeric/experiments.tur` `:enable [:refined]` | accepted, `TUR-W0063`, no effect |
+| `#lang turmeric refined` (first line of a file) | accepted, `TUR-W0064`, no effect |
 
-`#lang turmeric refined` is **exactly** `--enable=refined` scoped to one file --
-the `#lang` layer points at the same `EXPERIMENTS[]` row, so there is one enable
-path, one lifecycle warning, and one `expires_at`. If a project manifest states
-its own `:experiments` list and leaves `refined` out, a `#lang ... refined` file
-is a **hard error**, never a silent downgrade: the project owner said no, and
-compiling the file under different semantics than it asked for would be worse
-than failing.
+These compatibility shims age out one minor line after graduation, so drop the
+flag when convenient rather than relying on it.
 
-With the experiment off, everything below still parses and still runs its
-runtime checks. Nothing here is required to use contract types.
+The one **user-visible consequence** of graduation: a refinement that is
+violated on every execution reaching it is now a compile error (`TUR-E0371`)
+rather than a runtime contract failure. Everything the solver cannot decide is
+unchanged -- it still falls back to the runtime check.
 
 ### `--strict-refine`
 
@@ -56,7 +58,7 @@ a warning plus a runtime check. Use it when you want a build in which *every*
 refinement is discharged statically:
 
 ```sh
-tur build --enable=refined --strict-refine src/main.tur
+tur build --strict-refine src/main.tur
 ```
 
 ---
@@ -737,10 +739,10 @@ Run `tur explain TUR-W0372` (or any of the codes above) for the long form.
 Two environment variables:
 
 ```sh
-TUR_REFINE_STATS=1 tur build --enable=refined main.tur
+TUR_REFINE_STATS=1 tur build main.tur
 # refine: 3 obligation(s): 2 proven, 0 refuted, 1 unknown (7 backend call(s))
 
-TUR_REFINE_DUMP=1 tur emit-c --enable=refined main.tur
+TUR_REFINE_DUMP=1 tur emit-c main.tur
 # --- refinement VC (return value of double-pos) ---
 # (set-logic QF_UFLIA)
 # (declare-const x Int)
@@ -759,7 +761,7 @@ escapes the supported fragment there is no VC to dump, and `TUR_REFINE_DUMP=1`
 prints nothing for it. Stats names those separately, with the reason:
 
 ```sh
-TUR_REFINE_STATS=1 tur check --enable=refined main.tur
+TUR_REFINE_STATS=1 tur check main.tur
 # refine: not encoded (measure 'ready' is used both as a proposition and as a
 #         value): the return value of 'f'
 ```

@@ -556,29 +556,27 @@ defn main [] : int
   string/len(#s"hello")
 ```
 
-The semantic layer available today is **`refined`**, which turns on static
-discharge of `#refine{...}` predicates for this file -- the compiler tries to
-*prove* each refinement instead of only checking it at runtime:
+There is no semantic layer today. `refined` was one until it graduated in
+v0.33.0; static discharge of `#refine{...}` predicates is now unconditional, so
+there is nothing left for the token to turn on. A file that still carries
+`#lang turmeric refined` keeps compiling -- the token is accepted and ignored
+with a one-time `TUR-W0064` -- but it can be dropped. See
+[refinement-types-guide.md](refinement-types-guide.md).
 
-```turmeric
-#lang turmeric refined
-(defn double-pos [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
-  (* x 2))          ; proved statically -- no runtime check emitted
-```
-
-A semantic layer is never a second enable path. It points at an existing
-`EXPERIMENTS[]` row, so `#lang turmeric refined` is *exactly*
-`--enable=refined` scoped to one file, and the experiment's lifecycle warning
+When a semantic layer does exist, it is never a second enable path: it points
+at an existing `EXPERIMENTS[]` row, so `#lang turmeric <name>` is *exactly*
+`--enable=<name>` scoped to one file, and the experiment's lifecycle warning
 and `expires_at` govern both spellings. If a project manifest states its own
 `:experiments` list and leaves the backing experiment out, such a file is a
 **hard error** rather than a silent downgrade -- compiling it under different
-semantics than it asked for would be worse than refusing. See
-[refinement-types-guide.md](refinement-types-guide.md).
+semantics than it asked for would be worse than refusing.
 
 A `#lang` layer is a hard requirement of the file: an unrecognised layer token
-is a compile error (`TUR-E0330`), never silently ignored. Run `tur lang-layers`
-(add `--json` for the machine-readable form) to list every registered layer,
-its kind, and a one-line summary.
+is a compile error (`TUR-E0330`), never silently ignored. A *graduated* token
+is the one exception, and deliberately so -- deleting the row on graduation
+would otherwise break every file that opted in, which is the wrong population
+to break. Run `tur lang-layers` (add `--json` for the machine-readable form) to
+list every registered layer, its kind, and a one-line summary.
 
 ---
 

@@ -34,7 +34,7 @@ load-bearing prereqs that closed in 2026-06-11 see
 | **Storage choice** (dense vs sparse vs tag) | Type-family `Storage c` -- resolved at compile time, but the user can lie via orphan instances | Associated type, same caveat | Per-component; macro registers, accessor type bakes it in. No orphan-instance surface |
 | **Typeclass coherence** | Open instances; orphans are a maintenance hazard | Open instances | Coherent -- one `Component T` instance per `T`, enforced by the elaborator |
 | **Polymorphic-system bound** ("any world with `Pos` and `Vel`") | `Has w Pos, Has w Vel => …` constraint, solved by GHC | Same | `(HasPos W) (HasVel W) => …` Turmeric class constraint -- shipped via `defcomponent-class` / `definstance` |
-| **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness on the `ecs/refined-world` facade (`--enable=refined`): a read whose entity is not proven alive is a compile error |
+| **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness by importing the `ecs/refined-world` facade: a read whose entity is not proven alive is a compile error |
 | **Query arity** | Tuples up to 8-ish via type-class hackery; degrades past that | `Query` arrow combinators -- no cap, but composition cost is real | Truly variadic via row-kinded `for-each`; row type is the kind-`[*]` of components |
 | **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check (lifts when the spice wires `SizedVec<n, T>` -- SZ6+ shipped, spice wiring still TODO) |
 | **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-cross-world-systems-plan.md)); single-world is v1 |
@@ -322,8 +322,9 @@ world the comparison is not performed anywhere on the read path -- a
 stale handle reads stale bits. Sized worlds have `sized-alive?`;
 unsized worlds leave the check to you.
 
-A compile-time version now **ships as an opt-in surface** (2026-07-26).
-Refinement types live behind `--enable=refined`
+A compile-time version now **ships as an opt-in module** -- you opt in
+by importing it, not by setting a flag. Refinement types are checked
+statically on every compile
 ([`refinement-types-guide.md`](refinement-types-guide.md)), and the
 impure-measure question -- `alive?` reads mutable world state through
 inline C, which is exactly what congruence must refuse in general -- was
@@ -449,7 +450,8 @@ If you take only one thing from this guide, take this:
 - **Aliveness** is the row where the *defaults* are the same and
   runtime-checked everywhere (Haskell's `liquid-haskell` is the analog;
   nobody ships it as default). tur-ecs now has an opt-in compile-time
-  surface here -- the experimental `ecs/refined-world` facade, where an
+  surface here -- the `ecs/refined-world` facade, which you opt into by
+  importing it instead of the forgiving module, and where an
   unproven read fails to compile -- which neither Haskell library
   offers. On the default path tur-ecs is still arguably a step
   *behind*: the unsized read skips the generation compare entirely,

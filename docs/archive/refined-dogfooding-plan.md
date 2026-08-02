@@ -1,26 +1,33 @@
 # Dogfooding `refined` on a real program
 
-**Status: EXECUTED 2026-07-26 on tur-ecs.** The program this was waiting for
-came to exist: `spices/ecs` (~5400 lines, 22 modules, 66/66-green suite)
-carrying the RE1 refined surface. Results -- 1.004x cost on unannotated code,
-zero `TUR-E0371`, Z3 oracle agreement on every real VC, tier coverage with
-honest skips -- are in
-[`../v1/refined-dogfood-ecs-report.md`](../v1/refined-dogfood-ecs-report.md),
+**Status: EXECUTED 2026-07-26 on tur-ecs. ARCHIVED 2026-08-01** -- both things
+it fed have landed (Z3 retirement in 0.32.5, graduation for v0.33.0), so it is
+finished work, not shelved work. It sat in `docs/upcoming/hold/` for a while
+after it had already been executed, which is what the move corrects.
+
+The program this was waiting for came to exist: `spices/ecs` (~5400 lines, 22
+modules, 66/66-green suite) carrying the RE1 refined surface. Results --
+1.004x cost on unannotated code, zero `TUR-E0371`, Z3 oracle agreement on every
+real VC, tier coverage with honest skips -- are in
+[`../upcoming/v1/refined-dogfood-ecs-report.md`](../upcoming/v1/refined-dogfood-ecs-report.md),
 which follows this plan's report format. The tier checklist below is kept as
 written; per-item outcomes (covered / absence-result / skipped-no-natural-
 site, including the stdlib-alias mismatch finding) live in the report.
 
-**Why it is on hold and not in flight:** everything measured so far comes from
-fixtures, and fixtures are written by the same person who wrote the checker.
-They cover what was thought of. A real program is the only source of the shapes
-that were not.
+**Why it was held rather than run earlier:** everything measured up to that
+point came from fixtures, and fixtures are written by the same person who wrote
+the checker. They cover what was thought of. A real program is the only source
+of the shapes that were not -- so the plan waited for one to exist rather than
+contorting a fixture into standing in for it.
 
-**What it feeds:**
+**What it fed (both now closed):**
 
-- [refined-graduation-plan.md](../v1/refined-graduation-plan.md) precondition 2
-  -- compile-time cost on something that is not a fixture designed to be hard.
+- [refined-graduation-plan.md](../upcoming/v1/refined-graduation-plan.md)
+  precondition 2 -- compile-time cost on something that is not a fixture
+  designed to be hard. Satisfied; graduation executed 2026-08-01.
 - The Z3 retirement decision. The oracle's whole value is cross-checking VCs
-  the corpus cannot supply, and only a real program generates those.
+  the corpus cannot supply, and only a real program generates those. Evidence
+  banked 2026-07-26; scaffold deleted 2026-07-30 in 0.32.5.
 
 ---
 

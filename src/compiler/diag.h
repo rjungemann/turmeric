@@ -238,8 +238,8 @@ typedef enum DiagCode {
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
     /* RT3 (refinement-types-plan): static discharge of `#refine{...}`
-     * predicates.  Only ever emitted under the `refined` experiment
-     * (--enable=refined / `#lang turmeric refined`).  E0371/W0372 are the two
+     * predicates.  Emitted unconditionally since refinement types graduated in
+     * v0.33.0; there is no longer an experiment gate.  E0371/W0372 are the two
      * verdict-carrying codes: the runtime contract check survives in both
      * cases, so neither is a miscompile -- W0372 is "we could not prove it",
      * E0371 is "we found a counterexample".  Under --strict-refine both are

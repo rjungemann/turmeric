@@ -2,7 +2,6 @@
 #include "elab_internal.h"
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
-#include "runtime/experiments.h" /* RT0: experiment_warn_if_used("refined") */
 #include "globals.h"            /* repr-trace: g_emit_abi_trace */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
@@ -1328,12 +1327,12 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
                                         const Form *subject, TypeKind base_kind,
                                         RefineEnv *env, const char *what,
                                         const char *fn_name, Span loc) {
-    if (!g_opt_refined || !pred) return false;
+    if (!pred) return false;
     /* Never elide a check that is itself observable.  Reported as not-proven
-     * rather than diagnosed, because the predicate is equally impure with the
-     * gate off -- turning the experiment on should not invent an error. */
+     * rather than diagnosed: an impure predicate keeps the runtime check it
+     * would have had anyway, so discharge declines rather than inventing an
+     * error. */
     if (rt_pred_is_impure(e, pred)) return false;
-    experiment_warn_if_used("refined");
 
     /* Constructor axioms hold on every path, so they go in once, ahead of the
      * split, and are rewound afterwards so nothing leaks into the next
@@ -1411,7 +1410,7 @@ static bool rt_cs_seen(Elab *e, const Binding *callee, const Form *cf, uint32_t 
 
 uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                                const Form *call_form, uint32_t arg_offset) {
-    if (!g_opt_refined || !e || !callee || !call_form)
+    if (!e || !callee || !call_form)
         return e ? e->n_refine_call_sites : 0;
     /* A form can be elaborated more than once (macro expansion, specialization
      * retries).  Deduplicate so one source call site yields one diagnostic. */
@@ -1489,7 +1488,7 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
 
 void refine_note_macro_expansion(Elab *e, const Form *call,
                                  const Form *expansion) {
-    if (!g_opt_refined || !e || !call || !expansion) return;
+    if (!e || !call || !expansion) return;
     for (uint32_t i = 0; i < e->n_refine_mexps; i++) {
         if (e->refine_mexp_calls[i] == call) {
             e->refine_mexp_bodies[i] = expansion;   /* latest re-elaboration */
@@ -1533,7 +1532,7 @@ void refine_note_call_site_class_preds(Elab *e, const Binding *callee,
                                        const Form *call_form,
                                        const Form **preds, const char **vars,
                                        uint32_t n_params) {
-    if (!g_opt_refined || !e || !callee || !call_form) return;
+    if (!e || !callee || !call_form) return;
     for (uint32_t i = e->n_refine_call_sites; i-- > 0; ) {
         RefineCallSite *cs = &e->refine_call_sites[i];
         if (cs->callee != callee || cs->call_form != call_form) continue;
@@ -1546,7 +1545,7 @@ void refine_note_call_site_class_preds(Elab *e, const Binding *callee,
 
 void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
                                const char *caller, const Form *body) {
-    if (!g_opt_refined || !e) return;
+    if (!e) return;
     for (uint32_t i = from; i < e->n_refine_call_sites; i++) {
         if (e->refine_call_sites[i].env) continue;   /* an inner defn already owns it */
         e->refine_call_sites[i].env         = env;
@@ -1912,7 +1911,7 @@ static void rt_lint_class_leniency(Elab *e, RefineCallSite *cs, uint32_t p,
 }
 
 void refine_resolve_call_sites(Elab *e) {
-    if (!g_opt_refined || !e) return;
+    if (!e) return;
     for (uint32_t i = 0; i < e->n_refine_call_sites; i++) {
         RefineCallSite *cs = &e->refine_call_sites[i];
         const Binding *callee = cs->callee;
@@ -1980,7 +1979,6 @@ void refine_resolve_call_sites(Elab *e) {
                 snprintf(what, sizeof(what), "argument %u of '%s'", p + 1, cname);
             const char *what_owned = arena_strdup(e->arena, what, strlen(what));
 
-            experiment_warn_if_used("refined");
             RefineObligation *ob = refine_collect_obligation(
                 &e->refine_obs, pred, callee->refine_param_vars[p], arg,
                 rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
@@ -5312,51 +5310,48 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* Path-condition recovery uses the WHOLE body (rt_whole_body below),
          * not just the return subject -- both sides of the 2026-07-26 merge
          * implemented that fix; main's helper form is kept. */
-        RefineEnv *rt_env = NULL;
         bool rt_ret_proven  = false;
         bool rt_post_proven = false;
-        if (g_opt_refined) {
-            rt_env = rt_build_env(e, params, n_params, ct_param_preds,
-                                  ct_param_varnames, ct_param_param_idx,
-                                  n_ct_param_preds, ct_pre_form);
-            /* Unconditional: even a function with no refinements of its own is
-             * the named caller of the crossings its body produced, and its
-             * parameters still need declared sorts in the environment. */
-            refine_fill_call_site_env(e, rt_cs_start, rt_env,
-                                      name_f->as.sym ? name_f->as.sym->name : NULL,
-                                      rt_whole_body(e, call, body_start));
-            const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
-            char rt_what[128];
-            if (ct_ret_pred) {
-                snprintf(rt_what, sizeof(rt_what), "the return value of '%s'", rt_fn);
-                rt_ret_proven = rt_return_obligation_proven(
-                    e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
-                    arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
-                    call->span);
-                rt_ret_guaranteed = rt_ret_proven || should_check;
-            }
-            if (ct_post_form) {
-                snprintf(rt_what, sizeof(rt_what), "the postcondition of '%s'", rt_fn);
-                rt_post_proven = rt_return_obligation_proven(
-                    e, ct_post_form, "result", rt_subject, return_kind, rt_env,
-                    arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
-                    call->span);
-            }
-            /* RT4: with no DECLARED return refinement, try to infer one from
-             * the parameter refinements and the body.  Scope is deliberately
-             * narrow (the plan's): a single-expression body over a numeric
-             * result, at most four refined parameters.  A branching body would
-             * need a path-sensitive join at the merge point, which is deferred.
-             * Nothing is emitted for an inferred refinement -- it is extra
-             * knowledge published to call sites, not a new runtime check. */
-            if (!ct_ret_pred && n_body == 1 && n_ct_param_preds > 0 &&
-                n_ct_param_preds <= 4 && rt_subject &&
-                (return_kind == TY_INT || return_kind == TY_FLOAT ||
-                 return_kind == TY_FLOAT32 || return_kind == TY_FLOAT64)) {
-                rt_inferred_ret = rt4_infer_return(e, rt_subject, return_kind,
-                                                   rt_env, call->span);
-                if (rt_inferred_ret) rt_inferred_var = RT4_RESULT_VAR;
-            }
+        RefineEnv *rt_env = rt_build_env(e, params, n_params, ct_param_preds,
+                                         ct_param_varnames, ct_param_param_idx,
+                                         n_ct_param_preds, ct_pre_form);
+        /* Unconditional: even a function with no refinements of its own is
+         * the named caller of the crossings its body produced, and its
+         * parameters still need declared sorts in the environment. */
+        refine_fill_call_site_env(e, rt_cs_start, rt_env,
+                                  name_f->as.sym ? name_f->as.sym->name : NULL,
+                                  rt_whole_body(e, call, body_start));
+        const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
+        char rt_what[128];
+        if (ct_ret_pred) {
+            snprintf(rt_what, sizeof(rt_what), "the return value of '%s'", rt_fn);
+            rt_ret_proven = rt_return_obligation_proven(
+                e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
+                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
+                call->span);
+            rt_ret_guaranteed = rt_ret_proven || should_check;
+        }
+        if (ct_post_form) {
+            snprintf(rt_what, sizeof(rt_what), "the postcondition of '%s'", rt_fn);
+            rt_post_proven = rt_return_obligation_proven(
+                e, ct_post_form, "result", rt_subject, return_kind, rt_env,
+                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
+                call->span);
+        }
+        /* RT4: with no DECLARED return refinement, try to infer one from
+         * the parameter refinements and the body.  Scope is deliberately
+         * narrow (the plan's): a single-expression body over a numeric
+         * result, at most four refined parameters.  A branching body would
+         * need a path-sensitive join at the merge point, which is deferred.
+         * Nothing is emitted for an inferred refinement -- it is extra
+         * knowledge published to call sites, not a new runtime check. */
+        if (!ct_ret_pred && n_body == 1 && n_ct_param_preds > 0 &&
+            n_ct_param_preds <= 4 && rt_subject &&
+            (return_kind == TY_INT || return_kind == TY_FLOAT ||
+             return_kind == TY_FLOAT32 || return_kind == TY_FLOAT64)) {
+            rt_inferred_ret = rt4_infer_return(e, rt_subject, return_kind,
+                                               rt_env, call->span);
+            if (rt_inferred_ret) rt_inferred_var = RT4_RESULT_VAR;
         }
 
         if (should_check && body) {
@@ -5821,7 +5816,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * unit.  Parameter names ride along because a predicate may mention a
      * sibling parameter, which the call site replaces with that slot's
      * argument. */
-    if (g_opt_refined && n_params > 0) {
+    if (n_params > 0) {
         const Form **rp = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
         const char **rv = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
         const char **rn = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
@@ -5844,17 +5839,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
      * refinements, so this must not sit inside the block above. */
     b->reads_param_plus1 = reads_param_plus1_defn;
-    if (g_opt_refined) {
-        /* A declared return refinement wins -- but only when something
-         * actually enforces it (see rt_ret_guaranteed).  An INFERRED one is
-         * always safe to publish: RT4 only records what a backend proved. */
-        if (ct_ret_pred && rt_ret_guaranteed) {
-            b->refine_return_pred = ct_ret_pred;
-            b->refine_return_var  = ct_ret_var;
-        } else if (!ct_ret_pred && rt_inferred_ret) {
-            b->refine_return_pred = rt_inferred_ret;
-            b->refine_return_var  = rt_inferred_var;
-        }
+    /* A declared return refinement wins -- but only when something actually
+     * enforces it (see rt_ret_guaranteed).  An INFERRED one is always safe to
+     * publish: RT4 only records what a backend proved. */
+    if (ct_ret_pred && rt_ret_guaranteed) {
+        b->refine_return_pred = ct_ret_pred;
+        b->refine_return_var  = ct_ret_var;
+    } else if (!ct_ret_pred && rt_inferred_ret) {
+        b->refine_return_pred = rt_inferred_ret;
+        b->refine_return_var  = rt_inferred_var;
     }
 
     /* Phase R5: Store #[no-unwind] attribute on the binding */
@@ -7071,7 +7064,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * binding.  A `let` bound to the lambda copies them across (elab_forms.c),
      * which is what lets `(let [f (fn [x : Pos] ...)] (f 0))` be checked at the
      * call the way a call to a named function is. */
-    if (g_opt_refined && n_ct_param_preds > 0 && n_params > 0) {
+    if (n_ct_param_preds > 0 && n_params > 0) {
         const Form **rp = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
         const char **rv = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
         const char **rn = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));

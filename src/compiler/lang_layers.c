@@ -65,19 +65,9 @@ static const LangLayerDescriptor LANG_LAYERS[] = {
       NULL,                        /* reader layer: no experiment */
       "#s\"...\" owned-String literal (string/from-cstr)",
       "v1" },
-    /* RT0 (refinement-types-plan): the semantic layer for static refinement
-     * discharge.  `#lang turmeric refined` is EXACTLY `--enable=refined`
-     * scoped to one file -- the `experiment` field below is the only enable
-     * path, never a second parallel one, so the experiment's lifecycle
-     * (TUR-W0060/W0061) and expires_at govern both spellings.  A project
-     * manifest that disables the experiment makes such a file a hard error
-     * (see lang_layers_apply_semantic), never a silent ignore. */
-    { "refined",
-      LAYER_SEMANTIC,
-      NULL,                        /* semantic layer: no reader hook */
-      "refined",                   /* EXPERIMENTS[] row */
-      "static discharge of #refine{...} predicates (refinement types)",
-      "v1" },
+    /* RT0 refined GRADUATED 2026-08-01 -- static refinement discharge is
+     * unconditional, so the layer row is deleted rather than left to
+     * accumulate, and the token moves to GRADUATED_LAYERS[] below. */
 };
 
 /* ------------------------------------------------------------------------- *
@@ -96,21 +86,21 @@ static const LangLayerDescriptor LANG_LAYERS[] = {
  * line after graduation, matching the experiment convention -- the shim is a
  * migration window, not a permanent alias.
  *
- * Deliberately empty today: no layer has graduated yet.  `refined` becomes the
- * first entry when it does; `stringed` is the only other layer and is not
- * graduating.  The list exists ahead of that because the shim has to land
- * BEFORE or WITH the row deletion -- adding it afterwards would mean shipping
- * one release in which the files break.  See
- * docs/upcoming/v1/refined-graduation-plan.md.
- *
- * The mechanism was verified with a temporary entry before landing empty: a
+ * The shim landed empty ahead of use, deliberately: it has to be present
+ * BEFORE or WITH the first row deletion, because adding it afterwards would
+ * mean shipping one release in which every `#lang turmeric <name>` file
+ * breaks.  Its mechanism was verified with a temporary entry at that time -- a
  * graduated token warned once and compiled (exit 0) on both the compiled and
  * the interpreter path, a genuinely unknown token still reported TUR-E0330,
  * and a live layer was unaffected.  Testing it that way rather than at
  * graduation is the point -- an empty list exercises nothing, and graduation
  * is the worst moment to find out the shim does not work.
+ *
+ * `stringed` is the only remaining live layer and is not graduating.  See
+ * docs/upcoming/v1/refined-graduation-plan.md.
  * ------------------------------------------------------------------------- */
 static const char *const GRADUATED_LAYERS[] = {
+    "refined",  /* graduated 2026-08-01; static #refine{...} discharge is unconditional */
     NULL,
 };
 

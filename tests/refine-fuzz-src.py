@@ -12,21 +12,32 @@ bugs found in the refinement work so far lived exactly there, and ~17,300
 randomly generated VCs across six seeds were clean the whole time.
 
 This harness starts at the top instead.  It generates whole Turmeric programs,
-compiles and runs each one TWICE -- once with the `refined` experiment off and
-once with it on -- and compares what actually happened.
+compiles and runs each one TWICE -- once with static discharge suppressed and
+once normally -- and compares what actually happened.
+
+Refinement types graduated in v0.33.0, so the reference leg is no longer "the
+experiment is off"; it is `TUR_REFINE_NO_DISCHARGE=1`, an env-only test seam
+that makes every obligation decline so nothing is elided.  See run_gate() for
+why no shipping flag can stand in for it.
+
+TERMINOLOGY: "gate-off" and "gate-on" survive throughout this file as the names
+of the two legs.  There is no gate any more -- read them as "reference leg,
+discharge suppressed" and "discharge leg, normal build".  The names were kept
+deliberately rather than renamed across ~15 sites in a graduation change set.
 
 The property that matters
 -------------------------
-With the gate OFF, every refinement is a runtime contract check.  A program
-that violates its own refinement aborts.  With the gate ON, a discharged
+With discharge SUPPRESSED, every refinement is a runtime contract check.  A
+program that violates its own refinement aborts.  With discharge ON, a proved
 obligation lets that check be elided.  So:
 
-    gate-off aborted on a contract  ==>  gate-on must NOT run to completion
+    reference leg aborted on a contract  ==>  discharge leg must NOT run to
+                                              completion
 
-Any case where gate-off aborts and gate-on exits 0 is a MISCOMPILE: turning the
-experiment on changed a program that was caught into one that silently returns
-a value violating its own declared refinement.  That is the single thing the
-design forbids, and it is precisely what both known bugs did.
+Any case where the reference leg aborts and the discharge leg exits 0 is a
+MISCOMPILE: discharge changed a program that was caught into one that silently
+returns a value violating its own declared refinement.  That is the single
+thing the design forbids, and it is precisely what both known bugs did.
 
 Three weaker properties are checked alongside it:
 
@@ -778,12 +789,23 @@ class Outcome:
 
 
 def run_gate(tur, path, refined):
-    cmd = [tur, "run"]
-    if refined:
-        cmd.append("--enable=refined")
-    cmd.append(path)
+    """Compile+run one leg.  `refined=False` is the REFERENCE leg: no obligation
+    is discharged, so every refinement keeps its runtime check.
+
+    Until refinement types graduated (v0.33.0) that leg was spelled "omit
+    --enable=refined".  Graduation made the flag a no-op, which would have made
+    both legs identical builds and this whole harness vacuous while it kept
+    reporting PASS.  TUR_REFINE_NO_DISCHARGE is the replacement -- an env-only
+    test seam, deliberately not a CLI flag or an experiment.  No shipping flag
+    reconstructs this leg: --no-contracts emits NO checks, --keep-contracts
+    emits checks MINUS the elided ones, and the elided set is exactly what the
+    miscompile property below is about.
+    """
+    cmd = [tur, "run", path]
     env = dict(os.environ)
     env["TUR_REFINE_STATS"] = "1"
+    if not refined:
+        env["TUR_REFINE_NO_DISCHARGE"] = "1"
     # The generated programs are tiny and self-contained; leak checking the
     # spawned binary is not what this harness is measuring.
     env["ASAN_OPTIONS"] = env.get("ASAN_OPTIONS", "") or "detect_leaks=0"

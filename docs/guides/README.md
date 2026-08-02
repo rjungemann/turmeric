@@ -107,6 +107,12 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[error-handling-guide.md](error-handling-guide.md)** -- `Result`, `Option`, `panic`, contract macros (`assert!`, `require!`, `ensure!`)
 - **[contract-types-guide.md](contract-types-guide.md)** -- Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts
 
+## Refinement Types
+
+- **[refinement-types-guide.md](refinement-types-guide.md)** -- Static discharge of `#refine{ x : T | p }`: what gets proved, call-site crossings, `--strict-refine`, and the documented limits
+- **[stateful-refinements-guide.md](stateful-refinements-guide.md)** -- Refinements over mutable state: `#reads` measures and the `frozen` region that makes them congruent
+- **[refinement-solver-internals-guide.md](refinement-solver-internals-guide.md)** -- How the in-house solver chain works (normalization, EUF, Fourier-Motzkin, Nelson-Oppen, cube expansion), and how to debug a specific obligation
+
 ## Functional Patterns
 
 - **[arrows-guide.md](arrows-guide.md)** -- Bare-function arrow combinators and building DSP signal graphs with `stdlib/arrow.tur` and `stdlib/signal/`

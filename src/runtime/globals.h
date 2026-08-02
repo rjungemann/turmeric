@@ -226,12 +226,10 @@ extern bool g_opt_jit;
  * unconditional; the g_opt_closure_drop_glue enable bit and its codegen gates are
  * gone.  See docs/upcoming/closure-drop-glue-plan.md. */
 
-/* RT0 (refinement-types-plan): static discharge of `#refine{...}` predicates.
- * Gated by the `refined` experiment (--enable=refined, or the `#lang turmeric
- * refined` semantic layer, which is the same enable scoped to one file).  When
- * off, the elaborator behaves exactly as with contract types alone: predicates
- * parse and stay runtime-only and the discharge pass never runs. */
-extern bool g_opt_refined;
+/* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
+ * predicates is unconditional; the g_opt_refined enable bit and its
+ * elaboration gates are gone.  See
+ * docs/upcoming/v1/refined-graduation-plan.md. */
 
 /* sealed-opaque: gates the `:sealed` defopaque attribute's ENFORCEMENT.  When
  * off, `:sealed` parses and is recorded but the `::` check never fires, so

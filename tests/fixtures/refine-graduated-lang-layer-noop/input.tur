@@ -1,0 +1,25 @@
+#lang turmeric refined
+;; RT0 graduation compatibility promise (2026-08-01): `refined` graduated, so
+;; its LANG_LAYERS[] row is deleted -- CLAUDE.md is explicit that layers
+;; graduate to always-on rather than accumulating.  But a deleted row makes
+;; every file that still names the token fail outright with TUR-E0330, which is
+;; a harsher landing than the same graduation gives the CLI flag.
+;;
+;; `GRADUATED_LAYERS[]` in src/compiler/lang_layers.c is the layer-side shim
+;; that closes that gap: the token is accepted and ignored with a one-time
+;; TUR-W0064, so a file carrying `#lang turmeric refined` keeps compiling
+;; across the boundary.  The shim landed EMPTY ahead of this graduation on
+;; purpose -- adding it afterwards would have shipped one release in which
+;; every such file broke.
+;;
+;; This fixture was `refine-lang-layer`, which pinned the layer turning
+;; discharge ON.  There is nothing to turn on any more; what is worth pinning
+;; is that the token is still accepted.  Discharge itself is unconditional, so
+;; `(shift-up 3)` is still proved.
+(defn shift-up [x : #refine{ v : int | (>= v 3) }] : #refine{ r : int | (> r 0) }
+  (- x 2))
+
+(defn main [] : int
+  (println (shift-up 3))
+  (println "refine-graduated-lang-layer-noop")
+  0)

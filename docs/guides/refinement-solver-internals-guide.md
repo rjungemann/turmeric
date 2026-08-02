@@ -1,7 +1,7 @@
 # The Refinement Solver (Internals)
 
 > **Audience:** compiler developers and anyone who wants to know *how* the
-> `refined` experiment proves a predicate at compile time. For the user-facing
+> compiler proves a refinement predicate at compile time. For the user-facing
 > feature -- how to write refinements and read their diagnostics -- see
 > [refinement-types-guide.md](refinement-types-guide.md). For the always-on
 > runtime half see [contract-types-guide.md](contract-types-guide.md). The
@@ -9,9 +9,9 @@
 > [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md).
 
 A contract type `#refine{ x : T | p }` always has a runtime meaning: `p` is
-checked when a value crosses into the type. With the `refined` experiment on,
-the compiler additionally *tries to prove* `p` statically and elides the
-runtime check wherever the proof succeeds. The prover is a small, staged,
+checked when a value crosses into the type. On top of that, the compiler
+always *tries to prove* `p` statically and elides the runtime check wherever
+the proof succeeds. The prover is a small, staged,
 in-house decision procedure that ships inside `tur` -- there is **no SMT
 library dependency in any default or release build**, which is also why the
 WASM playground gets static checking at zero download cost.
@@ -420,15 +420,16 @@ help: (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) 
   runtime contract check it would otherwise inject; on `UNKNOWN`/`INVALID` the
   check is emitted exactly as the always-on contract path (see
   [contract-types-guide.md](contract-types-guide.md)) would.
-- **The experiment gate.** `refined` is a normal `EXPERIMENTS[]` row
-  (`src/runtime/experiments.c` -- `introduced` 0.31.0, `expires_at` 0.34.0,
-  `XF_LIFECYCLE_PROTOTYPE`, reads `g_opt_refined`), enabled via `--enable=refined`,
-  `:experiments [:refined]` in `build.tur`, the user experiments file, or
-  `#lang turmeric refined` (which points at the *same* row -- one enable path,
-  one lifecycle warning `TUR-W0060`/`W0061`, one `expires_at`). With the
-  experiment off, everything still parses and runs its runtime checks. See
-  [experimental-flags-guide.md](experimental-flags-guide.md) and the CLAUDE.md
-  `#lang` rules.
+- **No gate.** Static discharge is unconditional: every compile that sees a
+  `#refine{...}` runs the pipeline described here. There is no `EXPERIMENTS[]`
+  row and no global to read. The old opt-in spellings survive only as
+  compatibility shims that age out one minor line after graduation --
+  `--enable=refined`, `:experiments [:refined]`, and the user experiments file
+  are accepted as no-ops (`TUR-W0063`, `GRADUATED[]` in
+  `src/runtime/experiments.c`), and `#lang turmeric refined` is accepted as a
+  no-op layer token (`TUR-W0064`, `GRADUATED_LAYERS[]` in
+  `src/compiler/lang_layers.c`). Passing any of them changes nothing about
+  what the solver does.
 - **`--strict-refine`.** A diagnostic-strictness knob (not an experiment) that
   turns every `UNKNOWN`/open-`INVALID` obligation into a hard error, for builds
   that must discharge every refinement statically.
@@ -451,7 +452,8 @@ Registered in `diag.c` / `diag.h` (the `RT3` block, `diag.c:241`):
 | `TUR-W0377` | warn | instance-leniency note (paired with the class-method checks) |
 | `TUR-E0378` | error | refinement appears inside a function type |
 | `TUR-I0379` | internal | **RETIRED in 0.32.5**, never emitted: reported a Z3-oracle mismatch back when a dev build could link one. Code reserved, not reused |
-| `TUR-W0060` / `TUR-W0061` | warn | the `refined` experiment lifecycle notice |
+| `TUR-W0063` | warn | a lingering `--enable=refined` / `:experiments [:refined]`; accepted, no effect |
+| `TUR-W0064` | warn | a lingering `#lang turmeric refined` token; accepted, no effect |
 
 `TUR-E0371` and `TUR-W0372` both leave the program safe -- the runtime check
 survives either way. `tur explain TUR-W0372` prints the long form of any code.
@@ -480,12 +482,30 @@ Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
 
 ```sh
 # Per-unit stats: how many obligations were proven / refuted / unknown.
-TUR_REFINE_STATS=1 tur build --enable=refined main.tur
+TUR_REFINE_STATS=1 tur build main.tur
 # refine: 3 obligation(s): 2 proven, 0 refuted, 1 unknown (7 backend call(s))
 
 # Dump each VC as SMT-LIB2 (the refutation form shown earlier).
-TUR_REFINE_DUMP=1 tur emit-c --enable=refined main.tur
+TUR_REFINE_DUMP=1 tur emit-c main.tur
+
+# Suppress static discharge entirely: every obligation declines, so nothing is
+# elided and every refinement keeps its runtime check.
+TUR_REFINE_NO_DISCHARGE=1 tur build main.tur
 ```
+
+`TUR_REFINE_NO_DISCHARGE` is a **test seam, not a feature gate** -- env-only,
+with no `--enable`, no `EXPERIMENTS[]` row and no CLI flag. It exists because
+the source-level fuzzer needs a reference build in which every refinement keeps
+its runtime check, which is the ground truth for "does this program actually
+violate its own refinement". That is what the `refined` experiment gate
+supplied until refinement types graduated in v0.33.0, and no shipping flag
+reconstructs it: `--no-contracts` emits *no* checks, `--keep-contracts` emits
+checks *minus* whatever discharge elided, and the elided set is precisely what
+the fuzzer's miscompile property is about. It is implemented as one early
+return in `refine_collect_obligation` -- the single chokepoint every obligation
+flows through -- so nothing is collected, nothing is decided, and no refinement
+diagnostic fires. Reach for it when you want to know whether a behavior you are
+looking at came from discharge or was there anyway.
 
 ### The Z3 oracle -- RETIRED in 0.32.5
 
@@ -511,11 +531,12 @@ never had.
   on a machine that had Z3 installed; this runs in every build, including CI
   and WASM, which are exactly the ones that never had one.
 - `tests/refine-fuzz-src.py` -- a **source-level** differential fuzzer that
-  compiles generated programs twice (gate off vs gate on) and compares what
-  happens. It needs no oracle at all, and it covers the part that actually
-  broke: both known soundness bugs lived in the source-to-VC encoder, *above*
-  where the deleted VC-level fuzzer started, which is why ~17,300 generated VCs
-  across six seeds stayed clean through both of them.
+  compiles generated programs twice (`TUR_REFINE_NO_DISCHARGE=1` as the
+  reference leg, then a normal build) and compares what happens. It needs no
+  oracle at all, and it covers the part that actually broke: both known
+  soundness bugs lived in the source-to-VC encoder, *above* where the deleted
+  VC-level fuzzer started, which is why ~17,300 generated VCs across six seeds
+  stayed clean through both of them.
 
 To debug a specific VC against an external solver by hand, dump it with
 `TUR_REFINE_DUMP=1` and feed the SMT-LIB2 to whatever solver you like.
@@ -539,7 +560,8 @@ whole pipeline. Representative cases:
 | `refine-cube-expansion-bounded` | cap-hit degrades to a kept runtime check |
 | `refine-nonlinear-warn` | `TUR-W0373` on an abstracted product |
 | `refine-match-impure-arm` | fresh-per-occurrence encoding for impure calls |
-| `refine-off-is-contracts-only` | experiment off -> pure runtime behavior |
+| `refine-runtime-check-still-fires` | an undischarged obligation keeps its runtime contract |
+| `refine-graduated-enable-noop`, `refine-graduated-lang-layer-noop` | the `TUR-W0063` / `TUR-W0064` compatibility shims |
 | `refined-bounded-idx`, `refined-nonempty` | index/non-empty bounds end to end |
 
 Beyond the fixtures, `tests/refine-fuzz-src.py` fuzzes at the source level:

@@ -2,11 +2,13 @@
 # tests/run-refine-fuzz-src.sh -- source-level differential fuzz smoke for
 # refinement types.
 #
-# Compiles and runs generated Turmeric programs twice, gate-off and gate-on,
-# and asserts that turning `--enable=refined` on never turns a program the
-# runtime contract caught into one that exits 0.  See the header of
-# tests/refine-fuzz-src.py for the full property list and for the procedure
-# that proves this harness can fail.
+# Compiles and runs generated Turmeric programs twice -- once with static
+# discharge suppressed (TUR_REFINE_NO_DISCHARGE=1, the reference leg) and once
+# normally -- and asserts that discharge never turns a program the runtime
+# contract caught into one that exits 0.  See the header of
+# tests/refine-fuzz-src.py for the full property list, for why the reference
+# leg needs a dedicated test seam since refinement types graduated in v0.33.0,
+# and for the procedure that proves this harness can fail.
 #
 # This is the SMOKE size (fast enough for ctest).  For a real session, run the
 # Python driver directly with a larger --n and a fresh --seed.

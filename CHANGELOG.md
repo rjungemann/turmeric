@@ -2,6 +2,28 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **Refinement types graduated: `#refine{...}` predicates are now discharged
+  statically on every compile.** The `refined` experiment gate is gone. The one
+  user-visible consequence: a refinement that is violated on *every* execution
+  reaching it is now a compile error (`TUR-E0371`) rather than a runtime
+  contract failure. Nothing else changes -- an obligation the solver cannot
+  decide still falls back to exactly the runtime check it would have had
+  anyway, which is why turning this on cannot make a correct program wrong.
+  Graduation covers the stateful slice (`#reads` / `frozen`) as well as the
+  pure core. Preconditions were measured rather than assumed: the in-tree blast
+  radius was one fixture, and compile cost on a real ~5400-line program was
+  1.004x with zero `TUR-E0371`.
+
+  Existing opt-ins keep working and can be deleted at leisure:
+  `--enable=refined`, `:experiments [:refined]` and the user experiments file
+  are accepted as no-ops with `TUR-W0063`; `#lang turmeric refined` with
+  `TUR-W0064`. Both shims age out one minor line from now. `--strict-refine` is
+  unaffected and remains a real flag.
+
 ## [0.32.8] -- 2026-08-01
 
 ### Fixed

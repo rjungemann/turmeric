@@ -246,11 +246,9 @@ bool g_opt_jit = false;
  * unconditional; the enable bit and its codegen gates are gone.  See
  * docs/upcoming/closure-drop-glue-plan.md. */
 
-/* RT0 (refinement-types-plan): the `refined` experiment's enable bit.  Read by
- * elab_fns.c (obligation collection + runtime-check elision) and by the
- * discharge pass.  Off by default -- refinement checking is an in-flight
- * prototype and ships behind --enable=refined / `#lang turmeric refined`. */
-bool g_opt_refined = false;
+/* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}` is
+ * unconditional; the g_opt_refined enable bit and its elaboration gates are
+ * gone.  See docs/upcoming/v1/refined-graduation-plan.md. */
 
 /* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `(defopaque H :int
  * :sealed)` makes `::` refuse to convert between H and its representation type

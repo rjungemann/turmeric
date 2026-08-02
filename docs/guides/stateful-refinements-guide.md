@@ -1,10 +1,10 @@
 # Stateful Refinements -- frozen regions and `#reads`
 
-> **Status: implemented, experimental.** The `frozen` region form ships today in
+> **Status: shipping, unconditional.** The `frozen` region form ships today in
 > the `tur-ecs` spice (`ecs/freeze`). The `#reads` annotation and the congruence
-> grant it enables are **implemented behind `--enable=refined`** (still
-> experimental -- emits `TUR-W0060`, breaking changes possible) and are tracked
-> in
+> grant it enables are **on in every build** -- there is no flag to set. (A
+> lingering `--enable=refined` is accepted as a no-op, `TUR-W0063`.) The design
+> of record is
 > [`docs/upcoming/v1/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md).
 > A `#reads`-refined accessor now proves its guarded crossings *and* codegens
 > (see [Codegen and enforcement](#codegen-and-enforcement) -- this required
@@ -85,7 +85,7 @@ region body is a plain `let` body -- any result type, and elaborated *inline*
 > same shape freezes a file handle, a buffer, a lock, or a transaction, given a
 > mutator declared `^unique ^mut`.
 
-## Piece 2 -- `#reads w` (implemented, experimental)
+## Piece 2 -- `#reads w`
 
 The region proves the state is frozen, but the encoder still does not know that
 `alive?` *depends on* that state -- `alive?`'s body is inline C, opaque to the
@@ -206,8 +206,8 @@ instead depends on the mode:
 
 | mode | unproven `#reads` crossing |
 |---|---|
-| `--enable=refined --strict-refine` | **hard error** `TUR-W0372` -- the read must be provably guarded (this is the mode `tur-ecs` and any safety-critical use should compile under) |
-| `--enable=refined` (non-strict) | **warning** `TUR-W0372`: "no runtime fallback for an impure `#reads` measure -- the crossing must be proven (guard it inside a `frozen` region)". The crossing is trusted (elided), but you are told -- it is not silent |
+| `--strict-refine` | **hard error** `TUR-W0372` -- the read must be provably guarded (this is the mode `tur-ecs` and any safety-critical use should compile under) |
+| default (non-strict) | **warning** `TUR-W0372`: "no runtime fallback for an impure `#reads` measure -- the crossing must be proven (guard it inside a `frozen` region)". The crossing is trusted (elided), but you are told -- it is not silent |
 
 Both message variants say *no runtime fallback*, not "runtime check kept": a
 `#reads` crossing has no runtime contract to keep (unlike a pure refinement,
@@ -217,9 +217,9 @@ always surfaced, never silently trusted.
 
 The practical rule: **compile `#reads`-bearing code under `--strict-refine`.**
 There the guarantee is real -- an unguarded stateful read is a compile error, not
-a trusted (warned) elision. Non-strict downgrades it to a warning so `refined`
-stays incrementally adoptable, but the accessor's own internal check remains the
-runtime backstop either way.
+a trusted (warned) elision. Non-strict downgrades it to a warning so stateful
+refinements stay incrementally adoptable, but the accessor's own internal check
+remains the runtime backstop either way.
 
 > **On testing `#reads` soundness.** Because a `#reads` crossing carries no
 > runtime contract, the refinement *source fuzzer* (`tests/refine-fuzz-src.py`,

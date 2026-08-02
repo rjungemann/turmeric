@@ -1,5 +1,47 @@
 # Refinement Types -- Prototype Plan (RT0--RT7 + in-house solver S0--S4)
 
+## How to read this file -- it is TWO documents
+
+**This file is a journal stacked on top of a design document. They have
+different reliability, and mixing them up is the mistake this note exists to
+prevent.**
+
+| Part | Where | What it is | Trust it for |
+|---|---|---|---|
+| **1. Engineering journal** | ["Landed so far"](#landed-so-far-2026-07-24) down to the **"Part 2 -- the original design plan"** banner (~45--1820) | Dated entries, 2026-07-24 through 2026-07-30, written as the work landed. Blockquoted throughout. Verified against the source tree. | **Status. This is the status source.** What shipped, what deviated, what was measured, what was declined and why. |
+| **2. Original design plan** | the **"Part 2 -- the original design plan"** banner to the end (~1821--end) | The plan as written *before* implementation: Motivation, Background, Design Decisions, Architecture Overview, Phases RT0--RT7, S0--S4, Implementation Order, Effort Estimates, Open Questions, References. | **Reasoning only.** Why the design is shaped this way -- the solver seam, checking-not-inference, Z3-as-scaffolding, the predicate fragment. |
+
+**Part 2 is NOT a status source.** It is retained for its reasoning, which is
+still good, but it describes an intended implementation that the journal then
+deviated from in several named places. Where the two disagree, **the journal
+wins**. Known deviations are called out inline in Part 2 (search for
+`SUPERSEDED` and `CORRECTED`), but treat any un-annotated implementation detail
+in Part 2 -- file names, diagnostic assignments, stdlib contents, phase gating
+-- as a proposal rather than a fact.
+
+**Graduation (2026-08-01).** The `refined` experiment has **graduated**. Static
+discharge of `#refine{...}` is now **unconditional** -- there is no gate. The
+`EXPERIMENTS[]` and `LANG_LAYERS[]` rows are deleted, `g_opt_refined` is gone,
+and `"refined"` moved to `GRADUATED[]` / `GRADUATED_LAYERS[]`: a lingering
+`--enable=refined` is a `TUR-W0063` no-op and a lingering `#lang turmeric
+refined` a `TUR-W0064` no-op, both aging out one minor line later. Targets
+v0.33.0. See
+[refined-graduation-plan.md](refined-graduation-plan.md). **Every "gated behind
+`--enable=refined`" sentence anywhere in this file is historical.**
+
+**Sibling plans.** Two follow-on plans build directly on this one and account
+for fixtures a reader will find under `tests/fixtures/refine-*` that this plan
+never mentions:
+
+- [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
+  (`RM-B`, boolean-sorted measures -- LANDED RM-B0..RM-B3). Backs
+  `refine-bool-measure`, `refine-float-measure`, `refine-measure-euf`.
+- [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)
+  (`RM-S`, refinements over mutable state -- RM-S0 done, A-vs-B decision open).
+  Backs the `refine-stateful-*` fixtures.
+
+---
+
 > ## Landed so far (2026-07-24)
 >
 > **RT0--RT3 and S0--S3 are implemented and on `main`'s feature branch**, gated
@@ -309,6 +351,14 @@
 > is the designed outcome.
 >
 > ### Retirement criteria: still not met
+>
+> **SUPERSEDED -- this is the 2026-07-25 reading and it is no longer current.**
+> All three criteria were subsequently met and **the Z3 scaffold was deleted
+> 2026-07-30 in 0.32.5**. The entry is kept as the record of where things stood
+> that day; for the current state read
+> ["Landed: a labelled SMT-LIB corpus, replayed without Z3"](#landed-a-labelled-smt-lib-corpus-replayed-without-z3)
+> below and the **EXECUTED 2026-07-30 (0.32.5)** block under
+> ["Z3 retirement criteria"](#z3-retirement-criteria) in Part 2.
 >
 > Two of the three criteria remain open, and the honest reading is that the
 > oracle has just started doing its job rather than finished:
@@ -1424,7 +1474,8 @@
 > path exercised. The runner also fails on an empty corpus or one where nothing
 > was decided, so losing the corpus cannot read as green.
 >
-> Corpus: 103 benchmarks -- 23 hand-written one-idea-each across QF_UF (incl.
+> Corpus: 103 benchmarks *at the time of this entry* -- 23 hand-written
+> one-idea-each across QF_UF (incl.
 > arity-2 and transitive congruence), QF_IDL (negative-weight cycles), QF_LIA
 > (integer gap, scaling), QF_LRA (strictness where the integer version is
 > unsat), QF_UFLIA (needs both theories), and boolean structure (`or`, `=>`,
@@ -1441,6 +1492,13 @@
 > `unsat` inverts the check entirely. Both scripts (`validate-labels.py`,
 > `generate-corpus.py`) are development scaffolding in exactly the way
 > `refine_libz3.c` is -- neither is built, linked, or imported by the suite.
+>
+> **CORRECTED (2026-08-01): the corpus is now 125 benchmarks** (69 labelled
+> `unsat`, 56 labelled `sat`), and the current replay is 68 unsat proved / 56
+> sat correctly declined / 0 soundness failures -- the one undecided benchmark
+> is the deliberately out-of-fragment skip described above. The 103 figure in
+> this entry and the next paragraph is the size on 2026-07-25; it is kept as the
+> dated record. `find tests/corpus/smtlib -name '*.smt2' | wc -l` is the check.
 >
 > Evidence, all clean: 103 committed benchmarks replayed with no Z3 (55 unsat
 > proved, 47 sat correctly declined, 0 soundness failures); a 3600-benchmark
@@ -1626,10 +1684,21 @@
 > - [refined-graduation-plan.md](refined-graduation-plan.md) -- the decision and
 >   the mechanical checklist for removing the gate. The clock (`expires_at`
 >   `0.34.0`) makes this the only item with a deadline.
+>
+>   **LANDED 2026-08-01 (targeting v0.33.0).** All four preconditions closed and
+>   the flip is in: static discharge is unconditional, the `EXPERIMENTS[]` and
+>   `LANG_LAYERS[]` rows are deleted, `g_opt_refined` and its 15 conditionals are
+>   gone, and `"refined"` sits in `GRADUATED[]` / `GRADUATED_LAYERS[]` so a
+>   lingering `--enable=refined` is a `TUR-W0063` no-op and `#lang turmeric
+>   refined` a `TUR-W0064` no-op for one minor line. `--enable=refined` was
+>   stripped from 73 fixture `flags` files; the shim is pinned on purpose by
+>   `refine-graduated-enable-noop` and `refine-graduated-lang-layer-noop`. **The
+>   deadline item is closed** -- there is no longer an item in this plan with a
+>   clock on it.
 > - [corpus-reader-tail-plan.md](../../archive/history/corpus-reader-tail-plan.md) -- the last 7
 >   skips in the SMT-LIB corpus reader, with a recommendation to do one of the
 >   two items and skip the other.
-> - [../hold/refined-dogfooding-plan.md](../hold/refined-dogfooding-plan.md) --
+> - [../../archive/refined-dogfooding-plan.md](../../archive/refined-dogfooding-plan.md) --
 >   on hold, waiting on a real program rather than on effort. It carries a
 >   tiered list of what such a program should contain, since coverage there is
 >   what makes the exercise worth running, and it is the only source of the
@@ -1749,6 +1818,14 @@
 >
 > ---
 
+## Part 2 -- the original design plan
+
+> **CORRECTED -- everything below this line is the design document, not the
+> status.** It was written before implementation and reconciled only where it
+> was factually wrong. Read it for the *reasoning*; read the journal above for
+> what actually shipped. Sections that were overtaken by events carry an inline
+> `SUPERSEDED` or `CORRECTED` marker.
+
 > **Status:** RT0--RT6 + S0--S4 landed (see "Landed so far" above). RT7 landed
 > only in its within-unit half; the persistent cross-build cache is
 > deliberately not built -- see the measurement below. RT0 syntax/storage is largely covered by the
@@ -1766,12 +1843,28 @@
 > `F_CONTRACT_TYPE` reader tag, `#refine{...}` reader, and predicate-as-`Form*`
 > storage are already in place and reused directly.
 >
-> **Gate:** `refined` -- an `EXPERIMENTS[]` row (`--enable=refined`), surfaced
-> per-file as the `#lang turmeric refined` semantic layer. There is **no**
-> `-Xrefinements` flag; the retired `-X` surface does not come back for this.
-> See "Gating" below.
+> **Gate:** ~~`refined` -- an `EXPERIMENTS[]` row (`--enable=refined`), surfaced
+> per-file as the `#lang turmeric refined` semantic layer.~~ **SUPERSEDED
+> 2026-08-01: the experiment GRADUATED and there is no gate.** Static discharge
+> is unconditional; both rows are deleted and `g_opt_refined` no longer exists.
+> `--enable=refined` is a `TUR-W0063` no-op and `#lang turmeric refined` a
+> `TUR-W0064` no-op, aging out one minor line after v0.33.0. There was never an
+> `-Xrefinements` flag; the retired `-X` surface did not come back for this. The
+> "Gating" section below is retained for the reasoning behind the *choice* of
+> gate, not as a description of current behavior.
 >
-> **Last updated:** 2026-07-25
+> **Solver:** the Z3 scaffold was **retired 2026-07-30 in 0.32.5** and its
+> sources deleted. The in-house S0--S4 chain is the only solver, in every build.
+>
+> **Sibling plans:** [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
+> (boolean-sorted measures, `RM-B`) and
+> [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)
+> (refinements over mutable state, `RM-S`) extend the predicate language beyond
+> what this plan scopes.
+>
+> **Last updated:** 2026-08-01 (reconciliation pass: Part 2 corrected against
+> the tree; `refined` graduation and Z3 retirement recorded). The journal in
+> Part 1 was last extended 2026-07-30.
 
 ---
 
@@ -1832,8 +1925,8 @@ Non-goals for this prototype:
 | Contract elaboration | `src/compiler/elab_types.c:1072` | Checks predicate is well-typed + pure |
 | Runtime check insertion | `src/compiler/elab_core.c` | Emits C `assert` / panic for CT3 |
 | `:pre` / `:post` in `defn` | `src/compiler/elab_fns.c` | Parsed and elaborated; currently runtime only |
-| `EXPERIMENTS[]` registry | `src/runtime/experiments.c` | Where the `refined` row lands (RT0) |
-| `LANG_LAYERS[]` registry | (lang-layers-plan L0) | Where the `refined` semantic layer lands (RT0) |
+| `EXPERIMENTS[]` registry | `src/runtime/experiments.c` | Where the `refined` row lands (RT0). **Row deleted 2026-08-01 on graduation**; the name is in `GRADUATED[]`. |
+| `LANG_LAYERS[]` registry | `src/compiler/lang_layers.c` (lang-layers-plan L0) | Where the `refined` semantic layer lands (RT0). **Row deleted 2026-08-01**; the name is in `GRADUATED_LAYERS[]`. |
 
 Refinement types reuse all of the above. The delta is:
 
@@ -1862,6 +1955,22 @@ Refinement types reuse all of the above. The delta is:
 ## Design Decisions
 
 ### Gating: the `refined` experiment + `#lang` layer
+
+> **SUPERSEDED 2026-08-01 -- the gate is GONE.** `refined` graduated: static
+> discharge is unconditional, both registrations described below were **deleted**
+> (`EXPERIMENTS[]` row, `LANG_LAYERS[]` row), `g_opt_refined` and its 15
+> conditionals are removed, and the four `experiment_warn_if_used("refined")`
+> calls with them. The name moved to `GRADUATED[]` / `GRADUATED_LAYERS[]`, so
+> `--enable=refined` is a `TUR-W0063` no-op and `#lang turmeric refined` a
+> `TUR-W0064` no-op -- both age out one minor line after v0.33.0.
+> `LANG_LAYERS[]` now holds `stringed` alone and no semantic layer.
+>
+> This section is kept for the *reasoning*: why the experiment mechanism was the
+> right gate rather than a resurrected `-X` flag, and why the `#lang` layer had
+> to point at the experiment rather than open a second enable path. That
+> reasoning still governs the next in-flight feature. It no longer describes
+> refinement checking. **`--strict-refine` is unaffected and still ships** -- it
+> was always a diagnostic-strictness knob, never an experiment.
 
 Refinement checking is an in-flight compiler feature, so it ships behind the
 experiment mechanism, **not** a resurrected `-X` flag. Two coordinated
@@ -2037,11 +2146,14 @@ Consequences that follow directly from "scaffolding, not backend":
   is never downloaded, never statically linked into a distributed binary, and
   never added to the WASM bundle. The 15--20 MB binary-size question the
   original plan wrestled with disappears.
-- **A `refined` release build discharges only what the in-house chain can.**
-  Early on (RT3, before S-stages) that is little, and unhandled obligations fall
-  to runtime checks -- acceptable precisely because `refined` is an
-  experiment-gated prototype with an `expires_at` contract. Coverage climbs as
-  S0--S3 land; it never depended on shipping Z3.
+- **A release build discharges only what the in-house chain can.**
+  Early on (RT3, before S-stages) that was little, and unhandled obligations
+  fell to runtime checks -- acceptable at the time precisely because `refined`
+  was an experiment-gated prototype with an `expires_at` contract. (That
+  justification expired with the gate: S0--S3 all landed, coverage climbed as
+  predicted, and graduation followed. An undecidable obligation still falls to
+  its runtime check -- that is the permanent design, not a prototype
+  concession.) It never depended on shipping Z3.
 - **The browser story is unconditional, not "tail-fetches-Z3".** S0--S2 compile
   into `tur.wasm` and are the entire discharge path there. There is no
   `z3-solver`, no lazy fetch, no `SharedArrayBuffer`/`Atomics.wait` bridge.
@@ -2075,12 +2187,20 @@ make people forget you could hand-roll one.
 |---|---|---|
 | Predicate syntax | `#refine{ x : T \| p }` | same |
 | Verification time | Runtime always | Compile time when possible; runtime fallback |
-| Solver involvement | None | Yes -- via the seam (in-house, then Z3) |
-| Gate | contracts (shipped) | `refined` experiment / `#lang turmeric refined` |
+| Solver involvement | None | Yes -- via the seam (in-house only; the Z3 scaffold was retired 2026-07-30) |
+| Gate | contracts (shipped) | ~~`refined` experiment / `#lang turmeric refined`~~ **none -- graduated 2026-08-01; discharge is unconditional** |
 | `TY_CONTRACT` node | Yes | Same node; adds `rt_discharged` bit |
 
 Refinement elaboration is **additive**: if `refined` is off, the elaborator
 behaves exactly as with contracts alone. The discharge pass simply does not run.
+
+> **CORRECTED 2026-08-01.** There is no longer an "off" -- the discharge pass
+> always runs. Additivity survives in the form that matters and is pinned by
+> fixtures: static discharge only ever *removes* a runtime check it has proved
+> redundant, so `--keep-contracts` still emits and fires the entry check
+> (`refine-runtime-check-still-fires`) and `--no-contracts` still strips it
+> (`refine-no-contracts-strips-runtime-check`). The two halves stayed separable;
+> only the enable knob went away.
 
 ### Interaction with Existing Type System Features
 
@@ -2096,49 +2216,82 @@ behaves exactly as with contracts alone. The discharge pass simply does not run.
 
 ## Architecture Overview
 
+> **CORRECTED 2026-08-01.** The listing below is now the file layout **as
+> built**, not as originally proposed. Three planned files were never created,
+> each for a reason the journal records; two stdlib entries were wrong. The
+> deltas are spelled out under the listing so the original intent is not lost.
+> Cross-check against the nine `compiler/refine_*.c` entries in
+> `src/CMakeLists.txt` (~lines 186--194).
+
 ```
 src/compiler/
   elab_types.c         -- RT0: attach rt_discharged flag; call constraint collector
-  elab_fns.c           -- RT1: collect :pre/:post as obligations; propagation stubs
-  refine_collect.c     -- RT1 (new): constraint collector -- walks elaborated forms
-  refine_collect.h     -- RT1 (new)
-  refine_vc.c          -- RT2 (new): normalized VC representation + builder
-  refine_vc.h          -- RT2 (new): RefineVC, RefineVerdict, RefineBackend seam
-  refine_smtlib.c      -- RT2 (new): normalized-VC -> SMT-LIB2 serializer (Z3 backend only)
-  refine_smtlib.h      -- RT2 (new)
-  refine_discharge.c   -- RT3 (new): discharge pass -- runs the backend fall-through chain
-  refine_discharge.h   -- RT3 (new)
-  refine_libz3.c       -- RT3 (new): Z3 SCAFFOLD backend; #ifdef TUR_REFINE_Z3_ORACLE; deleted post-S3
-  refine_libz3.h       -- RT3 (new)
-  refine_solver_s0.c   -- S0 (new): normalize + trivial discharge
-  refine_solver_euf.c  -- S1 (new): congruence closure (union-find + EUF)
-  refine_solver_arith.c-- S2 (new): difference logic (Bellman-Ford), then simplex LRA
-  refine_solver_no.c   -- S3 (new): Nelson-Oppen combination of EUF + LRA
-  refine_solver_sat.c  -- S4 (new): boolean structure (small-DNF / case-split)
-  refine_solver.h      -- S0--S4 shared declarations; assembles the chain
-  refine_propagate.c   -- RT4 (new): template-based predicate propagation
-  refine_propagate.h   -- RT4 (new)
-  diag.h               -- RT3: add TUR-E0370..TUR-E0379 refinement diagnostics
-  types.h              -- RT0: add rt_discharged bit to TY_CONTRACT union arm
+  elab_fns.c           -- RT1: collect :pre/:post as obligations
+                          RT4: template-based predicate propagation lives HERE
+  refine_collect.c     -- RT1: constraint collector -- walks elaborated forms
+                          RT4: declared-result propagation, path conditions
+  refine_collect.h     -- RT1
+  refine_vc.c          -- RT2: normalized VC representation + builder; RT7 within-unit memo
+  refine_vc.h          -- RT2: RefineVC, RefineVerdict, RefineBackend seam
+  refine_smtlib.c      -- RT2: normalized-VC -> SMT-LIB2 serializer
+  refine_smtlib.h      -- RT2
+  refine_discharge.c   -- RT3: discharge pass -- runs the stage fall-through chain
+                          RT6: error message quality / counterexample rendering
+  refine_discharge.h   -- RT3
+  refine_solver_s0.c   -- S0: normalize + trivial discharge
+  refine_solver_euf.c  -- S1: congruence closure (union-find + EUF)
+  refine_solver_arith.c-- S2: Fourier-Motzkin over exact rationals (NOT Bellman-Ford + simplex)
+  refine_solver_no.c   -- S3: Nelson-Oppen combination of EUF + LRA
+  refine_solver.c      -- assembles the chain; ALSO the S4 small-DNF cube expansion
+                          and refine_model_search (bounded counterexample search)
+  refine_solver.h      -- S0--S4 shared declarations
+  diag.h               -- RT3: TUR-E0370..TUR-E0379 refinement diagnostics
+  types.h              -- RT0: rt_discharged bit on the TY_CONTRACT union arm
 
-src/runtime/experiments.c -- RT0 (modified): add the `refined` row
-(lang-layers L4)          -- RT0 (modified): add the `refined` LANG_LAYERS row
+src/runtime/experiments.c -- RT0: the `refined` row  [DELETED 2026-08-01 on graduation;
+                             the name now sits in GRADUATED[] as a TUR-W0063 no-op]
+src/compiler/lang_layers.c -- RT0: the `refined` LANG_LAYERS row  [DELETED 2026-08-01;
+                             now in GRADUATED_LAYERS[] as a TUR-W0064 no-op]
 
-src/wasm_glue.c        -- RT5a: no change for solver (in-house S0--S2 compile in directly)
-
-CMakeLists.txt         -- RT3 (modified): TUR_REFINE_Z3_ORACLE option (dev-only, system Z3, refused for Release/WASM)
+src/wasm_glue.c        -- RT5a: no change for solver (the in-house chain compiles in directly)
 
 stdlib/
-  refine.tur           -- RT5b (new): Nat, Pos, NonZero, Bounded, NonEmpty, Unit
-  refine-vec.tur       -- RT5b (new): SizedVec + refinement on index bounds
+  refine.tur           -- RT5b: nine MONOMORPHIC scalar aliases --
+                          Nat, Pos, NonZero, Neg, Byte, Percent,
+                          NonNegFloat, PosFloat, UnitFloat
+  refined.tur          -- (not an RT phase; stdlib-refinement-collections-plan R1/R2)
+                          NonEmpty + BoundedIdx refinement newtypes with total
+                          accessors, discharged by Option-returning smart constructors
 
-tests/fixtures/refine/ -- RT5b: end-to-end fixture tests
-tests/unit/            -- RT2/S*: normalized-VC + per-stage decision-procedure tests
+tests/fixtures/refine-*/ -- end-to-end fixture tests (flat, not a refine/ subdirectory)
+tests/unit/refine_solver.c -- RT2/S*: normalized-VC + per-stage decision-procedure tests
+tests/unit/refine_corpus.c -- the labelled SMT-LIB corpus replayer (no solver linked)
+tests/refine-fuzz-src.py   -- source-level differential fuzzer
 ```
+
+**Files this section used to list that do NOT exist, and why:**
+
+| Listed | Reality |
+|---|---|
+| `refine_solver_sat.c` (S4) | **Never created.** S4 is not a separate stage: the small-DNF cube expansion is shared machinery in `refine_solver.c` that S1/S2/S3 all run over, because every theory stage needs conjunctions of literals to work on. No DPLL(T) engine exists or is planned. See the S4 bullet under "Deliberate deviations" in the journal. |
+| `refine_propagate.{c,h}` (RT4) | **Never created.** RT4 landed as template-based propagation inside the existing `elab_fns.c` / `refine_collect.c`, with no separate module. See "RT4 predicate propagation (landed 2026-07-24)" and "RT4 branching bodies -- path splitting" in the journal. |
+| `refine_libz3.{c,h}` (RT3) | **Created, then DELETED 2026-07-30 in 0.32.5**, along with the `find_package(Z3)` block, the `TUR_REFINE_Z3_ORACLE` option, and `tests/unit/refine_fuzz.c` (the VC-level differential target). The scaffold did its job and was retired on schedule. |
+| `stdlib/refine-vec.tur` | **Never created.** No `SizedVec` refinement module shipped. |
+| `refine.tur` holding `Bounded` | **Not shipped, and a settled non-goal.** Parameterized refinement aliases do not elaborate -- see the "Not shipped: parameterized refinement aliases" note under Phase RT5b. |
+| `refine.tur` holding `NonEmpty` / `Unit` | Wrong module and wrong names. `NonEmpty` (with `BoundedIdx`) lives in **`stdlib/refined.tur`**, a separate module this plan never scoped. `Unit` shipped as `UnitFloat`, a `[0.0, 1.0]` float alias, not a unit type. |
 
 ---
 
 ## Phase RT0: Infrastructure Hooks
+
+> **SUPERSEDED 2026-08-01 -- the gate half of this phase has been UNDONE.** RT0
+> registered `refined` as an experiment plus `#lang` layer; graduation deleted
+> both rows, removed `g_opt_refined` and every `if (g_opt_refined)` conditional
+> shown below, and dropped the `experiment_warn_if_used("refined")` calls. The
+> collector and discharge pass now run **unconditionally**. What survives from
+> RT0 is the durable half: the `rt_discharged` bit on `TY_CONTRACT` and the
+> pipeline hook itself. Read the code blocks below with the `if (g_opt_refined)`
+> guards mentally deleted.
 
 **Goal:** Register the gate (experiment row + lang layer), add the discharge
 bit, and wire the discharge pass into the pipeline. No solver yet -- all
@@ -2181,11 +2334,21 @@ if (g_opt_refined)
 
 ### Acceptance Criteria
 
-- `tur experiments` lists `refined`; `--enable=refined` and
+- ~~`tur experiments` lists `refined`; `--enable=refined` and
   `#lang turmeric refined` both enable it; a manifest `:experiments []`
-  suppresses the user file and makes a `#lang ... refined` file a hard error.
-- With `refined` off, behavior is identical to contracts-only.
-- Existing contract tests continue to pass with the gate on and off.
+  suppresses the user file and makes a `#lang ... refined` file a hard error.~~
+- ~~With `refined` off, behavior is identical to contracts-only.~~
+- ~~Existing contract tests continue to pass with the gate on and off.~~
+
+> **The criteria above were met, then retired at graduation** -- there is no
+> gate left to satisfy them. They are replaced by the graduation acceptance
+> criteria, pinned by fixtures: `refine-graduated-enable-noop` (a lingering
+> `--enable=refined` warns `TUR-W0063` and compiles), and
+> `refine-graduated-lang-layer-noop` (a lingering `#lang turmeric refined` warns
+> `TUR-W0064` and compiles). The contracts-only comparison survives as
+> `refine-runtime-check-still-fires` (`--keep-contracts`) and
+> `refine-no-contracts-strips-runtime-check` (`--no-contracts`), which pin that
+> static discharge and the runtime check stayed separable.
 
 ---
 
@@ -2317,6 +2480,14 @@ stage exists -- **without** making Z3 part of any shippable artifact.
 
 ### CMake Integration -- system Z3 only, dev opt-in, never release/WASM
 
+> **SUPERSEDED 2026-07-30 (0.32.5) -- none of this is in `src/CMakeLists.txt`
+> any more.** The `TUR_REFINE_Z3_ORACLE` option, the `find_package(Z3 ...)`
+> call, the `FATAL_ERROR` guard, and the `target_link_libraries(turi PRIVATE
+> z3::libz3)` line were all deleted with the scaffold. Do not re-add them, and
+> do not add a release-cut `grep` for `z3` on the strength of this section --
+> see Open Question 4. Kept for the reasoning about *how* to isolate a dev-only
+> oracle, which is a pattern worth reusing, not as a description of the build.
+
 ```cmake
 # Dev-only correctness oracle + transitional bootstrap. OFF by default.
 option(TUR_REFINE_Z3_ORACLE "link a system Z3 as a dev-build refinement oracle" OFF)
@@ -2381,6 +2552,23 @@ honest state of the prototype until S0 lands a day later.
 | `TUR-W0373` | Warning | `non-linear predicate subterm '<subterm>' treated as uninterpreted; arithmetic reasoning incomplete` |
 | `TUR-E0375` | Error | `refinement predicate mentions effects; pure predicates only` |
 | `TUR-E0376` | Error | `refinement on type parameter is not supported in this prototype` |
+
+> **Note 2026-08-01:** the six codes above are accurate as shipped (see
+> `src/compiler/diag.h`), including `TUR-E0376` meaning *type parameter* -- the
+> claim in Open Question 6 that `TUR-E0376` rejects refined **typeclass method**
+> signatures was never true even of this plan. Four codes landed after this
+> table was written and belong with it:
+>
+> | Code | Kind | Meaning |
+> |---|---|---|
+> | `TUR-E0374` | Error | instance method demands more (parameter) or delivers less (result) than its class signature |
+> | `TUR-W0377` | Warning | call allowed only because the resolved instance demands less than its class |
+> | `TUR-E0378` | Error | refinement written inside a `(fn ...)` type |
+> | `TUR-I0379` | Info | **RETIRED** with the Z3 oracle (0.32.5); enum slot reserved, never emitted |
+>
+> The `diag.h` comment block still says these are "only ever emitted under the
+> `refined` experiment"; as of graduation they are emitted unconditionally.
+> `--strict-refine` still upgrades `TUR-E0371` and `TUR-W0372` to hard errors.
 
 ### Acceptance Criteria
 
@@ -2515,21 +2703,28 @@ scaffold is deleted once all of the following hold:
   regression the in-house solver runs against *without* Z3 present (labels come
   from the corpus, not a live Z3).
 
-  **Status: the mechanism now exists and is green; the soak window is the part
-  still accruing.** `tests/corpus/smtlib/` holds 103 labelled benchmarks and
-  `tur_refine_corpus` (ctest target, ~0.1s) replays them with no solver linked.
+  **Status: MET -- the mechanism exists, is green, and the soak window closed;
+  the scaffold was deleted 2026-07-30.** `tests/corpus/smtlib/` holds **125**
+  labelled benchmarks (69 `unsat`, 56 `sat`) and `tur_refine_corpus` (ctest
+  target, ~0.1s) replays them with no solver linked.
   The satisfiability/entailment bridge is exact -- assert everything as
   hypotheses, take `false` as the goal, so `hyps |- false` is VALID iff the
   benchmark is UNSAT -- which makes a `sat` benchmark answered VALID precisely a
   break of the one-directional invariant, checkable from the label alone.
 
-  Evidence to date, all clean:
+  Evidence, all clean (corpus row is the current figure; the two Z3-dependent
+  rows are the final pre-retirement measurements and cannot be re-run, since
+  the harnesses they used are deleted):
 
   | run | size | result |
   |---|---|---|
-  | committed corpus, no Z3 | 103 benchmarks | 55 unsat proved, 47 sat declined, 0 soundness failures |
+  | committed corpus, no Z3 (current) | **125** benchmarks | 68 unsat proved, 56 sat declined, 0 soundness failures |
+  | committed corpus, no Z3 (2026-07-25) | 103 benchmarks | 55 unsat proved, 47 sat declined, 0 soundness failures |
   | generated soak, Z3-labelled | 3600 benchmarks (seeds 7/8/9) | 2646 sat, **0** wrongly proved |
   | VC-level differential vs Z3 4.13 | 7000 VCs | 0 soundness bugs, 0 refutation bugs |
+
+  The one benchmark not decided in the 125-file run is the deliberately
+  out-of-fragment skip, kept so the reader's skip path stays exercised.
 
   The record metadata for **SMT-LIB release 2025 (non-incremental benchmarks)**
   (Zenodo `16740866`, CC-BY-4.0, 90 per-logic tarballs, 4.89 GB) is committed at
@@ -2572,10 +2767,15 @@ only ever the bootstrap that seeded it.
 
 ## Phase RT4: Bidirectional Predicate Propagation
 
-**Goal:** Implement `refine_propagate.c` to infer *result* refinements from
-*argument* refinements for simple arithmetic, reducing annotation burden. This
-is a small, template-based convenience -- **not** the general refinement
-inference we explicitly ruled out.
+> **CORRECTED 2026-08-01: there is no `refine_propagate.c`.** RT4 landed, and
+> landed in full (including declared-result propagation, path splitting across
+> branching bodies, `match`-arm splitting, and path conditions for call-site
+> crossings), but as changes to `elab_fns.c` and `refine_collect.c` -- it never
+> warranted a module of its own. The design below is otherwise accurate.
+
+**Goal:** Infer *result* refinements from *argument* refinements for simple
+arithmetic, reducing annotation burden. This is a small, template-based
+convenience -- **not** the general refinement inference we explicitly ruled out.
 
 Without it:
 
@@ -2671,6 +2871,19 @@ CMake option from RT3 already *refuses* `TUR_REFINE_Z3_ORACLE` under
 **Goal:** `stdlib/refine.tur` with common predicate-annotated aliases. Can
 proceed in parallel with RT5a once RT3 lands.
 
+> **CORRECTED 2026-08-01 -- what shipped.** `stdlib/refine.tur` holds **nine**
+> monomorphic aliases, all scalar: `Nat`, `Pos`, `NonZero`, `Neg`, `Byte`,
+> `Percent` (int); `NonNegFloat`, `PosFloat`, `UnitFloat` (float). Note
+> `PosFloat` is `(> x 0.0)` -- *strictly* positive; the non-negative one is
+> `NonNegFloat`, and the sketch below had them conflated. The base type is
+> `float`, not `double`.
+>
+> Separately, `stdlib/refined.tur` -- **not** part of RT5b and not scoped by
+> this plan -- ships the `NonEmpty` and `BoundedIdx` refinement *newtypes* with
+> total accessors (`ne-head`/`ne-tail`, `vec-get-checked`/`slice-get-checked`),
+> discharged by `Option`-returning smart constructors rather than by the solver.
+> It comes from `stdlib-refinement-collections-plan` (R1, R2).
+
 ```turmeric
 ;;; Nat -- non-negative integer (>= 0)
 (deftype Nat #refine{ x : int | (>= x 0) })
@@ -2681,8 +2894,8 @@ proceed in parallel with RT5a once RT3 lands.
 ;;; NonZero -- integer that is not zero
 (deftype NonZero #refine{ x : int | (not= x 0) })
 
-;;; PosFloat -- non-negative float
-(deftype PosFloat #refine{ x : double | (>= x 0.0) })
+;;; NonNegFloat -- non-negative float (>= 0.0); the domain of sqrt
+(deftype NonNegFloat #refine{ x : float | (>= x 0.0) })
 ```
 
 > **Not shipped: parameterized refinement aliases.** An earlier draft of this
@@ -2699,7 +2912,17 @@ proceed in parallel with RT5a once RT3 lands.
 > [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md).
 > `stdlib/refine.tur` shipped monomorphic aliases only -- there is no `Bounded`.
 
-`stdlib/refine-vec.tur` wires the `(< i n)` index obligation through
+> **CORRECTED 2026-08-01: `stdlib/refine-vec.tur` was NEVER CREATED.** The
+> sketch below is the design intent, retained because it is still the clearest
+> statement of what a `SizedVec` index refinement would look like and why S2
+> arithmetic is the direct target. It is not a description of any shipped
+> module. What ships instead is `BoundedIdx` in `stdlib/refined.tur`, which
+> takes a different route: the bound is a *value-level* fact the smart
+> constructor `bidx-of?` checks once and returns as an `Option`, not a type the
+> checker tracks. The revisit trigger for the typed version lives in
+> [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md).
+
+`stdlib/refine-vec.tur` would wire the `(< i n)` index obligation through
 `SizedVec` -- the direct target of S2a difference logic:
 
 ```turmeric
@@ -2708,8 +2931,8 @@ proceed in parallel with RT5a once RT3 lands.
   (vec-unsafe-get v i))
 ```
 
-`vec-unsafe-get` is emitted only when `(< j n)` is proved statically; otherwise
-the elaborator falls back to bounds-checked `vec-get`.
+`vec-unsafe-get` would be emitted only when `(< j n)` is proved statically;
+otherwise the elaborator falls back to bounds-checked `vec-get`.
 
 ### Acceptance Criteria
 
@@ -2760,6 +2983,14 @@ their source expressions rather than `uf_3(...)`.
 
 ## Phase RT7: Incremental Discharge Caching (Follow-up)
 
+> **CORRECTED 2026-08-01: only the within-unit half of RT7 shipped, and the
+> persistent cache below is DELIBERATELY NOT BUILT.** There is no
+> `.tur-cache/refine.db`. The within-unit memo lives in `refine_vc.c` /
+> `refine_discharge.c`. The reasoning for stopping there -- a measurement of
+> where discharge time actually goes, and why a VC hash alone is not a sound
+> cache key -- is in the journal under "RT7 -- measured first, then half-built
+> on purpose". The acceptance criteria below were never exercised.
+
 **Goal:** Skip re-deciding obligations on unchanged files. Each obligation is
 keyed by a hash of its **normalized VC** (captures predicate + hypotheses fully)
 plus the compiler version. Results cache in `.tur-cache/refine.db`; a matching
@@ -2767,6 +2998,9 @@ hash skips the whole chain. Invalidation is per-file (conservative, safe). The
 cache is always safe to delete.
 
 ### Acceptance Criteria
+
+*(Not met -- see the correction above. Retained as the spec a future persistent
+cache would have to satisfy.)*
 
 - A second build with no source changes runs zero backend decisions
   (`TUR_REFINE_STATS=1`).
@@ -2776,6 +3010,15 @@ cache is always safe to delete.
 ---
 
 ## Implementation Order and Dependencies
+
+> **CORRECTED 2026-08-01 -- this is the plan as sequenced, and it held, with two
+> named substitutions.** The order below was followed and every phase landed;
+> the Z3 scaffold was retired on schedule at end-of-S3 (2026-07-30, 0.32.5) and
+> `refined` graduated (2026-08-01). Substitutions: **S2b simplex was never
+> built** -- S2 is Fourier-Motzkin over exact rationals, which subsumes S2a and
+> met the coverage target in a few hundred lines; and **S4 is not a separate
+> node** -- the small-DNF expansion is shared machinery every theory stage runs
+> over. See "Deliberate deviations from the plan as written" in the journal.
 
 ```
 RT0  (experiment row + lang layer + discharge bit + pipeline hook)
@@ -2811,6 +3054,12 @@ parallelize after RT3. S2c, S4, and RT7 are deferrable indefinitely.
 
 ## Effort Estimates
 
+> **These are the PRE-IMPLEMENTATION estimates, kept as the record of what was
+> predicted. They are not a work plan and were never revised against actuals.**
+> Two rows describe work that did not happen as written: **S2b (simplex,
+> 2--4 weeks)** was never built -- S2 shipped as Fourier-Motzkin instead -- and
+> **RT5b's `refine-vec.tur`** was never created. Everything else landed.
+
 | Phase | Estimated Effort | Notes |
 |---|---|---|
 | RT0 | 1 day | Experiment row, lang layer, bit field, pipeline hook |
@@ -2842,10 +3091,17 @@ always sound.
 
 ## Open Questions
 
-1. **Z3 scaffold version.** The oracle uses whatever system Z3 the developer has,
-   requiring >= 4.12 (`find_package(Z3 4.12 CONFIG REQUIRED)`); an older one
-   makes the oracle option unavailable rather than silently degrading. There is
-   no version to *pin in a release*, because no release ships Z3.
+1. ~~**Z3 scaffold version.**~~ **MOOT -- resolved by retirement (2026-07-30,
+   0.32.5).** There is no scaffold and no version question: `refine_libz3.c`,
+   the `find_package(Z3 4.12 CONFIG REQUIRED)` block, and the
+   `TUR_REFINE_Z3_ORACLE` option are all deleted. Nothing in the tree links or
+   looks for Z3.
+
+   *For the record, the answer while the scaffold existed:* the oracle used
+   whatever system Z3 the developer had, requiring >= 4.12; an older one made
+   the option unavailable rather than silently degrading, and there was never a
+   version to *pin in a release*, because no release ever shipped Z3. It was
+   last exercised against 4.13 and re-checked against 4.15.4 before deletion.
 
 2. ~~**Retirement timing vs. coverage confidence.**~~ **ANSWERED: improve the
    corpus before retiring Z3.** The scaffold is not deleted on the bootstrap
@@ -2908,26 +3164,67 @@ always sound.
    which is why the runner counts and prints both rather than folding them into
    a pass.
 
+   **CLOSED 2026-07-30 (0.32.5): the bar was met and Z3 was retired.** The
+   in-tree corpus grew to 125 and the reader tail closed (200/200 external
+   benchmarks parse, 0 skipped); the final input was an oracle build against
+   system Z3 4.15.4 re-checking every VC the tur-ecs corpus generates, with
+   verdicts identical to the in-house chain and zero `TUR-I0379`. Nothing above
+   is a live prescription.
+
 3. **In-house solver arena discipline.** S1--S3 allocate union-find nodes,
    simplex tableaux, and equality-propagation queues per obligation. Decide
    whether each obligation gets a fresh arena (simple, leak-clean under the
    compiler's ASan/LSan policy) or the solver state resets in place per query.
    Fresh-arena-per-obligation is the default unless profiling says otherwise.
 
-4. **Oracle-build isolation.** Running both the in-house stage and the Z3
-   scaffold on every obligation is confined to `TUR_REFINE_Z3_ORACLE` dev
-   builds; the CMake `FATAL_ERROR` guard already forbids the option under
-   Release/WASM. Re-verify at each release cut that no shipped artifact links or
-   references Z3 (a `grep` for `z3` in the release build's link line belongs in
-   the release-cut checklist until the scaffold is deleted).
+4. ~~**Oracle-build isolation.**~~ **MOOT -- resolved by retirement (2026-07-30,
+   0.32.5).** The isolation problem is gone with the thing being isolated.
+
+   **Do not add the `grep` for `z3` to the release-cut checklist.** That
+   prescription was explicitly scoped "until the scaffold is deleted," and the
+   scaffold is deleted -- there is no dual-run mode, no `TUR_REFINE_Z3_ORACLE`
+   option, and no `#ifdef` for a release cut to verify around. Reconstructing
+   the check from this paragraph would be a release gate for a dependency that
+   no longer exists.
+
+   *For the record:* running both the in-house stage and the Z3 scaffold on
+   every obligation was confined to `TUR_REFINE_Z3_ORACLE` dev builds, and a
+   CMake `FATAL_ERROR` guard forbade the option under Release/WASM. Because
+   every removed line lived inside an `#ifdef` a default build never compiled,
+   the shipped binary was functionally identical before and after deletion.
 
 5. **`:post` with mutable references.** Allow `:post` on functions taking
    `&mut T`, but reject any predicate whose free variables include an `&mut`
    parameter name (`TUR-E0378`). Free-variable check on the predicate `Form*`;
    no alias analysis.
 
-6. **Interaction with typeclasses.** Reject refined types on typeclass method
-   signatures in the prototype (`TUR-E0376`). Per-instance discharge deferred.
+6. ~~**Interaction with typeclasses.** Reject refined types on typeclass method
+   signatures in the prototype (`TUR-E0376`). Per-instance discharge
+   deferred.~~ **ANSWERED, and the opposite of what this said. Typeclasses are
+   fully supported.** Nothing is rejected; `TUR-E0376` was reassigned to a
+   different meaning entirely. This was the stalest paragraph in the file --
+   the journal above records four separate slices that built the feature out.
+   Current state:
+
+   | Aspect | State |
+   |---|---|
+   | Refined types on `defclass` method signatures | **Supported**, parameters and results alike. `TypeClassMethod` carries `param_refine_preds` and `return_refine_pred`/`_var`. |
+   | Refined types on `definstance` method signatures | **Supported.** An impl may restate a refinement; an impl that writes a plain return type **inherits** the class's promise rather than discarding it. |
+   | Per-instance discharge | **Landed, not deferred.** A statically-resolved dispatch is checked like any other call -- the receiver occupies slot 0, so parameter and argument slots line up with no special-casing, and dotted (`.meth`) and bare (`meth`) spellings share the resolution point. |
+   | Class/instance **parameter** variance | **`TUR-E0374`.** Obligation `class_pred(p) \|- instance_pred(p)`: an instance may demand LESS (accept more), never more. |
+   | Class/instance **result** variance | **`TUR-E0374`, running the OPPOSITE direction.** Obligation `instance_pred(r) \|- class_pred(r)`: an instance may deliver MORE, never less. Distinct message from the parameter case. |
+   | Result propagation across a dispatch | **Landed.** A class's result refinement propagates to the caller so the caller's own obligation can discharge from it. Sound because an unproved variance obligation causes the class predicate to be checked alongside the instance's own; publication is gated on `rt_contracts_emitted()`. |
+   | Congruence over method calls | **Landed** -- the "third congruence door." |
+   | Dynamic dispatch | Crosses into the **class** signature. The remaining gap is a design question (is a class parameter refinement a caller contract, or only an upper bound on instance demands?), not missing machinery -- and it is not a soundness hole, since the method's own entry check is retained. Measured demand is zero. See "Next slice" in the journal. |
+
+   **`TUR-E0376` now means something else:** it is
+   `TUR_E0376_REFINE_TYPE_PARAM`, "refinement on a *type parameter*
+   (unsupported)" -- a different restriction with no bearing on typeclass
+   methods. Do not cite this paragraph's original code assignment.
+
+   Two adjacent diagnostics that did not exist when this question was written:
+   `TUR-E0375` (refinement predicate mentions effects) and `TUR-E0378`
+   (refinement written inside a `(fn ...)` type).
 
 ---
 
@@ -2952,5 +3249,39 @@ always sound.
 - **Turmeric Contract Types** -- `docs/guides/contract-types-guide.md`
 - **Turmeric Sized Types** -- `docs/guides/sized-types-guide.md`
 - **Lang layers** -- `docs/upcoming/lang-layers-plan.md` (the `refined` semantic
-  layer, phase L4).
+  layer, phase L4 -- since removed; see the graduation note at the top).
 - **Experiment mechanism** -- `docs/upcoming/v1/experimental-flag-mechanism-plan.md`.
+
+### Turmeric plans that depend on or extend this one
+
+- **Graduating `refined`** --
+  [refined-graduation-plan.md](refined-graduation-plan.md). EXECUTED
+  2026-08-01, targeting v0.33.0. The record of the four preconditions, the
+  dogfooding cost measurement, and the exact mechanical checklist that removed
+  the gate.
+- **Boolean-sorted measures (`RM-B`)** --
+  [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md).
+  LANDED (RM-B0..RM-B3). Lifts the hard-coded `VS_INT` measure result sort in
+  `refine_collect.c` so a `bool`-returning function can be a predicate atom.
+  RM-B0 also uncovered a float measure **mis-sort**, a soundness bug, written up
+  in
+  [docs/archive/history/refine-float-measure-missort.md](../../archive/history/refine-float-measure-missort.md).
+  Backing fixtures: `refine-bool-measure`, `refine-float-measure`,
+  `refine-measure-euf`.
+- **Refinements over mutable state (`RM-S`)** --
+  [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md). RM-S0
+  (dogfooding) done 2026-07-26 recommending Candidate B; the A-vs-B decision is
+  awaiting sign-off, and RM-S1/RM-S2 do not start without it. Addresses the
+  direct consequence of this plan's purity requirement: a measure must be
+  provably pure to be congruent, which makes every predicate about a mutable
+  world unprovable. Backing fixtures: the `refine-stateful-*` set
+  (`-frozen-macro`, `-guard-discharges`, `-nonfinal-statement`,
+  `-nonstrict-warns`, `-resizable-bounds`).
+- **Refinement-typed ECS APIs** --
+  [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md). The
+  downstream consumer; carries the revisit triggers for two settled non-goals
+  here (parameterized refinement aliases, and the typed `SizedVec` index bound
+  that `refine-vec.tur` would have provided).
+- **Refinement collections in stdlib** -- `stdlib-refinement-collections-plan`
+  (R1, R2), which produced `stdlib/refined.tur` (`NonEmpty`, `BoundedIdx`).
+  Distinct from RT5b's `stdlib/refine.tur` scalar aliases.

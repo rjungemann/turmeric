@@ -153,22 +153,17 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
                                   *   shelve, or bump */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_cycle_gc },
-    /* RT0 (docs/upcoming/v1/refinement-types-plan.md): static discharge of
-     * `#refine{ x : T | p }` predicates.  The predicate already has a runtime
-     * contract meaning, so the discharger is allowed to answer Unknown on any
-     * obligation and stay sound -- it simply falls back to the runtime check
-     * it would have had anyway.  That is what makes an incrementally
-     * hand-rolled, dependency-free solver a shippable prototype rather than a
-     * broken one.  Surfaced per-file as the `refined` LANG_LAYERS[] semantic
-     * layer (`#lang turmeric refined` == --enable=refined scoped to one
-     * file) -- one enable path, not two. */
-    { "refined",
-      "static discharge of #refine{...} predicates (refinement types)",
-      "docs/upcoming/v1/refinement-types-plan.md",
-      "0.31.0",                  /* introduced */
-      "0.34.0",                  /* expires_at (soft deadline; review at cut) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_refined },
+    /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
+     * predicates is now unconditional.  The runtime contract half was always
+     * on; what became unconditional is the STATIC half, so the one
+     * user-visible consequence is TUR-E0371 on a refinement violated on every
+     * execution reaching it.  Preconditions were measured, not assumed: the
+     * in-tree blast radius was one fixture (repurposed, not deleted), and cost
+     * on a real ~5400-line program was 1.004x with zero TUR-E0371.  The name
+     * moves to GRADUATED[] below and to GRADUATED_LAYERS[] in lang_layers.c --
+     * a lingering --enable is a TUR-W0063 no-op, and a lingering
+     * `#lang turmeric refined` a TUR-W0064 one.  See
+     * docs/upcoming/v1/refined-graduation-plan.md. */
     /* J1 (docs/upcoming/jit-engine-plan.md): the in-process MIR JIT engine.
      * Gated because it is a third execution engine whose semantics must stay
      * identical to `tur build` output while the J3 parity sweep is still to
@@ -229,6 +224,7 @@ static const char *const GRADUATED[] = {
     "cps-async",     /* graduated 2026-07-19; heap-continuation async/await is the unconditional CPS-path lowering */
     "owning-cloneable-capture", /* graduated 2026-07-20; owning capture into a multi-shot cloneable continuation is always-on */
     "closure-drop-glue", /* graduated 2026-07-22; Model R drop-glue header ABI is unconditional */
+    "refined",       /* graduated 2026-08-01; static discharge of #refine{...} is unconditional */
     NULL,
 };
 

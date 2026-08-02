@@ -2,7 +2,6 @@
 #include "elab_internal.h"
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
-#include "runtime/experiments.h" /* RT0: experiment_warn_if_used("refined") */
 #include "forms.h"
 #include "mangle.h"
 
@@ -3975,7 +3974,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * tautology -- and asking the solver is exactly how to tell those
          * apart.  Reported only on a REFUTATION; an undecidable pair keeps the
          * runtime check, as everywhere else. */
-        if (g_opt_refined && n_m_ct_preds > 0) {
+        if (n_m_ct_preds > 0) {
             for (uint32_t _ci = 0; _ci < n_m_ct_preds; _ci++) {
                 uint32_t _pi = m_ct_param_idx[_ci];
                 if (_pi >= n_method_params || !method_params[_pi] ||
@@ -4007,7 +4006,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 snprintf(what, sizeof(what),
                          "parameter '%s' of instance method '%s'", pname,
                          tc->methods[i].name ? tc->methods[i].name->name : "?");
-                experiment_warn_if_used("refined");
                 RefineObligation *vob = refine_collect_obligation(
                     &e->refine_obs, m_ct_preds[_ci], m_ct_vars[_ci], subj,
                     rt_sort_of_kind(method_params[_pi]->type.kind),
@@ -4047,7 +4045,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * that writes a plain return type inherits the class's, which cannot
          * be a weakening. */
         bool ret_variance_proved = false;
-        if (g_opt_refined && impl_ret_pred_own && m_class_ret_pred &&
+        if (impl_ret_pred_own && m_class_ret_pred &&
             impl_ret_pred != m_class_ret_pred) {
             const char *rvar = impl_ret_var ? impl_ret_var
                              : (m_class_ret_var ? m_class_ret_var : "r");
@@ -4062,7 +4060,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             char what[192];
             snprintf(what, sizeof(what), "the result of instance method '%s'",
                      tc->methods[i].name ? tc->methods[i].name->name : "?");
-            experiment_warn_if_used("refined");
             RefineObligation *vob = refine_collect_obligation(
                 &e->refine_obs, m_class_ret_pred, m_class_ret_var, subj,
                 rt_sort_of_kind(return_type.kind), type_name(return_type),
@@ -4096,7 +4093,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * one -- otherwise inheritance would produce a predicate the entry
          * check (which reads exactly these arrays) never sees. */
         bool _inherits_any = false;
-        if (g_opt_refined && tc->methods[i].param_refine_preds) {
+        if (tc->methods[i].param_refine_preds) {
             for (uint8_t _pi = 0; _pi < n_method_params &&
                                   _pi < tc->methods[i].n_params; _pi++) {
                 if (_pi < MAX_FN_ARITY && !m_param_annotated[_pi] &&
@@ -6903,44 +6900,42 @@ resolved_user_fallback:;
      * instance ones -- both count the receiver at 0 -- so the same arg_offset
      * of 1 applies.  Either way the method's own entry check still guards the
      * call; this layer reports, it never elides. */
-    if (g_opt_refined) {
-        const Binding *rt_cs_callee = NULL;
-        if (obj_is_abstract_tyvar && best_inst && best_inst->typeclass) {
+    const Binding *rt_cs_callee = NULL;
+    if (obj_is_abstract_tyvar && best_inst && best_inst->typeclass) {
+        TypeClass *rt_tc = best_inst->typeclass;
+        for (uint8_t rt_mi = 0; rt_mi < rt_tc->n_methods; rt_mi++) {
+            const Symbol *mn = rt_tc->methods[rt_mi].name;
+            if (mn && strlen(mn->name) == method_name_len &&
+                strncmp(mn->name, method_name, method_name_len) == 0) {
+                rt_cs_callee = rt_class_method_refine_binding(e, rt_tc, rt_mi);
+                break;
+            }
+        }
+    }
+    bool rt_is_class_cs = (rt_cs_callee != NULL);
+    if (!rt_cs_callee && best_method) rt_cs_callee = best_method->binding;
+    if (rt_cs_callee) {
+        (void)refine_note_call_site(e, rt_cs_callee, call, 1);
+        /* Reading B + lint: a STATICALLY-resolved dispatch is obliged to
+         * satisfy the instance it resolved to, which is the more precise
+         * contract.  Carry the class's predicates alongside so a call the
+         * class would reject can be linted (TUR-W0377) without changing
+         * what it must prove.  Not for a dynamic crossing -- that one IS
+         * the class signature, so there is nothing to compare against. */
+        if (!rt_is_class_cs && best_inst && best_inst->typeclass) {
             TypeClass *rt_tc = best_inst->typeclass;
             for (uint8_t rt_mi = 0; rt_mi < rt_tc->n_methods; rt_mi++) {
                 const Symbol *mn = rt_tc->methods[rt_mi].name;
-                if (mn && strlen(mn->name) == method_name_len &&
-                    strncmp(mn->name, method_name, method_name_len) == 0) {
-                    rt_cs_callee = rt_class_method_refine_binding(e, rt_tc, rt_mi);
-                    break;
-                }
-            }
-        }
-        bool rt_is_class_cs = (rt_cs_callee != NULL);
-        if (!rt_cs_callee && best_method) rt_cs_callee = best_method->binding;
-        if (rt_cs_callee) {
-            (void)refine_note_call_site(e, rt_cs_callee, call, 1);
-            /* Reading B + lint: a STATICALLY-resolved dispatch is obliged to
-             * satisfy the instance it resolved to, which is the more precise
-             * contract.  Carry the class's predicates alongside so a call the
-             * class would reject can be linted (TUR-W0377) without changing
-             * what it must prove.  Not for a dynamic crossing -- that one IS
-             * the class signature, so there is nothing to compare against. */
-            if (!rt_is_class_cs && best_inst && best_inst->typeclass) {
-                TypeClass *rt_tc = best_inst->typeclass;
-                for (uint8_t rt_mi = 0; rt_mi < rt_tc->n_methods; rt_mi++) {
-                    const Symbol *mn = rt_tc->methods[rt_mi].name;
-                    if (!mn || strlen(mn->name) != method_name_len ||
-                        strncmp(mn->name, method_name, method_name_len) != 0)
-                        continue;
-                    if (rt_tc->methods[rt_mi].param_refine_preds)
-                        refine_note_call_site_class_preds(
-                            e, rt_cs_callee, call,
-                            rt_tc->methods[rt_mi].param_refine_preds,
-                            rt_tc->methods[rt_mi].param_refine_vars,
-                            rt_tc->methods[rt_mi].n_params);
-                    break;
-                }
+                if (!mn || strlen(mn->name) != method_name_len ||
+                    strncmp(mn->name, method_name, method_name_len) != 0)
+                    continue;
+                if (rt_tc->methods[rt_mi].param_refine_preds)
+                    refine_note_call_site_class_preds(
+                        e, rt_cs_callee, call,
+                        rt_tc->methods[rt_mi].param_refine_preds,
+                        rt_tc->methods[rt_mi].param_refine_vars,
+                        rt_tc->methods[rt_mi].n_params);
+                break;
             }
         }
     }

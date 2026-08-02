@@ -1,0 +1,31 @@
+;; RT0 (graduated 2026-08-01): the runtime half of a refinement is independent
+;; of the static half.  Static discharge is now unconditional, and that did NOT
+;; make the runtime entry check redundant -- it is still emitted, still
+;; enforced, and still the thing that catches a violation the solver cannot
+;; see.
+;;
+;; The violating value comes from an inline-C body on purpose: the solver
+;; answers Unknown on it, so no TUR-E0371 is reported at compile time and the
+;; obligation falls back to exactly the runtime check it would have had anyway.
+;; That fallback IS the soundness argument for the whole feature, so it gets a
+;; fixture.
+;;
+;; (The `x : #refine{...}` spelling once silently skipped this check: the
+;; annotation reaches the elaborator wrapped in a type-annotation node and the
+;; old Form-shaped test missed it.  That hole is what this fixture pins shut.)
+;;
+;; The sibling `refine-no-contracts-strips-runtime-check` pins the other
+;; direction: `--no-contracts` removes this check.
+(defn opaque-zero [] : int
+  ```c
+  return 0;
+  ```)
+
+(defn double-pos [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
+  (* x 2))
+
+(defn main [] : int
+  (println (double-pos 5))
+  (println (double-pos (opaque-zero)))
+  (println "unreachable")
+  0)
