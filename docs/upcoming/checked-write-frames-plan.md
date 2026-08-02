@@ -233,11 +233,31 @@ Two things the sketch left out, both discovered in the building:
   rebinds this function's own slot; turmeric passes by value, so no caller can
   observe it. This is the same argument the landed WF3 slice already rests on
   ("a plain symbol target cannot alias"), and the two must agree -- if a
-  bare-symbol assignment could escape, WF3 would be unsound too. A PLACE
-  expression rooted at a parameter (`(set! (.n w) 9)`) does reach the caller's
-  object and does count. Checked against the reference case: `(set! p ...)` on
-  a `&T`-typed parameter is a *type error*, not a write-through, so the rule
-  holds for reference parameters as well.
+  bare-symbol assignment could escape, WF3 would be unsound too. Checked
+  against the reference case: `(set! p ...)` on a `&T`-typed parameter is a
+  *type error*, not a write-through, so the rule holds for reference
+  parameters as well.
+
+  > **Correction 2026-08-02.** This bullet originally continued: "A PLACE
+  > expression rooted at a parameter (`(set! (.n w) 9)`) does reach the
+  > caller's object and does count." The second half is true; the
+  > justification was overstated, and it is worth fixing rather than quietly
+  > dropping, because it asserts something about the language that is false.
+  >
+  > A place write reaches the caller's object through an `rc<Struct>` or a
+  > `:heap` receiver -- the case the rule exists for. Through a plain
+  > **by-value** struct parameter it reaches a copy: the compiled backend
+  > emits `(a).n = 3` into a discarded stack temporary, which `cc -O2` then
+  > deletes entirely (verified from the emitted assembly). So counting it is
+  > an OVER-approximation there, not an equivalence.
+  >
+  > Pessimism is the safe direction for a frame -- it over-declares, never
+  > under-declares -- so the rule itself stands unchanged. But the by-value
+  > case is a silent no-op compiled and a write-through interpreted, which is
+  > a live divergence:
+  > `docs/reported/struct-param-mutation-backend-divergence.md`. Resolving
+  > that by rejecting the no-op write would narrow this branch to rc/heap
+  > receivers and make it exact.
 
 The check is DEFERRED (`wf_resolve_write_frames`, before the crossing
 resolution that consumes it), because "every callee's declared frame stays

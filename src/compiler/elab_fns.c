@@ -1079,11 +1079,28 @@ static bool rt_form_borrows_name(const Elab *e, const Form *f,
  * What is deliberately NOT a write: assigning a parameter's own bare symbol
  * (`(set! p 5)`).  Turmeric passes by value, so that rebinds this function's
  * local slot and the caller cannot observe it -- the same by-value argument
- * the WF3 slice above already rests on.  A PLACE expression rooted at a
- * parameter (`(set! (.n w) 9)`) does reach the caller's object and does count.
- * Keeping these two consistent matters: if a bare-symbol assignment could
- * escape, WF3's "a plain symbol target cannot alias" rule would be unsound
- * too. */
+ * the WF3 slice above already rests on.  Keeping these two consistent matters:
+ * if a bare-symbol assignment could escape, WF3's "a plain symbol target
+ * cannot alias" rule would be unsound too.
+ *
+ * A PLACE expression rooted at a parameter (`(set! (.n w) 9)`) DOES count.
+ * Note this is an OVER-approximation, not an equivalence, and an earlier
+ * version of this comment overstated it as "does reach the caller's object":
+ *
+ *   - through an `rc<Struct>` or a `:heap` struct receiver it genuinely does
+ *     reach the caller's object, which is the case the rule exists for;
+ *   - through a plain by-value struct parameter it reaches a COPY, and the
+ *     compiled backend emits a store the C compiler then deletes outright.
+ *     Counting it is therefore pessimistic there -- it can force a frame wider
+ *     than the caller could ever observe.
+ *
+ * Pessimism is the safe direction for a frame (it over-declares, never
+ * under-declares), so the rule stands.  But the by-value case is a silent
+ * no-op in the compiled backend and a write-through in the turi interpreter,
+ * which is a live divergence -- see
+ * docs/reported/struct-param-mutation-backend-divergence.md.  If that is
+ * resolved by rejecting the no-op write, this branch narrows to the rc/heap
+ * receivers and stops being an over-approximation at all. */
 #define WF_SCAN_MAX_DEPTH 24   /* matches RT_SET_SCAN_MAX_DEPTH; same tradeoff */
 
 typedef enum WfVerdict {
