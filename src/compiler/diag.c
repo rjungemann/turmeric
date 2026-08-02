@@ -1417,7 +1417,8 @@ static const DiagExplanation diag_explanations_[] = {
       "The runtime contract check is still emitted, so the program remains\n"
       "safe; --strict-refine turns this into a hard failure instead.\n"
       "\n"
-      "Enable with: tur build --enable=refined myfile.tur\n",
+      "Refinement checking is on in every build -- `refined` graduated in\n"
+      "v0.33.0, so there is no flag to enable.\n",
     },
     { TUR_W0372_REFINE_UNKNOWN,
       "TUR-W0372: Solver returned unknown for a refinement predicate\n"

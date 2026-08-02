@@ -82,8 +82,9 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f);
 /* CT1: a contract predicate whose EVALUATION does something observable.
  *
  * Checks are conditional on the build: `--no-contracts` strips them, a release
- * build drops them unless --keep-contracts, and `--enable=refined` elides the
- * ones it can prove.  A predicate with side effects therefore makes program
+ * build drops them unless --keep-contracts, and static refinement discharge
+ * elides the ones it can prove (unconditional since `refined` graduated in
+ * v0.33.0).  A predicate with side effects therefore makes program
  * behaviour depend on whether its own contracts were compiled in --
  * `(>= (tick) 0)` advances a counter every time it is checked and not at all
  * when it is not.  That is a bug in the contract, not in any of those flags.
@@ -895,6 +896,138 @@ static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
         if (rt_form_mentions_set(e, f->as.list.items[i], depth + 1)) return true;
+    return false;
+}
+
+/* ------------------------------------------------------------------------- *
+ * WF3: frame-aware hypothesis invalidation.
+ *
+ * `rt_form_mentions_set` above is the COARSEST correct rule -- one assignment
+ * anywhere in a caller body drops every hypothesis for every crossing in it,
+ * however unrelated.  That is the binding constraint on two shipped surfaces
+ * (an accumulator `set!` in a `for-each-alive!` body, a counter `set!` in a
+ * `while`), so the helpers below let a hypothesis survive an assignment that
+ * provably cannot touch what it mentions.
+ *
+ * The slice is deliberately narrow (docs/upcoming/checked-write-frames-plan.md,
+ * WF3).  A hypothesis survives only when EVERY assignment in the body targets a
+ * PLAIN SYMBOL that the hypothesis does not mention and that the body never
+ * borrows.  Anything else -- a place expression (`(set! (.n w) 9)`), an
+ * assignment symbol used in a position this scan cannot attribute to a target,
+ * a scan that runs out of depth or target slots -- keeps the whole-body
+ * decline.  When in doubt the old rule is the fallback, because the failure
+ * mode here is a stale hypothesis proving a fresh lie.
+ *
+ * Why the assignment's VALUE needs no separate check: a hypothesis is only
+ * USABLE if its terms are congruent, and congruence is granted only to a pure
+ * measure or to a `#reads` measure inside a region that freezes its argument
+ * (`enc_reads_arg_frozen`).  A pure measure cannot be disturbed by any call, and
+ * inside a frozen region a mutator of the frozen world is statically
+ * unreachable (`TUR-E0200`).  So a call in the value position cannot stale a
+ * hypothesis that was going to be believed; only rebinding a name it mentions
+ * can, which is exactly what is tested here.
+ *
+ * Why a plain symbol target cannot alias: turmeric passes by value, so handing
+ * a local to a callee -- even `^mut` -- cannot let the callee write the
+ * caller's slot.  The one channel that could is an explicit borrow, so a body
+ * that borrows an assigned name keeps the full decline. */
+#define RT_WF3_MAX_TARGETS 16
+
+static bool rt_sym_is(const Form *f, const char *name);
+
+/* Collect the names assigned anywhere in `f`.
+ *
+ * Returns false when the body contains an assignment this analysis cannot
+ * vouch for; the caller must then keep the whole-body decline.  Mirrors
+ * `rt_form_mentions_set`'s traversal exactly -- including the macro-expansion
+ * hop -- so an assignment hidden in a template is attributed to its target
+ * rather than merely detected. */
+static bool rt_collect_set_targets(const Elab *e, const Form *f, uint32_t depth,
+                                   const char **names, uint32_t *n) {
+    if (!f) return true;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;  /* too deep to vouch for */
+    if (f->tag == F_SYM && f->as.sym) {
+        /* An assignment symbol reached anywhere other than the head of a form
+         * this function recognized: it may be aliased, passed, or applied, and
+         * the target is not readable from here. */
+        const char *nm = f->as.sym->name;
+        if (strcmp(nm, "set!") == 0 || strcmp(nm, "swap!") == 0 ||
+            strcmp(nm, "reset!") == 0)
+            return false;
+        return true;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_collect_set_targets(e, mx, depth, names, n);
+    }
+    if (f->as.list.len >= 2 &&
+        (rt_sym_is(f->as.list.items[0], "set!") ||
+         rt_sym_is(f->as.list.items[0], "swap!") ||
+         rt_sym_is(f->as.list.items[0], "reset!"))) {
+        const Form *target = f->as.list.items[1];
+        if (!target || target->tag != F_SYM || !target->as.sym)
+            return false;                    /* place expression: decline */
+        const char *tn = target->as.sym->name;
+        bool seen = false;
+        for (uint32_t i = 0; i < *n; i++)
+            if (strcmp(names[i], tn) == 0) { seen = true; break; }
+        if (!seen) {
+            if (*n >= RT_WF3_MAX_TARGETS) return false;   /* out of slots */
+            names[(*n)++] = tn;
+        }
+        /* The head and the target are accounted for; the VALUE operands may
+         * still hide further assignments. */
+        for (uint32_t i = 2; i < f->as.list.len; i++)
+            if (!rt_collect_set_targets(e, f->as.list.items[i], depth + 1,
+                                        names, n))
+                return false;
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!rt_collect_set_targets(e, f->as.list.items[i], depth + 1, names, n))
+            return false;
+    return true;
+}
+
+/* True when `f` mentions the symbol `name` anywhere.  Used both to decide
+ * whether an assignment kills a hypothesis and (via `rt_form_borrows_name`)
+ * whether a name escapes by reference. */
+static bool rt_form_mentions_name(const Elab *e, const Form *f,
+                                  const char *name, uint32_t depth) {
+    if (!f || !name) return false;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
+    if (f->tag == F_SYM)
+        return rt_sym_is(f, name);
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_form_mentions_name(e, mx, name, depth);
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_form_mentions_name(e, f->as.list.items[i], name, depth + 1))
+            return true;
+    return false;
+}
+
+/* True when `f` borrows `name` -- `(& name)`.  A borrowed local is the one
+ * channel by which a callee could write a caller's slot, so an assigned name
+ * that is also borrowed keeps the whole-body decline. */
+static bool rt_form_borrows_name(const Elab *e, const Form *f,
+                                 const char *name, uint32_t depth) {
+    if (!f || !name) return false;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_form_borrows_name(e, mx, name, depth);
+    }
+    if (f->as.list.len >= 2 && rt_sym_is(f->as.list.items[0], "&") &&
+        rt_sym_is(f->as.list.items[1], name))
+        return true;
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_form_borrows_name(e, f->as.list.items[i], name, depth + 1))
+            return true;
     return false;
 }
 
@@ -1844,7 +1977,20 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     RefineHyp *saved = cs->env ? cs->env->head : NULL;
     *skip = false;
     if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
-    if (rt_form_mentions_set(e, cs->caller_body, 0)) return saved;
+
+    /* WF3: an assignment no longer declines the whole body outright.  Collect
+     * what the body assigns, so each hypothesis can be tested against it
+     * below; a frame this analysis cannot vouch for (place-expression target,
+     * an unattributable assignment symbol, overflow, too deep) returns false
+     * here and restores the old whole-body decline. */
+    const char *wtgt[RT_WF3_MAX_TARGETS];
+    uint32_t nw = 0;
+    if (!rt_collect_set_targets(e, cs->caller_body, 0, wtgt, &nw)) return saved;
+    /* A borrowed local is the one way a callee could write this frame's slot,
+     * so an assigned name that is also borrowed is not provably disjoint. */
+    for (uint32_t i = 0; i < nw; i++)
+        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0)) return saved;
+
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
 
     const Form *hyps[RT_CS_PATH_MAX_HYPS];
@@ -1854,8 +2000,12 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
                                hyps, &n, &shadowed, 0))
         return saved;
     if (shadowed) { *skip = true; return saved; }
-    for (uint32_t i = 0; i < n; i++)
-        refine_env_push(cs->env, hyps[i], NULL, NULL);
+    for (uint32_t i = 0; i < n; i++) {
+        bool stale = false;
+        for (uint32_t j = 0; j < nw && !stale; j++)
+            stale = rt_form_mentions_name(e, hyps[i], wtgt[j], 0);
+        if (!stale) refine_env_push(cs->env, hyps[i], NULL, NULL);
+    }
     return saved;
 }
 

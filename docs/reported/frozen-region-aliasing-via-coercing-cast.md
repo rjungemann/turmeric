@@ -99,3 +99,19 @@ boundary is just considerably harder to cross by accident.
 
 The severity stays low for that reason, and this remains open until the
 experiment graduates or is shelved.
+
+### Adoption (2026-07-29): the ECS spice ships on it
+
+`sealed-opaque` plan item **S6** is done -- `turmeric-spices` PR #51 declares
+`(defopaque RGWorld :int :sealed)` in `ecs/refined-world` and rewrites that
+module's TRUST BOUNDARY docstring to the narrower, true claim (a stale inline
+comment asserting that opacity alone closed this hole is corrected in the same
+change). Regression fixture: `spices/ecs/tests/errors/refined-world-sealed-alias.tur`
+-- `TUR-E0302` under `--enable=sealed-opaque`, compiles clean without it, so
+consumers on an older `tur` are unaffected.
+
+That satisfies the first half of the plan's graduation criteria ("the ECS spice
+has shipped on it and no legitimate in-module pattern has needed an escape").
+The remaining half is the "moduleless top level" limitation in the plan's
+semantics (2), which must be closed or explicitly accepted in the guide before
+the row can be deleted.

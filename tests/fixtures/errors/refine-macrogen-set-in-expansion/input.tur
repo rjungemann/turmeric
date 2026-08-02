@@ -1,10 +1,18 @@
-;; A macro expansion HIDING a set! must decline path-condition collection the
-;; same way a written set! does: the source spelling shows no assignment, but
-;; the code that runs is the expansion, and a condition collected across an
-;; assignment may no longer hold at the crossing. rt_form_mentions_set scans
-;; macro calls AS their recorded expansion; the guarded read here must stay
-;; TUR-W0372 under --strict-refine even though a naive source scan looks like
-;; a proven guard + read.
+;; A macro expansion HIDING a set! must still be SEEN: the source spelling
+;; shows no assignment, but the code that runs is the expansion, and an
+;; assignment to state a hypothesis mentions may leave it false at the
+;; crossing. The frame walk (rt_collect_set_targets) scans macro calls AS
+;; their recorded expansion, exactly as rt_form_mentions_set did, so the
+;; guarded read here stays TUR-W0372 under --strict-refine even though a naive
+;; source scan looks like a proven guard + read.
+;;
+;; WF3 note: the assignment must target state the hypothesis MENTIONS for this
+;; to be the right answer. Before frame-aware invalidation this fixture
+;; assigned an unrelated local `q`, which declined only because the old rule
+;; was whole-body boolean -- a disjoint assignment is now correctly rescued
+;; (see refine-wf3-disjoint-set), so `q` no longer tested the macro hop it was
+;; written to test. Assigning `e` -- the very entity the guard is about --
+;; restores that, and is the shape that would actually be unsound to rescue.
 (defstruct World [n : int])
 
 (defn alive? [^borrow w : World e : int] #reads w : bool
@@ -15,13 +23,13 @@
   (.n w))
 
 (defmacro sneaky-read [w e]
-  `(do (set! q 9) (get! ~w ~e)))
+  `(do (set! ~e 9) (get! ~w ~e)))
 
 (defn run [] : int
   (let [^mut w (World 7)]
-    (let [^mut q 0]
+    (let [^mut e 0]
       (let [__f (& w)]
-        (if (alive? w 0) (sneaky-read w 0) -1)))))
+        (if (alive? w e) (sneaky-read w e) -1)))))
 
 (defn main [] : int
   (println (run))

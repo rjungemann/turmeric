@@ -1,5 +1,45 @@
 # Checked write frames -- `#writes`, frame-aware hypothesis invalidation
 
+> **Status 2026-08-01 -- WF3's narrow slice is LANDED. WF1/WF2/WF4 remain
+> proposed.**
+>
+> **WF3 needed neither WF1 nor WF2.** The plan sequences the phases as
+> vocabulary -> checked tier -> payoff, which reads as though the payoff
+> depends on the first two. It does not: the narrow slice is a *local* analysis
+> of the caller body, and every case that would need a callee's declared frame
+> (a call with `^mut` args, a nonempty `#writes`) is in the "keeps the full
+> decline" bucket. So the payoff shipped first, and `#writes` is still
+> unbuilt.
+>
+> What landed: `rt_collect_set_targets` / `rt_form_mentions_name` /
+> `rt_form_borrows_name` in `src/compiler/elab_fns.c`, replacing the single
+> `rt_form_mentions_set` veto in `rt_push_cs_path_conds`. A hypothesis now
+> survives an assignment iff every assignment in the body targets a plain
+> symbol the hypothesis does not mention and the body never borrows. Anything
+> else -- place-expression target, an assignment symbol this scan cannot
+> attribute, depth or slot exhaustion, a borrowed target -- restores the old
+> whole-body decline.
+>
+> One argument the sketch below leaves implicit, written down because the
+> slice's soundness rests on it: **the assignment's VALUE needs no check.** A
+> hypothesis is only usable if its terms are congruent, and congruence is
+> granted only to a pure measure or to a `#reads` measure inside a region that
+> freezes its argument (`enc_reads_arg_frozen`). A pure measure cannot be
+> disturbed by any call; inside a frozen region a mutator of the frozen world
+> is statically unreachable (`TUR-E0200`). So a call in value position cannot
+> stale a hypothesis that was going to be believed. That is also why
+> `(set! acc (+ acc (get! w e)))` -- whose value position calls the refined
+> accessor -- is rescuable at all.
+>
+> Evidence: suite 2510 -> **2512 passed, 0 failed**; source fuzzer
+> `--n 200 --mode both` at seeds 1 and 2, **0 soundness bugs, 0 other BUG
+> classes**. Sabotage run (strip all three guards, never decline): all three
+> negatives -- `errors/refine-stateful-mutation-invalidates`,
+> `errors/refine-macrogen-set-in-expansion`,
+> `errors/refine-wf3-borrowed-target` -- **wrongly prove**, and correctly
+> decline in the shipped build, so each guard is load-bearing. The sabotage
+> hook was removed before commit.
+
 **Status:** proposed. This is the plan for step 2 of the trajectory
 `stateful-refinements-guide.md` sketches ("trusted now -> checkable later ->
 effect-row eventually"), written down because two concrete demand signals now
@@ -115,6 +155,25 @@ assumed).
   borrowed-then-written local still declines; the differential fuzzer gains a
   shape that mixes disjoint and overlapping writes and stays at 0 soundness
   bugs.
+
+  > **Correction 2026-08-01 -- that list was self-contradictory, and the
+  > contradiction is instructive.** "They mutate mentioned state" was true of
+  > `refine-stateful-mutation-invalidates` (`(set! (.n w) 9)` -- a field write
+  > on the very world the hypothesis is about) and **false** of
+  > `refine-macrogen-set-in-expansion`, which assigned `q`, a plain local
+  > `int` no hypothesis mentions. A rule that declined the latter would be
+  > declining the accumulator case in the same breath -- they are the same
+  > shape -- so "the accumulator proves" and "the macrogen fixture still
+  > declines" could not both hold.
+  >
+  > What that fixture was really guarding is the **macro-expansion hop**: an
+  > assignment hidden in a template must be seen at all. That property is
+  > still essential (the frame walk keeps the hop, and dropping it would be
+  > unsound), so the fixture was rewritten to assign `e` -- the entity the
+  > guard is about -- which still exercises the hop and is genuinely
+  > unsound to rescue. The disjoint half it used to cover moved to the new
+  > positive fixture `refine-wf3-disjoint-set`, and the borrow guard got its
+  > own negative, `errors/refine-wf3-borrowed-target`.
 - Every rescue is provable-disjoint by construction; when in doubt the old
   boolean decline is the fallback.
 
