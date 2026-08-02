@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.33.0] -- 2026-08-01
 
 ### Fixed
 
@@ -39,6 +39,21 @@ All notable changes to Turmeric are documented here.
   are accepted as no-ops with `TUR-W0063`; `#lang turmeric refined` with
   `TUR-W0064`. Both shims age out one minor line from now. `--strict-refine` is
   unaffected and remains a real flag.
+
+### Docs
+
+- **The three refinement guides are reachable by browsing.**
+  `refinement-types`, `stateful-refinements`, and `refinement-solver-internals`
+  existed but were absent from the guides index -- only `contract-types` was
+  listed, so the whole feature was unreachable. They get their own section. The
+  advanced-type-system rationale's "refinement types were correctly deferred
+  for v1.0.0" section is rewritten as "deferred, then built": the deferral
+  reasoning was sound on its premises, but it assumed entailment meant an SMT
+  dependency on the compiler's critical path. Because every refinement is a
+  contract type first, it already has a runtime meaning, so a partial
+  discharger may answer `Unknown` on any obligation and stay sound -- which is
+  why no shipped artifact links a solver. Dependent types remain deferred on
+  unchanged grounds.
 
 ## [0.32.8] -- 2026-08-01
 

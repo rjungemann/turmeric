@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.32.8` -- sweet-exp `$` composes with neoteric and parenthesised rest-of-lines, a capturing closure passed to a tyvar-signature fn parameter no longer segfaults, and generated C no longer straddles the int64 carrier and a pointer.
+**Latest release:** `v0.33.0` -- refinement types graduate: `#refine{...}` predicates are discharged statically on every compile, and a refinement in type-argument position no longer breaks the program.
 
 ## What
 
