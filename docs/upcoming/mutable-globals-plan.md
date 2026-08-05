@@ -478,10 +478,12 @@ Recorded so the reasoning survives; none blocks G1.
    initializer), and per-thread lazy init is unreachable from `__thread` in C.
    The workable design is one `pthread_key_t` holding a per-thread block,
    materialized on first access -- the mechanism dynvars already use.
-2. **Does a `#reads` frame naming a global buy anything today?** `#reads` is
-   still step 1 -- trusted, refinement-only. A global in a `#reads` frame may be
-   documentation until the read side becomes checked. If so, G2 should ship
-   `#writes` only and say why.
+2. **Does a `#reads` frame naming a global buy anything today?** **ANSWERED --
+   see §12.** It would buy something worse than nothing: `#reads` is the one
+   annotation that *grants* congruence, so naming a global there would let a
+   promise about mutable global state pay out in proofs. G2 ships `#writes`
+   only, and `#reads` keeps its hard error for a non-parameter name. A narrow
+   read-side check is recommended as a companion (§12.3), not a prerequisite.
 3. **Should `^atomic` imply `^mut`?** An atomic global that is never written is
    just a global. Leaning yes-implies, so `(def ^atomic n 0)` is writable, but
    it makes `^atomic` the only annotation that grants mutability and that is a
@@ -820,3 +822,190 @@ Sketch, reusing machinery that exists:
    today with no cap diagnostic. Independent of this plan, cheap to check, and
    a nastier failure than it looks -- `pthread_key_create` returning `EAGAIN`
    is currently unchecked at the dynvar site.
+
+---
+
+## 12. Research: what would a stronger `#reads` cost, and is it a prerequisite? (open question 2)
+
+Answering §9's second open question, plus the follow-on it prompted: how much
+work is a stronger `#reads`, and should it gate this plan? Investigated
+2026-08-05. **[ran]** = probe compiled and executed; **[read]** = from the tree.
+
+### 12.0 Verdict
+
+**Not a prerequisite. Recommended as a companion, and it changes what G2 should
+ship.**
+
+Nothing in G2 is blocked on `#reads`. But the research turned up something that
+does bear on it: a `#reads` frame that omits mutable state the body reads
+produces a **false caller-side proof**, and `^mut` globals make that promise far
+easier to break -- in plain turmeric, with no inline C. So the answer to §9's
+literal question ("does a `#reads` frame naming a global buy anything today?")
+is stronger than "no, it would be documentation":
+
+**G2 should ship `#writes` only, and `#reads` should keep REFUSING to name a
+global** -- not accept it as documentation. Accepting one would widen the
+trusted surface exactly where the lie is cheapest to write. Reasoning in 12.4.
+
+### 12.1 What `#reads` is today [read]
+
+Narrower than `#writes` in every dimension:
+
+| | `#reads` | `#writes` |
+|---|---|---|
+| Arity | **exactly one parameter** (`elab_fns.c`: `len == 2`) | a bitmask, `#writes [a b]` |
+| Non-parameter name | hard error -- "names 'x', which is not a parameter of this function" | same |
+| Checked? | **no -- trusted** | yes (WF2), behind `--enable=write-frames` |
+| Consumers | one | WF3 invalidation |
+
+The single consumer is `enc_reads_arg_frozen` (`refine_collect.c`). When a
+measure declares `#reads w` and `w` is frozen at the call site, an otherwise
+**impure** measure is granted congruence:
+
+```c
+if (!pure && info.reads_param_plus1 != 0 &&
+    enc_reads_arg_frozen(E, f, info.reads_param_plus1))
+    pure = true;
+```
+
+The soundness argument, in the same comment, is that this "elides the
+caller-side crossing check, not the safety check" -- the backstop is the
+accessor's own internal check, which lives in user code.
+
+Note for G2: `#reads` cannot name a global **today** even if we wanted it to.
+The grammar accepts one bare parameter name and hard-errors on anything else,
+so G2 would have to extend the grammar, not just the resolution. `#writes`
+already has the bracket form.
+
+### 12.2 What a broken `#reads` promise actually costs [ran]
+
+A `#reads w` measure that also reads a `^mut` global:
+
+```turmeric
+(def ^mut fudge 1)
+(defn alive? [^borrow w : World e : int] #reads w : bool (> fudge 0))
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [__b (& w)]                 ;; freezes w
+      (if (alive? w 0)
+        (do (set! fudge -1)          ;; the state the measure really reads
+            (get! w 0))              ;; crossing -- (alive? w 0) is now FALSE
+        -1))))
+```
+
+Compiles clean and prints **7**. The crossing check was elided on a predicate
+that is false at run time. Remove the `(& w)` and the same program is
+`TUR-W0372`:
+
+> solver returned unknown for the refinement on argument 2 of 'get!' in 'run';
+> **no runtime fallback for an impure `#reads` measure** -- the crossing must be
+> proven (guard it inside a `frozen` region)
+
+So at the crossing there is no safety net: the outcome is a proof or a
+diagnostic, never a runtime check. That makes the trusted claim load-bearing.
+
+**This is pre-existing, not something `^mut` globals created.** [ran] The
+identical program with the global replaced by an inline-C `static int calls`
+counter -- writable long before D4 -- behaves exactly the same way: compiles
+clean, prints 7, check elided. Nothing regressed when `^mut` landed.
+
+What *did* change is reachability. Breaking the promise used to require
+reaching for inline C; now `(> fudge 0)` does it. And the documented trajectory
+says the wall is inline-C opacity -- step 2 is "verified by the purity walk
+**once a measure's state is Turmeric-visible** (struct fields rather than an
+inline-C handle)". A global read is Turmeric-visible. By the trajectory's own
+criterion this case is on the checkable side of the wall, and is simply not
+being checked.
+
+To be fair to the design: with a self-checking accessor (the ECS case, where
+`get!` validates internally and returns a sentinel) a broken promise costs a
+wrong-but-safe answer. The toy above has no internal check, which is what makes
+the elision visible. The risk is real but its severity depends on user code.
+
+### 12.3 What strengthening would cost
+
+Two very different bills, and conflating them is what makes `#reads` look
+expensive.
+
+**The general strengthening is not mainly a compiler cost.** Surveyed every
+`#reads` measure in the tree [ran]: they are essentially all inline-C bodies,
+and the two that look like turmeric (`sealedlib`'s `w-read`) bottom out in
+inline-C helpers. So a checked `#reads` in the general sense would verify
+**approximately nothing that exists**, because the state it would verify
+against is behind a handle the walk cannot see. Getting value there means
+rewriting the measure layer to hold state in turmeric structs -- a change to
+the ECS and spices, not to the compiler. That is the real bill, it is large,
+and it sits outside this repo's compiler.
+
+**The narrow strengthening is small.** State it as: *refuse the congruence
+override when the body demonstrably reads mutable state outside the frame.*
+
+- A classifier over the elaborated body -- "reads an `is_mut` binding that is
+  not the `#reads` parameter". Same shape and roughly the same size as
+  `rt_classify_expr`, whose walk it can borrow: ~60-120 lines.
+- One flag on `RefineFnInfo`, which already carries `reads_param_plus1`,
+  `writes_declared`, `writes_checked` -- the precedent slot exists.
+- A few lines gating the override at `refine_collect.c`.
+- Fixtures, including the 12.2 program as a negative.
+
+Crucially it must be **default-deny-refusal**: refuse only on positive evidence
+of an outside mutable read. An inline-C body yields no such evidence, so every
+existing measure keeps today's trusted behaviour and **no current fixture
+flips** -- checked by construction, since they are all inline-C. It can only
+ever turn a currently-proving program into `TUR-W0372`, never the reverse, so it
+still wants an experiment gate.
+
+That asymmetry is the useful finding: the expensive part of step 2 and the part
+that matters for mutable globals are **different work**, and only the cheap part
+is relevant here.
+
+### 12.4 Is it a prerequisite?
+
+**No.**
+
+- **G2 as scoped needs nothing from it.** `#writes` is already checked, and G1
+  built the global-write walk it would extend. Globals entering the `#writes`
+  vocabulary is independent of anything on the read side.
+- **It is a guard, not an unblocker.** It prevents `^mut` globals from widening
+  a pre-existing trusted-promise hole into plain turmeric. Worth doing, and
+  worth doing near this work because that is when the exposure changes -- but
+  sequencing it first would delay G2 for no technical gain.
+
+**What it does change is G2's shape.** §9's question asked whether a global in a
+`#reads` frame is merely documentation. It is worse than that: `#reads` is the
+one annotation that *grants* congruence, so letting it name a global would let a
+user write `#reads [w *cache*]` and buy a proof with a promise about mutable
+global state -- the easiest promise in the language to break by accident, since
+any function can write the global by name. Documentation that pays out in
+proofs is not documentation.
+
+So: **G2 ships `#writes` only**, and `#reads` keeps its current hard error for a
+non-parameter name. If a read-side story is wanted later it should arrive
+*checked*, via 12.3's narrow rule, not trusted.
+
+### 12.5 Recommended sequencing
+
+1. **G2 (`#writes` naming globals)** -- unchanged, unblocked, as planned.
+2. **The narrow `#reads` refusal** (12.3) -- a small companion, independently
+   useful, gated. Best landed near G2 while the reasoning is fresh; not before.
+3. **General checked `#reads`** -- out of scope for this plan and mostly not a
+   compiler change. If it is ever wanted, the prerequisite is a
+   Turmeric-visible measure layer, and that decision belongs to the ECS/spice
+   side.
+
+### 12.6 Sub-questions surfaced
+
+1. **Should the 12.2 program be a fixture regardless?** It pins documented
+   behaviour that is easy to mistake for a bug, and there is currently no
+   fixture showing what a broken `#reads` promise costs. Cheap, and it makes
+   the trust boundary testable rather than merely described.
+2. **Is `#reads`'s one-parameter limit deliberate or incidental?** `#writes`
+   grew a bracket form; `#reads` did not. A measure over two frozen resources
+   cannot be expressed today. Not needed here -- noting it because the
+   asymmetry looks unplanned.
+3. **Does `--strict-refine` change the 12.2 outcome?** It did not [ran] -- the
+   obligation is *proved*, not unknown, so strictness has nothing to escalate.
+   Worth confirming that is intended, since a user reaching for
+   `--strict-refine` may reasonably expect it to catch exactly this.
