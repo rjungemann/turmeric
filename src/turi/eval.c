@@ -1236,10 +1236,13 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
                           "outside of: its body or one of its clauses reaches "
                           "`perform` through a form the interpreter cannot "
                           "descend (a native higher-order call, a "
-                          "`catch-unwind` thunk, a match scrutinee, or "
-                          "similar). Reaching the `perform` through plain "
-                          "control flow -- `if`, `do`, `let`, `while`, a direct "
-                          "call -- keeps the handler on the multi-shot path");
+                          "`catch-unwind`/`reset`/`atomically` boundary, a "
+                          "match guard, or similar). Reaching the `perform` "
+                          "through plain control flow -- `if`, `do`, `let`, "
+                          "`while`, `match`, `set!`, a direct call -- keeps the "
+                          "handler on the multi-shot path. Run with "
+                          "TURI_TRACE_FIBER_FALLBACK=1 to see which form was "
+                          "responsible");
     cont->resume_val = val;
 
     /* Re-install the handler frame around the body re-entry for a DEEP handler,
@@ -4846,6 +4849,35 @@ typedef enum {
                       * dispatches: a ws continuation re-installs its prompt +
                       * clone (as the descend case did), a fiber continuation
                       * calls eval_resume_cont with the driven value. */
+    DK_PERFORM_ARG,  /* A perform's ARGUMENTS driven on the work-stack.  expr =
+                      * the EX_PERFORM, frame = enclosing, index = next arg,
+                      * aux = malloc'd TuriValue accumulator, tail = the
+                      * perform's tail-ness.  Pushed only when an arg may
+                      * itself perform (ws_has_perform) -- e.g.
+                      * `(perform (Log (perform (Ask))))` -- so the inner
+                      * perform lands in the driver with the prompt visible.
+                      * When the last arg returns, the accumulator hands off to
+                      * the descending EX_PERFORM arm via the driver-local
+                      * pargs_for/pargs_heap side channel and dispatch proceeds
+                      * exactly as the synchronous path.  The accumulator is in
+                      * clone_ws_slice's and the capture re-homing's
+                      * duplication sets, like DK_CALL_ARG's. */
+    DK_MATCH_SCRUT,  /* A match SCRUTINEE driven on the work-stack.  expr = the
+                      * EX_MATCH, frame = enclosing, tail = the match's
+                      * tail-ness.  Pushed only when the scrutinee may perform
+                      * (ws_has_perform) -- the common perform-free match keeps
+                      * the synchronous eval_match_resolve with no extra frame.
+                      * On the value's return, eval_match_resolve_with selects
+                      * the arm and the winning body descends (with the F1 tail
+                      * leak when the match was in tail position). */
+    DK_RESUME_K,     /* The phase before DK_RESUME: the resume's `k` expression
+                      * itself driven on the work-stack (was eval_expr).  expr =
+                      * the EX_RESUME, frame = enclosing, tail = the resume's
+                      * tail-ness.  When k's value returns, validate it and
+                      * hand off to DK_RESUME with the value arg descending.
+                      * Exists so a perform/resume in k's own computation --
+                      * rare, but expressible -- does not force the enclosing
+                      * handle onto the single-shot fiber. */
 } DriveKind;
 
 typedef struct {
@@ -4960,6 +4992,8 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
                 cnt = src[i].expr->as.call_.n_args;
             else if (src[i].kind == DK_MAKE_STRUCT)
                 cnt = src[i].expr->as.make_struct_.n_fields;
+            else if (src[i].kind == DK_PERFORM_ARG)
+                cnt = src[i].expr->as.perform_.perform->n_args;
             if (cnt) {
                 TuriValue *acc = (TuriValue *)malloc(cnt * sizeof(TuriValue));
                 memcpy(acc, src[i].aux, cnt * sizeof(TuriValue));
@@ -5389,6 +5423,19 @@ static bool ws_has_perform(const Expr *e) {
     case EX_SET:        return ws_has_perform(e->as.set_.value);
     case EX_RETURN:     return ws_has_perform(e->as.return_.value);
     case EX_GET_FIELD:  return ws_has_perform(e->as.get_field_.struct_expr);
+    /* The remaining unary_operand forms: their post-step (eval_unary_post)
+     * performs nothing itself, so each performs exactly when its operand does.
+     * Keeps this scan in agreement with ws_capturable's arms for the same
+     * forms -- without these, a perform-free `(:: v T)` handed to a black-box
+     * position read as "may perform" via the default. */
+    case EX_CAST:         return ws_has_perform(e->as.cast_.expr);
+    case EX_REINTERPRET:  return ws_has_perform(e->as.reinterpret_.expr);
+    case EX_ASCRIBE:      return ws_has_perform(e->as.ascribe_.inner);
+    case EX_BORROW_IMMUT: return ws_has_perform(e->as.borrow_immut_.expr);
+    case EX_RC_FROM_REF:  return ws_has_perform(e->as.rc_from_ref_.expr);
+    case EX_REF:          return ws_has_perform(e->as.ref_.expr);
+    case EX_EXISTS_PACK:  return ws_has_perform(e->as.exists_pack_.value);
+    case EX_UNION_INJECT: return ws_has_perform(e->as.union_inject_.value);
     case EX_RESUME:     return ws_has_perform(e->as.resume_.resume->k) ||
                                ws_has_perform(e->as.resume_.resume->value);
     /* fn-to-fat / poly wrappers are transparent: evaluating one just builds a
@@ -5414,6 +5461,39 @@ static bool ws_has_perform(const Expr *e) {
     }
 }
 
+/* TURI_TRACE_FIBER_FALLBACK=1: say which form pushed a handle off the
+ * work-stack (multi-shot) path onto the single-shot fiber.  The downgrade is
+ * otherwise invisible until a second resume errors -- and the offending form
+ * may be pages away from the handle, inside a callee the analysis descended
+ * into.  `offender` is the deepest node ws_capturable rejected (NULL when the
+ * rejection came from a depth/fn budget, which record nothing). */
+static void ws_trace_fiber_fallback(const Expr *handle_site, const Expr *offender) {
+    if (!getenv("TURI_TRACE_FIBER_FALLBACK")) return;
+    if (offender)
+        fprintf(stderr,
+                "turi: note: handle at %u:%u falls back to the single-shot fiber "
+                "effect runtime: the form at %u:%u (EX kind %d) is not "
+                "work-stack capturable\n",
+                handle_site->span.line, handle_site->span.col_start,
+                offender->span.line, offender->span.col_start,
+                (int)offender->kind);
+    else
+        fprintf(stderr,
+                "turi: note: handle at %u:%u falls back to the single-shot fiber "
+                "effect runtime (capturability analysis hit a depth or "
+                "fn-count budget)\n",
+                handle_site->span.line, handle_site->span.col_start);
+}
+
+/* Does any argument of this perform itself (possibly) perform?  Decides
+ * whether the driver's EX_PERFORM arm must drive the args (DK_PERFORM_ARG)
+ * rather than evaluating them synchronously. */
+static bool ws_has_perform_args(const PerformExpr *pe) {
+    for (uint32_t i = 0; i < pe->n_args; i++)
+        if (ws_has_perform(pe->args[i])) return true;
+    return false;
+}
+
 /* C3: cycle guard for ws_capturable's descent into recursive callee bodies.
  * A self-/mutually-recursive foldable call folds on the work-stack (DK_CALL_RET),
  * so by the inductive hypothesis its performs are capturable -- but the static
@@ -5426,19 +5506,40 @@ static bool ws_has_perform(const Expr *e) {
 static _Thread_local const void *g_wscap_fns[WSCAP_MAX_FNS];
 static _Thread_local int         g_wscap_n;
 
+/* TURI_TRACE_FIBER_FALLBACK: the deepest form that failed the capturability
+ * query in flight.  The wrapper below records the FIRST false return, which --
+ * recursion unwinding bottom-up -- is the deepest offending node, so the
+ * fallback trace can name the form that forced a handle onto the fiber.  The
+ * analysis is a whole-subtree scan whose verdict is invisible from source;
+ * without this, every gap in it presents as a silent single-shot downgrade
+ * diagnosed by staring (docs/archive/turi-multishot-resume-in-while-aborts.md
+ * took exactly that staring). */
+static _Thread_local const Expr *g_wscap_reject;
+
+static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int depth);
+
 /* Decide whether a handle body can run on the work-stack: true iff every
  * perform reachable from `e` is reached through driver-transparent forms (so
  * the perform lands in eval_drive_ex's descending switch with the prompt
  * visible on `st`).  Conservative: anything uncertain -> false -> fiber path.
  * `depth` bounds recursion through direct callee bodies. */
 static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int depth) {
+    bool ok = ws_capturable_rec(env, frame, e, depth);
+    if (!ok && e && !g_wscap_reject) g_wscap_reject = e;
+    return ok;
+}
+
+static bool ws_capturable_rec(TuriEnv *env, EvalFrame *frame, const Expr *e, int depth) {
     if (!e) return true;
     if (depth <= 0) return false;   /* give up on very deep / cyclic chains */
     switch (e->kind) {
     case EX_PERFORM: {
+        /* Args are driven when any may perform (DK_PERFORM_ARG), so each only
+         * needs to be capturable -- `(perform (Log (perform (Ask))))` no
+         * longer forces the fiber path. */
         PerformExpr *pe = e->as.perform_.perform;
         for (uint32_t i = 0; i < pe->n_args; i++)
-            if (ws_has_perform(pe->args[i])) return false;  /* args run via eval_expr */
+            if (!ws_capturable(env, frame, pe->args[i], depth)) return false;
         return true;
     }
     case EX_IF:
@@ -5474,8 +5575,10 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
             if (!ws_capturable(env, frame, e->as.make_struct_.field_values[i], depth)) return false;
         return true;
     case EX_MATCH:
-        /* Scrutinee + guards run via eval_match_resolve -> eval_expr (black box). */
-        if (ws_has_perform(e->as.match_.scrutinee)) return false;
+        /* The scrutinee is driven when it may perform (DK_MATCH_SCRUT), so it
+         * only needs to be capturable.  GUARDS still run via eval_expr inside
+         * eval_match_resolve_with and must stay perform-free. */
+        if (!ws_capturable(env, frame, e->as.match_.scrutinee, depth)) return false;
         for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
             if (ws_has_perform(e->as.match_.arms[i].guard)) return false;
             if (!ws_capturable(env, frame, e->as.match_.arms[i].body, depth)) return false;
@@ -5499,11 +5602,9 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
         return ws_capturable(env, frame, e->as.with_handler_.body, depth);
     }
     case EX_RESUME:
-        /* C3: k is still evaluated via eval_expr (must be perform-free), but the
-         * value arg is now driven on the work-stack (DK_RESUME), so it only needs
-         * to be capturable -- a performing/recursive resume value no longer
-         * forces the fiber path. */
-        return !ws_has_perform(e->as.resume_.resume->k) &&
+        /* Both halves are driven now: the value since C3 (DK_RESUME), k since
+         * DK_RESUME_K.  Either may perform without forcing the fiber path. */
+        return ws_capturable(env, frame, e->as.resume_.resume->k, depth) &&
                ws_capturable(env, frame, e->as.resume_.resume->value, depth);
     case EX_CALL: {
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
@@ -5551,9 +5652,25 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
     case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DEFAULT_OF:
     case EX_HANDLER_LIT: case EX_EXTERN_C:
         return true;
-    case EX_SET:        return !ws_has_perform(e->as.set_.value);
-    case EX_RETURN:     return !ws_has_perform(e->as.return_.value);
-    case EX_GET_FIELD:  return !ws_has_perform(e->as.get_field_.struct_expr);
+    /* Single-operand forms the driver drives (DK_UNARY via unary_operand, and
+     * DK_GET_FIELD for the field receiver -- SR N2/N3): a perform in the
+     * operand lands in the descending switch with the prompt visible, so
+     * recurse rather than demanding the operand be perform-free.  These arms
+     * were written before the driver grew those descents and were the "stale
+     * black box" half of docs/archive/turi-ws-capturable-stale-black-box-arms.md
+     * -- `(set! acc (+ acc (resume k i)))`, the natural accumulator, silently
+     * downgraded its handler to the single-shot fiber. */
+    case EX_SET:        return ws_capturable(env, frame, e->as.set_.value, depth);
+    case EX_RETURN:     return ws_capturable(env, frame, e->as.return_.value, depth);
+    case EX_GET_FIELD:  return ws_capturable(env, frame, e->as.get_field_.struct_expr, depth);
+    case EX_CAST:         return ws_capturable(env, frame, e->as.cast_.expr, depth);
+    case EX_REINTERPRET:  return ws_capturable(env, frame, e->as.reinterpret_.expr, depth);
+    case EX_ASCRIBE:      return ws_capturable(env, frame, e->as.ascribe_.inner, depth);
+    case EX_BORROW_IMMUT: return ws_capturable(env, frame, e->as.borrow_immut_.expr, depth);
+    case EX_RC_FROM_REF:  return ws_capturable(env, frame, e->as.rc_from_ref_.expr, depth);
+    case EX_REF:          return ws_capturable(env, frame, e->as.ref_.expr, depth);
+    case EX_EXISTS_PACK:  return ws_capturable(env, frame, e->as.exists_pack_.value, depth);
+    case EX_UNION_INJECT: return ws_capturable(env, frame, e->as.union_inject_.value, depth);
     default:
         /* Any other form is a black box for the driver: capturable only if it
          * contains no perform at all. */
@@ -5570,6 +5687,11 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
  *   0  -> no arm matched
  *  -1  -> a signal/error during scrutinee or guard eval: *out_val holds it
  * Mirrors the recursive EX_MATCH in eval_expr_impl exactly. */
+static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e,
+                                   TuriValue val,
+                                   EvalFrame **out_frame, const Expr **out_body,
+                                   TuriValue *out_val);
+
 static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
                               EvalFrame **out_frame, const Expr **out_body,
                               TuriValue *out_val) {
@@ -5577,6 +5699,19 @@ static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
     if (turi_is_error(val) || env_signaled(env)) {
         *out_val = val; return -1;
     }
+    return eval_match_resolve_with(env, frame, e, val, out_frame, out_body, out_val);
+}
+
+/* The arm-selection half of eval_match_resolve, taking a pre-computed
+ * scrutinee value.  Split out so the driver can DRIVE the scrutinee on the
+ * work-stack (DK_MATCH_SCRUT) -- with the prompt visible to a perform inside
+ * it -- and resolve the arm when the value returns.  Guards still run via
+ * eval_expr here; ws_capturable's EX_MATCH arm keeps requiring them
+ * perform-free. */
+static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e,
+                                   TuriValue val,
+                                   EvalFrame **out_frame, const Expr **out_body,
+                                   TuriValue *out_val) {
     MatchArm *arms   = e->as.match_.arms;
     uint32_t  n_arms = e->as.match_.n_arms;
 
@@ -5766,6 +5901,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
     TuriValue   apply_fn   = turi_nil();
     TuriValue  *apply_args = NULL;
     uint32_t    apply_n    = 0;
+
+    /* Side channel from DK_PERFORM_ARG back to the descending EX_PERFORM arm:
+     * when a perform's args were driven on the work-stack, the return leg
+     * routes control back to the EX_PERFORM with the evaluated args here.
+     * Driver-instance locals (not globals) so a re-entrant eval under a
+     * debugger hook or native callee cannot clobber an in-flight handoff. */
+    const Expr *pargs_for  = NULL;
+    TuriValue  *pargs_heap = NULL;
 
     for (;;) {
         if (have_apply) {
@@ -6045,6 +6188,18 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case EX_MATCH: {
+                /* A scrutinee that may perform is driven on the work-stack
+                 * (DK_MATCH_SCRUT), so its perform reaches the prompt scan;
+                 * arm selection then runs on the value's return.  The common
+                 * perform-free scrutinee keeps the synchronous resolve below
+                 * -- no extra frame on the hot match path. */
+                if (ws_has_perform(control->as.match_.scrutinee)) {
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_MATCH_SCRUT, .expr = control,
+                                             .frame = cf, .tail = tail }));
+                    control = control->as.match_.scrutinee;
+                    tail = false; descending = true;
+                    break;
+                }
                 /* Resolve scrutinee + arm + guard synchronously (shallow), then
                  * descend the winning arm body in the loop. */
                 EvalFrame  *af   = NULL;
@@ -6074,6 +6229,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* DC: a capturable handle installs a DK_PROMPT and runs its body
                  * on the work-stack; otherwise fall back to the fiber path. */
                 const HandleExpr *h = control->as.handle_.handle;
+                g_wscap_reject = NULL;
                 if (ws_capturable(env, cf, h->body, 64)) {
                     bool ok = true;
                     for (uint8_t i = 0; i < h->n_cases && ok; i++)
@@ -6087,6 +6243,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         break;                             /* keep descending */
                     }
                 }
+                ws_trace_fiber_fallback(control, g_wscap_reject);
                 cur = eval_handle(env, cf, h);   /* fiber fallback */
                 descending = false;
                 break;
@@ -6111,6 +6268,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 h->body = control->as.with_handler_.body;
                 h->cases = cs; h->n_cases = hv->n_cases;
                 h->is_unsafe_marker = false;
+                g_wscap_reject = NULL;
                 bool ok = ws_capturable(env, cf, h->body, 64);
                 for (uint8_t i = 0; i < h->n_cases && ok; i++)
                     ok = ws_capturable(env, cf, h->cases[i].body, 64);
@@ -6122,6 +6280,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     control = h->body; tail = false;
                     break;
                 }
+                ws_trace_fiber_fallback(control, g_wscap_reject);
                 cur = eval_handle(env, cf, h);   /* fiber fallback (borrows h) */
                 descending = false;
                 break;
@@ -6135,14 +6294,36 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = turi_errorf("eval: too many effect arguments (%u)", n);
                     descending = false; break;
                 }
-                bool sig = false;
-                for (uint8_t i = 0; i < n; i++) {
-                    pargs[i] = eval_expr(env, cf, pe->args[i]);
-                    if (turi_is_error(pargs[i]) || env_signaled(env)) {
-                        cur = pargs[i]; sig = true; break;
+                if (pargs_for == control) {
+                    /* Second visit: DK_PERFORM_ARG drove every arg and routed
+                     * back here with the values in the driver-local side
+                     * channel.  Copy them into the C-stack array -- the fiber
+                     * path below swapcontexts away with `pargs` still read by
+                     * the handler, so the storage must outlive this iteration
+                     * exactly as the synchronous path's does. */
+                    for (uint8_t i = 0; i < n; i++) pargs[i] = pargs_heap[i];
+                    free(pargs_heap);
+                    pargs_heap = NULL; pargs_for = NULL;
+                } else if (n > 0 && ws_has_perform_args(pe)) {
+                    /* An arg may itself perform: drive the args on the
+                     * work-stack (DK_PERFORM_ARG) so the inner perform sees
+                     * the prompt, then come back through the branch above. */
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_PERFORM_ARG, .expr = control,
+                                             .frame = cf, .index = 0,
+                                             .aux = malloc(n * sizeof(TuriValue)),
+                                             .tail = tail }));
+                    control = pe->args[0]; tail = false; descending = true;
+                    break;
+                } else {
+                    bool sig = false;
+                    for (uint8_t i = 0; i < n; i++) {
+                        pargs[i] = eval_expr(env, cf, pe->args[i]);
+                        if (turi_is_error(pargs[i]) || env_signaled(env)) {
+                            cur = pargs[i]; sig = true; break;
+                        }
                     }
+                    if (sig) { descending = false; break; }
                 }
-                if (sig) { descending = false; break; }
                 /* Scan downward for the nearest active prompt that handles this
                  * effect (propagating past prompts that don't). */
                 long pidx = -1; HandleCase *matched = NULL;
@@ -6192,6 +6373,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                             cnt = wc->frames[i].expr->as.call_.n_args; break;
                         case DK_MAKE_STRUCT:
                             cnt = wc->frames[i].expr->as.make_struct_.n_fields; break;
+                        case DK_PERFORM_ARG:
+                            cnt = wc->frames[i].expr->as.perform_.perform->n_args; break;
                         default: break;  /* aux is a defer mark / boundary, not owned here */
                         }
                         if (!cnt) continue;
@@ -6234,22 +6417,13 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case EX_RESUME: {
+                /* Drive k itself first (DK_RESUME_K), then the value
+                 * (DK_RESUME).  Both halves on the work-stack means neither
+                 * can hide a perform from the prompt scan. */
                 ResumeExpr *re = control->as.resume_.resume;
-                TuriValue k = eval_expr(env, cf, re->k);
-                if (turi_is_error(k) || env_signaled(env)) {
-                    cur = k; descending = false; break;
-                }
-                if (k.tag != TURI_EFFECT_CONT) {
-                    cur = turi_error("eval: resume: not a continuation");
-                    descending = false; break;
-                }
-                /* C3: drive re->value on the work-stack (was eval_expr) so a
-                 * recursive resume value arg -- (resume k (rec ...)) -- folds
-                 * instead of C-recursing.  DK_RESUME does the ws/fiber dispatch
-                 * once the value returns. */
-                DRIVE_PUSH(((DriveCont){ .kind = DK_RESUME, .last = k,
+                DRIVE_PUSH(((DriveCont){ .kind = DK_RESUME_K, .expr = control,
                                          .frame = cf, .tail = tail }));
-                control = re->value; tail = false; descending = true;
+                control = re->k; tail = false; descending = true;
                 break;
             }
             case EX_GET_FIELD: {
@@ -6676,6 +6850,28 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 len--;
                 break;
             }
+            case DK_RESUME_K: {
+                /* The resume's k expression produced `cur`.  Validate, then
+                 * descend the value arg under DK_RESUME carrying k in .last --
+                 * from here on identical to the former eval_expr'd-k path. */
+                if (signaled) { len--; break; }
+                if (cur.tag != TURI_EFFECT_CONT) {
+                    cur = turi_error("eval: resume: not a continuation");
+                    len--; break;
+                }
+                const Expr *rex = top->expr;
+                EvalFrame  *rcf = top->frame;
+                bool        rtl = top->tail;
+                /* Repurpose this slot as the DK_RESUME frame (same stack cell:
+                 * pop + push collapse). */
+                top->kind = DK_RESUME;
+                top->last = cur;
+                top->frame = rcf;
+                top->tail  = rtl;
+                control = rex->as.resume_.resume->value;
+                cf = rcf; tail = false; descending = true;
+                break;
+            }
             case DK_RESUME: {
                 /* C3: the resume value arg produced `cur`.  On a signal/error,
                  * propagate.  Otherwise dispatch the resume with the driven
@@ -6832,6 +7028,59 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * arm_frame before returning the body's result. */
                 eval_frame_free(top->frame);
                 len--;
+                break;
+            }
+            case DK_PERFORM_ARG: {
+                /* A driven perform arg produced `cur`.  Store it; descend the
+                 * next arg, or hand the full set back to the descending
+                 * EX_PERFORM arm via the side channel. */
+                TuriValue *acc = (TuriValue *)top->aux;
+                if (signaled) { free(acc); len--; break; }
+                const Expr  *pex = top->expr;
+                PerformExpr *pe  = pex->as.perform_.perform;
+                acc[top->index] = cur;
+                top->index++;
+                if (top->index < pe->n_args) {
+                    control = pe->args[top->index]; cf = top->frame;
+                    tail = false; descending = true;
+                } else {
+                    pargs_for  = pex;
+                    pargs_heap = acc;
+                    control = pex; cf = top->frame; tail = top->tail;
+                    len--;
+                    descending = true;
+                }
+                break;
+            }
+            case DK_MATCH_SCRUT: {
+                /* The driven scrutinee produced `cur`.  Select the arm with the
+                 * value in hand, then descend the winning body exactly as the
+                 * synchronous path does -- including the F1 tail leak, since
+                 * this frame pops before the body descends. */
+                if (signaled) { len--; break; }
+                const Expr *me  = top->expr;
+                EvalFrame  *mcf = top->frame;
+                bool        mtl = top->tail;
+                len--;   /* pop before descending: the body must see the frame
+                          * beneath (DK_CALL_RET for a tail arm, etc.) */
+                EvalFrame  *af   = NULL;
+                const Expr *body = NULL;
+                TuriValue   sv   = turi_nil();
+                int mr = eval_match_resolve_with(env, mcf, me, cur, &af, &body, &sv);
+                if (mr == 1) {
+                    if (mtl) {
+                        control = body; cf = af; tail = true;   /* F1 tail leak */
+                    } else {
+                        DRIVE_PUSH(((DriveCont){ .kind = DK_MATCH_BODY, .expr = me,
+                                                 .frame = af, .tail = mtl }));
+                        control = body; cf = af; tail = mtl;
+                    }
+                    descending = true;
+                } else if (mr == 0) {
+                    cur = turi_error("eval: match: no arm matched");
+                } else {
+                    cur = sv;
+                }
                 break;
             }
             case DK_CALL_ARG: {

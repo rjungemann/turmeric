@@ -58,6 +58,7 @@ does not share an investigation with the three above.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
+| [cps-multishot-nontail-resume-inner-handle-drops-clause-rest](cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md) | high | a NON-tail multishot `resume` whose continuation re-enters an inner `handle` delivers the first resume's value as the outer handle's value; the rest of the clause never runs. Prints 2 where the answer is 22, no diagnostic. Single resume fine, no-inner-handle fine; turi (now able to run the shape) is the correct reference |
 
 `handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
 landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --
@@ -77,7 +78,7 @@ fixture.
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
 | [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
-| [turi-ws-capturable-stale-black-box-arms](turi-ws-capturable-stale-black-box-arms.md) | medium | `ws_capturable` still calls `set!`/`return`/`get-field` operands black boxes though the driver drives them (SR N2/N3), so a `perform` there silently downgrades a handler to the single-shot fiber. Carries a **verified** three-line fix plus a classification of the whole remaining fallback surface -- what is stale, what needs driver work, what is blocked on `clone_ws_slice` owning boundaries |
+
 
 The first absorbed two symptom reports on 2026-08-01
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values`,
@@ -91,12 +92,16 @@ was a black box to the work-stack driver and forced the handle onto the
 single-shot fiber. `while` is now driven (`DK_WHILE`), and the fiber fallback
 reports instead of `abort()`ing when it is genuinely reached.
 
-`turi-ws-capturable-stale-black-box-arms` is that defect's sibling and the
-follow-up to it: same analysis, same silent downgrade, but arms that went stale
-rather than a form with no arm at all. Read it before touching `ws_capturable`
--- it enumerates the whole fallback surface, and in particular separates the
-forms the driver already descends safely from the ones whose frames carry a
-heap boundary `clone_ws_slice` would double-free.
+[turi-ws-capturable-stale-black-box-arms](../archive/turi-ws-capturable-stale-black-box-arms.md)
+was that defect's sibling, resolved the same day: the stale arms now recurse,
+match scrutinees / perform args / resume's `k` are driven (DK_MATCH_SCRUT /
+DK_PERFORM_ARG / DK_RESUME_K), and `TURI_TRACE_FIBER_FALLBACK=1` names the
+form behind any remaining fallback.  Its archived note keeps the map of what
+is still fiber-only and why -- read it before touching `ws_capturable`; in
+particular it separates the safely-descendable forms from the ones whose
+frames carry a heap boundary `clone_ws_slice` would double-free (reset /
+catch-unwind / atomically), which remain open by design.  Executing it also
+exposed a compiled-path miscompile, filed under "Effect handlers" above.
 
 ## Surface / expressiveness
 

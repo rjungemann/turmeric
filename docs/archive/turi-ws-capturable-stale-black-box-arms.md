@@ -1,11 +1,19 @@
 ---
-status: open
-severity: medium
+status: RESOLVED 2026-08-05 (fix directions 1 and 2, plus the trace; direction 3 remains open by design)
+severity: was medium
 discovered: 2026-08-05
 area: interpreter (work-stack capturability analysis, src/turi/eval.c)
 ---
 
 # `ws_capturable` still treats forms as black boxes that the driver now drives
+
+> **RESOLVED 2026-08-05.** Directions 1 and 2 landed together with the
+> `TURI_TRACE_FIBER_FALLBACK` trace -- see [Resolution](#resolution-2026-08-05)
+> at the bottom. Direction 3 (the boundary-carrying forms) remains open by
+> design, unchanged from the analysis below. Executing this report also
+> uncovered a **compiled-path miscompile** in the very shape the interpreter
+> can now run:
+> [cps-multishot-nontail-resume-inner-handle-drops-clause-rest](../reported/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
 
 ## Summary
 
@@ -186,3 +194,72 @@ A cheap safeguard to consider alongside any of these: an opt-in trace
 fiber. The analysis is a whole-subtree scan whose answer is invisible from
 source, and every future gap in it will present as this same silent
 downgrade.
+
+## Resolution (2026-08-05)
+
+Directions 1 and 2 landed, plus the trace. Direction 3 is untouched and its
+analysis above (the boundary-carrying frames, `clone_ws_slice` ownership)
+stands as the design note for whoever takes it.
+
+### Direction 1, wider than drafted
+
+The three stale arms now recurse, and so does the **whole `unary_operand`
+family** -- `EX_CAST` / `EX_REINTERPRET` / `EX_ASCRIBE` / `EX_BORROW_IMMUT` /
+`EX_RC_FROM_REF` / `EX_REF` / `EX_EXISTS_PACK` / `EX_UNION_INJECT` previously
+fell to the black-box default despite `DK_UNARY` driving every one of them.
+The `ws_has_perform` reconciliation resolved the report's open question:
+that scan answers a different question ("is a perform in here at all", used at
+genuinely black-box positions) and its existing arms were already precise;
+what it needed was matching arms for the transparent unary forms so a
+perform-free `(:: v T)` at a black-box position stops reading as "may
+perform" via its default.
+
+### Direction 2, all three
+
+- **Match scrutinee** (`DK_MATCH_SCRUT`): `eval_match_resolve` split into
+  resolve-with-value; a scrutinee that may perform is driven and the arm is
+  selected on the value's return, including the F1 tail leak. Gated on
+  `ws_has_perform(scrutinee)` so the common perform-free match keeps the
+  synchronous path with no extra frame. Guards still run via `eval_expr` and
+  still must be perform-free.
+- **Perform args** (`DK_PERFORM_ARG`): args accumulate on the work-stack when
+  any may perform, then hand back to the descending `EX_PERFORM` arm through a
+  *driver-local* side channel (`pargs_for`/`pargs_heap` -- locals, not
+  globals, so debugger-hook or native re-entry cannot clobber a handoff), and
+  dispatch proceeds through the existing code untouched. The values are
+  copied into the C-stack `pargs` array before dispatch because the fiber
+  path swapcontexts away with the handler still reading them. The
+  accumulator joined `clone_ws_slice`'s and the capture re-homing's
+  duplication sets, like `DK_CALL_ARG`'s.
+- **Resume's `k`** (`DK_RESUME_K`): driven, validated on return, then the
+  frame is repurposed in place as the `DK_RESUME` that drives the value --
+  the C3 machinery from there on.
+
+Measured, interpreter vs. hand evaluation (and vs. compiled where the
+compiled path is correct): set!-value repro **11**, accumulator-in-loop
+**44**, match-scrutinee-through-a-call **211**, perform-arg under nested
+handlers **22**, weighted **2020**. All pinned in
+`tests/fixtures/turi-ws-driven-operands` (`requires.interp-only`: run.sh's
+`tur run` path is the JIT -- a compiling pipeline -- not the tree-walker).
+
+### The part nobody asked for
+
+Comparing the two backends on the newly-runnable shapes found the compiled
+path **miscompiling** one of them: a non-tail multishot resume whose
+continuation re-enters an inner handle delivers the first resume's value as
+the outer handle's value and drops the rest of the clause (2 where the answer
+is 22; single resume fine, no-inner-handle fine). Filed with a boundary table
+as
+[cps-multishot-nontail-resume-inner-handle-drops-clause-rest](../reported/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
+The interpreter is ahead of the compiler on these shapes now, which reverses
+the usual direction of that comparison.
+
+### The trace
+
+`TURI_TRACE_FIBER_FALLBACK=1` prints, at each fiber fallback, the handle's
+span and the span + kind of the deepest form `ws_capturable` rejected (or a
+note when the rejection was a depth/fn budget). Implemented as a recording
+wrapper -- recursion unwinds bottom-up, so the first `false` seen is the
+deepest offender. The single-shot resume error now names the trace variable,
+and its list of non-descendable forms was corrected (match *scrutinee* left
+it; match *guards*, boundaries, and native HOFs remain).

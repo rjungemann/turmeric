@@ -1,0 +1,69 @@
+;; The interpreter's work-stack driver descends set! values, return values,
+;; get-field receivers, ascriptions, match scrutinees, resume's k, and
+;; perform's own args -- so a `perform` reached through any of them stays on
+;; the multi-shot path instead of silently downgrading the whole handle to the
+;; single-shot fiber.  Each case here resumes MORE than once, so a downgrade
+;; is a hard failure (the fiber fallback errors on the second resume), and the
+;; expected values distinguish per-resume frame cloning from shared state.
+;; See docs/archive/turi-ws-capturable-stale-black-box-arms.md.
+;;
+;; requires.interp-only: owned by tests/run-turi.sh (`tur --interpret`); the
+;; compiled suite PASS-skips it -- including run.sh's `tur run` path, which is
+;; the JIT (a compiling pipeline), not the tree-walker.  The
+;; compiled path rejects most of these shapes (a perform inside a set! value /
+;; match scrutinee is outside the CPS backend's admissible subset), and the
+;; one it accepts it miscompiles -- see
+;; docs/reported/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md.
+;; The interpreter is ahead of the compiler here; this fixture pins that.
+(defdata Box (MkBox int))
+(defeffect Ask [] : int)
+(defeffect Log [n : int] : int)
+
+;; match scrutinee: the perform is reached through a direct (foldable) call
+(defn ask-box [] #fx{Ask} : Box
+  (let [v (perform (Ask))]
+    (MkBox v)))
+
+(defn main [] : int
+  ;; set! value performs.  11, not 12: each resume clones the let frame, so
+  ;; both see sum = 0 (0+1 and 0+10 summed by the clause).  A shared frame
+  ;; would give 1 then 1+10 -> 12.
+  (println (handle
+             (let [^mut sum 0]
+               (set! sum (+ sum (perform (Ask))))
+               sum)
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 10))))
+
+  ;; the accumulator idiom: capture INSIDE a while whose body set!s with a
+  ;; performing value.  Each resume runs the remaining iterations with its own
+  ;; value: (1+1) + (10+10) = 22... summed across the outer suspension = 44.
+  (println (handle
+             (let [^mut i 0 ^mut sum 0]
+               (while (< i 2)
+                 (do (set! sum (+ sum (perform (Ask)))) (set! i (+ i 1))))
+               sum)
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 10))))
+
+  ;; match scrutinee performs (through ask-box): each resume selects the arm
+  ;; with its own scrutinee value.  (1+100) + (10+100) = 211.
+  (println (handle
+             (match (ask-box)
+               (MkBox v) (+ v 100))
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 10))))
+
+  ;; perform's ARG performs -- (Log (Ask)) under nested handlers, Ask
+  ;; multishot.  Each resume re-runs the Log perform through the inner
+  ;; handler: (1*2) + (10*2) = 22.
+  (println (handle
+             (handle (perform (Log (perform (Ask))))
+                     (Log [n] k2) (resume k2 (* n 2)))
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 10))))
+
+  ;; weighted variant of the same shape, so each resume's value is
+  ;; identifiable in the sum: 1000*2 + 20 = 2020.  (This is the program the
+  ;; compiled path gets wrong -- it prints 2.)
+  (println (handle
+             (handle (let [v (perform (Ask))] (perform (Log v)))
+                     (Log [n] k2) (resume k2 (* n 2)))
+             (Ask [] ^multishot k) (+ (* 1000 (resume k 1)) (resume k 10))))
+  0)
