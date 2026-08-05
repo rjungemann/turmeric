@@ -52,7 +52,8 @@ typedef struct tur_ucontext {
 extern void __tur_uctx_swap(ucontext_t *from, ucontext_t *to);
 extern void __tur_uctx_tramp(void);
 __asm__(
-".text\n"
+".section .text$__tur_uctx_swap,\"xr\"\n"
+".linkonce discard\n"
 ".globl __tur_uctx_swap\n"
 ".def __tur_uctx_swap; .scl 2; .type 32; .endef\n"
 "__tur_uctx_swap:\n"
@@ -77,12 +78,14 @@ __asm__(
 "  mov 40(%rdx), %rdi\n mov 32(%rdx), %rsi\n"
 "  mov 24(%rdx), %rbp\n mov 16(%rdx), %rbx\n"
 "  mov 8(%rdx), %rsp\n jmp *0(%rdx)\n"
+".section .text$__tur_uctx_tramp,\"xr\"\n"
+".linkonce discard\n"
 ".globl __tur_uctx_tramp\n"
 ".def __tur_uctx_tramp; .scl 2; .type 32; .endef\n"
 "__tur_uctx_tramp:\n"
 "  mov %r12, %rcx\n sub $32, %rsp\n call __tur_uctx_run\n call abort\n ud2\n"
 );
-void __tur_uctx_run(struct tur_ucontext *u) {
+static __attribute__((used)) void __tur_uctx_run(struct tur_ucontext *u) {
     if (u->entry) {
         if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);
         else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);

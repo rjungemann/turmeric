@@ -24,16 +24,40 @@ firewall).
 it in a stock Godot 4 binary. This is the actual point of Windows support -- the
 compiler/runtime work exists to serve it.
 
-### Prerequisite in this repo: shared-library output naming
+### Prerequisite in this repo: shared-library output naming -- DONE
 
-`tur build --shared` still emits `lib<name>.so`. On Windows the shim's AOT path
-wants `<name>.dll` (no `lib` prefix). Wire this through the shared-library output
-naming in `src/main.c` under `_WIN32`:
+`tur build --shared` now emits `<name>.dll` (no `lib` prefix) on Windows.
+`TUR_SHLIB_PREFIX` / `TUR_SHLIB_EXT` in `src/platform_fs.h` are the single
+source of truth; `src/main.c` (default output path) and
+`src/turi/spice_loader.c` (the `.tur-repl-cache/` image) both build their names
+from them. macOS deliberately keeps `lib<name>.so` -- see the header comment.
 
-- `.so` -> `.dll`, drop the `lib` prefix.
-- Confirm the shim's "compile script on demand" subprocess invokes `tur.exe`
-  (with the suffix) -- `tur_settle_exe_output` already handles the executable
-  case; the shared path needs the same care.
+`tests/run-build-shared.sh` passes 11/11 against `build-win/tur.exe`: the .dll
+links, exports `smokelib__add42`, dlopens through `src/platform_dl.h`, calls,
+and writes `exports.manifest`. Getting there needed three real fixes:
+
+- **Multi-TU collision in the emitted ucontext shim.** The WIN3-C register-
+  snapshot shim is emitted into *every* generated TU with `.globl`
+  `__tur_uctx_swap` / `__tur_uctx_tramp` and an external `__tur_uctx_run`, so
+  any build with more than one TU died with "multiple definition". A `--shared`
+  build always has two (the generated `tur_runtime.c`), and so does every
+  multi-module `tur build <dir>`. The definitions now sit in COMDAT
+  (`.text$<name>` + `.linkonce discard`), the same mechanism a C++ inline
+  function uses. Plain `.scl 3` is not enough for `__tur_uctx_swap` -- the C
+  code calls it, so GCC re-externalises the symbol underneath you.
+- **`basename_of()` split on `/` only.** Windows `realpath()` returns the
+  backslash spelling, so `tur build --shared .` used the whole absolute path as
+  the artifact name and ld rejected it. Now splits on `\` too, under `_WIN32`.
+- **`dlfcn.h` in the test harness.** MinGW has none; the harness includes the
+  repo's existing `src/platform_dl.h` instead.
+
+Nine harnesses also hardcoded `TUR="./build/tur"` rather than honouring a `TUR`
+override, so they could not be pointed at `build-win/tur.exe` at all. They now
+read `${TUR:-./build/tur}` like the other 35.
+
+Still open for WIN2: confirm the shim's "compile script on demand" subprocess
+invokes `tur.exe` (with the suffix). `tur_settle_exe_output` already handles the
+executable case.
 
 ### Scope (mostly in `../turmeric-godot/`)
 

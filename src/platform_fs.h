@@ -401,6 +401,35 @@ static inline int tur_settle_exe_output(const char *out_path) {
 #endif
 }
 
+/* ---- Shared-library file naming -------------------------------------------
+ *
+ * ELF platforms want a `lib` prefix on a shared object -- it is the convention
+ * the dynamic loader searches by, and `-l<name>` is defined in terms of it.  PE
+ * has no such convention: a Windows module is `<name>.dll`, full stop.  A
+ * `libfoo.so` written on Windows is a file LoadLibrary will happily open by
+ * absolute path, but that nothing which *discovers* modules by name -- Godot's
+ * GDExtension loader among them -- will recognise, so `tur build --shared` has
+ * to produce the platform's real spelling rather than one that merely loads.
+ *
+ * Both halves are string literals so a call site can paste them into a format
+ * string with no runtime branch:
+ *
+ *     snprintf(p, n, "%s/lib/" TUR_SHLIB_PREFIX "%s" TUR_SHLIB_EXT, dir, base);
+ *
+ * macOS deliberately keeps `lib<name>.so` rather than the `.dylib` its linker
+ * would name a library itself.  clang's `-shared` produces a valid Mach-O dylib
+ * under any name, dlopen does not care about the extension, and downstream
+ * consumers (the turmeric-godot shim's `.gdextension` entries) already spell it
+ * `.so`.  Renaming it would be a gratuitous break for no functional gain.
+ */
+#ifdef _WIN32
+#  define TUR_SHLIB_PREFIX ""
+#  define TUR_SHLIB_EXT    ".dll"
+#else
+#  define TUR_SHLIB_PREFIX "lib"
+#  define TUR_SHLIB_EXT    ".so"
+#endif
+
 /* ---- Directory entry kind (all platforms) ---------------------------------
  *
  * struct dirent::d_type is a BSD/glibc extension, not POSIX.  MinGW omits the

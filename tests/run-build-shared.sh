@@ -12,7 +12,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-TUR="./build/tur"
+TUR="${TUR:-./build/tur}"
 FIXTURE="tests/fixtures/build-shared-smoke"
 WORK="$(mktemp -d -t tur-rp0.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
@@ -30,10 +30,19 @@ fi
 # Pick the shared-library extension. macOS dlopen accepts .so too, but use
 # the platform-conventional name so the artifact looks right under `file`.
 case "$(uname -s)" in
-    Darwin) LIB_EXT="dylib" ;;
-    *)      LIB_EXT="so" ;;
+    Darwin)              LIB_EXT="dylib" ;;
+    MINGW*|MSYS*|CYGWIN*) LIB_EXT="dll" ;;
+    *)                   LIB_EXT="so" ;;
 esac
 LIB="$WORK/libsmoke.$LIB_EXT"
+
+# The name `tur build --shared` picks when the caller gives no -o. This must
+# track TUR_SHLIB_PREFIX/TUR_SHLIB_EXT in src/platform_fs.h: PE has no `lib`
+# convention, so Windows gets a bare `<name>.dll`.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) DEF_PREFIX="";    DEF_EXT=".dll" ;;
+    *)                    DEF_PREFIX="lib"; DEF_EXT=".so"  ;;
+esac
 
 # Build the shared library.
 build_out=$("$TUR" build --shared "$FIXTURE" -o "$LIB" 2>&1)
@@ -63,12 +72,14 @@ fi
 HARNESS="$WORK/harness"
 CC_BIN="${CC:-cc}"
 # -ldl: required on Linux for dlopen/dlsym; macOS rolls them into libSystem
-# so the flag is harmless there.
+# so the flag is harmless there. Windows has no libdl at all -- the harness
+# includes src/platform_dl.h instead, so it needs -Isrc and no -l.
 case "$(uname -s)" in
-    Darwin) DL_LIBS="" ;;
-    *)      DL_LIBS="-ldl" ;;
+    Darwin)               DL_LIBS="" ;;
+    MINGW*|MSYS*|CYGWIN*) DL_LIBS="" ;;
+    *)                    DL_LIBS="-ldl" ;;
 esac
-if ! $CC_BIN -O0 -std=c99 -Wall -o "$HARNESS" "$FIXTURE/harness.c" $DL_LIBS 2>"$WORK/cc.err"; then
+if ! $CC_BIN -O0 -std=c99 -Wall -Isrc -o "$HARNESS" "$FIXTURE/harness.c" $DL_LIBS 2>"$WORK/cc.err"; then
     fail "build-shared-smoke-harness-compile" "cc failed: $(cat "$WORK/cc.err")"
     exit 1
 fi
@@ -138,16 +149,16 @@ cwd_rc=$?
 if [ "$cwd_rc" -ne 0 ]; then
     fail "build-shared-smoke-cwd-default-name" \
          "tur build --shared . exit=$cwd_rc: $(cat "$NAMED_DIR/build-cwd.log" 2>/dev/null)"
-elif [ -e "$NAMED_DIR/build/lib/lib..so" ] || \
-     [ -e "$NAMED_DIR/build/lib/lib..so.manifest" ]; then
+elif [ -e "$NAMED_DIR/build/lib/$DEF_PREFIX.$DEF_EXT" ] || \
+     [ -e "$NAMED_DIR/build/lib/$DEF_PREFIX.$DEF_EXT.manifest" ]; then
     fail "build-shared-smoke-cwd-default-name" \
-         "produced lib..so artifact(s): $(ls "$NAMED_DIR"/build/lib/lib*.so* 2>/dev/null)"
-elif [ -e "$NAMED_DIR/build/lib/lib.so" ]; then
+         "produced $DEF_PREFIX.$DEF_EXT artifact(s): $(ls "$NAMED_DIR"/build/lib/ 2>/dev/null)"
+elif [ -e "$NAMED_DIR/build/lib/$DEF_PREFIX$DEF_EXT" ]; then
     fail "build-shared-smoke-cwd-default-name" \
-         "produced nameless lib.so: $(ls "$NAMED_DIR"/build/lib/lib*.so* 2>/dev/null)"
-elif [ ! -e "$NAMED_DIR/build/lib/libcwdlib.so" ]; then
+         "produced nameless $DEF_PREFIX$DEF_EXT: $(ls "$NAMED_DIR"/build/lib/ 2>/dev/null)"
+elif [ ! -e "$NAMED_DIR/build/lib/${DEF_PREFIX}cwdlib$DEF_EXT" ]; then
     fail "build-shared-smoke-cwd-default-name" \
-         "expected build/lib/libcwdlib.so (cwd basename); got: $(ls "$NAMED_DIR"/build/lib/lib*.so* 2>/dev/null)"
+         "expected build/lib/${DEF_PREFIX}cwdlib$DEF_EXT (cwd basename); got: $(ls "$NAMED_DIR"/build/lib/ 2>/dev/null)"
 else
     pass "build-shared-smoke-cwd-default-name"
 fi
@@ -179,10 +190,9 @@ if [ "$bdr_rc" -ne 0 ]; then
 elif [ ! -f "$BDR_BUILD/obj/m.c" ] || [ ! -f "$BDR_BUILD/obj/m.h" ]; then
     fail "build-dir-relocates-artifacts" \
          "expected obj/m.{c,h} under $BDR_BUILD; got: $(ls -R "$BDR_BUILD" 2>/dev/null)"
-elif [ ! -f "$BDR_BUILD/lib/libbdrelocates.so" ] && \
-     [ ! -f "$BDR_BUILD/lib/libbdrelocates.dylib" ]; then
+elif [ ! -f "$BDR_BUILD/lib/${DEF_PREFIX}bdrelocates$DEF_EXT" ]; then
     fail "build-dir-relocates-artifacts" \
-         "expected lib/libbdrelocates.{so,dylib} under $BDR_BUILD; got: $(ls "$BDR_BUILD/lib" 2>/dev/null)"
+         "expected lib/${DEF_PREFIX}bdrelocates$DEF_EXT under $BDR_BUILD; got: $(ls "$BDR_BUILD/lib" 2>/dev/null)"
 elif [ -f "$BDR_FIXTURE/src/m.c" ] || [ -f "$BDR_FIXTURE/src/m.h" ]; then
     fail "build-dir-relocates-artifacts" \
          "intermediates leaked into source tree: $(ls "$BDR_FIXTURE/src" 2>/dev/null)"

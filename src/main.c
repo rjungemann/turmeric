@@ -120,9 +120,21 @@ static void json_escape(const char *s, char *out, size_t cap) {
     out[i] = '\0';
 }
 
-/* Extract basename from a path. */
+/* Extract basename from a path.
+ *
+ * Windows accepts both separators, and realpath() on this platform hands back
+ * the backslash spelling ("C:\\tmp\\proj"), so a '/'-only scan finds nothing
+ * and returns the whole absolute path as the "basename".  That silently became
+ * the output name -- `tur build --shared .` tried to link
+ * `<build>/lib/C:\tmp\proj.dll` and ld failed with "Invalid argument".
+ * Backslash is only a separator under _WIN32: it is a legal character in a
+ * POSIX filename, so splitting on it there would be wrong. */
 static const char *basename_of(const char *path) {
     const char *s = strrchr(path, '/');
+#ifdef _WIN32
+    const char *b = strrchr(path, '\\');
+    if (b && (!s || b > s)) s = b;
+#endif
     return s ? s + 1 : path;
 }
 
@@ -3644,7 +3656,8 @@ static int cmd_check_dir(const char *dir) {
 /* Build a project from multiple .tur files. Generates .h and .c for each,
  * plus a _main.c that includes all headers. */
 /* RP0: `shared` selects shared-library build (skip _main.c, link with
- * -fPIC -shared, default output `lib<dir>.so`). The host can then
+ * -shared, default output `lib<dir>.so` -- `<dir>.dll` on Windows, see
+ * TUR_SHLIB_PREFIX/TUR_SHLIB_EXT in platform_fs.h). The host can then
  * dlopen the result and dlsym exported defns.
  * RP1: `manifest_path` overrides the default exports.manifest location
  * (`<out_path>.manifest`). NULL means use the default. Ignored unless
@@ -3876,7 +3889,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                 default_output_name(dir, base, sizeof(base));
             }
             snprintf(chosen_out, sizeof(chosen_out),
-                     "%s/lib/lib%s.so", build_dir, base);
+                     "%s/lib/" TUR_SHLIB_PREFIX "%s" TUR_SHLIB_EXT,
+                     build_dir, base);
         } else {
             if (manifest_base[0]) {
                 snprintf(base, sizeof(base), "%s", manifest_base);
@@ -4272,9 +4286,17 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * instead of an executable. On macOS, -undefined dynamic_lookup allows
      * cross-library symbols (e.g. httpd in tourist) to resolve at load time. */
     if (shared) {
+#ifdef _WIN32
+        /* No -fPIC on PE: every Win32 image is position-independent already, so
+         * MinGW's gcc answers the flag with a "-fPIC ignored for target"
+         * warning on every single shared build.  Suppressing the flag is not a
+         * behaviour change -- it is dropping a no-op that only produces noise. */
+        buf_puts(&cmd, " -shared");
+#else
         buf_puts(&cmd, " -fPIC -shared");
-#ifdef __APPLE__
+#  ifdef __APPLE__
         buf_puts(&cmd, " -undefined dynamic_lookup");
+#  endif
 #endif
     }
     buf_printf(&cmd, " -o %s", out_path);
@@ -6775,7 +6797,7 @@ static int usage_build(void) {
         "usage:\n"
         "  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file\n"
         "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
-        "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library (.so)\n"
+        "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library\n"
         "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
         "  tur emit-c [-I <dir>...] --build-dir <dir> <files...>  emit per-module .h/.c\n"
         "  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout\n"
@@ -6789,9 +6811,10 @@ static int usage_build(void) {
         "                    (subdirs: obj/, bin/, lib/). Defaults to\n"
         "                    <project-root>/build or <cwd>/build. Override layers:\n"
         "                    CLI flag > TUR_BUILD_DIR env > build.tur :build-dir.\n"
-        "  --shared          build a shared library (`-fPIC -shared`, no main);\n"
-        "                    requires a directory argument. Exported defns are\n"
-        "                    callable via dlopen/dlsym as `<module>__<name>`.\n"
+        "  --shared          build a shared library (`-shared`, no main); requires\n"
+        "                    a directory argument. Exported defns are callable via\n"
+        "                    dlopen/dlsym as `<module>__<name>`. Default output is\n"
+        "                    <build-dir>/lib/lib<name>.so, or <name>.dll on Windows.\n"
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
         "                    (defaults to `<out>.manifest`). Lists each export\n"
         "                    as `<mod>/<defn> -> <mangled> :: (:args) -> :ret`.\n"

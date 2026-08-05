@@ -32,6 +32,13 @@ esac
 WORK="$(mktemp -d -t tur-rp7.XXXXXX)"
 trap 'rm -rf "$WORK"; rm -f "$WORK.fifo"' EXIT
 
+# The cached spice image is named by tur_spice_image_load(); its extension
+# tracks TUR_SHLIB_EXT in src/platform_fs.h, so it is .dll on Windows.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) CACHE_LIB="lib-0.dll" ;;
+    *)                    CACHE_LIB="lib-0.so"  ;;
+esac
+
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "PASS $1"; }
@@ -53,13 +60,13 @@ cat > "$P1/.tur-repl-cache/exports.manifest" <<'EOF'
 sh/real -> sh__real :: () -> :int
 sh/ghost -> sh__ghost :: () -> :int
 EOF
-# Touch lib.so so the freshness check doesn't rebuild and overwrite our edits.
+# Touch the image so the freshness check doesn't rebuild and overwrite our edits.
 sleep 1
-touch "$P1/.tur-repl-cache/lib-0.so"
+touch "$P1/.tur-repl-cache/$CACHE_LIB"
 out=$(cd "$P1" && echo ':quit' | "$TUR_BIN" repl 2>&1)
 if   echo "$out" | grep -q "stale exports.manifest" \
   && echo "$out" | grep -q "sh__ghost" \
-  && echo "$out" | grep -q "lib-0.so" \
+  && echo "$out" | grep -qF "$CACHE_LIB" \
   && echo "$out" | grep -q "(reload)" \
   && echo "$out" | grep -q "rm -rf .tur-repl-cache"; then
     pass "rp7-stale-manifest-hint"

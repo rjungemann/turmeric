@@ -2,7 +2,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-TUR="./build/tur"
+TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
 PASS=0

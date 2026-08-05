@@ -32,6 +32,13 @@ esac
 WORK="$(mktemp -d -t tur-rp3.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The cached spice image is named by tur_spice_image_load(); its extension
+# tracks TUR_SHLIB_EXT in src/platform_fs.h, so it is .dll on Windows.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) CACHE_LIB="lib-0.dll" ;;
+    *)                    CACHE_LIB="lib-0.so"  ;;
+esac
+
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "PASS $1"; }
@@ -66,12 +73,12 @@ else
     fail "repl-spice-load-initial" "missing/wrong status line: $out"
 fi
 
-if [ -f "$PROJ/.tur-repl-cache/lib-0.so" ] \
+if [ -f "$PROJ/.tur-repl-cache/$CACHE_LIB" ] \
     && [ -f "$PROJ/.tur-repl-cache/exports.manifest" ]; then
     pass "repl-spice-load-cache-populated"
 else
     fail "repl-spice-load-cache-populated" \
-         "lib-0.so or exports.manifest missing under .tur-repl-cache"
+         "$CACHE_LIB or exports.manifest missing under .tur-repl-cache"
 fi
 
 EXPECTED='smokelib/add42 -> smokelib__add42 :: (:int) -> :int'
@@ -83,29 +90,29 @@ else
 fi
 
 # --- scenario 3: rerun is a no-op (mtime unchanged) -----------------------
-MT_BEFORE=$(stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
-            || stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null)
+MT_BEFORE=$(stat -c %Y "$PROJ/.tur-repl-cache/$CACHE_LIB" 2>/dev/null \
+            || stat -f %m "$PROJ/.tur-repl-cache/$CACHE_LIB" 2>/dev/null)
 sleep 1
 (cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
-MT_AFTER=$(stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
-           || stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null)
+MT_AFTER=$(stat -c %Y "$PROJ/.tur-repl-cache/$CACHE_LIB" 2>/dev/null \
+           || stat -f %m "$PROJ/.tur-repl-cache/$CACHE_LIB" 2>/dev/null)
 if [ "$MT_BEFORE" = "$MT_AFTER" ]; then
     pass "repl-spice-load-rerun-skips-rebuild"
 else
     fail "repl-spice-load-rerun-skips-rebuild" \
-         "lib-0.so was rebuilt unnecessarily ($MT_BEFORE -> $MT_AFTER)"
+         "$CACHE_LIB was rebuilt unnecessarily ($MT_BEFORE -> $MT_AFTER)"
 fi
 
 # --- scenario 4: touching a source rebuilds -------------------------------
 touch "$PROJ/src/smoke.tur"
 (cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
-MT_REBUILT=$(stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
-             || stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null)
+MT_REBUILT=$(stat -c %Y "$PROJ/.tur-repl-cache/$CACHE_LIB" 2>/dev/null \
+             || stat -f %m "$PROJ/.tur-repl-cache/$CACHE_LIB" 2>/dev/null)
 if [ "$MT_REBUILT" != "$MT_AFTER" ]; then
     pass "repl-spice-load-rebuild-on-change"
 else
     fail "repl-spice-load-rebuild-on-change" \
-         "lib-0.so mtime did not change after touching source"
+         "$CACHE_LIB mtime did not change after touching source"
 fi
 
 # --- scenario 5: TUR_NO_AUTO_SPICE=1 opts out -----------------------------

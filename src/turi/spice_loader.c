@@ -555,7 +555,8 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
     static unsigned int generation_counter = 0;
     unsigned int gen = generation_counter++;
     char lib_path[4400], manifest_path[4400];
-    snprintf(lib_path, sizeof(lib_path), "%s/lib-%u.so", cache_dir, gen);
+    snprintf(lib_path, sizeof(lib_path), "%s/lib-%u" TUR_SHLIB_EXT,
+             cache_dir, gen);
     snprintf(manifest_path, sizeof(manifest_path),
              "%s/exports.manifest", cache_dir);
 

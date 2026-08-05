@@ -23,7 +23,7 @@ cd "$(dirname "$0")/.."
 # docs/asan-debug-leaks-plan.md.
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
-TUR="./build/tur"
+TUR="${TUR:-./build/tur}"
 PASS=0
 FAIL=0
 

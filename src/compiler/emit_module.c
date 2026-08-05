@@ -6043,9 +6043,23 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "extern void __tur_uctx_tramp(void);\n");
     /* The context switch and entry trampoline, emitted as file-scope asm. This
      * is the exact code validated in fiber_ctx_x64_win.S, re-emitted here
-     * because generated C is standalone and cannot link that object. */
+     * because generated C is standalone and cannot link that object.
+     *
+     * This preamble goes into EVERY generated translation unit, so a plain
+     * `.globl` definition collides the moment a build has more than one TU --
+     * which is every `tur build <dir>` over multiple modules, and every
+     * `--shared` build (the generated tur_runtime.c is always a second TU).
+     * GNU ld reports it as "multiple definition of `__tur_uctx_swap'".
+     *
+     * The fix is COMDAT, the same mechanism a C++ inline function uses: each
+     * definition goes in its own `.text$<name>` section marked
+     * `.linkonce discard`, and the linker keeps exactly one copy and drops the
+     * rest.  Plain TU-local (`.scl 3`) is NOT enough for __tur_uctx_swap: the C
+     * code below calls it, so GCC emits its own `.def ... .scl 2` for the call
+     * and re-externalises the symbol underneath us. */
     buf_puts(out, "__asm__(\n");
-    buf_puts(out, "\".text\\n\"\n");
+    buf_puts(out, "\".section .text$__tur_uctx_swap,\\\"xr\\\"\\n\"\n");
+    buf_puts(out, "\".linkonce discard\\n\"\n");
     buf_puts(out, "\".globl __tur_uctx_swap\\n\"\n");
     buf_puts(out, "\".def __tur_uctx_swap; .scl 2; .type 32; .endef\\n\"\n");
     buf_puts(out, "\"__tur_uctx_swap:\\n\"\n");
@@ -6070,14 +6084,19 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "\"  mov 40(%rdx), %rdi\\n mov 32(%rdx), %rsi\\n\"\n");
     buf_puts(out, "\"  mov 24(%rdx), %rbp\\n mov 16(%rdx), %rbx\\n\"\n");
     buf_puts(out, "\"  mov 8(%rdx), %rsp\\n jmp *0(%rdx)\\n\"\n");
+    buf_puts(out, "\".section .text$__tur_uctx_tramp,\\\"xr\\\"\\n\"\n");
+    buf_puts(out, "\".linkonce discard\\n\"\n");
     buf_puts(out, "\".globl __tur_uctx_tramp\\n\"\n");
     buf_puts(out, "\".def __tur_uctx_tramp; .scl 2; .type 32; .endef\\n\"\n");
     buf_puts(out, "\"__tur_uctx_tramp:\\n\"\n");
     buf_puts(out, "\"  mov %r12, %rcx\\n sub $32, %rsp\\n call __tur_uctx_run\\n call abort\\n ud2\\n\"\n");
     buf_puts(out, ");\n");
-    /* Entry helper the trampoline calls (external so the asm `call` resolves and
-     * the optimiser cannot drop it as unreferenced). */
-    buf_puts(out, "void __tur_uctx_run(struct tur_ucontext *u) {\n");
+    /* Entry helper the trampoline calls.  `static` for the same per-TU reason as
+     * the asm symbols above -- the local symbol still satisfies the assembler's
+     * `call __tur_uctx_run` within this TU.  `used` is what keeps it: GCC cannot
+     * see the reference from inside the asm string, so without the attribute it
+     * would drop the function as unreferenced and the call would not link. */
+    buf_puts(out, "static __attribute__((used)) void __tur_uctx_run(struct tur_ucontext *u) {\n");
     buf_puts(out, "    if (u->entry) {\n");
     buf_puts(out, "        if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);\n");
     buf_puts(out, "        else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);\n");
