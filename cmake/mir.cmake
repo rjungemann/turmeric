@@ -63,6 +63,14 @@ include_guard(GLOBAL)
 #     defines __unused unconditionally, so the whole DIR struct failed to parse
 #     -- surfacing far away as "undeclared identifier d" at every later
 #     `DIR *d = opendir(...)` use, with nothing pointing at the attribute.
+#   9127f8e1 -- #pragma pack accepted only a literal number, but the
+#     MinGW/UCRT headers spell it `pack(push,_CRT_PACKING)` (a macro), so
+#     every UCRT header tripped "expected ')'" plus a misbalanced pop --
+#     which inside a real nested push silently pops the OUTER region early.
+#     Object-like macro args are now chased to their number (clang/MSVC
+#     semantics; measured: MinGW gcc 16 silently IGNORES macro-arg pack
+#     directives, no warning, but _CRT_PACKING is 8 == the x64 natural cap,
+#     so the two semantics agree on actual UCRT layout).
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -76,8 +84,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "9c221f9602e0b3f537e60a74982616b4fc53d561"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes")
+set(TUR_MIR_GIT_TAG "9127f8e1fa5c804b07b18aa43f717f7ff45b5217"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack incl. macro args + C23 enum base types + leading member attributes")
 
 include(FetchContent)
 
