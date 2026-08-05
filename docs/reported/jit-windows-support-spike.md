@@ -197,3 +197,24 @@ Working code is explicitly not required.
   spike; the two intersect at "a shipped Godot game on Windows."
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)
 - [docs/guides/jit-guide.md](../guides/jit-guide.md)
+
+---
+
+## 2026-08-05, later: NATIVE execution works; lazy thunks are the last defect
+
+With the compat prelude, export table, and include-walk fixes landed
+(`b5ea7628f`), `tur --enable=jit jit hello.tur` on Windows:
+
+- `TUR_JIT_GEN=interp`: runs, exit 0 -- full pipeline proven.
+- `TUR_JIT_GEN=eager`:  runs, exit 0 -- **MIR-gen native code executing a
+  Turmeric program on Windows.**
+- default (lazy):       SIGILL at a low address (thunk page) on the run
+  thread, before any program output.
+
+So the one remaining defect is the lazy-generation path -- MIR's
+`_MIR_get_wrapper` / `_MIR_redirect_thunk` machinery on the win64 target,
+which tur's serialized-lazy interface builds on. Everything below it is
+proven by the eager run. Next session: chase the thunk (rjungemann/mir,
+branch from `fix/pragma-pack-macro-arg`), or flip the Windows default to
+eager as an interim -- the engine comment notes eager "doubles" cost, which
+may be acceptable to ship a working tier first.
