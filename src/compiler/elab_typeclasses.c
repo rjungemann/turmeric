@@ -3960,6 +3960,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * it via c_export_name, the documented "emit this C name as-is" bypass. */
         method_binding->c_export_name = method_sym->name;
         method_binding->is_instance_method = true;   /* B6: internal export, CPS-eligible */
+        /* The user wrote `(definstance Eq int ...)`, not
+         * `__inst_Eq_eq_qu_int` -- keep the mangled name out of every
+         * human-facing symbol listing. */
+        method_binding->is_synthesized = true;
 
         /* RT1 VARIANCE: an instance may accept MORE than its class signature
          * promises, never less.  The class signature is the contract callers

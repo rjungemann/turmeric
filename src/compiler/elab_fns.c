@@ -8248,6 +8248,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * closure-dispatch protocol on the let binding, not by a direct call to
      * __fn_N (whose C signature returns the int64 carrier, not a fn pointer). */
     b->is_lifted_lambda = true;
+    /* `__fn_%u` above is a name the elaborator made up; nothing that lists
+     * symbols for a human should offer it. */
+    b->is_synthesized = true;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 
     /* RT1: publish this lambda's contract parameters on its lifted thunk

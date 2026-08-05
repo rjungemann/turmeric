@@ -15,6 +15,15 @@ static void collect_items(const Expr **items, uint32_t n);
 
 static void collect_binding(const Binding *b) {
     if (!b || !b->name || !b->is_global) return;
+    /* Names the elaborator minted -- lifted lambdas (`__fn_774`) and instance
+     * methods (`__inst_Eq_eq_qu_int`) -- are not part of the program a person
+     * is editing.  Dropping them here rather than in on_completion is
+     * deliberate: hover, go-to-definition, documentSymbol and
+     * workspace/symbol all read this one index, and every one of them was
+     * showing the mangled names.  There is nothing to navigate to and no
+     * prefix a user would type, so there is no reader for whom keeping them
+     * is better. */
+    if (b->is_synthesized) return;
     if (!out_ || !count_) return;
     if (*count_ >= cap_) return;
     LspSymbol *sym = &out_[(*count_)++];

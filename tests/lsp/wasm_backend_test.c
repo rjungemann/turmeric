@@ -283,6 +283,63 @@ static void test_broken_buffer_falls_back_to_stdlib(void) {
 }
 
 /* -------------------------------------------------------------------------
+ * Elaborator-minted names never reach a human-facing listing
+ *
+ * Anonymous lambdas lift to `__fn_774` globals and typeclass instances
+ * elaborate to `__inst_Eq_eq_qu_int` methods. Both used to land in the symbol
+ * index, so completion offered ~68 of them inside a 200-item cap and the
+ * outline view listed the mangled instance methods.
+ *
+ * The filter is on Binding.is_synthesized, not on the `__` spelling: the
+ * stdlib uses that prefix for its own hand-written internal helpers, which
+ * have real source and are worth hovering. `__buffer-helper` below stands for
+ * that class -- it is written in the buffer, so it must survive.
+ * --------------------------------------------------------------------- */
+
+static void test_synthesized_names_are_not_offered(void) {
+    fresh();
+    open_doc("file:///project/main.tur",
+             "(defn __buffer-helper [x : int] : int (* x 2))\n"
+             "(defn apply-twice [n : int] : int\n"
+             "  ((fn [y : int] : int (__buffer-helper y)) n))\n"
+             "\n");
+
+    /* An empty prefix, deliberately: this is the query the cap truncates, and
+     * the one where the mangled names were crowding out real ones. */
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/completion\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":3,\"character\":0}}}");
+
+    CHECK(!contains(&out, "\"label\":\"__inst_"),
+          "instance methods are not completion candidates");
+    CHECK(!contains(&out, "\"label\":\"__fn_"),
+          "lifted lambdas are not completion candidates");
+    CHECK(contains(&out, "\"label\":\"__buffer-helper\""),
+          "a hand-written __-prefixed name is still offered");
+    buf_free(&out);
+}
+
+static void test_outline_omits_lifted_lambdas(void) {
+    fresh();
+    open_doc("file:///project/outline.tur",
+             "(defn apply-twice [n : int] : int\n"
+             "  ((fn [y : int] : int y) n))\n");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"textDocument/documentSymbol\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/outline.tur\"}}}");
+
+    /* documentSymbol already restricts itself to this file, which is exactly
+     * why the lifted lambda showed up here: its span is the buffer's own. */
+    CHECK(contains(&out, "\"name\":\"apply-twice\""),
+          "the outline lists the function the user wrote");
+    CHECK(!contains(&out, "\"name\":\"__fn_"),
+          "the outline does not list the lambda the elaborator lifted");
+    buf_free(&out);
+}
+
+/* -------------------------------------------------------------------------
  * main
  * --------------------------------------------------------------------- */
 
@@ -303,6 +360,8 @@ int main(int argc, char **argv) {
     test_workspace_symbol_spans_tabs();
     test_definition_within_a_tab();
     test_broken_buffer_falls_back_to_stdlib();
+    test_synthesized_names_are_not_offered();
+    test_outline_omits_lifted_lambdas();
 
     lsp_session_reset();
 

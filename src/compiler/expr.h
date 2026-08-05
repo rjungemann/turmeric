@@ -184,6 +184,24 @@ struct Binding {
      * variant for an effectful instance method (its exported direct entry still
      * backs the dict slot), unlike a genuine `^:export-as` symbol. */
     bool          is_instance_method;
+    /* True when the elaborator minted this binding's NAME, rather than a
+     * person writing it: a lifted anonymous lambda (`__fn_774`) or a
+     * typeclass instance method (`__inst_Eq_eq_qu_int`).  There is no source
+     * form a user could navigate to and no name they could have typed, so
+     * every surface that enumerates program symbols for a human -- LSP
+     * completion, documentSymbol, workspace/symbol -- must skip these.
+     *
+     * Deliberately its own bit rather than `is_instance_method ||
+     * is_lifted_lambda`: those two are *specific* facts consulted by the
+     * emitter and the alias rule, and a consumer asking "did a person write
+     * this?" should not have to enumerate every species of synthesized
+     * binding.  A future mint site opts in with one assignment.
+     *
+     * Not the same as a `__` prefix.  The stdlib uses that spelling for its
+     * own hand-written internal helpers (`__arrow_pair_first`), which do have
+     * a source form, are worth hovering, and belong in their own file's
+     * outline.  See docs/archive/lsp-completion-internal-symbols.md. */
+    bool          is_synthesized;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
     /* LT1: Linear type checking — whether this binding holds a linear value */

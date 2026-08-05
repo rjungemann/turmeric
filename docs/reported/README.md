@@ -83,7 +83,14 @@ the single red line in `tests/run-turi.sh`.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [for-comprehension-pure-ambiguous-against-stdlib](for-comprehension-pure-ambiguous-against-stdlib.md) | medium | `for` desugars to a bare `.pure` inside a `fn`, so it is ambiguous against the auto-loaded instances -- `for` is dead surface as shipped |
-| [lsp-completion-internal-symbols](lsp-completion-internal-symbols.md) | medium | completion is dominated by `__inst_*` / `__fn_*` globals, which also overrun the 200-item cap |
+
+`lsp-completion-internal-symbols` was resolved 2026-08-05 (a
+`Binding.is_synthesized` bit filtered in the LSP collector) and moved to
+[docs/archive](../archive/lsp-completion-internal-symbols.md). Its `__`-prefix
+fix direction was **not** taken and the archived note says why: the prefix
+means "internal" in this codebase, not "synthesized", and the stdlib writes
+~46 of its own. The 200-item completion cap it also mentions is untouched and
+is not tracked as an open finding -- see that note's "What this does not fix".
 
 ## Soundness limits and UB
 
