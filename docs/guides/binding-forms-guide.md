@@ -131,6 +131,26 @@ updates. Use `stdlib/atomic.tur`'s CAS or fetch-add for a counter, or
 `stdlib/mutex.tur` for anything wider. `^atomic` is eight-byte scalars only and
 does not imply `^mut`.
 
+`^thread-local` (same gate) goes the other way: instead of synchronising one
+shared value, each thread gets **its own copy**, initialized by running the
+declared initializer on that thread.
+
+```turmeric
+(def ^thread-local scratch (make-buffer))   ;; one buffer per thread, not shared
+```
+
+Under `tur --interpret` it is a plain global: turi has no user-reachable thread
+spawn, so there is no second thread for it to differ on. It does not combine
+with `^atomic` -- a per-thread copy is unshared, so its accesses need no
+synchronisation -- and its initializer may not reference another
+`^thread-local`, because per-thread initialization order would otherwise become
+observable.
+
+For *scoped* ambient state -- a value a call tree should see but callers should
+be able to rebind -- prefer a dynamic variable (`defdynamic` / `binding`, see
+`stdlib/dynvar.tur`) over a mutable global. It is the same per-thread machinery
+with a scope attached, and it does not leave a name any function can write.
+
 `^persistent` and `^deprecated` are top-level annotations -- static storage and
 a deprecation nudge on a global. Neither has a local meaning, so both are
 rejected on a body binding.

@@ -26,6 +26,13 @@ void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
      * Emitted before the rc-release path below because an atomic global is a
      * scalar by construction (elab_def rejects anything wider), so it never
      * owns a refcounted value there is an old reference to release. */
+    /* G4b: a write to a `^thread-local` goes through its setter. */
+    if (e->as.set_.target && e->as.set_.target->is_thread_local) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tur_tl_set_%s(%s);\n", bn, v);
+        free(bn); free(v);
+        return;
+    }
     if (e->as.set_.target && e->as.set_.target->is_atomic) {
         const Binding *tb = e->as.set_.target;
         indent_buf(body, ctx->indent);

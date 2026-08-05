@@ -2886,6 +2886,17 @@ char *atom_var(EmitCtx *ctx, const Binding *b) {
      * The macro layer takes a pointer, so this works under the JIT unchanged --
      * atomicity is an operation on storage the JIT owns, where thread-local
      * storage would be storage the host has to own. */
+    /* G4b: a read of a `^thread-local` goes through its accessor, which
+     * materializes this thread's block and runs the initializer on first
+     * touch.  Same chokepoint as `^atomic`, for the same reason. */
+    if (b && b->is_thread_local) {
+        size_t n = strlen(nm) + 32;
+        char *out = (char *)malloc(n);
+        if (!out) { fprintf(stderr, "tur: oom\n"); abort(); }
+        snprintf(out, n, "__tur_tl_get_%s()", nm);
+        free(nm);
+        return out;
+    }
     if (b && b->is_atomic) {
         const char *ld = (b->type.kind == TY_PTR_VOID || b->type.kind == TY_CSTR)
                        ? "TUR_ATOMIC_LOAD_PTR" : "TUR_ATOMIC_LOAD_U64";

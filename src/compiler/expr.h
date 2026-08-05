@@ -159,6 +159,21 @@ struct Binding {
      * for `set!`, and a second route would make `^atomic` the only annotation
      * conferring write permission as a side effect. */
     bool          is_atomic;
+    /* G4b (mutable-globals-plan §4.4, §11.4), behind `--enable=global-state`:
+     * a `^thread-local` global.  Each thread gets its own copy, materialized on
+     * first access and initialized by running the declared initializer ON THAT
+     * THREAD -- which is the whole point: `(def ^thread-local buf (make-buf))`
+     * must give each thread its OWN buffer, not share one.
+     *
+     * Not `__thread`.  C has no dynamic thread-local initialization (a
+     * non-constant `__thread` initializer is "initializer element is not
+     * constant"), and c2mir has no thread-local storage at all -- it parses
+     * `_Thread_local`, warns, and treats the variable as an ordinary global, so
+     * every thread would silently share one slot under `tur jit`.  The lowering
+     * is a `pthread_key_t` instead: a libc call needs no compiler TLS support,
+     * and the key's destructor frees the per-thread block on thread exit, which
+     * `__thread` in C would not give us.  See the plan's §11. */
+    bool          is_thread_local;
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
     /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
     const char   *c_export_name;

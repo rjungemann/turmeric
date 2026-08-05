@@ -1315,6 +1315,27 @@ static WfVerdict wf_walk(Elab *e, const Form *f, Binding *const *params,
     return v;
 }
 
+/* G4b/§13.7: does this initializer form mention a `^thread-local` global?
+ * Returns the offending symbol, or NULL.  Form-level and resolved through the
+ * global scope, which is enough: a `^thread-local` is a global by definition,
+ * so a reference to one is a bare symbol naming it.  A local that shadows the
+ * name reads as a reference here -- pessimistic, and the safe direction. */
+static const Symbol *tl_init_references_thread_local(Elab *e, const Form *f,
+                                                     uint32_t depth) {
+    if (!f || depth >= 24) return NULL;
+    if (f->tag == F_SYM && f->as.sym) {
+        Binding *b = scope_lookup(&e->global, f->as.sym);
+        return (b && b->is_thread_local) ? f->as.sym : NULL;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return NULL;
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        const Symbol *r = tl_init_references_thread_local(e, f->as.list.items[i],
+                                                          depth + 1);
+        if (r) return r;
+    }
+    return NULL;
+}
+
 /* G4a: may a value of this kind be loaded/stored by the atomics macro layer?
  *
  * EIGHT-BYTE KINDS ONLY, and the width is the whole point rather than a
@@ -8781,6 +8802,7 @@ Expr *elab_def(Elab *e, const Form *call) {
     bool is_persistent = false;
     bool is_mut = false;
     bool is_atomic = false;
+    bool is_thread_local = false;
     bool is_deprecated_attr = false;
     const char *deprecation_msg = NULL;
 
@@ -8790,6 +8812,19 @@ Expr *elab_def(Elab *e, const Form *call) {
         const Symbol *s = cur->as.sym;
 
         if (s == e->sym_caret_persistent) { is_persistent = true; name_idx++; continue; }
+
+        /* G4b: `^thread-local` -- each thread gets its own copy, initialized
+         * on first access by running the initializer on that thread. */
+        if (s == e->sym_caret_thread_local) {
+            if (!g_opt_global_state) {
+                diag_emit(DIAG_ERROR, cur->span,
+                          "%s: '^thread-local' needs --enable=global-state "
+                          "(docs/upcoming/mutable-globals-plan.md)", kw);
+                return NULL;
+            }
+            experiment_warn_if_used("global-state");
+            is_thread_local = true; name_idx++; continue;
+        }
 
         /* G4a: `^atomic` -- reads and writes of this global are sequentially
          * consistent.  Scalars only; the type check happens below, once the
@@ -8992,6 +9027,35 @@ Expr *elab_def(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* G4b: `^thread-local` and `^atomic` are mutually exclusive.  A per-thread
+     * copy is unshared by construction, so making its accesses atomic buys
+     * nothing and would suggest a synchronisation that is not happening. */
+    if (is_thread_local && is_atomic) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: '^thread-local' and '^atomic' do not combine -- a "
+                  "per-thread copy is unshared, so its accesses need no "
+                  "synchronisation",
+                  kw);
+        return NULL;
+    }
+    /* G4b/§13.7: a `^thread-local` initializer may not reference another
+     * `^thread-local`.  Per-thread initialization order is source order, and
+     * allowing cross-references would make that order observable and therefore
+     * load-bearing, for no demonstrated need.  Loosenable later; rejecting is
+     * the direction that stays correct if the order ever changes. */
+    if (is_thread_local && init_f) {
+        const Symbol *bad = tl_init_references_thread_local(e, init_f, 0);
+        if (bad) {
+            diag_emit(DIAG_ERROR, init_f->span,
+                      "%s: a '^thread-local' initializer may not reference "
+                      "another '^thread-local' ('%s') -- per-thread "
+                      "initialization order would become observable; read it "
+                      "inside a function instead",
+                      kw, bad->name);
+            return NULL;
+        }
+    }
+
     /* G4a: `^atomic` requires an explicit `^mut` (decided 2026-08-05).  An
      * atomic global nothing may write is just a global, and making `^atomic`
      * confer write permission would make it the only annotation in the language
@@ -9018,8 +9082,9 @@ Expr *elab_def(Elab *e, const Form *call) {
 
     Binding *b = binding_new(e, name_f->as.sym, init->type,
                              /*is_mut=*/is_mut, /*is_global=*/true, name_f->span);
-    b->is_persistent = is_persistent;
-    b->is_atomic     = is_atomic;
+    b->is_persistent    = is_persistent;
+    b->is_atomic        = is_atomic;
+    b->is_thread_local  = is_thread_local;
     /* F4: ^deprecated on def */
     b->is_deprecated = is_deprecated_attr;
     b->deprecation_message = deprecation_msg;

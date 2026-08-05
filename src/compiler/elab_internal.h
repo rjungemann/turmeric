@@ -207,7 +207,9 @@ typedef struct Elab {
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
     const Symbol *sym_caret_relevant;
     /* G4a (mutable-globals-plan §4.4): `^atomic` on a top-level `def`. */
-    const Symbol *sym_caret_atomic;   /* ^relevant -- relevant value annotation */
+    const Symbol *sym_caret_atomic;
+    /* G4b (mutable-globals-plan §4.4, §11.4): `^thread-local` on a `def`. */
+    const Symbol *sym_caret_thread_local;   /* ^relevant -- relevant value annotation */
     /* LB1: ^borrow -- non-consuming parameter annotation for linear/affine handles */
     const Symbol *sym_caret_borrow;     /* ^borrow -- borrow (read without consuming) annotation */
     const Symbol *sym_caret_fat;        /* ^fat -- fat-closure-consuming parameter (A#1) */

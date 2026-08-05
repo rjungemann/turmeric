@@ -1,7 +1,8 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
 > **Status:** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see §10, §15,
-> §16, §17). G4b (`^thread-local`) and G5 proposed.
+> §16, §17). **G4b LANDED** (§18), so G4 is complete. G5a (docs) and G5b
+> (graduation) remain.
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
@@ -388,7 +389,7 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
   `--enable=global-state`.
 - **G3 -- module encapsulation. LANDED 2026-08-05; see §16.** §4.3. The one phase that can reject existing
   code. Behind the same gate. Wants its own soak time before graduating.
-- **G4 -- `^thread-local` and `^atomic`. `^atomic` LANDED 2026-08-05; see §17.** §4.4. Independent of G2/G3; can land
+- **G4 -- `^thread-local` and `^atomic`. BOTH LANDED 2026-08-05; see §17, §18.** §4.4. Independent of G2/G3; can land
   in either order relative to them. **Split them**: `^atomic` first -- it is much
   the smaller, its design question is settled (§13.6), and the JIT already has an
   atomics shim -- then `^thread-local`, which needs the whole of §11.4.
@@ -397,9 +398,17 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
   initializer may not reference another `^thread-local` (§13.7); and the guide
   states plainly that `^thread-local` is a plain global under turi (§13.4), with
   a fixture asserting it parses and runs there.
-- **G5 -- docs and graduation.** The guide section §4.4 promises, a
-  `binding-forms-guide.md` cross-reference, the dynvar-vs-global steer from
-  §1.2, and the graduation decision for `global-state`.
+- **G5a -- docs.** The guide section §4.4 promises, a `binding-forms-guide.md`
+  cross-reference, the dynvar-vs-global steer from §1.2, and the plain statement
+  that everything past `^atomic`/`^thread-local` is the programmer's problem
+  (§0.1). Independently useful and independently landable: it documents what has
+  already shipped, so it does not wait on G4b.
+- **G5b -- graduation.** The decision for `global-state`: graduate, shelve, or
+  bump `expires_at`. Distinct from G5a because it is a *judgement* that wants
+  adoption evidence, not a writing task -- G3 in particular can reject code that
+  compiles today, and that is the part worth soaking before it goes always-on.
+  Blocked on G5a (a feature should not graduate undocumented) and on whatever
+  G4b decides.
 
 G1 is worth doing even if nothing after it is. G2-G5 are each worth doing
 alone, in that order of confidence.
@@ -1452,8 +1461,9 @@ helper block is the only codegen change.
   §11.4 (one `pthread_key_t`, a per-thread block, materialize-on-first-access),
   plus §13.7's rule that its initializer may not reference another
   `^thread-local`, plus §13.4's turi note and fixture.
-- **G5**: the guide section §4.4 promises, the dynvar-vs-global steer, and the
-  graduation decision.
+- **G5a**: the guide section §4.4 promises and the dynvar-vs-global steer.
+- **G5b**: the graduation decision, which wants adoption evidence rather than
+  writing time.
 
 ### 17.7 Not covered, stated
 
@@ -1463,3 +1473,76 @@ rather than rigorous, and a passing race proves nothing. What the fixture does
 assert is that the lowering is correct and round-trips every admitted scalar
 kind. The honest claim for `^atomic` is "the emitted accesses are atomic", and
 that is what is tested.
+
+---
+
+## 18. G4b execution record -- `^thread-local` (2026-08-05)
+
+**Landed**, behind `--enable=global-state`. `tests/run.sh` -> 2563 passed, 0
+failed; `tests/run-turi.sh` -> 1753 passed, 0 failed, 705 skipped. No snapshot
+regen needed -- the per-thread machinery is emitted only into units that declare
+a `^thread-local`, so no fixture's `expected.c` moved.
+
+**G4 is complete.** Remaining: G5a (docs) and G5b (graduation).
+
+### 18.1 What landed, and that it is §11.4's design
+
+One `pthread_key_t` for the whole program holding **one per-thread block**,
+exactly as §11.4 recommended over a key each -- the budget is 1024 process-wide
+and shared with dynvars, and a function touching several thread-locals pays one
+`getspecific` rather than one each.
+
+Each global gets a value field and its own `inited` byte in the block, named by
+mangled binding name, so an accessor names both directly and there is no
+slot-index bookkeeping. `calloc` zeroes the block, so `inited` starts false on
+every new thread -- which is precisely "not yet initialized on this thread".
+
+Per global the emitter produces an `__tur_tl_initfn_<n>` (the declared
+initializer, as a function so it can run once per thread), a `__tur_tl_get_<n>`
+(materialize block, run initializer if this thread has not, return), and a
+`__tur_tl_set_<n>` (a write counts as initialization -- it replaces what the
+initializer would have produced, so running it afterwards would clobber the
+write). Reads and writes route through the same two chokepoints `^atomic` uses.
+
+A `^thread-local` has **no** process-wide storage and no entry in
+`__tur_module_def_init`; that is the difference the whole design turns on.
+
+**§11.4's optional `__thread` fast path is NOT implemented**, deliberately. It
+was described as an optimization of an already-correct path and last in
+sequence; the correct path is what landed.
+
+### 18.2 The one failure mode, checked
+
+`pthread_key_create`'s return value is checked and aborts with a message naming
+the feature. §13.3 found the dynvar path ignores it -- leaving the key
+uninitialized and every later `getspecific` undefined -- and a plan that
+recommends this mechanism should not reproduce its one unhandled failure. The
+dynvar site is still unfixed and still filed.
+
+### 18.3 The fixture asserts both properties without a race
+
+`g4b-thread-local-global` spawns two workers plus main, each incrementing its
+own copy from 100 a different number of times: **103 / 105 / 101**. If the
+copies were shared the totals would be 109-ish and order-dependent, so a shared
+slot cannot produce that output by luck. It proves per-thread *isolation* and
+per-thread *initialization* in one deterministic assertion, and nothing in it
+races -- the only cross-thread writes go to distinct malloc'd result slots.
+
+This is a stronger test than G4a got, and the difference is inherent rather
+than effort: "each thread has its own copy" is a functional property a
+deterministic program can pin, where "these accesses do not tear" is not.
+
+### 18.4 Three rejections
+
+An initializer referencing another `^thread-local` (§13.7's rule, enforced);
+`^thread-local` with `^atomic` (a per-thread copy is unshared, so atomicity
+would suggest a synchronisation that is not happening -- worse than nothing,
+because it reads as a safety claim); and `^thread-local` without the experiment,
+refused by name, since a silently-inert one would be a global every thread
+shares while the program believes each has its own.
+
+### 18.5 turi
+
+`^thread-local` is accepted and degenerate under `--interpret`, as §13.4
+specified. Recorded in the guide (G5a's first item, landed early here since it
+is one paragraph and belongs beside the annotation it describes).

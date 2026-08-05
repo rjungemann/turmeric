@@ -6,6 +6,17 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`^thread-local` on a top-level `def`**, behind `--enable=global-state`.
+  Each thread gets its own copy, materialized on first access and initialized by
+  running the declared initializer *on that thread* -- so
+  `(def ^thread-local buf (make-buf))` gives each thread its own buffer rather
+  than sharing one. Lowered to a `pthread_key_t` holding one per-thread block,
+  not `__thread`: C has no dynamic thread-local initialization, and the JIT's
+  c2mir has no thread-local storage at all (it would silently share one slot
+  across threads). The key's destructor frees the block on thread exit. Under
+  `tur --interpret` it is a plain global -- turi has no user-reachable thread
+  spawn, so there is no second thread for it to differ on. Does not combine with
+  `^atomic`, and its initializer may not reference another `^thread-local`.
 - **`^atomic` on a top-level `def`**, behind `--enable=global-state`. Every read
   of a `^atomic ^mut` global lowers to a sequentially-consistent load and every
   `set!` to a sequentially-consistent store. The practical benefit is as much

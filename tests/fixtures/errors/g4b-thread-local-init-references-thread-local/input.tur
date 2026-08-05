@@ -1,0 +1,14 @@
+;; G4b (plan section 13.7): a `^thread-local` initializer may not reference
+;; another `^thread-local`.  Per-thread initialization order is source order,
+;; and allowing cross-references would make that order observable and therefore
+;; load-bearing, for no demonstrated need.  Read it inside a function instead,
+;; where the accessor materializes both in whatever order the reads happen.
+;;
+;; Rejecting is the direction that stays correct if the order ever changes.
+(def ^thread-local base 10)
+
+(def ^thread-local derived (+ base 5))
+
+(defn main [] : int
+  (println derived)
+  0)
