@@ -57,13 +57,14 @@ does not share an investigation with the three above.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [handler-clause-statement-if-ices-emitter](handler-clause-statement-if-ices-emitter.md) | high | an `if` in statement position inside a `handle` clause ICEs the emitter; `while`/`when` desugar into it |
+| [handler-clause-statement-if-ices-emitter](handler-clause-statement-if-ices-emitter.md) | medium | **partially fixed 2026-08-05.** The `if` and `when` shapes compile and run; the ICE is gone everywhere (now a located error). A `while` in a clause is still unsupported -- `CT_LOOP` has no arm in `handle_case_ok`. Three root causes, not one; the coloring analysis was never involved |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
 
 Adjacent by symptom (both make the textbook state handler unwritable, and
 `docs/guides/effects-vs-monads.md` documents both under "Handler-clause
-restrictions"), but they are different mechanisms: one is CPS coloring, one is
-capture admission.
+restrictions"), but they are different mechanisms: one is CPS *admission* (not
+coloring -- the 2026-08-05 investigation disproved that, and the first row's
+one-liner used to say coloring), one is capture admission.
 
 ## Interpreter (`--interpret` / `tur repl`) divergence
 

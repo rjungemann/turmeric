@@ -644,9 +644,10 @@ one:
 - `k` is type-erased inside the clause and cannot be passed to a helper
   expecting a `cont<...>`. Route the resumption strategy through the effect
   payload instead (as the nondeterminism example above does).
-- An `if` in statement (non-tail) position inside a clause currently ICEs the
-  compiler. Keep conditionals in tail position, or hoist the branch into a
-  helper called from the clause.
+- A `while` loop in a clause is not supported. The compiler says so with a
+  located error naming this workaround: hoist the loop into a helper function
+  and call it from the clause. Conditionals -- `if` in either tail or statement
+  position, and `when` -- are fine.
 
 See `docs/reported/` for the open compiler defects behind the last two.
 

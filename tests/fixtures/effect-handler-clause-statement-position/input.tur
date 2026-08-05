@@ -1,0 +1,37 @@
+;; Regression: conditionals in STATEMENT position inside a `handle` clause.
+;;
+;; A handler clause body whose value is not the conditional itself -- the `if`
+;; is discarded by a `do`, or is a one-armed `when` -- lowers to a join point
+;; (CT_LETCONT) rather than a tail CT_IF.  handle_case_ok had no arm for that,
+;; and a one-armed `if` translated to CT_UNSUPPORTED, so both shapes evicted
+;; the enclosing function from the CPS backend.  Its `perform` then reached the
+;; direct emitter, which has no lowering for one and aborted the compiler.
+;;
+;; The assertions are about VALUES, not just about compiling: the discarded
+;; branch must still run its side effects, and the untaken branch must not.
+(defeffect Ask [] : int)
+
+(defn main [] : int
+  ;; if in statement position, value discarded
+  (println (handle (perform (Ask)) (Ask [] k)
+             (do (if (> 1 0) 1 2) 99)))
+
+  ;; one-armed `when`, taken and untaken
+  (println (handle (perform (Ask)) (Ask [] k)
+             (do (when (> 1 0) (println "when-taken")) 99)))
+  (println (handle (perform (Ask)) (Ask [] k)
+             (do (when (< 1 0) (println "unreachable")) 99)))
+
+  ;; the discarded branch's side effect on a mutable local is observable
+  (println (handle (perform (Ask)) (Ask [] k)
+             (let [^mut i 0] (when (> 1 0) (set! i 7)) i)))
+  (println (handle (perform (Ask)) (Ask [] k)
+             (let [^mut i 0] (when (< 1 0) (set! i 7)) i)))
+
+  ;; a statement-position branch that prints on both sides, then a value
+  (println (handle (perform (Ask)) (Ask [] k)
+             (do (if (> 1 0) (println "then") (println "else")) 42)))
+
+  ;; still works in tail position, which is what already compiled
+  (println (handle (perform (Ask)) (Ask [] k) (if (> 1 0) 1 2)))
+  0)

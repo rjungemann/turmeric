@@ -1855,13 +1855,53 @@ static bool await_cont_reset_ok(const CTerm *t) {
 /* A handler case body (C4): straight-line with `resume` (dk_invoke), delivered
  * to the prompt (KK_PROMPT) as a scalar.  resume.k is the continuation binding
  * (not scalar-checked); resume.v and other atoms are scalar. */
+static bool handle_case_ok_rec(const CTerm *t);
+
+/* Admission entry for a handler CASE body.
+ *
+ * emit_lifted gives each case its own DK frame with a fresh join stack, so
+ * every KK_VAR jump the case makes must name a join the case itself binds --
+ * a jump that escapes to an enclosing join has no slot in the frame.  That is
+ * exactly the check joins_closed_rec performs with a fresh def set, and it is
+ * already what the nested-handle arm of joins_closed_rec applies to a case
+ * body one level down; this applies it at the top level too, which is what
+ * makes admitting CT_LETCONT / KK_VAR below safe rather than hopeful. */
 static bool handle_case_ok(const CTerm *t) {
+    if (!handle_case_ok_rec(t)) return false;
+    uint32_t def[CC_MAX_BOUND];
+    return joins_closed_rec(t, def, 0);
+}
+
+static bool handle_case_ok_rec(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
         case CT_APPCONT:
+            /* A jump to a join the case binds (KK_VAR), or the case's own
+             * delivery of its value to the handle's prompt.  The KK_VAR arm is
+             * what lets a statement-position conditional -- which lowers to
+             * `letcont j(x) = <rest> in if c then (j a) else (j b)` -- land in
+             * a case body; handle_case_ok's joins_closed_rec has already
+             * established that j is bound within this case. */
+            if (t->as.appcont.kont.kind == KK_VAR)
+                return atom_ok(&t->as.appcont.v);
             return t->as.appcont.kont.kind == KK_PROMPT && atom_ok(&t->as.appcont.v);
+        case CT_LETCONT:
+            /* A join point in the case body.  emit_term lowers CT_LETCONT as
+             * local control flow (a slot plus a label) inside whatever frame it
+             * is emitting, and emit_lifted emits a case through emit_term, so
+             * the join lands in the case's own frame.  Without this arm a
+             * conditional in NON-TAIL position inside a handler clause evicted
+             * the enclosing function from the CPS backend, and its `perform`
+             * then reached the direct emitter, which has no lowering for one.
+             * (A `while` in a clause is a different blocker -- CT_LOOP, still
+             * unadmitted here.)  See
+             * docs/reported/handler-clause-statement-if-ices-emitter.md. */
+            return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty)
+                    || t->as.letcont.param.ty == TY_NIL)
+                && handle_case_ok_rec(t->as.letcont.jbody)
+                && handle_case_ok_rec(t->as.letcont.body);
         case CT_LETVAL:
-            return atom_ok(&t->as.letval.v) && handle_case_ok(t->as.letval.body);
+            return atom_ok(&t->as.letval.v) && handle_case_ok_rec(t->as.letval.body);
         case CT_LETPRIM:
             /* println/print IS emittable in a lifted handler case: emit_term's
              * CT_LETPRIM path emits the print statement (emit_println) and binds
@@ -1875,26 +1915,26 @@ static bool handle_case_ok(const CTerm *t) {
             if (!is_println_shape(t->as.letprim.spec->shape))
                 for (uint32_t i = 0; i < t->as.letprim.n; i++)
                     if (!atom_ok(&t->as.letprim.args[i])) return false;
-            return handle_case_ok(t->as.letprim.body);
+            return handle_case_ok_rec(t->as.letprim.body);
         case CT_LETCALL:
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
-            return handle_case_ok(t->as.letcall.body);
+            return handle_case_ok_rec(t->as.letcall.body);
         case CT_RESUME:
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
-                && handle_case_ok(t->as.resume.body);
+                && handle_case_ok_rec(t->as.resume.body);
         case CT_LETRAW:
-            return letraw_ok(t) && handle_case_ok(t->as.letraw.body);
+            return letraw_ok(t) && handle_case_ok_rec(t->as.letraw.body);
         case CT_CALLCC:
             /* A call/cc / escape hoisted into a handler case body (e.g. `(resume k
              * (+ 1 (escape f)))`): emit_lifted emits the case through emit_term,
              * which lowers CT_CALLCC via the native setjmp landing (emit_callcc),
              * so it stays in the CT-IR path rather than delegating to emit_cps.c. */
             return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
-                && handle_case_ok(t->as.callcc.body);
+                && handle_case_ok_rec(t->as.callcc.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
-                && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);
+                && handle_case_ok_rec(t->as.if_.then_) && handle_case_ok_rec(t->as.if_.else_);
         case CT_PERFORM:
             /* Effect re-opening (docs/reported/cps-handler-case-effect-reopening-
              * needs-emission.md): a handler CASE body that itself performs an
@@ -1907,7 +1947,7 @@ static bool handle_case_ok(const CTerm *t) {
              * `k`), so it is admitted by handle_case_ok, not perform_body_ok. */
             for (uint32_t i = 0; i < t->as.perform.n; i++)
                 if (!atom_ok(&t->as.perform.args[i])) return false;
-            return handle_case_ok(t->as.perform.body);
+            return handle_case_ok_rec(t->as.perform.body);
         default: return false;
     }
 }
