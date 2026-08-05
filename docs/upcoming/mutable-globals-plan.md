@@ -1,6 +1,8 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
 > **Status:** **G1 LANDED 2026-08-05** (see §10). G2-G5 proposed.
+> All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
+> strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
 > [`def-define-consolidation-plan.md`](def-define-consolidation-plan.md) §8.4
 > named ("giving mutable globals a concurrency story is its own plan, not a
@@ -484,15 +486,12 @@ Recorded so the reasoning survives; none blocks G1.
    promise about mutable global state pay out in proofs. G2 ships `#writes`
    only, and `#reads` keeps its hard error for a non-parameter name. A narrow
    read-side check is recommended as a companion (§12.3), not a prerequisite.
-3. **Should `^atomic` imply `^mut`?** An atomic global that is never written is
-   just a global. Leaning yes-implies, so `(def ^atomic n 0)` is writable, but
-   it makes `^atomic` the only annotation that grants mutability and that is a
-   surprise. Resolve at G4.
-4. **Interaction with `--shared` and separate compilation.** §1.1 establishes
-   that `tur build <dir>` is single-TU today, so nothing forces the question
-   now. A future separately-compiled global needs real linkage (`extern` plus
-   one definition), and G3's read-only rule would then have a linker-level
-   counterpart worth having.
+3. **Should `^atomic` imply `^mut`?** **ANSWERED -- §13.6.** No: keep them
+   orthogonal and require `(def ^atomic ^mut n 0)`, matching the `^unique ^mut`
+   idiom the codebase already uses.
+4. **Interaction with `--shared` and separate compilation.** **ANSWERED --
+   §13.2.** `--shared` already drops `static`, so user globals are exported
+   symbols today and the unstable binding-id suffix is part of that ABI.
 
 ---
 
@@ -1009,3 +1008,190 @@ non-parameter name. If a read-side story is wanted later it should arrive
    obligation is *proved*, not unknown, so strictness has nothing to escalate.
    Worth confirming that is intended, since a user reaching for
    `--strict-refine` may reasonably expect it to catch exactly this.
+
+---
+
+## 13. Research: the remaining sub-questions (2026-08-05)
+
+Closing out the sub-questions raised in §9, §11.6, and §12.6. **[ran]** = probe
+executed; **[read]** = from the tree.
+
+### 13.1 Should `--strict-refine` reject a trust-based proof? -- NO
+
+**Recommendation: leave `--strict-refine` alone. Escalating there would delete
+the feature's only real consumer.**
+
+`--strict-refine` means "hard-fail refinement obligations the solver **cannot
+prove**" [read: `main.c` help text]. Mechanically it escalates `TUR-W0372`
+(undecided) from warning to error (`refine_discharge.c`). In §12.2's program the
+obligation **is proved** -- so strictness has nothing to escalate, and that is
+it working as designed. The gap is not in strictness; it is that the promise
+backing the proof is unchecked.
+
+The tempting change -- "strict should also refuse a proof that rests on a
+trusted `#reads` override" -- is **wrong**, and measurably so. Nine fixtures
+combine `#reads` with `--strict-refine` [ran], including the flagship
+`refine-macrogen-foreach` (`for-each-alive!`):
+
+```
+refine-macrogen-crossings   refine-stateful-guard-discharges   refine-template-emitters
+refine-macrogen-foreach     refine-stateful-nonfinal-statement refine-wf3-disjoint-set
+refine-stateful-frozen-macro refine-stateful-resizable-bounds  wf3-borrow-write-free
+```
+
+They exist *because* the override grants the proof. The two features are
+designed to work together: strict says "every crossing must be **decided**", and
+the override is what decides them. Making strict refuse trusted proofs would
+turn all nine into errors and leave `#reads` with no working consumer at all.
+
+**The cheap interim that does work:** ship §12.3's classifier as a **warning
+first** -- "this `#reads` frame omits mutable state the body reads" -- gateless,
+before any refusal. It closes the "you cannot even tell" problem immediately and
+is provably zero-risk for the nine: every one of their measures is inline-C, so
+the default-deny classifier finds no positive evidence and stays silent. §12.2's
+program would warn. Escalating warning -> refusal later is then a gated,
+evidence-backed step rather than a guess.
+
+### 13.2 `--shared` exports user globals, and the mangled suffix is the ABI [ran]
+
+§9's fourth open question asked how separate compilation interacts. Sharper than
+expected:
+
+| Mode | Emitted | `nm` |
+|---|---|---|
+| executable | `static int64_t hits_1327;` | `b` (local) |
+| `--shared` | `int64_t hits_1327;` | `B` (**global**) |
+
+In `--shared` the emitter drops `static`, so every user global becomes an
+exported symbol of the `.so`. Two consequences, neither urgent but both worth
+recording:
+
+- **The binding-id suffix is part of the exported ABI.** `_1327` shifts with any
+  unrelated edit earlier in the unit -- proven in §11.1 by adding a `def` above
+  and watching `counter_1327` become `counter_1328`. Nothing consumes these by
+  name today, so nothing is broken; it does mean the mangling is not a stable
+  interface and should not become one.
+- **Two shared libraries can collide.** Two `.so`s each defining a global that
+  mangles to the same name are a load-time clash under `RTLD_GLOBAL`.
+  Mechanism identified, not reproduced -- flagged rather than claimed.
+
+This does not change any phase of this plan. It does mean H3's read-only-export
+rule (§4.3) has a linker-level counterpart worth having if separate compilation
+grows, exactly as §9.4 suspected.
+
+### 13.3 The 1024-key wall is latent, but `pthread_key_create` is unchecked [ran]
+
+`_SC_THREAD_KEYS_MAX` is 1024 and exactly 1024 keys were creatable (§11.3). The
+tree declares **20** `defdynamic`s total, 4 of them in stdlib, so the wall is
+nowhere near -- this is robustness, not a live risk.
+
+The defect is that the return value is discarded:
+
+```c
+static void _dynvar_init_X(void) {
+    pthread_key_create(&_dynvar_key_X, _dynvar_cleanup_X);   /* rc ignored */
+}
+```
+
+On `EAGAIN` the key is left uninitialized and every later `pthread_getspecific`
+on it is undefined behaviour -- a silent wrong-value failure rather than a
+diagnosable one. A two-line fix (check and `abort()` with a message naming the
+limit). **Independent of this plan**; recorded here because §11.4's design would
+spend one more key, and because a plan that recommends the mechanism should say
+that the mechanism's one failure mode is currently unhandled.
+
+### 13.4 `^thread-local` in the interpreter: a plain global [ran]
+
+turi has no user-reachable thread spawn. The only `pthread_create` in the
+interpreter is `ring_worker_nat` (`interpreter_natives.c`), a thread-ring
+*benchmark* native -- not a general spawn primitive, and not something user
+turmeric reaches. So under `--interpret` a `^thread-local` is observationally a
+plain global, and there is no second thread for it to differ on.
+
+That is a defensible answer, and §11.6.3's point stands: it should be a
+written-down rule (`^thread-local` is accepted and degenerate under turi), not
+an accident. Worth a one-line note in the guide when G4 lands, plus a fixture
+asserting the annotation at least parses and runs there.
+
+### 13.5 `#reads`'s one-parameter limit: a deliberate minimal slice [read]
+
+Deliberate, but as a *slice* rather than an argued permanent limit. The design
+commit is titled "blocker 2 design -- trusted `#reads w`, sound via kept entry
+check", and the guide frames the whole annotation as "the **minimal**, trusted,
+refinement-only slice, shaped so a stronger version can grow from it without a
+rename or a semantics break", explicitly calling it "a coarse (per-argument, not
+per-heap-location) `reads` clause".
+
+So single-parameter is consistent with the stated design, and the asymmetry with
+`#writes`'s bracket form is a consequence of `#writes` having grown later, not a
+considered decision that `#reads` should stay narrower. A measure over two
+frozen resources cannot be expressed today. Nothing here needs it; if the
+read-side plan (§14) is ever written, the bracket form is a natural early item
+and costs nothing semantically.
+
+### 13.6 Should `^atomic` imply `^mut`? -- NO, require both [read]
+
+§9's third open question. **Recommendation: keep them orthogonal.**
+
+`^mut` is the single gate for `set!` -- `elab_forms.c` tests `b->is_mut` at both
+the bare-symbol and the field-write site, and nothing else grants mutability.
+Making `^atomic` a second route would make it the only annotation in the
+language that confers write permission as a side effect, which is exactly the
+kind of surprise the D4 audit existed to remove.
+
+The codebase already composes rather than implies: `^unique ^mut` appears
+together throughout (`tests/fixtures/unique-vec-ops`, sealedlib's
+`^unique ^mut w : W`). `(def ^atomic ^mut n 0)` is one token longer and reads
+honestly; `^atomic` alone should be a diagnostic naming `^mut`, not a silent
+grant.
+
+### 13.7 What a `^thread-local` initializer may see [read]
+
+§11.6.2, resolved as a recommendation rather than left open. Under §11.4's
+design each thread runs the initializers in source order, so:
+
+- Reading a **non**-thread-local global is fine: it was initialized on the main
+  thread by `__tur_module_def_init` before any thread could exist.
+- Reading **another `^thread-local`** is the ordering hazard, and the simplest
+  defensible rule is to reject it outright. Per-thread initialization order is
+  already source order; allowing cross-references would make it observable and
+  therefore load-bearing, for no demonstrated need.
+
+Recommend: **a `^thread-local` initializer may not reference another
+`^thread-local`**, diagnosed by name. Cheap to check with the walk §11.4 needs
+anyway, and looseneable later if anyone asks.
+
+---
+
+## 14. Should the read side get its own plan?
+
+**Yes -- but written as part of G2, not before it, and only if G2 actually
+lands.**
+
+§12 established that the read-side work splits into two pieces with almost
+nothing in common: a small refusal rule that belongs near this work, and a
+general checked `#reads` whose cost is mostly a measure-layer rewrite outside
+the compiler. That is exactly the shape that wants its own document -- this plan
+is about globals, and a `#reads` plan is about the trusted-promise tier as a
+whole (the ECS measures, the inline-C wall, the bracket form of §13.5, the
+CSE/parallelization consumers the guide lists as blocked on checking).
+
+Concretely:
+
+- **In G2's scope:** §12.3's narrow rule, shipped as §13.1's warning first. It
+  is small, it is motivated by this plan's own findings, and splitting it out
+  would strand it.
+- **A new plan, drafted as G2's last step:** everything else on the read side.
+  Name it for the tier, not the annotation -- the subject is "making the trusted
+  refinement claims checkable", of which `#reads` is one instance and the
+  measure layer is the actual blocker. Its §1 is largely written already: §12.1
+  (what `#reads` is), §12.2 (what a broken promise costs, with a running repro),
+  §12.3 (the two bills), §13.5 (the arity slice).
+- **Not before G2.** The findings that justify the plan came out of doing this
+  work; writing it first would be guessing at them. And it must not become a
+  precondition -- §12.4 already established the read side blocks nothing.
+
+The one thing worth doing *immediately*, independent of any plan: §12.6.1's
+fixture. There is currently nothing in the suite pinning what a broken `#reads`
+promise costs, which makes §12.2's behaviour easy to rediscover as a bug. A
+fixture turns the trust boundary from prose into something the suite asserts.
