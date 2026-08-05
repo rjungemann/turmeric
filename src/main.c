@@ -3352,6 +3352,16 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     buf_init(&probe);
     emit_rt_split_source(&probe);
     uint64_t cur = tur_hamt_hash_xxh64(probe.data, probe.len);
+    const char *dbg = getenv("TUR_JIT_SPLIT_DEBUG");
+    if (dbg) {
+        fprintf(stderr, "split-debug: probe=%016llx len=%zu committed=%016llx\n",
+                (unsigned long long)cur, probe.len,
+                (unsigned long long)tur_rt_split_hash);
+        if (dbg[0] == '/' || (dbg[0] && dbg[1] == ':')) {
+            FILE *pf = fopen(dbg, "wb");
+            if (pf) { fwrite(probe.data, 1, probe.len, pf); fclose(pf); }
+        }
+    }
     buf_free(&probe);
     if (cur != tur_rt_split_hash) return false;
     buf_putc(csrc, '\0');

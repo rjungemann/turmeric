@@ -11206,6 +11206,18 @@ void emit_rt_split_source(Buf *out) {
     extern bool g_needs_winsock;
     bool s_hamt = g_needs_hamt, s_regex = g_needs_regex_h;
     bool s_var = g_has_variadics, s_cps = g_cps_path, s_wsk = g_needs_winsock;
+    /* DEDUP-4b interaction: the rc/GC section emits decls-only in archive mode
+     * and full static bodies otherwise, so the canonical text depends on
+     * g_rcgc_from_archive too.  cmd_emit_rt_split forces it true before
+     * calling here, but the S2 engage probe (jit_try_split_preamble) calls
+     * with whatever resolve_rcgc_from_archive decided for this box -- on a
+     * host without the lean runtime archive that is `false`, the probe emits
+     * the bodies flavor, and the hash NEVER matches the committed artifacts.
+     * Net effect: S2 silently disengaged for every program on such hosts.
+     * Force it here, where every caller gets the canonical posture, and
+     * restore on the way out. */
+    bool s_arch = rt_global_from_archive();
+    emit_set_rcgc_from_archive(true);
     g_needs_hamt = true; g_needs_regex_h = true;
     g_has_variadics = true; g_cps_path = true; g_needs_winsock = true;
     g_rt_split_all_gates = true;
@@ -11216,6 +11228,7 @@ void emit_rt_split_source(Buf *out) {
     g_rt_split_all_gates = false;
     g_needs_hamt = s_hamt; g_needs_regex_h = s_regex;
     g_has_variadics = s_var; g_cps_path = s_cps; g_needs_winsock = s_wsk;
+    emit_set_rcgc_from_archive(s_arch);
 }
 
 /* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF
