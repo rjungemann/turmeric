@@ -57,7 +57,7 @@
 
 (defn ref-get [r : RefHandle] : int
   ```c
-  struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
+  struct { int64_t value; } *ref = (void *)(intptr_t)r;
   if (!ref) {
     fprintf(stderr, "ref-get: null ref\n");
     exit(1);

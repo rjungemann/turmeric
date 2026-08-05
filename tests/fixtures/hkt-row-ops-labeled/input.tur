@@ -1,0 +1,55 @@
+;; row-ops-drop-field-names: the row algebra forwards a labeled row's field
+;; names instead of degrading the result to a positional row. Every case here
+;; type-checked before the fix too -- but only because the labels had been
+;; erased, so any two same-shaped rows matched. The companion errors/ fixtures
+;; pin down the mismatches that erasure was hiding.
+(defstruct Frame [^&cols] (n :int))
+
+;; row-canon over labeled rows is permutation-insensitive on (name, type)
+;; pairs. Note both slots are `int`: sorting on type_name alone leaves the two
+;; input orders untouched (a stable sort has nothing to reorder), so the field
+;; name has to lead the sort key for these to canonicalise identically.
+(defn make-ab [n : int] : (Frame (row-canon #row{a : int  b : int}))
+  (:: (make-struct Frame n) (Frame (row-canon #row{a : int  b : int}))))
+
+(defn make-ba [n : int] : (Frame (row-canon #row{b : int  a : int}))
+  (:: (make-struct Frame n) (Frame (row-canon #row{b : int  a : int}))))
+
+(defn use-canon [f : (Frame (row-canon #row{a : int  b : int}))] : int (.n f))
+
+;; row-union keeps both labels, and the empty row is label-neutral (it is the
+;; identity for the operation whether or not the other side carries labels).
+(defn make-union [n : int] : (Frame (row-union #row{id : int} #row{tag : bool}))
+  (:: (make-struct Frame n) (Frame (row-union #row{id : int} #row{tag : bool}))))
+
+(defn use-union [f : (Frame #row{id : int  tag : bool})] : int (.n f))
+
+(defn make-union-empty [n : int] : (Frame (row-union #row{id : int} #row{}))
+  (:: (make-struct Frame n) (Frame (row-union #row{id : int} #row{}))))
+
+;; A union of two identical (name, type) slots dedups to one.
+(defn make-union-dedup [n : int] : (Frame (row-union #row{id : int} #row{id : int}))
+  (:: (make-struct Frame n) (Frame (row-union #row{id : int} #row{id : int}))))
+
+(defn use-id [f : (Frame #row{id : int})] : int (.n f))
+
+;; row-concat preserves order and both sets of labels.
+(defn make-concat [n : int] : (Frame (row-concat #row{id : int} #row{tag : bool}))
+  (:: (make-struct Frame n) (Frame (row-concat #row{id : int} #row{tag : bool}))))
+
+;; row-intersect matches on the (name, type) pair: `id` survives because both
+;; sides label it `id`, and `tag`/`other` drop out even at equal element types.
+(defn make-isect [n : int] : (Frame (row-intersect #row{id : int  tag : bool}
+                                                   #row{id : int  other : bool}))
+  (:: (make-struct Frame n) (Frame (row-intersect #row{id : int  tag : bool}
+                                                  #row{id : int  other : bool}))))
+
+(defn main [] : int
+  (println (use-canon (make-ab 1)))
+  (println (use-canon (make-ba 2)))
+  (println (use-union (make-union 3)))
+  (println (use-id (make-union-empty 4)))
+  (println (use-id (make-union-dedup 5)))
+  (println (use-union (make-concat 6)))
+  (println (use-id (make-isect 7)))
+  0)

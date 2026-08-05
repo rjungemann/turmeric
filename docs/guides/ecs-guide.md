@@ -16,7 +16,7 @@ systems.
 
 For the long-form plan, prerequisites, and where each piece of the
 surface came from, see
-[`docs/upcoming/ecs-spice-plan.md`](../upcoming/ecs-spice-plan.md).
+[`docs/upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md).
 
 ## TL;DR
 
@@ -145,10 +145,31 @@ Entities are 64-bit handles packing (generation, index):
 (world-despawn! (.gens w) e)   ; bumps the generation; dense data not cleared
 ```
 
-Aliveness is a runtime check (`gens[index] == handle's generation`).
-This is the v1 surface; a refinement-typed strict-aliveness API
-(`entity-alive!`) is gated on the refinement-types work, see the
-plan's "Deferred to v2" section.
+Aliveness is a runtime check (`gens[index] == handle's generation`) --
+but note **who runs it**. `sized-alive?` performs the comparison for
+sized worlds; the unsized world exposes no aliveness predicate at all,
+and the `defcomponent-accessors` reads do not consult `gens`. A handle
+whose slot has been despawned reads the old bits. Compare generations
+yourself when a handle may have outlived its entity.
+
+A strict-aliveness API that makes use-after-despawn a *compile* error
+**ships as an opt-in module** -- you opt in by importing it, not by
+setting a flag; refinement checking itself is unconditional in every
+build. The `ecs/refined-world` module's accessor
+`rgworld-get-x!` refines its entity parameter with the impure `#reads`
+measure `rgworld-alive?`, and the read compiles only where aliveness is
+proven -- a guard inside a `frozen` region (which locks out
+`^unique ^mut` despawn, `TUR-E0200`), or the `for-each-alive!` macro,
+which generates the loop, the frozen borrow, and the guard so the body's
+read discharges per-entity. Under `--strict-refine` an unproven read is
+a hard error (`TUR-W0372`). The same surface ships for the REAL sized
+stack via `ecs/sized-refined`: `(sized-defworld-refined GameWorld)`
+emits `GameWorld-alive?` (`#reads`) + `GameWorld-despawn!`
+(`^unique ^mut`), `(sized-defcomponent-accessor-refined GameWorld Pos)`
+emits the cap-gated `get-Pos!` with the refined entity parameter, and
+`(for-each-alive GameWorld w n e body)` iterates with per-entity proofs
+-- all opt-in beside the unchanged forgiving family. See
+[docs/upcoming/v1/ecs-refinement-typed-apis-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-refinement-typed-apis-plan.md).
 
 ## Queries: `for-each` (imperative)
 
@@ -296,8 +317,12 @@ raylib is on the cmake-deps path.
   I1-I6; see
   [docs/guides/substructural-types-guide.md](substructural-types-guide.md)
   for the underlying cap machinery.
-- **Aliveness**: runtime, via generation comparison on every
-  storage access.
+- **Aliveness**: runtime by default, via generation comparison --
+  performed by `sized-alive?` on sized worlds, and **not** performed by
+  the unsized `defcomponent-accessors` read path. Compile-time strict
+  aliveness ships on the `ecs/refined-world` facade -- opting in means
+  importing that module rather than the forgiving one; no flag is
+  involved (see "Entities" above).
 
 ## Cross-world systems
 
@@ -588,7 +613,7 @@ frame; only the world boxes flip per frame as the sim/render state
 advances.
 
 For the shipped plan and motivation, see
-[docs/archive/history/ecs-cross-world-systems-plan.md](../archive/history/ecs-cross-world-systems-plan.md).
+[docs/archive/history/ecs-cross-world-systems-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md).
 
 ## Sized worlds -- compile-time rectangular iteration
 
@@ -720,12 +745,16 @@ intended sweet spot.
 ## Where to look next
 
 - `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` -- the
-  refinement-typed roadmap (entity-alive!, refinement-typed world
-  bounds) gated on refinement types landing.
+  refinement-typed roadmap: strict aliveness (RE1, shipped 2026-07-26
+  as `ecs/refined-world` + `for-each-alive!`), bounded slot indices
+  (RE2, gated on loop invariants and a profile).
+- `docs/upcoming/v1/ecs-component-set-bounds-plan.md` -- the structural
+  "any world with `Pos` and `Vel`" bound, split out of the above.
 - `../guides/hkt-guide.md` -- the variadic-HKT-rows mechanism behind
   the row-typed `Query` value.
 - `../guides/substructural-types-guide.md` -- the substructural
-  capability machinery that backs the planned `:writes` enforcement.
+  capability machinery that backs the shipped `:writes` enforcement
+  and the `frozen` region's borrow semantics.
 - `../../turmeric-spices/spices/ecs/README.md` -- the ECS spice
   release notes and known limitations.
 - `../../turmeric-spices/spices/ecs-raylib/README.md` -- the raylib

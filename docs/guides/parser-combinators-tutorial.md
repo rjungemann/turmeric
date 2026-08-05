@@ -25,7 +25,7 @@ The runnable end-to-end version of every snippet here lives in
 > **Note.** The snippets below use the `#\<char>` character-literal
 > syntax (`#\+` reads as `43`, `#\0` as `48`, `#\space` as `32`).
 > That syntax is a v1 legibility slice; see
-> [`docs/archive/legible-char-literals-plan.md`](../archive/legible-char-literals-plan.md).
+> [`docs/archive/legible-char-literals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/legible-char-literals-plan.md).
 > A `#\<char>` literal is just an `:int` -- the reader emits the byte
 > code, so it composes with `=` and arithmetic exactly like the raw
 > integer it replaces. The runnable fixture uses `#\` throughout.
@@ -153,9 +153,9 @@ per element type: `or-int` / `or-expr`, `map-int-to-expr`) as a
 pedagogical choice -- the shapes are easier to read when the element
 type is spelled out. The polymorphic spelling `(or-parser [A] p q)`
 also works: both the codegen drop
-([archived](../archive/history/poly-defn-inner-lambda-codegen.md))
+([archived](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-defn-inner-lambda-codegen.md))
 and the follow-on call-site element inference
-([archived](../archive/history/poly-combinator-application-element-inference.md))
+([archived](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-combinator-application-element-inference.md))
 were resolved on 2026-07-02, and the compiler now infers `A` through
 the returned closure at the application site.
 
@@ -340,7 +340,7 @@ in `paren-expr`. It was originally load-bearing because `expr-parse`
 is defined *later* in the file (mutual recursion) and the forward-decl
 pass didn't yet record the compound parametric return type, so the
 match binder fell back to a placeholder. That gap is resolved
-([archived](../archive/history/defdata-parametric-forward-decl-inference.md),
+([archived](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/defdata-parametric-forward-decl-inference.md),
 2026-07-02); the ascription is now optional but the tutorial fixture
 still carries it verbatim.
 
@@ -454,20 +454,20 @@ even for a tutorial-sized parser.
   numbers-with-exponents are the hard cases and need only the patterns
   here. See `tests/fixtures/parsec-json-subset/` for a starting
   point.
-- **Production library:** [`stdlib/parsec.tur`](../../stdlib/parsec.tur)
+- **Production library:** [`stdlib/parsec.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/parsec.tur)
   has performance-tuned versions of every combinator plus `pstring`,
   `parse-value`, and friends -- built on top of inline-C for the tight
   loops.
 - **Real strings:** add `(import cstr :refer [cstr-len cstr-nth])` and
   the input list of ASCII ints goes away -- the parser takes a `:cstr`
   directly. `stdlib/cstr.tur` shipped 2026-07-01
-  ([archived report](../archive/history/no-cstr-byte-primitives-pure-turmeric.md)).
+  ([archived report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/no-cstr-byte-primitives-pure-turmeric.md)).
 - **Polymorphic combinators:** the `or-int` / `or-expr` (and every
   other monomorphic pair in the tutorial) can be collapsed to a single
   `(or-parser [A] p q)`. Both the codegen drop and the call-site
   element inference gap that used to block this were resolved 2026-07-02
-  ([codegen](../archive/history/poly-defn-inner-lambda-codegen.md),
-  [inference](../archive/history/poly-combinator-application-element-inference.md));
+  ([codegen](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-defn-inner-lambda-codegen.md),
+  [inference](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-combinator-application-element-inference.md));
   keeping the monomorphic spelling in the tutorial is a pedagogical
   choice, not a compiler limit.
 - **Error positions and recovery:** the current library returns "no

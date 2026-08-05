@@ -1,0 +1,66 @@
+; CG5 (gc-cycle-collection-followup-plan): GC_AUTO must reclaim cycles with NO
+; (gc!) call anywhere in the program.
+;
+; Every other mode waits for the program to ask.  AUTO collects at allocation
+; checkpoints (gc_on_alloc_checkpoint), on two triggers: the candidate buffer
+; reaching GC_SUSPECT_THRESHOLD, or GC_AUTO_ALLOC_INTERVAL allocations since the
+; last collection.  Both exist because either alone has a blind spot -- a
+; candidate-count trigger misses a program that allocates heavily but buffers
+; few candidates, and an allocation-count trigger alone makes a cycle-churning
+; program wait out the full interval.
+;
+; Note there is deliberately no (gc!) below.  Under (gc-enable!) this same
+; program leaks every cycle; the assertion is that AUTO does not.
+;
+; Requires --enable=cycle-gc (see expected.flags).
+(defstruct S :move [next : rc<S>])
+
+(defn null-rc-s [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+; The no-growth assertion reads the CG6 collector counter, not a malloc probe.
+; Every value this fixture leaks-or-frees is an rc<T> control block, and each
+; one is registered at rc_cb_alloc_kinded and unregistered when it is freed --
+; by the collector OR by plain refcounting -- so (gc-live-blocks) is an exact,
+; program-scoped count of what has not been reclaimed.
+;
+; It replaced a malloc probe (mallinfo2 / malloc_zone_statistics) reading the
+; PROCESS heap, which was blind or wrong four different ways: vacuous under
+; ASan on glibc, quarantine-inflated under ASan on Darwin, reading the
+; COMPILER's heap under one-process `tur jit`, and hardcoded to 0 on any other
+; libc.  See the full table in tests/fixtures/gc-collects-strong-cycle/input.tur
+; and docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md.
+
+(defn build-cycle [] : int
+  (let [s1 (rc/of (make-struct S (null-rc-s)))
+        s2 (rc/of (make-struct S (rc/clone s1)))]
+    (set! (.next s1) (rc/clone s2))
+    0))
+
+(defn run [n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (build-cycle)                 ; <- no (gc!) here; AUTO must do it
+      (set! i (+ i 1))))
+  0)
+
+(defn main [] : int
+  (gc-auto!)
+  (run 20000)                       ; warm up; let AUTO reach steady state
+  (let [before (gc-live-blocks)]
+    (run 20000)
+    (let [after (gc-live-blocks)]
+      ; Steady state: automatic collection keeps the live set flat.  A
+      ; tolerance rather than == 0 because AUTO collects on an interval, so up
+      ; to one interval's worth of cycles is legitimately still uncollected at
+      ; either sample point.
+      ;
+      ; 512 blocks, against a measured residual of exactly 64 (identical on the
+      ; cc and jit paths, sanitized or not -- the counter is deterministic where
+      ; the old byte probe was not).  8x headroom over the real residual, and
+      ; still two orders of magnitude under the pre-CG5 failure, which leaks
+      ; both blocks of all 20000 pairs.
+      (println (if (< (- after before) 512) 0 (- after before)))
+      0)))

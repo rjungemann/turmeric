@@ -215,10 +215,62 @@ bool g_dump_mono_specs = false;
  * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
 bool g_dump_cps_mono = false;
 
-/* F3: enables the `async`/`await` heap-continuation representation; flipped by
- * the `cps-async` experiment.  See globals.h and
- * docs/archive/compiled-async-heap-continuations-plan.md. */
-bool g_opt_cps_async = false;
+/* E7 (v2 cps-dk-sole-effect-lowering-plan): enables the trampolined tail-resume
+ * lowering -- a perform-continuation ending in a tail call is admitted as a
+ * DKK_RESUME_FRAME and its handler tail-resume unwinds to the entry driver
+ * (meta-stack) instead of resuming inline, keeping deep effectful tail-recursion
+ * flat. Flipped by the `cps-tramp-resume` experiment; read by the CPS-IR
+ * classifier (emit_cps_ir.c) and gates the trampoline runtime emission. */
+bool g_opt_cps_tramp_resume = true;
+
+/* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
+ * captured into a multi-shot cloneable continuation (with the per-frame env
+ * clone/drop teardown) is now unconditional; the `owning-cloneable-capture`
+ * experiment row is retired (moved to GRADUATED[] in experiments.c) and a
+ * lingering --enable is a TUR-W0063 no-op.  The bit stays defined and true so
+ * the admission predicates that read it stay always-on (mirrors g_gadt_enabled /
+ * g_opt_cps_tramp_resume).  See
+ * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+bool g_opt_owning_cloneable_capture = true;
+
+/* CG5 (cycle-gc experiment): admit `(gc-auto!)` -- automatic, allocation-driven
+ * cycle collection.  Off by default; the collector's timing becomes implicit
+ * when it is on, which is exactly what the experiment gate exists for.  See
+ * docs/upcoming/v1/gc-cycle-collection-followup-plan.md. */
+bool g_opt_cycle_gc = false;
+/* J1 (jit-engine-plan): the `jit` experiment's enable bit -- gates the
+ * `tur jit` subcommand until graduation. */
+bool g_opt_jit = false;
+
+/* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI is
+ * unconditional; the enable bit and its codegen gates are gone.  See
+ * docs/upcoming/closure-drop-glue-plan.md. */
+
+/* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}` is
+ * unconditional; the g_opt_refined enable bit and its elaboration gates are
+ * gone.  See docs/upcoming/v1/refined-graduation-plan.md. */
+
+/* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `(defopaque H :int
+ * :sealed)` makes `::` refuse to convert between H and its representation type
+ * outside the module that declared H, closing the extract-reconstruct aliasing
+ * hole that bounds every guarantee built on an opaque handle.  Off by default;
+ * when off, `:sealed` still PARSES but imposes nothing, so a spice can adopt it
+ * without breaking consumers who have not enabled the experiment. */
+bool g_opt_sealed_opaque = false;
+
+/* write-frames (docs/upcoming/checked-write-frames-plan.md): `#writes w` /
+ * `#writes [a b]` declares which of a function's arguments its body may write.
+ * Off by default; when off the annotation still PARSES and is recorded but
+ * nothing checks it and nothing acts on it, so a spice can adopt it without
+ * breaking consumers who have not enabled the experiment. */
+bool g_opt_write_frames = false;
+
+/* --strict-refine: hard-fail on any obligation the chain could not prove. */
+bool g_strict_refine = false;
+
+/* lang-layers L4: set when a project manifest declared an `:experiments` key.
+ * See globals.h. */
+bool g_manifest_experiments_scoped = false;
 
 
 /* ---------------------------------------------------------------------------

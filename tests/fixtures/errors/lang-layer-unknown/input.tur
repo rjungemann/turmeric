@@ -1,0 +1,2 @@
+#lang turmeric boguslayer
+(defn main [] : int 0)

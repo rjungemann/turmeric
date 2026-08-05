@@ -32,6 +32,41 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
     return def;
 }
 
+/* rc-field-read-into-var-double-free: peel type ascriptions and return the
+ * EX_GET_FIELD when `init` reads an owning `rc<T>` FIELD directly (e.g.
+ * `(.r o)` / `(:: (.r o) rc<int>)`), or NULL otherwise.
+ *
+ * Reading an `rc` field is a shared-ownership borrow: the source struct still
+ * owns that field (a by-value local releases it via its scope-exit field
+ * auto-drop, an `rc/of`-wrapped struct via its control-block drop glue, a
+ * borrowed parameter via its caller).  Binding the raw word into a new
+ * rc-managed local therefore aliases the control block WITHOUT incrementing the
+ * strong count, yet that new binding gets its own scope-exit decrement -- two
+ * decrements against one +1 count => double free.  The caller wraps such an init
+ * in EX_RC_CLONE so the read clones (increments) the count, making the new
+ * binding a genuine second owner that balances its own decrement. */
+static Expr *elab_rc_field_read_init(Expr *init) {
+    Expr *cur = init;
+    while (cur && cur->kind == EX_ASCRIBE)
+        cur = cur->as.ascribe_.inner;
+    if (cur && cur->kind == EX_GET_FIELD && cur->type.kind == TY_RC)
+        return cur;
+    return NULL;
+}
+
+/* local-struct-drop: does field `fi` own a BOXED fn-field?  Such a field holds a
+ * heap fat-closure handle (`{shim, fn}` box, or a capturing env) that the struct
+ * drop glue frees via `free((void *)f)`.  A by-value local carrying one is freed
+ * at scope exit by the direct emitter (Binding.drops_fn_fields), NOT an injected
+ * defer -- a `(drop! (.fn o))` defer reads a fat-fn field the CPS backend's
+ * continuation-capture admission rejects, evicting a colored fn.  An UNboxed
+ * fn-field is a bare fn pointer (not heap) and is skipped. */
+static bool elab_field_is_boxed_fnfield(const CtorDef *ctor, uint32_t fi) {
+    return ctor->fields[fi].kind == TY_FN && ctor->fields[fi].full_type &&
+           ctor->fields[fi].full_type->kind == TY_FN &&
+           ctor->fields[fi].full_type->as.fn.boxed;
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_internal_defines -- rewrite a body window that may contain
@@ -177,6 +212,52 @@ Expr *elab_define_error(Elab *e, const Form *call) {
               "define is only valid as a body form (in defn, fn, let, or do); "
               "use def for top-level bindings");
     return NULL;
+}
+
+/* closure-drop-glue (automatic R3a): a let-binding whose type is a MOVE-ONLY
+ * (non-Clone) Drop-instance OPAQUE newtype -- e.g. httpd's `Handler` -- carries a
+ * heap fat-closure onion it solely owns.  Such a binding gets the same scope-exit
+ * auto-drop the TY_REF (rc/ref) path gets, but dispatched through the type's Drop
+ * instance (which routes to TUR_CLOSURE_DROP) instead of the `drop!`->free
+ * builtin (a bare free of the past-header fat pointer is the interior-free abort).
+ *
+ * Restricted, in the conservative "only ever greenlight a drop" spirit, to:
+ *   - an opaque ADT with a Drop instance and NO Clone instance (sole-owner, so a
+ *     single scope-exit release is correct -- a Clone/refcounted type like String
+ *     balances via capture retain/release, not a let scope-exit drop), and
+ *   - an initializer that is a genuine fresh-producing CALL (optionally ascribed),
+ *     so the binding owns a fresh value rather than aliasing a borrowed handle.
+ * The per-binding move/consume filtering (is_moved / is_linear_consumed /
+ * is_binding_consumed) is applied by the injection loops exactly as for TY_REF, so
+ * a Handler handed to a consumer (server constructor / httpd-call) that moves it is
+ * NOT double-dropped.  Returns the resolved Drop instance (for the method binding)
+ * or NULL when the binding is not a closure-drop opaque. */
+static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
+                                                           Expr *init) {
+    if (!b || !init) return NULL;
+    /* opaque ADT newtype only */
+    if (b->type.kind != TY_ADT || !b->type.as.adt_.def ||
+        !b->type.as.adt_.def->is_opaque)
+        return NULL;
+    /* fresh-producing call initializer (peel ascriptions) */
+    const Expr *pinit = init;
+    while (pinit && pinit->kind == EX_ASCRIBE) pinit = pinit->as.ascribe_.inner;
+    if (!pinit || pinit->kind != EX_CALL) return NULL;
+    /* Drop instance present, Clone instance absent (move-only sole owner) */
+    const Symbol *drop_name  = intern_cstr(e->st, "Drop");
+    const Symbol *clone_name = intern_cstr(e->st, "Clone");
+    TypeClass *drop_tc  = typeclass_env_lookup_typeclass(&e->typeclass_env, drop_name);
+    TypeClass *clone_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, clone_name);
+    if (!drop_tc) return NULL;
+    struct TypeClassInstance *di =
+        typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, &b->type, 1);
+    if (!di || di->n_method_impls == 0 || !di->method_impls[0] ||
+        !di->method_impls[0]->binding)
+        return NULL;
+    if (clone_tc &&
+        typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &b->type, 1))
+        return NULL;   /* Clone == shared refcount owner; not a sole-owner drop */
+    return di;
 }
 
 /* ---- special forms ---- */
@@ -680,8 +761,18 @@ Expr *elab_let(Elab *e, const Form *call) {
             /* Upgrade copy_kind to CK_LINEAR on the binding's type */
             b->type.copy_kind = CK_LINEAR;
         }
-        /* UT0: Mark binding as unique if annotated with ^unique */
-        if (is_unique_ann) {
+        /* UT0: Mark binding as unique if annotated with ^unique.
+         *
+         * closure-capture-escapes-linearity: also when the initializer is a
+         * CLOSURE that inherited CK_UNIQUE from a captured unique value it
+         * consumes (elab_fns.c).  Deliberately narrower than the CK_LINEAR case
+         * above, which accepts any initializer type: CK_UNIQUE is carried by
+         * ordinary `ref<T>` values too, so inferring from it in general would
+         * silently make every `(let [r (ref 7)] ...)` unique -- a much larger
+         * behaviour change than this report calls for.  A TY_FN is the only
+         * shape that can pick up CK_UNIQUE the new way. */
+        if (is_unique_ann
+            || (init->type.kind == TY_FN && init->type.copy_kind == CK_UNIQUE)) {
             b->is_unique = true;
             b->type.copy_kind = CK_UNIQUE;
         }
@@ -778,6 +869,30 @@ Expr *elab_let(Elab *e, const Form *call) {
             if (!binding_moved_during_init) { fprintf(stderr, "tur: oom\n"); abort(); }
         }
         
+        /* RT1: a `let` bound directly to a lambda literal inherits that
+         * lambda's contract parameters, so `(let [f (fn [x : Pos] ...)] (f 0))`
+         * checks its argument the way a call to a named function does.  Read
+         * straight off the init expression's FnDef rather than chasing the
+         * closure-binding graph: a non-capturing lambda has no closure box, so
+         * closure_fn_binding is not set for it and that route would miss
+         * exactly the simplest case. */
+        {
+            /* A non-capturing lambda is returned as an EX_VAR naming its lifted
+             * thunk binding; a capturing one as an EX_FN_DEF.  Both carry the
+             * contract parameters on the FnDef's binding. */
+            const Binding *lam = NULL;
+            if (init && init->kind == EX_VAR)
+                lam = init->as.var.binding;
+            else if (init && init->kind == EX_FN_DEF && init->as.fn_def_.fn)
+                lam = init->as.fn_def_.fn->binding;
+            if (lam && lam->refine_param_preds) {
+                b->refine_param_preds = lam->refine_param_preds;
+                b->refine_param_vars  = lam->refine_param_vars;
+                b->refine_param_names = lam->refine_param_names;
+                b->n_refine_params    = lam->n_refine_params;
+            }
+        }
+
         /* Propagate closure metadata through lets so a binding produced by a
          * closure literal or a closure-returning call remains callable with the
          * underlying thunk signature. */
@@ -890,6 +1005,13 @@ Expr *elab_let(Elab *e, const Form *call) {
             has_ref_bindings = true;
             break;
         }
+        /* closure-drop-glue (automatic R3a): a move-only Drop-instance opaque
+         * (Handler) also needs the do-wrap so its scope-exit drop can be
+         * appended.  Over-detecting is harmless (the injection loop re-checks). */
+        if (binding_closure_drop_inst(e, binds[k].binding, binds[k].init)) {
+            has_ref_bindings = true;
+            break;
+        }
     }
 
     /* The binding_moved_during_init array (built during the binding loop) records which
@@ -994,6 +1116,15 @@ Expr *elab_let(Elab *e, const Form *call) {
                     !is_binding_consumed(body, binds[k].binding)) {
                     n_refs++;
                 }
+                /* closure-drop-glue (automatic R3a): count a move-only Drop opaque
+                 * (Handler) binding not moved/consumed by scope exit -- same move
+                 * filters as the ref path, so a handed-off Handler is not dropped. */
+                else if (binding_closure_drop_inst(e, binds[k].binding, binds[k].init) &&
+                         !binding_moved_during_init[k] &&
+                         !binds[k].binding->is_moved &&
+                         !is_binding_consumed(body, binds[k].binding)) {
+                    n_refs++;
+                }
             }
             
             if (n_refs > 0) {
@@ -1065,11 +1196,53 @@ Expr *elab_let(Elab *e, const Form *call) {
                         
                         defer_expr->as.defer_.captures = captures;
                         defer_expr->as.defer_.n_captures = n_captures;
-                        
+
                         new_items[defer_idx++] = defer_expr;
                     }
+                    /* closure-drop-glue (automatic R3a): a move-only Drop opaque
+                     * (Handler) -- inject `(defer (<Drop.drop> b))`, dispatching
+                     * through the Drop instance's method (TUR_CLOSURE_DROP) rather
+                     * than drop!->free (a bare free of a headered onion aborts). */
+                    else {
+                        struct TypeClassInstance *di =
+                            binding_closure_drop_inst(e, binds[k].binding, binds[k].init);
+                        if (di && !binding_moved_during_init[k] &&
+                            !binds[k].binding->is_moved &&
+                            !is_binding_consumed(body, binds[k].binding)) {
+                            Binding *dm = di->method_impls[0]->binding;
+                            Expr *var_expr = expr_new(e->arena, EX_VAR,
+                                                      binds[k].binding->type, call->span);
+                            var_expr->as.var.binding = binds[k].binding;
+
+                            Expr *drop_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
+                            drop_call->as.call_.fn_binding = dm;
+                            drop_call->as.call_.n_args = 1;
+                            drop_call->as.call_.args =
+                                (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                            drop_call->as.call_.args[0] = var_expr;
+
+                            Expr *defer_expr = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
+                            defer_expr->as.defer_.body = drop_call;
+                            uint32_t n_free = 0;
+                            Binding **free_vars =
+                                collect_free_vars(drop_call, NULL, 0, NULL, 0, &n_free);
+                            Binding **captures = NULL;
+                            uint8_t n_captures = 0;
+                            if (n_free > 0) {
+                                captures = (Binding **)arena_alloc(
+                                    e->arena, n_free * sizeof(Binding *));
+                                memcpy(captures, free_vars, n_free * sizeof(Binding *));
+                                n_captures = (uint8_t)n_free;
+                            }
+                            free(free_vars);
+                            defer_expr->as.defer_.captures = captures;
+                            defer_expr->as.defer_.n_captures = n_captures;
+
+                            new_items[defer_idx++] = defer_expr;
+                        }
+                    }
                 }
-                
+
                 /* Update the body with new items */
                 body->as.do_.items = new_items;
                 body->as.do_.n = new_n;
@@ -1115,6 +1288,46 @@ Expr *elab_let(Elab *e, const Form *call) {
     }
 
     if (has_rc_bindings && body && body->kind == EX_DO) {
+        /* rc-field-read-into-var-double-free: BEFORE injecting the scope-exit
+         * auto-drops below (which mutate `body` to add `(defer (rc/drop x))` and
+         * would then read as consumption), clone-on-read every rc binding whose
+         * init borrows an `rc` field (`saved (.r o)`).  Reading an rc field is a
+         * shared-ownership borrow: the source struct still releases that field (a
+         * by-value local via its field auto-drop, an rc/of struct via its
+         * control-block drop glue, a borrowed parameter via its caller), so the
+         * raw word copy aliases the control block WITHOUT a strong-count bump --
+         * yet the new binding is disposed exactly once (its scope-exit auto-drop,
+         * an explicit `(rc/drop saved)`, or a move into a consumer), double-freeing
+         * the block.  Wrapping the init in EX_RC_CLONE makes the read increment the
+         * count, so the binding is a genuine second owner whose +1 balances that
+         * one disposal.  This is orthogonal to the auto-drop's moved/consumed
+         * filter: a consumed or moved binding is still disposed once and still
+         * needs the clone.  The ONE exception is when the source field is itself
+         * explicitly moved out (`(rc/drop (.f o))` / `(drop! (.f o))`), which
+         * suppresses the source-side release -- cloning then would over-count, so
+         * skip it. */
+        for (uint32_t k = 0; k < n_binds; k++) {
+            Type bt = binds[k].binding->type;
+            bool is_rc_managed = bt.kind == TY_RC ||
+                (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0
+                 && !bt.as.forall_.is_linear);
+            if (!is_rc_managed) continue;
+            Expr *fld = elab_rc_field_read_init(binds[k].init);
+            if (!fld) continue;
+            /* Skip when the source field is explicitly moved out: the source no
+             * longer releases it, so the raw copy is already the sole owner. */
+            const Expr *recv = fld->as.get_field_.struct_expr;
+            if (recv && recv->kind == EX_VAR && recv->as.var.binding &&
+                is_field_consumed(body, recv->as.var.binding,
+                                  fld->as.get_field_.field_idx))
+                continue;
+            Expr *clone = expr_new(e->arena, EX_RC_CLONE, binds[k].init->type,
+                                   binds[k].init->span);
+            clone->as.rc_clone_.expr = binds[k].init;
+            clone->as.rc_clone_.elide = false;
+            binds[k].init = clone;
+        }
+
         /* Count rc bindings that need auto-drop (excluding consumed/moved ones) */
         uint32_t n_rc_drops = 0;
         for (uint32_t k = 0; k < n_binds; k++) {
@@ -1127,6 +1340,13 @@ Expr *elab_let(Elab *e, const Form *call) {
                 !binds[k].binding->is_moved &&
                 !is_binding_consumed(body, binds[k].binding)) {
                 n_rc_drops++;
+                /* set-bang-rc-release: this binding owns a continuous +1 from
+                 * its init to the auto-drop injected below, so every `(set! b v)`
+                 * in the body must release what it overwrites -- otherwise only
+                 * the FINAL value is ever released and each assignment leaks a
+                 * block.  Gated on exactly the auto-drop predicate above so the
+                 * two can never disagree: a hand-managed binding gets neither. */
+                elab_set_rc_release(e->arena, body, binds[k].binding);
             }
         }
 
@@ -1261,6 +1481,27 @@ Expr *elab_let(Elab *e, const Form *call) {
         body = expr_new(e->arena, EX_DO, body->type, call->span);
         body->as.do_.items = items;
         body->as.do_.n = 1;
+    }
+
+    /* local-struct-drop (fn-field): flag every eligible by-value local that owns
+     * a boxed fn-field so the DIRECT emitter frees that box at scope exit.  Same
+     * moved/consumed/escape guards as the rc/ref auto-drop injection below, so a
+     * struct that escapes (returned / moved / consumed) is never flagged (no
+     * double-free).  Deliberately NOT injected as a defer -- see
+     * Binding.drops_fn_fields -- so a colored fn stays CPS-admissible. */
+    for (uint32_t k = 0; k < n_binds; k++) {
+        const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
+        if (!ad) continue;
+        if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
+            is_binding_consumed(body, binds[k].binding))
+            continue;
+        const CtorDef *ctor = ad->ctors[0];
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
+            if (is_field_consumed(body, binds[k].binding, fi)) continue;
+            binds[k].binding->drops_fn_fields = true;
+            break;
+        }
     }
 
     if (has_byval_drop_bindings && body && body->kind == EX_DO) {
@@ -2058,6 +2299,17 @@ static bool expr_is_fat_closure_value(const Expr *x) {
     return false;
 }
 
+/* fn-value-carrier-fat-seam-residuals (cell 2): is this expression a VAR of a
+ * carrier (tur_poly_fn_t) fn param -- the by-value poly carrier, whose elab
+ * type is spelled ptr<void>?  Peeks through ascriptions.  Used by the
+ * if-branch unifier to admit carrier-vs-boxed-fn joins by inserting the
+ * poly-to-fat conversion on this arm. */
+static bool expr_is_poly_carrier_fn_var(const Expr *x) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    return x && x->kind == EX_VAR && x->as.var.binding &&
+           x->as.var.binding->is_poly_fn && x->as.var.binding->is_param;
+}
+
 /* M2b: if-branch tyvar tolerance.
  *
  * The strict `type_eq` used for if-branch parity treats `(Option A)` (A bare
@@ -2357,6 +2609,43 @@ Expr *elab_if(Elab *e, const Form *call) {
             then_ = elab_coerce_to_any(e, then_);
             else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;
+        } else if (!type_eq(then_->type, else_->type) &&
+                   ((then_->type.kind == TY_PTR_VOID &&
+                     expr_is_poly_carrier_fn_var(then_) &&
+                     else_->type.kind == TY_FN &&
+                     (else_->type.as.fn.boxed ||
+                      fn_param_type_is_fat_normalized(&else_->type))) ||
+                    (else_->type.kind == TY_PTR_VOID &&
+                     expr_is_poly_carrier_fn_var(else_) &&
+                     then_->type.kind == TY_FN &&
+                     (then_->type.as.fn.boxed ||
+                      fn_param_type_is_fat_normalized(&then_->type))))) {
+            /* fn-value-carrier-fat-seam-residuals (cell 2): one arm is a
+             * CARRIER fn param (a by-value tur_poly_fn_t, spelled ptr<void>),
+             * the other a fat-normalized fn result of the same family --
+             * e.g. `(if (= n 0) v (f3 (- n 1) v))` where the recursion's
+             * result is the stage-2 boxed fn type.  The values are
+             * convertible (the poly-to-fat bridge exists); a reject here is
+             * the unifier not knowing that.  Insert the conversion on the
+             * carrier arm AT THE JOIN -- context-independent, so the fix
+             * holds whether or not this if sits in a tail the stage-2
+             * normalizer would visit -- and adopt the fn type for the if.
+             * Scoped to a carrier-param VAR arm against a boxed or
+             * fat-normalizable (concrete, effect-free) fn type; tyvar and
+             * effect-row'd signatures keep their conventions and still
+             * mismatch loudly. */
+            bool carrier_is_then = then_->type.kind == TY_PTR_VOID;
+            Expr **carm = carrier_is_then ? &then_ : &else_;
+            Type ft = carrier_is_then ? else_->type : then_->type;
+            ft.as.fn.boxed = true;
+            Type *sink = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *sink = ft;
+            Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID,
+                                  (*carm)->span);
+            conv->as.poly_to_fat_.inner = *carm;
+            conv->as.poly_to_fat_.sink_fn_type = sink;
+            *carm = conv;
+            result_t = ft;
         } else if ((expr_is_fat_closure_value(then_) && else_->type.kind == TY_PTR_VOID) ||
                    (expr_is_fat_closure_value(else_) && then_->type.kind == TY_PTR_VOID)) {
             /* vec-get-typed-fat-closure-readback: a fat-closure value (a directly
@@ -2672,6 +2961,27 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         TypeKind vk = value->type.kind;
         if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
             (void)binding_mark_moved(value->as.var.binding, value->span);
+        }
+    }
+
+    /* set-bang-rc-release: an rc field write RELEASES the field's previous
+     * pointer (see emit_set_field_stmt), so the incoming value has to carry its
+     * own +1 or the field ends up owning a reference nobody took.  The move-at-set
+     * above covers a bare variable, and `(rc/of ...)` / `(rc/clone ...)` carry one
+     * by construction -- but a bare rc FIELD READ carries nothing:
+     * `(set! (.next a) (.next b))` copied the word straight across, leaving
+     * `a.next` and `b.next` aliasing one block that BOTH would later release.
+     * Wrap it, exactly as the let-init and `(set! var ...)` paths do for the same
+     * borrow shape. */
+    if (expected_field.kind == TY_RC) {
+        Expr *inner = value;
+        while (inner && inner->kind == EX_ASCRIBE)
+            inner = inner->as.ascribe_.inner;
+        if (inner && inner->kind == EX_GET_FIELD && inner->type.kind == TY_RC) {
+            Expr *clone = expr_new(e->arena, EX_RC_CLONE, value->type, value->span);
+            clone->as.rc_clone_.expr = value;
+            clone->as.rc_clone_.elide = false;
+            value = clone;
         }
     }
 

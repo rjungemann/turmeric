@@ -1,0 +1,10 @@
+;; rat-literal-zero-denominator -- `#rat{n/0}` is a READ-TIME error.
+;;
+;; Because the literal form can never construct a zero denominator, it never
+;; needs the `(Result Rational ArithError)` wrapper `rat/of` carries -- the
+;; literal expands straight to `(rat/of! n d)`.
+(load "stdlib/rational.tur")
+
+(defn main [] : int
+  (println (rat/num #rat{1/0}))
+  0)

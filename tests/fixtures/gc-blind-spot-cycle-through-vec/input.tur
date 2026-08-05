@@ -1,0 +1,102 @@
+; CG3 item 2 / collections-cannot-hold-rc-values item 3: the documented
+; RCK_OPAQUE blind spot, finally exercisable.
+;
+; The gc-guide has always said a cycle routed through a "collection buffer such
+; as a vec of rc<T>" is not reclaimed, and the cycle-collection plan called for
+; fixtures asserting that non-collection.  They could not be written: until item
+; 2 the shape did not compile at all, so the blind spot was closed by rejection
+; rather than by tracing -- narrower than documented, for a reason nobody would
+; want.  A Vec[rc<T>] compiles now, so the gap is open for real and this is what
+; it costs.
+;
+; All three arms build the SAME two-reference cycle.  Only the back-edge
+; differs, which is what makes this a measurement of the container rather than
+; of the collector:
+;
+;   direct: a --.peer--> b --.peer--> a          both rc fields, walker sees both
+;   chain:  n --.kids--> Cell --.item--> n       a user container of rc cells
+;   vec:    n --.kids--> Vec --slot--> n         the Vec is a plain malloc block
+;
+; The chain arm is the one that says what the blind spot actually IS.  It is a
+; container by any reasonable reading -- a cell holding an element and a link --
+; and the collector reclaims it completely.  So the gap is not "collections",
+; and it is not a missing capability in the walker: build a container out of rc
+; cells and tracing already works end to end today.  What the walker cannot see
+; through is one specific thing, a flat malloc'd buffer with no walk_fn.
+;
+; The Vec holds a real strong reference (item 2), so the refcounts are right --
+; nothing here is leaking a count.  What is missing is VISIBILITY: the buffer is
+; an ordinary malloc'd { data, len, cap } header with no walk_fn, so gc_each_child
+; enumerates nothing for the `kids` field and the collector never learns that the
+; edge exists.
+;
+; Why this is not simply fixed by emitting a walk loop for the Vec field: a Vec is
+; shared by raw pointer and freed by hand, so the collector cannot tell whether
+; some other holder still points at the same buffer.  Tracing through it would
+; let the sweep free a block a live Vec still references -- trading a leak for a
+; use-after-free.  Making the container itself GC-visible is the actual fix,
+; now shipped as stdlib/rcvec.tur -- tests/fixtures/rcvec-cycle-is-collected
+; reclaims this exact shape to 0 live.  The plain-Vec arm here keeps pinning
+; what the UNOWNED buffer costs; see
+; docs/archive/collections-cannot-hold-rc-values.md.
+(defstruct D :move [peer : rc<D>])
+(defstruct Cell  :move [item : rc<CNode> next : rc<Cell>])
+(defstruct CNode :move [kids : rc<Cell>])
+(defstruct N :move [kids : (Vec rc<N>)])
+
+(defn null-rc-d [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+;; Control: the same cycle with no collection in the loop.
+(defn build-direct [] : int
+  (let [a (rc/of (make-struct D (null-rc-d)))
+        b (rc/of (make-struct D (rc/clone a)))]
+    (set! (.peer a) (rc/clone b)))
+  0)
+
+;; A user-defined container of rc cells -- traced today, no new machinery.
+(defn build-through-chain [] : int
+  (let [n (rc/of (make-struct CNode (null-rc-d)))
+        c (rc/of (make-struct Cell (rc/clone n) (null-rc-d)))]
+    (set! (.kids n) (rc/clone c)))
+  0)
+
+;; The blind spot: the back-edge rides a Vec element slot.
+(defn build-through-vec [] : int
+  (let [v (vec-new)
+        n (rc/of (make-struct N v))]
+    (vec-push! v n))
+  0)
+
+(defn main [] : int
+  (gc-enable!)
+
+  (let [^mut i 0]
+    (while (< i 50)
+      (build-direct)
+      (set! i (+ i 1))))
+  (gc!)
+  ;; The walker sees rc fields, so the direct cycles go.
+  (println (if (> (gc-objects-freed) 0) 1 0))   ; 1
+  (println (gc-live-blocks))                    ; 0
+
+  (let [^mut c 0]
+    (while (< c 50)
+      (build-through-chain)
+      (set! c (+ c 1))))
+  (gc!)
+  ;; A container of rc cells is traced end to end -- nothing stranded.
+  (println (gc-live-blocks))                    ; 0
+
+  (let [^mut j 0]
+    (while (< j 50)
+      (build-through-vec)
+      (set! j (+ j 1))))
+  (gc!)
+  ;; It does not see Vec slots, so every one of these survives.  When the
+  ;; container becomes GC-visible this line drops to 0 and the fixture should be
+  ;; updated to say so -- it is pinning a KNOWN GAP, not a desired behaviour.
+  (println (gc-live-blocks))                    ; 50
+  0)

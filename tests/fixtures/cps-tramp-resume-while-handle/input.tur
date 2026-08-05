@@ -1,0 +1,27 @@
+;; cps-while-native: a `while` with an interior per-iteration `handle` lowers to a
+;; synthesized tail-recursive __cps loop under --enable=cps-tramp-resume (run emits
+;; run__cps, zero eff=1 -- see
+;; docs/reported/cps-while-loop-with-interior-handle-no-native-lowering.md).
+;;
+;; total starts at 7 (tests the loop-param entry value threads in); each iteration
+;; installs a fresh Ask handler closing over the per-iteration snapshot `cur`, which
+;; resumes with (cur * 100).  Sum over i in 0..5 is 100*(0+1+2+3+4+5) = 1500, so
+;; the result is 7 + 1500 = 1507.  A mutation-ordering miscompile would print a
+;; different number (or loop forever).
+(defeffect Ask [] :int)
+
+(defn run [] : int
+  (let [^mut i     0
+        ^mut total 7]
+    (while (< i 6)
+      (let [cur i]
+        (set! total
+          (+ total
+             (handle
+               (perform (Ask))
+               (Ask [] k)
+               (resume k (* cur 100))))))
+      (set! i (+ i 1)))
+    total))
+
+(println (run))

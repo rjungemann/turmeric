@@ -11,7 +11,7 @@
   (defopaque Tag :int)
   (defn tag-of [n : int] : Tag ```c return n; ```)
   (defn tag-val [t : Tag] : int ```c return (int64_t)t; ```)
-  (defn b-new  [T] [^fat cb : (fn [T] void)] : (Box T) ```c return (void*)(intptr_t)cb; ```)
+  (defn b-new  [T] [^fat cb : (fn [T] void)] : (Box T) ```c return (int64_t)(intptr_t)cb; ```)
   (defn b-sub  [T] [^borrow b : (Box T) item : T] : void ```c (void)b; (void)item; ```)
   (defn b-free [T] [b : (Box T)] : void ```c (void)b; ```)
   (defn main [] : int

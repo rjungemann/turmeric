@@ -1,0 +1,29 @@
+;; Refinements on a typeclass instance method.
+;;
+;; This did not compile before: the instance method's parameter annotation was
+;; never peeled from its contract type to its base type, so the body could not
+;; use the value -- `'*' arg 2: expected int, got { v : int | ... }`.  That is
+;; the same defect that hit `defn` return types and `fn` parameters, reached
+;; independently for a third time, which is why the peel now lives in one
+;; documented helper (rt_peel_contract).
+;;
+;; A statically-resolved dispatch is checked like any other call: the receiver
+;; occupies slot 0 of the impl, so parameter and argument slots line up.  Both
+;; the dotted `(.m x ...)` and bare `(m x ...)` forms resolve to the same
+;; instance method and are checked identically.
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+(definstance Scaler [int]
+  (scale-by [self : int, k : #refine{ v : int | (> v 0) }] : int
+    (* self k)))
+
+(defn scale-twice [n : int, k : #refine{ v : int | (> v 0) }] : int
+  (.scale-by n k))          ; k's own refinement discharges the crossing
+
+(defn main [] : int
+  (println (.scale-by 3 4))
+  (println (scale-by 5 2))
+  (println (scale-twice 7 3))
+  (println "refine-typeclass-method")
+  0)

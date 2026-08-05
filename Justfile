@@ -313,9 +313,12 @@ spices:
     python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json
 
 
-# Check that every turmeric+sweet-exp toggle pair in the guides is valid.
+# Check that every turmeric+sweet-exp toggle pair in the guides is valid, and
+# that every build.tur snippet in the guides and the README actually parses.
+# README.md is in the list on purpose: it is the front door, and its manifest
+# snippet is the first thing a new user copies.
 check-guides:
-    python3 tools/check-guide-pairs.py docs/guides/
+    python3 tools/check-guide-pairs.py README.md docs/guides/
 
 # Strict check for spice READMEs: every `turmeric block must have an adjacent
 # `sweet-exp sibling (or be marked `turmeric no-check`).
@@ -348,14 +351,34 @@ web-deps:
 web: wasm web-deps
     cd web && npm run build
 
-# Deploy to GitHub Pages
+# Deploy try.turmeric-lang.com to Cloudflare Workers (requires `wrangler` auth).
+# Depends on `web`, so the wasm is always rebuilt from the current tree before
+# publishing -- the artifacts it writes into web/public/ are gitignored and
+# must not be committed.
 deploy-web: web
-    # cd web/dist && git init && git add . && git commit -m "Deploy to GitHub Pages"
-    # git push -f git@github.com:turmeric-lang/turmeric.git main:gh-pages
     cd web && npm run deploy
 
-# Run web dev server
+# Run web dev server.
+# web/public/turmeric.{js,wasm} and doc-names.json are gitignored build
+# outputs, so a fresh clone has none. Vite would happily serve the site with a
+# 404'ing wasm and a REPL that silently never boots, or with a doc panel that
+# finds nothing, so fail loudly instead of debugging that. We check rather than
+# depend on `wasm` so you don't need emscripten on PATH just to iterate on CSS
+# once the module has been built.
 web-dev: web-deps
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f web/public/turmeric.wasm ] || [ ! -f web/public/turmeric.js ]; then
+      echo "error: web/public/turmeric.{js,wasm} missing -- run 'just wasm' first" >&2
+      echo "       (they are build outputs and are no longer committed)" >&2
+      exit 1
+    fi
+    if [ ! -f web/public/doc-names.json ]; then
+      echo "error: web/public/doc-names.json missing -- run 'just docs' first" >&2
+      echo "       (it is a build output and is no longer committed; without it" >&2
+      echo "        the REPL's doc panel silently finds nothing)" >&2
+      exit 1
+    fi
     cd web && npm run dev
 
 # Clean WASM build
@@ -376,7 +399,13 @@ bump-patch:
     echo "$NEW" > VERSION
     sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/web/wasm_glue.h
     rm -f src/web/wasm_glue.h.bak
-    git add VERSION src/web/wasm_glue.h
+    # sw.js carries a dev/no-build fallback copy of the version; vite rewrites
+    # it in dist/, but the literal must track VERSION or an un-built serve gets
+    # a stale precache. Matched by shape, not by $OLD, so a bump re-syncs it
+    # even if it has already drifted.
+    sed -i.bak -E "s/tur-try-v1-[0-9]+\.[0-9]+\.[0-9]+/tur-try-v1-$NEW/" web/public/sw.js
+    rm -f web/public/sw.js.bak
+    git add VERSION src/web/wasm_glue.h web/public/sw.js
     git commit -m "chore: bump version to v$NEW"
     git tag -a "v$NEW" -m "Release v$NEW"
     git push origin HEAD "v$NEW"
@@ -391,7 +420,13 @@ bump-minor:
     echo "$NEW" > VERSION
     sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/web/wasm_glue.h
     rm -f src/web/wasm_glue.h.bak
-    git add VERSION src/web/wasm_glue.h
+    # sw.js carries a dev/no-build fallback copy of the version; vite rewrites
+    # it in dist/, but the literal must track VERSION or an un-built serve gets
+    # a stale precache. Matched by shape, not by $OLD, so a bump re-syncs it
+    # even if it has already drifted.
+    sed -i.bak -E "s/tur-try-v1-[0-9]+\.[0-9]+\.[0-9]+/tur-try-v1-$NEW/" web/public/sw.js
+    rm -f web/public/sw.js.bak
+    git add VERSION src/web/wasm_glue.h web/public/sw.js
     git commit -m "chore: bump version to v$NEW"
     git tag -a "v$NEW" -m "Release v$NEW"
     git push origin HEAD "v$NEW"
@@ -406,7 +441,13 @@ bump-major:
     echo "$NEW" > VERSION
     sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/web/wasm_glue.h
     rm -f src/web/wasm_glue.h.bak
-    git add VERSION src/web/wasm_glue.h
+    # sw.js carries a dev/no-build fallback copy of the version; vite rewrites
+    # it in dist/, but the literal must track VERSION or an un-built serve gets
+    # a stale precache. Matched by shape, not by $OLD, so a bump re-syncs it
+    # even if it has already drifted.
+    sed -i.bak -E "s/tur-try-v1-[0-9]+\.[0-9]+\.[0-9]+/tur-try-v1-$NEW/" web/public/sw.js
+    rm -f web/public/sw.js.bak
+    git add VERSION src/web/wasm_glue.h web/public/sw.js
     git commit -m "chore: bump version to v$NEW"
     git tag -a "v$NEW" -m "Release v$NEW"
     git push origin HEAD "v$NEW"

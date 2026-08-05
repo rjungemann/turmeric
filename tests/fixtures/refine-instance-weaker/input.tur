@@ -1,0 +1,27 @@
+;; The legal direction, and the one a naive check would get backwards.
+;;
+;; `Widen` accepts MORE than its class signature promises (the class requires
+;; k > 0; the instance is happy with k >= 0).  Every caller honouring the class
+;; contract is still served, so this is fine and must NOT be reported.
+;;
+;; `Exact` restates its class signature verbatim, which is the overwhelmingly
+;; common case and also has to stay silent.
+(defclass Widen [a]
+  (w [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+(definstance Widen [int]
+  (w [self : int, k : #refine{ v : int | (>= v 0) }] : int
+    (* self k)))
+
+(defclass Exact [a]
+  (x [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+(definstance Exact [int]
+  (x [self : int, k : #refine{ v : int | (> v 0) }] : int
+    (+ self k)))
+
+(defn main [] : int
+  (println (.w 3 4))
+  (println (.x 3 4))
+  (println "refine-instance-weaker")
+  0)

@@ -153,6 +153,53 @@ Rules:
 
 ---
 
+## Closures inherit the discipline of what they consume
+
+**A closure that consumes a captured `^linear` or `^unique` value is itself
+linear or unique.** The obligation travels with the closure, so every check that
+applied to the captured value applies to the closure that swallowed it:
+
+```turmeric
+(let [b (bytes-alloc 8)]
+  (let [f (fn [] : void (bytes-free b))]
+    (f)
+    (f)))          ;; ERROR TUR-E0101: linear value used after being consumed
+```
+
+| Shape | `^linear` | `^unique` |
+|---|---|---|
+| The consuming closure called twice | `TUR-E0101` | `TUR-E0201` |
+| Aliased first (`g` = `f`), then each called once | `TUR-E0101` | `TUR-E0201` |
+| `(rc/of f)` on the consuming closure | `TUR-E0103` | `TUR-E0202` |
+| The consuming closure never called | `TUR-E0100` | -- |
+
+The last row is not a technicality: a consuming closure that is dropped unused
+means the captured resource is never released, which is exactly what
+"linear value dropped without being consumed" is for.
+
+**Consuming, not merely capturing -- that distinction is the whole rule.** A
+closure that only *reads* its capture is unaffected at any arity; a read-only
+capture called twice is as legal as it ever was. A blanket "captures a linear
+value" rejection would take out every read-only handler closure in the tree
+(the `httpd` middleware family alone), which is why the rule is scoped to
+consumption.
+
+### Known limitation -- loops
+
+Linear checking is flow-sensitive but not iteration-sensitive, so one syntactic
+consumption site reads as one consumption however many times it runs:
+
+```turmeric
+(while (< i 3) (f))             ;; accepted
+(while (< i 3) (bytes-free b))  ;; also accepted -- same, without the closure
+```
+
+This is a property of the checker, not of closures -- the direct form behaves
+identically, and a closure is neither stronger nor weaker here than writing the
+consumption out by hand.
+
+---
+
 ## Stdlib macros
 
 ### `(must-use expr)`
@@ -205,7 +252,8 @@ with-resource [r ref(42)]
 |-------------|----------------------------------------------|
 | `TUR-E0100` | Linear value dropped without being consumed  |
 | `TUR-E0101` | Linear value used after being consumed       |
-| `TUR-E0102` | Linear value captured by a closure           |
+| `TUR-E0102` | Cannot copy a linear value                    |
+| `TUR-E0103` | Cannot wrap a linear value in `rc<T>`         |
 | `TUR-E0150` | Affine value used more than once             |
 | `TUR-E0151` | Relevant value dropped without being used    |
 

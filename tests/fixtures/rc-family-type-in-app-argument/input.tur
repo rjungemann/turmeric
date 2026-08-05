@@ -1,0 +1,46 @@
+; rc<T> written inside a type APPLICATION argument used to resolve to a type
+; variable literally NAMED "rc<S>", not to a real rc type.
+;
+; rc_family_type_from_keyword_name (elab_types.c) exists precisely to stop that,
+; but only the defn param/return ladders called it.  Every other type position
+; -- type-application arguments, `::` ascriptions, aliases -- routed through
+; type_expr_from_form, which hooked ptr<T> and then fell straight through to the
+; named-tyvar fallback.
+;
+; The failure was not a rejected annotation, which is what makes it worth
+; pinning: the annotation was accepted and silently mistyped.  Ascribing
+; `(Vec rc<S>)` bound the element tyvar A to the *name* "rc<S>", so a later push
+; of an honest rc<S> failed unification against its own annotation with
+;
+;   error: function 'vec-push!' arg 2: expected tyvar, got rc<S>
+;
+; -- an error blaming the argument for the annotation's mistake.  `(Vec S)` and
+; `(Vec int)` were unaffected, so the shape looked rc-specific rather than
+; annotation-specific.
+;
+; Every assertion below is a strong count: the point is not that these forms
+; parse, it is that the ascribed Vec is the SAME type the unascribed one infers,
+; so item-2 element ownership applies identically through both.
+(defstruct S :move [tag : int])
+(defstruct N :move [kids : (Vec rc<S>)])
+
+(defn main [] : int
+  (let [a (rc/of (make-struct S 1))]
+
+    ;; the ascription that used to mistype the element
+    (let [v (:: (vec-new) (Vec rc<S>))]
+      (vec-push! v a)
+      (println (rc/strong-count a))       ; 2
+      (println (vec-len v))               ; 1
+      (vec-free v))
+    (println (rc/strong-count a))         ; 1
+
+    ;; and through a struct field declared with the same spelling, pushed via a
+    ;; field read -- the form the GC blind-spot work needed
+    (let [n (rc/of (make-struct N (:: (vec-new) (Vec rc<S>))))]
+      (vec-push! (.kids n) a)
+      (println (rc/strong-count a))       ; 2
+      (println (vec-len (.kids n)))       ; 1
+      (vec-free (.kids n)))
+    (println (rc/strong-count a)))        ; 1
+  0)

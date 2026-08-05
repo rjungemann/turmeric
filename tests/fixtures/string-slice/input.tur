@@ -1,0 +1,45 @@
+;; owned-string-type-plan: StringSlice -- zero-copy, bounds-checked, safe ranged
+;; views into an immutable refcounted String.
+(load "stdlib/string-slice.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+;; print a fresh (owned) cstr and free it, so the fixture stays tidy
+(defn puts-owned [c : cstr] : void
+  (let [g (string/adopt-cstr c)]
+    (do (println (string/to-cstr g)) (string/release g))))
+
+(defn demo [] : int
+  (let [s (string/from-cstr "hello world")
+        w (string/slice s 6 5)     ;; "world" -- zero-copy view
+        h (string/slice s 0 5)]    ;; "hello"
+    (do
+      (puts-owned (slice/to-cstr w))
+      (println (slice/len w))
+      (println (slice/byte-at w 0))    ;; 'w' = 119
+      (println (slice/byte-at w 99))   ;; -1 out of range
+      (println (yn (slice/empty? (string/slice s 3 0))))
+      ;; O(1) sub-view relative to w
+      (puts-owned (slice/to-cstr (slice/sub w 0 3)))   ;; "wor"
+      ;; SAFETY: release the parent; the slice retains it, so w is still valid
+      (string/release s)
+      (puts-owned (slice/to-cstr w))   ;; still "world"
+      ;; typeclasses: Show / Eq / Ord over slices
+      (show-line w)
+      (let [w2 (string/slice (string/from-cstr "world") 0 5)]
+        (do
+          (println (yn (eq? w w2)))        ;; content-equal
+          (println (yn (lt? h w)))         ;; "hello" < "world"
+          (slice/release w2)))
+      ;; materialize to an owned String, then use it as a Map key
+      (let [owned (slice/to-string w)
+            m     (map-assoc (:: (map-new) (Map String int)) owned 42)]
+        (do
+          (println (map-get m (string/from-cstr "world")))
+          (map-free m)
+          (string/release owned)))
+      (slice/release w)
+      (slice/release h)
+      0)))
+
+(demo)

@@ -1,0 +1,7 @@
+(defmodule mainmod
+  (import bmod :refer [b-val])
+  (import cmod :refer [c-val])
+  (defn main [] : int
+    (if (= (+ (b-val) (c-val)) 5)
+      (do (println "three-hop-ok") 0)
+      (do (println "three-hop-bad") 1))))

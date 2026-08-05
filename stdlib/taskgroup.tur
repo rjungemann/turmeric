@@ -474,7 +474,7 @@
   ((FiberBlock *)fiber)->task_group = (void *)g;
   ((FiberBlock *)fiber)->cancelled = g->cancelled;
 
-  return fiber;
+  return (int64_t)(intptr_t)fiber;
   ```)
 ;;; task-group-join -- wait for a specific spawned fiber to complete.
 ;;;
@@ -592,7 +592,6 @@
 (defn spawn-timeout-thread-fn [raw : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *tg; int ms; } TimeoutArg;
-  typedef struct { long tv_sec; long tv_nsec; } timespec;
   typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -602,7 +601,7 @@
       bool done;
   } TaskGroupBlock;
   TimeoutArg *a = (TimeoutArg *)raw;
-  timespec ts = { .tv_sec = a->ms / 1000, .tv_nsec = (a->ms % 1000) * 1000000L };
+  struct timespec ts = { .tv_sec = a->ms / 1000, .tv_nsec = (a->ms % 1000) * 1000000L };
   nanosleep(&ts, NULL);
   TaskGroupBlock *g = (TaskGroupBlock *)a->tg;
   pthread_mutex_lock(&g->lock);
@@ -634,7 +633,7 @@
   typedef struct { void *tg; int ms; } TimeoutArg;
   TimeoutArg *arg = (TimeoutArg *)malloc(sizeof(TimeoutArg));
   if (!arg) { free(t); fprintf(stderr, "spawn-timeout: arg oom\n"); abort(); }
-  arg->tg = group;
+  arg->tg = (void*)(intptr_t)group;
   arg->ms = (int)ms;
 
   pthread_create(t, NULL, (void *(*)(void *))spawn_hytimeout_hythread_hyfn, arg);

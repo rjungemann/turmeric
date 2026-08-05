@@ -1,0 +1,11 @@
+; x < y, y < z, z < x is a cycle in a strict order.
+(set-logic QF_LIA)
+(set-info :status unsat)
+(declare-fun x () Int)
+(declare-fun y () Int)
+(declare-fun z () Int)
+(assert (< x y))
+(assert (< y z))
+(assert (< z x))
+(check-sat)
+(exit)

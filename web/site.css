@@ -15,9 +15,23 @@
 @import '@fontsource/dm-sans/300.css';
 @import '@fontsource/dm-sans/400.css';
 @import '@fontsource/dm-sans/500.css';
+@import '@fontsource/space-grotesk/400.css';
+@import '@fontsource/space-grotesk/500.css';
 
 /* ── RESET ─────────────────────────────── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ── ICONS (<t-icon>, Lucide set) ──────── */
+/* Sized by font-size (1em); the CSS width/height override the SVG's baked-in
+ * 24x24 attributes. Stroke inherits `color` via currentColor. */
+t-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  vertical-align: -0.125em;
+}
+t-icon svg { display: block; width: 1em; height: 1em; }
 
 /* ── BASE ──────────────────────────────── */
 html { scroll-behavior: smooth; }

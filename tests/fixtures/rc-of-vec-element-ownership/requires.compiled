@@ -1,0 +1,7 @@
+Same reason as rc-family-type-in-app-argument: this fixture measures the
+strong counts a Vec's rc<T> element ownership produces, which is established
+at elaboration (RETAIN/BORROW/REJECT classification of the carrier crossing)
+and in codegen (`tur-vec-elem-rc?` folded into the -o helpers' `owned` flag).
+The interpreter models rc counts but not the emit-time ownership transfer, so
+the push/get/pop counts come out one low. Compiled path is green
+(bash tests/run.sh).

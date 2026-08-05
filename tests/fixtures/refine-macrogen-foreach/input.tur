@@ -1,0 +1,33 @@
+;; The ergonomic for-each-alive shape (RE1 (c)): ONE macro generates the
+;; recursive loop, the frozen re-borrow, AND the aliveness guard; the user's
+;; refined read is spliced as the body. Every piece the crossing needs -- the
+;; guard hypothesis, the borrow that makes the #reads measure congruent, the
+;; `e = __i` binder equation -- lives in the EXPANSION, so this proves only if
+;; the path walk traverses macro expansions (refine_note_macro_expansion) and
+;; the set!-scan depth admits an expansion deeper than the source spelling it.
+;; Prints x+e for the two alive entities (skips despawned e=1): 40, 42.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; return e != 1;
+  ```)
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (+ (.n w) e))
+
+(defmacro for-each-alive [w n binder & body]
+  `(let __fea-go [__i 0]
+     (if (< __i ~n)
+       (do
+         (let [__fea (& ~w)]
+           (if (alive? ~w __i)
+             (do (let [~binder __i] ~@body) 0)
+             0))
+         (__fea-go (+ __i 1)))
+       0)))
+
+(defn main [] : int
+  (let [^mut w (World 40)]
+    (for-each-alive w 3 e
+      (println (get! w e))))
+  0)

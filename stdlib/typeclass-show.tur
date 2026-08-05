@@ -1,355 +1,315 @@
-;;; tur/typeclass-show -- the Show typeclass, its primitive instances, and the
-;;; Show instances for the typed collections (Vec / Set / Map).
+;;; tur/typeclass-show -- the Show typeclass (owned String result) and its
+;;; primitive + typed-collection instances.
 ;;;
-;;; This is NOT auto-loaded.  It is pulled in on demand by stdlib/typeclass.tur
-;;; (so `(load "stdlib/typeclass.tur")` still provides Show + the collection
-;;; instances for compiled programs) and preloaded by the interactive REPL
-;;; (src/turi/preload.c, turi_env_preload_typeclasses) so the prompt can render
-;;; collections through their Show instance.
+;;; Show renders a value as an OWNED `String` (refcount 1): `(show x)` returns a
+;;; fresh String the caller `string/release`s, so a generic caller has a single
+;;; uniformly-safe ownership policy (release) -- no leak, no borrow/malloc
+;;; guessing.  This is the owned surface the show-owned-result-plan builds; the
+;;; earlier `cstr`-returning Show was retired at stage 4.
 ;;;
-;;; Kept OUT of the compiled auto-load list on purpose:
-;;;   - Auto-loading the Show *class* breaks `derive-show`: its macro-emitted
-;;;     instance would orphan (TUR-E0013) against a foreign Show module.
-;;;   - It would add Show machinery to every compiled program's prelude.
-;;; Kept separate from the rest of typeclass.tur (Ord/Num/Clone/Display/Debug/
-;;; Error) so the REPL can preload just Show without the Error[ptr<void>]
-;;; instance, whose inline-C error-message would shadow the interpreter's async
-;;; error-message builtin.
+;;; Because it returns `String`, Show sits ABOVE stdlib/string.tur in the load
+;;; graph and loads it here.  It is pulled in by stdlib/typeclass.tur (so
+;;; `(load "stdlib/typeclass.tur")` still provides Show + the collection
+;;; instances) and preloaded by the REPL (src/turi/preload.c).
 ;;;
-;;; Since: Phase repl-show-collections
-;;; Show -- typeclass for string representation.
+;;; Since: v2 (show-owned-result-plan, stage 4)
+(load "stdlib/string.tur")
+;;; Show -- typeclass for an owned-String representation.
 ;;;
 ;;; Parameters:
 ;;;   a -- the type to render
 ;;;
 ;;; Returns:
-;;;   A :cstr human-readable string.
+;;;   A fresh owned String (refcount 1); the caller string/releases it.
 ;;;
-;;; Since: Phase 15
-(defclass Show [a] (show [x] : cstr))
-;; Instances for primitive types
-;;; Show [int] -- Show instance for int.
+;;; Since: Phase 15 (owned since stage 4)
 
-(definstance Show [int]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(24);
-    snprintf(buf, 24, "%lld", (long long)x);
-    return (const char *)buf;
-    ```))
-;;; Show [cstr] -- Show instance for cstr (identity).
+(defclass Show [a] (show [x] : String))
+;; ---------------------------------------------------------------------------
+;; Primitive instances.  Each builds the owned String directly (no cstr
+;; intermediate to leak): int via int->string, the other numerics via an
+;; inline-C snprintf into a stack buffer handed to tur_string_from_cstr (one
+;; copy, leak-free), cstr/bool by copying the literal, String by O(1) retain.
+;; ---------------------------------------------------------------------------
+;;; Show [int] -- owned decimal String.
 
-(definstance Show [cstr] (show [x] x))
-;;; Show [bool] -- Show instance for bool.
+(definstance Show [int] (show [x] : String (int->string x)))
+;;; Show [cstr] -- copy the borrowed cstr into a fresh owned String.
 
-(definstance Show [bool] (show [x] : cstr (if x "true" "false")))
-;;; Show [int8] -- Show instance for int8.
+(definstance Show [cstr] (show [x] : String (string/from-cstr x)))
+;;; Show [bool] -- owned "true" / "false" String.
+
+(definstance Show [bool]
+  (show [x] : String (string/from-cstr (if x "true" "false"))))
+;;; Show [int8] -- owned decimal String.
 
 (definstance Show [int8]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%d", (int)x);
-    return (const char *)buf;
+    char buf[8]; snprintf(buf, 8, "%d", (int)x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [int16] -- Show instance for int16.
+;;; Show [int16] -- owned decimal String.
 
 (definstance Show [int16]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%d", (int)x);
-    return (const char *)buf;
+    char buf[8]; snprintf(buf, 8, "%d", (int)x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [int32] -- Show instance for int32.
+;;; Show [int32] -- owned decimal String.
 
 (definstance Show [int32]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(16);
-    snprintf(buf, 16, "%d", x);
-    return (const char *)buf;
+    char buf[16]; snprintf(buf, 16, "%d", x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [uint8] -- Show instance for uint8.
+;;; Show [uint8] -- owned decimal String.
 
 (definstance Show [uint8]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%u", (unsigned)x);
-    return (const char *)buf;
+    char buf[8]; snprintf(buf, 8, "%u", (unsigned)x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [uint16] -- Show instance for uint16.
+;;; Show [uint16] -- owned decimal String.
 
 (definstance Show [uint16]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%u", (unsigned)x);
-    return (const char *)buf;
+    char buf[8]; snprintf(buf, 8, "%u", (unsigned)x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [uint32] -- Show instance for uint32.
+;;; Show [uint32] -- owned decimal String.
 
 (definstance Show [uint32]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(16);
-    snprintf(buf, 16, "%u", x);
-    return (const char *)buf;
+    char buf[16]; snprintf(buf, 16, "%u", x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [uint64] -- Show instance for uint64.
+;;; Show [uint64] -- owned decimal String.
 
 (definstance Show [uint64]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(24);
-    snprintf(buf, 24, "%llu", (unsigned long long)x);
-    return (const char *)buf;
+    char buf[24]; snprintf(buf, 24, "%llu", (unsigned long long)x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [float] -- Show instance for float (double).
+;;; Show [float] -- owned String rendering of a double.
 
 (definstance Show [float]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(32);
-    snprintf(buf, 32, "%g", (double)x);
-    return (const char *)buf;
+    char buf[32]; snprintf(buf, 32, "%g", (double)x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [float32] -- Show instance for float32.
+;;; Show [float32] -- owned String rendering of a float32.
 
 (definstance Show [float32]
   (show [x]
-    : cstr
+    : String
     ```c
-    char *buf = (char *)malloc(32);
-    snprintf(buf, 32, "%g", (double)x);
-    return (const char *)buf;
+    char buf[32]; snprintf(buf, 32, "%g", (double)x);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; Show [ptr<void>] -- Show instance for result<T,E> represented as ptr<void>.
+;;; Show [String] -- O(1) retain (refcount++), a second owning handle.
+
+(definstance Show [String] (show [x] : String (string/retain x)))
+;; ---------------------------------------------------------------------------
+;; Mixed borrow/malloc instance: the result<T,E> carrier.  Build the owned
+;; String directly from a stack buffer (the null case is a borrowed literal, the
+;; ok/err cases format an int -- one copy handles both, leak-free).
+;; ---------------------------------------------------------------------------
+;;; Show [ptr<void>] -- render a result<T,E> carrier as an owned String.
 
 (definstance Show [ptr<void>]
   (show [x]
-    : cstr
+    : String
     ```c
     struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
-    if (res == NULL) return "err";
-    char *buf = (char *)malloc(48);
+    if (res == NULL) { return (int64_t)(intptr_t)tur_string_from_cstr("err"); }
+    char buf[48];
     if (res->is_ok) {
         snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
     } else {
         snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
     }
-    return (const char *)buf;
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))
-;;; ============================================================================
-;;; Show instances for the typed collections (Vec / Set / Map).
-;;;
-;;; They live here, in Show's own module, so the orphan rule (TUR-E0013) is
-;;; satisfied without touching vec.tur / set.tur / map.tur.  Vec/Set/Map, the
-;;; HAMT iterator ops, and vec-get/vec-len are always auto-loaded, so they are
-;;; in scope by the time this file is loaded (on demand via typeclass.tur, or
-;;; the REPL preload).
-;;;
-;;; Element-type recovery goes through the int64 carrier (as in Eq[Vec] /
-;;; Eq[Set] / Eq[Map]): scalar element types whose display value equals their
-;;; carrier (int, bool) render exactly; content-boxed types (cstr) currently
-;;; show their carrier -- the same limitation those Eq instances carry.
-;;;
-;;; Since: Phase repl-show-collections
-;;; ============================================================================
-;;; show-concat -- internal: concatenate two NUL-terminated strings.
-;;;
-;;; A private copy of str-concat (stdlib/str.tur is not auto-loaded) so the
-;;; collection Show instances can build their output with no extra dependency.
-;;; The interpreter registers a matching native (turi_register_collection_natives)
-;;; so the pure-Turmeric Show bodies also run under --interpret and at the REPL.
-;;; Neither input is freed; both may be string literals.
-;;;
-;;; Since: Phase repl-show-collections
+;; ---------------------------------------------------------------------------
+;; Typed collections (Vec / Set / Map).
+;;
+;; Built with a StringBuilder over each element's own Show, releasing every
+;; intermediate element String as it is pushed -- fully leak-clean.  The
+;; `s : (Set A)` / `m : (Map K V)` witness parameters pin the element types so
+;; monomorphization grounds the element Show dispatch (the phantom-type
+;; rationale from the historic cstr collection loops still applies).
+;;
+;; They live in Show's own module so the orphan rule (TUR-E0013) is satisfied
+;; without touching vec.tur / set.tur / map.tur.  Vec/Set/Map and the HAMT
+;; iterator ops are always auto-loaded, so they are in scope here.
+;; ---------------------------------------------------------------------------
+;;; vec-show-loop -- push "e0 e1 ..." element reprs into the builder.
 
-(defn show-concat [a : cstr b : cstr] : cstr
-  ```c
-  const char *sa = (const char*)a;
-  const char *sb = (const char*)b;
-  size_t la = strlen(sa), lb = strlen(sb);
-  char *out = malloc(la + lb + 1);
-  memcpy(out, sa, la);
-  memcpy(out + la, sb, lb);
-  out[la + lb] = '\0';
-  return (const char *)out;
-  ```)
-;;; vec-show-loop -- accumulate the space-separated element repr for Show[Vec].
-;;;
-;;; The `^Show A` constraint puts the element Show dictionary in scope so
-;;; `(show (vec-get v i))` dispatches on the concrete element type.  The
-;;; `(:: ... A)` recovers the element type from vec-get's int64 carrier.
-;;; Self-tail-recursive so Path A can TCO it inside its spec.
-;;;
-;;; Parameters:
-;;;   v   -- Vec[A]
-;;;   i   -- current index (start at 0)
-;;;   len -- element count (vec-len v)
-;;;   acc -- repr accumulated so far ("" at the start)
-;;;
-;;; Returns:
-;;;   The space-separated concatenation of (show v[i]) for i in [i, len).
-;;;
-;;; Since: Phase repl-show-collections
-
-(defn vec-show-loop [^Show A]
-  [v : (Vec A) i : int len : int acc : cstr]
-  : cstr
+(defn vec-show-loop [^Show A] [v : (Vec A) i : int len : int b : StringBuilder] : StringBuilder
   (if (= i len)
-    acc
-    (vec-show-loop v
-      (+ i 1)
-      len
-      (show-concat acc
-        (show-concat (if (= i 0) "" " ") (show (:: (vec-get v i) A)))))))
-;;; Show [Vec] -- render a Vec[A] as "[a b c]" using the element's Show instance.
-;;;
-;;; Mirrors the vec-of / [...] literal surface, so the repr round-trips
-;;; visually.  An empty Vec shows as "[]".
+    b
+    (do
+      (when (> i 0) (builder/push-cstr! b " "))
+      (let [es (show (:: (vec-get v i) A))]
+        (do (builder/push-string! b es) (string/release es)))
+      (vec-show-loop v (+ i 1) len b))))
+;;; Show [Vec] -- render a Vec[A] as an owned "[a b c]" String.
 ;;;
 ;;; Example:
-;;;   (show (vec-of 1 2 3))  ; => "[1 2 3]"
-;;;   (show (vec-new))       ; => "[]"
-;;;
-;;; Since: Phase repl-show-collections
+;;;   (show (vec-of 1 2 3))  ; => String "[1 2 3]"
 
 (definstance Show [Vec]
   [(Show A)]
   (show [x]
-    (show-concat "["
-      (show-concat (vec-show-loop (:: x (Vec A)) 0 (vec-len (:: x (Vec A))) "")
-        "]"))))
-;;; set-show-loop -- accumulate the space-separated element repr for Show[Set].
-;;;
-;;; Walks the set's HAMT via the pure-Turmeric iterator (each element is a
-;;; HAMT key).  The `^Show A` constraint scopes the element Show dictionary.
-;;;
-;;; The `s : (Set A)` parameter is threaded purely to pin the element type A
-;;; on the loop's own signature.  The HAMT iterator handle is an untyped
-;;; `ptr<void>`, so without a parameter that mentions A the loop's `^Show A`
-;;; would be a phantom type variable: monomorphization has nothing to ground
-;;; it against, the element read `(show (:: (hamt/iter-cur-key iter) A))`
-;;; bakes the int64-carrier representative Show[int], and a cstr/bool/float
-;;; element shows as its raw carrier word.  Carrying `(Set A)` gives the
-;;; specializer the same structural handle it already uses for Show[Vec]
-;;; (whose loop carries `v : (Vec A)`), so the element dispatches on its
-;;; concrete type per ABI specialization.
-;;;
-;;; Parameters:
-;;;   s     -- the Set[A] being shown (type witness for A; not otherwise read)
-;;;   iter  -- hamt/iter-alloc-allocated handle scanning the set
-;;;   first -- true until the first element is emitted (separator control)
-;;;   acc   -- repr accumulated so far
-;;;
-;;; Returns:
-;;;   The space-separated concatenation of (show elem) over the set.
-;;;
-;;; Since: Phase repl-show-collections
+    (let [xx (:: x (Vec A))
+          b  (builder/new)]
+      (do
+        (builder/push-cstr! b "[")
+        (vec-show-loop xx 0 (vec-len xx) b)
+        (builder/push-cstr! b "]")
+        (builder/finish b)))))
+;;; set-show-loop -- push the space-separated element reprs into b.
 
-(defn set-show-loop [^Show A]
-  [s : (Set A) iter : ptr<void> first : bool acc : cstr]
-  : cstr
+(defn set-show-loop [^Show A] [s : (Set A)
+                               iter : ptr<void>
+                               first : bool
+                               b : StringBuilder] : StringBuilder
   (if (hamt/iter-advance! iter)
-    (set-show-loop s
-      iter
-      false
-      (show-concat acc
-        (show-concat (if first "" " ") (show (:: (hamt/iter-cur-key iter) A)))))
-    acc))
-;;; set-show-driver -- allocate the iter box, run set-show-loop, free.
-;;;
-;;; Since: Phase repl-show-collections
-
-(defn set-show-driver [^Show A]
-  [s (Set A)]
-  : cstr
-  (let [iter (hamt/iter-alloc (set-hamt s))
-        body (set-show-loop s iter true "")]
-    (do (hamt/iter-destroy! iter) body)))
-;;; Show [Set] -- render a Set[A] as "#set{a b c}" using the element's Show
-;;; instance.  Mirrors the #set{...} / set-of literal surface.  An empty Set
-;;; shows as "#set{}".
+    (do
+      (when (not first) (builder/push-cstr! b " "))
+      (let [es (show (:: (hamt/iter-cur-key iter) A))]
+        (do (builder/push-string! b es) (string/release es)))
+      (set-show-loop s iter false b))
+    b))
+;;; Show [Set] -- render a Set[A] as an owned "#set{a b c}" String.
 ;;;
 ;;; Example:
-;;;   (show (set-of 1 2 3))  ; => "#set{1 2 3}"
-;;;
-;;; Since: Phase repl-show-collections
+;;;   (show (set-of 1 2 3))  ; => String "#set{1 2 3}"
 
 (definstance Show [Set]
   [(Show A)]
   (show [x]
-    (show-concat "#set{" (show-concat (set-show-driver (:: x (Set A))) "}"))))
-;;; map-show-loop -- accumulate the "k v" pairs repr for Show[Map].
-;;;
-;;; Walks the map's HAMT via the pure-Turmeric iterator, formatting each entry
-;;; as "key value".  The `^Show K` / `^Show V` constraints scope both element
-;;; Show dictionaries.
-;;;
-;;; The `m : (Map K V)` parameter is threaded purely to pin the key/value
-;;; types K and V on the loop's own signature.  As with set-show-loop, the
-;;; HAMT iterator handle is an untyped `ptr<void>`; without a parameter that
-;;; mentions K and V the loop's `^Show K`/`^Show V` are phantom variables the
-;;; specializer cannot ground, and cstr keys / non-int values would show as
-;;; their raw carrier words.  Carrying `(Map K V)` gives monomorphization the
-;;; structural handle it needs to dispatch each key and value on its concrete
-;;; type.
-;;;
-;;; Parameters:
-;;;   m     -- the Map[K V] being shown (type witness for K and V; not read)
-;;;   iter  -- hamt/iter-alloc-allocated handle scanning the map
-;;;   first -- true until the first entry is emitted (separator control)
-;;;   acc   -- repr accumulated so far
-;;;
-;;; Returns:
-;;;   The space-separated "k v" pairs over the map.
-;;;
-;;; Since: Phase repl-show-collections
+    (let [ss   (:: x (Set A))
+          b    (builder/new)
+          iter (hamt/iter-alloc (set-hamt ss))]
+      (do
+        (builder/push-cstr! b "#set{")
+        (set-show-loop ss iter true b)
+        (hamt/iter-destroy! iter)
+        (builder/push-cstr! b "}")
+        (builder/finish b)))))
+;;; map-show-loop -- push the space-separated "k v" reprs into b.
 
-(defn map-show-loop [^Show K ^Show V]
-  [m : (Map K V) iter : ptr<void> first : bool acc : cstr]
-  : cstr
+(defn map-show-loop [^Show K ^Show V] [m : (Map K V)
+                                       iter : ptr<void>
+                                       first : bool
+                                       b : StringBuilder] : StringBuilder
   (if (hamt/iter-advance! iter)
-    (map-show-loop m
-      iter
-      false
-      (show-concat acc
-        (show-concat (show-concat (if first "" " ")
-                       (show (:: (hamt/iter-cur-key iter) K)))
-          (show-concat " " (show (:: (map-iter-cur-val-as iter) V))))))
-    acc))
-;;; map-show-driver -- allocate the iter box, run map-show-loop, free.
-;;;
-;;; Since: Phase repl-show-collections
-
-(defn map-show-driver [^Show K ^Show V]
-  [m (Map K V)]
-  : cstr
-  (let [iter (hamt/iter-alloc (map-hamt m))
-        body (map-show-loop m iter true "")]
-    (do (hamt/iter-destroy! iter) body)))
-;;; Show [Map] -- render a Map[K V] as "#map{k1 v1 k2 v2}" using the key and
-;;; value Show instances.  Mirrors the #map{...} / hamt-of literal surface.
-;;; An empty Map shows as "#map{}".
+    (do
+      (when (not first) (builder/push-cstr! b " "))
+      (let [ks (show (:: (hamt/iter-cur-key iter) K))
+            vs (show (:: (map-iter-cur-val-as iter) V))]
+        (do
+          (builder/push-string! b ks)
+          (string/release ks)
+          (builder/push-cstr! b " ")
+          (builder/push-string! b vs)
+          (string/release vs)))
+      (map-show-loop m iter false b))
+    b))
+;;; Show [Map] -- render a Map[K V] as an owned "#map{k1 v1 k2 v2}" String.
 ;;;
 ;;; Example:
-;;;   (show (hamt-of 1 10 2 20))  ; => "#map{1 10 2 20}"
-;;;
-;;; Since: Phase repl-show-collections
+;;;   (show (hamt-of 1 10 2 20))  ; => String "#map{1 10 2 20}"
 
 (definstance Show [Map]
   [(Show K) (Show V)]
   (show [x]
-    (show-concat "#map{" (show-concat (map-show-driver (:: x (Map K V))) "}"))))
+    (let [mm   (:: x (Map K V))
+          b    (builder/new)
+          iter (hamt/iter-alloc (map-hamt mm))]
+      (do
+        (builder/push-cstr! b "#map{")
+        (map-show-loop mm iter true b)
+        (hamt/iter-destroy! iter)
+        (builder/push-cstr! b "}")
+        (builder/finish b)))))
+;; ---------------------------------------------------------------------------
+;; Show [Sym] -- interned runtime symbols (:Sym).
+;;
+;; A keyword literal (`:a`) is an interned :Sym, so a Sym-keyed collection --
+;; `#map{:a 1}`, `#set{:x :y}` -- renders each key through Show[Sym].  Without
+;; this instance the map/set show loop had no Show for the key type and the
+;; interpreter fell through to the raw carrier integer (`#map{32696212 1}`
+;; instead of `#map{:a 1}`); see docs/reported/map-show-keyword-key-raw-int.md.
+;;
+;; The instance lives here (Show's own module) rather than in sym.tur because
+;; the Show class is defined here and sym.tur loads before it -- an instance in
+;; sym.tur could not name Show.  sym.tur is loaded below for `sym->str`; the
+;; body is ordinary Turmeric (no inline-C) so the tree-walking interpreter --
+;; which is the reported path -- can execute it via the sym->str native.
+;; ---------------------------------------------------------------------------
+(load "stdlib/sym.tur")
+;;; Show [Sym] -- render an interned symbol as an owned ":name" String.
+;;;
+;;; Example:
+;;;   (show :hello)  ; => String ":hello"
+
+(definstance Show [Sym]
+  (show [x]
+    : String
+    (let [b (builder/new)]
+      (do
+        (builder/push-cstr! b ":")
+        (builder/push-cstr! b (sym->str x))
+        (builder/finish b)))))
+;; ---------------------------------------------------------------------------
+;; Convenience wrappers + a compatibility alias.
+;; ---------------------------------------------------------------------------
+;;; show-string-fputs -- internal: write a cstr to stdout with no newline.
+
+(defn show-string-fputs [s : cstr]
+  #fx{FS}
+  : void
+  ```c
+  fputs((const char *)s, stdout);
+  ```)
+;;; print-show -- render x via Show and print it (no trailing newline).
+;;;
+;;; Shows x to an owned String, prints its bytes, and releases the String.
+;;;
+;;; Example:
+;;;   (print-show 42)  ; prints: 42
+;;;
+;;; Since: v2 (show-owned-result-plan)
+
+(defn print-show [^Show a] [x : a] : void
+  (let [s (show x)]
+    (do (show-string-fputs (string/to-cstr s)) (string/release s))))
+;;; show-line -- render x via Show and print it with a trailing newline.
+;;;
+;;; Shows x to an owned String, prints its bytes plus a newline, releases it.
+;;;
+;;; Example:
+;;;   (show-line 42)  ; prints: 42\n
+;;;
+;;; Since: v2 (show-owned-result-plan)
+
+(defn show-line [^Show a] [x : a] : void
+  (let [s (show x)] (do (println (string/to-cstr s)) (string/release s))))

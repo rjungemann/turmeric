@@ -603,10 +603,12 @@ Expr *elab_send_to(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Emit: __extension__ ({ tur_router_send(__TUR_VAL_0__, to_idx, (int64_t)(__TUR_VAL_1__)); (void*)__TUR_VAL_0__; }) */
+    /* Emit: ({ tur_router_send(__TUR_VAL_0__, to_idx, (int64_t)(__TUR_VAL_1__)); (void*)__TUR_VAL_0__; })
+     * Bare statement-expression, no __extension__ -- see the note in
+     * elab_sessions.c's send_code.  src/turi/eval.c matches this by prefix. */
     char send_code[256];
     snprintf(send_code, sizeof(send_code),
-             "__extension__ ({ tur_router_send(__TUR_VAL_0__, %d, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })",
+             "({ tur_router_send(__TUR_VAL_0__, %d, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })",
              to_idx);
     size_t send_code_len = strlen(send_code);
     char *code_str = (char *)arena_alloc(e->arena, send_code_len + 1);

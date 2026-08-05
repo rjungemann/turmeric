@@ -1,0 +1,16 @@
+;; Two-effect, two-case resuming handler; each case trampolines independently
+;; and threads its own resumed value. result = (1 + 2) * 50000 = 150000.
+;;
+;; 5e4 is the every-path depth. The full 5e5 lives in the compiled-only sibling
+;; `cps-tramp-resume-multicase-500k` -- read the header in
+;; `cps-tramp-resume-deep-1m` for why the pair is split.
+(defeffect Add [] :int)
+(defeffect Mul [] :int)
+(defn loop [n : int acc : int] : int
+  (if (= n 0) acc
+    (loop (- n 1) (+ (+ acc (perform (Add))) (perform (Mul))))))
+(defn run [] : int
+  (handle (loop 50000 0)
+    (Add [] k) (resume k 1)
+    (Mul [] k) (resume k 2)))
+(defn main [] : int (println (run)) 0)

@@ -1,0 +1,52 @@
+; collections-cannot-hold-rc-values item 3: stdlib/rcchain.tur is a collection
+; of rc<A> the cycle collector CAN trace through.
+;
+; The sibling fixture gc-blind-spot-cycle-through-vec measures the gap: a cycle
+; routed through a Vec's flat element buffer is refcount-correct and never
+; reclaimed, because the buffer is an ordinary malloc block with no walk_fn.
+; It also shows the gap is narrower than "collections" -- a container built out
+; of rc cells is traced today.  RcChain is that observation packaged.
+;
+; So the assertions here are the mirror image of the vec arm, on the same shape:
+; a node whose collection holds the node back.
+;
+;   n --.kids--> RcChain --.item--> n
+;
+; and the whole thing goes.  No new machinery was needed anywhere -- the module
+; is ordinary Turmeric, no inline-C, no runtime hook -- which is the actual
+; finding: the walker was never the missing piece.
+(load "stdlib/rcchain.tur")
+
+(defstruct N :move [kids : rc<RcChain>])
+
+(defn nil-n [] : rc<N>
+  (:: 0 rc<N>))
+
+(defn build [] : int
+  (let [n (rc/of (make-struct N (rcchain-nil)))
+        c (rcchain-cons (rc/clone n) (rcchain-nil))]
+    (set! (.kids n) c))
+  0)
+
+(defn main [] : int
+  (gc-enable!)
+
+  ;; Refcounts first: the chain owns its element, and the borrow accessors do
+  ;; not consume the chain (rc<T> is move-only, so a by-value param would).
+  (let [a (rc/of (make-struct N (rcchain-nil)))]
+    (println (rc/strong-count a))              ; 1
+    (let [c (rcchain-cons (rc/clone a) (rcchain-nil))]
+      (println (rc/strong-count a))            ; 2 -- the chain owns one
+      (println (rcchain-empty? c))             ; 0
+      (println (rcchain-empty? c))             ; 0 -- borrowed, not consumed
+      (println (rcchain-empty? (rcchain-next c)))))  ; 1 -- one link only
+
+  ;; Then the thing that matters: 50 cycles routed through a chain, collected.
+  (let [^mut i 0]
+    (while (< i 50)
+      (build)
+      (set! i (+ i 1))))
+  (gc!)
+  (println (if (> (gc-objects-freed) 0) 1 0))  ; 1
+  (println (gc-live-blocks))                   ; 0
+  0)

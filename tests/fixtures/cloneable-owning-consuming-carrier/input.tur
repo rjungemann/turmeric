@@ -1,0 +1,31 @@
+;; E3a (owning-cloneable-capture): the CONSUMING CARRIER case -- a cloneable
+;; continuation frame that CONSUMES (frees) its captured `:heap` carrier handle
+;; once per call (an owning, non-^borrow param, auto-freed at the callee's scope
+;; exit).  Unlike rc (refcounted -> incref clone), a heap handle is not shared:
+;; each multi-shot resume must free its OWN allocation, so the env_clone glue is a
+;; real DEEP COPY (malloc a fresh header + shallow field copy).  Restricted to a
+;; FLAT heap handle (no owning fields), so the shallow copy shares nothing.
+;;
+;; TWO fields (tag, tag2) so the fixture guards the FULL header copy, not just the
+;; first word.  consume-h reads .tag2 and is auto-freed; resumed twice, each
+;; resume deep-copies h, reads it, frees its copy; the owner's original is freed
+;; once by its P5b-threaded scope-exit drop.  Every allocation malloc'd once,
+;; freed once.  LeakSanitizer-clean.
+
+(defstruct H :heap [tag : int tag2 : int])
+
+(defn k-identity [k] : int k)
+
+(defn consume-h [v : int h : H] : int
+  (+ v (.tag2 h)))
+
+(defn run [] : int
+  (let [h (make-struct H :tag 5 :tag2 100)]
+    (let [k (cloneable-reset (consume-h (cloneable-shift k-identity 0) h))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))          ; (10 + 100) + (20 + 100) = 230
+
+(defn main [] : int
+  (println (run))
+  0)

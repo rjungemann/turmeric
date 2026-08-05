@@ -213,6 +213,17 @@ typedef struct CtorField {
      * tracking: effect_check merges this row when a `(.run v)` call invokes the
      * stored fn.  NULL for non-fn fields or fn fields with no effect annotation. */
     struct EffectRow *effect_row;
+    /* drop-glue-shallow-nested-owning-aggregate: non-NULL when this field is a
+     * nested owning aggregate stored behind the int64 carrier -- a by-value
+     * struct/ADT product that itself `needs_drop_glue` (transitively owns an
+     * rc/ref/weak).  Such a field's `full_type` is deliberately left NULL (a
+     * carrier-ADT full_type would misclassify field READS), so this dedicated
+     * slot carries the inner def for the drop path: it (a) transitively flips
+     * the owner's `needs_drop_glue`, and (b) tells the by-value drop/walk glue
+     * to release the boxed sub-aggregate via `drop_glue_<Inner>` /
+     * `walk_glue_<Inner>` instead of leaking it.  NULL for a directly-owning
+     * (rc/ref/weak) field or a non-owning inline aggregate. */
+    const struct AdtDef *drop_inner_def;
 } CtorField;
 
 /* Phase SZ6: Type-level size index term.
@@ -336,6 +347,22 @@ typedef struct AdtDef {
      * skip an opaque one -- it stays the int64 carrier with its name kept only
      * for nominal identity (typeclass dispatch, REPL type tags, mangling). */
     bool        is_opaque;
+    /* sealed-opaque experiment (docs/upcoming/sealed-opaque-plan.md): set by the
+     * `:sealed` attribute on a defopaque.  `::` is a COERCING cast, so an
+     * ordinary opaque can always be unwrapped to its carrier and re-wrapped as a
+     * fresh value -- which bounds every guarantee built on the handle (see
+     * docs/reported/frozen-region-aliasing-via-coercing-cast.md).  When this is
+     * set AND the experiment is enabled, elab_ascribe refuses to cross the
+     * type/representation boundary outside `sealed_module`.  Parsed and recorded
+     * unconditionally; only the ENFORCEMENT is gated, so adopting `:sealed`
+     * downstream does not break consumers who have not opted in. */
+    bool             sealed;
+    /* The module that declared this def, or NULL for a moduleless top level.
+     * Interned, so compare by pointer against `e->current_module_name`.  Only
+     * read for the `sealed` check today; `origin_file_id` above stays the
+     * FILE-granular identity the orphan-instance check uses, which is a
+     * different question (a module can span files). */
+    const Symbol    *sealed_module;
 } AdtDef;
 
 /* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is
@@ -640,6 +667,15 @@ typedef struct Type {
              * NULL for primitive rest (`& rest :int`, etc.), in which case the
              * fast-path TypeKind comparison on rest_kind is used. */
             struct Type *rest_full_type;
+            /* closure-drop-glue (mw-compose-of): the `& rest` parameter carries a
+             * `^borrow` annotation -- the callee invokes/reads each rest element
+             * but does not store or return it, so a fresh uniquely-owned closure
+             * passed as a rest argument does NOT escape and the CALLER may free it
+             * at scope exit (per-binding-once, so the duplicate-argument aliasing
+             * hazard of a callee-side per-apply free does not arise).  Set only
+             * under `--enable=closure-drop-glue`; default false keeps flag-off
+             * codegen byte-identical. */
+            bool rest_borrow;
             /* LS4: index of the parameter whose lifetime the borrow return is
              * tied to (the returned &'a T aliases this argument's storage), or
              * -1 when the return is not a lifetime-tied borrow.  Used by the
@@ -746,6 +782,20 @@ typedef struct Type {
         struct {
             struct Type *fn;   /* The type constructor being applied (kind * -> * or * -> * -> *) */
             struct Type *arg;  /* The type argument (kind *) */
+            /* constrained-hkt-abstract-var-requires-last-param-free: a
+             * HOLE-HEADED partial application -- `(Result _ cstr)`, the shape a
+             * wildcard instance head declares.  `fn` is the bare constructor and
+             * `arg` is the FIXED argument; the free slot is the hole.  Applying
+             * such a type to `X` places `X` at the hole index and the fixed args
+             * in the remaining slots, so `(Result _ cstr)` applied to `int` is
+             * `(Result int cstr)` -- which ordinary currying cannot express,
+             * since a curried prefix can only ever leave the LAST slot free.
+             *
+             * Encoding is hole-index PLUS ONE so that 0 -- the value every
+             * memset/zero-initialised Type already carries -- means "ordinary
+             * application, no hole".  Never read this field directly; use
+             * type_app_hole_pos() / type_app_has_hole(). */
+            uint8_t hole_pos_p1;
         } app;
         /* Phase HKT-P2: Recursive type binder — (defrec Name [params] body) */
         struct {
@@ -900,6 +950,10 @@ enum {
  * different arity; the arena is never freed (reachable, process-lifetime), so
  * the arrays outlive every by-value Type copy that shares them. */
 uint8_t *tur_fn_args_alloc(uint32_t n);
+
+/* The same process-lifetime arena, for building Types where no caller arena is
+ * in scope (see constrained-hkt-abstract-var-requires-last-param-free). */
+Arena *tur_type_arena(void);
 
 /* CONV-S1 (defstruct-as-defadt): the runtime `any`-box tag for a type.  A
  * struct-origin lowered ADT boxes / casts / is?-tests as TY_STRUCT, so the
@@ -1266,6 +1320,22 @@ static inline Type type_weak(TypeKind inner) {
     return t;
 }
 
+/* weak<ADT> with the ADT def carried alongside, the weak mirror of
+ * type_rc_adt.  A `weak<Name>` field over a user aggregate needs this for the
+ * same reason the rc form does: without the inner def the field's type is
+ * `weak<?>` while `(weak r)` over an `rc<Name>` produces `weak<ADT>`, so the
+ * back-edge of a parent/child graph -- the one shape weak<T> exists for --
+ * failed to type-check at the `set!`. */
+static inline Type type_weak_adt(struct AdtDef *def) {
+    Type t = {0};
+    t.kind = TY_WEAK;
+    t.copy_kind = CK_MOVE;
+    t.as.rc.inner = TY_ADT;
+    t.as.rc.adt_def = def;
+    t.n_lifetimes = 0;
+    return t;
+}
+
 /* Construct a function type from TypeKinds.  arity is unbounded (uint32_t); the
  * per-arg kind/flag arrays are allocated out of line from the global type arena
  * (tur_fn_args_alloc), so a function type can describe any number of parameters
@@ -1295,6 +1365,7 @@ static inline Type type_fn(const TypeKind arg_kinds[], uint32_t arity, TypeKind 
     t.as.fn.result_borrow_arg = -1; /* LS4: no lifetime-tied borrow return by default */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
     t.as.fn.rest_full_type = NULL; /* typed-variadic: NULL = primitive rest */
+    t.as.fn.rest_borrow = false; /* closure-drop-glue: ^borrow rest, default off */
     t.as.fn.param_type_forms = NULL; /* sized-types-cross-param-unification: filled by defn elab */
     t.as.fn.result_type_form = NULL; /* SZ8 non-GADT: filled by defn elab when a return ann was recorded */
     return t;
@@ -1372,6 +1443,24 @@ static inline Type type_typeclass_inst(TypeClassInstance *inst) {
  * Both fn and arg are copied into newly-allocated memory on the arena.
  * The result kind is computed from fn's kind using kind_of_type_app. */
 Type type_app(Arena *a, Type fn, Type arg, Span span);
+/* constrained-hkt-abstract-var-requires-last-param-free: build the hole-headed
+ * partial application `ctor` with `fixed` in every slot but `hole_pos`, which
+ * stays free (e.g. type_app_hole(a, Result, cstr, 0) == `(Result _ cstr)`). */
+Type type_app_hole(Arena *a, Type fn, Type arg, uint8_t hole_pos, Span span);
+/* Does this type carry a partial-application hole?  False for every ordinary
+ * application, and for every non-TY_APP type. */
+static inline bool type_app_has_hole(const Type *t) {
+    return t && t->kind == TY_APP && t->as.app.hole_pos_p1 != 0;
+}
+/* The hole's slot index.  Only meaningful when type_app_has_hole(). */
+static inline uint8_t type_app_hole_pos(const Type *t) {
+    return (uint8_t)(t->as.app.hole_pos_p1 - 1);
+}
+/* Apply a hole-headed partial application to `elem`, yielding the saturated
+ * N-ary application (`(Result _ cstr)` + `int` -> `(Result int cstr)`).  When
+ * `head` carries no hole this is the ordinary type_app.  Returns the saturated
+ * type; arena-allocates the spine. */
+Type type_app_fill_hole(Arena *a, Type head, Type elem, Span span);
 
 /* Lift the substructural discipline (:linear / :affine) from a TY_APP's head
  * StructDef onto the application node.  Call after constructing a TY_APP whose
@@ -1414,7 +1503,22 @@ Type type_typerow_named(Arena *a, Type **elements, const char **field_names,
 bool type_typerow_eq_perm(Type a, Type b);
 
 /* Variadic HKT rows (Layer 5): row algebra -- the type-level operations the
- * ECS query / relational layers build on. All are pure and compile-time. */
+ * ECS query / relational layers build on. All are pure and compile-time.
+ *
+ * row-ops-drop-field-names: every operation below FORWARDS a labeled row's
+ * field_names. Dropping them would return a positional row, which compares
+ * equal to any same-shaped positional row, so `#row{id : int}` would start
+ * unifying with `#row{name : int}` after a round trip through the algebra.
+ * Labeled rows dedup and intersect on the (name, type) PAIR, matching how they
+ * unify elsewhere. Mixing a labeled operand with a bare one is rejected by the
+ * caller (elab_types.c) rather than resolved here; an EMPTY row is
+ * label-neutral, so `(row-union R #row{})` stays the identity either way. */
+/* True if `r` is a non-empty row carrying field names. */
+bool type_typerow_is_labeled(Type r);
+/* First field name appearing twice in a labeled row, or NULL if all distinct.
+ * concat/union can produce a duplicate that no literal could (TUR-E0291), so
+ * the caller scans the folded result. */
+const char *type_typerow_dup_field_name(Type r);
 /* Membership: true if `row` contains an element type_eq to `elem`. */
 bool type_typerow_contains(Type row, Type elem);
 /* Concatenation (`++`): x ++ y, order-preserving, duplicates kept (clamped 255). */
@@ -1423,10 +1527,11 @@ Type type_typerow_concat(Arena *a, Type x, Type y);
 Type type_typerow_union(Arena *a, Type x, Type y);
 /* Intersection: x's elements also in y, x's order, deduplicated. */
 Type type_typerow_intersect(Arena *a, Type x, Type y);
-/* L6 follow-up D: canonical (sorted-by-type_name) copy of a row -- the opt-in
- * surface for permutation-aware equality. (row-canon #row{a b}) and
- * (row-canon #row{b a}) reduce to the same TY_TYPEROW, so ordinary type_eq
- * agrees. Compile-time only. */
+/* L6 follow-up D: canonical (sorted) copy of a row -- the opt-in surface for
+ * permutation-aware equality. (row-canon #row{a b}) and (row-canon #row{b a})
+ * reduce to the same TY_TYPEROW, so ordinary type_eq agrees. Compile-time only.
+ * Sort key is (field_name, type_name) for a labeled row, type_name alone for a
+ * positional one -- see the note in types.c on why the field name has to lead. */
 Type type_typerow_canonical(Arena *a, Type x);
 
 /* Phase 17: Exception type constructor */
@@ -1647,6 +1752,7 @@ char        *type_adt_app_ctor_suffix(Type t);
 /* CONV-S1: stable interned C typedef name (`tur_adt_<mangled>`) for the by-value
  * representation of a non-parametric flat-product ADT.  See types.c. */
 const char  *adt_byval_c_name(const AdtDef *def);
+const char  *adt_heap_ptr_c_name(const AdtDef *def);
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
  * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).  True when t is
  * a concrete monomorphisation of a single-variant non-GADT parametric flat
@@ -1662,6 +1768,38 @@ bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);
+bool         type_is_boxed_container_elem(Type t);
+
+/* Increment 4 stage 2 (repr-decision-function-plan): the POSITION axis.
+ * `repr_of(type, position)` states the INTENDED representation protocol --
+ * what form a value of this type takes in this position under the
+ * consolidated rules increments 1-3 established.  In stage 2 it is
+ * consulted only by SHADOW checks (under --emit-abi-trace) that log
+ * disagreements with what a site actually decided; behavior is unchanged.
+ * A disagreement is either a residual seam or a hole in this spec -- both
+ * are findings.  Stage 3 migrates sites to consult it for real. */
+typedef enum ReprPosition {
+    REPR_POS_PARAM,           /* a defn/fn parameter slot */
+    REPR_POS_RESULT,          /* a fn result / control-form merge value */
+    REPR_POS_LET_BIND,        /* a let/letrec binding */
+    REPR_POS_CONTAINER_ELEM,  /* a Vec/Map/Set element slot */
+    REPR_POS_STRUCT_FIELD,    /* a struct/ADT field slot */
+    REPR_POS_CARRIER_SINK,    /* a generic (tyvar/inline-C) int64 sink */
+} ReprPosition;
+
+typedef enum ReprForm {
+    REPR_SCALAR_BITS,   /* value IS the bits (int/float/bool/cstr/ptr leaf) */
+    REPR_HEAP_PTR,      /* pointer to a heap object; carrier round-trip lossless */
+    REPR_BYVAL_AGG,     /* a real C aggregate, by value */
+    REPR_BOXED_AGG,     /* heap-boxed aggregate; slot holds the box pointer */
+    REPR_CARRIER_I64,   /* the erased int64 carrier */
+    REPR_FAT_HANDLE,    /* fat closure box {thunk, env...} as a void-ptr/int64 handle */
+    REPR_THIN_FN,       /* bare code pointer, no environment */
+} ReprForm;
+
+ReprForm     repr_of(const Type *t, ReprPosition pos);
+const char  *repr_form_name(ReprForm f);
+const char  *repr_position_name(ReprPosition pos);
 /* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /
  * adt_is_byvalue_product -- a concrete flat-product ADT-app (`(Pair2 int
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the
@@ -1702,6 +1840,11 @@ const char  *type_struct_value_c_name(Type t);
  * a transparent newtype over int64 -- one C representation everywhere, so HKT
  * dispatch can chain it (.fmap (.fmap s g) h) without rep-mixing. */
 bool         type_is_transparent_int_newtype(Type t);
+/* fn-value-fat-normalization stage 1: the shared param-normalization decision
+ * (see types.c). Consulted by BOTH the elab call-site shim and the emit
+ * invoke dispatch -- do not fork this logic. */
+bool         fn_param_type_is_fat_normalized(const Type *t);
+bool         fn_result_type_is_fat_normalized(const Type *t);
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
 int          type_rank(const Type *t);
 

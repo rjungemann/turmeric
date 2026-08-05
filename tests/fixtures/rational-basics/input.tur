@@ -1,0 +1,52 @@
+;; rational-basics -- Rational construction, normalization, the #rat{...}
+;; literal, accessors, and the Show/Eq/Ord instances.
+;;
+;; Every value is normalized at construction (den > 0, gcd(|num|, den) = 1), so
+;; structural equality IS mathematical equality: #rat{6/8} and #rat{3/4} are the
+;; same value.  The literal normalizes at READ time, so the emitted call is
+;; already (rat/of! 3 4).
+(load "stdlib/rational.tur")
+
+(defn pr [r : Rational] : void
+  (let [s (rat->string r)]
+    (do (println (string/to-cstr s)) (string/release s))))
+
+(defn pr-show [r : Rational] : void
+  (let [s (show r)]
+    (do (println (string/to-cstr s)) (string/release s))))
+
+(defn res-ok? [r : (Result Rational ArithError)] : bool (.is-ok r))
+
+(defn main [] : int
+  ;; Literal + read-time normalization.
+  (pr #rat{3/4})
+  (pr #rat{-3/4})
+  (pr #rat{6/8})
+  (pr #rat{3/-4})
+  (pr #rat{-6/-8})
+  ;; A whole number prints without a denominator and round-trips.
+  (pr #rat{5})
+  (pr #rat{10/5})
+  (pr (rat/from-int 7))
+  ;; Accessors: the sign always lives in the numerator.
+  (println (rat/num #rat{-6/8}))
+  (println (rat/den #rat{-6/8}))
+  (println (rat/zero? #rat{0/5}))
+  (println (rat/integer? #rat{6/3}))
+  ;; rat/of reports a zero denominator instead of panicking.
+  (println (res-ok? (rat/of 3 4)))
+  (println (res-ok? (rat/of 3 0)))
+  ;; Structural equality is exact equality because both sides normalize.
+  (println (eq? #rat{2/4} #rat{1/2}))
+  (println (eq? #rat{2/4} #rat{1/3}))
+  ;; Ord: 1/3 < 1/2, via the cross-cancelled cross-product.
+  (println (rat/cmp #rat{1/3} #rat{1/2}))
+  (println (rat/cmp #rat{1/2} #rat{1/3}))
+  (println (rat/cmp #rat{2/4} #rat{1/2}))
+  (println (lt? #rat{1/3} #rat{1/2}))
+  (println (gte? #rat{1/2} #rat{1/2}))
+  ;; Show and the lossy exit from the exact tower.
+  (pr-show #rat{-6/8})
+  (println (rat->float #rat{1/4}))
+  (println (rat->float #rat{-3/4}))
+  0)

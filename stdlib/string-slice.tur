@@ -1,0 +1,188 @@
+;;; tur/string-slice -- StringSlice: a zero-copy, bounds-checked view into a String.
+;;;
+;;; A `StringSlice` is a `{ parent String; offset; len }` view that RETAINS its
+;;; parent String.  Because `String` is immutable and refcounted, the borrowed
+;;; byte range stays valid and unchanging for the slice's lifetime -- so this is
+;;; genuinely safe zero-copy ranged access, unlike a raw pointer+len view over a
+;;; `cstr` whose backing buffer can be freed or mutated underneath it.
+;;;
+;;; Sub-slicing (`slice/sub`) is O(1): a new view over the same parent. Indexing
+;;; (`slice/byte-at`) is bounds-checked (returns -1 out of range). Materialize to
+;;; an owned `String` (`slice/to-string`) or a fresh `cstr` (`slice/to-cstr`)
+;;; only at the boundary where you need one.
+;;;
+;;; This supersedes the inert borrowed-view `str` (stdlib/str.tur) for the safe,
+;;; owned case: prefer a `String` + `StringSlice` when the view must not outlive
+;;; -- or be invalidated by -- its source. `str` remains for zero-ownership
+;;; interop over a caller-managed buffer.
+;;;
+;;; Every op has an interpreter native (src/turi/string_native.c), so
+;;; `StringSlice` behaves identically compiled and under --interpret.
+;;;
+;;; Since: v2 (owned-string-type-plan -- String slices)
+(load "stdlib/string.tur")
+
+(load "stdlib/typeclass.tur")
+
+(load "stdlib/typeclass-show.tur")
+
+(load "stdlib/typeclass-hash.tur")
+;; ---- Opaque handle newtype -------------------------------------------------
+
+(defopaque StringSlice :ptr<void>)
+;; ---- Runtime primitives (src/runtime/tur_string.c) -------------------------
+
+(extern-c tur_string_slice [s :ptr off :int len :int] :ptr)
+
+(extern-c tur_string_slice_cstr [s :cstr off :int len :int] :ptr)
+
+(extern-c tur_slice_retain [sl :ptr] :ptr)
+
+(extern-c tur_slice_release [sl :ptr] :void)
+
+(extern-c tur_slice_len [sl :ptr] :int)
+
+(extern-c tur_slice_empty [sl :ptr] :bool)
+
+(extern-c tur_slice_byte_at [sl :ptr i :int] :int)
+
+(extern-c tur_slice_sub [sl :ptr off :int len :int] :ptr)
+
+(extern-c tur_slice_to_string [sl :ptr] :ptr)
+
+(extern-c tur_slice_to_cstr [sl :ptr] :cstr)
+
+(extern-c tur_slice_eq [a :ptr b :ptr] :bool)
+
+(extern-c tur_slice_cmp [a :ptr b :ptr] :int)
+
+(extern-c tur_slice_hash [sl :ptr] :int)
+;; ---- Construction ----------------------------------------------------------
+;;; string/slice -- a zero-copy view of String s over bytes [off, off+len).
+;;;
+;;; The slice retains s, so the range stays valid until the slice is released.
+;;; off/len are clamped to s's bounds, so the result is always a valid view.
+;;;
+;;; Parameters:
+;;;   s   -- the parent String (retained by the slice)
+;;;   off -- start byte offset (clamped into [0, len s])
+;;;   len -- number of bytes (clamped so off+len <= len s)
+;;;
+;;; Returns:
+;;;   A StringSlice viewing the requested range.
+;;;
+;;; Example:
+;;;   (slice/to-cstr (string/slice (string/from-cstr "hello world") 6 5))  ; => "world"
+;;;
+;;; Since: v2
+
+(defn string/slice [s : String off : int len : int] : StringSlice
+  (:: (tur_string_slice (:: s ptr<void>) off len) StringSlice))
+;;; string/slice-cstr -- slice a raw cstr safely by copying it into an owned
+;;; String the slice solely owns (freed when the slice is released).
+;;;
+;;; Use this to get safe ranged access to a cstr without worrying about the
+;;; cstr's lifetime: the bytes are copied once, and the copy lives exactly as
+;;; long as the slice (and its sub-slices).
+;;;
+;;; Since: v2
+
+(defn string/slice-cstr [s : cstr off : int len : int] : StringSlice
+  (:: (tur_string_slice_cstr s off len) StringSlice))
+;; ---- Refcount --------------------------------------------------------------
+;;; slice/retain -- increment the slice's refcount, returning a second handle.
+;;;
+;;; Since: v2
+
+(defn slice/retain [sl : StringSlice] : StringSlice
+  (:: (tur_slice_retain (:: sl ptr<void>)) StringSlice))
+;;; slice/release -- decrement the slice's refcount; at zero, release the parent.
+;;;
+;;; Since: v2
+
+(defn slice/release [sl : StringSlice] : void
+  (tur_slice_release (:: sl ptr<void>)))
+;; ---- Queries ---------------------------------------------------------------
+;;; slice/len -- byte length of the slice.
+;;;
+;;; Since: v2
+
+(defn slice/len [sl : StringSlice] : int (tur_slice_len (:: sl ptr<void>)))
+;;; slice/empty? -- true iff the slice has length zero.
+;;;
+;;; Since: v2
+
+(defn slice/empty? [sl : StringSlice] : bool
+  (tur_slice_empty (:: sl ptr<void>)))
+;;; slice/byte-at -- the byte (0..255) at index i, or -1 if out of range.
+;;;
+;;; Since: v2
+
+(defn slice/byte-at [sl : StringSlice i : int] : int
+  (tur_slice_byte_at (:: sl ptr<void>) i))
+;;; slice/compare -- lexicographic byte compare of two slices: -1, 0, or 1.
+;;;
+;;; Since: v2
+
+(defn slice/compare [a : StringSlice b : StringSlice] : int
+  (tur_slice_cmp (:: a ptr<void>) (:: b ptr<void>)))
+;;; slice/eq? -- content equality of two slices.
+;;;
+;;; Since: v2
+
+(defn slice/eq? [a : StringSlice b : StringSlice] : bool
+  (tur_slice_eq (:: a ptr<void>) (:: b ptr<void>)))
+;;; slice/hash -- content hash over the slice's byte range.
+;;;
+;;; Since: v2
+
+(defn slice/hash [sl : StringSlice] : int (tur_slice_hash (:: sl ptr<void>)))
+;; ---- Sub-slicing (O(1)) ----------------------------------------------------
+;;; slice/sub -- a sub-view [off, off+len) RELATIVE to this slice (clamped).
+;;;
+;;; O(1): the result views the same parent String; no bytes are copied.
+;;;
+;;; Example:
+;;;   (let [w (string/slice (string/from-cstr "hello world") 6 5)]  ; "world"
+;;;     (slice/to-cstr (slice/sub w 0 3)))                          ; => "wor"
+;;;
+;;; Since: v2
+
+(defn slice/sub [sl : StringSlice off : int len : int] : StringSlice
+  (:: (tur_slice_sub (:: sl ptr<void>) off len) StringSlice))
+;; ---- Materialization -------------------------------------------------------
+;;; slice/to-string -- copy the slice's range into a fresh owned String.
+;;;
+;;; Since: v2
+
+(defn slice/to-string [sl : StringSlice] : String
+  (:: (tur_slice_to_string (:: sl ptr<void>)) String))
+;;; slice/to-cstr -- copy the slice's range into a fresh NUL-terminated cstr.
+;;;
+;;; The result is a freshly heap-allocated cstr (the caller frees it, or adopts
+;;; it with string/adopt-cstr).  A slice is not NUL-terminated at its end, so
+;;; there is deliberately no borrowed cstr view -- this always copies.
+;;;
+;;; Since: v2
+
+(defn slice/to-cstr [sl : StringSlice] : cstr
+  (tur_slice_to_cstr (:: sl ptr<void>)))
+;; ---- Typeclass instances ---------------------------------------------------
+;;; Eq [StringSlice] -- content equality (no allocation).
+
+(definstance Eq [StringSlice] (eq? [x y] (slice/eq? x y)))
+;;; Ord [StringSlice] -- lexicographic byte ordering.
+
+(definstance Ord [StringSlice]
+  (lt? [x y] (< (slice/compare x y) 0))
+  (lte? [x y] (<= (slice/compare x y) 0))
+  (gt? [x y] (> (slice/compare x y) 0))
+  (gte? [x y] (>= (slice/compare x y) 0)))
+;;; Show [StringSlice] -- the slice content as a fresh owned String.
+;;; slice/to-cstr always mallocs, so adopting it is leak-free.
+
+(definstance Show [StringSlice]
+  (show [x] : String (string/adopt-cstr (slice/to-cstr x))))
+;;; Hash [StringSlice] -- content hash over the byte range.
+
+(definstance Hash [StringSlice] (hash [x] (slice/hash x)))

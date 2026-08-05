@@ -1,0 +1,6 @@
+(defpackage mid2
+  :name    "mid2"
+  :version "0.1.0"
+  :spices #map{
+    "leaf" #map{:path "../leaf"}
+  })

@@ -1,0 +1,9 @@
+N=1000000 result=1042 sum=500001500000 expect_sum=500001500000 kframe_runs=1 outer_final=1042 expect_outer=1042 max_stack=152
+meta-stack high-water=1 (want O(nesting), not O(N=1000000))
+
+=== E7 FULL-FIDELITY VERDICT ===
+deep tail-recursion flat (real chain layout): YES (max_stack=152)
+handle-continuation frame runs exactly once:  YES (runs=1)
+enclosing OUTER handle catches propagated eff: YES
+accumulated side effects correct:             YES
+meta-stack bounded by nesting (heap O(1) C):  YES (hwm=1)

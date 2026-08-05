@@ -1,0 +1,28 @@
+;; Regression guard for digest-hex-nested-static-fn: digest/sha256-hex and
+;; digest/md5-hex previously emitted `static` NESTED C functions (rejected by a
+;; standard C compiler). The per-block transforms are now hoisted to file scope,
+;; so these compile and match the known FIPS/RFC test vectors.
+(load "stdlib/digest.tur")
+
+;; hash the NUL-terminated bytes of a cstr literal
+(defn sha-of [s : cstr] : cstr
+  ```c
+  return (const char *)(intptr_t)__TUR_CNAME_digest/sha256-hex__(
+    (int64_t)(intptr_t)s, (int64_t)strlen((const char *)(intptr_t)s));
+  ```)
+
+(defn md5-of [s : cstr] : cstr
+  ```c
+  return (const char *)(intptr_t)__TUR_CNAME_digest/md5-hex__(
+    (int64_t)(intptr_t)s, (int64_t)strlen((const char *)(intptr_t)s));
+  ```)
+
+(defn demo [] : int
+  (do
+    (println (digest/sha256-hex 0 0))   ; SHA-256("")
+    (println (sha-of "abc"))            ; SHA-256("abc")
+    (println (digest/md5-hex 0 0))      ; MD5("")
+    (println (md5-of "abc"))            ; MD5("abc")
+    0))
+
+(demo)

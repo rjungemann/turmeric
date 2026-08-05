@@ -1,7 +1,10 @@
 # Turmeric as a Godot 4 Scripting Language -- Binding Guide
 
-> **Status:** v1 in progress (Phase G3+G4 MVPs shipped)
-> **Plan:** [docs/upcoming/v1/godot-language-binding-plan.md](../upcoming/v1/godot-language-binding-plan.md)
+> **Status:** v1 in progress. Working today: the curated + generated
+> facades, interpreter and AOT execution, the editor plugin (highlighter,
+> completion, structured validation, and a stack-frame debugger),
+> inspector exports/signals, cross-script calls, and `preload`.
+> **Plan:** [docs/upcoming/v1/godot-language-binding-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/godot-language-binding-plan.md)
 > **Repo:** `../turmeric-godot/` (sibling to this one)
 
 This guide is for people who want to attach `.tur` scripts to Godot
@@ -81,11 +84,12 @@ script load:
 
 2. **`bridge/generated_facade.{h,cpp}`** -- a class-prefixed facade
    generated from `godot-cpp/gdextension/extension_api.json` by
-   `tools/gen_godot_facade.py`. Today ships wrappers for an
-   allow-listed 15 classes (~672 methods): Node, Node2D, CanvasItem,
-   Sprite2D, Area2D, RigidBody2D, StaticBody2D, PhysicsBody2D,
-   CollisionShape2D, Input, Viewport, SceneTree, Timer,
-   AnimationPlayer, Object.
+   `tools/gen_godot_facade.py`. Today ships ~2,400 method wrappers
+   across an allow-listed 53 classes -- the common 2D gameplay surface
+   (Node, Node2D, CanvasItem, Control, Sprite2D, the physics bodies,
+   Area2D, Camera2D, Timer, Tween, AnimationPlayer, Input, Label,
+   audio players, TileMap, ...) plus `Object`. The full list is the
+   `ALLOWLIST` in the generator.
 
 The generated names are `classname/method-name` (kebab-case methods,
 lowercase class prefix): `node2d/set-skew`, `sprite2d/is-centered`,
@@ -219,6 +223,27 @@ in v1; only errors and warnings reach the editor's error list panel.
 
 ---
 
+## Debugger
+
+The binding implements Godot's `ScriptLanguageExtension` debug hooks on
+top of libturi's `turi_debug_*` API, so the in-editor debugger works
+against running `.tur` scripts. Set a breakpoint in the script editor,
+hit Play, and execution pauses into Godot's debug loop; the Stack Trace
+dock shows the frame list (function / source / line), the Variables
+panel shows per-frame locals, the *Continue* / *Step Into* / *Step Over*
+/ *Step Out* buttons map to `turi_debug_resume_*`, and the debugger
+console's expression evaluator runs through `turi_debug_eval_expr`.
+
+Breakpoints are armed at script load (`_reload`), so they take effect
+without a manual attach step.
+
+Still stubbed (see [Known gaps](#known-gaps)): stack-level *members* and
+*instance*, the globals view, `_debug_get_error`, and the flat
+current-stack-info array. Frames, locals, breakpoints, stepping, and
+expression eval are the working core.
+
+---
+
 ## AOT execution mode
 
 The interpreter path runs every script body through libturi at call time.
@@ -228,7 +253,7 @@ table. The AOT path compiles each script to a shared library via
 the dlsym'd function pointer. Same observable behaviour either way --
 AOT is the optimisation, not a separate language.
 
-Plan reference: [docs/archive/godot-binding-aot-plan.md](../archive/godot-binding-aot-plan.md).
+Plan reference: [docs/archive/godot-binding-aot-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-binding-aot-plan.md).
 
 ### Opting in
 
@@ -350,70 +375,93 @@ Watch the Godot Output panel; every AOT diagnostic prefixes
 
 The AOT image owns a `dlopen` handle, dropped before the next image
 loads -- generations never overlap. v1 restricts AOT hot-reload to
-editor-stopped scripts (matches the parent plan's hot-reload story);
-there is no runtime guard against reload during a live call because
-Godot only fires `Script::_reload` outside Play.
+editor-stopped scripts; there is no runtime guard against reload during
+a live call because Godot only fires `Script::_reload` outside Play.
 
-### Not yet
+### Not yet AOT-able
 
 - `Ptr` / opaque-handle / struct args and returns.
-- Cross-script direct dispatch (Callable fallback works -- see
-  [Cross-script calls](#cross-script-calls)). The fast-path
-  build-graph variant is Tier 4 (T4.A approach 2).
+- Cross-script *direct* dispatch. The always-available Callable
+  fallback works today -- see [Cross-script calls](#cross-script-calls);
+  the direct build-graph variant is not yet wired.
 - Export-time signed dylibs.
 - Per-method JIT -- AOT is the v1 story; JIT is not in the v1 picture.
 
-### Shipped since the original v1 plan
-
-- Variadic dispatch: `godot-call-pack` + generated `cls/method`
-  wrappers with a trailing `extras : ArrayHandle`. Covers
-  `Object::emit_signal`, `Node::rpc`, `SceneTree::call_group`, ...
-  See Tier 3 (T3.E).
+Variadic calls dispatch fine either way: `godot-call-pack` plus the
+generated `cls/method` wrappers carry a trailing `extras : ArrayHandle`,
+covering `Object::emit_signal`, `Node::rpc`, `SceneTree::call_group`, and
+friends.
 
 ---
 
 ## Known gaps
 
-1. **No debugger.** Phase G4.3 (`debug_*` hooks) was called "stretch"
-   in the plan and didn't ship. Breakpoints / stepping / stack frames
-   need an interpreter-pause story libturi doesn't have today.
+1. **Debugger is partial.** Stack frames, per-frame locals, line /
+   function / source, editor breakpoints, stepping (in / over / out),
+   and live expression evaluation all work, backed by libturi's
+   `turi_debug_*` API. Still stubbed (return empty): `_debug_get_error`,
+   stack-level *members* and *instance*, `_debug_get_globals`, and
+   `_debug_get_current_stack_info`.
 
-2. **Eval-mode unknown calls defer to runtime.** A typo in a method
-   name passes `_validate` and only fires `TURI_ERROR` when the line
-   is actually executed. Tracked in
-   [docs/reported/eval-mode-unknown-call-deferred-to-runtime.md](../reported/eval-mode-unknown-call-deferred-to-runtime.md).
+2. **Handle types are opt-in, not enforced.** The bridge now emits a
+   `defopaque <Class>Handle` newtype per allow-listed class (plus
+   `Vec2Handle` / `Vec3Handle` / `ColorHandle` / `Rect2Handle` for the
+   arena aggregates), and the marshaller recognizes them. But the
+   prelude and generated facade still trade in bare `:int` to compose
+   with each other, so by default a mistyped opaque arg (a Vector2
+   handle where an Object is expected) is still only caught at runtime
+   by `(godot-call)`'s shape check. Reach for the newtypes in your own
+   script signatures when you want the compile-time distinction;
+   unwrap with `(:: h :int)` at the call boundary.
 
-3. **No Object/arena handle distinction at the type level.** Both
-   are `:int` to the elaborator. Mistyped opaque args (passing a
-   Vector2 handle where an Object is expected) are caught at runtime
-   via `(godot-call)`'s shape check, not at compile time. A
-   `defopaque NodeHandle` / `defopaque Vec2Handle` pass would tighten
-   this.
+3. **No Android / iOS / web export.** Desktop only for v1; web is
+   blocked on [`wasm-spices-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/wasm-spices-plan.md).
 
-4. **Inspector property types limited to `float`/`int`/`bool`/`string`**.
-   Vector2 / Color / Resource refs are next.
+4. **Generated facade allowlist is 53 of 920 classes.** Grown
+   tactically as demos demand; the long tail is editor-internals /
+   audio-server / 3D classes the average 2D game doesn't touch.
 
-5. **No Android / iOS / web export.** Desktop only for v1; web is
-   blocked on [`wasm-spices-plan.md`](../upcoming/wasm-spices-plan.md).
+5. **Some Variant types still don't cross the boundary.** Inspector
+   exports and prop-get/set now cover `float` / `int` / `bool` /
+   `string` / `vec2` / `vec3` / `color` / `rect2` / `object` (Resource
+   and Node refs). `Transform2D`, `Transform3D`, `Array`, and
+   `Dictionary` are not yet exportable as inspector defaults (they lack
+   arena builders on that path).
 
-6. **`signals.gd` driver in `examples/spike/` fails to parse** as a
-   GDScript file (type inference complaint on `var sigs := ...`).
-   Pre-existing; one-line `var sigs: Array =` fix waiting to be
-   landed.
+### Recently closed
 
-7. **Generated facade allowlist is 53 of 920 classes** (was 15 in the
-   original v1 plan; Tier 3 grew it). Tactical growth as demos
-   demand; the long tail is editor-internals / audio-server / 3D
-   classes the average 2D game doesn't touch.
+- **Debugger** landed (see gap 1 for what's still stubbed).
+- **Eval-mode unknown calls** now surface a `TUR-W0040` warning at
+  `_validate` time instead of only firing at runtime -- a typo shows up
+  in the editor's error list before the script is attached. (The
+  runtime-dispatch fallback is preserved for legitimately late-bound
+  natives, so it's a warning, not a hard error.) See
+  [docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md).
+- **Inspector property types** expanded past the primitives (see gap 5).
+- **`signals.gd`** in `examples/spike/` parses again (`var sigs: Array =`
+  landed).
+
+---
+
+## Preloading resources
+
+`(preload "res://path/to/thing.tscn")` returns a `ResourceHandle` and,
+when used as a top-level form, validates the path at script **load**
+time: a missing resource fails the `_reload` with
+`preload: missing resource '...'` before any gameplay runs, rather than
+handing back a null at first use. Results are cached, so a `defn` that
+calls `preload` repeatedly only loads once. Type the handle at the use
+site (`(:: (preload ...) :PackedSceneHandle)`) when you want a concrete
+type. For the runtime `load` / `ResourceLoader` story, see the
+[resource loader guide](godot-resource-loader-guide.md).
 
 ---
 
 ## Cross-script calls
 
 Each `.tur` script AOT-compiles to its own dlopen'd shared library.
-Direct symbol resolution from one script's library into another's is
-the Tier 4 "approach 2" piece (per-script `build.tur`-style
-dependency graph, `RTLD_GLOBAL` for exports) -- not in v1.x.
+Direct symbol resolution from one script's library into another's (a
+per-script dependency graph with `RTLD_GLOBAL` exports) is not in v1.x.
 
 The v1.x **always-available path** is exactly what GDScript pays for
 the same operation: route through Godot's Callable / `Object::callv`.
@@ -428,7 +476,7 @@ helpers in the prelude:
 (cross-call other-node "do-thing" arg1 arg2)
 
 ;; Arbitrary-arity flavour -- pass an ArrayHandle for any arg count.
-;; Same machinery the T3.E generated vararg wrappers use.
+;; Same machinery as the generated vararg wrappers.
 (let [extras (array-new)]
   (array-push-i extras 5)
   (array-push-c extras "hello")

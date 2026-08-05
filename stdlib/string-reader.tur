@@ -1,0 +1,28 @@
+;;; tur/string-reader -- opt-in `#s"..."` owned-String literal syntax.
+;;;
+;;; `#s"text"` reads as `(string/from-cstr "text")` -- a fresh owned String --
+;;; while bare `"text"` stays a borrowed `cstr` (the owned-string-type-plan keeps
+;;; the default literal typing unchanged).
+;;;
+;;; Two lines, because a reader macro and the code it expands to live in
+;;; different phases:
+;;;
+;;;   #use-reader-macros "stdlib/string-reader.tur"   ;; READ time: enable #s"..."
+;;;   (load "stdlib/string.tur")                       ;; EVAL time: the String code
+;;;
+;;;   ... #s"hello" ...   ;; => (string/from-cstr "hello"), an owned String
+;;;
+;;; Why not a single `(load)`?  A reader macro must be registered while the file
+;;; is being READ; `(load ...)` runs later, at EVAL time, after `#s"..."` has
+;;; already been tokenized -- so a plain load can never enable `#s` for the file
+;;; that loads it.  The read-time `#use-reader-macros` directive is what registers
+;;; it.  (Both directives accept the stable `stdlib/...` path: `#use-reader-macros`
+;;; falls back to TUR_STDLIB_DIR just as `(load)` does.)
+;;;
+;;; This file is intentionally definition-ONLY: it is meant to be named by
+;;; `#use-reader-macros` (which registers the macro below and discards everything
+;;; else).  Do not add a `(load ...)` here -- a file that is both `#use`-d and
+;;; `(load)`-ed would register the macro twice ("already registered").
+;;;
+;;; Since: v2 (owned-string-type-plan literal ergonomics)
+(reader-macros/define 's :string '(string/from-cstr $body))

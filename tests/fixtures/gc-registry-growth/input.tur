@@ -1,0 +1,29 @@
+; CG0 (gc-cycle-collection-plan): the GC block registry must grow past the old
+; fixed 4096-entry cap.
+;
+; Before CG0, gc_register_block was a silent no-op once gc_all_blocks_count hit
+; GC_GLOBAL_REGISTRY_CAPACITY (4096): every rc block allocated after that was
+; invisible to the collector -- a correctness cliff, not just a capacity limit
+; (docs/reported/gc-strong-cycles-not-collected.md). This builds a chain of
+; 20000 simultaneously-live rc blocks with the collector enabled and reports the
+; peak registry size, which must equal the number actually live.
+(defn note-peak [] : int
+  ```c
+  extern uint32_t gc_all_blocks_count;
+  static uint32_t peak = 0;
+  if (gc_all_blocks_count > peak) peak = gc_all_blocks_count;
+  return (int64_t)peak;
+  ```)
+
+(defn build-chain [n : int] : int
+  (if (< n 1)
+    (note-peak)
+    (let [r (rc/of n)]
+      (let [_ (build-chain (- n 1))]
+        (+ (rc/strong-count r) (note-peak))))))
+
+(defn main [] : int
+  (gc-enable!)
+  (build-chain 20000)
+  (println (note-peak))
+  0)

@@ -114,7 +114,21 @@ fixture_has_inline_c() {
     if   [ -f "$dir/input.tur" ]; then f="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then f="$dir/$(basename "$dir").tur"
     else return 1; fi
-    grep -q '```c' "$f" 2>/dev/null
+    grep -q '```c' "$f" 2>/dev/null && return 0
+    # The carve-out is about whether the PROGRAM contains inline-C, not whether
+    # that inline-C is spelled in the fixture file.  A fixture that reaches it
+    # through `(load "stdlib/<mod>.tur")` -- e.g. the rc/weak fixtures, whose
+    # inline-C lives in the loaded module -- is just as unrunnable under the
+    # tree-walking interpreter, but the own-file grep above says otherwise and
+    # the fixture then runs and fails on the first unsupported call.  Follow one
+    # level of `load`, which is all any fixture uses.
+    local loaded
+    while IFS= read -r loaded; do
+        [ -n "$loaded" ] || continue
+        [ -f "$loaded" ] || continue
+        grep -q '```c' "$loaded" 2>/dev/null && return 0
+    done < <(sed -n 's/.*(load "\([^"]*\)").*/\1/p' "$f" 2>/dev/null)
+    return 1
 }
 
 # W5 flip: a small set of fixtures carry a ```c block yet DO run correctly under
@@ -137,6 +151,7 @@ typed/slice-basic
 contract-ffi
 seq-core-from-list
 seq-transform-filter-map
+hamt-lowering-basic
 "
 while IFS= read -r _fx; do
     _fx="${_fx#"${_fx%%[![:space:]]*}"}"; _fx="${_fx%"${_fx##*[![:space:]]}"}"
@@ -330,6 +345,19 @@ run_turi_fixture() {
     # Expected exit code.
     local expected_exit="0"
     [ -f "$dir/expected.exit" ] && expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
+
+    # Report a timeout AS a timeout.  timeout(1) exits 124 when it kills the
+    # child, and the partial stdout that leaves behind would otherwise fall
+    # through to the diff below and be reported as "stdout mismatch" -- which
+    # sends whoever reads the log looking for a wrong answer that does not
+    # exist.  This check must stay ahead of the stdout diff.  See
+    # docs/archive/ci-cps-tramp-turi-timeouts-under-load.md, where exactly that
+    # misreport cost a triage pass.
+    if [ "$rc" -eq 124 ] && [ "$expected_exit" != "124" ]; then
+        echo "FAIL $name -- timed out (>${fixture_timeout}s under --interpret)"
+        echo "FAIL" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+        return
+    fi
 
     # Check stdout.
     if [ -f "$dir/expected.stdout" ]; then

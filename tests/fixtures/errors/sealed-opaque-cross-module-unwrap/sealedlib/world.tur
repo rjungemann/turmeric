@@ -1,0 +1,20 @@
+(defmodule sealedlib/world
+  (export W w-new w-bump! w-read)
+;; A sealed opaque: `::` may not cross the W/:int boundary outside this module.
+;; See docs/upcoming/sealed-opaque-plan.md.
+(defopaque W :int :sealed)
+(defn w-alloc [] #fx{} : int
+  ```c return (int64_t)(intptr_t)calloc(4, sizeof(int64_t)); ```)
+(defn w-poke [c : int v : int] #fx{} : int
+  ```c int64_t* b=(int64_t*)(intptr_t)c; b[0]=v; return 0; ```)
+(defn w-peek [c : int] #fx{} : int
+  ```c int64_t* b=(int64_t*)(intptr_t)c; return b[0]; ```)
+(defn w-ctrl [w : W] #fx{} : int
+  ```c return (int64_t)w; ```)
+;; In-module `::` in BOTH directions is still legal -- that is the whole point
+;; of an opaque having a representation at all.
+(defn w-new [] : W (:: (w-alloc) W))
+(defn w-bump! [^unique ^mut w : W] : int
+  (w-poke (w-ctrl w) (+ (w-peek (w-ctrl w)) 1)))
+(defn w-read [^borrow w : W] #reads w : int (w-peek (w-ctrl w)))
+)

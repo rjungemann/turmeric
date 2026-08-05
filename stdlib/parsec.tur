@@ -101,7 +101,7 @@
 ;;; Example:
 ;;;   (mbind (mreturn 1) (fn [x] (mreturn (* x 2))))  ; => Cell{2}
 
-(defn mbind [ma fn] : int
+(defn mbind [ma : int ^borrow ^fat fn : int] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
@@ -533,9 +533,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn or-parser [A]
-  [p : (Parser A) q : (Parser A)]
-  : (Parser A)
+(defn or-parser [A] [p : (Parser A) q : (Parser A)] : (Parser A)
   (:: (or-parser-raw (:: p :int) (:: q :int)) :Parser))
 ;; bind-parser p f: apply p, then for each (v, inp'), apply (f v) as a parser
 ;; f must be a fat closure: value -> Parser
@@ -606,9 +604,7 @@
 ;;;
 ;;; Since: Phase B1
 
-(defn then-parser [A B]
-  [p : (Parser A) q : (Parser B)]
-  : (Parser B)
+(defn then-parser [A B] [p : (Parser A) q : (Parser B)] : (Parser B)
   (:: (then-parser-raw (:: p :int) (:: q :int)) :Parser))
 ;; many p: match p zero or more times (greedy); returns one result
 ;;; many-c-impl -- internal C implementation of greedy zero-or-more repetition.
@@ -658,9 +654,7 @@
 ;;;   (run-parser (many (pchar 97)) "aab")
 ;;;   ; => Cell{Pair(Cell{97,97}, Input@2)}
 
-(defn many [A]
-  [p : (Parser A)]
-  : (Parser int)
+(defn many [A] [p : (Parser A)] : (Parser int)
   (:: (let [_p (:: p :int)] (fn [inp] (let [_ _p] (many-c-impl _p inp))))
     :Parser))
 ;; many1 p: one or more; fails if p doesn't match at least once
@@ -688,9 +682,7 @@
 ;;;   ; => Cell{Pair(Cell{97,97}, Input@2)}
 ;;;   (run-parser (many1 (pchar 97)) "bbb")  ; => 0  (fails)
 
-(defn many1 [A]
-  [p : (Parser A)]
-  : (Parser int)
+(defn many1 [A] [p : (Parser A)] : (Parser int)
   (:: (let [_p (:: p :int)] (fn [inp] (let [_ _p] (many1-impl _p inp))))
     :Parser))
 ;; optional p: match p zero or one times; 0 = none, pair-first = some-value
@@ -715,9 +707,7 @@
 ;;;   (run-parser (optional (pchar 65)) "ABC")  ; => two results
 ;;;   (run-parser (optional (pchar 65)) "XYZ")  ; => Cell{Pair(0, Input@0)}
 
-(defn optional [A]
-  [p : (Parser A)]
-  : (Parser int)
+(defn optional [A] [p : (Parser A)] : (Parser int)
   (:: (let [_p (:: p :int)] (fn [inp] (let [_ _p] (optional-impl _p inp))))
     :Parser))
 ;;; ── Runners ──────────────────────────────────────────────────────────────────
@@ -736,9 +726,7 @@
 ;;;   (run-parser (pchar 65) "ABC")  ; => Cell{Pair(65, Input@1)}
 
 
-(defn run-parser [A]
-  [p : (Parser A) s : cstr]
-  : int
+(defn run-parser [A] [p : (Parser A) s : cstr] : int
   (let [inp (input-new s 0)] (apply-parser (:: p :int) inp)))
 ;; run-parser-full p s: return mreturn(value) for first full-input parse, mzero if none
 ;;; run-parser-full-c -- internal C helper to extract the first full-input parse.
@@ -777,9 +765,7 @@
 ;;;   ; => Cell{value=Cell{97,97,97}}
 ;;;   (run-parser-full (pchar 97) "ab")  ; => 0  (leftover input)
 
-(defn run-parser-full [A]
-  [p : (Parser A) s : cstr]
-  : int
+(defn run-parser-full [A] [p : (Parser A) s : cstr] : int
   (run-parser-full-c (run-parser p s)))
 ;;; ── Result helpers ───────────────────────────────────────────────────────────
 ;; parse-value: extract value from first parse result (first = result value)

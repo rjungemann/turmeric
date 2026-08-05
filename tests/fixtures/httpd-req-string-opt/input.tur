@@ -1,0 +1,78 @@
+;; string-owned-builders-and-optional-accessors-plan Part 2: optional
+;; owned-String accessors for httpd.  httpd-req-cookie-opt / httpd-req-form-opt
+;; return (Option String): some owned bytes on a match, none on every miss.  This
+;; is strictly better than the "" cstr sentinel -- "present and empty" is a
+;; distinct `some ""` from "absent" (`none`), which the cstr form cannot express.
+;;
+;; The accessors need a real HttpdConn, so this fixture fabricates one directly in
+;; inline-C (the HttpdConn / HttpdHeader layout is in scope via httpd's autolink
+;; include) instead of spinning up a server -- self-contained, no sockets.
+(load "stdlib/httpd-string.tur")
+
+;; Build a fake HttpdConn carrying a single Cookie: header (none if hdr is empty).
+(defn fake-conn-cookie [hdr : cstr] : ptr<void>
+  ```c
+  HttpdConn *c = (HttpdConn *)calloc(1, sizeof(HttpdConn));
+  if (hdr && *hdr) {
+      HttpdHeader *h = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+      h->name  = strdup("Cookie");
+      h->value = strdup((const char *)hdr);
+      h->next  = NULL;
+      c->req_headers = h;
+  }
+  return (void *)c;
+  ```)
+
+;; Build a fake HttpdConn carrying a URL-encoded body.
+(defn fake-conn-body [body : cstr] : ptr<void>
+  ```c
+  HttpdConn *c = (HttpdConn *)calloc(1, sizeof(HttpdConn));
+  if (body && *body) {
+      c->body     = strdup((const char *)body);
+      c->body_len = (int)strlen((const char *)body);
+  }
+  return (void *)c;
+  ```)
+
+;; Print "some:<bytes>" for a present value.
+(defn print-some [v : cstr] : void
+  ```c printf("some:%s\n", (const char *)v); ```)
+
+;; Print "some:<bytes>" or "none" for an (Option String).  Consumed via the
+;; standard carrier accessors some?/unwrap (see the module note).
+(defn show-cookie [conn : ptr<void> name : cstr] : void
+  (let [o (httpd-req-cookie-opt conn name)]
+    (if (some? o)
+      (print-some (string/to-cstr (unwrap o)))
+      (println "none"))))
+
+(defn show-form [conn : ptr<void> field : cstr] : void
+  (let [o (httpd-req-form-opt conn field)]
+    (if (some? o)
+      (print-some (string/to-cstr (unwrap o)))
+      (println "none"))))
+
+(defn demo [] : int
+  (let [c1 (fake-conn-cookie "session=abc123; pref=dark; empty=")
+        c2 (fake-conn-cookie "")
+        b1 (fake-conn-body "username=alice&city=San+Diego&blank=")]
+    (do
+      ;; cookie present -- some with the decoded bytes
+      (show-cookie c1 "session")           ; some:abc123
+      (show-cookie c1 "pref")              ; some:dark
+      ;; cookie present but empty -- some "" (NOT none)
+      (show-cookie c1 "empty")             ; some:
+      ;; cookie absent (name not in header) -- none
+      (show-cookie c1 "missing")           ; none
+      ;; no Cookie header at all -- none
+      (show-cookie c2 "session")           ; none
+      ;; form field present -- some, percent/plus decoded
+      (show-form b1 "username")            ; some:alice
+      (show-form b1 "city")                ; some:San Diego
+      ;; form field present but empty -- some "" (NOT none)
+      (show-form b1 "blank")               ; some:
+      ;; form field absent -- none
+      (show-form b1 "nope")                ; none
+      0)))
+
+(demo)

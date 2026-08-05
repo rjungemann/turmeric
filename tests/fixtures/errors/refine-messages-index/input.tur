@@ -1,0 +1,10 @@
+;; RT6 message quality, shape 2: an index bound.  The useful hint here is a
+;; relation between two VARIABLES -- `(< i n)` -- which no literal bound can
+;; express, so the candidate search tries variable-vs-variable shapes as well
+;; as comparisons against the literals the code already mentions.
+(defn at [n : int, i : int] : #refine{ r : int | (< r n) }
+  i)
+
+(defn main [] : int
+  (println (at 5 2))
+  0)

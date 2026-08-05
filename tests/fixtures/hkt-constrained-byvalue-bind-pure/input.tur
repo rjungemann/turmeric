@@ -1,0 +1,29 @@
+;; `bind`-then-`pure` over an abstract type constructor, instantiated at the
+;; stdlib Option -- a by-value carrier -- from an unconstrained caller.
+;;
+;; This composes three fixes:
+;;   - gap 1: return-directed `pure` resolves against the constraint;
+;;   - gap 2: the continuation's `(Option int)` return is boxed across the
+;;     carrier (the aggregate spill shim);
+;;   - Route B: the direct call routes through the callee's DICT CLONE with the
+;;     concrete Option singletons, and the lifted continuation captures the
+;;     Applicative dict in its closure env, so its `pure` is a dict-slot load
+;;     (never the Applicative[Schema] representative it used to keep).
+;;
+;; The emitted continuation must read `((void**)env->__dict)[0]`; the sibling
+;; fixture hkt-constrained-continuation-dict proves instance selection with two
+;; differently-tagged instances (107/207).
+
+(defn bind-then-pure [^m] [^Monad m ^Applicative m x : (m int)] : (m int)
+  (bind x (fn [v] (pure (+ v 1)))))
+
+(defn just-pure [^m] [^Applicative m x : (m int)] : (m int)
+  (pure 7))
+
+(defn nothing [] : (Option int) (none))
+
+(defn main [] : int
+  (println (unwrap-or (bind-then-pure (some 41)) -1))   ; 42
+  (println (unwrap-or (bind-then-pure (nothing)) -1))   ; -1 (short-circuits)
+  (println (unwrap-or (just-pure (some 0)) -1))         ; 7
+  0)

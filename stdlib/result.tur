@@ -33,8 +33,7 @@
 ;;;   carrier handle to `(Result A B)` and letting the carrier-ABI
 ;;;   codegen take care of the rest).
 
-(defn ok [A B]
-  [x : A]
+(defn ok [A B] [x : A]
   #fx{Construct}
   : (Result A B)
   (make-struct Result :is-ok true :ok-val x :err-val (default-of B)))
@@ -55,8 +54,7 @@
 ;;; Since: Phase TC1 (made polymorphic as Prereq 3, 2026-06-12; same
 ;;;   notes as `ok`).
 
-(defn err [A B]
-  [e : B]
+(defn err [A B] [e : B]
   #fx{Construct}
   : (Result A B)
   (make-struct Result :is-ok false :ok-val (default-of A) :err-val e))
@@ -162,9 +160,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-map [A B E]
-  [r : (Result A E) ^fat f : (fn [A] B)]
-  : (Result B E)
+(defn result-map [A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)
   ;; Option/Result none-as-NULL retirement (Track A): by-value `(Result A E)`
   ;; receiver.  Pure-Turmeric body reads `.is-ok`/`.ok-val`/`.err-val` directly
   ;; and rebuilds via the `#{Construct}` ok/err constructors -- no inline-C

@@ -1,0 +1,24 @@
+;; Root cause A of docs/archive/map-show-keyword-key-raw-int.md: generic
+;; collection show over a :Sym element printed the raw carrier integer.
+;;
+;; The cause was NOT a Sym-vs-int name collision (Sym's C carrier is
+;; `const struct __tur_sym *`, distinct from int's `int64_t`). It was that
+;; type_has_concrete_codegen_layout omitted TY_SYM, so
+;; adt_app_is_byvalue_product((Vec Sym)) was false and type_c_name fell through
+;; to the int64 carrier -- `(Vec Sym)` never got a by-value monomorph, its
+;; constrained-instance bodies were never specialized, and the element
+;; dispatched to Show[int].
+;;
+;; A Sym element must render through Show [Sym], and the element types that
+;; already worked must keep working.
+(load "stdlib/typeclass.tur")
+
+(defn main [] : int
+  (show-line (:: (vec-of :a :b) (Vec Sym)))
+  (show-line (:: #map{:a 1 :b 2} (Map Sym int)))
+  (show-line (:: #set{:x :y} (Set Sym)))
+  ;; controls -- element types with their own C carrier, correct before the fix
+  (show-line (:: (vec-of "p" "q") (Vec cstr)))
+  (show-line (:: (vec-of 1 2) (Vec int)))
+  (show-line (:: #map{"s" 1} (Map cstr int)))
+  0)

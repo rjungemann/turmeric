@@ -1,0 +1,31 @@
+;; The case that decides whether propagating a class result refinement is
+;; sound: an instance whose restated promise is weaker than the class's in a
+;; way the solver CANNOT SEE.
+;;
+;; `(>= (* r r) (* r 2))` is nonlinear, so `instance |- class` abstracts to an
+;; uninterpreted term and answers unknown. No `TUR-E0374` fires -- the variance
+;; check reports only on a refutation. But r = -5 satisfies the instance's
+;; promise (25 >= -10) and violates the class's (-5 >= 0 is false).
+;;
+;; Meanwhile the caller's obligation IS discharged, from the class promise, and
+;; its check is elided. If nothing enforced the class promise on the instance,
+;; this program would print -5 from a function declaring `(>= r 0)`.
+;;
+;; What stops it is the extra check injected on the instance method: when the
+;; instance restates a predicate and the variance obligation does not discharge,
+;; the class's predicate is checked alongside the instance's own. That is the
+;; "Class result contract violated" abort below, and it fires with the gate off
+;; and on alike.
+(defclass Boxed [a]
+  (unbox [self : a, k : int] : #refine{ r : int | (>= r 0) }))
+
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : #refine{ r : int | (>= (* r r) (* r 2)) }
+    -5))
+
+(defn use-it [] : #refine{ r : int | (>= r 0) }
+  (.unbox 3 4))
+
+(defn main [] : int
+  (println (use-it))
+  0)

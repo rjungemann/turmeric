@@ -236,20 +236,38 @@ Expr *elab_defkind(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
-/* Phase TA1: (defalias Name :primitive-type)
+/* Phase TA1/TA2: (defalias Name <type-expr>)
  *
- * Declares a type alias for a primitive TypeKind.  The alias is stored in
- * e->type_alias_names / e->type_alias_kinds and consulted during type-
- * annotation resolution in type_expr_from_form and elab_fns parameter parsing.
+ * Declares a *transparent* type alias.  The alias is stored in
+ * e->type_alias_names / e->type_alias_kinds / e->type_alias_types and consulted
+ * during type-annotation resolution in type_expr_from_form and the elab_fns
+ * parameter/return ladders; every use site sees the target type itself, so the
+ * alias never participates in unification as a nominal type of its own.
  *
- * Syntax: (defalias Sample :int)
- *         (defalias Timestamp :int64)
+ * TA1 accepted primitive keywords only:
+ *
+ *   (defalias Sample :int)
+ *   (defalias Timestamp :int64)
+ *
+ * TA2 (composite-type-alias-gap) accepts any type expression the elaborator can
+ * resolve -- type applications, struct/ADT names, function types, refinements:
+ *
+ *   (defalias IntList (Cons int))
+ *   (defalias Point P)                    ; P declared by defstruct
+ *   (defalias Backtrack (fn [int] int))
+ *   (defalias NonZero #refine{ x : int | (not= x 0) })
+ *
+ * `deftype` stays what it always was -- the recursive type binder (TY_REC).
+ * The two forms are disjoint: `defalias` is transparent, `deftype` is
+ * recursive-nominal.  Alias *parameters* -- `(defalias Name [a] ...)` -- are
+ * not supported; a parameterised alias would need type-level substitution at
+ * every use site, which nothing in the resolver does today.
  */
 Expr *elab_defalias(Elab *e, const Form *call) {
-    /* Minimum: (defalias Name :keyword) — 3 elements */
+    /* Minimum: (defalias Name <type-expr>) — 3 elements */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defalias requires (defalias Name :primitive-type)");
+                  "defalias requires (defalias Name <type-expr>)");
         return NULL;
     }
 
@@ -262,19 +280,80 @@ Expr *elab_defalias(Elab *e, const Form *call) {
     }
     const Symbol *alias_name = name_form->as.sym;
 
-    /* Parse target type — must be a primitive keyword */
+    /* A `deftype`-shaped parameter vector -- (defalias Name [a] body) -- is not
+     * a defalias.  Name it rather than letting the vector fall through to the
+     * type-expression parser and produce a confusing downstream error. */
     Form *type_form = call->as.list.items[2];
-    if (type_form->tag != F_KEYWORD) {
+    if (type_form->tag == F_VEC && call->as.list.len > 3) {
         diag_emit(DIAG_ERROR, type_form->span,
-                  "defalias: target type must be a keyword (e.g. :int, :float)");
+                  "defalias '%s': type parameters are not supported -- a "
+                  "defalias target must be a fully applied type "
+                  "(e.g. (defalias IntList (Cons int)))",
+                  alias_name->name);
         return NULL;
     }
-    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
-    if (target_kind == TY_UNKNOWN) {
-        diag_emit(DIAG_ERROR, type_form->span,
-                  "defalias: '%s' is not a recognised primitive type",
-                  type_form->as.sym->name);
-        return NULL;
+
+    /* Resolve the target.  Primitive keywords keep the TA1 fast path so the
+     * exact TypeKind (and nothing else) lands in the table; everything else
+     * goes through the full type-expression resolver. */
+    Type *target = NULL;
+    if (type_form->tag == F_KEYWORD) {
+        TypeKind prim = typekind_from_symbol(type_form->as.sym->name);
+        if (prim != TY_UNKNOWN) {
+            target = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *target = type_from_kind(prim);
+        }
+    }
+    if (!target) {
+        target = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+        if (!target) {
+            return NULL;
+        }
+        /* An alias to itself never terminates at a use site.  Checked before
+         * the tyvar-echo test below so the recursive case gets the diagnostic
+         * that names the right remedy rather than a generic "unknown type". */
+        if ((type_form->tag == F_SYM || type_form->tag == F_KEYWORD) &&
+            type_form->as.sym == alias_name) {
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "defalias '%s': an alias cannot refer to itself -- use "
+                      "deftype for a recursive type",
+                      alias_name->name);
+            return NULL;
+        }
+        /* type_expr_from_form's last resort for an unknown name is a TY_TYVAR
+         * carrying that very name.  Aliasing to it would silently accept a
+         * typo -- `(defalias Bad :not-a-type)` must stay an error -- so reject
+         * a tyvar that is just the target spelling echoed back.  (A *nested*
+         * unknown name, `(defalias Foo (Cons Bar))`, still lands on the same
+         * unresolved-tyvar fallback every other type position uses.) */
+        if (target->kind == TY_TYVAR &&
+            (type_form->tag == F_SYM || type_form->tag == F_KEYWORD) &&
+            target->as.tyvar_.name &&
+            strcmp(target->as.tyvar_.name, type_form->as.sym->name) == 0) {
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "defalias: '%s' is not a recognised type",
+                      type_form->as.sym->name);
+            return NULL;
+        }
+        /* Same fallback, one level in: `(defalias L (list int))` applies a name
+         * that is not a type constructor, so the head of the TY_APP chain is an
+         * unresolved tyvar.  The direct annotation `[xs : (list int)]` reports
+         * this as a kind mismatch; without this the alias would swallow the
+         * declaration-site error and only surface a confusing unification
+         * failure at the first use.  No type parameters are in scope here, so a
+         * tyvar head can only ever mean an unknown name. */
+        {
+            const Type *head = target;
+            while (head && head->kind == TY_APP) head = head->as.app.fn;
+            if (head && head->kind == TY_TYVAR && head->as.tyvar_.name &&
+                target->kind == TY_APP) {
+                diag_emit(DIAG_ERROR, type_form->span,
+                          "defalias '%s': '%s' is not a type constructor -- "
+                          "it cannot be applied to type arguments",
+                          alias_name->name, head->as.tyvar_.name);
+                return NULL;
+            }
+        }
     }
 
     /* Grow the alias table if needed */
@@ -284,18 +363,24 @@ Expr *elab_defalias(Elab *e, const Form *call) {
             new_cap * sizeof(const Symbol *));
         TypeKind *new_kinds = (TypeKind *)arena_alloc(e->arena,
             new_cap * sizeof(TypeKind));
+        Type **new_types = (Type **)arena_alloc(e->arena,
+            new_cap * sizeof(Type *));
         if (e->n_type_aliases > 0) {
             memcpy(new_names, e->type_alias_names,
                    e->n_type_aliases * sizeof(const Symbol *));
             memcpy(new_kinds, e->type_alias_kinds,
                    e->n_type_aliases * sizeof(TypeKind));
+            memcpy(new_types, e->type_alias_types,
+                   e->n_type_aliases * sizeof(Type *));
         }
         e->type_alias_names = new_names;
         e->type_alias_kinds = new_kinds;
+        e->type_alias_types = new_types;
         e->cap_type_aliases = new_cap;
     }
     e->type_alias_names[e->n_type_aliases] = alias_name;
-    e->type_alias_kinds[e->n_type_aliases] = target_kind;
+    e->type_alias_kinds[e->n_type_aliases] = target->kind;
+    e->type_alias_types[e->n_type_aliases] = target;
     e->n_type_aliases++;
 
     /* defalias has no runtime effect — return nil */
@@ -445,6 +530,70 @@ Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     return t;
 }
 
+/* rc-angle-bracket-annotation-becomes-tyvar: resolve a typed reference-family
+ * keyword annotation -- `rc<T>`, `weak<T>`, `ref<T>`, `lref<T>` -- to its real
+ * TY_RC/TY_WEAK/TY_REF/TY_LREF Type carrying the inner pointee kind.  This
+ * mirrors `ptr<T>` (ptr_type_from_keyword_name) and the struct-field parser
+ * (parse_struct_field_type), both of which already accept the angle-bracket
+ * spelling.  The defn/fn param and return ladders were the one place that did
+ * NOT: a `rc<int>` annotation there fell through to a fresh type variable named
+ * "rc<int>".  Under expected-type pressure that tyvar unifies with a real rc
+ * value (so `(sink r)` / a struct field of type rc "work"), but any post-hoc
+ * `rc/...` builtin sees the bare tyvar and errors with a confusing "got tyvar"
+ * -- a silent footgun.  Returns NULL when `name` is not one of these
+ * angle-bracket forms, so the caller falls through to its existing resolution
+ * (bare `rc`, tyvar, alias, ...). */
+Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+                                       Span span, const Symbol *rec_name,
+                                       const Symbol **type_params,
+                                       Kind *type_param_kinds, uint8_t n_type_params) {
+    /* shortest typed form is "rc<x>" == 5 chars; must end in '>' */
+    if (len < 5 || name[len - 1] != '>') return NULL;
+    TypeKind family = TY_UNKNOWN;
+    uint32_t prefix_len = 0;
+    if (len > 3 && memcmp(name, "rc<", 3) == 0)        { family = TY_RC;   prefix_len = 3; }
+    else if (len > 4 && memcmp(name, "ref<", 4) == 0)  { family = TY_REF;  prefix_len = 4; }
+    else if (len > 5 && memcmp(name, "lref<", 5) == 0) { family = TY_LREF; prefix_len = 5; }
+    else if (len > 5 && memcmp(name, "weak<", 5) == 0) { family = TY_WEAK; prefix_len = 5; }
+    if (family == TY_UNKNOWN) return NULL;
+
+    const char *inner = name + prefix_len;
+    uint32_t inner_len = len - prefix_len - 1;   /* between "rc<" and the final '>' */
+    if (inner_len == 0) {
+        diag_emit(DIAG_ERROR, span, "empty inner type in '%.*s<...>'",
+                  (int)(prefix_len - 1), name);
+        return NULL;
+    }
+    /* Resolve the inner spelling through the same synthetic-F_SYM path as
+     * ptr<T>: primitive / type-param / struct / ADT / nested resolution. */
+    const Symbol *inner_sym = symtab_intern(e->st, strslice(inner, inner_len));
+    Form inner_form;
+    memset(&inner_form, 0, sizeof(inner_form));
+    inner_form.tag = F_SYM;
+    inner_form.span = span;
+    inner_form.as.sym = inner_sym;
+    Type *pointee = type_expr_from_form(e, &inner_form, rec_name,
+                                        type_params, type_param_kinds, n_type_params);
+    if (!pointee) return NULL;
+
+    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+    /* rc<ADT>/rc<Struct-lowered-to-ADT> carries the def so field access through
+     * the rc receiver auto-derefs -- parity with a defstruct rc<Struct> field
+     * (elab_structs.c adt_rc_inner_full_type). */
+    if (family == TY_RC && pointee->kind == TY_ADT && pointee->as.adt_.def) {
+        *t = type_rc_adt(pointee->as.adt_.def);
+        return t;
+    }
+    switch (family) {
+        case TY_RC:   *t = type_rc(pointee->kind);   break;
+        case TY_WEAK: *t = type_weak(pointee->kind); break;
+        case TY_REF:  *t = type_ref(pointee->kind);  break;
+        case TY_LREF: *t = type_lref(pointee->kind); break;
+        default: return NULL;
+    }
+    return t;
+}
+
 /* fn-type-bare-identifier-plan Phase 4: a type slot inside a (fn ...) type
  * expression that carries a leading colon -- the fused `:int` keyword form or
  * the spaced-but-still-redundant `: int` F_TYPE_ANN wrapper -- is rejected.
@@ -453,6 +602,75 @@ Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
  * deprecation warning; Phase 4 promotes it to a hard error.  Code stays as
  * TUR_D0001 so `tur explain TUR-D0001` and any tooling pinned on the code
  * keep working across the warning-to-error transition. */
+/* A `(fn ...)` type cannot carry refinements.  Rejecting is deliberate: the
+ * alternative is to PEEL and discard the predicate, which would accept the
+ * syntax and silently drop the guarantee -- the worst of the three options,
+ * because the annotation then reads like something that is being checked.
+ *
+ * Left unhandled entirely, the contract type survives into the signature and
+ * every use of the value fails with `expected { _ : ? | ... }, got int`, naming
+ * a type the programmer never wrote.  That is the fourth site to hit this;
+ * CT0's note on `rt_peel_contract` lists the first three.  This one is not a
+ * missing peel -- there is nowhere for the predicate to ride -- so it gets a
+ * diagnostic that says what is actually unsupported. */
+/* Peel a contract written in TYPE-ARGUMENT position -- `(Box #refine{...})`.
+ *
+ * This is the fifth annotation site to need a peel (the comment above
+ * reject_fn_type_contract counts the first four).  Storing the TY_CONTRACT node
+ * whole is what the old behavior did, and nothing between here and codegen
+ * peeled it, so the payload a `match` arm binds stayed contract-typed and every
+ * ordinary use of it failed: operator lookup (TUR-E0006), overload resolution,
+ * and the register-class check (TUR-E0707) all compare kinds without peeling,
+ * so a float-based contract even read as "non-float".  Peeling makes the
+ * annotation inert instead of actively breaking the program.
+ *
+ * It WARNS rather than dropping the predicate quietly: peeling here gives up on
+ * ever checking the payload, and an annotation that silently does nothing is
+ * how a reader ends up believing a container's contents are checked.  Enforcing
+ * it needs the refinement to survive as a type argument down to the unpacking
+ * binder, plus a checked crossing where a ctor call's result type is matched
+ * against a declared one -- a real feature, not a patch.
+ *
+ * Shared because there are TWO type-application loops: type_expr_from_form's
+ * and fn_type_from_form_impl's (the latter never reaches the former's app
+ * path).  Fixing only one leaves the parameter-annotation position broken,
+ * which is the position that actually gets written.
+ * See docs/archive/contract-type-arg-not-peeled-to-base.md. */
+Type *rt_peel_type_arg_contract(Type *arg_type, Span at) {
+    if (!arg_type || arg_type->kind != TY_CONTRACT) return arg_type;
+    Type *peeled = rt_peel_contract(arg_type, NULL, NULL);
+    if (peeled == arg_type) return arg_type;   /* malformed contract: leave it */
+    diag_emit_with_code(DIAG_WARNING, at,
+        TUR_W0380_REFINE_TYPE_ARG_UNENFORCED,
+        "refinement in type-argument position is not enforced; the payload is "
+        "treated as '%s'", type_name(*peeled));
+    diag_emit(DIAG_NOTE, at,
+        "refine a parameter, a return type, or a `let` binding instead -- "
+        "those positions emit a check");
+    return peeled;
+}
+
+static void reject_fn_type_contract(Elab *e, Type *t, const Form *slot,
+                                    const char *what) {
+    (void)e;
+    if (!t || t->kind != TY_CONTRACT || !slot) return;
+    diag_emit_with_code(DIAG_ERROR, slot->span, TUR_E0378_REFINE_IN_FN_TYPE,
+                        "a refinement cannot be written on the %s of a "
+                        "(fn ...) type; function types do not carry "
+                        "refinements", what);
+    diag_emit(DIAG_NOTE, slot->span,
+              "a function value with refined parameters can still be passed "
+              "and called -- its own entry checks run -- but the refinement "
+              "is not visible through the function type, so the call is "
+              "checked at run time rather than statically");
+    /* Recover to the BASE type.  The compile already fails on the error above,
+     * so this cannot make a bad program compile; what it prevents is the
+     * cascade -- a surviving TY_CONTRACT makes every use of the value report
+     * `expected { _ : ? | ... }, got int`, which is the confusing message this
+     * diagnostic exists to replace, not to accompany. */
+    if (t->as.contract_.base_type) *t = *t->as.contract_.base_type;
+}
+
 static void reject_fn_type_colon(Elab *e, const Form *slot) {
     (void)e;
     if (!slot) return;
@@ -613,13 +831,16 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             const Symbol *alias_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
             for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                 if (e->type_alias_names[ai] == alias_sym) {
+                    /* TA2: hand back the full target type, not just its kind --
+                     * a composite alias ((list int), a struct, (fn [int] int))
+                     * carries payload a bare TypeKind would drop. */
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    *t = type_from_kind(e->type_alias_kinds[ai]);
+                    *t = *e->type_alias_types[ai];
                     return t;
                 }
             }
         }
-        
+
         /* IT4: any — top type. */
         if (sym->len == 3 && memcmp(sym->name, "any", 3) == 0) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -660,6 +881,31 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (pt) return pt;
         }
 
+        /* rc<T>/weak<T>/ref<T>/lref<T> in ANY type position, not just the defn
+         * param/return ladders that call the resolver directly (elab_fns.c).
+         * Without this the reference-family spelling reached the tyvar fallback
+         * below and became a type variable literally *named* "rc<S>" -- the
+         * very footgun rc_family_type_from_keyword_name was written to close,
+         * still open everywhere that routes through here: type-application
+         * arguments, `::` ascriptions, aliases.
+         *
+         * The symptom was a real program silently mistyped rather than
+         * rejected.  `(:: (vec-new) (Vec rc<S>))` bound the element tyvar A to
+         * the *name* "rc<S>", so a later `(vec-push! v a)` with an honest rc<S>
+         * value failed unification against its own annotation -- "expected
+         * tyvar, got rc<S>" -- while `(Vec S)` and `(Vec int)` were fine.  The
+         * error pointed at the argument when the annotation was at fault.
+         * Placed beside the ptr<T> hook, which has the same shape and was
+         * already wired in here. */
+        {
+            Type *rt = rc_family_type_from_keyword_name(e, sym->name, sym->len,
+                                                        form->span, rec_name,
+                                                        type_params,
+                                                        type_param_kinds,
+                                                        n_type_params);
+            if (rt) return rt;
+        }
+
         /* Unknown -- return an unresolved named type variable.
          * structdef-retirement slice 5 (P7): an unknown bare type name is an
          * unresolved type variable, not a nominal struct.  Emit a named
@@ -690,6 +936,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 strcmp(e->sig_tyvars[si], sym->name) == 0) {
                 if (e->sig_tyvar_kinds[si] != KIND_STAR)
                     t->hkt_kind = e->sig_tyvar_kinds[si];
+                /* van-laarhoven-lens-composition: a name quantified by an
+                 * ENCLOSING fn signature is an unconstrained type variable, so
+                 * it must follow the same copy discipline as a LOCAL declared
+                 * type param -- CK_COPY (see type_tyvar_named / the n_type_params
+                 * branch above), NOT the CK_MOVE forced on genuinely-free unknown
+                 * names.  Without this, an inner closure param typed by an outer
+                 * tyvar (e.g. `(fn [s : S] ...)` in a lens `put`) is wrongly
+                 * treated as affine and a legitimate double-use trips TUR-E0005. */
+                t->copy_kind = CK_COPY;
                 break;
             }
         }
@@ -752,10 +1007,39 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                         return NULL;
                     }
                     if (!have_acc) { acc = *operand; have_acc = true; continue; }
+                    /* row-ops-drop-field-names, all-or-nothing labels: the
+                     * literal level already rejects a `#row{...}` that mixes
+                     * bare types with `name : T` slots (TUR-E0290); the algebra
+                     * has to hold the same line, or the fold would have to
+                     * invent a name for the bare side. An EMPTY operand is
+                     * label-neutral, so `(row-union R #row{})` stays legal --
+                     * type_typerow_is_labeled is false for a zero-length row on
+                     * both sides of this check. */
+                    if (operand->as.typerow_.n_elements > 0 &&
+                        acc.as.typerow_.n_elements > 0 &&
+                        type_typerow_is_labeled(acc) !=
+                            type_typerow_is_labeled(*operand)) {
+                        diag_emit(DIAG_ERROR, form->as.list.items[ai]->span,
+                            "'%s' operand %u mixes a labeled row with a bare one; "
+                            "labels are all-or-nothing across the whole operation "
+                            "(TUR-E0290)", h, (unsigned)ai);
+                        return NULL;
+                    }
                     switch (rop) {
                         case 1: acc = type_typerow_concat(e->arena, acc, *operand); break;
                         case 2: acc = type_typerow_union(e->arena, acc, *operand); break;
                         default: acc = type_typerow_intersect(e->arena, acc, *operand); break;
+                    }
+                    /* concat keeps duplicates outright, and union keeps two
+                     * slots that share a name but disagree on type -- both can
+                     * produce a labeled row that no literal could have spelled.
+                     * Report it against the operand that introduced it. */
+                    const char *dup = type_typerow_dup_field_name(acc);
+                    if (dup) {
+                        diag_emit(DIAG_ERROR, form->as.list.items[ai]->span,
+                            "'%s' result has duplicate field name `%s` "
+                            "(TUR-E0291)", h, dup);
+                        return NULL;
                     }
                 }
                 if (nargs == 0) acc = type_typerow(e->arena, NULL, 0);
@@ -1257,6 +1541,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 reject_fn_type_colon(e, params_vec->as.list.items[pi2]);
                 Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
                                                rec_name, type_params, type_param_kinds, n_type_params);
+                reject_fn_type_contract(e, at, params_vec->as.list.items[pi2],
+                                        "parameter");
                 fn_arg_full[pi2] = at;
                 /* Type variables map to the int64 carrier kind; use TY_INT so
                  * the fn's result_kind/arg_kinds stay consistent with the ->
@@ -1314,6 +1600,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             reject_fn_type_colon(e, form->as.list.items[idx]);
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
+            reject_fn_type_contract(e, ret_t, form->as.list.items[idx], "result");
             /* Type variables lower to the int64 carrier for the kind slot. */
             TypeKind ret_kind = ret_t ? (ret_t->kind == TY_TYVAR ? TY_INT : ret_t->kind)
                                       : TY_INT;
@@ -1900,6 +2187,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                                   type_params, type_param_kinds, n_type_params);
             }
             if (!arg_type) return NULL;
+            arg_type = rt_peel_type_arg_contract(arg_type, arg_form->span);
 
             /* Variadic HKT rows: enforce that a row-of-types argument lands in
              * a row-kinded parameter slot (and vice versa). ctor_type is the
@@ -2069,13 +2357,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             t->c_num_spelling = c_num_spelling_for_name(sym->name);
             return t;
         }
-        /* Phase TA1: check defalias table before struct/ADT fallback */
+        /* Phase TA1/TA2: check defalias table before struct/ADT fallback */
         {
             const Symbol *alias_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
             for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                 if (e->type_alias_names[ai] == alias_sym) {
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    *t = type_from_kind(e->type_alias_kinds[ai]);
+                    *t = *e->type_alias_types[ai];
                     return t;
                 }
             }
@@ -2107,6 +2395,31 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                                   rec_name, type_params,
                                                   type_param_kinds, n_type_params);
             if (pt) return pt;
+        }
+
+        /* rc<T>/weak<T>/ref<T>/lref<T> in ANY type position, not just the defn
+         * param/return ladders that call the resolver directly (elab_fns.c).
+         * Without this the reference-family spelling reached the tyvar fallback
+         * below and became a type variable literally *named* "rc<S>" -- the
+         * very footgun rc_family_type_from_keyword_name was written to close,
+         * still open everywhere that routes through here: type-application
+         * arguments, `::` ascriptions, aliases.
+         *
+         * The symptom was a real program silently mistyped rather than
+         * rejected.  `(:: (vec-new) (Vec rc<S>))` bound the element tyvar A to
+         * the *name* "rc<S>", so a later `(vec-push! v a)` with an honest rc<S>
+         * value failed unification against its own annotation -- "expected
+         * tyvar, got rc<S>" -- while `(Vec S)` and `(Vec int)` were fine.  The
+         * error pointed at the argument when the annotation was at fault.
+         * Placed beside the ptr<T> hook, which has the same shape and was
+         * already wired in here. */
+        {
+            Type *rt = rc_family_type_from_keyword_name(e, sym->name, sym->len,
+                                                        form->span, rec_name,
+                                                        type_params,
+                                                        type_param_kinds,
+                                                        n_type_params);
+            if (rt) return rt;
         }
 
         /* Unknown keyword type -- return an unresolved named type variable.
@@ -2295,6 +2608,26 @@ Expr *elab_deftype(Elab *e, const Form *call) {
                                           type_params, type_param_kinds, n_type_params);
     if (!body_type) {
         return NULL;
+    }
+
+    /* CT0/RT5b: `(deftype Nat #refine{ x : int | (>= x 0) })` is a REFINEMENT
+     * ALIAS, not a recursive type.  Bind the name straight to the contract
+     * type so `[n : Nat]` resolves to `{ x : int | (>= x 0) }` -- the
+     * parameter takes the base type, the predicate becomes its contract check,
+     * and (under `refined`) its hypothesis.  Wrapping it in a TY_REC the way an
+     * ordinary deftype body is wrapped would make every use site fail to type
+     * (`expected <rec>, got int`), which is what stdlib/refine.tur needs. */
+    if (body_type->kind == TY_CONTRACT) {
+        if (n_type_params > 0) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "deftype '%s': a refinement alias takes no type parameters "
+                      "in this prototype (the predicate cannot mention them)",
+                      name->name);
+            return NULL;
+        }
+        Binding *cb = binding_new(e, name, *body_type, false, true, name_form->span);
+        scope_add(&e->global, cb);
+        return e_nil(e, call->span);
     }
 
     /* Phase HKT-P2: Validate guarded recursion
@@ -2513,6 +2846,56 @@ static bool ascribe_type_is_word_carrier(const Type *t) {
     return t && (t->kind == TY_INT || t->kind == TY_PTR_VOID);
 }
 
+/* sealed-opaque: the AdtDef behind a `:sealed` defopaque, or NULL.  Descends a
+ * parameterised head so a phantom-parameterised sealed opaque `(H A)` is caught
+ * as well as a bare `H`. */
+static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
+    if (!t) return NULL;
+    /* A TY_APP spine is left-nested -- `(H A B)` is app(app(H, A), B) -- so walk
+     * down to the head rather than unwrapping one level. */
+    while (t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
+    if (t->kind != TY_ADT) return NULL;
+    const AdtDef *def = t->as.adt_.def;
+    return (def && def->is_opaque && def->sealed) ? def : NULL;
+}
+
+/* Reject a `::` that crosses a sealed opaque's representation boundary from
+ * outside the module that declared it.  Returns true if a diagnostic was
+ * emitted.  See docs/upcoming/sealed-opaque-plan.md.
+ *
+ * The rule is "exactly one side is this sealed type": an identity relabel
+ * (`(:: w H)` where w is already an H) crosses nothing and stays legal, while
+ * both the unwrap (`(:: w :int)`) and the fabricate (`(:: n H)`) directions are
+ * refused.  Sealing BOTH directions is what makes the representation private
+ * rather than merely hard to rebuild -- see the plan's "why both directions". */
+static bool ascribe_check_sealed(Elab *e, const Form *call,
+                                 const Type *from, const Type *to) {
+    if (!g_opt_sealed_opaque) return false;   /* experiment off: parses, imposes nothing */
+
+    const AdtDef *sf = ascribe_sealed_opaque_def(from);
+    const AdtDef *st = ascribe_sealed_opaque_def(to);
+    if (sf == st) return false;               /* both sides same sealed def, or neither */
+
+    const AdtDef *sealed_def = sf ? sf : st;
+    /* A moduleless top level has no module identity to compare, so nothing is
+     * "outside" it -- single-file programs are exactly where sealing has the
+     * least to offer, and erroring there would be noise.  Documented as a known
+     * limitation in the plan. */
+    if (!sealed_def->sealed_module) return false;
+    if (e->current_module_name == sealed_def->sealed_module) return false;
+
+    diag_emit_with_code(
+        DIAG_ERROR, call->span, TUR_E0302_SEALED_OPAQUE_CAST,
+        "cannot %s sealed opaque '%s' %s its representation -- '%s' is sealed to "
+        "module '%s', so `::` may not cross that boundary here",
+        sf ? "unwrap" : "fabricate",
+        sealed_def->name ? sealed_def->name : "<opaque>",
+        sf ? "to" : "from",
+        sealed_def->name ? sealed_def->name : "<opaque>",
+        sealed_def->sealed_module->name);
+    return true;
+}
+
 Expr *elab_ascribe(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2568,6 +2951,27 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     if (ascribed->kind == TY_ANY && inner->type.kind != TY_ANY) {
         return elab_coerce_to_any(e, inner);
     }
+
+    /* sealed-opaque: refuse to cross a sealed opaque's representation boundary
+     * from outside its declaring module.  Placed before the remaining coercion
+     * rules because it is a visibility question, not a representation one --
+     * whether the cast would LOWER soundly is beside the point if the caller is
+     * not allowed to express it. */
+    if (ascribe_check_sealed(e, call, &inner->type, ascribed)) return NULL;
+
+    /* fn-value-carrier-fat-seam-residuals (ascribed-alias variant): ascribing
+     * a CARRIER (tur_poly_fn_t) fn param to a fn type -- `(:: v (fn [] int))`
+     * where `v : (fn [] int)` is is_poly_fn -- is a pure type assertion, not a
+     * representation change.  Wrapping it in an EX_ASCRIBE node hands the let-
+     * binding path a TY_FN-typed init it bridges with the generic
+     * `(int64_t)(intptr_t)` pointer cast, which is invalid C on the by-value
+     * aggregate.  Return the var itself: an alias binding then copies the
+     * tur_poly_fn_t by value (the shape that works), and the tail machinery's
+     * alias resolution classifies it by its binding as usual. */
+    if (ascribed->kind == TY_FN && inner->kind == EX_VAR &&
+        inner->as.var.binding && inner->as.var.binding->is_poly_fn &&
+        inner->as.var.binding->is_param)
+        return inner;
 
     /* CONV-S1 (defstruct-as-defadt, seam 4): ascribing a concrete ADT app onto
      * an ADT constructor call whose own type is left bare/under-applied.  A
@@ -2648,6 +3052,55 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * differ, insert an EX_REINTERPRET. */
     TypeKind src_kind = inner->type.kind;
     TypeKind dst_kind = ascribed->kind;
+    /* collections-cannot-hold-rc-values item 2, ascription side.  The carrier
+     * rules added there run in elab_call.c, so they cover CALL arguments and
+     * results only -- `::` builds its EX_REINTERPRET here and walked straight
+     * past them.  That left the check trivially defeatable:
+     *
+     *     (vec-push! v (:: a :int))     ;; a : rc<S>
+     *
+     * type-checks, stores the bare control-block pointer in a slot nobody owns,
+     * and the program's refcounts are nonsense from that point on -- measured:
+     * `(rc/strong-count a)` printing garbage after the vec is freed.
+     *
+     * Two asymmetric rules, because the two directions are not equally bad:
+     *
+     *   OWNING -> anything is always rejected.  Erasing a counted handle to a
+     *   machine integer is exactly the `:int` type-erasure the codebase rules
+     *   out, and there is no shape where it is what the author meant.
+     *
+     *   anything -> OWNING is rejected EXCEPT for the literal 0.  That one form
+     *   is a null handle -- the only way to write an empty rc without inline-C
+     *   (see docs/reported/inline-c-rc-return-misses-carrier-bridge.md), and
+     *   what stdlib/rcchain.tur's `rcchain-nil` uses.  Any other integer
+     *   fabricates a control-block pointer out of arithmetic. */
+    {
+        bool src_owning = src_kind == TY_RC || src_kind == TY_WEAK ||
+                          src_kind == TY_REF || src_kind == TY_LREF;
+        bool dst_owning = dst_kind == TY_RC || dst_kind == TY_WEAK ||
+                          dst_kind == TY_REF || dst_kind == TY_LREF;
+        if (src_owning && src_kind != dst_kind) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "cannot reinterpret an owning value (%s) as %s: the "
+                      "handle is reference-counted, and erasing it to an "
+                      "unmanaged type leaves a pointer nobody owns. Pass the "
+                      "%s itself, or use rc/ptr for a borrowed raw pointer",
+                      typekind_to_string(src_kind),
+                      typekind_to_string(dst_kind),
+                      typekind_to_string(src_kind));
+            return NULL;
+        }
+        if (dst_owning && !src_owning &&
+            !(inner->kind == EX_INT_LIT && inner->as.i == 0)) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "cannot reinterpret %s as an owning value (%s): only the "
+                      "literal 0 (a null handle) may be ascribed to a "
+                      "reference-counted type",
+                      typekind_to_string(src_kind),
+                      typekind_to_string(dst_kind));
+            return NULL;
+        }
+    }
     if (src_kind != dst_kind) {
         int src_size = type_size_bytes(src_kind);
         int dst_size = type_size_bytes(dst_kind);
@@ -2680,7 +3133,15 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
     if (ascribed->kind == TY_FN &&
         (src_kind == TY_INT || src_kind == TY_PTR_VOID ||
-         ascribe_type_is_opaque_handle(&inner->type))) {
+         ascribe_type_is_opaque_handle(&inner->type) ||
+         /* fn-value-fat-normalization stage 2: the inner value is ALREADY a
+          * fat handle (a boxed TY_FN -- e.g. a let whose init was a
+          * closure-returning call).  Retyping it to the bare non-boxed fn
+          * type would send the invoke down the thin path and jump into the
+          * box (the ascribe-around-let SIGSEGV in
+          * fn-typed-value-return-ascribe-miscompiles).  Fat identity is
+          * preserved through `::`. */
+         (inner->type.kind == TY_FN && inner->type.as.fn.boxed))) {
         out->type.as.fn.boxed = true;
     }
     return out;

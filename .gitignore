@@ -2,8 +2,15 @@
 
 build/
 build2/
+build-asan/
 build-debug/
+build-jit/
+build-jit-asan/
+build-jit-spike/
+build-turjit/
+build-turjit-debug/
 build-norel/
+build-oracle/
 build-rel/
 build-release/
 build-tsan/
@@ -27,6 +34,8 @@ build-release-check/
 !examples/**/*.h
 !docs/**/*.c
 !docs/**/*.h
+!tools/**/*.c
+!tools/**/*.h
 
 # Python bytecode
 __pycache__/
@@ -47,6 +56,7 @@ tests/fixtures/**/.gitignore
 tests/.stamp-cache/
 tests/.stamp-cache-doctest/
 tests/.stamp-cache-turi/
+tests/.stamp-cache-jit/
 tests/doctest-generated/
 /tmp/tur-build/
 tur
@@ -70,6 +80,28 @@ docs/api/
 web/node_modules/
 web/dist/
 web/test-results/
+web/.vite/
+web/.wrangler/
+
+# WASM build outputs. `tur_wasm` copies these out of build-wasm/ into
+# web/public/ (src/CMakeLists.txt), where vite picks them up as static assets.
+# They are build products, not source: tracking them forced a second
+# "regenerate web artifacts" commit after every deploy and left each release
+# tag carrying the *previous* release's binary. Run `just wasm` (or
+# `tur run wasm`) to produce them; `just web` / `just deploy-web` do it for you.
+web/public/turmeric.js
+web/public/turmeric.wasm
+
+# Doc-name index behind the web REPL's doc panel, emitted by `just docs`
+# (tools/gendocs.py --emit-json). Same story as the wasm pair above: tracking
+# it meant every release tag either carried a stale index -- v0.32.3 nearly
+# shipped without a single `rat/*` or `complex/*` entry -- or dirtied the tree
+# mid-deploy. It also merges spice entries from the *optional* sibling
+# ../turmeric-spices/ checkout, so a contributor who has that clone and one
+# who does not could never agree on its contents. Note this is unlike
+# stdlib/docstrings.tur, gendocs' other emitted output, which stays tracked
+# because it is a real source module the compiler imports.
+web/public/doc-names.json
 
 # Playwright MCP browser session artifacts
 .playwright-mcp/
@@ -98,9 +130,13 @@ performance-comparison/inputs/large/
 # The harness diffs against expected.stdout, not these files.
 tests/fixtures/*/turi.stdout
 tests/fixtures/*/turi.stderr
+tests/fixtures/*/jit.stdout
+tests/fixtures/*/jit.stderr
 # Nested fixtures (errors/<name>, typed/<name>, typed-slots/<name>, ...).
 tests/fixtures/*/*/turi.stdout
 tests/fixtures/*/*/turi.stderr
+tests/fixtures/*/*/jit.stdout
+tests/fixtures/*/*/jit.stderr
 
 # REPL-compiled spice shared libraries and their symbol manifests.
 *.so
@@ -109,3 +145,23 @@ tests/fixtures/*/*/turi.stderr
 # Claude Code agent worktrees (transient, harness-managed)
 .claude/worktrees/
 
+
+# J3 benchmark triangle artifacts (run-triangle.sh output dir).
+benchmarks/output/
+build-mirpin/
+build-lazyrel/
+build-jitrel/
+build-i4/
+
+# CTest output captured at the repo root.  jit-ctest.log -- 86 KB of raw ctest
+# output from a local macOS build tree -- was committed by accident in
+# 0ee40e7a ("ci: publish the JIT corpus counts on a passing run"), which meant
+# to publish the counts, not the log.  The pattern keeps the next one out.
+/*-ctest.log
+/ctest.log
+
+# CTest's own scratch directory, created by a bare `ctest` at the repo root
+# (everything here runs `ctest --test-dir build`, which writes build/Testing/
+# instead).  Testing/Temporary/{LastTest.log,CTestCostData.txt} were committed
+# by accident in #728 -- both stubs from a run that executed no tests.
+/Testing/

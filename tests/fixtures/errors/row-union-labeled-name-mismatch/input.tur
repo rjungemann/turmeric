@@ -1,0 +1,11 @@
+;; row-ops-drop-field-names: the same label erasure via row-union. A no-op
+;; union against the empty row was enough to strip the labels; row-concat and
+;; row-intersect erased them the same way.
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn make-id [n : int] : (Tbl (row-union #row{id : int} #row{}))
+  (:: (make-struct Tbl n) (Tbl (row-union #row{id : int} #row{}))))
+
+(defn use-name [t : (Tbl (row-union #row{name : int} #row{}))] : int (.rows t))
+
+(defn main [] : int (use-name (make-id 1)))

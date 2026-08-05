@@ -27,12 +27,28 @@ cat > "$PROJ/build.tur" <<'EOF'
 EOF
 cat > "$PROJ/src/lib.tur" <<'EOF'
 (defmodule sh
-  (export add42 mul scale answer noisy)
+  (export add42 mul scale answer noisy sum12 wide-mix imix9)
   (defn add42 [x :int] :int (+ x 42))
   (defn mul [a :int b :int] :int (* a b))
   (defn scale [x :float y :float] :float (* x y))
   (defn answer [] :int 42)
-  (defn noisy [x :int] :void (println x)))
+  (defn noisy [x :int] :void (println x))
+  ;; interpreter-arbitrary-arity-ffi: arity 12 exceeds the generated
+  ;; shape table's default --max-arity (6), so this is only callable via
+  ;; the per-export `__ffi` shim the spice build now emits.
+  (defn sum12 [a :int b :int c :int d :int e :int f :int
+               g :int h :int i :int j :int k :int l :int] :int
+    (+ a (+ b (+ c (+ d (+ e (+ f (+ g (+ h (+ i (+ j (+ k l))))))))))))
+  ;; High-arity with a mixed int/float register split -- the params
+  ;; interleave int/float, so the shim must read fv[1],fv[3],fv[5],fv[7]
+  ;; (not fv[0..3]); a wrong buffer/index would corrupt the float sum.
+  (defn wide-mix [a :int b :float c :int d :float e :int f :float
+                  g :int h :float] :float
+    (+ b (+ d (+ f h))))
+  ;; Wide all-int, int return, to pin the int-slot indexing at arity 9.
+  (defn imix9 [a :int b :int c :int d :int e :int
+               f :int g :int h :int i :int] :int
+    (- a (+ b (+ c (+ d (+ e (+ f (+ g (+ h i))))))))))
 EOF
 
 PASS=0
@@ -82,6 +98,26 @@ if echo "$out" | grep -qx '99' && echo "$out" | grep -qx '=> nil'; then
 else
     fail "rp4-call-void-return" "$out"
 fi
+
+# --- arbitrary arity via per-export FFI shim -----------------------------
+# These arities (12, 9) exceed the generated shape table's default
+# --max-arity (6). Before the per-export `__ffi` shim they failed at call
+# time with "no registered dispatcher for shape"; now they resolve.
+
+out=$(run '(sum12 1 2 3 4 5 6 7 8 9 10 11 12)')
+if echo "$out" | grep -qx '=> 78'; then pass "rp4-call-arity12-all-int"
+else fail "rp4-call-arity12-all-int" "$out"; fi
+
+# Interleaved int/float params: the shim must read fv[1],fv[3],fv[5],fv[7]
+# (b+d+f+h = 1.5+2.25+0.25+4.0 = 8.0), proving per-position class dispatch.
+out=$(run '(wide-mix 1 1.5 2 2.25 3 0.25 4 4.0)')
+if echo "$out" | grep -qx '=> 8'; then pass "rp4-call-arity8-int-float-split"
+else fail "rp4-call-arity8-int-float-split" "$out"; fi
+
+# Wide all-int, int return: 100 - (1+2+3+4+5+6+7+8) = 64.
+out=$(run '(imix9 100 1 2 3 4 5 6 7 8)')
+if echo "$out" | grep -qx '=> 64'; then pass "rp4-call-arity9-int-return"
+else fail "rp4-call-arity9-int-return" "$out"; fi
 
 # --- error surface -------------------------------------------------------
 

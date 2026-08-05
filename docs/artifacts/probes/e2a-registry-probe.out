@@ -1,0 +1,3 @@
+fn type annot test
+result=0  prints=1
+E2a-REGISTRY: PASS

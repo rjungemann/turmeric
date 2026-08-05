@@ -1,0 +1,12 @@
+;; load-ignores-inline-lang-directive: `(load "path")` used to pick the loaded
+;; file's dialect from its EXTENSION alone, so a sibling whose first line is
+;; `#lang turmeric/sweet` was handed to the plain s-expression reader and died
+;; on the directive itself ("unexpected character '#'").  A `.tur.sweet`
+;; extension worked; an inline directive did not.
+(load "tests/fixtures/load-inline-lang-sweet/sweetlib.tur")
+
+(defn main [] : int
+  (do
+    (println (sweet-add 2 3))
+    (println (sweet-triple 4))
+    0))

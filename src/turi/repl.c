@@ -32,11 +32,15 @@
 #include "interpreter_natives.h"  /* wk_register_* interpreter native overrides */
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
+#include "platform_fs.h"   /* setenv/unsetenv on Windows */
 
+#include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>   /* stat() -- logical-cwd identity check */
 #include <unistd.h>
 
 /* libedit readline-compatible API (ships with macOS and most Linux distros).
@@ -165,6 +169,34 @@ static void repl_diag_sink(struct TuriEnv *env, int level, const char *code,
 }
 
 /* -------------------------------------------------------------------------
+ * TR2.4: per-env configuration for a freshly created REPL environment.
+ *
+ * The REPL is the canonical long-lived env: one TuriEnv serves the whole
+ * session and turi_env_free is only called on :reset / :run. Scratch promotion
+ * (turi-value-pool-scratch-promotion-plan) bounds the value pool for exactly
+ * that shape -- at each top-level boundary it promotes escaping values into the
+ * permanent pool and rewinds the scratch region, so per-turn transients do not
+ * accumulate for the life of the session. It stays OFF by default for embedders
+ * (the create/eval/free pattern needs no promotion), but the REPL always wants
+ * it, and with TR2.1-TR2.3 having bounded the elaboration and source terms the
+ * value pool is now the remaining unbounded one.
+ *
+ * The promotion walk is conservative: when a turn leaves live state it cannot
+ * prove safe to relocate (a suspended generator, a captured continuation), it
+ * simply declines to rewind that cycle rather than corrupting it. Measured at
+ * ~100% rewind on ordinary REPL input (TR0).
+ *
+ * TUR_NO_SCRATCH_PROMOTION=1 opts out, for bisecting a suspected promotion bug.
+ * ---------------------------------------------------------------------- */
+static void repl_configure_env(TuriEnv *env) {
+    if (!env) return;
+    turi_env_set_diag_sink(env, repl_diag_sink, env);
+    const char *off = getenv("TUR_NO_SCRATCH_PROMOTION");
+    if (!(off && *off && strcmp(off, "0") != 0))
+        turi_env_set_scratch_promotion(env, true);
+}
+
+/* -------------------------------------------------------------------------
  * Paren-balance counter — drives multi-line continuation
  * ---------------------------------------------------------------------- */
 
@@ -195,7 +227,8 @@ static int paren_balance(const char *s) {
 /* Known REPL meta-commands for colon-prefix completion. */
 static const char *const k_meta_cmds[] = {
     ":help", ":quit", ":q",
-    ":type", ":doc", ":reload", ":run", ":reset", ":explain",
+    ":type", ":doc", ":reload", ":load-string", ":run", ":reset", ":explain",
+    ":cd", ":pwd",
     ":tutorial", ":next", ":prev", ":hint", ":skip",
     ":quit-tutorial", ":tutorial-progress",
     NULL
@@ -234,17 +267,181 @@ static char *tur_completion_generator(const char *text, int state) {
 #endif /* TURI_HAVE_EDITLINE */
 
 /* -------------------------------------------------------------------------
- * Shell-integration markers (OSC 133 semantic prompts).
+ * Shell-integration markers (OSC 133 semantic prompts, OSC 7 cwd reports).
  *
  * A host terminal (e.g. Trowel, iTerm2, WezTerm) uses these to track idle
- * vs. busy state without pattern-matching the prompt string. Enabled when
- * stdout is a TTY; opt out with TUR_NO_SHELL_INTEGRATION=1.
+ * vs. busy state without pattern-matching the prompt string.
+ *
+ * Enabled automatically when stdout is a TTY. Two env vars override that:
+ *
+ *   TUR_NO_SHELL_INTEGRATION=1  force off (a TTY that garbles the escapes)
+ *   TUR_SHELL_INTEGRATION=1     force on  (stdout is a pipe, not a TTY)
+ *
+ * The force-on switch is the one that matters. A GUI host that drives the
+ * REPL over pipes rather than a pty is exactly the consumer these markers
+ * exist for, and it was the one consumer that could not get them: with no
+ * marker ever arriving, a host has nothing to distinguish "evaluating" from
+ * "waiting at the prompt" and has to latch busy forever as the safe default.
+ * TUR_NO_SHELL_INTEGRATION still wins if both are set -- an explicit "off"
+ * should never be overridden by an explicit "on".
  * ---------------------------------------------------------------------- */
 static bool g_shell_integration = false;
 
+/* A: prompt is about to be written -- the REPL is idle, awaiting input. */
 static void repl_emit_prompt_marker(void) {
     if (!g_shell_integration) return;
     fputs("\x1b]133;A\x07", stdout);
+    fflush(stdout);
+}
+
+/* C: input accepted, evaluation starting -- the REPL is busy.
+ * D;<status>: evaluation finished, with 0 = ok and 1 = the form errored.
+ *
+ * A alone marks the idle edge but nothing marks the busy one, so a host
+ * could see that a prompt had been written but not that work had started or
+ * when it ended. C/D close that loop: A -> idle, C -> busy, D -> done.
+ *
+ * B (end of prompt / start of the typed command) is deliberately not
+ * emitted. Placing it correctly means writing it between the prompt string
+ * and the user's keystrokes, which is inside editline's own output -- it
+ * would have to be embedded in the prompt behind \1..\2 non-printing guards
+ * that libedit does not reliably honor, risking a visibly corrupted prompt
+ * in a real terminal. B only serves command extraction, which no host here
+ * needs (they send input programmatically); busy/idle needs A/C/D. */
+static void repl_emit_exec_marker(void) {
+    if (!g_shell_integration) return;
+    fputs("\x1b]133;C\x07", stdout);
+    fflush(stdout);
+}
+
+static void repl_emit_done_marker(int status) {
+    if (!g_shell_integration) return;
+    printf("\x1b]133;D;%d\x07", status);
+    fflush(stdout);
+}
+
+/* -------------------------------------------------------------------------
+ * Logical working directory (`pwd -L` semantics)
+ *
+ * getcwd(3) always answers with symlinks resolved. A host that launched us
+ * in /tmp/project (itself a symlink, as /tmp is on macOS) therefore gets
+ * told /private/tmp/project, which never string-matches the path it holds --
+ * so a host comparing the two naively concludes the REPL is somewhere else
+ * entirely and has to canonicalize both sides to recover.
+ *
+ * Shells solved this long ago: `pwd -L` reports $PWD when $PWD still names
+ * the current directory, and only falls back to the resolved answer when it
+ * does not. Same rule here, with the same safety check -- the candidate is
+ * accepted only if it stats to the same (device, inode) as `.`, so we can
+ * never report a path that is not this directory.
+ * ---------------------------------------------------------------------- */
+
+/* True if `path` names the directory we are actually in. */
+static bool path_is_cwd(const char *path) {
+    struct stat a, b;
+    if (!path || path[0] != '/') return false;
+    if (stat(path, &a) != 0 || stat(".", &b) != 0) return false;
+    return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+}
+
+/* Collapse "." and ".." components textually, the way a shell resolves them
+ * against the logical path. Writes into `out` (which may not alias `in`).
+ * Purely lexical -- popping ".." is wrong when the popped component was a
+ * symlink, which is exactly what the path_is_cwd() check downstream catches. */
+static void path_normalize(const char *in, char *out, size_t cap) {
+    /* Component start offsets into `out`, for popping on "..". */
+    size_t starts[PATH_MAX / 2];
+    size_t depth = 0, o = 0;
+
+    if (cap == 0) return;
+    out[o++] = '/';
+
+    for (const char *p = in; *p; ) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        const char *seg = p;
+        while (*p && *p != '/') p++;
+        size_t seglen = (size_t)(p - seg);
+
+        if (seglen == 1 && seg[0] == '.') continue;
+        if (seglen == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (depth > 0) o = starts[--depth];   /* pop */
+            if (o == 0) o = 1;                    /* never above root */
+            continue;
+        }
+        if (depth >= sizeof(starts) / sizeof(starts[0])) return; /* absurd */
+        if (o + seglen + 1 >= cap) return;                       /* too long */
+        starts[depth++] = o;
+        if (o > 1) out[o++] = '/';
+        memcpy(out + o, seg, seglen);
+        o += seglen;
+    }
+    out[o ? o : 1] = '\0';
+    if (o == 0) { out[0] = '/'; out[1] = '\0'; }
+}
+
+/* The working directory as the host would spell it: $PWD when it still names
+ * this directory, otherwise getcwd(). Returns `out`, or NULL on failure. */
+static char *repl_logical_cwd(char *out, size_t cap) {
+    const char *pwd = getenv("PWD");
+    if (pwd && pwd[0] == '/' && strlen(pwd) < cap) {
+        char norm[PATH_MAX];
+        path_normalize(pwd, norm, sizeof norm);
+        if (path_is_cwd(norm) && strlen(norm) < cap) {
+            memcpy(out, norm, strlen(norm) + 1);
+            return out;
+        }
+    }
+    return getcwd(out, cap);
+}
+
+/* Keep $PWD logical across `:cd` so the next report does not silently fall
+ * back to the resolved path. Called after a successful chdir(); `target` is
+ * the argument as the user wrote it. */
+static void repl_update_logical_pwd(const char *target) {
+    char cand[PATH_MAX];
+    char norm[PATH_MAX];
+
+    if (target[0] == '/') {
+        if (strlen(target) >= sizeof cand) return;
+        memcpy(cand, target, strlen(target) + 1);
+    } else {
+        const char *pwd = getenv("PWD");
+        if (!pwd || pwd[0] != '/') return;
+        if (snprintf(cand, sizeof cand, "%s/%s", pwd, target) >= (int)sizeof cand)
+            return;
+    }
+    path_normalize(cand, norm, sizeof norm);
+    /* Only adopt it if it really is where we landed. A ".." that crossed a
+     * symlink normalizes to the wrong place; leaving $PWD alone makes
+     * repl_logical_cwd fall back to getcwd(), which is always correct. */
+    if (path_is_cwd(norm)) setenv("PWD", norm, 1);
+    else                   unsetenv("PWD");
+}
+
+/* Report the current working directory as OSC 7, the de-facto standard
+ * `file://<host>/<path>` notification.  A host that tracks it can keep its
+ * own "REPL is rooted here" display honest across `:cd` without having to
+ * restart the process or scrape output.
+ *
+ * Path characters outside the unreserved set are percent-encoded, so a
+ * directory containing spaces or `#` survives the round trip. */
+static void repl_emit_cwd_marker(void) {
+    char cwd[PATH_MAX];
+
+    if (!g_shell_integration) return;
+    if (!repl_logical_cwd(cwd, sizeof cwd)) return;
+
+    fputs("\x1b]7;file://", stdout);
+    for (const unsigned char *p = (const unsigned char *)cwd; *p; p++) {
+        if (isalnum(*p) || *p == '/' || *p == '-' || *p == '.' ||
+            *p == '_' || *p == '~') {
+            fputc((int)*p, stdout);
+        } else {
+            printf("%%%02X", *p);
+        }
+    }
+    fputs("\x07", stdout);
     fflush(stdout);
 }
 
@@ -559,6 +756,88 @@ static void cmd_reload(TuriEnv *env, const char *path) {
     }
 }
 
+/* Reinstate the interactive prompt's stdlib surface on a freshly created env.
+ * Startup does this inline (turi_env_new -> preload macros/collections/
+ * typeclasses -> re-register the inline-C native overrides -> reload native);
+ * :reset and :run (cmd_run) recreate the env and MUST run the same sequence or
+ * the session loses everything the preload bound -- `#map{}`/`#set{}`, the
+ * typeclass Show instances, and the carrier list helpers (list-head/list-tail),
+ * which then warn TUR-W0040 and, for the non-native ones (hamt-of, ...), fail
+ * at runtime. Keeping the three call sites in one helper stops them drifting.
+ * NOTE: spice auto-discovery (RP3) is intentionally NOT re-run here -- it is
+ * cwd-dependent and prints its own banner; only the always-on stdlib preload
+ * belongs in the shared reinit. */
+static void repl_preload_stdlib_and_natives(TuriEnv *env) {
+    const char *stdlib_root = getenv("TUR_STDLIB_DIR");
+    turi_env_preload_macros(env, stdlib_root);
+    /* Typed native-function stubs, in the SAME slot the `--interpret` path uses
+     * (after macros, before collections).  Without these, `cons`/`head`/`tail`
+     * resolve to the elaborator builtin the tree-walker cannot execute, so
+     * `(list-head (cons 65 (cons 66 0)))` returned nil at the prompt while the
+     * compiled and `--interpret` paths gave 65.  See
+     * docs/archive/repl-list-head-over-cons-returns-nil.md. */
+    turi_env_preload_native_stubs(env);
+    turi_env_preload_collections(env, stdlib_root);
+    turi_env_preload_typeclasses(env, stdlib_root);
+    /* Pin everything the preload just accumulated so a `#lang` switch at the
+     * prompt truncates back to here instead of emptying src_acc and taking the
+     * stdlib with it (web-repl-lang-switch-drops-stdlib). */
+    turi_env_pin_prelude(env);
+    turi_env_register_interpreter_natives(env);
+    tur_ffi_register_reload_native(env);
+}
+
+/* -------------------------------------------------------------------------
+ * :load-string "<src>"  -- evaluate source handed over directly.
+ *
+ * The prompt is line-oriented, so a host wanting to run a multi-line
+ * selection had no way to say so: it wrote the region to a scratch file and
+ * sent `(load "...")`, paying a disk round-trip (and leaving temp files
+ * behind) for something the evaluator can already do from memory --
+ * turi_eval_file is itself just read-file plus turi_eval.
+ *
+ * The argument is one double-quoted literal with C-style escapes, so an
+ * arbitrary region collapses onto the single line the prompt reads: newlines
+ * travel as \n. That is trivial for a host to produce and unambiguous to
+ * parse, which a bare unquoted tail would not be.
+ * ---------------------------------------------------------------------- */
+
+/* Decode the quoted literal starting at *pp (which must point at the opening
+ * quote). Returns a malloc'd string and advances *pp past the closing quote,
+ * or NULL if the literal is unterminated. */
+static char *unquote_literal(const char **pp) {
+    const char *p = *pp;
+    if (*p != '"') return NULL;
+    p++;
+
+    size_t cap = strlen(p) + 1;
+    char  *out = (char *)malloc(cap);
+    size_t o = 0;
+    if (!out) return NULL;
+
+    while (*p && *p != '"') {
+        if (*p == '\\' && p[1]) {
+            p++;
+            switch (*p) {
+                case 'n':  out[o++] = '\n'; break;
+                case 't':  out[o++] = '\t'; break;
+                case 'r':  out[o++] = '\r'; break;
+                case '0':  out[o++] = '\0'; break;
+                case '"':  out[o++] = '"';  break;
+                case '\\': out[o++] = '\\'; break;
+                default:   out[o++] = *p;   break;
+            }
+            p++;
+        } else {
+            out[o++] = *p++;
+        }
+    }
+    if (*p != '"') { free(out); return NULL; }  /* unterminated */
+    out[o] = '\0';
+    *pp = p + 1;
+    return out;
+}
+
 /* -------------------------------------------------------------------------
  * :run <file>  -- DrRacket-style "press Run" semantic.
  *
@@ -581,8 +860,8 @@ static void cmd_run(TuriEnv **env_io, const char *path) {
         *env_io = NULL;
         return;
     }
-    turi_env_set_diag_sink(env, repl_diag_sink, env);
-    tur_ffi_register_reload_native(env);
+    repl_configure_env(env);   /* TR2.4 */
+    repl_preload_stdlib_and_natives(env);
     *env_io = env;
 
     printf(";; run: %s\n", path);
@@ -685,8 +964,11 @@ static void print_help(void) {
         "  :type <expr>        print inferred type without evaluating\n"
         "  :doc  <sym>         print documentation for a symbol or builtin\n"
         "  :reload <file>      evaluate a .tur file into the current session\n"
+        "  :load-string \"<src>\"  evaluate source directly (\\n for newlines)\n"
         "  :run <file>         reset session, load file, auto-invoke (main)\n"
         "  :reset              clear session and start fresh\n"
+        "  :pwd                print the working directory\n"
+        "  :cd [dir]           change the working directory (bare :cd goes home)\n"
         "  :explain [code]     explain the most recent error, or a TUR-E#### code\n"
         "\n"
         "Tutorial commands:\n"
@@ -926,8 +1208,14 @@ static bool check_tutorial_step(TuriEnv *env, const char *input) {
 int turi_repl_run(bool watch_mode) {
     bool use_color = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     const char *no_shell_integ = getenv("TUR_NO_SHELL_INTEGRATION");
-    g_shell_integration = isatty(STDOUT_FILENO)
-        && (!no_shell_integ || strcmp(no_shell_integ, "1") != 0);
+    const char *yes_shell_integ = getenv("TUR_SHELL_INTEGRATION");
+    bool force_off = no_shell_integ  && strcmp(no_shell_integ,  "1") == 0;
+    bool force_on  = yes_shell_integ && strcmp(yes_shell_integ, "1") == 0;
+    g_shell_integration = !force_off && (force_on || isatty(STDOUT_FILENO));
+
+    /* Tell the host where we start, so it does not have to assume the cwd it
+     * launched us with is still current. */
+    repl_emit_cwd_marker();
 
     turi_init(use_color);
     
@@ -961,7 +1249,7 @@ int turi_repl_run(bool watch_mode) {
         fprintf(stderr, "tur repl: failed to create eval environment\n");
         return 1;
     }
-    turi_env_set_diag_sink(env, repl_diag_sink, env);
+    repl_configure_env(env);   /* TR2.4: diag sink + scratch promotion */
 
     /* Preload the core macros (when/cond/for/and/or + assert!/require!/...) and
      * the typed-collection stdlib so the interactive prompt matches the
@@ -970,34 +1258,14 @@ int turi_repl_run(bool watch_mode) {
      * preload; the report's fix direction 3 names the REPL as a drift point).
      * TUR_STDLIB_DIR is set by main.c's resolve_stdlib_root(); the helper
      * defaults to a cwd-relative "stdlib" when it is unset. */
-    {
-        const char *stdlib_root = getenv("TUR_STDLIB_DIR");
-        turi_env_preload_macros(env, stdlib_root);
-        turi_env_preload_collections(env, stdlib_root);
-        /* REPL-only: load the full typeclass.tur so the prompt can render Vec /
-         * Set / Map results through their Show instances (turi_try_show_by_tag)
-         * and `(show x)` resolves without an explicit (load ...).  Kept out of
-         * the shared preload so --interpret and the fixture worker still treat
-         * Show/Ord/Num as opt-in (some fixtures define their own Show class or
-         * assert a missing-instance error). */
-        turi_env_preload_typeclasses(env, stdlib_root);
-    }
-
-    /* Register the interpreter native overrides (sym/:Sym, contracts, seq,
-     * json/schema, safe box/unbox, comonad/mutex/future/chan/... ) so the
-     * prompt can evaluate ops whose stdlib body is inline-C -- e.g. `#map{:a 1}`
-     * needs the Hash[Sym]/Eq[Sym] natives, `assert!` needs the contract natives.
-     * Relocated from src/main.c into tur_core so the REPL and the WASM REPL
-     * register the same block as --interpret and cannot drift
-     * (web-repl-repl-inline-c-native-gap).  Runs AFTER the preload so the native
-     * shims win over the loaded inline-C bodies. */
-    turi_env_register_interpreter_natives(env);
-
-    /* RP5: register `(reload)` unconditionally so users always have
-     * a callable handle, even outside a spice project (the native
-     * surfaces a "no spice loaded" message in that case rather than
-     * an unbound-variable error). */
-    tur_ffi_register_reload_native(env);
+    /* Preload the core macros (when/cond/for/and/or + assert!/require!/...),
+     * the typed-collection stdlib (so `#map{...}`/`#set{...}` and the carrier
+     * list helpers resolve), and the REPL-only typeclass surface, then register
+     * the inline-C native overrides and the `(reload)` native.  :reset and :run
+     * recreate the env and re-run this exact sequence via the shared helper --
+     * see repl_preload_stdlib_and_natives.  (web-repl-missing-stdlib-preload,
+     * web-repl-repl-inline-c-native-gap.) */
+    repl_preload_stdlib_and_natives(env);
 
     /* RP3: auto-discover an enclosing spice project and load its
      * shared library. Skipped silently when:
@@ -1121,7 +1389,8 @@ int turi_repl_run(bool watch_mode) {
                 turi_env_free(env);
                 env = turi_env_new();
                 if (env) {
-                    turi_env_set_diag_sink(env, repl_diag_sink, env);
+                    repl_configure_env(env);   /* TR2.4 */
+                    repl_preload_stdlib_and_natives(env);
                 }
                 balance = 0;
                 multi.len = 0;
@@ -1130,6 +1399,36 @@ int turi_repl_run(bool watch_mode) {
                 g_completion_env = env;
 #endif
                 printf(";; session cleared\n");
+                free(line);
+                continue;
+            }
+            /* :pwd — print the working directory, as the host spells it. */
+            if (strcmp(line, ":pwd") == 0) {
+                char cwd[PATH_MAX];
+                if (repl_logical_cwd(cwd, sizeof cwd)) printf("%s\n", cwd);
+                else printf(":pwd failed: %s\n", strerror(errno));
+                free(line);
+                continue;
+            }
+            /* :cd [dir] — change the working directory, bare :cd goes home.
+             * Unlike a host-side "set directory" this moves the *running*
+             * process, so session state survives. Hosts tracking the cwd are
+             * told via OSC 7. */
+            if (strncmp(line, ":cd", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) {
+                const char *arg = (line[3] == ' ') ? line + 4 : "";
+                while (*arg == ' ') arg++;
+                if (!*arg) {
+                    const char *home = getenv("HOME");
+                    arg = (home && *home) ? home : "/";
+                }
+                if (chdir(arg) != 0) {
+                    printf(":cd %s: %s\n", arg, strerror(errno));
+                } else {
+                    char cwd[PATH_MAX];
+                    repl_update_logical_pwd(arg);
+                    if (repl_logical_cwd(cwd, sizeof cwd)) printf("%s\n", cwd);
+                    repl_emit_cwd_marker();
+                }
                 free(line);
                 continue;
             }
@@ -1152,6 +1451,36 @@ int turi_repl_run(bool watch_mode) {
                 cmd_explain(env, arg);
                 free(line);
                 continue;
+            }
+            if (strncmp(line, ":load-string", 12) == 0 &&
+                (line[12] == ' ' || line[12] == '\0')) {
+                const char *arg = (line[12] == ' ') ? line + 13 : "";
+                while (*arg == ' ') arg++;
+                if (*arg != '"') {
+                    printf(":load-string requires a quoted source string, "
+                           "e.g. :load-string \"(defn f [] 1)\\n(f)\"\n");
+                    free(line);
+                    continue;
+                }
+                char *src = unquote_literal(&arg);
+                if (!src) {
+                    printf(":load-string: unterminated string literal\n");
+                    free(line);
+                    continue;
+                }
+                /* Route through the normal evaluation path rather than
+                 * calling turi_eval directly, so a region gets the same
+                 * Show-instance display, `_` binding, and error reporting an
+                 * interactively typed form does. */
+                multi.len = 0;
+                buf_puts(&multi, src);
+                buf_putc(&multi, '\0');
+                free(src);
+                free(line);
+                line = NULL;
+                balance = 0;
+                in_sweet_form = false;
+                goto repl_do_eval;
             }
             if (strncmp(line, ":reload", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
                 const char *path = (line[7] == ' ') ? line + 8 : "";
@@ -1236,16 +1565,27 @@ int turi_repl_run(bool watch_mode) {
                 continue;
             }
             if (strncmp(line, "#lang ", 6) == 0) {
-                const char *rest = NULL;
-                size_t rest_len  = 0;
-                ReaderType rt = detect_lang(line, strlen(line), &rest, &rest_len);
+                const char  *rest    = NULL;
+                size_t       rest_len = 0;
+                LangLayerSet layers  = 0;
+                const char  *bad     = NULL;
+                size_t       bad_len = 0;
+                ReaderType rt = detect_lang_layered(line, strlen(line),
+                                                    &rest, &rest_len,
+                                                    &layers, &bad, &bad_len);
                 if (rt == READER_UNKNOWN || rt == (ReaderType)-1) {
                     fprintf(stderr, "unknown #lang: '%s'\n", line + 6);
-                } else if (rt != env->reader_type) {
+                } else if (bad) {
+                    fprintf(stderr, "unknown #lang layer: '%.*s'\n",
+                            (int)bad_len, bad);
+                } else if (rt != env->reader_type || layers != env->lang_layers) {
                     env->reader_type      = rt;
-                    env->src_acc.len      = 0;   /* accumulated source may be incompatible */
-                    env->prior_toplevel   = 0;
-                    env->prior_prog_items = 0;
+                    env->lang_layers      = layers;
+                    /* Accumulated USER source may be incompatible with the new
+                     * reader, but the pinned stdlib preload is not: rewind to
+                     * the pin rather than emptying, or the next collection
+                     * literal fails as "unknown ... 'hamt-of'". */
+                    turi_env_reset_to_prelude(env);
                     printf("; reader set to %s (session reset)\n", reader_type_name(rt));
                 } else {
                     printf("; reader already set to %s\n", reader_type_name(rt));
@@ -1315,6 +1655,8 @@ int turi_repl_run(bool watch_mode) {
 
             g_last_diag_code[0] = '\0';
 
+            repl_emit_exec_marker();   /* busy from here until the D below */
+
             char     type_tag[64] = {0};
             TuriValue result = turi_eval_typed(env, multi.data,
                                                type_tag, sizeof(type_tag));
@@ -1370,6 +1712,8 @@ int turi_repl_run(bool watch_mode) {
                 }
             }
             fflush(stdout);
+
+            repl_emit_done_marker(turi_is_error(result) ? 1 : 0);
 
             multi.len = 0;
         }

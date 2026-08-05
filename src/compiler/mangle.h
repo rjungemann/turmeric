@@ -88,4 +88,34 @@ void tur_mangle_ident(const char *name, char *out, size_t cap);
  * `cap >= strlen(mangled) + 1` always suffices. */
 size_t tur_demangle(const char *mangled, char *out, size_t cap);
 
+/* True if `name[0..len)` is a libc/POSIX function symbol that a C toolchain's
+ * system headers declare in the emitted translation unit, so a user top-level
+ * `defn` lowered to a bare `static int64_t <name>(...)` would be a
+ * redeclaration conflict.  The emitter (raw_name_for_binding) consults this to
+ * mangle ONLY a bare, non-module-prefixed global whose spelling collides --
+ * module-qualified names (`geom__read`) and extern-c bindings (which name the
+ * real libc symbol on purpose) are unaffected.  See
+ * docs/archive/codegen-user-defn-collides-with-libc-pipe2.md. */
+int tur_name_collides_libc(const char *name, size_t len);
+
+/* True if `name[0..len)` is a C reserved word (C89 through C23, plus the two
+ * near-universal extensions `asm`/`typeof`).  Such a name survives every
+ * mangling scheme unchanged -- it is pure `[A-Za-z0-9_]`, so both the injective
+ * scheme and the legacy fold pass it through byte for byte -- and then lands in
+ * the emitted C as `static int64_t double(int64_t);`, `f(int64_t double)`, or
+ * `int64_t int;`.  Each is a syntax error, and one bad declaration derails the
+ * rest of the translation unit, so the user sees hundreds of cc errors with no
+ * relation to their source.  Callers prefix a hit with TUR_NAME_GUARD_PREFIX,
+ * exactly as they do for tur_name_collides_libc.  See
+ * docs/archive/c-keyword-function-names-not-mangled.md. */
+int tur_name_is_c_keyword(const char *name, size_t len);
+
+/* Prefix applied to a source name whose C spelling would collide with something
+ * the C side already owns -- a libc/POSIX symbol the system headers declare, or
+ * a C reserved word.  A user name that literally starts with `tur_u_` cannot
+ * alias the guarded form under the injective scheme (a literal '_' encodes as
+ * "_un", so `tur_u_double` mangles to `tur_unu_undouble`). */
+#define TUR_NAME_GUARD_PREFIX     "tur_u_"
+#define TUR_NAME_GUARD_PREFIX_LEN 6
+
 #endif /* TUR_COMPILER_MANGLE_H */

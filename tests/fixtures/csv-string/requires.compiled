@@ -1,0 +1,5 @@
+tur/csv-string's emitters are inline-C ("run it with tur build/tur run instead
+of --interpret"); the interpreter has no native override for them and aborts
+with "inline-C not supported". The module docstring states it "runs on the
+compiled path; use the underlying csv/emit* cstr forms under --interpret".
+Compiled path is green (bash tests/run.sh).

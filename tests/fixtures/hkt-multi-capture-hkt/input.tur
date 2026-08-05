@@ -23,14 +23,14 @@
 (defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
 (defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return (int)(p->value);
   ```)
 
@@ -38,7 +38,7 @@
   (fmap [container fn]
     ```c
     struct { bool is_some; int64_t value; } *c =
-        (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+        (void *)(intptr_t)container;
     if (!c || !c->is_some) return 0;
     struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
     r->is_some = true;

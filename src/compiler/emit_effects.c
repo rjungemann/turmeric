@@ -12,6 +12,7 @@
  * emit_module.c -- see emit-effects-extraction-plan.md §EE4 for rationale.
  */
 #include "emit_internal.h"
+#include "globals.h"   /* B3 part 2: g_opt_cps_tramp_resume */
 
 /* =========================================================================
  * Region C -- algebraic effects
@@ -88,68 +89,6 @@ char *emit_effects_defect(EmitCtx *ctx, Buf *body, const Expr *e) {
     return atom_nil();
 }
 
-char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* (perform (EffectName args...)) - perform an effect.
-     * Emit: tur_effect_perform("Name", args_array, n_args)
-     */
-    PerformExpr *perf = e->as.perform_.perform;
-    if (!perf) return atom_nil();
-
-    bool nil_result = (e->type.kind == TY_NIL);
-
-    /* Emit arguments into a temporary array */
-    char *args_var_str = NULL;
-    if (perf->n_args > 0) {
-        args_var_str = fresh_tmp(ctx);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "int64_t %s[%d];\n", args_var_str, perf->n_args);
-        for (uint32_t i = 0; i < perf->n_args; i++) {
-            char *av = emit_value(ctx, body, perf->args[i]);
-            indent_buf(body, ctx->indent);
-            /* Store the arg into the int64 slot: Tier C by-value aggregate boxed,
-             * a float bit-reinterpreted (a plain cast would truncate the
-             * fraction), everything else a plain cast. The handler case unpacks
-             * with the inverse eff_slot_load. */
-            char *sv = eff_slot_store(perf->args[i]->type, av);
-            buf_printf(body, "%s[%d] = %s;\n", args_var_str, i, sv);
-            free(sv);
-            free(av);
-        }
-    }
-    const char *args_arg  = args_var_str ? args_var_str : "NULL";
-    int         n_args    = perf->n_args;
-
-    if (nil_result) {
-        /* Void-result effect: emit as statement, return nil placeholder */
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "tur_effect_perform(\"%s\", %s, %d);\n",
-                   perf->effect_name->name, args_arg, n_args);
-        free(args_var_str);
-        return atom_nil();
-    } else {
-        char *result = fresh_tmp(ctx);
-        indent_buf(body, ctx->indent);
-        const char *res_ctype = type_c_name(e->type);
-        bool needs_cast = (e->type.kind != TY_INT && e->type.kind != TY_UNKNOWN);
-        Buf pcall; buf_init(&pcall);
-        buf_printf(&pcall, "tur_effect_perform(\"%s\", %s, %d)",
-                   perf->effect_name->name, args_arg, n_args);
-        buf_putc(&pcall, '\0');
-        if (needs_cast) {
-            /* Load the result out of the int64 slot: a boxed aggregate is
-             * deref'd, a float is bit-reinterpreted (a plain cast would read the
-             * double's bits as an integer), everything else is a plain cast. */
-            char *ld = eff_slot_load(e->type, pcall.data);
-            buf_printf(body, "%s %s = %s;\n", res_ctype, result, ld);
-            free(ld);
-        } else {
-            buf_printf(body, "int64_t %s = %s;\n", result, pcall.data);
-        }
-        buf_free(&pcall);
-        free(args_var_str);
-        return result;
-    }
-}
 
 bool emit_handle_is_pure_unsafe(const HandleExpr *h) {
     return h && h->is_unsafe_marker;
@@ -851,6 +790,99 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
     return atom_nil();
 }
 
+/* B3 part 2: emit a DK-ABI case fn for a first-class handler literal case, so a
+ * dynamic `(with-handler <value> body)` can install it on the DK
+ * (dk_hgroup_from_table).  Restricted to the shape the 3 dynamic-handler target
+ * fixtures use: a case body that is `[non-control stmt]* then a TAIL single-shot
+ * (resume k V)`, with at most one effect parameter.  Returns true (and writes the
+ * fn to `hbuf`) when emittable; false leaves dk_fn=0 so the dynamic install
+ * evicts gracefully.  The non-tail prefix is emitted with the normal direct
+ * emitter; only the tail resume is hand-lowered to dk_tail_resume (the fiber
+ * emitter would emit tur_effect_cont_resume). */
+static bool emit_dk_handler_case_fn(EmitCtx *ctx, Buf *hbuf, const char *dkfn_name,
+                                    HandleCase *c, const char *env_type,
+                                    const char *env_var, bool has_caps,
+                                    Binding **caps, uint32_t n_caps) {
+    if (!c || c->n_params > 1) return false;
+    const Expr *cbody = c->body;
+    const Expr *tail = cbody;
+    const Expr *const *prefix = NULL;
+    uint32_t n_prefix = 0;
+    if (cbody && cbody->kind == EX_DO && cbody->as.do_.n >= 1) {
+        prefix = (const Expr *const *)cbody->as.do_.items;
+        n_prefix = cbody->as.do_.n - 1;
+        tail = cbody->as.do_.items[cbody->as.do_.n - 1];
+    }
+    if (!tail || tail->kind != EX_RESUME || !tail->as.resume_.resume) return false;
+    ResumeExpr *r = tail->as.resume_.resume;
+    if (!r->k || r->k->type.copy_kind == CK_MULTISHOT) return false;  /* single-shot only */
+
+    Buf fn; buf_init(&fn);
+    Buf pend; buf_init(&pend);
+    buf_puts(&fn, "    (void)__dkenv; (void)__dkarg; (void)__dksubk;\n");
+    if (has_caps)
+        buf_printf(&fn, "    %s *%s = (%s *)(void *)(intptr_t)__dkenv;\n",
+                   env_type, env_var, env_type);
+    /* the single effect param (if any) arrives in __dkarg */
+    if (c->n_params == 1 && c->param_bindings && c->param_bindings[0]) {
+        const char *ct = type_c_name(c->param_bindings[0]->type);
+        char *raw = raw_name_for_binding(c->param_bindings[0]);
+        char *ld = eff_slot_load(c->param_bindings[0]->type, "((int64_t)__dkarg)");
+        bool fnval = c->param_bindings[0]->type.kind == TY_FN
+                     && !c->param_bindings[0]->type.as.fn.boxed;
+        if (fnval) buf_printf(&fn, "    %s %s = %s;\n", ct, raw, ld);
+        else       buf_printf(&fn, "    %s %s_%u = %s;\n", ct, raw,
+                              (unsigned)c->param_bindings[0]->id, ld);
+        free(ld); free(raw);
+    }
+    /* the continuation binding holds the DK subk (as an int64, like the fiber k) */
+    if (c->k_binding) {
+        char *raw = raw_name_for_binding(c->k_binding);
+        buf_printf(&fn, "    int64_t %s_%u = (int64_t)(intptr_t)__dksubk;\n",
+                   raw, (unsigned)c->k_binding->id);
+        free(raw);
+    }
+    EmitCtx hc = *ctx;
+    hc.file = &fn; hc.pending_handler_fns = &pend; hc.indent = 4;
+    hc.fn_params = NULL; hc.n_fn_params = 0; hc.closure = NULL;
+    hc.env_var_name = has_caps ? env_var : NULL;
+    hc.defer_captures = NULL; hc.n_defer_captures = 0; hc.frame_var = NULL;
+    hc.return_emitted = false;
+    hc.handle_captures = has_caps ? caps : NULL;
+    hc.n_handle_captures = has_caps ? n_caps : 0;
+    hc.handle_env_name = has_caps ? env_var : NULL;
+    /* non-tail prefix statements (e.g. (println s)) -- ordinary direct emit */
+    for (uint32_t i = 0; i < n_prefix; i++) emit_stmt(&hc, &fn, prefix[i]);
+    /* tail (resume k V): consume the continuation and tail-resume it on the DK */
+    char *kv = emit_value(&hc, &fn, r->k);
+    Type vtype = r->value ? r->value->type : (Type){0};
+    bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
+    char *v_arg;
+    if (v_is_nil) {
+        v_arg = strdup("(intptr_t)0");
+    } else {
+        char *vv = emit_value(&hc, &fn, r->value);
+        char *sv = eff_slot_store(vtype, vv);
+        Buf vb; buf_init(&vb);
+        buf_printf(&vb, "(intptr_t)(%s)", sv);
+        buf_putc(&vb, '\0');
+        v_arg = strdup(vb.data);
+        buf_free(&vb); free(sv); free(vv);
+    }
+    buf_printf(&fn, "    ((struct DK *)(intptr_t)%s)->consumed = 1;\n", kv);
+    buf_printf(&fn, "    return dk_tail_resume((struct DK *)(intptr_t)%s, %s);\n", kv, v_arg);
+    free(kv); free(v_arg);
+    ctx->tmp_n = hc.tmp_n;
+    if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
+    buf_free(&pend);
+    buf_printf(hbuf, "static intptr_t %s(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);\n", dkfn_name);
+    buf_printf(hbuf, "static intptr_t %s(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {\n", dkfn_name);
+    buf_write(hbuf, fn.data, fn.len);
+    buf_puts(hbuf, "}\n\n");
+    buf_free(&fn);
+    return true;
+}
+
 /* FH2: emit a handler literal as a runtime tur_handler_table_t* value.
  * Emits the single case as a static __effect_handler_<id> function (same ABI
  * and capture-via-__env scheme as emit_effects_handle), heap-allocates the
@@ -893,7 +925,15 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_printf(hbuf, "};\n\n");
     }
 
-    /* Emit the case function (mirrors emit_effects_handle Step 4). */
+    /* Emit the case function (mirrors emit_effects_handle Step 4).  Buffer it into
+     * `fiberfn` rather than hbuf directly: the fiber `__effect_handler_N` (whose
+     * body direct-emits the case's `resume` as `tur_effect_cont_resume`) is DEAD
+     * when a DK case fn is also emitted (dk_hgroup_from_table installs via `dk_fn`
+     * and never reads `.fn`; with the flag always-on every perform DK-lowers).  It
+     * is appended to hbuf only when the DK case is NOT emittable, so a DK-lowered
+     * handler value no longer drags the fiber `tur_effect_cont_resume` runtime into
+     * the emitted C.  Buffering (not reordering) keeps tmp_n allocation identical. */
+    Buf fiberfn; buf_init(&fiberfn);
     {
         Buf fn; buf_init(&fn);
         Buf pend; buf_init(&pend);
@@ -955,16 +995,28 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
         }
         ctx->tmp_n = hc.tmp_n;
-        if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
+        if (pend.len > 0) buf_write(&fiberfn, pend.data, pend.len);
         buf_free(&pend);
-        buf_printf(hbuf, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+        buf_printf(&fiberfn, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
                          " int64_t __k, void *__env);\n", hfn_name);
-        buf_printf(hbuf, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+        buf_printf(&fiberfn, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
                          " int64_t __k, void *__env) {\n", hfn_name);
-        buf_write(hbuf, fn.data, fn.len);
-        buf_puts(hbuf, "}\n\n");
+        buf_write(&fiberfn, fn.data, fn.len);
+        buf_puts(&fiberfn, "}\n\n");
         buf_free(&fn);
     }
+
+    /* B3 part 2: also emit a DK-ABI case fn (when the case shape allows) so a
+     * dynamic with-handler over this value can install it on the DK. */
+    char dkfn_name[64];
+    snprintf(dkfn_name, sizeof(dkfn_name), "__dk_hcase_%d", id);
+    bool dk_emitted = g_opt_cps_tramp_resume
+        && emit_dk_handler_case_fn(ctx, hbuf, dkfn_name, c, env_type, env_var,
+                                   has_caps, caps, n_caps);
+    /* Fiber case fn is DEAD once the DK case is emitted -- append it only as the
+     * non-DK fallback, so `tur_effect_cont_resume` leaves the DK-lowered output. */
+    if (!dk_emitted && fiberfn.len > 0) buf_write(hbuf, fiberfn.data, fiberfn.len);
+    buf_free(&fiberfn);
 
     /* Inline: heap-alloc the capture env, build a one-entry owning table. */
     char env_inl[64];
@@ -988,11 +1040,19 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s->entries[0].eff_name = \"%s\";\n", tbl, c->effect_name->name);
     indent_buf(body, ctx->indent);
-    buf_printf(body, "%s->entries[0].fn = %s;\n", tbl, hfn_name);
+    /* fn is the fiber case entry; when the DK case is present it is dead (and no
+     * longer emitted), so store NULL -- the DK install path reads only dk_fn. */
+    buf_printf(body, "%s->entries[0].fn = %s;\n", tbl, dk_emitted ? "NULL" : hfn_name);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s->entries[0].env = %s;\n", tbl, has_caps ? env_inl : "NULL");
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s->entries[0].cont_kind = %d;\n", tbl, (int)c->cont_kind);
+    if (dk_emitted) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s->entries[0].dk_tag = %d;\n", tbl, effect_tag(c->effect_name));
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s->entries[0].dk_fn = %s;\n", tbl, dkfn_name);
+    }
     free(caps);
     return tbl;
 }
@@ -1012,203 +1072,6 @@ char *emit_effects_compose_handlers(EmitCtx *ctx, Buf *body, const Expr *e) {
  * performed effects against hv's runtime table via the generic
  * tur_handler_dispatch.  Mirrors emit_effects_handle Steps 5-7 with the table
  * supplied at runtime instead of compile-time inline cases. */
-char *emit_effects_with_handler(EmitCtx *ctx, Buf *body, const Expr *e) {
-    Expr *hv = e->as.with_handler_.handler;
-    Expr *hbody = e->as.with_handler_.body;
-    bool returns_value = (e->type.kind != TY_NIL);
-    int id = ctx->tmp_n++;
-    Buf *hbuf = ctx->pending_handler_fns;
-
-    /* The handler table is a temporary (owned here, free after use) only when
-     * the argument is a literal/compose expression; a bound var is owned by its
-     * binding scope and must not be freed here. */
-    bool owns_table = (hv->kind == EX_HANDLER_LIT || hv->kind == EX_COMPOSE_HANDLERS);
-
-    /* Evaluate the handler value -> tur_handler_table_t*. */
-    char *hv_val = emit_value(ctx, body, hv);
-    char tbl_var[64];
-    snprintf(tbl_var, sizeof(tbl_var), "__wh_tbl_%d", id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "tur_handler_table_t *%s = %s;\n", tbl_var, hv_val);
-    free(hv_val);
-
-    /* Collect captures from the body for the fiber body function. */
-    uint32_t n_caps = 0;
-    Binding **caps = collect_handle_captures(hbody, &n_caps);
-    bool has_caps = (n_caps > 0);
-
-    char env_type[64], env_var[64], body_fn[64], cap_var[64], fiber_var[64];
-    snprintf(env_type, sizeof(env_type), "__WHEnv_%d", id);
-    snprintf(env_var, sizeof(env_var), "__whenv_%d", id);
-    snprintf(body_fn, sizeof(body_fn), "__wh_body_%d", id);
-    snprintf(cap_var, sizeof(cap_var), "__wh_cap_%d", id);
-    snprintf(fiber_var, sizeof(fiber_var), "__wh_fiber_%d", id);
-
-    if (has_caps) {
-        buf_printf(hbuf, "typedef struct %s %s;\n", env_type, env_type);
-        buf_printf(hbuf, "struct %s {\n", env_type);
-        for (uint32_t j = 0; j < n_caps; j++) {
-            Binding *bd = caps[j];
-            char *raw = raw_name_for_binding(bd);
-            const char *ft = bd->is_poly_fn ? "tur_poly_fn_t" : type_c_name(bd->type);
-            buf_printf(hbuf, "    %s %s;\n", ft, raw);
-            free(raw);
-        }
-        buf_printf(hbuf, "};\n\n");
-    }
-
-    /* Emit the body fiber function (mirrors emit_effects_handle Step 5). */
-    {
-        Buf fn; buf_init(&fn);
-        Buf pend; buf_init(&pend);
-        if (has_caps) {
-            buf_puts(&fn, "    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)tur_current_fiber->eff_ctx;\n");
-            buf_printf(&fn, "    %s *%s = (%s *)__cap->body_env;\n", env_type, env_var, env_type);
-        }
-        EmitCtx bc = *ctx;
-        bc.file = &fn; bc.pending_handler_fns = &pend; bc.indent = 4;
-        bc.fn_params = NULL; bc.n_fn_params = 0; bc.closure = NULL;
-        bc.env_var_name = has_caps ? env_var : NULL;
-        bc.defer_captures = NULL; bc.n_defer_captures = 0; bc.frame_var = NULL;
-        bc.return_emitted = false;
-        bc.handle_captures = has_caps ? caps : NULL;
-        bc.n_handle_captures = has_caps ? n_caps : 0;
-        bc.handle_env_name = has_caps ? env_var : NULL;
-        if (hbody->type.kind == TY_NIL || hbody->type.kind == TY_NEVER) {
-            emit_stmt(&bc, &fn, hbody);
-            buf_puts(&fn, "    tur_current_fiber->result = 0;\n");
-        } else {
-            char *bret = emit_value(&bc, &fn, hbody);
-            /* Pack the body result into the int64 fiber result slot (float
-             * bit-reinterpret / aggregate box / plain cast). */
-            char *sv = eff_slot_store(hbody->type, bret);
-            buf_printf(&fn, "    tur_current_fiber->result = %s;\n", sv);
-            free(sv);
-            free(bret);
-        }
-        ctx->tmp_n = bc.tmp_n;
-        if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
-        buf_free(&pend);
-        buf_printf(hbuf, "static void %s(void);\n", body_fn);
-        buf_printf(hbuf, "static void %s(void) {\n", body_fn);
-        buf_write(hbuf, fn.data, fn.len);
-        buf_puts(hbuf, "}\n\n");
-        buf_free(&fn);
-    }
-
-    /* Inline setup (mirrors emit_effects_handle Step 7). */
-    char *result = fresh_tmp(ctx);
-    if (has_caps) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
-                   env_type, env_var, env_type, env_type);
-        for (uint32_t j = 0; j < n_caps; j++) {
-            Binding *bd = caps[j];
-            char *raw = raw_name_for_binding(bd);
-            char *cur = name_for_binding(ctx, bd);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s->%s = %s;\n", env_var, raw, cur);
-            free(raw); free(cur);
-        }
-    }
-
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "TurEffectCaptureCtx %s;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.has_pending_effect = false;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.eff_name = NULL;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.eff_n_args = 0;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.dispatch = tur_handler_dispatch;\n", cap_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.body_env = %s;\n", cap_var, has_caps ? env_var : "NULL");
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.table = %s;\n", cap_var, tbl_var);
-
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "FiberBlock *%s = tur_fiber_block_new(%s, 0);\n", fiber_var, body_fn);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s->eff_ctx = &%s;\n", fiber_var, cap_var);
-
-    /* Intercept frame: populate cases from the runtime table (cap at 8). */
-    char frame_var[64], parent_var[64];
-    snprintf(frame_var, sizeof(frame_var), "__wh_frame_%d", id);
-    snprintf(parent_var, sizeof(parent_var), "__wh_parent_%d", id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body,
-        "EffectHandlerFrame *%s = (tur_current_fiber"
-        " ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain"
-        " : global_effect_handler_chain);\n", parent_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "EffectHandlerFrame %s;\n", frame_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.parent = %s;\n", frame_var, parent_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "int __wh_nf_%d = %s->n_entries < 8 ? %s->n_entries : 8;\n",
-               id, tbl_var, tbl_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s.n_cases = __wh_nf_%d;\n", frame_var, id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "for (int __wi = 0; __wi < __wh_nf_%d; __wi++) {\n", id);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "    %s.cases[__wi].effect_name = %s->entries[__wi].eff_name;\n", frame_var, tbl_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "    %s.cases[__wi].handler_fn = NULL;\n", frame_var);
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "    %s.cases[__wi].env = NULL;\n", frame_var);
-    indent_buf(body, ctx->indent);
-    buf_puts(body, "}\n");
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "%s->effect_handler_chain = &%s;\n", fiber_var, frame_var);
-
-    indent_buf(body, ctx->indent);
-    if (returns_value) {
-        /* Load the with-handler result out of the int64 ABI (float
-         * bit-reinterpret / aggregate unbox / plain cast). */
-        Buf dcall; buf_init(&dcall);
-        buf_printf(&dcall, "tur_handler_dispatch(&%s, (int64_t)(intptr_t)%s, 0)",
-                   cap_var, fiber_var);
-        buf_putc(&dcall, '\0');
-        char *ld = eff_slot_load(e->type, dcall.data);
-        buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), result, ld);
-        free(ld);
-        buf_free(&dcall);
-    } else {
-        buf_printf(body, "tur_handler_dispatch(&%s, (int64_t)(intptr_t)%s, 0);\n",
-                   cap_var, fiber_var);
-    }
-
-    if (has_caps) {
-        for (uint32_t j = 0; j < n_caps; j++) {
-            Binding *bd = caps[j];
-            char *raw = raw_name_for_binding(bd);
-            char *cur = name_for_binding(ctx, bd);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s = %s->%s;\n", cur, env_var, raw);
-            free(raw); free(cur);
-        }
-    }
-
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "if (%s->done) { free(%s->stack); free(%s); }\n",
-               fiber_var, fiber_var, fiber_var);
-    if (has_caps) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s->done) { free(%s); }\n", fiber_var, env_var);
-    }
-    /* FH1.2: free the handler table iff it is a temporary owned here. */
-    if (owns_table) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "tur_handler_table_free(%s);\n", tbl_var);
-    }
-
-    free(caps);
-    if (returns_value) return result;
-    free(result);
-    return atom_nil();
-}
 
 char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (resume k value) - resume continuation with value.
@@ -1228,13 +1091,31 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (k_type.copy_kind == CK_MULTISHOT) {
             /* MS1: ^multishot k -- snapshot before each resume so k stays usable. */
             char *tmp = fresh_tmp(ctx);
+            char *snap = fresh_tmp(ctx);
             Type vtype = e->as.resume_.resume->value->type;
             bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
             char *v_arg = v_is_nil ? strdup("(int64_t)0")
                                    : eff_slot_store(vtype, v_var);
+            /* Snapshot -> resume -> drop.  tur_continuation_snapshot clones the
+             * cont (a fresh struct + a deep clone of its env); the resume runs
+             * cont_fn on that clone but never reclaims it (cont_fn = __dk_cont_fn
+             * = dk_invoke, which dk_copy_range's the chain and frees only its own
+             * internal copy -- the snapshot's env is left caller-owned).  So the
+             * per-resume snapshot (struct + env) leaked one clone per `(k v)`.
+             * Drop it right after the resume returns: tur_cloneable_cont_drop
+             * fires drop_env (dk_free of the chain clone) then frees the struct --
+             * safe because the resume's dk_invoke never took ownership of the env,
+             * and the returned result is a plain value, not the snapshot.  The
+             * original k is untouched (this frees the clone, not k), so a
+             * subsequent resume of k still works (multi-shot).
+             * (docs/archive/cps-resume-frame-node-leak.md, snapshot sibling.) */
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), %s);\n",
-                       tmp, k_var, v_arg);
+            buf_printf(body, "int64_t %s = tur_continuation_snapshot(%s);\n", snap, k_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(%s, %s);\n", tmp, snap, v_arg);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_cloneable_cont_drop(%s);\n", snap);
+            free(snap);
             free(v_arg);
             free(k_var);
             free(v_var);

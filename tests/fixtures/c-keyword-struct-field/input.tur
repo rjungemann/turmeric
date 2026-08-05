@@ -1,0 +1,19 @@
+;; A struct whose NAME or whose FIELD names are C keywords. A keyword field
+;; emitted `int64_t int;` inside the generated struct body; the struct name
+;; itself is always spelled `tur_adt_<name>` so it was never a bare collision,
+;; but the three manglers that build that spelling have to agree on it.
+;; Regression for docs/archive/c-keyword-function-names-not-mangled.md.
+
+(defstruct Rec [int : int float : int const : int])
+
+(defstruct enum [signed : int])
+
+(defn main [] : int
+  (let [r (Rec 1 2 3)
+        e (enum 40)]
+    (do
+      (println (.int r))
+      (println (.float r))
+      (println (.const r))
+      (println (+ (.signed e) 2))
+      0)))

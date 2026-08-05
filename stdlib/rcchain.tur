@@ -1,0 +1,131 @@
+;;; tur/rcchain -- a collection of rc<A> the cycle collector can trace through.
+;;;
+;;; Opt-in: load it when you need one.
+;;;
+;;;   (load "stdlib/rcchain.tur")
+;;;
+;;; The problem it solves: a `(Vec rc<T>)` is refcount-correct but INVISIBLE to
+;;; the cycle collector.  A Vec's elements live in an ordinary malloc'd
+;;; { data, len, cap } buffer with no walk_fn, so `gc_each_child` enumerates
+;;; nothing for it and a cycle routed through the buffer is never reclaimed
+;;; (measured: tests/fixtures/gc-blind-spot-cycle-through-vec, 0 freed / 50
+;;; live).  Nor can that be fixed by tracing the buffer: a Vec is shared by raw
+;;; pointer and freed by hand, so the collector cannot tell whether some other
+;;; holder still points at it, and the sweep would free a block a live Vec
+;;; references.
+;;;
+;;; An RcChain has no such buffer.  Every link is an ordinary `rc` field, which
+;;; the emitted walk glue already enumerates -- so a cycle through a chain is
+;;; reclaimed with no new machinery anywhere in the compiler or the runtime.
+;;; That is the whole design: the blind spot is one specific thing, a flat
+;;; buffer, and the way around it is not to have one.
+;;;
+;;; The trade is the obvious one.  A chain is O(n) to index and costs one rc
+;;; block per element, where a Vec is O(1) and costs one buffer.  Reach for this
+;;; only when the elements can form a cycle AND the collector is on; a `Vec` of
+;;; handles that cannot cycle is still the better default.  For O(1) indexing
+;;; with the same traceability, see stdlib/rcvec.tur -- a flat buffer whose
+;;; container is itself GC-visible via emitted walk/drop hooks; this module
+;;; remains the zero-C-hook alternative.
+;;;
+;;; Accessors take their chain `^borrow`, so a chain can be walked repeatedly
+;;; without being consumed -- `rc<T>` is move-only, and a by-value parameter
+;;; would poison the caller's binding after one read.
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+;; Cycle-collector-visible chain of rc<A>.
+;;; RcChain -- one link: an element and the rest of the chain.
+;;;
+;;; Both fields are `rc`, which is what makes the link traceable: the walk glue
+;;; emitted for the struct reports each as a child, so the collector follows
+;;; both the element and the spine.
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+(defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
+;;; rcchain-nil -- the empty chain.
+;;;
+;;; Returns:
+;;;   An empty chain (a null rc handle, which the walker skips).
+;;;
+;;; An ascription rather than an inline-C `return 0;` -- both lower identically,
+;;; and the ascription keeps the module free of inline-C entirely, which is
+;;; the point worth making about it: a collection the cycle collector can trace
+;;; needs nothing below the language.
+;;;
+;;; (The inline-C form used to be actively worse: it emitted a base returning
+;;; the int64 carrier, so every call site warned.  Fixed and pinned by
+;;; tests/fixtures/inline-c-rc-return-typed; the choice here is now taste.)
+;;;
+;;; Example:
+;;;   (rcchain-nil)  ; => empty chain
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+
+(defn rcchain-nil [] : rc<RcChain> (:: 0 rc<RcChain>))
+;;; rcchain-empty? -- 1 if the chain has no links.
+;;;
+;;; Parameters:
+;;;   c -- the chain to test (borrowed)
+;;;
+;;; Returns:
+;;;   1 for the empty chain, 0 otherwise.
+;;;
+;;; Example:
+;;;   (rcchain-empty? (rcchain-nil))  ; => 1
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+
+(defn rcchain-empty? [^borrow c : rc<RcChain>] : int
+  ```c
+  return (intptr_t)c == 0 ? 1 : 0;
+  ```)
+;;; rcchain-cons -- prepend an element to a chain.
+;;;
+;;; The new link takes ownership of both arguments, which is what keeps the
+;;; chain's counts honest: pass `(rc/clone x)` when you want to keep your own
+;;; reference to the element.
+;;;
+;;; Parameters:
+;;;   item -- the element to prepend
+;;;   rest -- the existing chain (or (rcchain-nil))
+;;;
+;;; Returns:
+;;;   A new chain whose head is item.
+;;;
+;;; Example:
+;;;   (rcchain-cons (rc/clone x) (rcchain-nil))
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+
+(defn rcchain-cons [A] [item : rc<A> rest : rc<RcChain>] : rc<RcChain>
+  (rc/of (make-struct RcChain item rest)))
+;;; rcchain-head -- the element at the front of a chain.
+;;;
+;;; Undefined on an empty chain -- test with rcchain-empty? first.
+;;;
+;;; Parameters:
+;;;   c -- a non-empty chain (borrowed)
+;;;
+;;; Returns:
+;;;   The front element.
+;;;
+;;; Example:
+;;;   (rcchain-head (rcchain-cons (rc/clone x) (rcchain-nil)))
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+
+(defn rcchain-head [A] [^borrow c : rc<RcChain>] : rc<A> (.item c))
+;;; rcchain-next -- the rest of a chain, past its front link.
+;;;
+;;; Parameters:
+;;;   c -- a non-empty chain (borrowed)
+;;;
+;;; Returns:
+;;;   The remaining chain.
+;;;
+;;; Example:
+;;;   (rcchain-next (rcchain-cons (rc/clone x) (rcchain-nil)))  ; => empty
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+
+(defn rcchain-next [^borrow c : rc<RcChain>] : rc<RcChain> (.next c))

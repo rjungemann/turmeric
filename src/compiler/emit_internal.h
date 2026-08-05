@@ -99,6 +99,21 @@ void        sym_codegen_emit(Buf *out, bool external_weak);
 /* SYM5: note that str->sym is defined in this TU (gates the seeding ctor). */
 void        sym_codegen_note_intern_used(void);
 
+/* S1b (jit-engine-plan): per-TU explicit static-initialization registry.
+ * Replaces per-site `__attribute__((constructor))`, which c2mir silently
+ * discards (findings 3.1).  Bands encode the ordering the toolchain used to
+ * pick for us; within a band, registration order is preserved. */
+typedef enum StaticInitBand {
+    STATIC_INIT_KEYS     = 0,  /* pthread_key_create for dynamic variables */
+    STATIC_INIT_REGISTRY = 1,  /* __sk_register / __tur_cps_register / tur_sym_register */
+    STATIC_INIT_ATEXIT   = 2,  /* module-defer atexit() registration */
+    STATIC_INIT_DEFS     = 3,  /* __tur_module_def_init -- runs user code, last */
+} StaticInitBand;
+void     static_init_reset(void);
+void     static_init_register(const char *fn, StaticInitBand band);
+uint32_t static_init_count(void);
+void     static_init_emit(Buf *out);
+
 /* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
 extern int64_t g_backtrack_depth;
 /* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */
@@ -106,6 +121,13 @@ extern bool g_dump_clone_plan;
 
 /* Forward declarations */
 struct DeferThunk;
+
+/* struct-of-closures monomorphization: upper bound on the number of ADDITIONAL
+ * (beyond the first) inner closures a single struct-of-closures return can link
+ * to one outer spec.  A generic fn returning `(make-struct S clo1 .. cloN)`
+ * links clo1 via inner_closure_spec_idx and clo2..cloN here, so this caps N-1.
+ * 15 (total 16 closures) matches the practical struct field ceiling. */
+#define TUR_EXTRA_INNER_CLOSURE_MAX 15
 
 /* GS5/CS3: AbiTypeBinding is defined in expr.h and shared with elab_call.c so
  * the emit phase consumes the substitution that elab already computed. */
@@ -135,6 +157,17 @@ typedef struct EmitAbiSpecialization {
      * the linked inner-closure-body spec, or -1 when none.  Lets the outer
      * spec body's EX_CLOSURE emit reference the inner clone's name + env. */
     int32_t inner_closure_spec_idx;
+    /* struct-of-closures monomorphization: a generic fn that RETURNS a
+     * struct-of-closures (`(make-struct S clo1 clo2 ...)`, lowered to a ctor
+     * CALL whose args are the closures) links its FIRST closure via
+     * inner_closure_spec_idx above; every ADDITIONAL closure needs its own
+     * per-spec clone + suffixed env too, or its captured monomorph fields keep
+     * the base int64-carrier type and the ctor-body construction assigns a
+     * by-value struct into an int64 slot.  These are the extra links; the
+     * EX_CLOSURE / thunk emit sites resolve a closure's inner spec by matching
+     * `binding` across the primary index and this list. */
+    int32_t extra_inner_closure_spec_idx[TUR_EXTRA_INNER_CLOSURE_MAX];
+    uint8_t n_extra_inner_closure_spec_idx;
     /* M6 / gap G6(c): true when this spec is the per-spec clone of a CAPTURED
      * closure PASSED to a generic combinator (the recursive `(fn [c] : B
      * (re-cata alg c))` handed to `fmap`).  Scopes the return-only-poly result
@@ -190,6 +223,28 @@ typedef struct EmitCtx {
     Buf  *thunk_typedefs; /* TS1: shared thunk typedef prelude */
     int   indent;
     int   tmp_n;
+    /* S1 (jit-engine-plan, findings 16): the return C type of the call
+     * expression an EX_CALL builder just finished composing, handed to
+     * emit_value's panic-hoist so the `__ps_N` temp can be declared with a
+     * real type instead of `__auto_type` (which c2mir cannot parse).  This is
+     * GROUND TRUTH, not inference: each builder writes the same ret_c string
+     * it spelled into the cast / thunk-typedef of the call text itself.
+     * Protocol: a builder sets it as the LAST thing before returning its
+     * composed call string (nested argument calls were already hoisted and
+     * consumed their own notes by then); emit_value captures and CLEARS it
+     * unconditionally after every dispatch, so a note from a void/never call
+     * (whose hoist is skipped) can never leak onto a later call.  Empty
+     * string == no note. */
+    char  call_ret_note[256];
+    /* consolidation increment 2 (bind cell): set while emitting an
+     * EX_POLY_WRAP argument of a call whose resolved callee is the CARRIER
+     * base instance entry (an __inst_* binding with no matched by-value
+     * spec and a tyvar-mentioning result).  Such a callee invokes the
+     * continuation through the int64 carrier cast, so the wrapper must box
+     * a by-value aggregate result (the spill shim) -- pairing the wrapper
+     * ABI with the SELECTED entry point instead of guessing from receiver
+     * abstractness (result-monad-bind-typed-boundary-miscompiles). */
+    bool  poly_wrap_callee_carrier;
     /* Phase 2: when emitting a function body, these are the parameter bindings
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
@@ -217,6 +272,18 @@ typedef struct EmitCtx {
     char    **poly_fatshim_names;
     uint32_t  n_poly_fatshim_names;
     uint32_t  cap_poly_fatshim_names;
+    /* fn-value-fat-normalization: STATIC {shim, orig} boxes.  A box whose
+     * `orig` is a file-scope function is a CONSTANT, so it does not need the
+     * per-execution malloc EX_FN_TO_FAT would otherwise emit -- which is not
+     * merely slow but an unbounded leak, since nothing drops a box handed to a
+     * normalized param (a 5e6-iteration `(apply1 add3 acc)` loop leaked
+     * 122 MiB).  `fatbox_keys` dedups on "<shim>|<orig>"; the definitions land
+     * in `thunk_typedefs` and the fill statements in `fatbox_init`, emitted as
+     * one `__tur_fatbox_init` registered in the earliest static-init band. */
+    char    **fatbox_keys;
+    uint32_t  n_fatbox_keys;
+    uint32_t  cap_fatbox_keys;
+    Buf      *fatbox_init;
     /* constrained-byval dispatch: per-(class,struct-instance) carrier-adapter
      * witness-dict tracking.  A constrained existential over a by-value struct
      * payload points its witness at one of these `dict_<Class>_<T>__exbox`
@@ -230,6 +297,15 @@ typedef struct EmitCtx {
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
     /* Phase 4 v1: Frame tracking for unified defer model */
     const char *frame_var;    /* Name of current tur_frame variable (e.g., "__frame_3") */
+    /* S1b/dynvar early-exit: the dynamic-binding guards currently in scope,
+     * innermost LAST.  An early `return` out of a `binding` body must pop them
+     * explicitly: the __attribute__((cleanup)) that covers this on the cc path
+     * is discarded by c2mir with no diagnostic, which left the dynvar key
+     * pointing at a returned function's stack frame (a SEGV, not a leak).
+     * The pop is idempotent, so firing here AND via the attribute is safe. */
+    char    **dynvar_guard_ptrs;
+    char    **dynvar_guard_names;
+    uint32_t  n_dynvar_guards, cap_dynvar_guards;
     bool in_scope_with_defers; /* Track if current scope has defers */
     struct DeferThunk *pending_defer_thunks; /* Thunks to emit at file scope */
     /* Phase 4 v1: For defer thunk emission with captures */
@@ -466,6 +542,53 @@ bool inline_c_has_ty_template(const InlineC *ic);
  * never hardcodes the name-mangling scheme). */
 bool inline_c_has_cname_template(const InlineC *ic);
 const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
+/* gcc14-int-conversion (carrier-representation-tracking): a side table recording
+ * the ACTUAL emitted C parameter-type string of each function, keyed by emitted
+ * C name.  Populated from the forward-declaration pass (ground truth, since the
+ * monomorphized source type collides between a generic carrier-ABI callee and a
+ * concrete-pointer callee).  A call site consults it to bridge int64<->pointer
+ * against what the callee's signature really is.  emit_sig_reset() clears it at
+ * the start of each program emission. */
+void emit_sig_reset(void);
+void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
+                                 const char *ctype);
+const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
+/* S1 (jit-engine-plan section 4): the same side table's return-type half.  A
+ * call site consults it to name the type of a hoisted call temp outright,
+ * instead of emitting GNU C's `__auto_type` -- which c2mir cannot parse at all
+ * and which accounts for 193 of the 256 full-corpus JIT failures. */
+void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
+                               const char *ctype);
+const char *emit_sig_lookup_ret_ctype(const char *cname);
+/* gcc14-int-conversion (carrier-representation-tracking): a side table recording
+ * the ACTUAL emitted C type of each LOCAL variable / temp, keyed by its (globally
+ * unique via fresh_tmp) C name.  A binder init `int64_t z = __t169;` reading a
+ * control-result temp `__t169` declared `tur_adt_X *` straddles the
+ * int64<->pointer duality, but the init EXPRESSION's TYPE c-names to the carrier
+ * (so a type-based check under-fires) while keying on the type broadly over-fires
+ * (139-fixture churn).  Consulting the temp's REAL emitted C type bridges only the
+ * genuine straddle.  emit_localvar_reset() clears it per program. */
+void emit_localvar_reset(void);
+void emit_localvar_record_ctype(const char *cname, const char *ctype);
+const char *emit_localvar_lookup_ctype(const char *cname);
+/* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
+ * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
+ * produces.  Anything else (a struct typedef such as `Option__int` or
+ * `tur_adt_Vec__int`) is reported as non-scalar.
+ *
+ * Deliberately conservative in that direction: the only consumer picks between
+ * `((T)0)` and `(T){0}`, and `(T){0}` is what every site emitted before, so a
+ * false "aggregate" verdict is a no-op while a false "scalar" verdict would be
+ * a miscompile. */
+bool emit_c_type_is_scalar(const char *cname);
+/* S1: a zero of `cname`, spelled so c2mir accepts it.  `((T)0)` for scalars,
+ * `(T){0}` for aggregates.  Returns a malloc'd string the caller frees.
+ *
+ * A scalar compound literal is C99-legal and every cc takes it, but c2mir
+ * rejects it outright ("braces around scalar initializer", c2mir.c:7781), and
+ * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
+char *emit_c_zero_of(const char *cname);
+bool emit_str_is_bare_ident(const char *s);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
@@ -496,6 +619,26 @@ bool fn_body_tail_is_carrier_producer(const struct Expr *e);
  * emit_expr.c. */
 bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
 Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e);
+/* CONV-S1 seam 4: does an inline-C body with declared result `rft` return that
+ * result BY VALUE (the concrete aggregate) rather than through the int64
+ * carrier?  This is the single question that decides an inline-C function's C
+ * return type, so it must be asked the same way everywhere:
+ *
+ *   - emit_fns.c   -- emits the definition's signature
+ *   - emit_module.c-- emits the matching forward declaration
+ *   - emit_expr.c  -- decides whether a CONSUMER must bridge carrier->by-value
+ *
+ * The first two had hand-duplicated copies that had to be kept in lockstep; the
+ * third inferred it from the type's shape and got it wrong for a by-value
+ * result, deref-ing a value that was never a pointer.  Defined in emit_fns.c.
+ * `rft` is the declared (unresolved) result type; pass body_is_inline_c so
+ * callers that already computed it do not re-derive it. */
+bool inline_c_returns_byvalue_adt(struct EmitCtx *ctx, bool body_is_inline_c,
+                                  const Type *rft);
+/* B3 part 2: per-effect integer tag (memoized by symbol) used by the DK backend
+ * (dk_perform / dk_handler tags).  Defined in emit_cps_ir.c; called from
+ * emit_effects.c to stamp a first-class handler entry's DK case tag. */
+int effect_tag(const struct Symbol *eff);
 /* Phase 5 dead-instance elimination: is this HKT typeclass instance live (any
  * method base directly referenced)?  Used to skip dead instances' dict + bases
  * in lockstep.  Defined in emit_module.c. */
@@ -515,6 +658,13 @@ struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr
  * parametric container.  Defined in emit_core.c. */
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict);
+/* RC2 (generic-show-wrapper-cps-monomorphization-plan): re-resolve a carrier-erased
+ * typeclass-method call to the concrete per-ABI-spec instance method symbol, or NULL
+ * when the call is not a genuine tyvar dispatch inside a spec (self-gating: safe on
+ * an ordinary int dispatch).  Shared by the direct emitter and the CPS emitter so a
+ * `(show x)` inside a COLORED wrapper clone body dispatches to `__inst_Show_show_<T>`
+ * rather than the baked int carrier representative.  Defined in emit_core.c. */
+char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call);
 /* R2 (carrier-crossing-recovery-routing-plan): shared first-stage dispatch-tyvar
  * identification -- writes the TY_TYVAR a typeclass-method call dispatches on
  * (ascribed receiver, bare receiver, or result type) into *out, or returns false
@@ -595,6 +745,13 @@ bool catch_box_binding_escapes(const Expr *e, const Binding *b);
  * caught box is sole-owned -- it escapes nowhere except that return. */
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
+/* catch-unwind-panic-payload-leaks (Leak 2): admit a deep box free when `b` is
+ * read through a reader (not only the scalar-accessor whitelist) but every such
+ * reader result is confined to the scope (consumed by a non-retaining print
+ * sink), and the scope value itself cannot carry a box-owned pointer out
+ * (`scope_result` is a non-pointer scalar / nil).  See emit_core.c. */
+bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
+                                       TypeKind scope_result);
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);
@@ -609,6 +766,15 @@ char *mangle_field_name(const char *name);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
+/* struct-of-closures monomorphization: find the inner-closure body spec (the
+ * primary inner_closure_spec_idx or one of the extra struct-of-closures links)
+ * of outer spec `cur` whose lifted-fn binding is `binding`.  NULL when none
+ * matches.  The EX_CLOSURE construction and thunk-call emit sites use this to
+ * pick the register-class-/layout-correct clone + suffixed env for EACH closure
+ * a struct-of-closures return builds, not just the first. */
+const EmitAbiSpecialization *emit_inner_closure_spec_for_binding(
+        const EmitCtx *ctx, const EmitAbiSpecialization *cur,
+        const Binding *binding);
 /* MB2.5 (constrained-hkt-forall-mode-b-plan): true when `call` is a class-method
  * call inside a dict-clone body that dispatches through the runtime dict param
  * (the same condition emit_call_name uses to route the call through
@@ -660,6 +826,8 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
  * given closure signature, returning its C function name.  Returns NULL when
  * the signature is the all-int64_t carrier case (caller uses the preamble
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
+const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
+                                 const char *fnptr);
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a
@@ -686,6 +854,19 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
 char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
                                   Type result_type, Type *param_types,
                                   uint8_t n_params);
+/* nested-bind-over-result-typed-boundary: the fat-closure twin of the above.
+ * A CAPTURING continuation has no named wrapper, so the shim is keyed on the
+ * signature and reads the real entry point out of the closure env's `__fn`
+ * slot (offset 0) at run time.  Returns the shim name, or NULL when the return
+ * already rides the int64 carrier or a param is not int-register-class. */
+char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
+                                      Type *param_types, uint8_t n_params);
+/* E2 (fat-closure fn-value threading): ensure a `<wrapper>__cps` twin exists for
+ * a poly-wrap thunk boxing an effectful named fn, DK-threading its call through
+ * the direct->CPS registry.  Returns the malloc'd twin name (caller uses it for
+ * the tur_poly_fn_t.fn_cps slot), or NULL when already emitted. */
+char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
+                                 const char *inner_fn);
 /* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the
  * given (result, arg0..argN) method signature, returning its C function name.
  * Returns NULL for the all-int64_t carrier case (caller uses the preamble
@@ -698,11 +879,9 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
  * EX_DISCONTINUE).  Expression-position emission only; emit_program runtime
  * fragments remain in emit_module.c. */
 char *emit_effects_defect(EmitCtx *ctx, Buf *body, const Expr *e);
-char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e);
 /* FH2-FH5: first-class handler values */
 char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e);
-char *emit_effects_with_handler(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_compose_handlers(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e);

@@ -85,6 +85,7 @@ static inline int swapcontext(ucontext_t *from, ucontext_t *to) {
 #endif
 
 #include "turi/value.h"
+#include "runtime/platform.h"  /* TUR_THREAD_LOCAL */
 
 /* Forward declarations */
 typedef struct TuriEnv    TuriEnv;    /* from env.h — do not include here */
@@ -277,6 +278,6 @@ TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms);
 /* Thread-local fiber pointer: set by the scheduler immediately before the
  * first swapcontext into a fiber, read once by async_fiber_thunk (eval.c).
  * Defined in eval.c; extern here so fiber.c can set it before each resume. */
-extern _Thread_local TuriFiber *g_pending_async_fiber;
+extern TUR_THREAD_LOCAL TuriFiber *g_pending_async_fiber;
 
 #endif /* TURI_FIBER_H */

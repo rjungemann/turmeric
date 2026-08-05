@@ -1,0 +1,34 @@
+;; WF3: a hypothesis survives an assignment that provably cannot touch what it
+;; mentions. The accumulator `set!` here is about `acc`; the hypothesis that
+;; discharges the guarded read is about `w` and the literal entity. Before
+;; frame-aware invalidation the whole-body boolean decline dropped it anyway,
+;; which is why `for-each-alive!` shipped taking only PURE bodies -- this is
+;; the demand signal in docs/upcoming/checked-write-frames-plan.md.
+;;
+;; The rescue is narrow by construction: the target is a plain symbol, the
+;; hypothesis does not mention it, and the body never borrows it. Assign a
+;; place expression, a mentioned name, or a borrowed local instead and the full
+;; decline returns -- see errors/refine-stateful-mutation-invalidates,
+;; errors/refine-macrogen-set-in-expansion, errors/refine-wf3-borrowed-target.
+;;
+;; Expected: refine: 1 proven, and the program prints 7.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [^mut acc 0]
+      (let [__f (& w)]
+        (if (alive? w 0)
+          (do (set! acc (+ acc (get! w 0))) acc)
+          -1)))))
+
+(defn main [] : int
+  (println (run))
+  0)

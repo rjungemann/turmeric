@@ -1,0 +1,3 @@
+(defmodule mid1
+  (export mid1-tag)
+  (defn mid1-tag [] : int 1))

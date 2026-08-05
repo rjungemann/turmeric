@@ -1,0 +1,19 @@
+;; The imported module does a top-level (load "stdlib/string.tur"), which pulls
+;; in the reentrant string<->typeclass load chain (string.tur ->
+;; typeclass.tur -> typeclass-show.tur -> (load string.tur)).  Before the
+;; import-side Pass-1 forward-declaration landed, that chain spliced
+;; typeclass-show.tur's self-recursive `vec-show-loop` (defined at :163,
+;; self-call at :174) into this imported module with NO forward declaration,
+;; so elaboration errored "unknown function or operator 'vec-show-loop'".
+;; See docs/archive/compiled-string-return-int-conversion.md (secondary
+;; blocker).
+(load "stdlib/string.tur")
+
+(defmodule greetlib/greeter
+  (export greet shout)
+  ;; Returns an owned String -- puts the stdlib String type in an imported
+  ;; module's exported signature, the API contract that used to be impossible.
+  (defn greet [name : cstr] : String
+    (string/from-cstr name))
+  (defn shout [name : cstr] : String
+    (string/to-upper (string/from-cstr name))))

@@ -100,6 +100,9 @@ typedef enum DiagCode {
     /* IT1: Union type errors (-Xunion-types) */
     TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
     TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */
+    /* sealed-opaque experiment: `::` between a `:sealed` defopaque and its
+     * representation type, outside the module that declared it. */
+    TUR_E0302_SEALED_OPAQUE_CAST,
     /* IT3: Intersection type errors (-Xintersection-types) */
     TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */
@@ -124,6 +127,13 @@ typedef enum DiagCode {
      * bound is now MAX_FN_ARITY (64) -- but a lint nudge toward the arity style
      * guide (a defstruct options value or a `& rest :type` variadic). */
     TUR_W0041_HIGH_ARITY,
+    /* A `defn`/`defmacro` names a reserved special form (`return`, `match`,
+     * `handle`, ...).  Head-position dispatch in elab_call matches those names
+     * by symbol identity *before* any binding or macro lookup, so the
+     * definition is accepted but every bare `(name ...)` call site elaborates
+     * as the special form and the definition is unreachable by its bare name.
+     * See docs/archive/defn-shadows-return-special-form.md. */
+    TUR_W0042_SHADOWS_SPECIAL_FORM,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */
@@ -227,10 +237,62 @@ typedef enum DiagCode {
     TUR_E0310_UNKNOWN_EXPERIMENT,
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
+    /* RT3 (refinement-types-plan): static discharge of `#refine{...}`
+     * predicates.  Emitted unconditionally since refinement types graduated in
+     * v0.33.0; there is no longer an experiment gate.  E0371/W0372 are the two
+     * verdict-carrying codes: the runtime contract check survives in both
+     * cases, so neither is a miscompile -- W0372 is "we could not prove it",
+     * E0371 is "we found a counterexample".  Under --strict-refine both are
+     * hard errors. */
+    TUR_E0370_REFINE_ILL_TYPED,   /* refinement predicate is ill-typed */
+    TUR_E0371_REFINE_NOT_PROVED,  /* counterexample found; predicate is not entailed */
+    TUR_W0372_REFINE_UNKNOWN,     /* no backend decided it; runtime check kept */
+    TUR_W0373_REFINE_NONLINEAR,   /* nonlinear subterm treated as uninterpreted */
+    TUR_E0374_REFINE_INSTANCE_STRONGER, /* instance method demands more than its class signature */
+    TUR_E0375_REFINE_EFFECTFUL,   /* refinement predicate mentions effects */
+    TUR_E0376_REFINE_TYPE_PARAM,  /* refinement on a type parameter (unsupported) */
+    TUR_W0377_REFINE_INSTANCE_LENIENCY, /* call allowed only because the resolved
+                                         * instance demands less than its class */
+    TUR_E0378_REFINE_IN_FN_TYPE,  /* refinement written inside a (fn ...) type */
+    TUR_I0379_REFINE_ORACLE_MISMATCH, /* RETIRED (Z3 oracle retirement, 0.32.5): the
+                                       * dev-only oracle whose disagreements this
+                                       * reported is gone. Code reserved, no longer
+                                       * emitted. */
+    /* A refinement written in TYPE-ARGUMENT position -- `(Box #refine{...})`.
+     * The contract is peeled to its base type so the payload behaves like the
+     * ordinary value it is; the predicate is NOT enforced on the payload.
+     * Warned rather than dropped silently: an annotation that quietly does
+     * nothing is how a reader ends up believing a container's contents are
+     * checked when they are not.  See
+     * docs/archive/contract-type-arg-not-peeled-to-base.md. */
+    TUR_W0380_REFINE_TYPE_ARG_UNENFORCED,
+    /* WF1/WF2 (checked-write-frames-plan): the `#writes` write-frame annotation.
+     * E0381 -- the annotation itself is malformed, or names something that is
+     *          not a parameter of this function.  A frame that does not resolve
+     *          cannot be checked against anything, so it is an error rather
+     *          than a silently ignored decoration.
+     * E0382 -- the body WRITES outside the frame it declared.  This is the WF2
+     *          checked tier: a declared frame the body exceeds is an error, not
+     *          a silent widening, for the same reason `#reads` is -- downstream
+     *          code is entitled to believe the declaration. */
+    TUR_E0381_WRITES_FRAME_INVALID,
+    TUR_E0382_WRITES_FRAME_EXCEEDED,
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */
     TUR_E0620_EXPORTS_FX_ROW,
+    /* `:tur-version` in build.tur (no-compiler-version-constraint-in-manifest):
+     * E0621 -- the running compiler is BELOW the declared floor, so the spice's
+     *          source genuinely will not work.  Hard error.
+     * E0622 -- the range itself is malformed; a typo must not silently become a
+     *          different constraint.  Hard error.
+     * W0623 -- the running compiler is ABOVE the declared ceiling.  Only means
+     *          "never tested against this compiler", which is usually fine, so
+     *          it warns: a hard ceiling would make every release break every
+     *          spice until each author bumped a number. */
+    TUR_E0621_TUR_VERSION_BELOW_FLOOR,
+    TUR_E0622_TUR_VERSION_MALFORMED,
+    TUR_W0623_TUR_VERSION_ABOVE_CEILING,
 } DiagCode;
 
 typedef enum DiagLevel {
@@ -250,6 +312,12 @@ typedef enum ReaderType {
     READER_NEOTERIC,       /* Turmeric + neoteric notation */
     READER_SWEET,          /* Full sweet-expressions */
 } ReaderType;
+
+/* The additive `#lang` layer set: a bitset over the LANG_LAYERS[] table
+ * (src/compiler/lang_layers.c), one bit per table index.  Rides alongside
+ * the base ReaderType, not in place of it.  Empty (0) for a bare file or a
+ * `#lang` line with no trailing layer tokens.  See lang_layers.h. */
+typedef uint32_t LangLayerSet;
 
 /* Source map for syntax-transforming readers (currently sweet-exp).
  * Each run says "starting at xform_offset in the transformed text,
@@ -287,6 +355,11 @@ typedef struct SourceFile {
     size_t      len;
     uint16_t    file_id;
     ReaderType  reader_type;  /* Phase S1: for enabling syntax features */
+    /* Additive `#lang` layer set parsed from the same directive line as
+     * reader_type (lang-layers-plan).  Reader layers in this set have their
+     * `#`-dispatch registered at reader init; empty for files without layers.
+     * A SourceFile built with `{0}`/memset starts with no layers. */
+    LangLayerSet lang_layers;
     /* Sweet-exp transformation support: when xform_map is non-NULL, src
      * is the preprocessed s-expression text and orig_src/orig_len point
      * to the user's original source.  Diagnostics render snippets from
@@ -296,9 +369,23 @@ typedef struct SourceFile {
     const SweetMap *xform_map;
 } SourceFile;
 
-/* Detect #lang directive from file source (Phase S0) */
-ReaderType detect_lang(const char *src, size_t len, const char **out_rest, 
+/* Detect #lang directive from file source (Phase S0).  Base reader only;
+ * any trailing layer tokens are consumed (never leaked into the body) but
+ * not reported.  A thin wrapper over detect_lang_layered. */
+ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
                        size_t *out_rest_len);
+
+/* Detect #lang directive, reporting both the base ReaderType and the
+ * additive layer set (lang-layers-plan L0).  `out_layers` receives the set of
+ * recognized layer tokens; when a trailing token is NOT a registered layer,
+ * `*out_bad`/`*out_bad_len` point at the first offending token (into `src`)
+ * and it is omitted from the set -- the caller reports TUR-E0330.  Any of the
+ * out-params may be NULL; passing NULL for `out_layers` makes this behave like
+ * detect_lang (layers parsed for EOL-consumption but discarded). */
+ReaderType detect_lang_layered(const char *src, size_t len,
+                               const char **out_rest, size_t *out_rest_len,
+                               LangLayerSet *out_layers,
+                               const char **out_bad, size_t *out_bad_len);
 
 /* Get reader type from file extension (Phase S0) */
 ReaderType reader_type_from_extension(const char *path);

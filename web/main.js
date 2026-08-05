@@ -4,6 +4,7 @@
  */
 
 import { TUTORIAL_STEPS } from './tutorials.js';
+import { createLspClient } from './lsp-client.js';
 
 // ============================================================================
 // WASM Module State
@@ -28,13 +29,14 @@ let isExecuting = false;
 let replHistory = [];
 let replHistoryIndex = -1;
 let currentLangMode = 'turmeric'; // tracks active #lang mode
+let lspClient = null;            // language server adapter; booted lazily
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 const CONFIG = {
-    DEFAULT_CODE: `#lang sweet-exp
+    DEFAULT_CODE: `#lang turmeric/sweet
 
 println "Hello, Turmeric!"
 `,
@@ -78,7 +80,7 @@ const EXAMPLES = {
 
 (println (handle (use-ask)
   (Ask [] k) (resume k 41)))`,
-    sweet: `#lang sweet-exp
+    sweet: `#lang turmeric/sweet
 ;; Sweet-exp syntax: indentation, curly-infix, neoteric, $
 
 defn square [x : int] : int
@@ -289,6 +291,7 @@ function createTab({ name, content = '', activate = true } = {}) {
     if (activate) switchTab(tab.id);
     else renderTabs();
     persistTabs();
+    notifyTabsChanged();
     return tab;
 }
 
@@ -313,6 +316,7 @@ function closeTab(id) {
     renderTabs();
     persistTabs();
     persistActiveId();
+    notifyTabsChanged();
 }
 
 function sanitizeTabName(raw) {
@@ -342,6 +346,118 @@ function renameTab(id, rawName) {
     tab.name = final;
     renderTabs();
     persistTabs();
+    // A rename changes the document uri, so the server has to be told: the
+    // client closes the old one and opens the new.
+    notifyTabsChanged();
+}
+
+// ============================================================================
+// Language server (try-turmeric-lsp-plan)
+// ============================================================================
+
+/**
+ * Every tab is an open document as far as the server is concerned -- which is
+ * what makes workspace/symbol and cross-tab go-to-definition work here without
+ * the filesystem crawl a native client would need. That requires a Monaco
+ * model per tab, including tabs the user has not activated yet; models are
+ * otherwise created lazily on first switch.
+ */
+function ensureAllTabModels() {
+    for (const tab of tabs) ensureModel(tab);
+}
+
+/**
+ * Tell the server the tab set moved. Driven from the mutation sites rather
+ * than by polling, but the client re-derives the whole open set from `tabs`
+ * each time, so a missed call costs one stale moment rather than a permanently
+ * desynchronised server.
+ */
+function notifyTabsChanged() {
+    if (!lspClient || !lspClient.isAvailable()) return;
+    ensureAllTabModels();
+    lspClient.sync();
+}
+
+function setLspStatus(state) {
+    const wrap = document.getElementById('lsp-status');
+    const dot = document.getElementById('lsp-status-dot');
+    const text = document.getElementById('lsp-status-text');
+    if (!wrap || !dot || !text) return;
+
+    if (state === 'unavailable') {
+        // Nothing to say. The playground worked without analysis for its whole
+        // life and still does; a permanent red dot would read as a fault.
+        wrap.hidden = true;
+        return;
+    }
+    wrap.hidden = false;
+    if (state === 'booting') {
+        dot.className = 'dot loading';
+        text.textContent = 'Starting analysis...';
+    } else if (state === 'analyzing') {
+        dot.className = 'dot loading';
+        text.textContent = 'Analyzing...';
+    } else {
+        dot.className = 'dot online';
+        text.textContent = 'Analysis ready';
+    }
+}
+
+/**
+ * Boot the language server.
+ *
+ * Lazy on purpose: this is a second WASM instance, which roughly doubles the
+ * playground's wasm memory. It is the same /turmeric.js URL so it is a cache
+ * hit rather than a second download, but the memory is real -- and a visitor
+ * who lands on the page to read a snippet should not pay for an analysis they
+ * never asked a question of. First editor focus is the signal that they are
+ * going to.
+ */
+function startLspClient() {
+    if (lspClient) return lspClient.start();
+
+    lspClient = createLspClient({
+        monaco,
+        languageId: 'turmeric',
+        getTabs: () => tabs,
+        onStatus: setLspStatus,
+        onNavigate: (tab, range) => {
+            // Monaco's standalone editor cannot switch models on its own, so a
+            // definition in another tab is a tab switch we perform.
+            switchTab(tab.id);
+            try {
+                editor.revealRangeInCenterIfOutsideViewport(range);
+                editor.setPosition({
+                    lineNumber: range.startLineNumber,
+                    column: range.startColumn,
+                });
+            } catch {}
+        },
+    });
+
+    // Test surface: lets a spec await the server instead of sleeping on it.
+    window._turiLsp = {
+        ready: lspClient.start(),
+        isAvailable: () => lspClient.isAvailable(),
+        isBusy: () => lspClient.isBusy(),
+        openDocuments: () => lspClient._openDocumentCount(),
+        sync: () => notifyTabsChanged(),
+        // Monaco is a module-scoped import, not a global, so a spec has no
+        // other way to read the markers the adapter set.
+        markers: () => monaco.editor.getModelMarkers({ owner: 'turmeric' })
+            .map(m => ({
+                message: m.message,
+                severity: m.severity,
+                startLineNumber: m.startLineNumber,
+                startColumn: m.startColumn,
+                endColumn: m.endColumn,
+            })),
+    };
+
+    return lspClient.start().then((ok) => {
+        if (ok) notifyTabsChanged();
+        return ok;
+    });
 }
 
 function renderTabs() {
@@ -887,7 +1003,7 @@ async function initWasm() {
  * blank line (leading spaces/tabs are allowed but not newlines).
  *
  * Returns { lang: string|null, body: string }
- *   lang -- the language name (e.g. "sweet-exp") or null if no directive found
+ *   lang -- the base language name (e.g. "turmeric/sweet") or null if no directive found
  *   body -- source text with the #lang line removed
  */
 function parseLangDirective(code) {
@@ -1009,7 +1125,52 @@ function configureMonaco() {
             ]
         }
     });
-    
+
+    // Language configuration — teaches Monaco which characters form bracket
+    // pairs so its native bracket-pair colorization (rainbow parens, matching
+    // the trowel editor) can depth-color them. `colorizedBracketPairs` lists
+    // the pairs that participate in the rainbow cycle.
+    monaco.languages.setLanguageConfiguration('turmeric', {
+        brackets: [
+            ['(', ')'],
+            ['[', ']'],
+            ['{', '}'],
+        ],
+        colorizedBracketPairs: [
+            ['(', ')'],
+            ['[', ']'],
+            ['{', '}'],
+        ],
+        autoClosingPairs: [
+            { open: '(', close: ')' },
+            { open: '[', close: ']' },
+            { open: '{', close: '}' },
+            { open: '"', close: '"' },
+        ],
+        surroundingPairs: [
+            { open: '(', close: ')' },
+            { open: '[', close: ']' },
+            { open: '{', close: '}' },
+            { open: '"', close: '"' },
+        ],
+        comments: { lineComment: ';' },
+    });
+
+    // Rainbow-bracket palette, mirrored from trowel's turmeric-dark theme
+    // (resources/turmeric-dark.theme.json rainbow0..6 + bracketError). Monaco
+    // supports six depth colors before the cycle repeats, so we take six of
+    // trowel's seven levels spanning the spectrum; the unexpected-bracket color
+    // is trowel's BracketError red.
+    const rainbowBrackets = {
+        'editorBracketHighlight.foreground1':               '#EFA030', // orange
+        'editorBracketHighlight.foreground2':               '#D7C94A', // yellow
+        'editorBracketHighlight.foreground3':               '#A8C98A', // green
+        'editorBracketHighlight.foreground4':               '#7AC4B8', // teal
+        'editorBracketHighlight.foreground5':               '#8AB0E8', // blue
+        'editorBracketHighlight.foreground6':               '#C4A0E8', // purple
+        'editorBracketHighlight.unexpectedBracket.foreground': '#FF5C57', // error red
+    };
+
     // Define theme
     monaco.editor.defineTheme('turmeric-light', {
         base: 'vs',
@@ -1031,13 +1192,17 @@ function configureMonaco() {
             'editorCursor.foreground': '#0366d6',
             'editor.lineHighlightBackground': '#f8f8f8',
             'editorLineNumber.foreground': '#959da5',
-            'editor.selectionBackground': 'rgba(3, 102, 214, 0.3)',
-            'editor.inactiveSelectionBackground': 'rgba(3, 102, 214, 0.1)',
+            // NOTE: Monaco parses theme colors with Color.fromHex() and falls
+            // back to opaque RED on any parse failure -- rgba() strings are NOT
+            // supported here. Always use #RRGGBB or #RRGGBBAA.
+            'editor.selectionBackground': '#0366D64D',
+            'editor.inactiveSelectionBackground': '#0366D61A',
             'editorIndentGuide.background': '#e1e4e8',
-            'editorIndentGuide.activeBackground': '#959da5'
+            'editorIndentGuide.activeBackground': '#959da5',
+            ...rainbowBrackets
         }
     });
-    
+
     monaco.editor.defineTheme('turmeric-dark', {
         base: 'vs-dark',
         inherit: true,
@@ -1064,13 +1229,15 @@ function configureMonaco() {
             'editorLineNumber.foreground':          '#453F39',
             'editorLineNumber.activeForeground':    '#88796C',
 
-            // Cursor & selection
+            // Cursor & selection -- neutral medium gray, never a warning color.
+            // Selection/bracket-match/scrollbar are structural chrome; red is
+            // reserved for diagnostics.
             'editorCursor.foreground':              '#D48B1C',
-            'editor.selectionBackground':           'rgba(212,139,28,0.18)',
-            'editor.inactiveSelectionBackground':   'rgba(212,139,28,0.08)',
-            'editor.selectionHighlightBackground':  'rgba(212,139,28,0.08)',
-            'editor.wordHighlightBackground':       'rgba(212,139,28,0.10)',
-            'editor.wordHighlightStrongBackground': 'rgba(212,139,28,0.20)',
+            'editor.selectionBackground':           '#5A544C59',
+            'editor.inactiveSelectionBackground':   '#5A544C33',
+            'editor.selectionHighlightBackground':  '#5A544C2E',
+            'editor.wordHighlightBackground':       '#5A544C2E',
+            'editor.wordHighlightStrongBackground': '#5A544C40',
 
             // Line highlight
             'editor.lineHighlightBackground':       '#111009',
@@ -1080,14 +1247,15 @@ function configureMonaco() {
             'editorIndentGuide.background1':        '#252119',
             'editorIndentGuide.activeBackground1':  '#3E3830',
 
-            // Bracket matching — gold tint
-            'editorBracketMatch.background':        'rgba(212,139,28,0.12)',
-            'editorBracketMatch.border':            'rgba(212,139,28,0.50)',
+            // Bracket matching — medium gray, so a matched delimiter never
+            // reads as an error highlight
+            'editorBracketMatch.background':        '#6A625926',
+            'editorBracketMatch.border':            '#8C847A99',
 
             // Find matches
-            'editorFindMatch.background':           'rgba(212,139,28,0.28)',
-            'editorFindMatch.border':               'rgba(212,139,28,0.65)',
-            'editorFindMatchHighlight.background':  'rgba(212,139,28,0.12)',
+            'editorFindMatch.background':           '#D48B1C47',
+            'editorFindMatch.border':               '#D48B1CA6',
+            'editorFindMatchHighlight.background':  '#D48B1C1F',
 
             // Autocomplete / hover / suggest widgets
             'editorWidget.background':                       '#181512',
@@ -1096,21 +1264,24 @@ function configureMonaco() {
             'editorSuggestWidget.background':                '#181512',
             'editorSuggestWidget.border':                    '#302B24',
             'editorSuggestWidget.foreground':                '#EAE0D2',
-            'editorSuggestWidget.selectedBackground':        'rgba(212,139,28,0.15)',
+            'editorSuggestWidget.selectedBackground':        '#D48B1C26',
             'editorSuggestWidget.selectedForeground':        '#EAE0D2',
             'editorSuggestWidget.highlightForeground':       '#EFA030',
             'editorHoverWidget.background':                  '#181512',
             'editorHoverWidget.border':                      '#302B24',
             'editorHoverWidget.foreground':                  '#EAE0D2',
 
-            // Scrollbars — warm dark, gold on active
+            // Scrollbars — medium gray, brightening on hover/drag
             'scrollbar.shadow':                     '#00000000',
-            'scrollbarSlider.background':           'rgba(62,56,48,0.55)',
-            'scrollbarSlider.hoverBackground':      'rgba(88,79,68,0.75)',
-            'scrollbarSlider.activeBackground':     'rgba(212,139,28,0.40)',
+            'scrollbarSlider.background':           '#5A544C8C',
+            'scrollbarSlider.hoverBackground':      '#7A736ABF',
+            'scrollbarSlider.activeBackground':     '#8C847ACC',
 
             // Focus ring — gold instead of VS Code blue
-            'focusBorder':                          'rgba(212,139,28,0.40)',
+            'focusBorder':                          '#D48B1C66',
+
+            // Rainbow brackets — depth-colored, matching the trowel editor
+            ...rainbowBrackets
         }
     });
 
@@ -1152,6 +1323,15 @@ async function initEditor() {
         autoClosingQuotes: 'beforeWhitespace',
         autoSurround: 'never',
         bracketMatching: true,
+        bracketPairColorization: {
+            enabled: true,
+            independentColorPoolPerBracketType: false
+        },
+        guides: {
+            bracketPairs: true,
+            bracketPairsHorizontal: 'active',
+            highlightActiveBracketPair: true
+        },
         colorDecorators: true,
         contextmenu: true,
         cursorBlinking: 'blink',
@@ -1346,6 +1526,14 @@ async function initEditor() {
         }
     });
     
+    // Boot the language server the first time the user puts a cursor in the
+    // editor. Reading code costs nothing; asking the editor a question is what
+    // pays for the second WASM instance.
+    const bootLsp = editor.onDidFocusEditorText(() => {
+        bootLsp.dispose();
+        startLspClient();
+    });
+
     // Initialize cursor position display
     updateCursorPosition();
     
@@ -1359,11 +1547,16 @@ async function initEditor() {
 
 /**
  * Shared eval + output path used by both the Run button and the REPL input.
- * @param {string} code        Source to evaluate
- * @param {string} promptHtml  HTML for the prompt prefix (e.g. '<span ...>></span>')
- * @param {boolean} showTiming Whether to call updateExecTime and show the loading indicator
+ * @param {string} code           Source to evaluate
+ * @param {string} promptHtml     HTML for the prompt prefix (e.g. '<span ...>></span>')
+ * @param {boolean} showTiming    Whether to call updateExecTime and show the loading indicator
+ * @param {boolean} echoSource    Whether to echo the source to the console
+ * @param {boolean} suppressResult Whether to suppress the result line (errors still shown).
+ *                                 Used by the Run button to hide the bare `#<fn main>`
+ *                                 closure while it defines `main`, before invoking it.
+ * @returns {{ isError: boolean }} Whether the evaluation reported an error.
  */
-async function executeCode(source, promptHtml, showTiming = false, echoSource = true) {
+async function executeCode(source, promptHtml, showTiming = false, echoSource = true, suppressResult = false) {
     const consoleLoading = showTiming ? document.getElementById('console-loading') : null;
     if (consoleLoading) consoleLoading.style.display = 'flex';
 
@@ -1380,18 +1573,32 @@ async function executeCode(source, promptHtml, showTiming = false, echoSource = 
 
         if (isError) {
             appendToConsole(`<span class="console-error">${escapeHtml(result)}</span>`);
-        } else if (result && result !== 'nil') {
+        } else if (!suppressResult && result && result !== 'nil') {
             appendToConsole(`<span class="console-result">${escapeHtml(result)}</span>`);
         }
 
         if (showTiming) updateExecTime(execTime);
         maybeShowDoc(source.trim());
 
+        return { isError };
+
     } catch (err) {
         if (consoleLoading) consoleLoading.style.display = 'none';
         appendToConsole(`<span class="console-error">Error: ${escapeHtml(err.message)}</span>`);
         if (showTiming) updateExecTime(0);
+        return { isError: true };
     }
+}
+
+/**
+ * Detect whether a program defines a top-level `main` function, in either
+ * s-expression (`(defn main ...)`) or sweet-exp (`defn main ...`) form. Used to
+ * mirror `tur run`: a program that defines `main` should have it invoked as the
+ * entry point, rather than the REPL leaving the bare `#<fn main>` closure as the
+ * last top-level value.
+ */
+function definesMainEntry(code) {
+    return /(^|\n)[ \t]*\(?defn\s+main\b/.test(code);
 }
 
 /**
@@ -1407,6 +1614,18 @@ async function runCode() {
         appendToConsole('<span class="console-error">Error: No code to evaluate</span>');
         return;
     }
+
+    // Mirror `tur run`: a program that defines a top-level `main` uses it as its
+    // entry point. Evaluate the program's top-level forms (which define `main`),
+    // suppressing the bare `#<fn main>` closure result, then invoke `(main)` and
+    // show ITS output/return -- so running e.g. `(defn main [] : int (+ 1 1))`
+    // shows `2`, not `#<fn main>`.
+    if (definesMainEntry(code)) {
+        const { isError } = await executeCode(code, '', true, false, true);
+        if (!isError) await executeCode('(main)', '', false, false);
+        return;
+    }
+
     await executeCode(code, '', true, false);
 }
 
@@ -1800,6 +2019,13 @@ function applyProjectLoad(parsed) {
     renderTabs();
     safeWrite(STORAGE_KEYS.tabs, tabsSnapshot());
     safeWrite(STORAGE_KEYS.activeTab, activeId);
+    // A wholesale replacement, not an edit. Re-opening the new tabs into a
+    // session that still holds the old project's documents would leave
+    // workspace/symbol answering with names from a workspace the user closed.
+    if (lspClient && lspClient.isAvailable()) {
+        ensureAllTabModels();
+        lspClient.resetWorkspace();
+    }
     showStatus(`Loaded ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`, 'success');
 }
 
@@ -1996,14 +2222,46 @@ function initEventListeners() {
     // Copy console button
     document.getElementById('copy-console-btn')?.addEventListener('click', copyConsole);
     
-    // Examples select
-    document.getElementById('examples-select')?.addEventListener('change', (e) => {
-        if (e.target.value) {
-            loadExample(e.target.value);
-            e.target.value = '';
+    // Examples dropdown (hamburger button + popover). Mirrors the ⋯ overflow
+    // menu below: reparent to <body> so it escapes ancestor overflow/stacking
+    // contexts, anchor with position:fixed, close on outside-click / Escape.
+    const examplesBtn = document.getElementById('examples-btn');
+    const examplesMenu = document.getElementById('examples-menu');
+    if (examplesBtn && examplesMenu) {
+        if (examplesMenu.parentElement !== document.body) {
+            document.body.appendChild(examplesMenu);
         }
-    });
-    
+        const closeExamples = () => {
+            examplesMenu.hidden = true;
+            examplesBtn.setAttribute('aria-expanded', 'false');
+        };
+        const openExamples = () => {
+            examplesMenu.hidden = false;
+            examplesBtn.setAttribute('aria-expanded', 'true');
+            const r = examplesBtn.getBoundingClientRect();
+            examplesMenu.style.top = `${r.bottom + 4}px`;
+            examplesMenu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
+        };
+        examplesBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            examplesMenu.hidden ? openExamples() : closeExamples();
+        });
+        examplesMenu.addEventListener('click', (e) => {
+            const item = e.target.closest('.more-item');
+            if (!item || !item.dataset.example) return;
+            loadExample(item.dataset.example);
+            closeExamples();
+        });
+        document.addEventListener('click', (e) => {
+            if (!examplesMenu.hidden && !examplesMenu.contains(e.target) && e.target !== examplesBtn) {
+                closeExamples();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !examplesMenu.hidden) closeExamples();
+        });
+    }
+
     // Solve button
     document.getElementById('solve-btn')?.addEventListener('click', solveStep);
 
@@ -2046,14 +2304,13 @@ function initEventListeners() {
             if (!item) return;
             const cmd = item.dataset.cmd;
             const example = item.dataset.example;
+            const action = item.dataset.action;
             if (cmd) {
                 document.getElementById(cmd)?.click();
             } else if (example) {
-                const sel = document.getElementById('examples-select');
-                if (sel) {
-                    sel.value = example;
-                    sel.dispatchEvent(new Event('change'));
-                }
+                loadExample(example);
+            } else if (action === 'force-update') {
+                forceUpdatePWA();
             }
             closeMenu();
         });
@@ -2519,6 +2776,33 @@ if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .catch((err) => console.warn('SW registration failed:', err));
     });
+}
+
+/**
+ * Force-update the installed PWA: unregister every service worker and drop all
+ * Cache Storage entries, then hard-reload so the page (and the WASM/JS assets)
+ * are fetched fresh from the network. This is the user-facing escape hatch for a
+ * stuck cache -- it works even when the shipped sw.js forgot to bump
+ * CACHE_VERSION, because it nukes the SW entirely so the post-reload navigation
+ * is uncontrolled and hits the network directly. localStorage (the editor tabs)
+ * is intentionally left alone, so no code is lost.
+ */
+async function forceUpdatePWA() {
+    if (typeof showStatus === 'function') showStatus('Updating...', 'info');
+    try {
+        if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((r) => r.unregister()));
+        }
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+    } catch (err) {
+        console.warn('Force update failed:', err);
+    }
+    // Reload from the network now that no SW/cache can serve stale assets.
+    window.location.reload();
 }
 
 // ============================================================================

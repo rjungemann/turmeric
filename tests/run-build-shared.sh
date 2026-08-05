@@ -60,8 +60,16 @@ pass "build-shared-smoke-link"
 # The .so must export smokelib__add42 (the mangled name for the (export
 # add42) defn inside (defmodule smokelib ...)). nm is preferred; fall
 # back to strings if nm is unavailable.
+#
+# Capture nm's output before matching rather than piping into `grep -q`: this
+# script runs under `set -o pipefail`, and `grep -q` exits on the first match,
+# which hands nm a SIGPIPE (141) and makes the *pipeline* fail even though the
+# symbol was found.  Whether that races depends on how much nm still had
+# buffered, so the piped form failed intermittently (~4 runs in 5 here) with a
+# misleading "symbol not found".
 if command -v nm >/dev/null 2>&1; then
-    if nm "$LIB" 2>/dev/null | grep -qE '(^| )_?smokelib__add42( |$)'; then
+    nm_out=$(nm "$LIB" 2>/dev/null)
+    if printf '%s\n' "$nm_out" | grep -qE '(^| )_?smokelib__add42( |$)'; then
         pass "build-shared-smoke-symbol-present"
     else
         fail "build-shared-smoke-symbol-present" "smokelib__add42 not found in $LIB"

@@ -1,0 +1,45 @@
+#lang sweet-exp
+
+;; `$` (SRFI-110 rest-of-line marker) against every rest-of-line shape.
+;;
+;; `$` wraps the rest of the line in one pair of parens, which is right
+;; for a bare token sequence -- `f $ g 1 2` => `(f (g 1 2))`.  When the
+;; rest is ALREADY one complete delimited expression (a neoteric call, a
+;; parenthesised form, a curly-infix group, a data literal), the wrap is
+;; suppressed: otherwise `f $ g(1)` would become `(f ((g 1)))` and try to
+;; call the result of `(g 1)`.
+;;
+;; A bare atom is deliberately still wrapped -- SRFI-110 says `f $ g` is
+;; `(f (g))`, which is a call, not a double application.
+
+defn zero [] : int
+  0
+
+defn ident [x : int] : int
+  x
+
+defn triple-sum [a : int b : int c : int] : int
+  {a + b + c}
+
+defn add4 [a : int b : int c : int d : int] : int
+  {a + b + c + d}
+
+defn main [] : int
+  ;; bare token sequence -- wrapped
+  println $ triple-sum 1 2 3
+  ;; bare atom -- wrapped, so this calls `zero`
+  println $ zero
+  ;; neoteric call -- already complete, not re-wrapped
+  println $ ident(7)
+  ;; parenthesised form -- already complete, not re-wrapped
+  println $ (ident 8)
+  ;; curly-infix group -- already complete, not re-wrapped
+  println $ {40 + 2}
+  ;; chained `$`: the outer rest is a sequence, the inner one a call
+  println $ ident $ triple-sum(10 20 30)
+  ;; a trailing line comment does not change the shape test
+  println $ ident(11)  ; still one complete call
+  ;; line continuation inside the rest -- a sequence, so wrapped
+  println $ add4 100 200 \
+                 300 400
+  0

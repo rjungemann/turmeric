@@ -1,0 +1,46 @@
+; An HKT instance method with an INLINE-C body keeps its applied result type,
+; when that result is carrier-width.
+;
+; The dispatch site recovers the grounded result `(f b)` -> `(HBox int)` by
+; substituting the element tyvars, but it only COMMITS the recovered type when
+; the result's representation is already the int64 carrier the method returns.
+; Otherwise the consumer would read a by-value aggregate off a carrier word.
+;
+; That carrier-width test used to know about two classes -- int-carrier newtypes
+; and (later) pointer-family handles -- and missed a third: a `:heap` ADT is a
+; pointer, `tur_adt_HBox__int *`, so it fits the carrier exactly. An inline-C
+; instance over one therefore lost its result type entirely, printing as the
+; def-less `(type-app ? ?)`:
+;
+;   error: no typeclass method found for 'val'
+;   error [TUR-E0001]: expected cstr, got (type-app ? ?)
+;
+; so nothing could be read off an fmap result and no typed consumer accepted it.
+;
+; NOT fixed, and deliberately so: a genuinely BY-VALUE aggregate result (a
+; non-`:heap` parametric struct) still loses its type here. Committing it would
+; emit `tur_adt_Box__int m = __ps_N;` against a carrier-returning inline-C base
+; -- measured as `error: invalid initializer`. An inline-C body is written
+; against one C signature and cannot be re-specialized, so that case needs
+; producer-side work, not a wider commit.
+(defstruct HBox :heap [A] (val A))
+
+;; Carrier-essential body: reuses the container rather than rebuilding it, which
+;; is the shape that forces inline-C in the first place.
+(definstance Functor [HBox]
+  (fmap [container g]
+    ```c
+    return container;
+    ```))
+
+(defn dbl [x : int] : int (* x 2))
+
+;; A typed consumer: only accepts the result if its type really grounded.
+(defn unwrap-hbox [h : (HBox int)] : int (.val h))
+
+(defn main [] : int
+  (let [b (:: (make-struct HBox :val 21) (HBox int))]
+    (let [m (fmap b dbl)]
+      (println (.val m))          ; 21 -- field read through the grounded type
+      (println (unwrap-hbox m)))) ; 21 -- and it satisfies a typed parameter
+  0)

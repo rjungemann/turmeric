@@ -1,0 +1,34 @@
+;; string-owned-builders-and-optional-accessors-plan Part 1: owned-String
+;; siblings for the cstr builders.  str-concat-string / cstr-sub-string adopt the
+;; malloc'd cstr from str-concat / cstr-sub into an owned String (single-join /
+;; substring: the wrap path).  For a multi-join accumulation the sanctioned path
+;; is a StringBuilder, exercised below for contrast -- linear, one final alloc,
+;; not a fold of str-concat-string.
+(load "stdlib/str-build-string.tur")
+
+;; Owned multi-join via StringBuilder (the sanctioned accumulation path).
+(defn join3 [a : cstr b : cstr c : cstr] : String
+  (let [sb (builder/new)]
+    (do
+      (builder/push-cstr! sb a)
+      (builder/push-cstr! sb b)
+      (builder/push-cstr! sb c)
+      (builder/finish sb))))
+
+(defn demo [] : int
+  (do
+    ;; single join -- the wrap path
+    (println (string/to-cstr (str-concat-string "Hello, " "world")))
+    ;; substring -- the wrap path (clamped, like cstr-sub)
+    (println (string/to-cstr (cstr-sub-string "hello" 1 4)))
+    (println (string/to-cstr (cstr-sub-string "hi" 0 99)))   ; clamped -> "hi"
+    ;; multi-join -- the build path (StringBuilder, one final allocation)
+    (println (string/to-cstr (join3 "a" "b" "c")))
+    ;; owned result survives as a Map key
+    (let [m (map-assoc (:: (map-new) (Map String int)) (str-concat-string "k" "1") 7)]
+      (do
+        (println (map-get m (str-concat-string "k" "1")))
+        (map-free m)))
+    0))
+
+(demo)

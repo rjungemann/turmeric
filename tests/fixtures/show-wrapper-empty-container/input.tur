@@ -1,0 +1,19 @@
+;; generic-show-wrapper-cps-monomorphization-plan Edge 1: a generic `^Show a`
+;; wrapper (show-line) applied to an element-LESS parametric container -- e.g.
+;; `(vec-new)` / `(hamt-of)`, whose empty contents never let the element type be
+;; inferred -- used to ICE at emit_reresolve_disp_type ("carrier<->concrete
+;; crossing reached code emission with an unresolved parametric param").  The
+;; wrapper clone's inner `(show x)` re-resolves on a `(Vec ?)` / `(Map ? ?)`
+;; dispatch type whose HEAD is concrete but whose element is a tyvar.  Instance
+;; selection keys on the head (Show[Vec] / Show[Map]) and the empty container never
+;; runs per-element dispatch, so the head-match resolves it and the empty container
+;; renders -- matching the direct `(show (vec-new))` path.
+(load "stdlib/typeclass.tur")
+
+(defn render-empty [] : int
+  (do
+    (show-line (vec-new))                    ;; []
+    (show-line (:: (hamt-of) (Map int int))) ;; #map{}
+    0))
+
+(defn main [] : int (render-empty))

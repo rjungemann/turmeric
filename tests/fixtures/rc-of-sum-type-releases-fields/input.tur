@@ -1,0 +1,50 @@
+; rc-of-sum-type-drops-no-glue: `(rc/of v)` where v is a MULTI-VARIANT ADT with
+; an owning field must release that field, and the cycle walker must be able to
+; trace through the box.
+;
+; It used to do neither.  The glue was selected on
+;   needs_drop_glue && adt_is_byvalue_product(adef)
+; and a sum satisfies the first half and fails the second, so it fell through
+; with drop_fn still NULL -- no drop glue, no walker.  Two bugs from one branch:
+; the rc payload leaked with the collector off, and a cycle routed through the
+; box was invisible to the walker with it on.  option<T> and result<T,E> are
+; multi-variant, so this was not an exotic corner.
+;
+; Fixing the glue alone was not enough.  A sum's ctor mallocs the tag+union
+; record and returns a POINTER, so the generic "malloc a cell and store the
+; value" boxing left cb->value pointing at a cell that *held* the pointer rather
+; than at the record -- the glue then read the pointer bits as `s->tag` and
+; matched no case.  Same double-indirection shape as the `:heap` + rc<T> bug
+; (docs/archive/gc-heap-struct-rc-not-a-control-block.md).  The boxing adopts
+; the ctor's pointer directly now.
+(defstruct S :move [next : rc<S>])
+
+(defn null-rc-s [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defdata Box (Nothing) (Held [inner : rc<S>]))
+
+;; Half 1 -- the leak.  The sum's owning field must be released at scope exit.
+(defn releases-field [] : int
+  (let [a (rc/of (make-struct S (null-rc-s)))]
+    (let [b (rc/of (Held (rc/clone a)))]
+      (rc/strong-count a)))              ; 2 while the box holds one
+  (gc-live-blocks))                      ; 0 once both scopes exit
+
+;; Half 2 -- the blind spot.  A cycle routed THROUGH the boxed sum must be
+;; traceable by the walker, so the collector can reclaim it.
+(defn collects-cycle-through-sum [] : int
+  (let [s1 (rc/of (make-struct S (null-rc-s)))
+        s2 (rc/of (make-struct S (rc/clone s1)))
+        b  (rc/of (Held (rc/clone s2)))]
+    (set! (.next s1) (rc/clone s2)))
+  (gc!)
+  (gc-live-blocks))
+
+(defn main [] : int
+  (gc-enable!)
+  (println (releases-field))              ; 0
+  (println (collects-cycle-through-sum))  ; 0
+  0)

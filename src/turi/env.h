@@ -102,9 +102,32 @@ typedef struct TuriCoroStack {
  * the node refcounts (correct now that the delete path retains pulled-up
  * siblings -- docs/archive/history/hamt-delete-sibling-refcount-report.md). */
 typedef void (*TuriCollBufFreeFn)(void *box);
+
+/* TR3 (turi-interp-incremental-reclamation): the eval-boundary sweep.
+ *
+ * With scratch promotion on, a successful rewind proves the live value graph
+ * is exactly what is reachable from the eval result + globals.  The sweep
+ * then conservatively marks every tracked box whose address appears as an
+ * int64 carrier anywhere in that graph (or inside another marked box) and
+ * frees the rest -- bounding a long-lived env's collection memory at the
+ * eval boundary instead of at teardown.
+ *
+ * `mark` hands one contained value to the marker (typed where the box knows
+ * the element tag, a bare turi_int carrier otherwise).  `scan` enumerates a
+ * box's contents through it and returns true only if the enumeration was
+ * COMPLETE -- i.e. no entry could be hiding a reference the marker cannot
+ * see (a Set/Map's untyped entries cannot rule out a struct-valued entry
+ * holding a handle, so its scan returns false when non-empty).  Any marked
+ * box with an incomplete scan makes the whole cycle mark-only: nothing is
+ * freed, matching the plan's leak-on-doubt rule. */
+typedef void (*TuriCollBufMarkFn)(TuriValue v, void *ctx);
+typedef bool (*TuriCollBufScanFn)(void *box, TuriCollBufMarkFn mark, void *ctx);
+
 typedef struct TuriCollBuf {
     void                *box;      /* wrapper allocation; NULL once freed/tombstoned */
     TuriCollBufFreeFn    destroy;  /* frees box (and any heap buffer it owns) */
+    TuriCollBufScanFn    scan;     /* enumerate contained values; NULL = opaque */
+    bool                 marked;   /* per-sweep scratch bit */
     struct TuriCollBuf  *next;
 } TuriCollBuf;
 
@@ -153,6 +176,27 @@ typedef struct TuriEnv {
     Arena       sym_arena;       /* SymbolTable string storage — permanent */
     SymbolTable st;              /* Persistent symbol table */
     Buf         src_acc;         /* Accumulated prior source text */
+    /* The leading region of src_acc that a reader-type change must NOT discard:
+     * the stdlib preload every interpreter entry point evaluates into this same
+     * env before handing it to a user.  A `#lang` switch resets src_acc because
+     * prior input cannot be re-parsed under an incompatible reader -- but the
+     * preload is not user input, and dropping it took `hamt-of` (and the rest of
+     * the stdlib) with it, so the first collection literal after a switch failed
+     * as "unknown function or operator".
+     *
+     * Captured by turi_env_pin_prelude once the preload sequence has run;
+     * restored by turi_env_reset_to_prelude at every reader-switch site.  The
+     * accumulation counters are pinned alongside the length so the prelude comes
+     * back marked ALREADY-RUN rather than replayed: re-running it would re-execute
+     * `(load "stdlib/...")` forms whose module registration is deduped by the
+     * elaborator, which re-established the stdlib on a first switch and silently
+     * failed to on the second.  src_pin_len == 0 means nothing is pinned, which
+     * reproduces the historical "discard everything" behaviour. */
+    size_t      src_pin_len;
+    uint32_t    pin_toplevel;    /* prior_toplevel at pin time */
+    uint32_t    pin_prog_items;  /* prior_prog_items at pin time */
+    uint32_t    pin_acc_forms;   /* n_acc_forms at pin time */
+    uint32_t    pin_next_line;   /* acc_next_line at pin time */
     uint32_t    prior_toplevel;  /* Count of top-level PARSED forms from prior evals */
     /* Count of already-evaluated non-file-scope-def PROGRAM items from prior
      * evals. Distinct from prior_toplevel: a (load ...) form expands inline to
@@ -162,6 +206,45 @@ typedef struct TuriEnv {
      * shifts the boundary and previously-run top-level forms get evaluated
      * again (e.g. a prior (gen-next g) double-advances a suspended generator). */
     uint32_t    prior_prog_items;
+    /* TR2 (turi-incremental-elaboration-design): opt-in incremental parse.
+     * OFF by default -- the default path stays byte-identical (re-parse the
+     * whole accumulated blob every eval). When on, turi_eval re-reads only the
+     * newly appended source and reuses the prior evals' Forms, removing the
+     * O(N^2) re-parse that dominates a long-lived session (Trowel / Try
+     * Turmeric / Godot embeddings). Set via turi_env_set_incremental_elab. */
+    bool          incremental_elab;
+    /* Accumulated top-level Forms from all prior evals, in parse order. Each
+     * Form* lives in the eval arena that parsed it (all retained in
+     * eval_arenas) and is immutable after parse -- only forms.c constructors
+     * ever write Form fields -- so reuse across evals is sound. The vector
+     * itself is malloc/realloc'd, freed in turi_env_free. Committed only on a
+     * successful eval, mirroring src_acc; reset to 0 whenever src_acc resets
+     * (a reader-type change), since forms cannot mix across readers. */
+    struct Form **acc_forms;
+    uint32_t      n_acc_forms;
+    uint32_t      cap_acc_forms;
+    /* Line number at which the next appended source chunk begins, tracked
+     * incrementally (counting newlines in the new text only) so resuming the
+     * reader never rescans the prefix. 1-based; 0 means "not yet initialised". */
+    uint32_t      acc_next_line;
+    /* TR2.3: scratch buffer holding "accumulated source + this turn's source",
+     * REUSED across evals. It is what the eval's SourceFile points at, so
+     * diagnostics still see the whole session text -- but unlike the old
+     * per-eval arena_strdup of the same blob it is not retained N times, which
+     * was the last O(N^2) term once elaboration went incremental. Nothing holds
+     * a pointer into it past its eval: Forms copy their bytes (form_str
+     * arena_strdups), and the SourceFile is re-registered every turn. */
+    Buf           src_combined;
+    /* TR2.2b: persistent elaboration session (opaque ElabSession, elab.h). Holds
+     * the accumulated scope / typeclass env / ADT+effect+module registries so a
+     * new turn's forms elaborate against prior definitions WITHOUT re-elaborating
+     * them -- the O(N^2) retained-elaboration term. `elab_session_forms` is how
+     * many accumulated forms the session has already absorbed, so a turn hands
+     * the elaborator only acc_forms[elab_session_forms .. n_acc_forms).
+     * Discarded (and rebuilt by replaying all accumulated forms) after any
+     * failed elaboration, since a partial program may have entered its scope. */
+    struct Elab  *elab_session;
+    uint32_t      elab_session_forms;
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),
@@ -187,6 +270,16 @@ typedef struct TuriEnv {
      * (create/eval/free) needs no promotion and the default path is unchanged.
      * Set via turi_env_set_scratch_promotion. */
     bool        scratch_promotion;
+    /* TR0 measurement (turi-interp-incremental-reclamation-plan.md): per-env
+     * scratch-promotion outcome tally, incremented once per top-level eval
+     * boundary while scratch_promotion is on. Quantifies how often the
+     * conservative walk actually rewinds vs declines, and why -- the signal
+     * that decides whether the TR1 carrier-relocation work is load-bearing.
+     * Zero-initialized (env is calloc'd); read directly by measurement harnesses. */
+    uint64_t    promo_attempts;               /* promotion entered (feature on) */
+    uint64_t    promo_rewinds;                /* reached arena_reset (scratch reclaimed) */
+    uint64_t    promo_decline_busy;           /* bailed: env not quiescent (live control flow) */
+    uint64_t    promo_decline_unrelocatable;  /* bailed: root set not relocatable (carrier/wscont) */
     EnvBinding *globals;         /* Global name→TuriValue map (linked list) */
     bool        sandboxed;       /* Deprecated alias: true when caps == TURI_CAP_NONE */
     TuriCaps    caps;            /* SB4: capability bitmask (TURI_CAP_ALL = unrestricted) */
@@ -245,6 +338,18 @@ typedef struct TuriEnv {
      * (currently Vec), tracked so turi_env_free reclaims the ones the program
      * never freed. */
     TuriCollBuf   *coll_bufs;
+    /* TR3: recycled tracking nodes.  The eval-boundary sweep unlinks freed
+     * AND tombstoned (explicitly vec-free'd) nodes here, and
+     * turi_env_track_collection reuses them -- so node count is bounded by
+     * peak simultaneous collections, not total ever created.  Nodes are
+     * perm-pool allocations, so there is nothing to free(). */
+    TuriCollBuf   *coll_bufs_free;
+    /* TR3 observability, mirroring the promo_* counters: sweeps that ran a
+     * free phase, sweeps declined as mark-only (an incomplete scan on a live
+     * box), and total boxes freed by sweeps. */
+    uint64_t       collsweep_runs;
+    uint64_t       collsweep_markonly;
+    uint64_t       collsweep_freed;
     /* All allocated futures (linked list for bulk free in turi_env_free) */
     TuriFuture *all_futures;
     /* Pipe fds for the built-in test I/O pipe (S7.7 tests) */
@@ -254,6 +359,11 @@ typedef struct TuriEnv {
     EnvHashTable globals_ht;
     /* Active reader syntax mode — settable via #lang in the REPL */
     ReaderType   reader_type;
+    /* Additive `#lang` layer set active for the session (lang-layers-plan
+     * L1), the neighbor of reader_type: carried onto each eval's SourceFile
+     * so reader layers (e.g. `stringed` => #s"...") stay active across the
+     * accumulated <eval> blob.  Reset alongside reader_type on a #lang switch. */
+    LangLayerSet lang_layers;
     /* Base directory for resolving module imports (NULL = ".").
      * Set this before turi_eval_file when the input uses (import ...). */
     const char  *module_base_dir;
@@ -271,6 +381,16 @@ typedef struct TuriEnv {
     /* SI4: TypeClassEnv* from latest turi_eval; used by turi_try_show for Show dispatch.
      * Points into an eval_arena (never freed). Cast to TypeClassEnv* in eval.c. */
     void        *last_tc_env;
+    /* Full elaborated Type of the last top-level result, as a `const Type *`
+     * into the same eval_arena as last_tc_env (never freed; NULL when the turn
+     * produced no new top-level expression).  The companion `type_tag` string
+     * carries only the head constructor ("Map"), which is enough to FIND the
+     * Show instance but not to show its ELEMENTS: a generic `Show [Map]` body
+     * needs concrete K/V to re-resolve `(show (:: ... K))` away from the
+     * int-carrier representative instance.  Kept as void* because env.h stays
+     * free of the compiler type headers; cast to `const Type *` in eval.c.
+     * See docs/archive/map-show-keyword-key-raw-int.md (root cause B). */
+    void        *last_result_type;
     /* RM Q#5: session-scoped reader-macro registry. Persists across REPL
      * turns so `(reader-macros/define ...)` on one line is visible to the
      * reader on the next. Allocated from sym_arena; entries' templates
@@ -364,7 +484,8 @@ TuriCoroStack *turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
  * can tombstone it in O(1) via turi_env_untrack_collection.  Returns NULL
  * (buffer untracked, no crash) when env or box is NULL. */
 TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
-                                       TuriCollBufFreeFn destroy);
+                                       TuriCollBufFreeFn destroy,
+                                       TuriCollBufScanFn scan);
 
 /* interp-collections-never-freed: tombstone a tracking node whose buffer is
  * about to be freed explicitly, so the turi_env_free teardown walk skips it and
@@ -400,6 +521,44 @@ void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image);
  * live continuations/generators/fibers, pending async work), that eval's scratch
  * is left intact rather than corrupted -- it simply does not shrink that cycle. */
 void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
+
+/* TR2 (turi-incremental-elaboration-design): control incremental parsing +
+ * elaboration for a long-lived env.  ON by default since 2026-07-25 (set
+ * TUR_NO_INCREMENTAL_ELAB=1, or call this with false, to restore the
+ * whole-program path).
+ *
+ * When enabled, turi_eval parses only the newly appended source each turn and
+ * reuses the Forms parsed by earlier evals, instead of re-parsing the entire
+ * accumulated session source every time (which is O(N^2) in both time and
+ * retained AST over a session -- see docs/reported/turi-repl-quadratic-reparse.md).
+ * The full accumulated blob is still handed to diagnostics, so spans and error
+ * snippets render exactly as before.
+ *
+ * Results are identical to the default path: the same forms array is elaborated
+ * either way, since parsed Forms are immutable and the reader-macro registry
+ * persists on the env.  The interpreter automatically falls back to a whole-blob
+ * re-parse for any turn it cannot handle incrementally (a sweet-exp reader, a
+ * reader-type change, a `define` rewrite), so correctness never depends on the
+ * fast path applying.  Safe to toggle between top-level eval cycles. */
+void turi_env_set_incremental_elab(TuriEnv *env, bool enable);
+
+/* Pin everything accumulated in env->src_acc so far as the stdlib prelude, so a
+ * later reader-type change keeps it instead of emptying src_acc.  Call once,
+ * after the turi_env_preload_* sequence and before the env is handed to a user;
+ * all three interpreter entry points (native REPL, `--interpret`, WASM) do.
+ * Only reader-agnostic plain s-expressions may be pinned -- the pinned text is
+ * re-read under the NEW reader after a switch, a property src/main.c's file-eval
+ * pre-detect already relies on.  Idempotent; a second call re-pins at the
+ * current position. */
+void turi_env_pin_prelude(TuriEnv *env);
+
+/* Perform a reader-switch reset: drop accumulated USER source and the
+ * elaboration session built from it, rewinding to the pinned prelude (or to
+ * empty when nothing is pinned).  The caller sets env->reader_type itself --
+ * this only handles the accumulation state, which every switch site
+ * (turi_eval_impl, turi_eval_file, the REPL's `#lang` handler, and the WASM
+ * set-lang entry point) previously open-coded and had to keep in sync. */
+void turi_env_reset_to_prelude(TuriEnv *env);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

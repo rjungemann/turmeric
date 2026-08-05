@@ -1,0 +1,32 @@
+;; E3a (owning-cloneable-capture): an owning `rc` the FUNCTION OWNS, captured
+;; ^borrow across a genuinely multi-shot cloneable continuation and dropped
+;; EXPLICITLY after the reset.
+;;
+;; `run` allocates r, captures it ^borrow into the continuation (read-combine
+;; reads its count, never drops it), resumes twice (clone + original), then drops
+;; r exactly once on the straight-line path after the reset.  The rc is borrowed
+;; read-only across every resume, alive until the post-reset drop -- leak-clean.
+;;
+;; This is the drop-crossing companion to cloneable-owning-borrow-capture: there
+;; the caller owned r; here the CPS-colored fn owns it and its (explicit) drop
+;; crosses the cloneable-reset.  The AUTO-inserted scope-exit drop (an EX_DEFER)
+;; is still unsupported on the CPS path -- that ergonomic case is the E3b
+;; CPS-defer-lowering follow-on; an explicit drop is admitted today.
+
+(defn k-identity [k] : int k)
+
+(defn read-combine [v : int ^borrow r : rc] : int
+  (+ v (rc/strong-count r)))
+
+(defn run [] : int
+  (let [r (rc/of 99)]
+    (let [k (cloneable-reset (read-combine (cloneable-shift k-identity 0) r))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (let [res (+ a b)]      ; (10 + 1) + (20 + 1) = 32
+            (rc/drop r)           ; explicit drop, crosses the reset; runs once
+            res))))))
+
+(defn main [] : int
+  (println (run))
+  0)

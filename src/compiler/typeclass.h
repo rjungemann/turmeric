@@ -9,6 +9,8 @@
 
 /* Forward declaration for EffectRow (defined in effect.h) */
 struct EffectRow;
+/* Forward declaration for Binding (defined in expr.h) */
+struct Binding;
 
 /* Forward declarations */
 typedef struct TypeClassMethod TypeClassMethod;
@@ -36,8 +38,33 @@ struct TypeClassMethod {
      * an explicit type annotation is present; NULL means no params had
      * explicit annotations (backwards-compatible default). */
     bool *param_explicit_type;
+    /* RT1: the refinement each parameter declares in the CLASS signature, or
+     * NULL.  An instance's own refinement is checked against this: the class
+     * signature is the promise callers program against, so an instance that
+     * demands MORE than the class does would reject an argument a generic
+     * caller was entitled to pass.  Arrays have n_params entries. */
+    const struct Form **param_refine_preds;
+    const char        **param_refine_vars;
+    /* RT1: lazily-built Binding carrying the CLASS's parameter refinements, so
+     * a DYNAMIC dispatch (no statically-resolved instance) can record an
+     * ordinary crossing against the class signature -- the strongest demand
+     * true of every instance, since `TUR-E0374` forbids an instance demanding
+     * more.  Cached here rather than rebuilt per call site because crossings
+     * deduplicate on (callee, call_form): a fresh Binding each time would
+     * defeat that and double-report a re-elaborated site.  NULL until the
+     * first dynamic dispatch that needs it, and never built when no parameter
+     * carries a refinement. */
+    struct Binding *refine_class_binding;
     uint8_t n_params;
-    Type return_type;             /* Return type */
+    Type return_type;             /* Return type (contract PEELED to its base) */
+    /* RT1: the refinement the CLASS signature declares on the method's RESULT,
+     * or NULL.  Parameters and results vary in OPPOSITE directions: an instance
+     * may accept more than the class promises, but it must deliver at least as
+     * much.  So a class result refinement is inherited by an instance that does
+     * not restate one, and an instance that does restate one owes
+     * `instance_pred(r) |- class_pred(r)`. */
+    const struct Form  *return_refine_pred;
+    const char         *return_refine_var;
     /* ER3: Effect-row annotation from the defclass method signature.
      * NULL if not annotated; ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER resolves it. */
     struct EffectRow *effect_row;
@@ -146,6 +173,15 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
 
 /* Look up a typeclass by name */
 TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol *name);
+
+/* RT4: find the class METHOD a bare name denotes, if any.  The refinement
+ * encoder needs this to tell a typeclass method apart from a name that
+ * resolves to nothing at all -- the latter is an abstract measure, which the
+ * language defines as congruent, and a method is emphatically not one.
+ * Writes the declaring class to *out_class when non-NULL. */
+const TypeClassMethod *typeclass_env_find_method(const TypeClassEnv *env,
+                                                 const Symbol *name,
+                                                 const TypeClass **out_class);
 
 /* assoc-types-plan: find the typeclass that declares an associated type member
  * named `assoc_name`, writing the member's index within that class to

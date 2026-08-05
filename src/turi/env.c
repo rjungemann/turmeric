@@ -2,8 +2,10 @@
 #include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL */
 #include "fiber.h"
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
+#include "elab.h"           /* TR2.2b: persistent ElabSession lifecycle */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
 #include "collections_native.h"  /* Vec/Set/Map/HAMT native overrides */
+#include "string_native.h"        /* owned String type native overrides */
 #include "interpreter_natives.h"  /* option/result/str/math/seq/json/... natives */
 #include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
 
@@ -191,6 +193,26 @@ TuriEnv *turi_env_new(void) {
     arena_init(&env->value_perm, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
+    buf_init(&env->src_combined);   /* TR2.3: reused per-eval source blob */
+    /* TR2: incremental parse + elaboration is ON by default. A long-lived env
+     * (REPL, notebook kernel, Trowel / Try Turmeric / Godot embeddings) is
+     * otherwise O(N^2) in retained memory and time over a session -- measured at
+     * ~1 GB and quadratic parse/elaborate over 1500 turns, versus ~2 MB and
+     * linear with this on. A single-eval embedder is unaffected: the first eval
+     * has no accumulated prefix, so it takes the whole-program path either way.
+     *
+     * Results are identical to the old path except for one intentional fix:
+     * redefining a top-level `defn` across turns now works instead of failing
+     * with "already defined by an auto-loaded stdlib module" (an artifact of the
+     * old path re-elaborating prior turns under stdlib_prefix). Guarded by the
+     * tur_incremental_elab_diff A/B harness.
+     *
+     * TUR_NO_INCREMENTAL_ELAB=1 restores the whole-program path, for bisecting a
+     * suspected incremental-path bug; turi_env_set_incremental_elab overrides. */
+    {
+        const char *off = getenv("TUR_NO_INCREMENTAL_ELAB");
+        env->incremental_elab = !(off && *off && strcmp(off, "0") != 0);
+    }
     env->caps = TURI_CAP_ALL;
     /* Gap 7: default to interpret mode (every turi_env_new caller is an
      * interpreter embedder; mirrors the g_interpret_mode = true above).  An
@@ -210,6 +232,10 @@ TuriEnv *turi_env_new(void) {
      * before install_default_natives so an embedder-seeded default of the same
      * name still wins.  See docs/upcoming/turi-interp-collections-libturi-plan.md. */
     turi_register_collection_natives(env);
+    /* Owned String type (owned-string-type-plan): register the tur_string_*
+     * primitives so stdlib/string.tur's pure-Turmeric ops + typeclass instances
+     * resolve under --interpret exactly as in compiled code. */
+    turi_register_string_natives(env);
     /* Register the remaining stdlib inline-C native overrides (option/result/
      * str/math/safe/contract/comonad/typeclass, seq, json/schema, the
      * concurrency + OS-handle modules, and sym) so every interpreter env
@@ -330,6 +356,21 @@ void turi_env_free(TuriEnv *env) {
     arena_free(&env->value_perm);
     turi_val_global_pool_free();
 
+    /* TR2.2b: the persistent elaboration session owns malloc'd scope/registry
+     * storage; free it before the vector below. */
+    if (env->elab_session) {
+        elab_session_free((ElabSession *)env->elab_session);
+        env->elab_session       = NULL;
+        env->elab_session_forms = 0;
+    }
+    buf_free(&env->src_combined);   /* TR2.3 */
+    /* TR2: the accumulated-Form vector is malloc'd (the Forms themselves live
+     * in eval_arenas, already freed above). */
+    free(env->acc_forms);
+    env->acc_forms     = NULL;
+    env->n_acc_forms   = 0;
+    env->cap_acc_forms = 0;
+
     /* Free global bindings */
     EnvBinding *b = env->globals;
     while (b) {
@@ -373,8 +414,16 @@ void turi_env_free(TuriEnv *env) {
 void turi_env_reset(TuriEnv *env) {
     if (!env) return;
 
-    /* Drop accumulated REPL/eval source so the next turi_eval starts fresh. */
+    /* Drop accumulated REPL/eval source so the next turi_eval starts fresh.
+     * The prelude pin goes with it -- this reset drops the preloaded stdlib
+     * along with everything else, so there is nothing left to pin; a caller
+     * that re-preloads calls turi_env_pin_prelude again. */
     env->src_acc.len      = 0;
+    env->src_pin_len      = 0;
+    env->pin_toplevel     = 0;
+    env->pin_prog_items   = 0;
+    env->pin_acc_forms    = 0;
+    env->pin_next_line    = 0;
     env->prior_toplevel   = 0;
     env->prior_prog_items = 0;
 
@@ -467,11 +516,20 @@ void turi_env_register_native_ex(TuriEnv *env, const char *name,
  * scratch-allocated node would be poisoned by arena_reset while still linked.
  * value_perm is present and freed at turi_env_free on every path. */
 TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
-                                       TuriCollBufFreeFn destroy) {
+                                       TuriCollBufFreeFn destroy,
+                                       TuriCollBufScanFn scan) {
     if (!env || !box || !destroy) return NULL;
-    TuriCollBuf *node = (TuriCollBuf *)turi_val_perm_alloc(env, sizeof(TuriCollBuf));
+    /* TR3: reuse a node the sweep recycled before growing the perm pool. */
+    TuriCollBuf *node = env->coll_bufs_free;
+    if (node) {
+        env->coll_bufs_free = node->next;
+    } else {
+        node = (TuriCollBuf *)turi_val_perm_alloc(env, sizeof(TuriCollBuf));
+    }
     node->box     = box;
     node->destroy = destroy;
+    node->scan    = scan;
+    node->marked  = false;
     node->next    = env->coll_bufs;
     env->coll_bufs = node;
     return node;
@@ -489,6 +547,58 @@ void turi_env_set_interpret_mode(TuriEnv *env, bool interpret) {
 void turi_env_set_scratch_promotion(TuriEnv *env, bool enable) {
     if (!env) return;
     env->scratch_promotion = enable;
+}
+
+void turi_env_set_incremental_elab(TuriEnv *env, bool enable) {
+    if (!env) return;
+    env->incremental_elab = enable;
+}
+
+void turi_env_pin_prelude(TuriEnv *env) {
+    if (!env) return;
+    env->src_pin_len     = env->src_acc.len;
+    env->pin_toplevel    = env->prior_toplevel;
+    env->pin_prog_items  = env->prior_prog_items;
+    env->pin_acc_forms   = env->n_acc_forms;
+    env->pin_next_line   = env->acc_next_line;
+}
+
+void turi_env_reset_to_prelude(TuriEnv *env) {
+    if (!env) return;
+
+    /* Clamp: a caller that shortened src_acc by other means (turi_env_reset)
+     * must not leave the pin pointing past the end of the buffer. */
+    size_t pin = (env->src_pin_len < env->src_acc.len) ? env->src_pin_len
+                                                       : env->src_acc.len;
+    env->src_acc.len = pin;
+
+    if (pin == 0) {
+        /* Nothing pinned -- the historical full discard. */
+        env->prior_toplevel   = 0;
+        env->prior_prog_items = 0;
+        env->n_acc_forms      = 0;
+        env->acc_next_line    = 0;
+    } else {
+        /* Rewind to the pin.  The counters come back too, so the prelude is
+         * marked already-run: its definitions are still bound in env->globals
+         * from the original load, and replaying the `(load ...)` forms would
+         * hit the elaborator's loaded_modules dedup and register nothing. */
+        env->prior_toplevel   = env->pin_toplevel;
+        env->prior_prog_items = env->pin_prog_items;
+        env->n_acc_forms      = env->pin_acc_forms;
+        env->acc_next_line    = env->pin_next_line;
+    }
+
+    /* TR2: the elaboration session was built from forms read under the OLD
+     * reader; drop it either way.  It is rebuilt by replaying the retained
+     * accumulated forms, which for the pinned region is a re-elaboration, not a
+     * re-evaluation -- prior_prog_items above is what keeps the program items
+     * from running a second time. */
+    if (env->elab_session) {
+        elab_session_free(env->elab_session);
+        env->elab_session       = NULL;
+        env->elab_session_forms = 0;
+    }
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

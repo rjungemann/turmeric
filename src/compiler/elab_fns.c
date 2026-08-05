@@ -1,5 +1,2668 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
+#include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
+#include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
+#include "globals.h"            /* repr-trace: g_emit_abi_trace; WF1: g_opt_write_frames */
+#include "experiments.h"        /* WF1: experiment_warn_if_used("write-frames") */
+
+/* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
+ * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
+ * per-param non-retention when a defn is elaborated.  Forward-declared to avoid
+ * pulling the whole emit-internal surface into the elaborator. */
+bool closure_binding_escapes(const Expr *e, const Binding *b);
+bool expr_subtree_has_inline_c(const Expr *e);
+/* catch-box-reader-confinement-whitelist: the box-confinement walk, likewise
+ * defined emit-side, reused here to infer per-param non-retention for
+ * pointer-carrying scalars when a defn is elaborated. */
+bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry);
+
+/* closure-capture-escapes-linearity: one enclosing linear/unique binding's
+ * substructural state, recorded before a lambda body is elaborated so the body's
+ * effect on it can be read off afterwards.  See the snapshot in elab_fn. */
+typedef struct FnCaptureLinSnap {
+    Binding *binding;
+    bool     was_consumed;   /* is_linear_consumed before the body */
+    bool     was_moved;      /* is_moved before the body */
+} FnCaptureLinSnap;
+
+/* closure-drop-glue S1c: a scalar Copy type kind -- safe to hold in / bare-free
+ * around a closure env (no owning teardown, no aliasing of the env).  Excludes
+ * rc/ref/weak (owning), structs/ADTs/tyvars (aggregate/opaque), and fn/cont. */
+static bool fn_result_kind_is_scalar_copy(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR: case TY_NIL:
+        case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT1 (refinement-types-plan): obligation collection for a `defn`.
+ *
+ * Parameter refinements and `:pre` become HYPOTHESES; the return refinement
+ * and `:post` become GOALS.  When a backend proves a goal, the runtime
+ * contract check for it is not emitted at all -- that elision is the whole
+ * point of the feature, and it is sound because the proof is over the same
+ * body the check would have guarded.
+ * ------------------------------------------------------------------------- */
+
+/* Map a Turmeric type kind to the VC sort the solver reasons in.
+ *
+ * RM-B1: `:bool` denotes a PROPOSITION, not the integer 0/1.  Without this arm
+ * a bool-returning function could not be used as a predicate atom at all --
+ * `(alive? w x)` encoded Int-sorted and refine_vc_build dropped the whole
+ * obligation as "does not denote a proposition". */
+VCSort rt_sort_of_kind(TypeKind k) {
+    switch (k) {
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: return VS_REAL;
+        case TY_BOOL: return VS_BOOL;
+        default: return VS_INT;
+    }
+}
+
+/* CT1: inject a contract entry check for each `{ v : T | pred }` parameter:
+ *
+ *     (tur-contract-check (let [v <param>] pred) "Contract violated")
+ *
+ * Shared by `defn` and `fn` so a lambda's contract parameters behave exactly
+ * like a defn's rather than being silently decorative.  Returns the new body
+ * (the original when nothing was injected).  Must run while the function's
+ * inner scope is still current -- the predicate is elaborated in it. */
+static bool rt_expr_definitely_impure(const Expr *x);
+
+/* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
+ * Defined after rt_resolve_fn; forward-declared here for rt_inject_param_checks. */
+static bool rt_pred_reads_measure(Elab *e, const Form *f);
+
+/* CT1: a contract predicate whose EVALUATION does something observable.
+ *
+ * Checks are conditional on the build: `--no-contracts` strips them, a release
+ * build drops them unless --keep-contracts, and static refinement discharge
+ * elides the ones it can prove (unconditional since `refined` graduated in
+ * v0.33.0).  A predicate with side effects therefore makes program
+ * behaviour depend on whether its own contracts were compiled in --
+ * `(>= (tick) 0)` advances a counter every time it is checked and not at all
+ * when it is not.  That is a bug in the contract, not in any of those flags.
+ *
+ * Reported only on PROVEN impurity (`RT_P_IMPURE`), never on a predicate the
+ * walk merely does not model, so a measure written with a `match` or a field
+ * read is left alone.  That asymmetry is why the classifier is three-valued.
+ *
+ * Gate-independent on purpose: the predicate is equally wrong with the
+ * refinement experiment off. */
+static void rt_diag_impure_pred(Elab *e, const Expr *pred_e, Span span) {
+    (void)e;
+    if (!pred_e || !rt_expr_definitely_impure(pred_e)) return;
+    diag_emit_with_code(DIAG_ERROR, span, TUR_E0375_REFINE_EFFECTFUL,
+        "contract predicate has side effects; predicates must be pure");
+    diag_emit(DIAG_NOTE, span,
+        "evaluating this predicate changes program state, so whether the "
+        "check is compiled in becomes observable");
+}
+
+Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
+                                    Binding **params, uint32_t n_params,
+                                    const Form **ct_preds, const char **ct_vars,
+                                    const uint32_t *ct_idx, uint32_t n_ct,
+                                    Span span) {
+    if (!check_fn || !body) return body;
+    for (uint32_t ci = 0; ci < n_ct; ci++) {
+        if (ct_preds[ci] == NULL) continue;
+        uint32_t pi = ct_idx[ci];
+        if (pi >= n_params || !params[pi]) continue;
+        /* C2 (#reads): a param whose refinement is a `#reads`-annotated measure
+         * is statically checked at its CROSSINGS, never at runtime.  The measure
+         * is impure by construction (that is why it needs the grant at all), so a
+         * runtime entry contract for it is impossible -- it would be TUR-E0375,
+         * "predicate has side effects" -- and would in any case defeat the
+         * trusted-congruence grant.  Suppress the entry-check injection here; the
+         * caller-side crossing obligation is the enforcement point (proven ->
+         * elided; unknown -> a kept impure check that is itself E0375, so a caller
+         * that cannot discharge the crossing still fails to compile).  The grant's
+         * soundness is pinned by tests/fixtures/errors/refine-stateful-*. */
+        if (rt_pred_reads_measure(e, ct_preds[ci])) continue;
+        const char *var_nm = ct_vars[ci];
+
+        /* Bind the contract's own variable name as an alias for the parameter,
+         * unless it already IS the parameter's name. */
+        Binding *cv_b = NULL;
+        if (var_nm) {
+            StrSlice vnsl = strslice(var_nm, (uint32_t)strlen(var_nm));
+            const Symbol *cv_sym = symtab_intern(e->st, vnsl);
+            Binding *existing_cv = scope_lookup(e->scope, cv_sym);
+            if (!existing_cv || existing_cv != params[pi]) {
+                cv_b = binding_new(e, cv_sym, params[pi]->type, false, false, span);
+                scope_add(e->scope, cv_b);
+            }
+        }
+        Expr *pred_e = elab_form(e, (Form *)ct_preds[ci]);
+        if (!pred_e) continue;
+        rt_diag_impure_pred(e, pred_e, span);
+
+        Expr *check_expr = pred_e;
+        if (cv_b) {
+            Expr *param_var_e = expr_new(e->arena, EX_VAR, params[pi]->type, span);
+            param_var_e->as.var.binding = params[pi];
+            LetBinding *cv_lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            cv_lb->binding = cv_b;
+            cv_lb->init = param_var_e;
+            Expr *let_cv = expr_new(e->arena, EX_LET, pred_e->type, span);
+            let_cv->as.let_.bindings = cv_lb;
+            let_cv->as.let_.n = 1;
+            let_cv->as.let_.body = pred_e;
+            check_expr = let_cv;
+        }
+
+        Expr **ck_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        ck_args[0] = check_expr;
+        Expr *ck_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+        ck_msg->as.s.p = "Contract violated";
+        ck_msg->as.s.len = 17;
+        ck_args[1] = ck_msg;
+        Expr *ck_call = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
+        ck_call->as.call_.fn_binding  = check_fn;
+        ck_call->as.call_.args        = ck_args;
+        ck_call->as.call_.n_args      = 2;
+        ck_call->as.call_.fn_expr     = NULL;
+        ck_call->as.call_.dict_arg    = NULL;
+        ck_call->as.call_.is_poly_call = false;
+        ck_call->as.call_.poly_arg_mask = 0;
+
+        Expr **do2 = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        do2[0] = ck_call;
+        do2[1] = body;
+        Expr *new_b = expr_new(e->arena, EX_DO, body->type, span);
+        new_b->as.do_.items = do2;
+        new_b->as.do_.n = 2;
+        body = new_b;
+    }
+    return body;
+}
+
+/* CT1: wrap `body` so its RESULT is checked against `pred`:
+ *
+ *   (let [<var> body] (tur-contract-check pred "<msg>") <var>)
+ *
+ * `var_name` is the name the predicate binds the result under -- the contract's
+ * own variable for a `: #refine{ r : T | p }` return, or NULL for `:post`,
+ * which uses `result`.  Returns `body` unchanged when there is nothing to do.
+ *
+ * Shared by `defn` and typeclass instance methods.  It lives in one place
+ * because the sibling peel (rt_peel_contract) had to be reached independently
+ * three times before it was centralised, and this is the same shape of trap:
+ * a second hand-rolled copy is a second place for a refinement to be accepted
+ * and silently not enforced. */
+Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
+                           const Form *pred, const char *var_name,
+                           const char *fail_msg, Span span) {
+    if (!check_fn || !body || !pred) return body;
+    const Symbol *bind_sym = e->sym_result;
+    if (var_name)
+        bind_sym = symtab_intern(e->st, strslice(var_name, (uint32_t)strlen(var_name)));
+
+    Binding *result_b = binding_new(e, bind_sym, body->type, false, false, span);
+    scope_add(e->scope, result_b);
+    Expr *pred_e = elab_form(e, (Form *)pred);
+    if (!pred_e) return body;
+    rt_diag_impure_pred(e, pred_e, span);
+
+    Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    args[0] = pred_e;
+    Expr *msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+    msg->as.s.p   = fail_msg;
+    msg->as.s.len = (uint32_t)strlen(fail_msg);
+    args[1] = msg;
+    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
+    check->as.call_.fn_binding   = check_fn;
+    check->as.call_.args         = args;
+    check->as.call_.n_args       = 2;
+    check->as.call_.fn_expr      = NULL;
+    check->as.call_.dict_arg     = NULL;
+    check->as.call_.is_poly_call = false;
+    check->as.call_.poly_arg_mask = 0;
+
+    Expr *result_var = expr_new(e->arena, EX_VAR, body->type, span);
+    result_var->as.var.binding = result_b;
+    Expr **inner = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    inner[0] = check;
+    inner[1] = result_var;
+    Expr *inner_do = expr_new(e->arena, EX_DO, body->type, span);
+    inner_do->as.do_.items = inner;
+    inner_do->as.do_.n = 2;
+
+    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+    lb->binding = result_b;
+    lb->init = body;
+    Expr *let_e = expr_new(e->arena, EX_LET, body->type, span);
+    let_e->as.let_.bindings = lb;
+    let_e->as.let_.n = 1;
+    let_e->as.let_.body = inner_do;
+    return let_e;
+}
+
+/* True when contract checks are being emitted for this build.  `--no-contracts`
+ * strips them, and a release build drops them unless --keep-contracts. */
+bool rt_contracts_emitted(void) {
+#ifdef NDEBUG
+    if (!g_keep_contracts_in_release) return false;
+#endif
+    return !g_no_contracts;
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT4 purity -- a THREE-valued classification, because two questions are
+ * asked of it and they want OPPOSITE conservatism.
+ *
+ * 1. CONGRUENCE: "may two occurrences of this call be modelled as the same
+ *    value?"  Answering yes wrongly elides a real check -- `(- (tick) (tick))`
+ *    with a counter-bumping `tick` encodes as `t - t`, the solver proves
+ *    `t - t >= 0`, and a program that returns -1 ships unchecked.  This
+ *    question needs PURE to mean proven-pure; everything else reads as impure.
+ *
+ * 2. DIAGNOSTICS: "is this predicate effectful, so that evaluating the check
+ *    is itself part of the program's behaviour?"  Answering yes wrongly
+ *    REJECTS WORKING CODE.  This question needs IMPURE to mean proven-impure;
+ *    everything else must be left alone.
+ *
+ * These are not negations of each other, and collapsing them into one boolean
+ * is exactly how a default-deny purity test turns into false errors on a
+ * perfectly good measure whose body happens to use a form the walk has not
+ * learned (a `match`, a field read).  The gap between them is RT_P_UNKNOWN,
+ * and each caller reads it its own way.
+ *
+ * The DECLARED EFFECT ROW IS NOT EVIDENCE either way.  The effect system
+ * tracks algebraic effects (`perform`/handlers); it infers nothing from
+ * `set!`, from mutable globals, or from inline C -- effect_check.c says so
+ * where it suppresses W0031 for `#fx{Unsafe}` bodies containing inline C.  A
+ * function can declare `#fx{}`, carry a `static` counter in a C block, and
+ * return a different value every call.
+ * ------------------------------------------------------------------------- */
+
+typedef enum RtPurity {
+    RT_P_PURE = 0,   /* proven: computes a value, touches nothing        */
+    RT_P_IMPURE,     /* proven: reaches a concrete effectful construct   */
+    RT_P_UNKNOWN,    /* neither proven -- a form the walk does not model */
+} RtPurity;
+
+/* Combine sibling results.  IMPURE dominates (one proven effect is enough);
+ * otherwise UNKNOWN dominates PURE. */
+static inline RtPurity rt_p_join(RtPurity a, RtPurity b) {
+    if (a == RT_P_IMPURE  || b == RT_P_IMPURE)  return RT_P_IMPURE;
+    if (a == RT_P_UNKNOWN || b == RT_P_UNKNOWN) return RT_P_UNKNOWN;
+    return RT_P_PURE;
+}
+
+#define RT_PURE_MAX_DEPTH 64
+#define RT_PURE_MAX_NODES 20000
+
+typedef struct RtPureCtx {
+    Binding *stack[RT_PURE_MAX_DEPTH];
+    uint32_t depth;
+    /* Smallest stack index of an in-progress binding this subtree leaned on.
+     * A result derived from an assumption about an OUTER frame is provisional
+     * and must not be memoized -- that frame may still turn out impure. */
+    uint32_t min_open;
+    uint32_t budget;
+} RtPureCtx;
+
+static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x);
+
+/* Builtins that compute a value from their arguments and touch nothing. */
+static bool rt_builtin_shape_pure(BuiltinShape s) {
+    switch (s) {
+    case BS_BIN_INFIX:
+    case BS_VARIADIC_FOLD:
+    case BS_PREFIX_UNARY:
+    case BS_AND_SC:
+    case BS_OR_SC:
+    case BS_DIV_CHECK:   /* may trap on /0, but a trap is not a state change */
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Builtins that definitely DO something: printing, writing memory, freeing,
+ * loading libraries.  A shape in neither list is UNKNOWN, never impure. */
+static bool rt_builtin_shape_impure(BuiltinShape s) {
+    switch (s) {
+    case BS_PRINTLN_INT:  case BS_PRINTLN_FLOAT:  case BS_PRINTLN_BOOL:
+    case BS_PRINTLN_CSTR: case BS_PRINTLN_UINT:   case BS_PRINTLN_FLOAT32:
+    case BS_PREFIX_UNARY_FREE:
+    case BS_PTR_WRITE:    case BS_ARRAY_SET_UNCHECKED:
+    case BS_RAW_MALLOC:   case BS_RAW_FREE:       case BS_RAW_REALLOC:
+    case BS_RAW_MEMCPY:   case BS_RAW_MEMSET:
+    case BS_DLOPEN:       case BS_DLSYM:          case BS_DLCLOSE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static RtPurity rt_classify_binding(RtPureCtx *c, Binding *b) {
+    if (!b) return RT_P_UNKNOWN;
+    if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
+    for (uint32_t i = 0; i < c->depth; i++) {
+        if (c->stack[i] == b) {
+            /* Recursion: assume pure for now.  Impurity only ever enters
+             * through a concrete leaf, so the greatest fixpoint is the right
+             * one -- but record that we leaned on frame `i`. */
+            if (i < c->min_open) c->min_open = i;
+            return RT_P_PURE;
+        }
+    }
+    FnDef *fd = b->source_fn_def;
+    /* No body in hand: an extern, an inline-C-only defn whose FnDef never got
+     * linked, or a forward reference not yet elaborated.  UNKNOWN -- not
+     * congruent, and not diagnosable either -- and deliberately NOT memoized,
+     * since the same name may be resolvable later in the unit. */
+    if (!fd || !fd->body) return RT_P_UNKNOWN;
+    if (c->depth >= RT_PURE_MAX_DEPTH || c->budget == 0) return RT_P_UNKNOWN;
+
+    uint32_t my_depth  = c->depth;
+    uint32_t saved_min = c->min_open;
+    c->stack[c->depth++] = b;
+    c->min_open = UINT32_MAX;
+
+    RtPurity r = rt_classify_expr(c, fd->body);
+
+    uint32_t used = c->min_open;
+    c->depth--;
+    if (used >= my_depth) b->refine_purity = (uint8_t)(r + 1);
+    c->min_open = (used < saved_min) ? used : saved_min;
+    return r;
+}
+
+static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
+    if (!x) return RT_P_PURE;
+    if (c->budget == 0) return RT_P_UNKNOWN;
+    c->budget--;
+
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return RT_P_PURE;
+
+    case EX_VAR:
+        /* Reading a mutable binding is not congruent -- two reads can differ --
+         * but a read is not an EFFECT, so it is UNKNOWN, never impure. */
+        if (!x->as.var.binding) return RT_P_UNKNOWN;
+        return x->as.var.binding->is_mut ? RT_P_UNKNOWN : RT_P_PURE;
+
+    /* Proven effects. */
+    case EX_INLINE_C:
+    case EX_SET: case EX_SET_DEREF:
+    case EX_PERFORM:
+        return RT_P_IMPURE;
+
+    case EX_IF:
+        return rt_p_join(rt_classify_expr(c, x->as.if_.cond),
+                         rt_p_join(rt_classify_expr(c, x->as.if_.then_),
+                                   rt_classify_expr(c, x->as.if_.else_or_null)));
+
+    case EX_DO: {
+        RtPurity r = RT_P_PURE;
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            r = rt_p_join(r, rt_classify_expr(c, x->as.do_.items[i]));
+        return r;
+    }
+
+    case EX_LET: {
+        RtPurity r = rt_classify_expr(c, x->as.let_.body);
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            r = rt_p_join(r, rt_classify_expr(c, x->as.let_.bindings[i].init));
+        return r;
+    }
+
+    case EX_RETURN:
+        return rt_classify_expr(c, x->as.return_.value);
+
+    /* A `match` computes a value from its scrutinee and one arm; nothing about
+     * dispatching on a constructor is observable.  Pattern BINDINGS are not
+     * walked -- they are introduced by the pattern, not evaluated -- so an arm
+     * that merely reads them stays pure.  Widening the classifier here grows
+     * congruence (a measure written with a `match` is now usable as one) and
+     * cannot grow TUR-E0375, since moving a form from UNKNOWN to PURE only
+     * ever removes diagnostics. */
+    case EX_MATCH: {
+        RtPurity r = rt_classify_expr(c, x->as.match_.scrutinee);
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            r = rt_p_join(r, rt_classify_expr(c, x->as.match_.arms[i].body));
+            r = rt_p_join(r, rt_classify_expr(c, x->as.match_.arms[i].guard));
+        }
+        return r;
+    }
+
+    /* A field read is exactly as pure as its receiver.  There is no per-field
+     * `mut` marker in the language, but there does not need to be one: `set!`
+     * on `(.f s)` requires `s` to be bound `^mut`, so an immutable binding's
+     * fields cannot be written THROUGH IT -- the same declaration-level
+     * guarantee that already makes a non-mut variable read congruent.
+     * Recursing on the receiver inherits that answer, and inherits IMPURE when
+     * computing the receiver itself has an effect (`(.w (next-box))`).
+     *
+     * BEHIND A REFERENCE IT IS DECLINED.  The guarantee is about one binding,
+     * not about the object: with `rc<T>` or a borrow, a caller can hold a
+     * `^mut` handle to the very object the callee reads through a non-mut one,
+     * and mutate it between two calls -- which is precisely the aliasing that
+     * congruence assumes away.  A by-value receiver has no second handle to
+     * mutate through (`:copy` copies, and a moved value leaves the caller
+     * nothing), so the vector closes by construction.  Declining costs
+     * precision on `rc` getters and nothing else.  Three congruence
+     * miscompiles on this feature have come from assuming an aliasing
+     * question away; this one is answered instead. */
+    case EX_GET_FIELD: {
+        const Expr *recv = x->as.get_field_.struct_expr;
+        if (!recv) return RT_P_UNKNOWN;
+        switch (recv->type.kind) {
+            case TY_REF: case TY_RC: case TY_PTR_VOID:
+            case TY_REF_IMMUT: case TY_REF_MUT:
+                return RT_P_UNKNOWN;
+            default: break;
+        }
+        return rt_classify_expr(c, recv);
+    }
+
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return RT_P_UNKNOWN;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        RtPurity r = rt_builtin_shape_impure(sh) ? RT_P_IMPURE
+                   : rt_builtin_shape_pure(sh)   ? RT_P_PURE
+                                                 : RT_P_UNKNOWN;
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            r = rt_p_join(r, rt_classify_expr(c, x->as.builtin.args[i]));
+        return r;
+    }
+
+    case EX_CALL: {
+        /* An indirect call (`fn_expr`) or a rank-2 poly call can land
+         * anywhere, so there is no callee to interrogate. */
+        RtPurity r = (x->as.call_.fn_expr || x->as.call_.is_poly_call)
+                   ? RT_P_UNKNOWN
+                   : rt_classify_binding(c, x->as.call_.fn_binding);
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+            r = rt_p_join(r, rt_classify_expr(c, x->as.call_.args[i]));
+        return r;
+    }
+
+    default:
+        /* A form the walk does not model -- match, field reads, closures,
+         * while, STM, async, panic.  Neither proven pure nor proven
+         * effectful, and that distinction is the whole point. */
+        return RT_P_UNKNOWN;
+    }
+}
+
+static RtPurity rt_classify_binding_top(Binding *b) {
+    if (!b) return RT_P_UNKNOWN;
+    if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
+    /* A declared non-empty effect row rules PURE out.  It does not prove
+     * IMPURE -- the row can name an effect the body never performs -- so it
+     * only ever downgrades to UNKNOWN. */
+    bool row_veto = (b->type.kind == TY_FN && b->type.as.fn.effect_row &&
+                     !effect_row_is_empty(b->type.as.fn.effect_row));
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
+    RtPurity r = rt_classify_binding(&c, b);
+    if (row_veto && r == RT_P_PURE) return RT_P_UNKNOWN;
+    return r;
+}
+
+/* True when calling `b` twice with equal arguments is guaranteed to produce
+ * equal results with no observable side effect.  UNKNOWN reads as "no". */
+static bool rt_binding_is_pure(Binding *b) {
+    return rt_classify_binding_top(b) == RT_P_PURE;
+}
+
+/* CT1/RT: does evaluating this elaborated predicate DO something observable?
+ * Only a proven effect counts -- an unrecognised form answers false, so a
+ * predicate the walk cannot model is never diagnosed and never blocks
+ * elision on suspicion alone. */
+static bool rt_expr_definitely_impure(const Expr *x) {
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
+    return rt_classify_expr(&c, x) == RT_P_IMPURE;
+}
+
+/* RT4: resolve a called function's return refinement for the encoder.  Owned
+ * by the elaborator because it is the only side that can look a name up in the
+ * global scope; refine_collect.c reaches it through a function pointer so it
+ * stays free of scope/binding knowledge. */
+bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
+    Elab *e = (Elab *)ud;
+    if (!e || !name) return false;
+    /* No flag test here on purpose.  A refinement only reaches
+     * `refine_return_pred` when something actually enforces it -- it was proved
+     * statically, or the runtime check that guarantees it is being emitted --
+     * and that decision is made where the callee is elaborated, which is the
+     * only place that knows whether contracts survived for it.  Re-testing
+     * `--no-contracts` here would also throw away INFERRED refinements, which
+     * are proved facts and hold whether or not any check is emitted. */
+    const Symbol *sym = symtab_intern(e->st, strslice(name, (uint32_t)strlen(name)));
+
+    /* A DATA CONSTRUCTOR IS PURE BY CONSTRUCTION.  It stores its arguments and
+     * runs no user code, so two applications to equal arguments hold equal
+     * fields -- which is the only thing the VC ever asks, since a constructor
+     * term is only ever reached through a selector.  (Object IDENTITY differs
+     * between two applications, but nothing in the predicate language can
+     * observe it.)
+     *
+     * Answered before the binding lookup because a constructor DOES have a
+     * global binding and no `defn` body, so the default-deny body walk finds
+     * no evidence and lands on UNKNOWN -- which congruence reads as impure.
+     * That gave every occurrence its own symbol and made the constructor
+     * axioms below inert: the `Box(p,3)` in the axiom and the `Box(p,3)` in
+     * the goal were different terms. */
+    if (elab_lookup_ctor(e, sym)) {
+        out->ret_pred    = NULL;
+        out->ret_var     = NULL;
+        out->param_names = NULL;
+        out->n_params    = 0;
+        out->pure        = true;
+        /* A constructor yields an aggregate handle -- an opaque Int term, the
+         * only thing the predicate language can say about it. */
+        out->ret_sort    = VS_INT;
+        return true;
+    }
+
+    Binding *b = scope_lookup(&e->global, sym);
+    if (!b) {
+        /* A TYPECLASS METHOD has no global binding under its bare name -- the
+         * dispatch is resolved elsewhere -- so it used to fall through to the
+         * abstract-measure rule below and pick up congruence for free.  That is
+         * the same miscompile as the `tick` case, reached through a third door:
+         * an instance method that counts up made `(- (tickm 1) (tickm 1))`
+         * encode as `t - t`, the solver proved `t - t >= 0`, and the runtime
+         * check that would have caught -1 was elided.
+         *
+         * A method is code that runs.  Report it as a known callee with NO
+         * purity, so each occurrence gets its own symbol.  The class's result
+         * refinement is deliberately NOT published here: which instance runs is
+         * not known at the encoder, and the enforcement question is
+         * per-instance. */
+        /* Both dispatch spellings reach here: the bare `(m x)` as `m`, and the
+         * dotted `(.m x)` as `.m`.  Look the dotted one up under its method
+         * name -- checking only `sym` fixed the bare form and left the dotted
+         * one still congruent, which the fuzzer caught two seeds later. */
+        const Symbol *msym = sym;
+        if (name[0] == '.' && name[1] != '\0')
+            msym = symtab_intern(e->st, strslice(name + 1,
+                                                 (uint32_t)strlen(name) - 1));
+        const TypeClass *owner = NULL;
+        const TypeClassMethod *m =
+            typeclass_env_find_method(&e->typeclass_env, msym, &owner);
+        if (m) {
+            out->ret_pred    = NULL;
+            out->ret_var     = NULL;
+            out->param_names = NULL;
+            out->n_params    = 0;
+            out->pure        = false;
+            /* RM-B1: the class signature's declared result type is the one
+             * promise true of every instance, so its sort is the dispatch's. */
+            out->ret_sort    = rt_sort_of_kind(m->return_type.kind);
+            /* RT4: the CLASS's result refinement propagates, even though which
+             * instance runs is unknown here -- because it is the one promise
+             * true of EVERY instance.  Result variance is what buys that: an
+             * instance either inherits the class predicate (and is checked
+             * against it) or restates one, and then either its own is proved
+             * to imply the class's or the class's is checked alongside it.
+             *
+             * Gated on the check surviving, matching `rt_ret_guaranteed` on the
+             * `defn` path: `--no-contracts` removes the thing that enforces
+             * this, so the fact must go with it. */
+            if (m->return_refine_pred && rt_contracts_emitted()) {
+                out->ret_pred = m->return_refine_pred;
+                out->ret_var  = m->return_refine_var;
+                /* Parameter names let a predicate that mentions a parameter be
+                 * substituted with what the call site supplied.  The receiver
+                 * is slot 0 of both the class signature and the dispatch, so
+                 * the slots line up. */
+                if (m->param_names && m->n_params) {
+                    const char **pn = (const char **)arena_alloc(
+                        e->arena, m->n_params * sizeof(char *));
+                    for (uint8_t i = 0; i < m->n_params; i++)
+                        pn[i] = m->param_names[i] ? m->param_names[i]->name : NULL;
+                    out->param_names = pn;
+                    out->n_params    = m->n_params;
+                }
+            }
+            return true;
+        }
+        /* Genuinely nothing: an abstract measure -- an uninterpreted
+         * mathematical function, which the language defines as congruent. */
+        return false;
+    }
+
+    out->ret_pred    = b->refine_return_pred;
+    out->ret_var     = b->refine_return_var;
+    out->param_names = b->refine_param_names;
+    out->n_params    = b->n_refine_params;
+
+    /* RM-B1: the sort the measure symbol is declared at.  `result_kind` is the
+     * declared return type PEELED to its base, which is exactly what the VC
+     * reasons over -- a `: #refine{ r : float | q }` return is a Real, and the
+     * `q` is carried separately in ret_pred.  A non-fn binding (a `def` used as
+     * a nullary measure) answers from its own type. */
+    out->ret_sort = rt_sort_of_kind(b->type.kind == TY_FN ? b->type.as.fn.result_kind
+                                                          : b->type.kind);
+
+    /* C2 / #reads: publish the read-frame param so the encoder can grant
+     * congruence when that argument is frozen at the call site. */
+    out->reads_param_plus1 = b->reads_param_plus1;
+
+    /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
+     * CHECKED.  A consumer that acts on the frame (WF3, WF4) must gate on
+     * `writes_checked`; a trusted frame documents intent but has not been
+     * verified against a body, so eliding on it would be trusting a promise. */
+    out->writes_param_mask = b->writes_param_mask;
+    out->writes_declared   = b->writes_declared;
+    out->writes_checked    = b->writes_checked;
+
+    /* PURITY, which decides whether two occurrences of this call may be
+     * modelled as the same value.  See rt_binding_is_pure above: the declared
+     * effect row is only a veto, the real evidence is a default-deny walk of
+     * the callee's body. */
+    out->pure = rt_binding_is_pure(b);
+    return true;
+}
+
+/* The resolver, for callers outside this file that build their own env. */
+RefineFnResolver rt_refine_resolver(Elab *e) { (void)e; return rt_resolve_fn; }
+
+/* Build the hypothesis environment visible at a function's return point. */
+static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,
+                               const Form **ct_param_preds,
+                               const char **ct_param_varnames,
+                               const uint32_t *ct_param_param_idx,
+                               uint32_t n_ct_param_preds,
+                               const Form *ct_pre_form) {
+    RefineEnv *env = refine_env_new(e->arena);
+    refine_env_set_resolver(env, rt_resolve_fn, e);
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (!params[i] || !params[i]->name) continue;
+        refine_env_declare(env, params[i]->name->name,
+                           rt_sort_of_kind(params[i]->type.kind));
+    }
+    for (uint32_t i = 0; i < n_ct_param_preds; i++) {
+        if (!ct_param_preds[i]) continue;
+        uint32_t pi = ct_param_param_idx[i];
+        if (pi >= n_params || !params[pi] || !params[pi]->name) continue;
+        refine_env_push(env, ct_param_preds[i], ct_param_varnames[i],
+                        params[pi]->name->name);
+    }
+    /* A `:pre` predicate mentions the parameters directly -- nothing to
+     * rename, so it rides in with a NULL bound variable. */
+    if (ct_pre_form) refine_env_push(env, ct_pre_form, NULL, NULL);
+    return env;
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT4: template-based predicate propagation.
+ *
+ * A deliberately small convenience, NOT the general refinement inference the
+ * plan rules out.  We do not search for a predicate that satisfies a recursive
+ * constraint system (that is the LiquidHaskell layer we deleted by making
+ * refinements written rather than inferred); we try a fixed vocabulary of
+ * shapes against the body and keep the first the solver can prove.  Wrong
+ * guesses cost a discarded proof attempt, never a wrong answer.
+ * ------------------------------------------------------------------------- */
+
+#define RT4_RESULT_VAR "__rt_result"
+
+/* Build the predicate Form `(<op> __rt_result 0)`. */
+static const Form *rt4_template(Elab *e, const char *op, Span span, bool is_float) {
+    Form **items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    items[0] = form_sym(e->arena, span,
+                        symtab_intern(e->st, strslice(op, (uint32_t)strlen(op))));
+    items[1] = form_sym(e->arena, span,
+                        symtab_intern(e->st, strslice(RT4_RESULT_VAR,
+                                                      (uint32_t)strlen(RT4_RESULT_VAR))));
+    items[2] = is_float ? form_float(e->arena, span, 0.0)
+                        : form_int(e->arena, span, 0);
+    return form_list(e->arena, span, items, 3);
+}
+
+/* Try each shape against `subject` under `env`; return the first one a backend
+ * proves, or NULL.  Silent: these are probes, not obligations the user wrote,
+ * so a failed one reports nothing and counts for nothing. */
+static const Form *rt4_infer_return(Elab *e, const Form *subject, TypeKind ret_kind,
+                                    RefineEnv *env, Span span) {
+    if (!subject || !env) return NULL;
+    bool is_float = (ret_kind == TY_FLOAT || ret_kind == TY_FLOAT32 ||
+                     ret_kind == TY_FLOAT64);
+    /* Ordered most-informative first, so `(> r 0)` wins over `(>= r 0)` when
+     * both hold. */
+    static const char *const SHAPES[] = { ">", "<", ">=", "<=", "not=" };
+    for (size_t i = 0; i < sizeof(SHAPES) / sizeof(SHAPES[0]); i++) {
+        const Form *tmpl = rt4_template(e, SHAPES[i], span, is_float);
+        RefineObligation probe;
+        memset(&probe, 0, sizeof(probe));
+        probe.predicate   = tmpl;
+        probe.var_name    = RT4_RESULT_VAR;
+        probe.subject     = subject;
+        probe.base_sort   = rt_sort_of_kind(ret_kind);
+        probe.loc         = span;
+        probe.env         = env;
+        probe.what        = "inferred result refinement";
+        probe.speculative = true;
+        if (refine_discharge_one(&probe, e->arena)) return tmpl;
+    }
+    return NULL;
+}
+
+/* Collect one return-position obligation and decide it now.  Returns true when
+ * a backend proved it, so the caller can skip injecting the runtime check. */
+/* True when evaluating `pred` would do something observable -- it calls a
+ * function that is not known pure.
+ *
+ * Eliding a check is only invisible when running the check was invisible.  A
+ * predicate like `(>= (tick) 0)`, where `tick` bumps a counter, makes the
+ * check itself part of the program's behaviour: with the check emitted the
+ * counter advances, without it the counter does not, and the program prints
+ * different numbers.  The fuzzer found exactly that as an OUTPUT DIVERGENCE
+ * (not a soundness bug -- both runs were internally consistent, they just
+ * disagreed).
+ *
+ * An impure predicate is a mistake in its own right -- `TUR-E0375` exists for
+ * it and nothing emits it, so a contract whose evaluation has side effects is
+ * accepted today and already behaves differently under `--no-contracts`. That
+ * is a contract-layer issue and is reported separately. What this feature owes
+ * is narrower and absolute: turning the gate on must not change behaviour, so
+ * a check guarding an impure predicate is never elided. */
+static bool rt_pred_is_impure(Elab *e, const Form *f) {
+    if (!f) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head->tag == F_SYM && head->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        /* A name that resolves to nothing is an abstract measure -- a
+         * mathematical function, so nothing runs.  Builtins (`+`, `and`, ...)
+         * land there too, which is correct: they are pure. */
+        if (rt_resolve_fn(e, head->as.sym->name, &info) && !info.pure)
+            return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_is_impure(e, f->as.list.items[i])) return true;
+    return false;
+}
+
+/* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
+ *
+ * Mirrors rt_pred_is_impure, but keys on the reads grant rather than impurity:
+ * a measure declared `#reads w` resolves to a RefineFnInfo with a non-zero
+ * reads_param_plus1.  rt_inject_param_checks uses this to skip the (impossible)
+ * runtime entry contract for such a param -- see the comment at its call site.
+ *
+ * The recursive walk matches a `#reads` measure anywhere in a compound
+ * predicate (e.g. `(and (alive? w x) ...)`): the entry contract must be
+ * suppressed as a whole, since the impure sub-term alone makes it unemittable. */
+static bool rt_pred_reads_measure(Elab *e, const Form *f) {
+    if (!f) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head->tag == F_SYM && head->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        if (rt_resolve_fn(e, head->as.sym->name, &info) &&
+            info.reads_param_plus1 != 0)
+            return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_reads_measure(e, f->as.list.items[i])) return true;
+    return false;
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT4 branching bodies: prove a return obligation PER PATH.
+ *
+ * The obligation is `pred[body/r]`.  When the body is a single expression the
+ * encoder handles it directly, but `(if c t e)` is not an arithmetic term --
+ * there is no value to substitute -- so the whole obligation answered unknown
+ * and the check stayed.  That rules out most real function bodies.
+ *
+ * Splitting recovers them.  `(if c t e)` is discharged when BOTH
+ *
+ *     c  |- pred[t/r]        and        (not c) |- pred[e/r]
+ *
+ * hold, which is exactly the path-sensitive reading: on each path the value
+ * returned is that branch's, and the condition that selected it is a fact.
+ * `(let [x v] body)` adds `x = v` and recurses into the body, so a body that
+ * names its result still gets checked.
+ *
+ * Every sub-obligation is discharged SILENTLY.  A failure here is not a
+ * diagnostic -- it means this strategy did not work, and the caller falls back
+ * to the ordinary whole-body obligation, which reports in the ordinary place
+ * with the ordinary message.  So splitting can only ever prove MORE; it never
+ * changes what an unproven function looks like.
+ * ------------------------------------------------------------------------- */
+
+#define RT_PATH_MAX_DEPTH 8
+
+/* Discharge one path's obligation without reporting anything. */
+static bool rt_prove_silent(Elab *e, const Form *pred, const char *var_name,
+                            const Form *subject, TypeKind base_kind,
+                            RefineEnv *env, Span loc) {
+    if (!pred || !subject) return false;
+    RefineObligation *ob = refine_collect_obligation(
+        &e->refine_obs, pred, var_name, subject, rt_sort_of_kind(base_kind),
+        type_name(type_simple(base_kind, CK_COPY)), loc, env, "path", NULL);
+    if (!ob) return false;
+    ob->speculative = true;
+    ob->path_probe  = true;
+    return refine_discharge_one(ob, e->arena);
+}
+
+/* True when `f` is a list whose head is the symbol `name`. */
+static bool rt_head_is(const Form *f, const char *name) {
+    if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *h = f->as.list.items[0];
+    if (h->tag != F_SYM || !h->as.sym) return false;
+    return strcmp(h->as.sym->name, name) == 0;
+}
+
+static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
+                           const Form *subject, TypeKind base_kind,
+                           RefineEnv *env, Span loc, uint32_t depth);
+
+/* True when `f` contains an assignment anywhere.  Used to decide whether a
+ * statement can be stepped over: an assignment may stale a hypothesis already
+ * in the environment, and every other form cannot.  Deliberately syntactic and
+ * deliberately over-broad -- a name that merely LOOKS like an assignment costs
+ * precision, and missing one costs soundness. */
+/* 24, matching RT_CS_PATH_MAX_DEPTH: the scan is linear in nodes either way,
+ * and a macro EXPANSION is legitimately deeper than the source that spells it
+ * -- a 12 limit made rt_form_mentions_set return its conservative "too deep,
+ * assume assignment" answer on a clean for-each expansion, spuriously
+ * declining every crossing in the caller. */
+#define RT_SET_SCAN_MAX_DEPTH 24
+
+static const Form *rt_macro_expansion(const Elab *e, const Form *call);
+
+static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
+    if (!f) return false;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
+    if (f->tag == F_SYM && f->as.sym) {
+        const char *n = f->as.sym->name;
+        return strcmp(n, "set!") == 0 || strcmp(n, "swap!") == 0 ||
+               strcmp(n, "reset!") == 0;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    /* A macro call scans as its EXPANSION: the source spelling shows no
+     * `set!`, but the code that runs is the expansion, and an assignment
+     * hidden in a template must decline exactly like a written one.  The hop
+     * does NOT consume depth -- it is a lateral move to fresh nodes, not
+     * structural nesting, and cannot cycle (an expansion's nodes are newly
+     * constructed; only spliced ARGUMENTS are reused, and a call form cannot
+     * be its own argument). */
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_form_mentions_set(e, mx, depth);
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_form_mentions_set(e, f->as.list.items[i], depth + 1)) return true;
+    return false;
+}
+
+/* ------------------------------------------------------------------------- *
+ * WF3: frame-aware hypothesis invalidation.
+ *
+ * `rt_form_mentions_set` above is the COARSEST correct rule -- one assignment
+ * anywhere in a caller body drops every hypothesis for every crossing in it,
+ * however unrelated.  That is the binding constraint on two shipped surfaces
+ * (an accumulator `set!` in a `for-each-alive!` body, a counter `set!` in a
+ * `while`), so the helpers below let a hypothesis survive an assignment that
+ * provably cannot touch what it mentions.
+ *
+ * The slice is deliberately narrow (docs/upcoming/checked-write-frames-plan.md,
+ * WF3).  A hypothesis survives only when EVERY assignment in the body targets a
+ * PLAIN SYMBOL that the hypothesis does not mention and that the body never
+ * borrows.  Anything else -- a place expression (`(set! (.n w) 9)`), an
+ * assignment symbol used in a position this scan cannot attribute to a target,
+ * a scan that runs out of depth or target slots -- keeps the whole-body
+ * decline.  When in doubt the old rule is the fallback, because the failure
+ * mode here is a stale hypothesis proving a fresh lie.
+ *
+ * Why the assignment's VALUE needs no separate check: a hypothesis is only
+ * USABLE if its terms are congruent, and congruence is granted only to a pure
+ * measure or to a `#reads` measure inside a region that freezes its argument
+ * (`enc_reads_arg_frozen`).  A pure measure cannot be disturbed by any call, and
+ * inside a frozen region a mutator of the frozen world is statically
+ * unreachable (`TUR-E0200`).  So a call in the value position cannot stale a
+ * hypothesis that was going to be believed; only rebinding a name it mentions
+ * can, which is exactly what is tested here.
+ *
+ * Why a plain symbol target cannot alias: turmeric passes by value, so handing
+ * a local to a callee -- even `^mut` -- cannot let the callee write the
+ * caller's slot.  The one channel that could is an explicit borrow, so a body
+ * that borrows an assigned name keeps the full decline. */
+#define RT_WF3_MAX_TARGETS 16
+
+static bool rt_sym_is(const Form *f, const char *name);
+
+/* Collect the names assigned anywhere in `f`.
+ *
+ * Returns false when the body contains an assignment this analysis cannot
+ * vouch for; the caller must then keep the whole-body decline.  Mirrors
+ * `rt_form_mentions_set`'s traversal exactly -- including the macro-expansion
+ * hop -- so an assignment hidden in a template is attributed to its target
+ * rather than merely detected. */
+static bool rt_collect_set_targets(const Elab *e, const Form *f, uint32_t depth,
+                                   const char **names, uint32_t *n) {
+    if (!f) return true;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;  /* too deep to vouch for */
+    if (f->tag == F_SYM && f->as.sym) {
+        /* An assignment symbol reached anywhere other than the head of a form
+         * this function recognized: it may be aliased, passed, or applied, and
+         * the target is not readable from here. */
+        const char *nm = f->as.sym->name;
+        if (strcmp(nm, "set!") == 0 || strcmp(nm, "swap!") == 0 ||
+            strcmp(nm, "reset!") == 0)
+            return false;
+        return true;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_collect_set_targets(e, mx, depth, names, n);
+    }
+    if (f->as.list.len >= 2 &&
+        (rt_sym_is(f->as.list.items[0], "set!") ||
+         rt_sym_is(f->as.list.items[0], "swap!") ||
+         rt_sym_is(f->as.list.items[0], "reset!"))) {
+        const Form *target = f->as.list.items[1];
+        if (!target || target->tag != F_SYM || !target->as.sym)
+            return false;                    /* place expression: decline */
+        const char *tn = target->as.sym->name;
+        bool seen = false;
+        for (uint32_t i = 0; i < *n; i++)
+            if (strcmp(names[i], tn) == 0) { seen = true; break; }
+        if (!seen) {
+            if (*n >= RT_WF3_MAX_TARGETS) return false;   /* out of slots */
+            names[(*n)++] = tn;
+        }
+        /* The head and the target are accounted for; the VALUE operands may
+         * still hide further assignments. */
+        for (uint32_t i = 2; i < f->as.list.len; i++)
+            if (!rt_collect_set_targets(e, f->as.list.items[i], depth + 1,
+                                        names, n))
+                return false;
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!rt_collect_set_targets(e, f->as.list.items[i], depth + 1, names, n))
+            return false;
+    return true;
+}
+
+/* True when `f` mentions the symbol `name` anywhere.  Used both to decide
+ * whether an assignment kills a hypothesis and (via `rt_form_borrows_name`)
+ * whether a name escapes by reference. */
+static bool rt_form_mentions_name(const Elab *e, const Form *f,
+                                  const char *name, uint32_t depth) {
+    if (!f || !name) return false;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
+    if (f->tag == F_SYM)
+        return rt_sym_is(f, name);
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_form_mentions_name(e, mx, name, depth);
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_form_mentions_name(e, f->as.list.items[i], name, depth + 1))
+            return true;
+    return false;
+}
+
+/* True when `f` borrows `name` -- `(& name)`.  A borrowed local is the one
+ * channel by which a callee could write a caller's slot, so an assigned name
+ * that is also borrowed keeps the whole-body decline. */
+static bool rt_form_borrows_name(const Elab *e, const Form *f,
+                                 const char *name, uint32_t depth) {
+    if (!f || !name) return false;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_form_borrows_name(e, mx, name, depth);
+    }
+    if (f->as.list.len >= 2 && rt_sym_is(f->as.list.items[0], "&") &&
+        rt_sym_is(f->as.list.items[1], name))
+        return true;
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_form_borrows_name(e, f->as.list.items[i], name, depth + 1))
+            return true;
+    return false;
+}
+
+/* ------------------------------------------------------------------------- *
+ * WF2: the checked tier for `#writes` frames.
+ *
+ * A body with no inline C is walkable, so a declared frame can be VERIFIED
+ * rather than believed.  That distinction is the whole point: `#reads` is step
+ * 1 of the trajectory (trusted, sound because it changes nothing at runtime),
+ * and every step past it -- WF3's callee-frame widening, WF4's entry-check
+ * elision -- ELIDES or REORDERS real work on the strength of the claim.  A
+ * promise cannot back that; a checked fact can.
+ *
+ * The walk classifies each function into exactly one of three outcomes:
+ *
+ *   - VERIFIED    -- every write channel was visible and landed inside the
+ *                    frame.  `writes_checked = true`; consumers may act on it.
+ *   - EXCEEDED    -- a write outside the frame was seen.  TUR-E0382, because a
+ *                    declared frame the body exceeds is an error and not a
+ *                    silent widening (the `#reads` rule).  `writes_checked`
+ *                    stays false.
+ *   - UNVERIFIED  -- something in the body could not be vouched for: inline C,
+ *                    a callee that does not resolve, a resolvable callee with
+ *                    no declared frame that receives a frame-relevant argument,
+ *                    or the scan running out of depth.  NO diagnostic --
+ *                    `writes_checked` simply stays false, so the declaration
+ *                    still documents intent and nothing optimizes on it.
+ *
+ * Making the third case a downgrade rather than an error is what keeps
+ * `#writes` adoptable: an error would mean no function could carry a frame
+ * until its entire transitive callee set carried one too.  It is also the
+ * honest answer -- "I could not check this" is not "you did something wrong".
+ *
+ * Three write channels are checked, matching the plan's WF2 list:
+ *   1. a direct `set!`/`swap!`/`reset!` through a parameter;
+ *   2. an argument passed to a `^mut` parameter of a callee;
+ *   3. a callee's own declared `#writes` frame, mapped back through the
+ *      argument list to this function's parameters.
+ *
+ * What is deliberately NOT a write: assigning a parameter's own bare symbol
+ * (`(set! p 5)`).  Turmeric passes by value, so that rebinds this function's
+ * local slot and the caller cannot observe it -- the same by-value argument
+ * the WF3 slice above already rests on.  Keeping these two consistent matters:
+ * if a bare-symbol assignment could escape, WF3's "a plain symbol target
+ * cannot alias" rule would be unsound too.
+ *
+ * A PLACE expression rooted at a parameter (`(set! (.n w) 9)`) DOES count.
+ * Note this is an OVER-approximation, not an equivalence, and an earlier
+ * version of this comment overstated it as "does reach the caller's object":
+ *
+ *   - through an `rc<Struct>` or a `:heap` struct receiver it genuinely does
+ *     reach the caller's object, which is the case the rule exists for;
+ *   - through a plain by-value struct parameter it reaches a COPY, and the
+ *     compiled backend emits a store the C compiler then deletes outright.
+ *     Counting it is therefore pessimistic there -- it can force a frame wider
+ *     than the caller could ever observe.
+ *
+ * Pessimism is the safe direction for a frame (it over-declares, never
+ * under-declares), so the rule stands.  But the by-value case is a silent
+ * no-op in the compiled backend and a write-through in the turi interpreter,
+ * which is a live divergence -- see
+ * docs/reported/struct-param-mutation-backend-divergence.md.  If that is
+ * resolved by rejecting the no-op write, this branch narrows to the rc/heap
+ * receivers and stops being an over-approximation at all. */
+#define WF_SCAN_MAX_DEPTH 24   /* matches RT_SET_SCAN_MAX_DEPTH; same tradeoff */
+
+typedef enum WfVerdict {
+    WF_VERIFIED = 0,   /* every channel seen, all inside the frame */
+    WF_UNVERIFIED,     /* something could not be vouched for; no diagnostic */
+    WF_EXCEEDED,       /* a definite write outside the frame; TUR-E0382 */
+} WfVerdict;
+
+/* The 0-based parameter index `f` names, or -1 when `f` is not a bare symbol
+ * naming one of `params`.  Compared by interned Symbol identity, not spelling,
+ * so a local that shadows a parameter's name does not masquerade as it. */
+static int wf_param_index(const Form *f, Binding *const *params, uint32_t n_params) {
+    if (!f || f->tag != F_SYM || !f->as.sym) return -1;
+    for (uint32_t i = 0; i < n_params; i++)
+        if (params[i] && params[i]->name == f->as.sym) return (int)i;
+    return -1;
+}
+
+/* The parameter a PLACE expression is rooted at, or -1.
+ *
+ * `(.n w)` roots at `w`; `(.n (.inner w))` roots at `w` too.  A place whose
+ * root is not a bare symbol (a call result, an index into a computed value)
+ * returns -1 and is reported by the caller as unverifiable rather than safe --
+ * it may well reach a parameter by a route this scan cannot follow. */
+static int wf_place_root_param(const Form *f, Binding *const *params,
+                               uint32_t n_params, uint32_t depth, bool *opaque) {
+    if (!f) { *opaque = true; return -1; }
+    if (depth >= WF_SCAN_MAX_DEPTH) { *opaque = true; return -1; }
+    if (f->tag == F_SYM) {
+        int pi = wf_param_index(f, params, n_params);
+        if (pi < 0) return -1;      /* a local: not in the frame vocabulary */
+        return pi;
+    }
+    if (f->tag != F_LIST || f->as.list.len < 2) { *opaque = true; return -1; }
+    /* An accessor form `(<place-op> <subject> ...)`: recurse on the subject.
+     * Which head it is does not matter -- field access, index, deref all put
+     * the thing being written into slot 1. */
+    return wf_place_root_param(f->as.list.items[1], params, n_params,
+                               depth + 1, opaque);
+}
+
+static WfVerdict wf_worse(WfVerdict a, WfVerdict b) { return a > b ? a : b; }
+
+/* Walk `f`, accumulating the verdict for a frame of `mask` over `params`. */
+static WfVerdict wf_walk(Elab *e, const Form *f, Binding *const *params,
+                         uint32_t n_params, uint32_t mask, uint32_t depth,
+                         const Form **witness) {
+    if (!f) return WF_VERIFIED;
+    if (depth >= WF_SCAN_MAX_DEPTH) return WF_UNVERIFIED;
+    /* An inline-C body is opaque by construction.  This is the trust boundary
+     * `#reads` already draws and the plan keeps: checked-when-checkable, never
+     * checked-by-pretending. */
+    if (f->tag == F_CBLOCK) return WF_UNVERIFIED;
+    if (f->tag == F_SYM && f->as.sym) {
+        /* A bare assignment symbol that is not the head of a form recognized
+         * below: it may be aliased or applied, and its target is not readable
+         * from here. */
+        const char *n = f->as.sym->name;
+        if (strcmp(n, "set!") == 0 || strcmp(n, "swap!") == 0 ||
+            strcmp(n, "reset!") == 0)
+            return WF_UNVERIFIED;
+        return WF_VERIFIED;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return WF_VERIFIED;
+    /* A macro call walks as its EXPANSION, exactly as the WF3 scanners do: the
+     * source spelling may show no write at all, but the code that runs is the
+     * expansion, and a frame that ignored a write hidden in a template would be
+     * a frame the body exceeds without anyone hearing about it.  The hop does
+     * not consume depth (a lateral move to fresh nodes, not nesting). */
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_walk(e, mx, params, n_params, mask, depth, witness);
+    }
+    if (f->as.list.len == 0) return WF_VERIFIED;
+
+    WfVerdict v = WF_VERIFIED;
+
+    /* --- channel 1: a direct assignment ---------------------------------- */
+    if (f->as.list.len >= 2 &&
+        (rt_sym_is(f->as.list.items[0], "set!") ||
+         rt_sym_is(f->as.list.items[0], "swap!") ||
+         rt_sym_is(f->as.list.items[0], "reset!"))) {
+        const Form *target = f->as.list.items[1];
+        if (target && target->tag == F_SYM) {
+            /* Bare symbol: a local rebind, in-frame by the by-value argument
+             * above -- whether or not it happens to spell a parameter. */
+        } else {
+            bool opaque = false;
+            int pi = wf_place_root_param(target, params, n_params, 0, &opaque);
+            if (opaque) {
+                v = wf_worse(v, WF_UNVERIFIED);
+            } else if (pi >= 0 && !(mask & ((uint32_t)1u << pi))) {
+                if (witness && !*witness) *witness = f;
+                v = wf_worse(v, WF_EXCEEDED);
+            }
+        }
+        for (uint32_t i = 2; i < f->as.list.len; i++)
+            v = wf_worse(v, wf_walk(e, f->as.list.items[i], params, n_params,
+                                    mask, depth + 1, witness));
+        return v;
+    }
+
+    /* --- channels 2 and 3: a call ---------------------------------------- */
+    if (f->tag == F_LIST && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        /* Only a call that hands this function's own parameters onward can
+         * write this frame at all, so a call with no parameter-rooted argument
+         * needs no callee knowledge -- which is what keeps the common case
+         * (calling an unannotated helper on locals) verifiable. */
+        bool passes_param = false;
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            bool opaque = false;
+            if (wf_place_root_param(f->as.list.items[i], params, n_params, 0,
+                                    &opaque) >= 0)
+                passes_param = true;
+        }
+        if (passes_param) {
+            Binding *callee = scope_lookup(&e->global, head);
+            if (!callee) {
+                /* Not resolvable here (a local fn value, a typeclass method, a
+                 * builtin): no frame to consult, so no vouching. */
+                v = wf_worse(v, WF_UNVERIFIED);
+            } else {
+                /* `source_fn_def` is the defn's own parameter list, which is
+                 * where the `^mut`/`^borrow` modes live -- the binding's TY_FN
+                 * carries only kinds. */
+                const FnDef *fd = callee->source_fn_def;
+                uint32_t cn = fd ? fd->n_params : 0;
+                for (uint32_t i = 1; i < f->as.list.len; i++) {
+                    uint32_t slot = i - 1;   /* 0-based callee parameter */
+                    bool opaque = false;
+                    int pi = wf_place_root_param(f->as.list.items[i], params,
+                                                 n_params, 0, &opaque);
+                    if (opaque) { v = wf_worse(v, WF_UNVERIFIED); continue; }
+                    if (pi < 0) continue;    /* a local: not in this vocabulary */
+                    bool callee_writes_slot;
+                    if (callee->writes_declared) {
+                        /* Channel 3: the callee said what it writes.  Only a
+                         * CHECKED frame may narrow us -- a trusted one is a
+                         * promise, and a chain of promises is what the checked
+                         * tier exists to replace. */
+                        if (!callee->writes_checked) {
+                            v = wf_worse(v, WF_UNVERIFIED);
+                            continue;
+                        }
+                        callee_writes_slot =
+                            slot < WF_MAX_FRAME_PARAMS &&
+                            (callee->writes_param_mask & ((uint32_t)1u << slot)) != 0;
+                    } else if (fd && slot < cn && fd->params[slot]) {
+                        /* Channel 2: no declared frame, so fall back to the
+                         * parameter MODE, which is itself a declaration.
+                         *
+                         *   ^borrow -- safe, and not merely assumed safe: the
+                         *     borrow checker already forbids writing through
+                         *     it, so this is a fact the frame may rely on.
+                         *   ^mut    -- a DEFINITE write channel.  The callee
+                         *     asked for mutable access and the language grants
+                         *     it, so handing a parameter here writes it,
+                         *     whether or not the callee happens to use it.
+                         *     Treating it as merely-possible would let a frame
+                         *     be silently exceeded through the one channel the
+                         *     language spells out.
+                         *   anything else -- UNVERIFIED.  A plain by-value slot
+                         *     may still be an opaque handle the callee writes
+                         *     through, which is exactly what this scan cannot
+                         *     see.  Not a definite write, so not E0382; just
+                         *     not vouchable. */
+                        if (fd->params[slot]->is_borrow) continue;
+                        if (!fd->params[slot]->is_mut) {
+                            v = wf_worse(v, WF_UNVERIFIED);
+                            continue;
+                        }
+                        callee_writes_slot = true;
+                    } else {
+                        v = wf_worse(v, WF_UNVERIFIED);
+                        continue;
+                    }
+                    if (callee_writes_slot && !(mask & ((uint32_t)1u << pi))) {
+                        if (witness && !*witness) *witness = f;
+                        v = wf_worse(v, WF_EXCEEDED);
+                    }
+                }
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        v = wf_worse(v, wf_walk(e, f->as.list.items[i], params, n_params, mask,
+                                depth + 1, witness));
+    return v;
+}
+
+void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
+                        const Form *defn_form, uint32_t body_start,
+                        const Form *annot) {
+    if (!e || !fn || !g_opt_write_frames) return;
+    if (e->n_wf_frame_sites == e->cap_wf_frame_sites) {
+        uint32_t ncap = e->cap_wf_frame_sites ? e->cap_wf_frame_sites * 2 : 8;
+        WriteFrameSite *nb = (WriteFrameSite *)arena_alloc(
+            e->arena, ncap * sizeof(WriteFrameSite));
+        if (e->wf_frame_sites)
+            memcpy(nb, e->wf_frame_sites,
+                   e->n_wf_frame_sites * sizeof(WriteFrameSite));
+        e->wf_frame_sites     = nb;
+        e->cap_wf_frame_sites = ncap;
+    }
+    WriteFrameSite *s = &e->wf_frame_sites[e->n_wf_frame_sites++];
+    s->fn         = fn;
+    s->params     = params;
+    s->n_params   = n_params;
+    s->defn_form  = defn_form;
+    s->body_start = body_start;
+    s->annot      = annot;
+}
+
+void wf_resolve_write_frames(Elab *e) {
+    if (!e || !g_opt_write_frames || e->n_wf_frame_sites == 0) return;
+    /* Iterate to a fixed point: channel 3 consults a callee's `writes_checked`,
+     * which a later pass may raise, so one linear sweep would under-verify a
+     * caller purely because its callee had not been visited yet.  Verdicts only
+     * ever move from unverified to verified, so this terminates; the bound is
+     * belt-and-braces against a future non-monotone edit.  Definite violations
+     * are reported once, on the LAST round, so a caller cannot be blamed twice
+     * for the same write. */
+    uint32_t rounds = e->n_wf_frame_sites + 1;
+    for (uint32_t round = 0; round < rounds; round++) {
+        bool progress = false;
+        for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
+            WriteFrameSite *s = &e->wf_frame_sites[i];
+            if (!s->fn || s->fn->writes_checked) continue;
+            const Form *witness = NULL;
+            WfVerdict v = WF_VERIFIED;
+            const Form *d = s->defn_form;
+            for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
+                v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
+                                        s->n_params, s->fn->writes_param_mask,
+                                        0, &witness));
+            if (v == WF_VERIFIED) { s->fn->writes_checked = true; progress = true; }
+        }
+        if (!progress) break;
+    }
+    /* Final sweep: report the frames that are definitely exceeded. */
+    for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
+        WriteFrameSite *s = &e->wf_frame_sites[i];
+        if (!s->fn || s->fn->writes_checked) continue;
+        const Form *witness = NULL;
+        WfVerdict v = WF_VERIFIED;
+        const Form *d = s->defn_form;
+        for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
+            v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
+                                    s->n_params, s->fn->writes_param_mask, 0,
+                                    &witness));
+        if (v != WF_EXCEEDED) continue;
+        Span at = witness ? witness->span
+                          : (s->annot ? s->annot->span : d->span);
+        diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
+                            "this writes outside the `#writes` frame declared by "
+                            "'%s'",
+                            s->fn->name ? s->fn->name->name : "<fn>");
+        if (s->annot)
+            diag_emit(DIAG_NOTE, s->annot->span,
+                      "the declared frame is here; widen it to what the body "
+                      "writes, or narrow the body");
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * WF3 widening: borrow-aware disjointness, backed by CHECKED callee frames.
+ *
+ * The landed WF3 slice declines a whole caller body the moment an assigned
+ * name is also BORROWED, on the grounds that "a borrowed local is the one way a
+ * callee could write this frame's slot".  That is true, and until WF2 it was
+ * also the end of the conversation -- there was no way to ask what a callee
+ * does, so assuming the worst was the only sound answer.
+ *
+ * With a checked frame there is now a question to ask instead of an assumption
+ * to make.  A borrow is dangerous only if it REACHES a callee that writes
+ * through it, so the decline can be lifted when every borrow of the assigned
+ * name is provably write-free.  Two shapes are recognized, and everything else
+ * keeps the old decline:
+ *
+ *   (f ... (& acc) ...)          -- passed straight into a call slot; safe iff
+ *                                   that slot cannot be written.
+ *   (let [b (& acc)] body)       -- `b` aliases the borrow, so every occurrence
+ *                                   of `b` in `body` must itself sit in a slot
+ *                                   that cannot be written.  Zero occurrences
+ *                                   is the common case and trivially safe --
+ *                                   that is the `frozen` region idiom, whose
+ *                                   `(& w)` exists only to lock w down and is
+ *                                   never passed anywhere.
+ *
+ * "Cannot be written" has exactly three sources, in descending strength:
+ *   - a `^borrow` parameter, which the borrow checker already forbids writing
+ *     through.  A fact, independent of any annotation.
+ *   - a CHECKED `#writes` frame that excludes the slot.  A fact, because WF2
+ *     walked the body.
+ *   - nothing else.  An unresolvable callee, an unannotated non-borrow slot, or
+ *     a DECLARED-but-unchecked frame all answer "assume it writes".  The last
+ *     of those is the point of the tier split: acting on a trusted frame here
+ *     would let a promise elide a check, which is the thing the checked tier
+ *     exists to prevent.
+ *
+ * Gated on the experiment, because it consumes WF2's verdicts and changes which
+ * programs prove. */
+
+/* Can the callee named `head` write the argument it receives in `slot`
+ * (0-based)?  Conservative: true unless something positively says otherwise. */
+static bool wf_call_slot_writes(Elab *e, const Symbol *head, uint32_t slot) {
+    Binding *callee = head ? scope_lookup(&e->global, head) : NULL;
+    if (!callee) return true;              /* unresolvable: assume the worst */
+    if (callee->writes_declared) {
+        if (!callee->writes_checked) return true;   /* a promise, not a fact */
+        return slot >= WF_MAX_FRAME_PARAMS ||
+               (callee->writes_param_mask & ((uint32_t)1u << slot)) != 0;
+    }
+    const FnDef *fd = callee->source_fn_def;
+    if (!fd || slot >= fd->n_params || !fd->params[slot]) return true;
+    return !fd->params[slot]->is_borrow;
+}
+
+/* Every occurrence of `alias` in `f` sits in a call slot the callee cannot
+ * write.  A bare occurrence anywhere else -- returned, stored, assigned, used
+ * as a callee -- is not accounted for and answers false. */
+static bool wf_alias_write_free(Elab *e, const Form *f, const char *alias,
+                                uint32_t depth) {
+    if (!f) return true;
+    if (depth >= WF_SCAN_MAX_DEPTH) return false;   /* too deep to vouch for */
+    if (f->tag == F_SYM) return !rt_sym_is(f, alias);
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_alias_write_free(e, mx, alias, depth);
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 1 && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        if (rt_sym_is(f->as.list.items[0], alias))
+            return false;                  /* the borrow itself is the callee */
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            const Form *a = f->as.list.items[i];
+            if (a && a->tag == F_SYM && rt_sym_is(a, alias)) {
+                if (wf_call_slot_writes(e, head, i - 1)) return false;
+                continue;                  /* this occurrence is accounted for */
+            }
+            if (!wf_alias_write_free(e, a, alias, depth + 1)) return false;
+        }
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!wf_alias_write_free(e, f->as.list.items[i], alias, depth + 1))
+            return false;
+    return true;
+}
+
+/* True when every borrow of `name` in `f` is provably write-free. */
+static bool wf_borrow_write_free(Elab *e, const Form *f, const char *name,
+                                 uint32_t depth) {
+    if (!f) return true;
+    if (depth >= WF_SCAN_MAX_DEPTH) return false;   /* too deep to vouch for */
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wf_borrow_write_free(e, mx, name, depth);
+    }
+    /* `(let [b (& name)] body)`: b aliases the borrow for the whole body. */
+    if (rt_head_is(f, "let") && f->as.list.len == 3) {
+        const Form *binds = f->as.list.items[1];
+        const Form *body  = f->as.list.items[2];
+        if (binds && binds->tag == F_VEC && binds->as.list.len == 2) {
+            const Form *x = binds->as.list.items[0];
+            const Form *v = binds->as.list.items[1];
+            if (v && v->tag == F_LIST && v->as.list.len >= 2 &&
+                rt_sym_is(v->as.list.items[0], "&") &&
+                rt_sym_is(v->as.list.items[1], name)) {
+                if (!x || x->tag != F_SYM || !x->as.sym) return false;
+                if (!wf_alias_write_free(e, body, x->as.sym->name, 0)) return false;
+                /* The body may borrow `name` AGAIN, independently. */
+                return wf_borrow_write_free(e, body, name, depth + 1);
+            }
+        }
+    }
+    /* A bare `(& name)`.  Checked BEFORE the call branch below, which would
+     * otherwise walk this very form as a call to `&` and find nothing wrong
+     * with it.  Reaching here means no enclosing form accounted for the
+     * borrow, so there is no answer about where it goes. */
+    if (f->tag == F_LIST && f->as.list.len >= 2 &&
+        rt_sym_is(f->as.list.items[0], "&") &&
+        rt_sym_is(f->as.list.items[1], name))
+        return false;
+    /* `(g ... (& name) ...)`: handed straight to a call slot. */
+    if (f->tag == F_LIST && f->as.list.len >= 1 && f->as.list.items[0] &&
+        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
+        const Symbol *head = f->as.list.items[0]->as.sym;
+        for (uint32_t i = 1; i < f->as.list.len; i++) {
+            const Form *a = f->as.list.items[i];
+            if (a && a->tag == F_LIST && a->as.list.len >= 2 &&
+                rt_sym_is(a->as.list.items[0], "&") &&
+                rt_sym_is(a->as.list.items[1], name)) {
+                if (wf_call_slot_writes(e, head, i - 1)) return false;
+                continue;                  /* this borrow is accounted for */
+            }
+            if (!wf_borrow_write_free(e, a, name, depth + 1)) return false;
+        }
+        return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!wf_borrow_write_free(e, f->as.list.items[i], name, depth + 1))
+            return false;
+    return true;
+}
+
+/* ------------------------------------------------------------------------- *
+ * A datatype theory for match arms.
+ *
+ * The VC term language has no constructors and no selectors, and it is not
+ * getting any: adding sorts and theory solvers for algebraic data would be a
+ * far larger change than what a match arm actually needs.  What it needs is a
+ * way to SAY "on this path the scrutinee is a Circle, and `r` is its radius",
+ * and that is expressible today -- as ordinary equations over UNINTERPRETED
+ * functions, which S1 already decides by congruence closure.
+ *
+ * So the theory is synthesized at the FORM level, before encoding:
+ *
+ *   (Circle r)  on scrutinee `s`   ==>   (= (#dt/tag s) 3)
+ *                                        (= r (.radius s))
+ *
+ * `#dt/tag` is a total function from the datatype to its discriminant, which is
+ * exactly what `CtorDef.tag` numbers.  A field selector is a total function too
+ * -- undefined-in-principle off its own constructor, but an uninterpreted
+ * symbol is free to take any value there, and this arm only ever asserts the
+ * case where it is defined.  Both facts are true on the path being proved, so
+ * asserting them is sound; the solver needs no new theory to use them, because
+ * congruence over an uninterpreted symbol is the whole of what they require.
+ *
+ * THE SYNTHETIC NAME MUST NOT BE SPELLABLE.  `enc_measure` resolves a head name
+ * to decide purity, and a name that resolves to a real PURE function would have
+ * `(= (#dt/tag s) 3)` assert something about THAT function -- a hypothesis that
+ * can be false, and a false hypothesis proves the goal and elides the check.
+ * A leading `#` is reader dispatch, so no source symbol can begin with one;
+ * the name therefore resolves to nothing, which the encoder reads as an
+ * abstract measure -- uninterpreted and congruent, which is what it is.
+ * ------------------------------------------------------------------------- */
+
+#define RT_DT_TAG_FN "#dt/tag"
+
+static Form *rt_form_call1(Elab *e, Span sp, const char *fn, const Form *arg) {
+    Form **k = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    k[0] = form_sym(e->arena, sp,
+                    symtab_intern(e->st, strslice(fn, (uint32_t)strlen(fn))));
+    k[1] = (Form *)arg;
+    return form_list(e->arena, sp, k, 2);
+}
+
+static Form *rt_form_eq(Elab *e, Span sp, const Form *a, const Form *b) {
+    Form **k = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    k[0] = form_sym(e->arena, sp, symtab_intern(e->st, strslice("=", 1)));
+    k[1] = (Form *)a;
+    k[2] = (Form *)b;
+    return form_list(e->arena, sp, k, 3);
+}
+
+/* True when `f` is exactly the symbol `name`. */
+static bool rt_sym_is(const Form *f, const char *name) {
+    return f && f->tag == F_SYM && f->as.sym &&
+           strcmp(f->as.sym->name, name) == 0;
+}
+
+/* The constructor a pattern names, or NULL when the pattern is not a
+ * constructor application (a literal, a wildcard, a bare binder). */
+static CtorDef *rt_pat_ctor(Elab *e, const Form *pat) {
+    if (!pat || pat->tag != F_LIST || pat->as.list.len == 0) return NULL;
+    const Form *h = pat->as.list.items[0];
+    if (h->tag != F_SYM || !h->as.sym) return NULL;
+    return elab_lookup_ctor(e, h->as.sym);
+}
+
+/* Copy `f`, renaming every FREE occurrence of `from` to `to`.
+ *
+ * Path splitting asserts `x = v` in the environment's single flat namespace,
+ * so a `let` that rebinds a name already in scope would assert
+ * `x = <something mentioning x>` -- a contradiction, which proves the goal and
+ * elides a check that was protecting something.  Renaming the binding is what
+ * makes those bodies splittable instead of skipped.
+ *
+ * Returns NULL when the body REBINDS the same name again, which would need a
+ * second rename to stay correct; declining is the safe answer and the caller
+ * falls back to the whole-body obligation. */
+static Form *rt_rename_free(Elab *e, const Form *f,
+                            const Symbol *from, const Symbol *to) {
+    if (!f) return NULL;
+    if (f->tag == F_SYM)
+        return (f->as.sym == from)
+             ? form_sym(e->arena, f->span, to) : (Form *)f;
+    if (f->tag != F_LIST && f->tag != F_VEC) return (Form *)f;
+
+    /* A nested binder of the same name: decline rather than guess. */
+    if (f->tag == F_LIST && f->as.list.len >= 2 &&
+        f->as.list.items[0]->tag == F_SYM &&
+        f->as.list.items[0]->as.sym &&
+        strcmp(f->as.list.items[0]->as.sym->name, "let") == 0) {
+        const Form *b = f->as.list.items[1];
+        if (b && b->tag == F_VEC)
+            for (uint32_t i = 0; i + 1 < b->as.list.len; i += 2)
+                if (b->as.list.items[i]->tag == F_SYM &&
+                    b->as.list.items[i]->as.sym == from)
+                    return NULL;
+    }
+
+    uint32_t n = f->as.list.len;
+    Form **kids = (Form **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Form *));
+    bool changed = false;
+    for (uint32_t i = 0; i < n; i++) {
+        kids[i] = rt_rename_free(e, f->as.list.items[i], from, to);
+        if (!kids[i]) return NULL;
+        if (kids[i] != f->as.list.items[i]) changed = true;
+    }
+    if (!changed) return (Form *)f;
+    return f->tag == F_LIST ? form_list(e->arena, f->span, kids, n)
+                            : form_vec(e->arena, f->span, kids, n);
+}
+
+/* Run `body` with `hyp` assumed.  The env's hypothesis list is a cons chain
+ * and its name table only ever grows, so a scope is saved and restored by
+ * rewinding both -- no copying. */
+static bool rt_prove_under(Elab *e, const Form *pred, const char *var_name,
+                           const Form *hyp, const Form *body,
+                           TypeKind base_kind, RefineEnv *env, Span loc,
+                           uint32_t depth) {
+    RefineHyp *saved_head  = env->head;
+    uint32_t   saved_names = env->n_names;
+    if (hyp) refine_env_push(env, hyp, NULL, NULL);
+    bool ok = rt_prove_paths(e, pred, var_name, body, base_kind, env, loc, depth + 1);
+    env->head    = saved_head;
+    env->n_names = saved_names;
+    return ok;
+}
+
+static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
+                           const Form *subject, TypeKind base_kind,
+                           RefineEnv *env, Span loc, uint32_t depth) {
+    if (!subject || depth >= RT_PATH_MAX_DEPTH) return false;
+
+    /* (if c t e) -- both arms, each under its own path condition.  A one-armed
+     * `if` has no value on the false path and is left alone. */
+    if (rt_head_is(subject, "if") && subject->as.list.len == 4) {
+        const Form *c = subject->as.list.items[1];
+        const Form *t = subject->as.list.items[2];
+        const Form *f = subject->as.list.items[3];
+        Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+        notk[0] = form_sym(e->arena, subject->span,
+                           symtab_intern(e->st, strslice("not", 3)));
+        notk[1] = (Form *)c;
+        Form *nc = form_list(e->arena, subject->span, notk, 2);
+        return rt_prove_under(e, pred, var_name, c,  t, base_kind, env, loc, depth) &&
+               rt_prove_under(e, pred, var_name, nc, f, base_kind, env, loc, depth);
+    }
+
+    /* (let [x v] body) -- one binding, one body form.  `x = v` is the fact the
+     * body's own obligation needs.  Wider shapes fall through rather than
+     * guess which binding the result depends on. */
+    if (rt_head_is(subject, "let") && subject->as.list.len == 3) {
+        const Form *binds = subject->as.list.items[1];
+        const Form *body  = subject->as.list.items[2];
+        if (binds && binds->tag == F_VEC && binds->as.list.len == 2 &&
+            binds->as.list.items[0]->tag == F_SYM) {
+            const Form *x = binds->as.list.items[0];
+            const Form *v = binds->as.list.items[1];
+            /* SHADOWING IS A CONTRADICTION HERE.  The hypothesis is `x = v` in
+             * the environment's single flat namespace, so rebinding a name
+             * that is already in scope asserts `x = <something mentioning x>`.
+             * `(let [x (- x 1)] x)` becomes `x = x - 1`, which is false for
+             * every x -- and a false hypothesis proves the goal, so the check
+             * gets elided and the function returns a value violating its own
+             * refinement.  That is a miscompile, and this shape is ordinary
+             * code, not a corner case.
+             *
+             * Declining to split is the fix: the whole-body obligation still
+             * runs and still answers unknown, exactly as before path
+             * splitting existed.  Alpha-renaming the binding would recover
+             * these bodies and is the natural follow-up. */
+            /* SHADOWING.  The hypothesis is `x = v` in one flat namespace,
+             * so rebinding a name already in scope would assert
+             * `x = <something mentioning x>` -- `(let [x (- x 1)] x)` becomes
+             * `x = x - 1`, false for every x, and a false hypothesis proves
+             * the goal.  That was a live miscompile.
+             *
+             * Alpha-rename instead of declining: the binding becomes a fresh
+             * name, the body is rewritten to use it, and `v` keeps referring
+             * to the OUTER x because only the body is renamed. */
+            bool shadows = false;
+            for (uint32_t _i = 0; _i < env->n_names; _i++)
+                if (env->names[_i] &&
+                    strcmp(env->names[_i], x->as.sym->name) == 0)
+                    { shadows = true; break; }
+            if (shadows) {
+                char fresh[96];
+                snprintf(fresh, sizeof(fresh), "%s~%u", x->as.sym->name, depth);
+                const Symbol *fs = symtab_intern(
+                    e->st, strslice(arena_strdup(e->arena, fresh, strlen(fresh)),
+                                    (uint32_t)strlen(fresh)));
+                Form *nx = form_sym(e->arena, x->span, fs);
+                Form *nbody = rt_rename_free(e, body, x->as.sym, fs);
+                if (!nbody) return false;
+                x = nx; body = nbody;
+            }
+            refine_env_declare(env, x->as.sym->name, rt_sort_of_kind(base_kind));
+
+            /* A BRANCHING VALUE splits too.  `(let [m (if c a b)] ...)` used to
+             * assert `m = (if c a b)`, and an `if` is not a term the encoder
+             * can build -- so the hypothesis was dropped and `m` went into the
+             * body completely unconstrained.  `(let [m (if (<= a b) a b)] m)`
+             * against `(<= r a)` was Unknown while the identical `if` written
+             * directly as the body proved, which is a distinction no one
+             * writing the code would expect to matter.
+             *
+             * Splitting the VALUE is the same rule as splitting the body, one
+             * level up: on the true path `m = a`, on the false path `m = b`,
+             * and the branch condition is a fact on each. */
+            if (rt_head_is(v, "if") && v->as.list.len == 4 &&
+                depth + 1 < RT_PATH_MAX_DEPTH) {
+                const Form *c  = v->as.list.items[1];
+                const Form *vt = v->as.list.items[2];
+                const Form *vf = v->as.list.items[3];
+                Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+                notk[0] = form_sym(e->arena, v->span,
+                                   symtab_intern(e->st, strslice("not", 3)));
+                notk[1] = (Form *)c;
+                Form *nc = form_list(e->arena, v->span, notk, 2);
+
+                RefineHyp *br_head  = env->head;
+                uint32_t   br_names = env->n_names;
+                refine_env_push(env, c, NULL, NULL);
+                bool ok_t = rt_prove_under(e, pred, var_name,
+                                           rt_form_eq(e, v->span, x, vt),
+                                           body, base_kind, env, loc, depth + 1);
+                env->head = br_head; env->n_names = br_names;
+                if (!ok_t) return false;
+
+                refine_env_push(env, nc, NULL, NULL);
+                bool ok_f = rt_prove_under(e, pred, var_name,
+                                           rt_form_eq(e, v->span, x, vf),
+                                           body, base_kind, env, loc, depth + 1);
+                env->head = br_head; env->n_names = br_names;
+                return ok_f;
+            }
+
+            return rt_prove_under(e, pred, var_name,
+                                  rt_form_eq(e, subject->span, x, v),
+                                  body, base_kind, env, loc, depth);
+        }
+        return false;
+    }
+
+    /* (do s1 ... sn) -- the value is the LAST form; the rest are statements.
+     *
+     * Splitting on the last form is only sound while the statements cannot
+     * invalidate the hypotheses already in the environment. Those hypotheses
+     * are about parameters, so an assignment is exactly what would stale them:
+     * `(do (set! x 0) (if (>= x 0) x 0))` must not be proved using the
+     * parameter refinement that held BEFORE the assignment. A Form-level scan
+     * for any `set!` in the statements is conservative -- it declines some
+     * harmless writes to purely local state -- and cheap, which is the right
+     * trade for a rule whose failure mode is a miscompile. */
+    if (rt_head_is(subject, "do") && subject->as.list.len >= 2) {
+        for (uint32_t i = 1; i + 1 < subject->as.list.len; i++)
+            if (rt_form_mentions_set(e, subject->as.list.items[i], 0)) return false;
+        return rt_prove_paths(e, pred, var_name,
+                              subject->as.list.items[subject->as.list.len - 1],
+                              base_kind, env, loc, depth + 1);
+    }
+
+    /* (match scrut pat1 [when g1] e1 pat2 [when g2] e2 ...) -- every arm, under
+     * everything the arm's selection tells us.
+     *
+     * Arms are NOT fixed-width: `when` inserts a guard between a pattern and
+     * its body, so the list is walked rather than strided in pairs.  Striding
+     * misreads a guarded match wholesale -- `when` becomes a pattern and the
+     * guard expression becomes a body -- which failed safe (the misread arm
+     * never proved) but meant no guarded match was ever split.
+     *
+     * Four hypothesis sources, all true whenever the arm is the one that runs:
+     *
+     *   - the CONSTRUCTOR, as `(= (#dt/tag s) <tag>)`;
+     *   - each record FIELD bound by the pattern, as `(= b (.field s))`,
+     *     which is what lets a getter's postcondition mention the field it
+     *     returns;
+     *   - a LITERAL pattern, as `(= s <lit>)`;
+     *   - the GUARD, verbatim -- a necessary condition for the arm to fire.
+     *
+     * The guard is only a NECESSARY condition, never sufficient: an arm also
+     * requires every earlier arm to have failed, which is not asserted. That
+     * direction is the safe one (fewer hypotheses only make a goal harder).
+     *
+     * Pattern binders that SHADOW a name in scope still decline the split. The
+     * encoder has one flat namespace, so the arm's `r` would inherit an outer
+     * `r`'s hypotheses -- the same class of bug as the shadowed `let`, and
+     * unsound rather than imprecise.  Alpha-renaming would now be possible (a
+     * binder finally HAS a fact to rename into), but the rename would have to
+     * reach the synthesized selector facts as well, and declining costs only
+     * precision. */
+    if (rt_head_is(subject, "match") && subject->as.list.len >= 4) {
+        const Form *scrut  = subject->as.list.items[1];
+        const uint32_t len = subject->as.list.len;
+        RefineHyp *saved_head  = env->head;
+        uint32_t   saved_names = env->n_names;
+        bool ok = true;
+        uint32_t i = 2;
+        while (ok && i < len) {
+            const Form *pat = subject->as.list.items[i++];
+            const Form *guard = NULL;
+            if (i + 1 < len && rt_sym_is(subject->as.list.items[i], "when")) {
+                guard = subject->as.list.items[i + 1];
+                i += 2;
+            }
+            if (i >= len) { ok = false; break; }   /* malformed: no body */
+            const Form *arm = subject->as.list.items[i++];
+
+            /* PER-ARM SCOPE.  Each arm's facts must die with the arm: two arms
+             * of the same match assert different tags for the same scrutinee,
+             * so letting them accumulate would put `tag(s) = 0` and
+             * `tag(s) = 1` in one environment -- a contradiction, which proves
+             * every later arm's goal and elides its check.  The outer
+             * save/restore below is not enough; this is the one that matters. */
+            RefineHyp *arm_head  = env->head;
+            uint32_t   arm_names = env->n_names;
+
+            CtorDef *cd = rt_pat_ctor(e, pat);
+            if (cd)
+                refine_env_push(env,
+                                rt_form_eq(e, pat->span,
+                                           rt_form_call1(e, pat->span,
+                                                         RT_DT_TAG_FN, scrut),
+                                           form_int(e->arena, pat->span,
+                                                    (int64_t)cd->tag)),
+                                NULL, NULL);
+            else if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT))
+                refine_env_push(env, rt_form_eq(e, pat->span, scrut, pat),
+                                NULL, NULL);
+
+            /* Binders: declare, decline on shadow, and tie each to its field. */
+            if (pat && (pat->tag == F_LIST || pat->tag == F_VEC)) {
+                for (uint32_t k = 1; ok && k < pat->as.list.len; k++) {
+                    const Form *b = pat->as.list.items[k];
+                    if (b->tag != F_SYM || !b->as.sym) continue;
+                    for (uint32_t j = 0; j < env->n_names; j++)
+                        if (env->names[j] &&
+                            strcmp(env->names[j], b->as.sym->name) == 0)
+                            { ok = false; break; }
+                    if (!ok) break;
+                    refine_env_declare(env, b->as.sym->name,
+                                       rt_sort_of_kind(base_kind));
+                    /* Only a record constructor has a field NAME to select
+                     * with; a positional variant has no accessor to speak of,
+                     * so its binder stays unconstrained as before. */
+                    uint32_t fi = k - 1;
+                    if (cd && cd->is_record && fi < cd->n_fields &&
+                        cd->fields[fi].name) {
+                        char acc[128];
+                        snprintf(acc, sizeof(acc), ".%s", cd->fields[fi].name);
+                        refine_env_push(env,
+                                        rt_form_eq(e, b->span, b,
+                                                   rt_form_call1(e, b->span,
+                                                                 acc, scrut)),
+                                        NULL, NULL);
+                    }
+                }
+            }
+
+            if (ok && guard) refine_env_push(env, guard, NULL, NULL);
+            if (ok) ok = rt_prove_paths(e, pred, var_name, arm, base_kind, env,
+                                        loc, depth + 1);
+            env->head    = arm_head;
+            env->n_names = arm_names;
+        }
+        env->head    = saved_head;
+        env->n_names = saved_names;
+        return ok;
+    }
+
+    /* A leaf: an ordinary expression the encoder can substitute for `r`. */
+    return rt_prove_silent(e, pred, var_name, subject, base_kind, env, loc);
+}
+
+/* ------------------------------------------------------------------------- *
+ * Constructor axioms.
+ *
+ * The match-arm theory gives a selector its meaning going ONE way: a binder is
+ * the field it destructures.  It says nothing about a value that was just
+ * BUILT, so `(let [b (Box p 3)] (match b (Box w h) w))` against `(= r p)` had
+ * the chain `b = Box(p,3)`, `w = .width(b)`, goal `w = p` -- and no rule
+ * connecting `.width` to the `Box` that produced it.
+ *
+ * The missing fact is the defining equation of a record constructor:
+ *
+ *     (= (.width (Box p 3)) p)
+ *
+ * It is universally true -- not path-dependent, not an assumption -- so it can
+ * be asserted once per constructor application found anywhere in the obligation
+ * rather than per path.  Congruence closure then does the rest: `b` and
+ * `Box(p,3)` are equal, so `.width(b)` and `.width(Box(p,3))` are the same
+ * term, which is `p`.
+ *
+ * Only RECORD constructors take part.  A positional variant has no field name,
+ * so there is no accessor to write the equation about.
+ * ------------------------------------------------------------------------- */
+
+#define RT_CTOR_AXIOM_MAX_DEPTH 8
+
+static void rt_push_ctor_axioms(Elab *e, RefineEnv *env, const Form *f,
+                                uint32_t depth) {
+    if (!f || depth >= RT_CTOR_AXIOM_MAX_DEPTH) return;
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+
+    if (f->tag == F_LIST && f->as.list.len >= 1) {
+        CtorDef *cd = rt_pat_ctor(e, f);
+        /* Arity must match exactly: a partial application is a closure, not a
+         * value with fields, and over-applying is not this form at all. */
+        if (cd && cd->is_record && cd->n_fields == f->as.list.len - 1) {
+            for (uint32_t i = 0; i < cd->n_fields; i++) {
+                if (!cd->fields[i].name) continue;
+                char acc[128];
+                snprintf(acc, sizeof(acc), ".%s", cd->fields[i].name);
+                refine_env_push(env,
+                                rt_form_eq(e, f->span,
+                                           rt_form_call1(e, f->span, acc, f),
+                                           f->as.list.items[i + 1]),
+                                NULL, NULL);
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        rt_push_ctor_axioms(e, env, f->as.list.items[i], depth + 1);
+}
+
+static bool rt_return_obligation_proven(Elab *e, const Form *pred,
+                                        const char *var_name,
+                                        const Form *subject, TypeKind base_kind,
+                                        RefineEnv *env, const char *what,
+                                        const char *fn_name, Span loc) {
+    if (!pred) return false;
+    /* Never elide a check that is itself observable.  Reported as not-proven
+     * rather than diagnosed: an impure predicate keeps the runtime check it
+     * would have had anyway, so discharge declines rather than inventing an
+     * error. */
+    if (rt_pred_is_impure(e, pred)) return false;
+
+    /* Constructor axioms hold on every path, so they go in once, ahead of the
+     * split, and are rewound afterwards so nothing leaks into the next
+     * function's environment. */
+    RefineHyp *ax_head  = env->head;
+    uint32_t   ax_names = env->n_names;
+    rt_push_ctor_axioms(e, env, subject, 0);
+
+    /* RT4: a branching body is proved per path when it can be.  Tried first
+     * and silently; failing costs one extra pass and changes nothing the user
+     * sees, because the whole-body obligation below still runs and still
+     * reports. */
+    if (subject && (rt_head_is(subject, "if") || rt_head_is(subject, "let") ||
+                    rt_head_is(subject, "match") || rt_head_is(subject, "do")) &&
+        rt_prove_paths(e, pred, var_name, subject, base_kind, env, loc, 0)) {
+        refine_note_split_proven();
+        env->head = ax_head; env->n_names = ax_names;
+        return true;
+    }
+
+    RefineObligation *ob =
+        refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
+                                  rt_sort_of_kind(base_kind), type_name(type_simple(base_kind, CK_COPY)),
+                                  loc, env, what, fn_name);
+    bool proven = refine_discharge_one(ob, e->arena);
+    env->head = ax_head; env->n_names = ax_names;
+    return proven;
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT1 call-site crossings.
+ *
+ * Passing an argument where the parameter type is `#refine{ v : T | p }` is a
+ * crossing INTO the refinement, so the caller owes a proof of `p[arg/v]`.  We
+ * record the crossing during elaboration and resolve it afterwards; see the
+ * comment on Elab.refine_call_sites for why the deferral is load-bearing.
+ * ------------------------------------------------------------------------- */
+
+/* Hash of the (callee, call_form) pointer pair. */
+static uint32_t rt_cs_hash(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)a * 0x9e3779b97f4a7c15ull;
+    uintptr_t y = (uintptr_t)b * 0xc2b2ae3d27d4eb4full;
+    uint32_t h = (uint32_t)((x ^ (y >> 17)) >> 13);
+    return h ? h : 1;
+}
+
+/* Probe the dedup set; returns true when this pair was already recorded.
+ * Inserts `slot` otherwise. */
+static bool rt_cs_seen(Elab *e, const Binding *callee, const Form *cf, uint32_t slot) {
+    if (e->refine_cs_htab_cap == 0 ||
+        (e->n_refine_call_sites + 1) * 2 >= e->refine_cs_htab_cap) {
+        uint32_t ncap = e->refine_cs_htab_cap ? e->refine_cs_htab_cap * 2 : 128;
+        uint32_t *nt = (uint32_t *)arena_alloc(e->arena, ncap * sizeof(uint32_t));
+        memset(nt, 0, ncap * sizeof(uint32_t));
+        for (uint32_t i = 0; i < e->n_refine_call_sites; i++) {
+            uint32_t h = rt_cs_hash(e->refine_call_sites[i].callee,
+                                    e->refine_call_sites[i].call_form);
+            uint32_t j = h & (ncap - 1);
+            while (nt[j]) j = (j + 1) & (ncap - 1);
+            nt[j] = i + 1;
+        }
+        e->refine_cs_htab = nt;
+        e->refine_cs_htab_cap = ncap;
+    }
+    uint32_t h = rt_cs_hash(callee, cf);
+    uint32_t j = h & (e->refine_cs_htab_cap - 1);
+    while (e->refine_cs_htab[j]) {
+        const RefineCallSite *cs = &e->refine_call_sites[e->refine_cs_htab[j] - 1];
+        if (cs->callee == callee && cs->call_form == cf) return true;
+        j = (j + 1) & (e->refine_cs_htab_cap - 1);
+    }
+    e->refine_cs_htab[j] = slot + 1;
+    return false;
+}
+
+uint32_t refine_note_call_site(Elab *e, const Binding *callee,
+                               const Form *call_form, uint32_t arg_offset) {
+    if (!e || !callee || !call_form)
+        return e ? e->n_refine_call_sites : 0;
+    /* A form can be elaborated more than once (macro expansion, specialization
+     * retries).  Deduplicate so one source call site yields one diagnostic. */
+    if (rt_cs_seen(e, callee, call_form, e->n_refine_call_sites))
+        return e->n_refine_call_sites;
+    if (e->n_refine_call_sites == e->cap_refine_call_sites) {
+        uint32_t ncap = e->cap_refine_call_sites ? e->cap_refine_call_sites * 2 : 16;
+        RefineCallSite *nb = (RefineCallSite *)arena_alloc(e->arena,
+                                                           ncap * sizeof(RefineCallSite));
+        if (e->n_refine_call_sites)
+            memcpy(nb, e->refine_call_sites,
+                   e->n_refine_call_sites * sizeof(RefineCallSite));
+        e->refine_call_sites = nb;
+        e->cap_refine_call_sites = ncap;
+    }
+    /* Prefer the name at the call site over the binding's, which for a
+     * typeclass method is the mangled instance symbol.  A leading '.' is the
+     * dispatch marker, not part of the method name. */
+    const char *display = callee->name ? callee->name->name : "?";
+    if (call_form->tag == F_LIST && call_form->as.list.len > 0) {
+        const Form *head = call_form->as.list.items[0];
+        if (head->tag == F_SYM && head->as.sym && head->as.sym->name) {
+            const char *hn = head->as.sym->name;
+            display = (hn[0] == '.' && hn[1]) ? hn + 1 : hn;
+        }
+    }
+
+    RefineCallSite *cs = &e->refine_call_sites[e->n_refine_call_sites++];
+    cs->callee         = callee;
+    cs->callee_display = display;
+    cs->call_form   = call_form;
+    cs->arg_offset  = arg_offset;
+    cs->env         = NULL;   /* back-filled by refine_fill_call_site_env */
+    cs->caller_body = NULL;
+    cs->caller_name = NULL;
+    cs->class_param_preds = NULL;
+    cs->class_param_vars  = NULL;
+    cs->n_class_params    = 0;
+    /* C2 / #reads: snapshot the borrows LIVE at this crossing.  The borrow
+     * checker's scope is authoritative about liveness right here (a `frozen`
+     * region's `(& w)` borrow is active); recovering it syntactically later
+     * would risk treating an already-ended borrow as live.  A binding borrowed
+     * here cannot be `^unique ^mut`-mutated (UT2) or `set!` (borrow-checked),
+     * so a `#reads`-it measure is a function of frozen state in this obligation. */
+    cs->frozen_names = NULL;
+    cs->n_frozen     = 0;
+    {
+        uint32_t nb = 0;
+        for (const Scope *s = e->scope; s; s = s->parent)
+            for (const ScopeBorrow *bo = s->borrows; bo; bo = bo->next)
+                if (bo->binding && bo->binding->name) nb++;
+        if (nb) {
+            const char **fn = (const char **)arena_alloc(e->arena, nb * sizeof(char *));
+            uint32_t k = 0;
+            for (const Scope *s = e->scope; s; s = s->parent)
+                for (const ScopeBorrow *bo = s->borrows; bo; bo = bo->next) {
+                    Binding *b = bo->binding;
+                    if (!b || !b->name) continue;
+                    /* Only publish a frozen name that STILL resolves to the
+                     * borrowed binding here.  If it has been SHADOWED by an
+                     * inner binding of the same spelling, the encoder's
+                     * name-based match would otherwise treat the (unfrozen)
+                     * shadow as frozen -- an unsoundness the shadow+despawn
+                     * fixture pins.  Comparing to scope_lookup's innermost
+                     * result closes it. */
+                    if (scope_lookup(e->scope, b->name) != b) continue;
+                    fn[k++] = b->name->name;
+                }
+            if (k) { cs->frozen_names = fn; cs->n_frozen = k; }
+        }
+    }
+    cs->loc         = call_form->span;
+    return e->n_refine_call_sites;
+}
+
+void refine_note_macro_expansion(Elab *e, const Form *call,
+                                 const Form *expansion) {
+    if (!e || !call || !expansion) return;
+    for (uint32_t i = 0; i < e->n_refine_mexps; i++) {
+        if (e->refine_mexp_calls[i] == call) {
+            e->refine_mexp_bodies[i] = expansion;   /* latest re-elaboration */
+            return;
+        }
+    }
+    if (e->n_refine_mexps == e->cap_refine_mexps) {
+        uint32_t ncap = e->cap_refine_mexps ? e->cap_refine_mexps * 2 : 16;
+        const Form **nc = (const Form **)arena_alloc(e->arena,
+                                                     ncap * sizeof(Form *));
+        const Form **nb = (const Form **)arena_alloc(e->arena,
+                                                     ncap * sizeof(Form *));
+        if (e->n_refine_mexps) {
+            memcpy(nc, e->refine_mexp_calls, e->n_refine_mexps * sizeof(Form *));
+            memcpy(nb, e->refine_mexp_bodies, e->n_refine_mexps * sizeof(Form *));
+        }
+        e->refine_mexp_calls  = nc;
+        e->refine_mexp_bodies = nb;
+        e->cap_refine_mexps   = ncap;
+    }
+    e->refine_mexp_calls[e->n_refine_mexps]  = call;
+    e->refine_mexp_bodies[e->n_refine_mexps] = expansion;
+    e->n_refine_mexps++;
+}
+
+/* The expansion recorded for a macro-call form, or NULL.  Linear scan: the
+ * table only holds macro calls seen in refined units, and the path walks that
+ * consult it are already bounded (RT_CS_PATH_MAX_DEPTH). */
+static const Form *rt_macro_expansion(const Elab *e, const Form *call) {
+    if (!e || !call || call->tag != F_LIST) return NULL;
+    for (uint32_t i = 0; i < e->n_refine_mexps; i++)
+        if (e->refine_mexp_calls[i] == call) return e->refine_mexp_bodies[i];
+    return NULL;
+}
+
+/* Keyed on (callee, call_form) rather than on the index refine_note_call_site
+ * returns: that function yields the CURRENT count when it deduplicates, which
+ * names the last crossing recorded rather than the matching one.  Attaching the
+ * class predicates to the wrong crossing would lint an unrelated call. */
+void refine_note_call_site_class_preds(Elab *e, const Binding *callee,
+                                       const Form *call_form,
+                                       const Form **preds, const char **vars,
+                                       uint32_t n_params) {
+    if (!e || !callee || !call_form) return;
+    for (uint32_t i = e->n_refine_call_sites; i-- > 0; ) {
+        RefineCallSite *cs = &e->refine_call_sites[i];
+        if (cs->callee != callee || cs->call_form != call_form) continue;
+        cs->class_param_preds = preds;
+        cs->class_param_vars  = vars;
+        cs->n_class_params    = n_params;
+        return;
+    }
+}
+
+void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
+                               const char *caller, const Form *body) {
+    if (!e) return;
+    for (uint32_t i = from; i < e->n_refine_call_sites; i++) {
+        if (e->refine_call_sites[i].env) continue;   /* an inner defn already owns it */
+        e->refine_call_sites[i].env         = env;
+        e->refine_call_sites[i].caller_name = caller;
+        e->refine_call_sites[i].caller_body = body;
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Path conditions for call-site crossings.
+ *
+ * A crossing is collected during elaboration and discharged after the whole
+ * unit -- which is what lets it see every callee's refinement, and is why the
+ * deferral is load-bearing.  The cost was that a call inside a branch was
+ * checked WITHOUT the condition that selected the branch, so the canonical
+ * decreasing-argument recursion could not discharge its own recursive call:
+ *
+ *     (defn f [n : Nat] : Nat
+ *       (if (= n 0) 0 (+ 1 (f (- n 1)))))     ; needs n - 1 >= 0
+ *
+ * `n >= 0` is in the environment and `n != 0` is not, so `n - 1 >= 0` was
+ * Unknown and the crossing kept its check.
+ *
+ * The conditions are recovered SYNTACTICALLY rather than by threading a
+ * condition stack through expression elaboration.  `call_form` is a pointer
+ * into the caller's body, so walking the body down to that exact node collects
+ * every branch that had to be taken to reach it -- no change to any elab_*
+ * function, and the facts are the same ones `rt_prove_paths` already
+ * synthesizes for return obligations.
+ * ------------------------------------------------------------------------- */
+
+#define RT_CS_PATH_MAX_DEPTH 24
+#define RT_CS_PATH_MAX_HYPS  8
+
+/* Crossing identity that survives macro expansion.
+ *
+ * Pointer equality is the fast path.  But a region written as a MACRO -- the
+ * shipped `ecs/freeze` `frozen`, or any macro that wraps a body with `~@body` --
+ * expands by quasiquote, which RECONSTRUCTS the body into fresh Form objects.
+ * So the crossing that gets elaborated and registered as `cs->call_form` is a
+ * different pointer than the crossing node reachable in `cs->caller_body` (the
+ * source defn body), and a pointer-only match reports 0 occurrences -- the guard
+ * on the path is then dropped and a perfectly good `(if (alive? w e) ...)` no
+ * longer discharges its read (see docs/reported/frozen-macro-breaks-refinement-
+ * guard-discharge.md).
+ *
+ * The copy preserves the source SPAN, so we fall back to matching a real
+ * source location plus the head symbol and arity.  This only ever RESCUES the
+ * "copied once" case: callers keep the `!= 1` ambiguity decline, so a span
+ * shared by more than one node (a macro that DUPLICATES a crossing) still bails,
+ * and a crossing genuinely absent from the body still matches nothing.  A span
+ * match is therefore never less conservative than pointer identity where it
+ * mattered -- it strictly recovers copies of the same source crossing, which
+ * carry the same guards on the same path. */
+static bool rt_form_ident(const Form *a, const Form *b) {
+    if (a == b) return true;
+    if (!a || !b || a->tag != b->tag) return false;
+    if (a->tag != F_LIST && a->tag != F_VEC) return false;   /* only call forms */
+    if (span_is_unknown(a->span) || span_is_unknown(b->span)) return false;
+    if (a->span.file_id  != b->span.file_id ||
+        a->span.off_start != b->span.off_start ||
+        a->span.off_end   != b->span.off_end) return false;
+    if (a->as.list.len != b->as.list.len || a->as.list.len == 0) return false;
+    const Form *ha = a->as.list.items[0], *hb = b->as.list.items[0];
+    if (!ha || !hb || ha->tag != F_SYM || hb->tag != F_SYM) return false;
+    return ha->as.sym == hb->as.sym;                          /* interned */
+}
+
+/* Count occurrences of `target` (pointer- or source-identical), stopping at 2.
+ *
+ * A macro call counts as its recorded EXPANSION, not its raw arguments: the
+ * expansion is the code that elaborated (so a template-GENERATED crossing is
+ * only reachable there), and a `~body`-spliced argument appears in BOTH the
+ * call form and the expansion -- walking both would double-count one crossing
+ * and trip the `!= 1` ambiguity decline. */
+static uint32_t rt_form_occurrences(const Elab *e, const Form *node,
+                                    const Form *target, uint32_t depth) {
+    if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return 0;
+    if (rt_form_ident(node, target)) return 1;
+    if (node->tag != F_LIST && node->tag != F_VEC) return 0;
+    {
+        const Form *mx = rt_macro_expansion(e, node);
+        if (mx) return rt_form_occurrences(e, mx, target, depth);  /* lateral hop */
+    }
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < node->as.list.len && n < 2; i++)
+        n += rt_form_occurrences(e, node->as.list.items[i], target, depth + 1);
+    return n;
+}
+
+/* Walk down to `target`, appending the condition of every `if` branch entered
+ * on the way.  Returns true when the target is in this subtree.
+ *
+ * A target inside the CONDITION of an `if` gets no fact from that `if`: the
+ * condition is evaluated before either branch is chosen, so neither it nor its
+ * negation holds there. */
+/* True when `name` is already declared in the crossing's environment -- i.e.
+ * a binder of that name SHADOWS something the hypotheses talk about. */
+static bool rt_env_has_name(RefineEnv *env, const Symbol *sym) {
+    if (!env || !sym) return false;
+    for (uint32_t j = 0; j < env->n_names; j++)
+        if (env->names[j] && strcmp(env->names[j], sym->name) == 0) return true;
+    return false;
+}
+
+/* `*shadowed` is set when a binder on the path rebinds a name the environment
+ * already has hypotheses about.  The caller must then abandon the crossing
+ * entirely, not merely drop a fact: the encoder has ONE FLAT NAMESPACE, so the
+ * argument form's `x` is encoded as the same variable as the outer `x` and
+ * silently inherits its hypotheses.  `(let [x (- x x)] (sdiv 10 x))` under
+ * `x > 0` "proved" `x != 0` of a value that is zero.
+ *
+ * That predates path conditions -- the environment always carried the
+ * parameter refinements -- and it was never a miscompile, because a crossing
+ * is a diagnostic layer and never elides the callee's own entry check, which
+ * still fires. What it was is a WRONG ANSWER: --strict-refine accepted a
+ * program that panics. */
+static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
+                                  const Form *target, const Form **hyps,
+                                  uint32_t *n, bool *shadowed, uint32_t depth) {
+    if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (rt_form_ident(node, target)) return true;
+    if (node->tag != F_LIST && node->tag != F_VEC) return false;
+
+    /* A macro call walks as its recorded EXPANSION (mirrors
+     * rt_form_occurrences): a guard or crossing the template GENERATED --
+     * e.g. `(if (alive? ~w ~e) (get! ~w ~e) -1)` -- exists only there, and
+     * an `if` in the expansion contributes its condition exactly like a
+     * written one. */
+    {
+        const Form *mx = rt_macro_expansion(e, node);
+        if (mx) return rt_collect_path_conds(e, env, mx, target, hyps, n,
+                                             shadowed, depth);   /* lateral hop */
+    }
+
+    if (rt_head_is(node, "if") && node->as.list.len == 4) {
+        const Form *c = node->as.list.items[1];
+        if (rt_collect_path_conds(e, env, c, target, hyps, n, shadowed, depth + 1))
+            return true;
+        for (uint32_t br = 2; br <= 3; br++) {
+            if (!rt_collect_path_conds(e, env, node->as.list.items[br], target,
+                                       hyps, n, shadowed, depth + 1))
+                continue;
+            if (*n >= RT_CS_PATH_MAX_HYPS) return true;  /* deep enough */
+            if (br == 2) {
+                hyps[(*n)++] = c;
+            } else {
+                Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+                notk[0] = form_sym(e->arena, node->span,
+                                   symtab_intern(e->st, strslice("not", 3)));
+                notk[1] = (Form *)c;
+                hyps[(*n)++] = form_list(e->arena, node->span, notk, 2);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /* (let [x v] body) -- `x = v` is a fact for a call in the BODY, and no
+     * fact at all for a call inside `v` itself, which runs first.
+     *
+     * A binding that SHADOWS a name in scope contributes nothing rather than
+     * declining the whole path: the equation would be `x = <something
+     * mentioning x>` in one flat namespace -- false for every x, and a false
+     * hypothesis proves the goal.  The return-obligation splitter alpha-renames
+     * instead, which it can because it also rewrites the body; here there is no
+     * body to rewrite, only a call form to leave alone, so dropping the one
+     * fact is the honest answer.  Every other condition on the path stays. */
+    if (rt_head_is(node, "let") && node->as.list.len == 3) {
+        const Form *binds = node->as.list.items[1];
+        const Form *body  = node->as.list.items[2];
+        if (binds && binds->tag == F_VEC && binds->as.list.len == 2 &&
+            binds->as.list.items[0]->tag == F_SYM &&
+            binds->as.list.items[0]->as.sym) {
+            const Form *x = binds->as.list.items[0];
+            const Form *v = binds->as.list.items[1];
+            if (rt_collect_path_conds(e, env, v, target, hyps, n, shadowed, depth + 1))
+                return true;
+            if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, depth + 1))
+                return false;
+            if (rt_env_has_name(env, x->as.sym)) { *shadowed = true; return true; }
+            if (*n >= RT_CS_PATH_MAX_HYPS) return true;
+            /* A bound FUNCTION is not an arithmetic fact, and asserting it
+             * actively costs: the encoder abstracts the lambda to an
+             * uninterpreted symbol, and `refine_model_search` declines any VC
+             * containing one -- so a goal that was REFUTED with a
+             * counterexample degrades to Unknown. `(let [f (fn ...)] (f 0))`
+             * against `(> v 0)` stopped being a compile error the moment this
+             * equation was added.
+             *
+             * The general shape of that hazard is worth remembering: adding a
+             * hypothesis can never make a goal easier to PROVE incorrectly,
+             * but it can make it harder to REFUTE. Hypotheses are not free. */
+            if (!rt_head_is(v, "fn")) hyps[(*n)++] = rt_form_eq(e, node->span, x, v);
+            return true;
+        }
+        /* A wider binding list: descend without claiming any equation. */
+    }
+
+    /* (match scrut pat [when g] body ...) -- an arm contributes what selected
+     * it.  Only the two sources that introduce no NAMES are collected here: a
+     * literal pattern's `(= scrut <lit>)` and a guard, verbatim.  A
+     * constructor's tag and its field selectors are deliberately left out --
+     * they come with pattern BINDERS, and a binder that shadows an outer name
+     * would silently inherit its hypotheses in this flat namespace, which is
+     * the unsound direction rather than the imprecise one. */
+    if (rt_head_is(node, "match") && node->as.list.len >= 4) {
+        const Form *scrut = node->as.list.items[1];
+        const uint32_t len = node->as.list.len;
+        if (rt_collect_path_conds(e, env, scrut, target, hyps, n, shadowed, depth + 1))
+            return true;
+        uint32_t i = 2;
+        while (i < len) {
+            const Form *pat = node->as.list.items[i++];
+            const Form *guard = NULL;
+            if (i + 1 < len && rt_sym_is(node->as.list.items[i], "when")) {
+                guard = node->as.list.items[i + 1];
+                i += 2;
+            }
+            if (i >= len) return false;            /* malformed: no body */
+            const Form *arm = node->as.list.items[i++];
+            /* A call inside the guard runs before the arm is chosen. */
+            if (guard &&
+                rt_collect_path_conds(e, env, guard, target, hyps, n, shadowed, depth + 1))
+                return true;
+            if (!rt_collect_path_conds(e, env, arm, target, hyps, n, shadowed, depth + 1))
+                continue;
+            if (pat && (pat->tag == F_LIST || pat->tag == F_VEC))
+                for (uint32_t k = 1; k < pat->as.list.len; k++) {
+                    const Form *b = pat->as.list.items[k];
+                    if (b->tag == F_SYM && rt_env_has_name(env, b->as.sym)) {
+                        *shadowed = true;
+                        return true;
+                    }
+                }
+            if (guard && *n < RT_CS_PATH_MAX_HYPS) hyps[(*n)++] = guard;
+            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT) &&
+                *n < RT_CS_PATH_MAX_HYPS)
+                hyps[(*n)++] = rt_form_eq(e, pat->span, scrut, pat);
+            return true;
+        }
+        return false;
+    }
+
+    for (uint32_t i = 0; i < node->as.list.len; i++)
+        if (rt_collect_path_conds(e, env, node->as.list.items[i], target, hyps,
+                                  n, shadowed, depth + 1))
+            return true;
+    return false;
+}
+
+/* The caller's WHOLE body, as one form the path walk can descend.
+ *
+ * `caller_body` used to be the defn's LAST body form -- correct for its other
+ * job (the return obligation's subject) and wrong here.  A crossing in any
+ * earlier form was then invisible to `rt_collect_path_conds`, which walks down
+ * to `call_form` and gives up when it does not find it, so the call was
+ * checked without the branch that guards it.  A zero-parameter caller showed
+ * it plainly: `main`'s last form is the literal `0`, and the walk searched `0`
+ * for the call.  See
+ * docs/archive/refine-callsite-path-conds-lost-multi-form-body.md.
+ *
+ * A single-form body is passed through unwrapped, so the common case allocates
+ * nothing and the resulting tree is byte-identical to before.  A multi-form
+ * body is wrapped in a synthetic `(do ...)`: `do` is not one of the three
+ * heads the walk treats specially, so it falls to the generic descent, which
+ * is exactly the "a later body form is not guarded by an earlier one"
+ * semantics wanted here.
+ *
+ * Widening also widens the two vetoes in rt_push_cs_path_conds, in the safe
+ * direction both times: a `set!` anywhere in the body now declines every
+ * crossing in it (it used to be checked only against the last form, so an
+ * assignment in an earlier form could invalidate a condition unnoticed), and
+ * a `call_form` node reachable from two body forms now counts as ambiguous
+ * rather than unique. */
+static const Form *rt_whole_body(Elab *e, const Form *call, uint32_t body_start) {
+    if (!call || call->as.list.len <= body_start) return NULL;
+    uint32_t nb = call->as.list.len - body_start;
+    if (nb == 1) return call->as.list.items[body_start];
+    Form **items = (Form **)arena_alloc(e->arena, (nb + 1) * sizeof(Form *));
+    items[0] = form_sym(e->arena, call->span,
+                        symtab_intern(e->st, strslice("do", 2)));
+    for (uint32_t i = 0; i < nb; i++)
+        items[i + 1] = call->as.list.items[body_start + i];
+    return form_list(e->arena, call->span, items, nb + 1);
+}
+
+/* Push this crossing's path conditions onto `cs->env`, returning the saved
+ * head so the caller can rewind.  Declines -- pushing nothing -- when the body
+ * assigns anywhere, since a condition mentioning a reassigned name may no
+ * longer hold at the call, and when `call_form` is reachable by more than one
+ * route, which a macro that shares a node can produce and which would make
+ * "the" path ambiguous. */
+static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
+                                        bool *skip) {
+    RefineHyp *saved = cs->env ? cs->env->head : NULL;
+    *skip = false;
+    if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
+
+    /* WF3: an assignment no longer declines the whole body outright.  Collect
+     * what the body assigns, so each hypothesis can be tested against it
+     * below; a frame this analysis cannot vouch for (place-expression target,
+     * an unattributable assignment symbol, overflow, too deep) returns false
+     * here and restores the old whole-body decline. */
+    const char *wtgt[RT_WF3_MAX_TARGETS];
+    uint32_t nw = 0;
+    if (!rt_collect_set_targets(e, cs->caller_body, 0, wtgt, &nw)) return saved;
+    /* A borrowed local is the one way a callee could write this frame's slot,
+     * so an assigned name that is also borrowed is not provably disjoint --
+     * unless every borrow of it provably goes nowhere that writes, which is
+     * the question WF2's checked frames made askable.  Without the experiment
+     * there are no checked frames to ask, so the guard stays unconditional. */
+    for (uint32_t i = 0; i < nw; i++)
+        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0) &&
+            !(g_opt_write_frames &&
+              wf_borrow_write_free(e, cs->caller_body, wtgt[i], 0)))
+            return saved;
+
+    if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
+
+    const Form *hyps[RT_CS_PATH_MAX_HYPS];
+    uint32_t n = 0;
+    bool shadowed = false;
+    if (!rt_collect_path_conds(e, cs->env, cs->caller_body, cs->call_form,
+                               hyps, &n, &shadowed, 0))
+        return saved;
+    if (shadowed) { *skip = true; return saved; }
+    for (uint32_t i = 0; i < n; i++) {
+        bool stale = false;
+        for (uint32_t j = 0; j < nw && !stale; j++)
+            stale = rt_form_mentions_name(e, hyps[i], wtgt[j], 0);
+        if (!stale) refine_env_push(cs->env, hyps[i], NULL, NULL);
+    }
+    return saved;
+}
+
+/* TUR-W0377: the resolved instance accepts this argument, but the CLASS
+ * signature rejects it outright, so the call is relying on that instance
+ * demanding less than its class.
+ *
+ * Only a DEFINITE violation warns.  `refine_model_search` returning a model
+ * with no free variables means the goal folded to false on the values written
+ * at the site; an OPEN model only says "not for every input", which for an
+ * argument the instance genuinely accepts is not worth a diagnostic.  That
+ * keeps the lint silent on `(.scale-by 3 n)` and loud on `(.scale-by 3 0)`.
+ *
+ * `speculative` keeps the obligation off the ordinary reporting path: its
+ * failure is an interface-versus-implementation disagreement with its own
+ * wording, not a TUR-E0371 about a value the program cannot supply. */
+static void rt_lint_class_leniency(Elab *e, RefineCallSite *cs, uint32_t p,
+                                   const Form *cls_pred, const Form *arg,
+                                   TypeKind pk, const RefineSubst *subst,
+                                   uint32_t n_subst) {
+    if (!cls_pred || !cs) return;
+    const Binding *callee = cs->callee;
+    /* An instance that restated its class predicate has nothing to disagree
+     * with -- the two are the same Form. */
+    if (callee->refine_param_preds && p < callee->n_refine_params &&
+        callee->refine_param_preds[p] == cls_pred) return;
+
+    const char *cvar = (cs->class_param_vars && p < cs->n_class_params)
+                     ? cs->class_param_vars[p] : NULL;
+    RefineObligation *ob = refine_collect_obligation(
+        &e->refine_obs, cls_pred, cvar, arg,
+        rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
+        cs->loc, cs->env, "class signature", cs->caller_name);
+    if (!ob) return;
+    refine_obligation_set_subst(ob, e->arena, subst, n_subst);
+    ob->speculative = true;
+    if (refine_discharge_one(ob, e->arena)) return;   /* class admits it too */
+    if (!ob->vc) return;
+    RefineModel *m = refine_model_search(ob->vc, e->arena);
+    if (!m || m->n != 0) return;                      /* not a definite violation */
+
+    const char *cname = cs->callee_display
+                      ? cs->callee_display
+                      : (callee->name ? callee->name->name : "?");
+    diag_emit_with_code(DIAG_WARNING, cs->loc, TUR_W0377_REFINE_INSTANCE_LENIENCY,
+                        "argument %u of '%s' is accepted by the resolved "
+                        "instance but violates the class signature's refinement",
+                        p + 1, cname);
+    diag_emit(DIAG_NOTE, cs->loc,
+              "the instance demands less than its class, which is legal; this "
+              "call would fail if dispatch were dynamic or a stricter instance "
+              "existed");
+}
+
+void refine_resolve_call_sites(Elab *e) {
+    if (!e) return;
+    for (uint32_t i = 0; i < e->n_refine_call_sites; i++) {
+        RefineCallSite *cs = &e->refine_call_sites[i];
+        const Binding *callee = cs->callee;
+        /* A crossing is worth walking when EITHER side has a predicate.  An
+         * instance that explicitly demands nothing publishes no arrays of its
+         * own, and that is exactly the shape TUR-W0377 exists to lint. */
+        bool has_inst_preds = callee->refine_param_preds &&
+                              callee->n_refine_params > 0;
+        bool has_class_preds = cs->class_param_preds && cs->n_class_params > 0;
+        if (!has_inst_preds && !has_class_preds) continue;
+
+        const Form *cf = cs->call_form;
+        if (!cf || cf->tag != F_LIST) continue;
+        uint32_t n_args = cf->as.list.len > cs->arg_offset
+                        ? cf->as.list.len - cs->arg_offset : 0;
+
+        /* The branches that had to be taken to reach this call are facts here.
+         * Rewound below so one crossing's path never leaks into the next --
+         * several crossings share one caller's env. */
+        bool cs_skip = false;
+        RefineHyp *cs_saved = rt_push_cs_path_conds(e, cs, &cs_skip);
+        if (cs_skip) continue;   /* shadowed binder: no honest answer here */
+
+        /* Every callee parameter name maps to the caller's argument in that
+         * slot, so a predicate mentioning a SIBLING parameter is checked
+         * against the real argument rather than a free variable. */
+        RefineSubst subst[MAX_FN_ARITY];
+        uint32_t n_subst = 0;
+        for (uint32_t p = 0; has_inst_preds && p < callee->n_refine_params &&
+                             p < n_args && n_subst < MAX_FN_ARITY; p++) {
+            if (!callee->refine_param_names[p]) continue;
+            subst[n_subst].name = callee->refine_param_names[p];
+            subst[n_subst].form = cf->as.list.items[cs->arg_offset + p];
+            n_subst++;
+        }
+
+        uint32_t n_slots = has_inst_preds ? callee->n_refine_params : 0;
+        if (has_class_preds && cs->n_class_params > n_slots)
+            n_slots = cs->n_class_params;
+        for (uint32_t p = 0; p < n_slots && p < n_args; p++) {
+            const Form *pred = (has_inst_preds && p < callee->n_refine_params)
+                             ? callee->refine_param_preds[p] : NULL;
+            const Form *cls_pred = (has_class_preds && p < cs->n_class_params)
+                                 ? cs->class_param_preds[p] : NULL;
+            if (!pred && !cls_pred) continue;
+            const Form *arg = cf->as.list.items[cs->arg_offset + p];
+            TypeKind pk = (callee->type.kind == TY_FN &&
+                           callee->type.as.fn.arg_kinds &&
+                           p < callee->type.as.fn.arity)
+                        ? callee->type.as.fn.arg_kinds[p] : TY_INT;
+            if (!pred) {
+                /* The instance demands nothing here.  Nothing to prove -- but
+                 * the class may still reject this argument. */
+                rt_lint_class_leniency(e, cs, p, cls_pred, arg, pk, subst, n_subst);
+                continue;
+            }
+
+            const char *cname = cs->callee_display ? cs->callee_display
+                              : (callee->name ? callee->name->name : "?");
+            char what[160];
+            if (cs->caller_name)
+                snprintf(what, sizeof(what), "argument %u of '%s' in '%s'",
+                         p + 1, cname, cs->caller_name);
+            else
+                snprintf(what, sizeof(what), "argument %u of '%s'", p + 1, cname);
+            const char *what_owned = arena_strdup(e->arena, what, strlen(what));
+
+            RefineObligation *ob = refine_collect_obligation(
+                &e->refine_obs, pred, callee->refine_param_vars[p], arg,
+                rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
+                cs->loc, cs->env, what_owned, cs->caller_name);
+            if (!ob) continue;
+            refine_obligation_set_subst(ob, e->arena, subst, n_subst);
+            /* C2 / #reads: carry this crossing's frozen (borrowed) bindings so
+             * the encoder can grant a `#reads w` measure congruence when w is
+             * one of them. */
+            refine_obligation_set_frozen(ob, cs->frozen_names, cs->n_frozen);
+            /* The callee checks its own parameters on entry, so an argument
+             * we cannot prove is the ordinary case, not news.  What still
+             * errors is an argument that is DEFINITELY wrong -- a closed goal
+             * that evaluates false -- which is `(safe-div 10 0)` becoming a
+             * compile-time failure instead of a runtime panic.
+             *
+             * C2 / #reads exception: a `#reads`-measure predicate is impure, so
+             * the callee's entry check is TUR-E0375-unemittable and is
+             * suppressed (see rt_inject_param_checks) -- there is NO runtime
+             * backstop for this crossing.  Mark it proof-only so an unproven
+             * one is reported (a warning in non-strict, an error in strict)
+             * rather than silently trusted, and so its W0372 does not claim a
+             * runtime check was kept. */
+            bool reads_crossing = rt_pred_reads_measure(e, pred);
+            ob->runtime_guarded = !reads_crossing;
+            ob->reads_no_runtime = reads_crossing;
+            bool inst_ok = refine_discharge_one(ob, e->arena);
+
+            /* Reading B + lint: the obligation above is the resolved INSTANCE's,
+             * which is the more precise of the two contracts and the one this
+             * call actually has to satisfy.  But when the instance demands less
+             * than its class and the argument is one the CLASS rejects
+             * outright, the call is leaning on that instance's private
+             * leniency -- which is not part of the interface, and is gone the
+             * moment dispatch goes dynamic or a stricter instance is added.
+             *
+             * Only when the instance obligation itself was PROVED: an argument
+             * that failed the instance check already has its own E0371 at this
+             * span, and a second diagnostic about the class would just be
+             * noise. */
+            if (inst_ok)
+                rt_lint_class_leniency(e, cs, p, cls_pred, arg, pk, subst, n_subst);
+        }
+        if (cs->env) cs->env->head = cs_saved;
+    }
+}
 
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
@@ -78,6 +2741,19 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 if (cont_name_is_multishot(sym->name)) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
+        }
+        /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+         * annotation reached through the spaced `: rc<T>` (F_TYPE_ANN) path or a
+         * nested type position.  Resolve it here too, so it does not fall through
+         * to type_expr_from_form and become a fresh tyvar named "rc<int>".  The
+         * fused `:rc<T>` keyword path in the defn/fn ladders handles the keyword
+         * form directly. */
+        if (sym) {
+            Type *rt = rc_family_type_from_keyword_name(e, sym->name, sym->len,
+                                                        form->span, NULL,
+                                                        type_params, type_param_kinds,
+                                                        n_type_params);
+            if (rt) return rt;
         }
         Type *t = type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         return t;
@@ -237,6 +2913,11 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                                           type_params, type_param_kinds, n_type_params);
             }
             if (!arg) return NULL;
+            /* Same peel type_expr_from_form's app loop does -- this loop is the
+             * one a `defn`/`fn` parameter annotation actually goes through, so
+             * fixing only the other one leaves `(Box #refine{...})` broken in
+             * the position people write it. */
+            arg = rt_peel_type_arg_contract(arg, arg_form->span);
             if (!check_row_type_arg_kind(head_type, (uint8_t)(i - 1), *arg,
                                          form->as.list.items[i]->span))
                 return NULL;
@@ -438,11 +3119,20 @@ static bool form_mentions_type_param(const Form *form, const Symbol *sym) {
         case F_SYM:
         case F_KEYWORD:
             return form->as.sym == sym;
+        case F_CONTRACT_TYPE:
+            /* items: [var, base-type, "|", predicate].  Only the BASE TYPE is
+             * a type expression.  The bound variable and the predicate are
+             * value-level: their free names are ordinary values, and treating
+             * them as type-variable mentions makes the implicit-type-param
+             * inference swallow the very parameters the predicate constrains
+             * (`[v : int, n : int]` with a `(len v)` refinement lost both
+             * parameters and then failed to parse their annotations). */
+            return form->as.list.len > 1 &&
+                   form_mentions_type_param(form->as.list.items[1], sym);
         case F_TYPE_ANN:
         case F_LIST:
         case F_VEC:
         case F_MAP:
-        case F_CONTRACT_TYPE:
             for (uint32_t i = 0; i < form->as.list.len; i++) {
                 if (form_mentions_type_param(form->as.list.items[i], sym)) return true;
             }
@@ -718,36 +3408,109 @@ static bool check_no_borrow_escape(const Expr *tail, uint32_t fn_local_depth,
  * caller fat-dispatches every leaf, so a thin-pointer arm is read as a fat box
  * (slot-0 of a code address) and jumped into -> SIGSEGV.  Walks through
  * tail-position structure only (do/if/let/match/ascribe). */
-static unsigned fn_tail_fn_leaf_kinds(const Expr *x) {
+/* fn-value-carrier-fat-seam-residuals (cell 1): the tail walkers classify
+ * leaves by BINDING, so a let-ALIAS of a param loses its provenance -- e.g.
+ * `(let [w v] w)` where `v` is a carrier (tur_poly_fn_t) fn param: `w` is a
+ * local non-param binding of non-boxed TY_FN (or ptr<void>), so the stage-2
+ * normalizer either thin-shims the by-value aggregate (invalid C) or skips
+ * it entirely (the merge temp assign is invalid C instead).  The walkers
+ * therefore carry a stack env of the let bindings they descend PAST, and a
+ * leaf var resolves transitively through recorded inits (peeking through
+ * ascriptions) back to the classifiable origin.  Only tail-position lets are
+ * recorded -- exactly the ones whose aliases can BE a tail leaf. */
+typedef struct FnTailAlias {
+    const struct FnTailAlias *up;
+    const Binding *binding;
+    const Expr *init;
+} FnTailAlias;
+
+static const Expr *fn_tail_resolve_alias(const Expr *x, const FnTailAlias *env) {
+    int guard = 32;  /* alias chains are tiny; guard against binding cycles */
+    while (x && guard-- > 0) {
+        while (x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+        if (x->kind != EX_VAR || !x->as.var.binding) return x;
+        const Binding *vb = x->as.var.binding;
+        if (vb->is_param) return x;
+        const Expr *init = NULL;
+        for (const FnTailAlias *a = env; a; a = a->up)
+            if (a->binding == vb) { init = a->init; break; }
+        if (!init) return x;
+        x = init;
+    }
+    return x;
+}
+
+/* Push one let form's bindings onto the alias env.  The storage array lives
+ * in the caller's block scope; the recursive walk into the let body happens
+ * inside that scope, so the nodes stay alive exactly as long as needed.
+ * Lets wider than the fixed cap simply skip recording (the resolver then
+ * conservatively leaves aliases unresolved -- current behavior). */
+#define FN_TAIL_PUSH_LET_ALIASES(x, env, storage)                            \
+    const FnTailAlias *env##_new = (env);                                    \
+    do {                                                                     \
+        uint32_t _n = (x)->as.let_.n;                                        \
+        if (_n > 16) _n = 0;                                                 \
+        for (uint32_t _i = 0; _i < _n; _i++) {                               \
+            storage[_i].binding = (x)->as.let_.bindings[_i].binding;         \
+            storage[_i].init = (x)->as.let_.bindings[_i].init;               \
+            storage[_i].up = (_i == 0) ? (env) : &storage[_i - 1];           \
+        }                                                                    \
+        if (_n > 0) env##_new = &storage[_n - 1];                            \
+    } while (0)
+
+static unsigned fn_tail_fn_leaf_kinds(const Expr *x, const FnTailAlias *env) {
     if (!x) return 0;
     switch (x->kind) {
         case EX_DO:
             return x->as.do_.n > 0
-                       ? fn_tail_fn_leaf_kinds(x->as.do_.items[x->as.do_.n - 1])
+                       ? fn_tail_fn_leaf_kinds(x->as.do_.items[x->as.do_.n - 1],
+                                               env)
                        : 0;
         case EX_IF:
-            return fn_tail_fn_leaf_kinds(x->as.if_.then_) |
+            return fn_tail_fn_leaf_kinds(x->as.if_.then_, env) |
                    (x->as.if_.else_or_null
-                        ? fn_tail_fn_leaf_kinds(x->as.if_.else_or_null)
+                        ? fn_tail_fn_leaf_kinds(x->as.if_.else_or_null, env)
                         : 0);
         case EX_LET:
-        case EX_LETREC:
-            return fn_tail_fn_leaf_kinds(x->as.let_.body);
+        case EX_LETREC: {
+            FnTailAlias _st[16];
+            FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
+            return fn_tail_fn_leaf_kinds(x->as.let_.body, env_new);
+        }
         case EX_ASCRIBE:
-            return fn_tail_fn_leaf_kinds(x->as.ascribe_.inner);
+            return fn_tail_fn_leaf_kinds(x->as.ascribe_.inner, env);
         case EX_MATCH: {
             unsigned acc = 0;
             for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
-                acc |= fn_tail_fn_leaf_kinds(x->as.match_.arms[i].body);
+                acc |= fn_tail_fn_leaf_kinds(x->as.match_.arms[i].body, env);
             return acc;
         }
         case EX_CLOSURE:
         case EX_FN_TO_FAT:
             return 2u;  /* fat box */
-        case EX_VAR:
+        case EX_VAR: {
+            /* fn-value-fat-normalization: binding-aware classification.  A
+             * carrier (is_poly_fn) fn param is a by-value tur_poly_fn_t --
+             * neither thin nor fat (bit 4).  A ^fat param or a stage-1
+             * NORMALIZED nominal param already holds a fat handle even though
+             * its static type is a non-boxed TY_FN -- classifying those as
+             * thin would double-box them.  A local ALIAS resolves to its
+             * origin first (cell 1). */
+            const Expr *r = fn_tail_resolve_alias(x, env);
+            if (r != x && r->kind != EX_VAR)
+                return fn_tail_fn_leaf_kinds(r, env);
+            if (r->kind == EX_VAR && r->as.var.binding) {
+                const Binding *vb = r->as.var.binding;
+                if (vb->is_poly_fn && vb->is_param) return 4u;
+                if (vb->is_fat ||
+                    (vb->is_param && vb->type.kind == TY_FN &&
+                     fn_param_type_is_fat_normalized(&vb->type)))
+                    return 2u;
+            }
             if (x->type.kind == TY_FN)
                 return x->type.as.fn.boxed ? 2u : 1u;  /* boxed=fat, bare=thin */
             return 0;
+        }
         default:
             if (x->type.kind == TY_FN && x->type.as.fn.boxed)
                 return 2u;
@@ -762,35 +3525,134 @@ static unsigned fn_tail_fn_leaf_kinds(const Expr *x) {
  * is uniformly fat across all return leaves and a fat-dispatch consumer reads a
  * valid { thunk, ... } layout on every arm.  Symmetric with the ^fat-result
  * auto-shim and the parametric-ADT-field shim in elab_call.c. */
-static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot) {
+static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot,
+                                         const FnTailAlias *env) {
     Expr *x = *slot;
     if (!x) return;
     switch (x->kind) {
         case EX_DO:
             if (x->as.do_.n > 0)
-                elab_box_thin_fn_tail_leaves(e, &x->as.do_.items[x->as.do_.n - 1]);
+                elab_box_thin_fn_tail_leaves(e, &x->as.do_.items[x->as.do_.n - 1],
+                                             env);
             return;
         case EX_IF:
-            elab_box_thin_fn_tail_leaves(e, &x->as.if_.then_);
+            elab_box_thin_fn_tail_leaves(e, &x->as.if_.then_, env);
             if (x->as.if_.else_or_null)
-                elab_box_thin_fn_tail_leaves(e, &x->as.if_.else_or_null);
+                elab_box_thin_fn_tail_leaves(e, &x->as.if_.else_or_null, env);
             return;
         case EX_LET:
-        case EX_LETREC:
-            elab_box_thin_fn_tail_leaves(e, &x->as.let_.body);
+        case EX_LETREC: {
+            FnTailAlias _st[16];
+            FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
+            elab_box_thin_fn_tail_leaves(e, &x->as.let_.body, env_new);
             return;
+        }
         case EX_ASCRIBE:
-            elab_box_thin_fn_tail_leaves(e, &x->as.ascribe_.inner);
+            elab_box_thin_fn_tail_leaves(e, &x->as.ascribe_.inner, env);
             return;
         case EX_MATCH:
             for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
-                elab_box_thin_fn_tail_leaves(e, &x->as.match_.arms[i].body);
+                elab_box_thin_fn_tail_leaves(e, &x->as.match_.arms[i].body, env);
             return;
         default:
             break;
     }
     if (x->kind == EX_VAR && x->type.kind == TY_FN && !x->type.as.fn.boxed &&
         x->type.as.fn.arity >= 1 && x->type.as.fn.arity <= 5) {
+        /* stage-1 normalized params and ^fat params already hold fat handles
+         * despite their non-boxed static type -- shimming them here would
+         * double-box (mirrors the classifier's binding-aware cases).  A local
+         * ALIAS resolves to its origin first (seam-residuals cell 1): an
+         * alias of a fat/normalized/carrier value must not be thin-shimmed. */
+        const Expr *r = fn_tail_resolve_alias(x, env);
+        const Binding *rb = (r && r->kind == EX_VAR) ? r->as.var.binding : NULL;
+        if (rb &&
+            (rb->is_fat || (rb->is_poly_fn && rb->is_param) ||
+             (rb->is_param &&
+              fn_param_type_is_fat_normalized(&rb->type))))
+            return;
+        if (r && r != x && r->kind != EX_VAR &&
+            (r->kind == EX_CLOSURE || r->kind == EX_FN_TO_FAT ||
+             (r->type.kind == TY_FN && r->type.as.fn.boxed)))
+            return;  /* alias of a fat producer -- already fat */
+        Type bt = x->type;
+        bt.as.fn.boxed = true;
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, bt, x->span);
+        shim->as.fn_to_fat_.inner = x;
+        *slot = shim;
+    }
+}
+
+/* fn-value-fat-normalization stage 2: normalize EVERY tail leaf of a defn
+ * whose declared result is a concrete effect-free fn type
+ * (fn_param_type_is_fat_normalized) onto the fat handle: a thin bare-fn leaf
+ * is shimmed (EX_FN_TO_FAT), a carrier (tur_poly_fn_t) param leaf is boxed
+ * (EX_POLY_TO_FAT -- previously `return (int64_t)(intptr_t)v;` on the
+ * aggregate, a hard cc error), and already-fat leaves pass through.  The
+ * caller then marks the declared result `boxed`, which steers the signature
+ * and every consumer onto the existing fat-result plumbing. */
+static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
+                                          Type *sink_fn_type,
+                                          const FnTailAlias *env) {
+    Expr *x = *slot;
+    if (!x) return;
+    switch (x->kind) {
+        case EX_DO:
+            if (x->as.do_.n > 0)
+                elab_normalize_fn_tail_leaves(e,
+                    &x->as.do_.items[x->as.do_.n - 1], sink_fn_type, env);
+            return;
+        case EX_IF:
+            elab_normalize_fn_tail_leaves(e, &x->as.if_.then_, sink_fn_type,
+                                          env);
+            if (x->as.if_.else_or_null)
+                elab_normalize_fn_tail_leaves(e, &x->as.if_.else_or_null,
+                                              sink_fn_type, env);
+            return;
+        case EX_LET:
+        case EX_LETREC: {
+            FnTailAlias _st[16];
+            FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
+            elab_normalize_fn_tail_leaves(e, &x->as.let_.body, sink_fn_type,
+                                          env_new);
+            return;
+        }
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                elab_normalize_fn_tail_leaves(e, &x->as.match_.arms[i].body,
+                                              sink_fn_type, env);
+            return;
+        default:
+            break;
+    }
+    if (x->kind != EX_VAR || !x->as.var.binding) return;
+    /* seam-residuals cell 1: resolve a local alias to its origin so the
+     * classification below sees the value's REAL representation.  The
+     * conversion (if any) is applied to the ORIGINAL leaf `x` -- its emitted
+     * value carries the same representation as the origin (a let alias of a
+     * tur_poly_fn_t param is a by-value tur_poly_fn_t copy). */
+    const Expr *r = fn_tail_resolve_alias(x, env);
+    Binding *vb = (r->kind == EX_VAR && r->as.var.binding)
+                      ? r->as.var.binding
+                      : x->as.var.binding;
+    if (vb->is_poly_fn && vb->is_param) {
+        Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID, x->span);
+        conv->as.poly_to_fat_.inner = x;
+        conv->as.poly_to_fat_.sink_fn_type =
+            (sink_fn_type && sink_fn_type->kind == TY_FN) ? sink_fn_type : NULL;
+        *slot = conv;
+        return;
+    }
+    if (vb->is_fat ||
+        (vb->is_param && vb->type.kind == TY_FN &&
+         fn_param_type_is_fat_normalized(&vb->type)))
+        return;  /* already fat */
+    if (r != x && r->kind != EX_VAR &&
+        (r->kind == EX_CLOSURE || r->kind == EX_FN_TO_FAT ||
+         (r->type.kind == TY_FN && r->type.as.fn.boxed)))
+        return;  /* alias of a fat producer -- already fat */
+    if (x->type.kind == TY_FN && !x->type.as.fn.boxed &&
+        x->type.as.fn.arity <= 5) {
         Type bt = x->type;
         bt.as.fn.boxed = true;
         Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, bt, x->span);
@@ -881,6 +3743,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, name_f->span, "defn name must be a symbol");
         return NULL;
     }
+    /* TUR-W0042 (docs/archive/defn-shadows-return-special-form.md): defining a
+     * function whose name is a reserved special form (`return`, `match`, ...)
+     * is accepted and bound, but every bare call site dispatches to the special
+     * form instead.  Warn HERE, at the definition, rather than leaving the
+     * author to decode a type error against the caller's argument.  Suppressed
+     * during stdlib auto-load and for specialization clones (which re-elaborate
+     * the same Form and would double-report). */
+    if (!e->in_stdlib_load && !e->bare_fat_spec_active)
+        tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defn");
+
     Binding *existing = scope_lookup(e->scope, name_f->as.sym);
     /* bare-fat-result-monomorphization: a specialized clone re-elaborates the
      * same `(defn ...)` Form under a mangled name, so the original (lazy)
@@ -1151,6 +4023,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     bool is_variadic = false;
     TypeKind rest_kind = TY_INT;  /* default rest element type */
     Type *rest_full_type = NULL;  /* typed-variadic: full Type for user-defined rest */
+    /* closure-drop-glue (mw-compose-of): a `^borrow` immediately before `&`
+     * marks the whole rest list as borrowed -- the callee reads/invokes each
+     * element but retains none, so the caller may free a fresh uniquely-owned
+     * closure passed as a rest arg at its own scope exit.  Recorded only under
+     * the experiment; flag-off it stays false so the fn type is unchanged. */
+    bool rest_borrow_flag = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -1204,6 +4082,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             is_variadic = true;
+            /* closure-drop-glue (mw-compose-of): consume a pending `^borrow`
+             * (`^borrow & rest ...`) as the rest-list borrow marker. */
+            if (next_param_borrow) {
+                rest_borrow_flag = true;
+            }
+            next_param_borrow = false;
             /* Add rest param as a regular int binding (cons-list pointer at runtime) */
             if (n_params == 0) {
                 params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
@@ -1434,22 +4318,6 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
-            /* CT0: For F_CONTRACT_TYPE, use the base type for the param kind.
-             * The predicate is collected for injection as a precondition. */
-            /* For F_CONTRACT_TYPE: collect predicate, use base type */
-            if (p->tag == F_CONTRACT_TYPE && p->as.list.len >= 4) {
-                /* items: [var, type-ann, "|", pred] */
-                const char *ct_var = NULL;
-                if (p->as.list.items[0]->tag == F_SYM) {
-                    ct_var = p->as.list.items[0]->as.sym->name;
-                }
-                if (n_ct_param_preds < MAX_FN_ARITY) {
-                    ct_param_preds[n_ct_param_preds]     = p->as.list.items[3];
-                    ct_param_varnames[n_ct_param_preds]  = ct_var;
-                    ct_param_param_idx[n_ct_param_preds] = n_params - 1;
-                    n_ct_param_preds++;
-                }
-            }
             /* For F_TYPE_ANN, unwrap to the inner type form first */
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
             /* sized-types-cross-param-unification: record the raw type form so
@@ -1477,11 +4345,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
             Type *ann = fn_type_from_form(e, type_form,
                                           fn_type_params, fn_type_param_kinds, n_fn_type_params);
             if (!ann) return NULL;
-            /* CT0: For contract types, use base type for C-level representation */
+            /* CT0: a contract-typed parameter takes its BASE type at the C
+             * level, and its predicate becomes an entry check (CT1) plus --
+             * under `refined` -- a hypothesis for the return obligation (RT1).
+             *
+             * Collecting from the RESOLVED TYPE rather than from the raw Form
+             * is what makes all three spellings work uniformly: the bare
+             * brace form `[x {v : int | p}]`, the current `[x : #refine{...}]`
+             * (which the reader wraps in an F_TYPE_ANN -- the Form-shaped
+             * check missed this one entirely, so such a parameter silently got
+             * NO runtime check at all), and a NAMED refinement alias
+             * `[x : Nat]` declared with `deftype` (stdlib/refine.tur), which
+             * has no contract Form at the use site at all. */
             if (ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
                 TypeKind base_kind = ann->as.contract_.base_type->kind;
                 param_kinds[n_params - 1] = base_kind;
                 params[n_params - 1]->type = *ann->as.contract_.base_type;
+                if (ann->as.contract_.predicate && n_ct_param_preds < MAX_FN_ARITY) {
+                    ct_param_preds[n_ct_param_preds]     = ann->as.contract_.predicate;
+                    ct_param_varnames[n_ct_param_preds]  = ann->as.contract_.var_name;
+                    ct_param_param_idx[n_ct_param_preds] = n_params - 1;
+                    n_ct_param_preds++;
+                }
                 continue;
             }
             if (ann->kind == TY_FORALL) {
@@ -1541,6 +4426,47 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                   ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
                                   !fn_type_has_named_tyvar(ann) &&
                                   fn_type_is_carrier_safe(ann);
+                /* fn-value-fat-normalization stage 2: a NESTED concrete
+                 * effect-free fn RESULT inside a fn-typed param annotation is
+                 * marked boxed, recursively -- stage-2 producers return fat
+                 * handles for such types, so an annotation left thin would
+                 * make `((f 1) 2)` thin-dispatch a fat handle (the
+                 * curried-fn-typed-param SIGSEGV found by the stage-2 suite
+                 * measurement). */
+                {
+                    Type *nr = ann->as.fn.result_full_type;
+                    while (nr && nr->kind == TY_FN && !nr->as.fn.boxed &&
+                           fn_result_type_is_fat_normalized(nr)) {
+                        nr->as.fn.boxed = true;
+                        nr = nr->as.fn.result_full_type;
+                    }
+                }
+                /* repr-trace (representation-consolidation-meta-plan increment
+                 * 0): with --emit-abi-trace, print the representation this
+                 * fn-typed parameter was routed onto, and -- for the thin
+                 * nominal TY_FN fallthrough -- which gate forced it there.
+                 * This makes the per-boundary decision diffable: a
+                 * consolidation increment can assert "only the intended
+                 * boundaries moved" by diffing traces. */
+                if (g_emit_abi_trace) {
+                    const char *repr;
+                    const char *why = "";
+                    if (carrier_ok)                repr = "carrier";
+                    else if (pb->is_fat)           repr = "fat";
+                    else if (ann->as.fn.cfnptr)    repr = "cfnptr";
+                    else {
+                        repr = "thin-fn";
+                        if (effectful)                              why = " effect-row";
+                        else if (ann->as.fn.is_variadic)            why = " variadic";
+                        else if (fn_type_has_named_tyvar(ann))      why = " tyvar-sig";
+                        else if (!fn_type_is_carrier_safe(ann))     why = " non-scalar-sig";
+                        else if (!plain)                            why = " substructural";
+                        else                                        why = " arity";
+                    }
+                    fprintf(stderr, "repr-trace %u:%u fn-param %s %s%s\n",
+                            p->span.line, p->span.col_start,
+                            pb->name ? pb->name->name : "_", repr, why);
+                }
                 if (carrier_ok) {
                     param_kinds[n_params - 1] = TY_PTR_VOID;
                     pb->type = TYPE_PTR_VOID;
@@ -1690,6 +4616,33 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     continue;
                 }
             }
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `:rc<T>` / `:weak<T>` / `:ref<T>` / `:lref<T>` parameter.  Resolve
+             * it to the real carrier instead of a fresh tyvar named "rc<int>".
+             * :ref / :lref carry the same linear-by-default discipline the bare
+             * keyword forms apply below. */
+            {
+                Type *rt = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                            p->span, NULL,
+                                                            fn_type_params,
+                                                            fn_type_param_kinds,
+                                                            n_fn_type_params);
+                if (rt) {
+                    param_kinds[n_params - 1] = rt->kind;
+                    params[n_params - 1]->type = *rt;
+                    if (rt->kind == TY_REF) {
+                        if (!params[n_params - 1]->is_linear
+                                && !params[n_params - 1]->is_affine
+                                && !params[n_params - 1]->is_relevant) {
+                            params[n_params - 1]->is_linear = true;
+                            params[n_params - 1]->type.substruct = SK_LINEAR;
+                        }
+                    } else if (rt->kind == TY_LREF) {
+                        params[n_params - 1]->is_linear = true;
+                    }
+                    continue;
+                }
+            }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
              * type-variable path.  The fast-path checks below are kept for the
@@ -1769,15 +4722,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     params[n_params - 1]->type = type_from_kind(ck);
                     params[n_params - 1]->type.copy_kind = typekind_default_copy_kind(ck);
                 } else {
-                    /* Phase TA1: check defalias table */
+                    /* Phase TA1/TA2: check defalias table.  Copy the full
+                     * target type so a composite alias keeps its payload
+                     * (element types, struct def, fn signature). */
                     const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
-                    TypeKind ak = TY_UNKNOWN;
+                    const Type *at = NULL;
                     for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
-                        if (e->type_alias_names[ai] == ksym) { ak = e->type_alias_kinds[ai]; break; }
+                        if (e->type_alias_names[ai] == ksym) { at = e->type_alias_types[ai]; break; }
                     }
-                    if (ak != TY_UNKNOWN) {
-                        param_kinds[n_params - 1] = ak;
-                        params[n_params - 1]->type = type_from_kind(ak);
+                    if (at) {
+                        param_kinds[n_params - 1] = at->kind;
+                        params[n_params - 1]->type = *at;
                     } else {
                     /* Try to look up as ADT name */
                     AdtDef *param_adt = NULL;
@@ -1905,6 +4860,27 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Type *return_tyvar_type = NULL; /* GS4: full TY_TYVAR return type for call-site substitution */
     Type *return_borrow_type = NULL; /* LS2: full borrow return type (&'a T) so lifetime IDs survive */
     const Form *return_type_form_kept = NULL; /* SZ8 non-GADT: retain raw return-type Form for size-index inference at call sites */
+    /* CT0/RT0: a contract RETURN type -- `: #refine{ r : T | p }`.  The
+     * declared return kind is the BASE type T (mirroring how a contract
+     * parameter annotation is handled); the predicate becomes a postcondition
+     * on the result, checked at runtime and -- under the `refined` experiment
+     * -- proved statically when a backend can, in which case no runtime check
+     * is emitted at all.  Before this, a contract return type left
+     * return_kind == TY_CONTRACT and every caller failed to type the call. */
+    const Form *ct_ret_pred = NULL;
+    const char *ct_ret_var  = NULL;
+    /* RT4: a return refinement the solver PROVED about the body, when none was
+     * declared.  Published on the binding so call sites can use it; never
+     * turned into a runtime check. */
+    const Form *rt_inferred_ret = NULL;
+    const char *rt_inferred_var = NULL;
+    /* True when a DECLARED return refinement is actually guaranteed of every
+     * value this function returns -- either it was proved statically, or the
+     * runtime check that enforces it is being emitted.  Neither holds when
+     * contracts are stripped (`--no-contracts`, or a release build without
+     * --keep-contracts), and assuming it then would let a call site prove a
+     * goal from a fact nothing enforces. */
+    bool rt_ret_guaranteed = false;
     uint32_t body_start = params_idx + 1;  /* params_idx = params vector */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -1913,6 +4889,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     EffectRow *declared_effect_row_defn = NULL;
     bool defn_has_construct_attr = false;
     bool defn_has_byval_attr = false;
+    /* C2 / #reads: captured here, stamped onto the binding alongside the
+     * refine_* metadata below.  1-based; 0 = no #reads annotation. */
+    uint32_t reads_param_plus1_defn = 0;
+    /* WF1 / #writes: the write frame, captured here and stamped alongside.
+     * `declared` is separate from the mask because an empty mask is a real
+     * frame ("writes nothing"), not the absence of one -- see expr.h. */
+    uint32_t writes_mask_defn     = 0;
+    bool     writes_declared_defn = false;
+    const Form *writes_annot_defn = NULL;   /* for the WF2 diagnostic's span */
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
@@ -1940,6 +4925,100 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid);
             body_start++;  /* skip past the effect row map */
+        }
+    }
+    /* C2 / #reads <sym> and WF1 / #writes <sym>|[<sym>...]: the frame
+     * annotations, at the same signature position as #fx{...} and (when it is
+     * present) after it.  Each resolves its named symbols to parameter indices
+     * and records them on the binding; the refinement encoder consults `#reads`
+     * to grant congruence inside a frozen region, and WF2/WF3/WF4 consult
+     * `#writes`.
+     *
+     * The loop accepts the two in EITHER order.  There is no reason to prefer
+     * one spelling, and a fixed order would turn a reader's stylistic choice
+     * into "unknown function or operator 'writes'" -- the annotation would fall
+     * through to the body walk and elaborate as a call. */
+    for (int annot_slot = 0; annot_slot < 2; annot_slot++) {
+        if (call->as.list.len < body_start + 1) break;
+        Form *maybe = call->as.list.items[body_start];
+        if (maybe->tag != F_LIST) break;
+        if (maybe->fx_prov == (uint8_t)PROV_READS) {
+            const Form *psym = (maybe->as.list.len == 2)
+                                   ? maybe->as.list.items[1] : NULL;
+            if (!psym || psym->tag != F_SYM || !psym->as.sym) {
+                diag_emit(DIAG_ERROR, maybe->span,
+                          "#reads must name a parameter: `#reads <param>`");
+            } else {
+                uint32_t found = 0;
+                for (uint32_t pi = 0; pi < n_params; pi++) {
+                    if (params[pi] && params[pi]->name == psym->as.sym) {
+                        found = pi + 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    diag_emit(DIAG_ERROR, psym->span,
+                              "#reads names '%s', which is not a parameter of this function",
+                              psym->as.sym->name);
+                } else {
+                    reads_param_plus1_defn = found;
+                }
+            }
+            body_start++;  /* skip past the #reads annotation */
+        } else if (maybe->fx_prov == (uint8_t)PROV_WRITES) {
+            experiment_warn_if_used("write-frames");
+            if (writes_declared_defn) {
+                diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                    TUR_E0381_WRITES_FRAME_INVALID,
+                                    "duplicate `#writes` frame on this function; "
+                                    "name every written parameter in one "
+                                    "`#writes [...]`");
+            }
+            /* Declared even when a name inside fails to resolve: the intent to
+             * carry a frame is unambiguous, and treating a typo'd frame as "no
+             * frame" would silently downgrade the function to UNKNOWN-writes
+             * after already reporting the typo -- two answers to one mistake. */
+            writes_declared_defn = true;
+            writes_annot_defn    = maybe;
+            for (uint32_t ai = 1; ai < maybe->as.list.len; ai++) {
+                const Form *psym = maybe->as.list.items[ai];
+                if (!psym || psym->tag != F_SYM || !psym->as.sym) {
+                    diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                        TUR_E0381_WRITES_FRAME_INVALID,
+                                        "#writes must name parameters: "
+                                        "`#writes <param>` or `#writes [<param> ...]`");
+                    continue;
+                }
+                uint32_t found = 0;
+                for (uint32_t pi = 0; pi < n_params; pi++) {
+                    if (params[pi] && params[pi]->name == psym->as.sym) {
+                        found = pi + 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    diag_emit_with_code(DIAG_ERROR, psym->span,
+                                        TUR_E0381_WRITES_FRAME_INVALID,
+                                        "#writes names '%s', which is not a parameter "
+                                        "of this function",
+                                        psym->as.sym->name);
+                } else if (found > WF_MAX_FRAME_PARAMS) {
+                    /* The mask is 32 bits wide.  Rejected rather than dropped:
+                     * a silently ignored frame member is a frame the body can
+                     * exceed without anyone hearing about it. */
+                    diag_emit_with_code(DIAG_ERROR, psym->span,
+                                        TUR_E0381_WRITES_FRAME_INVALID,
+                                        "#writes names '%s', parameter %u -- a write "
+                                        "frame covers at most the first %u parameters",
+                                        psym->as.sym->name, found,
+                                        (unsigned)WF_MAX_FRAME_PARAMS);
+                } else {
+                    writes_mask_defn |= (uint32_t)1u << (found - 1);
+                }
+            }
+            body_start++;  /* skip past the #writes annotation */
+        } else {
+            break;         /* neither annotation: the body starts here */
         }
     }
     bool fn_declared_unsafe =
@@ -2017,6 +5096,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 body_start++;
                 goto done_return_annotation;
             }
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `: rc<T>` / `: weak<T>` / `: ref<T>` / `: lref<T>` return type. */
+            {
+                Type *rc_ret = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                                ret_f->span, NULL,
+                                                                fn_type_params,
+                                                                fn_type_param_kinds,
+                                                                n_fn_type_params);
+                if (rc_ret) {
+                    return_kind = rc_ret->kind;
+                    return_app_type = rc_ret;  /* threads result_full_type for codegen */
+                    body_start++;
+                    goto done_return_annotation;
+                }
+            }
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_kind = TY_INT;
             } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
@@ -2070,13 +5164,31 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 } else if (ck != TY_UNKNOWN) {
                     return_kind = ck;
                 } else {
-                    /* Phase TA1: check defalias table */
+                    /* Phase TA1/TA2: check defalias table.  A composite target
+                     * has to thread its full type through the same capture
+                     * variables the `: (type-expr)` path uses below, or the
+                     * payload (struct def, fn signature, app args) is lost and
+                     * call sites see a bare shell of the right kind. */
                     bool alias_found = false;
                     {
                         const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
                         for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                             if (e->type_alias_names[ai] == ksym) {
-                                return_kind = e->type_alias_kinds[ai];
+                                Type *at = e->type_alias_types[ai];
+                                return_kind = at->kind;
+                                switch (at->kind) {
+                                case TY_ADT:       return_adt_def       = at->as.adt_.def; break;
+                                case TY_SESSION:
+                                case TY_ROLE:      return_session_type  = at; break;
+                                case TY_APP:       return_app_type      = at; break;
+                                case TY_EXISTS:
+                                case TY_FORALL:    return_exists_type   = at; break;
+                                case TY_FN:        return_fn_type       = at; break;
+                                case TY_TYVAR:     return_tyvar_type    = at; break;
+                                case TY_REF_IMMUT:
+                                case TY_REF_MUT:   return_borrow_type   = at; break;
+                                default: break;
+                                }
                                 alias_found = true;
                                 break;
                             }
@@ -2116,6 +5228,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_type_form_kept = ret_f->as.list.items[0];
                 Type *ann = fn_type_from_form(e, ret_f->as.list.items[0],
                                               fn_type_params, fn_type_param_kinds, n_fn_type_params);
+                /* CT0/RT0: peel a contract return type down to its base type.
+                 * Everything downstream (return_kind, the ADT/session/forall
+                 * capture below, codegen, call sites) then sees exactly the
+                 * type it would have seen without the refinement, and the
+                 * predicate rides along as a postcondition on the result.
+                 * Before this, a `: #refine{...}` return left return_kind ==
+                 * TY_CONTRACT and every call site failed to type the result. */
+                if (ann && ann->kind == TY_CONTRACT) {
+                    ct_ret_pred = ann->as.contract_.predicate;
+                    ct_ret_var  = ann->as.contract_.var_name;
+                    ann = ann->as.contract_.base_type;
+                }
                 if (ann) {
                     return_kind = ann->kind;
                     if (ann->kind == TY_TYVAR) {
@@ -2329,6 +5453,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         existing->type.as.fn.is_variadic = is_variadic;
         existing->type.as.fn.rest_kind   = rest_kind;
         existing->type.as.fn.rest_full_type = rest_full_type;
+        existing->type.as.fn.rest_borrow = rest_borrow_flag; /* closure-drop-glue (mw-compose-of) */
         bool _any_poly = false;
         for (uint32_t _ei = 0; _ei < n_params; _ei++) {
             if (param_poly_types[_ei]) { _any_poly = true; break; }
@@ -2559,7 +5684,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->cur_hkt_constraint_class = NULL;
     e->cur_hkt_constraint_tyvar = NULL;
     e->cur_hkt_dict_binding     = NULL;
-    if (n_constraints == 1 && constraint_list &&
+    /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the ambient constraint
+     * used to be recorded only for a SINGLE-constraint fn, so the moment a body
+     * needed two classes on the same type constructor -- `[^Monad m ^Applicative
+     * m ...]`, which is what any `bind`-then-`pure` combinator needs -- the
+     * ambient went unset and return-directed dispatch had nothing to key on.
+     * Accept N constraints as long as they all pin the SAME higher-kinded type
+     * variable; the ambient class/dict stay the first one (the dict-clone path
+     * below is still single-constraint by construction, see make_dict_clone),
+     * but `cur_hkt_constraint_tyvar` now correctly reports "this body abstracts
+     * over m". Constraints on DIFFERENT tyvars keep the old behaviour of
+     * recording no ambient at all. */
+    bool hkt_constraints_share_tyvar = (n_constraints >= 1 && constraint_list);
+    for (uint8_t ci = 1; ci < n_constraints && hkt_constraints_share_tyvar; ci++) {
+        if (!constraint_list[ci].typeclass || !constraint_list[ci].tyvar ||
+            constraint_list[ci].tyvar != constraint_list[0].tyvar)
+            hkt_constraints_share_tyvar = false;
+    }
+    if (hkt_constraints_share_tyvar &&
         constraint_list[0].typeclass && constraint_list[0].tyvar) {
         const Symbol *ctv = constraint_list[0].tyvar;
         for (uint8_t tpi = 0; tpi < n_fn_type_params; tpi++) {
@@ -2592,6 +5734,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * propagates to the call directly under the ascription.  We skip the
      * TY_TYVAR case because a bare type-variable return cannot bind a
      * callee's tyvar (no concrete witness to substitute). */
+    /* RT1: everything the body records from here on is a call-site crossing
+     * inside THIS function, so its hypotheses are this function's.  Marking the
+     * range now and back-filling once the environment exists avoids keeping a
+     * mutable "current env" that elab_defn's many error returns would have to
+     * unwind correctly. */
+    uint32_t rt_cs_start = e->n_refine_call_sites;
+
     Type *prev_body_expected = e->expected_type;
     Type *body_expected = NULL;
     /* structdef-retirement DS-C: the return_struct_def branch (a TY_STRUCT
@@ -2850,79 +5999,86 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* Phase C2: --no-contracts strips refinement-type ({ x : T | pred })
          * contract injection too, so the flag removes *all* contract checks. */
         if (g_no_contracts) should_check = false;
+
+        /* RT1: under the `refined` experiment, build the hypothesis
+         * environment (parameter refinements + `:pre`) once and use it twice --
+         * to decide this function's return-position obligations, and (via the
+         * back-fill below) as the hypotheses for every call-site crossing its
+         * body produced.  A proved obligation gets no runtime check emitted; an
+         * unproved one keeps exactly the check it would have had with contract
+         * types alone.
+         *
+         * The parameter's own ENTRY check is still always emitted, even when
+         * every visible call site is proved: eliding it would need whole-program
+         * knowledge of the call graph (including exported and indirect callers),
+         * and getting that wrong drops a check that was protecting something.
+         * The call-site obligations here are a diagnostic layer on top -- they
+         * turn `(safe-div 10 0)` into a compile error -- not a licence to
+         * remove the callee's guard. */
+        const Form *rt_subject = (call->as.list.len > body_start)
+                               ? call->as.list.items[call->as.list.len - 1] : NULL;
+        /* Path-condition recovery uses the WHOLE body (rt_whole_body below),
+         * not just the return subject -- both sides of the 2026-07-26 merge
+         * implemented that fix; main's helper form is kept. */
+        bool rt_ret_proven  = false;
+        bool rt_post_proven = false;
+        RefineEnv *rt_env = rt_build_env(e, params, n_params, ct_param_preds,
+                                         ct_param_varnames, ct_param_param_idx,
+                                         n_ct_param_preds, ct_pre_form);
+        /* Unconditional: even a function with no refinements of its own is
+         * the named caller of the crossings its body produced, and its
+         * parameters still need declared sorts in the environment. */
+        refine_fill_call_site_env(e, rt_cs_start, rt_env,
+                                  name_f->as.sym ? name_f->as.sym->name : NULL,
+                                  rt_whole_body(e, call, body_start));
+        const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
+        char rt_what[128];
+        if (ct_ret_pred) {
+            snprintf(rt_what, sizeof(rt_what), "the return value of '%s'", rt_fn);
+            rt_ret_proven = rt_return_obligation_proven(
+                e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
+                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
+                call->span);
+            rt_ret_guaranteed = rt_ret_proven || should_check;
+        }
+        if (ct_post_form) {
+            snprintf(rt_what, sizeof(rt_what), "the postcondition of '%s'", rt_fn);
+            rt_post_proven = rt_return_obligation_proven(
+                e, ct_post_form, "result", rt_subject, return_kind, rt_env,
+                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
+                call->span);
+        }
+        /* RT4: with no DECLARED return refinement, try to infer one from
+         * the parameter refinements and the body.  Scope is deliberately
+         * narrow (the plan's): a single-expression body over a numeric
+         * result, at most four refined parameters.  A branching body would
+         * need a path-sensitive join at the merge point, which is deferred.
+         * Nothing is emitted for an inferred refinement -- it is extra
+         * knowledge published to call sites, not a new runtime check. */
+        if (!ct_ret_pred && n_body == 1 && n_ct_param_preds > 0 &&
+            n_ct_param_preds <= 4 && rt_subject &&
+            (return_kind == TY_INT || return_kind == TY_FLOAT ||
+             return_kind == TY_FLOAT32 || return_kind == TY_FLOAT64)) {
+            rt_inferred_ret = rt4_infer_return(e, rt_subject, return_kind,
+                                               rt_env, call->span);
+            if (rt_inferred_ret) rt_inferred_var = RT4_RESULT_VAR;
+        }
+
         if (should_check && body) {
             /* Look up tur-contract-check binding */
             Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
 
-            /* CT1: Param contract type predicates — inject as pre-checks.
-             * For each { v : T | pred } param annotation, inject:
-             *   (tur-contract-check (let [v param] pred) "Contract violated") */
-            if (check_fn) {
-                for (uint8_t ct_pi = 0; ct_pi < n_ct_param_preds; ct_pi++) {
-                    if (ct_param_preds[ct_pi] == NULL) continue;
-                    const char *var_nm = ct_param_varnames[ct_pi];
-                    const Form *pred_f = ct_param_preds[ct_pi];
-                    uint8_t pi = ct_param_param_idx[ct_pi];
-                    /* Add contract var binding (alias for param) */
-                    Binding *cv_b = NULL;
-                    if (var_nm) {
-                        StrSlice vnsl = strslice(var_nm, (uint32_t)strlen(var_nm));
-                        const Symbol *cv_sym = symtab_intern(e->st, vnsl);
-                        /* Only add if different from param name */
-                        Binding *existing_cv = scope_lookup(e->scope, cv_sym);
-                        if (!existing_cv || existing_cv != params[pi]) {
-                            cv_b = binding_new(e, cv_sym, params[pi]->type, false, false, call->span);
-                            /* Make cv_b reference same value as param by sharing the binding.
-                             * We create a var expr below to read params[pi]. */
-                            scope_add(e->scope, cv_b);
-                        }
-                    }
-                    Expr *pred_e = elab_form(e, (Form *)pred_f);
-                    if (pred_e) {
-                        Expr **ck_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                        /* If cv_b was added, wrap in let: (let [v param] pred) */
-                        Expr *check_expr = pred_e;
-                        if (cv_b) {
-                            /* Build: let [cv_b = param_var] in pred_e */
-                            Expr *param_var_e = expr_new(e->arena, EX_VAR, params[pi]->type, call->span);
-                            param_var_e->as.var.binding = params[pi];
-                            LetBinding *cv_lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
-                            cv_lb->binding = cv_b;
-                            cv_lb->init = param_var_e;
-                            Expr *let_cv = expr_new(e->arena, EX_LET, pred_e->type, call->span);
-                            let_cv->as.let_.bindings = cv_lb;
-                            let_cv->as.let_.n = 1;
-                            let_cv->as.let_.body = pred_e;
-                            check_expr = let_cv;
-                        }
-                        ck_args[0] = check_expr;
-                        Expr *ck_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
-                        ck_msg->as.s.p = "Contract violated";
-                        ck_msg->as.s.len = 17;
-                        ck_args[1] = ck_msg;
-                        Expr *ck_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
-                        ck_call->as.call_.fn_binding = check_fn;
-                        ck_call->as.call_.args = ck_args;
-                        ck_call->as.call_.n_args = 2;
-                        ck_call->as.call_.fn_expr = NULL;
-                        ck_call->as.call_.dict_arg = NULL;
-                        ck_call->as.call_.is_poly_call = false;
-                        ck_call->as.call_.poly_arg_mask = 0;
-                        /* Prepend to body */
-                        Expr **do2 = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                        do2[0] = ck_call;
-                        do2[1] = body;
-                        Expr *new_b = expr_new(e->arena, EX_DO, body->type, call->span);
-                        new_b->as.do_.items = do2;
-                        new_b->as.do_.n = 2;
-                        body = new_b;
-                    }
-                }
-            }
+            /* CT1: parameter contract predicates -- entry checks.  Shared
+             * with `fn` so a lambda's contract parameters behave identically. */
+            body = rt_inject_param_checks(e, body, check_fn, params, n_params,
+                                          ct_param_preds, ct_param_varnames,
+                                          ct_param_param_idx, n_ct_param_preds,
+                                          call->span);
 
             /* CT1: :pre — prepend (tur-contract-check pre_pred "Precondition failed") */
             if (ct_pre_form && check_fn) {
                 Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
+                rt_diag_impure_pred(e, pred_e, call->span);
                 if (pred_e) {
                     /* Build call: (tur-contract-check pred "Precondition failed") */
                     Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
@@ -2951,52 +6107,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
 
-            /* CT1: :post — wrap body as:
-             *   (let [result body] (tur-contract-check post_pred "Postcondition failed") result) */
-            if (ct_post_form && check_fn) {
-                /* Create 'result' binding for the return value */
-                Binding *result_b = binding_new(e, e->sym_result, body->type, false, false, call->span);
-                /* Elaborate post predicate with 'result' in scope */
-                scope_add(e->scope, result_b);
-                Expr *post_pred_e = elab_form(e, (Form *)ct_post_form);
-                /* Remove 'result' from scope (done via scope exit, but we patch manually) */
-                /* Note: scope is already cleaned up below; we just need the expr */
-                if (post_pred_e) {
-                    /* Build (tur-contract-check post_pred "Postcondition failed") */
-                    Expr **post_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                    post_args[0] = post_pred_e;
-                    Expr *post_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
-                    post_msg->as.s.p = "Postcondition failed";
-                    post_msg->as.s.len = 20;
-                    post_args[1] = post_msg;
-                    Expr *post_check = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
-                    post_check->as.call_.fn_binding = check_fn;
-                    post_check->as.call_.args = post_args;
-                    post_check->as.call_.n_args = 2;
-                    post_check->as.call_.fn_expr = NULL;
-                    post_check->as.call_.dict_arg = NULL;
-                    post_check->as.call_.is_poly_call = false;
-                    post_check->as.call_.poly_arg_mask = 0;
-                    /* result_var: reference to the result binding */
-                    Expr *result_var = expr_new(e->arena, EX_VAR, body->type, call->span);
-                    result_var->as.var.binding = result_b;
-                    /* do: (tur-contract-check ...) then result */
-                    Expr **inner_items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                    inner_items[0] = post_check;
-                    inner_items[1] = result_var;
-                    Expr *inner_do = expr_new(e->arena, EX_DO, body->type, call->span);
-                    inner_do->as.do_.items = inner_items;
-                    inner_do->as.do_.n = 2;
-                    /* let binding: result = body */
-                    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
-                    lb->binding = result_b;
-                    lb->init = body;
-                    Expr *let_e = expr_new(e->arena, EX_LET, body->type, call->span);
-                    let_e->as.let_.bindings = lb;
-                    let_e->as.let_.n = 1;
-                    let_e->as.let_.body = inner_do;
-                    body = let_e;
-                }
+            /* CT1: :post and a contract RETURN type — wrap body as:
+             *   (let [<var> body] (tur-contract-check pred "...failed") <var>)
+             *
+             * `:post` binds the result as `result`; a `: #refine{ r : T | p }`
+             * return type binds it as the contract's own variable (`r`).  RT3:
+             * an obligation a backend proved emits NO check at all.
+             *
+             * Both can be present; the return contract wraps outermost. */
+            for (int ct_pass = 0; ct_pass < 2 && check_fn; ct_pass++) {
+                const Form *pred_form = ct_pass == 0 ? ct_post_form : ct_ret_pred;
+                if (!pred_form) continue;
+                if (ct_pass == 0 ? rt_post_proven : rt_ret_proven) continue;
+                body = rt_wrap_return_check(
+                    e, body, check_fn, pred_form,
+                    ct_pass == 1 ? ct_ret_var : NULL,
+                    ct_pass == 0 ? "Postcondition failed"
+                                 : "Return contract violated",
+                    call->span);
             }
         }
     }
@@ -3104,6 +6232,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fn_type.as.fn.is_variadic = is_variadic;
     fn_type.as.fn.rest_kind   = rest_kind;
     fn_type.as.fn.rest_full_type = rest_full_type;
+    fn_type.as.fn.rest_borrow = rest_borrow_flag; /* closure-drop-glue (mw-compose-of) */
 
     /* Phase G3: attach full ADT return type if declared (for proper def propagation) */
     if (return_adt_def) {
@@ -3390,11 +6519,148 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* RT1: publish the per-parameter refinement predicates on the binding so
+     * call sites can check their arguments against them.  This is the same
+     * Binding object pass 1 forward-declared, so a call elaborated BEFORE this
+     * defn sees the predicates too -- the resolution pass runs after the whole
+     * unit.  Parameter names ride along because a predicate may mention a
+     * sibling parameter, which the call site replaces with that slot's
+     * argument. */
+    if (n_params > 0) {
+        const Form **rp = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
+        const char **rv = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        const char **rn = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        for (uint32_t _pi = 0; _pi < n_params; _pi++) {
+            rp[_pi] = NULL;
+            rv[_pi] = NULL;
+            rn[_pi] = (params[_pi] && params[_pi]->name) ? params[_pi]->name->name : NULL;
+        }
+        for (uint32_t _ci = 0; _ci < n_ct_param_preds; _ci++) {
+            uint32_t _pi = ct_param_param_idx[_ci];
+            if (_pi >= n_params) continue;
+            rp[_pi] = ct_param_preds[_ci];
+            rv[_pi] = ct_param_varnames[_ci];
+        }
+        b->refine_param_preds = rp;
+        b->refine_param_vars  = rv;
+        b->refine_param_names = rn;
+        b->n_refine_params    = n_params;
+    }
+    /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
+     * refinements, so this must not sit inside the block above. */
+    b->reads_param_plus1 = reads_param_plus1_defn;
+    /* WF1 / #writes: same placement rationale as `#reads` -- a write frame is
+     * independent of param refinements.  `writes_checked` starts false and is
+     * raised by the DEFERRED WF2 pass (wf_resolve_write_frames), which is where
+     * it has to happen: "every callee's own declared #writes frame stays inside
+     * this frame" is a question about functions that may be defined later in
+     * the file, and the answer must not depend on definition order. */
+    b->writes_param_mask = writes_mask_defn;
+    b->writes_declared   = writes_declared_defn;
+    b->writes_checked    = false;
+    if (writes_declared_defn)
+        wf_note_frame_site(e, b, params, n_params, call, body_start,
+                           writes_annot_defn);
+    /* A declared return refinement wins -- but only when something actually
+     * enforces it (see rt_ret_guaranteed).  An INFERRED one is always safe to
+     * publish: RT4 only records what a backend proved. */
+    if (ct_ret_pred && rt_ret_guaranteed) {
+        b->refine_return_pred = ct_ret_pred;
+        b->refine_return_var  = ct_ret_var;
+    } else if (!ct_ret_pred && rt_inferred_ret) {
+        b->refine_return_pred = rt_inferred_ret;
+        b->refine_return_var  = rt_inferred_var;
+    }
+
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
     /* #[used]: retain with external C linkage under separate compilation */
     b->retain_c_linkage = retain_c_linkage;
+    /* closure-drop-glue S1c (non-retaining fn-param inference): a fn-typed / ^fat
+     * parameter that the body only CALLS -- never lets escape as a value -- does
+     * not retain a capturing-closure argument, so that argument's heap env may be
+     * freed at the call scope's exit (like a ^borrow param).  Infer the mask now,
+     * from the just-elaborated body; the conservative escape analysis only ever
+     * clears the bit (a false "escapes" merely preserves the status-quo leak). */
+    b->nonretain_param_mask = 0;
+    /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
+     * (a param is a C-visible formal, not an AST capture), so a body containing
+     * any inline-C is never treated as non-retaining -- otherwise its stored
+     * closure arg would be freed while the C-side copy is still live (UAF). */
+    /* catch-box-reader-confinement-whitelist: the same inference, for the
+     * pointer-carrying scalars (cstr / ptr<void>) that a caught-Result box
+     * hands out.  Trusting a hardcoded print-family name list made the
+     * confinement check a soundness-maintenance footgun AND needlessly leaked
+     * for a user-defined logger that is every bit as safe; inferring it from
+     * the body makes it a checked property.  The inline-C guard above is
+     * load-bearing here too -- a C body can stash the pointer where no AST
+     * walk can see it.
+     *
+     * The result gate mirrors catch_box_binding_reader_confined: the param may
+     * only be treated as non-retained if the function's own result cannot carry
+     * it back out. */
+    b->nonretain_ptr_param_mask = 0;
+    if (body && !expr_subtree_has_inline_c(body)) {
+        for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+            Binding *_pb = params[_pi];
+            if (!_pb) continue;
+            bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
+                               _pb->type.kind == TY_FN;
+            if (_is_fnparam && !closure_binding_escapes(body, _pb))
+                b->nonretain_param_mask |= (1u << _pi);
+            bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
+                                  _pb->type.kind == TY_PTR_VOID;
+            if (_is_ptr_scalar) {
+                TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                       : TY_UNKNOWN;
+                bool _result_safe = false;
+                switch (_rk) {
+                    case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+                    case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+                    case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+                    case TY_FLOAT64: case TY_FLOAT32:
+                        _result_safe = true; break;
+                    default: break;
+                }
+                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
+                    b->nonretain_ptr_param_mask |= (1u << _pi);
+            }
+        }
+    }
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+
+    /* closure-drop-glue S1c (fresh-closure-returning fn): a fn whose body is a
+     * bare capturing EX_CLOSURE constructs a FRESH, uniquely-owned heap env on
+     * every call and returns it.  When such a call result is consumed by a
+     * non-retaining fn-param, the caller can free that env at scope exit (the
+     * make-scaler headline shape).  Restricted to scalar (Copy) captures and a
+     * scalar closure result so a bare `free(env)` is fully safe: no owning
+     * capture to double-free/leak, and the result cannot alias the env. */
+    b->returns_fresh_closure = false;
+    {
+        const Expr *_fc = body;
+        while (_fc && _fc->kind == EX_ASCRIBE) _fc = _fc->as.ascribe_.inner;
+        /* closure-drop-glue (mw-compose-of): peel a trailing `(let [...] <closure>)`
+         * wrapper so a factory like `(defn make-mw [tag] (let [_t tag] (fn [n] ...)))`
+         * is still recognised as fresh-closure-returning.  Every call allocates a
+         * fresh env (Turmeric lets are not memoised); the let-bound intermediates
+         * are the factory's own scope and do not affect the returned env, whose
+         * captures/result are still checked scalar-Copy below. */
+        while (_fc && (_fc->kind == EX_LET || _fc->kind == EX_ASCRIBE))
+            _fc = (_fc->kind == EX_ASCRIBE) ? _fc->as.ascribe_.inner
+                                            : _fc->as.let_.body;
+        if (_fc && _fc->kind == EX_CLOSURE && _fc->as.closure_.closure &&
+            _fc->as.closure_.closure->n_captures > 0 &&
+            _fc->as.closure_.closure->fn) {
+            struct Closure *_c = _fc->as.closure_.closure;
+            bool _ok = fn_result_kind_is_scalar_copy(_c->fn->return_type.kind);
+            for (uint8_t _ci = 0; _ok && _ci < _c->n_captures; _ci++)
+                if (!_c->captures[_ci] ||
+                    !fn_result_kind_is_scalar_copy(_c->captures[_ci]->type.kind))
+                    _ok = false;
+            b->returns_fresh_closure = _ok;
+        }
+    }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
     /* let-bound-sf-loses-outer-arg-type: record whether the return *value* is
@@ -3455,10 +6721,32 @@ Expr *elab_defn(Elab *e, const Form *call) {
              fn_type.as.fn.result_full_type->kind == TY_FN) ||
             (fn_type.as.fn.result_kind == TY_FN);
         if (result_is_fn && body) {
-            unsigned leaves = fn_tail_fn_leaf_kinds(body);
+            unsigned leaves = fn_tail_fn_leaf_kinds(body, NULL);
             if ((leaves & 1u) && (leaves & 2u)) {
-                elab_box_thin_fn_tail_leaves(e, &body);
+                elab_box_thin_fn_tail_leaves(e, &body, NULL);
             }
+        }
+    }
+
+    /* fn-value-fat-normalization stage 2: a defn whose declared result is a
+     * concrete effect-free fn type returns a fat handle, ALWAYS -- tail
+     * leaves are normalized (thin shimmed, carrier param boxed via
+     * poly-to-fat, fat passed through) and the result is marked boxed so
+     * every consumer rides the existing boxed-result plumbing.  Same
+     * narrowed claim as stage 1 (the shared predicate); the nested-result
+     * (result_kind == TY_FN/TY_UNKNOWN) and ^fat-result carve-outs mirror
+     * the returns_boxed_closure block above. */
+    {
+        Type *rft = fn_type.as.fn.result_full_type;
+        if (body && rft && rft->kind == TY_FN && !rft->as.fn.boxed &&
+            !fn_type.as.fn.result_fat &&
+            rft->as.fn.result_kind != TY_FN &&
+            rft->as.fn.result_kind != TY_UNKNOWN &&
+            fn_result_type_is_fat_normalized(rft) &&
+            !(b->name && b->name->name &&
+              strncmp(b->name->name, "__inst_", 7) == 0)) {
+            elab_normalize_fn_tail_leaves(e, &body, rft, NULL);
+            rft->as.fn.boxed = true;
         }
     }
 
@@ -3628,6 +6916,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* CT0/CT1: contract-typed parameters of this lambda, collected during
+     * parameter parsing and injected as entry checks once the body exists. */
+    const Form *ct_param_preds[MAX_FN_ARITY];
+    const char *ct_param_varnames[MAX_FN_ARITY];
+    uint32_t    ct_param_param_idx[MAX_FN_ARITY];
+    uint32_t    n_ct_param_preds = 0;
+
     /* Edge 1: snapshot and clear the active letrec self-exclude group at entry.
      * This `fn` IS the letrec init's top-level lambda iff elab_letrec set the
      * group right before calling us; a direct self/mutual call in our own body
@@ -3795,7 +7090,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
             params[n_params++] = rest_b;
             break;
         }
-        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN || p->tag == F_LIST || p->tag == F_VEC) {
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN || p->tag == F_LIST ||
+            p->tag == F_VEC || p->tag == F_CONTRACT_TYPE) {
             if (n_params == 0) {
                 diag_emit(DIAG_ERROR, p->span,
                           "fn: type annotation without preceding parameter");
@@ -3805,6 +7101,20 @@ Expr *elab_fn(Elab *e, const Form *call) {
             Type *ann = fn_type_from_form(e, type_form,
                                           fn_type_params, fn_type_param_kinds, n_fn_type_params);
             if (!ann) return NULL;
+            /* CT0: a contract-typed lambda parameter takes its BASE type, and
+             * its predicate becomes an entry check -- exactly as for a `defn`.
+             * Without the peel the parameter's type stayed TY_CONTRACT and
+             * every call site failed with `expected { _ : ? | ... }, got int`,
+             * so `#refine` on a lambda parameter did not compile at all. */
+            if (ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
+                if (ann->as.contract_.predicate && n_ct_param_preds < MAX_FN_ARITY) {
+                    ct_param_preds[n_ct_param_preds]     = ann->as.contract_.predicate;
+                    ct_param_varnames[n_ct_param_preds]  = ann->as.contract_.var_name;
+                    ct_param_param_idx[n_ct_param_preds] = n_params - 1;
+                    n_ct_param_preds++;
+                }
+                ann = ann->as.contract_.base_type;
+            }
             param_kinds[n_params - 1] = ann->kind;
             params[n_params - 1]->type = *ann;
             /* Record the full type whenever the annotation carries information
@@ -3989,9 +7299,19 @@ Expr *elab_fn(Elab *e, const Form *call) {
                                                        fn_type_params,
                                                        fn_type_param_kinds,
                                                        n_fn_type_params);
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `: rc<T>` / `: weak<T>` / `: ref<T>` / `: lref<T>` return type. */
+            Type *rc_ret = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                            ret_f->span, NULL,
+                                                            fn_type_params,
+                                                            fn_type_param_kinds,
+                                                            n_fn_type_params);
             if (ptr_ret) {
                 return_kind = TY_PTR_VOID;
                 return_full_type = ptr_ret;
+            } else if (rc_ret) {
+                return_kind = rc_ret->kind;
+                return_full_type = rc_ret;
             } else if (fn_type_param_index(fn_type_params, n_fn_type_params, kw, &type_param_idx)) {
                 return_kind = TY_TYVAR;
                 return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -4029,12 +7349,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
                  * int64 carrier and the value's struct type was lost at the
                  * call site -- a following (.field ...) could not resolve. */
                 bool resolved_nominal = false;
-                /* defalias table (mirror elab_defn's TA1 ladder) */
+                /* defalias table (mirror elab_defn's TA1/TA2 ladder) */
                 {
                     const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
                     for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                         if (e->type_alias_names[ai] == ksym) {
-                            return_kind = e->type_alias_kinds[ai];
+                            return_kind      = e->type_alias_kinds[ai];
+                            return_full_type = e->type_alias_types[ai];
                             resolved_nominal = true;
                             break;
                         }
@@ -4068,6 +7389,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (ret_f->as.list.len > 0) {
                 Type *ann = fn_type_from_form(e, ret_f->as.list.items[0],
                                               fn_type_params, fn_type_param_kinds, n_fn_type_params);
+                /* CT0: a contract return type on a lambda contributes its base
+                 * type; the predicate is a `defn`-level construct (there is no
+                 * postcondition injection point for an anonymous fn), so it is
+                 * peeled and dropped rather than left to break the result kind. */
+                if (ann && ann->kind == TY_CONTRACT && ann->as.contract_.base_type)
+                    ann = ann->as.contract_.base_type;
                 if (ann) {
                     return_kind = ann->kind;
                     if (ann->kind == TY_TYVAR || fn_type_has_named_tyvar(ann)) {
@@ -4122,6 +7449,43 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
+
+    /* closure-capture-escapes-linearity: snapshot the substructural state of
+     * every enclosing linear/unique binding BEFORE the body runs.
+     *
+     * Elaborating the body marks an OUTER binding consumed at the point the
+     * closure is built, not where it is called, so `(f) (f)` on a closure that
+     * frees a captured `^linear` was two consumptions the checker never saw --
+     * a real double-free.  Comparing this snapshot against the state after the
+     * body identifies exactly which captures the body CONSUMES (as opposed to
+     * merely reads), which is the distinction the fix turns on: a read-only
+     * capture is safe at any arity and must stay accepted.
+     *
+     * Arena-allocated rather than malloc'd on purpose -- elab_fn has many early
+     * returns between here and the use site below, and the compiler path is
+     * leak-checked. */
+    uint32_t n_lin_snap = 0;
+    for (const Scope *cur = e->scope; cur; cur = cur->parent)
+        for (uint32_t i = 0; i < cur->n; i++)
+            if (cur->bindings[i]->is_linear || cur->bindings[i]->is_unique)
+                n_lin_snap++;
+    FnCaptureLinSnap *lin_snap =
+        (FnCaptureLinSnap *)arena_alloc(e->arena,
+                                        (n_lin_snap ? n_lin_snap : 1)
+                                            * sizeof(FnCaptureLinSnap));
+    {
+        uint32_t k = 0;
+        for (const Scope *cur = e->scope; cur; cur = cur->parent)
+            for (uint32_t i = 0; i < cur->n; i++) {
+                Binding *b = cur->bindings[i];
+                if (!b->is_linear && !b->is_unique) continue;
+                lin_snap[k].binding       = b;
+                lin_snap[k].was_consumed  = b->is_linear_consumed;
+                lin_snap[k].was_moved     = b->is_moved;
+                k++;
+            }
+    }
+
     e->fn_body_depth++;
     if (fn_declared_unsafe) e->unsafe_depth++;
     /* Propagate the lambda's declared return type onto the expected-type
@@ -4205,12 +7569,56 @@ Expr *elab_fn(Elab *e, const Form *call) {
         }
     }
 
+    /* CT1: inject this lambda's parameter contract checks.  Done BEFORE capture
+     * analysis so the final body is what gets scanned, and while the inner
+     * scope is still current so the predicate can be elaborated in it. */
+    if (n_ct_param_preds > 0 && body && rt_contracts_emitted()) {
+        Binding *ct_check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+        body = rt_inject_param_checks(e, body, ct_check_fn, params, n_params,
+                                      ct_param_preds, ct_param_varnames,
+                                      ct_param_param_idx, n_ct_param_preds,
+                                      call->span);
+    }
+
     /* Phase 3: Capture analysis - collect free variables in the body */
     /* We need to do this before popping the scope */
     uint32_t n_captures = 0;
     Binding **captures = collect_free_vars(body, params, n_params,
                                            letrec_self_group, n_letrec_self_group,
                                            &n_captures);
+
+    /* closure-capture-escapes-linearity: a closure that CONSUMES a captured
+     * linear/unique value is itself linear/unique.
+     *
+     * Consuming the capture once per call means the closure carries exactly the
+     * obligation the captured value had, so inheriting its copy_kind makes every
+     * bad shape fall out of checks that already exist, with no new diagnostic:
+     * calling it twice is TUR-E0101 use-after-consume, `(rc/of f)` is TUR-E0103,
+     * and dropping it unused is TUR-E0100 (correct -- the captured resource would
+     * never be released).  The unique case lands on TUR-E0201/E0202 the same way.
+     *
+     * CONSUMES, not merely captures.  A closure that only READS a captured linear
+     * value is safe at any arity; a blanket capture-based rule (the shape
+     * TUR-E0500 uses for ^multishot handlers, where N invocations are
+     * definitional) would reject a large amount of working code -- 73 fixtures
+     * carry captures, and the httpd middleware closures that dominate that list
+     * are read-only. */
+    bool capture_consumes_linear = false;
+    bool capture_consumes_unique = false;
+    for (uint32_t ci = 0; ci < n_captures && !(capture_consumes_linear
+                                               && capture_consumes_unique); ci++) {
+        Binding *cb = captures[ci];
+        if (!cb->is_linear && !cb->is_unique) continue;
+        for (uint32_t si = 0; si < n_lin_snap; si++) {
+            if (lin_snap[si].binding != cb) continue;
+            /* Transitioned during THIS body: the body is what consumed it. */
+            if (cb->is_linear && cb->is_linear_consumed && !lin_snap[si].was_consumed)
+                capture_consumes_linear = true;
+            if (cb->is_unique && cb->is_moved && !lin_snap[si].was_moved)
+                capture_consumes_unique = true;
+            break;
+        }
+    }
 
     /* Pop scope */
     e->scope = inner.parent;
@@ -4345,6 +7753,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
         }
     }
 
+    /* closure-capture-escapes-linearity: stamp the inherited obligation onto the
+     * closure's own type.  A `let` binding whose initializer type carries
+     * CK_LINEAR is already marked linear (elab_forms.c), so this is all it takes
+     * for the existing use-after-consume / rc-wrap / dropped checks to start
+     * seeing the closure.  Linear wins over unique when a body consumes both --
+     * it is the stricter obligation. */
+    if (capture_consumes_linear)      fn_type.copy_kind = CK_LINEAR;
+    else if (capture_consumes_unique) fn_type.copy_kind = CK_UNIQUE;
+
     /* Check if we're at top level */
     bool at_top_level = (e->scope == &e->global);
 
@@ -4364,6 +7781,31 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * __fn_N (whose C signature returns the int64 carrier, not a fn pointer). */
     b->is_lifted_lambda = true;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+
+    /* RT1: publish this lambda's contract parameters on its lifted thunk
+     * binding.  A `let` bound to the lambda copies them across (elab_forms.c),
+     * which is what lets `(let [f (fn [x : Pos] ...)] (f 0))` be checked at the
+     * call the way a call to a named function is. */
+    if (n_ct_param_preds > 0 && n_params > 0) {
+        const Form **rp = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
+        const char **rv = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        const char **rn = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        for (uint32_t _pi = 0; _pi < n_params; _pi++) {
+            rp[_pi] = NULL;
+            rv[_pi] = NULL;
+            rn[_pi] = (params[_pi] && params[_pi]->name) ? params[_pi]->name->name : NULL;
+        }
+        for (uint32_t _ci = 0; _ci < n_ct_param_preds; _ci++) {
+            uint32_t _pi = ct_param_param_idx[_ci];
+            if (_pi >= n_params) continue;
+            rp[_pi] = ct_param_preds[_ci];
+            rv[_pi] = ct_param_varnames[_ci];
+        }
+        b->refine_param_preds = rp;
+        b->refine_param_vars  = rv;
+        b->refine_param_names = rn;
+        b->n_refine_params    = n_params;
+    }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
     /* let-bound-sf-loses-outer-arg-type: see the defn path -- record whether the
@@ -4491,6 +7933,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
             FN_ARG_SET(new_fn_type.as.fn, i + 1, FA_FAT, FN_ARG_FLAG(b->type.as.fn, i, FA_FAT));
         }
         new_fn_type.as.fn.result_fat = b->type.as.fn.result_fat;
+        /* closure-capture-escapes-linearity: carry the inherited obligation onto
+         * the env-prepended thunk type.  type_fn() zero-inits copy_kind, and this
+         * is the CAPTURING path -- the only one that can have inherited one -- so
+         * without this the mark set above is dropped before any binding sees it. */
+        new_fn_type.copy_kind = b->type.copy_kind;
         b->type = new_fn_type;
         fd->binding->type = new_fn_type;
         fn_def_expr->type = new_fn_type;
@@ -4510,6 +7957,68 @@ Expr *elab_fn(Elab *e, const Form *call) {
         closure->n_captures = n_captures;
         closure->env_name = env_name_sym;
         closure->is_shift_receiver = false;   /* arena mem is not zeroed */
+        closure->is_effect_payload = false;
+        closure->capture_drop_insts = NULL;   /* Model R #1b (arena is non-zeroing) */
+        closure->capture_clone_insts = NULL;
+
+        /* closure-drop-glue (Model R): make each OWNING capture participate in the
+         * env's lifecycle so it is released when the env dies instead of leaking.
+         * Gated on the experiment; the base language is unchanged.  Two kinds:
+         *
+         *  (a) type-honesty -- an OWNED `^fat` closure handle: MOVE it into the env
+         *      (mark the source consumed), so the env is its sole owner and a second
+         *      capture is a compile-time use-after-move, not a double-free.  The
+         *      is_fat drop-glue walk releases it via TUR_CLOSURE_DROP.
+         *
+         *  (b) Drop typeclass -- a capture whose type implements Drop (e.g. an owned
+         *      refcounted String): record its Drop instance (and Clone, if any).  A
+         *      Drop+Clone type is RETAINed at capture / released at env death
+         *      (refcount balances, aliasing-safe -- like the rc walk); a Drop-only
+         *      (move-only) type is consumed at capture and released once.
+         *
+         * The letrec self-capture (env storing its own pointer) is not a transfer
+         * and is skipped. */
+        {
+            const Symbol *drop_name = intern_cstr(e->st, "Drop");
+            TypeClass *drop_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, drop_name);
+            struct TypeClassInstance **drops = NULL;
+            for (uint32_t ci = 0; ci < n_captures; ci++) {
+                Binding *cap = arena_captures[ci];
+                if (!cap || cap->is_global) continue;
+                bool self_cap = cap->closure_fn_binding &&
+                                cap->closure_fn_binding == fd->binding;
+                if (self_cap) continue;
+                /* (a) ^fat owned closure handle -> move (is_fat walk releases it). */
+                if (cap->is_fat) {
+                    (void)binding_mark_moved(cap, call->span);
+                    continue;
+                }
+                /* rc/weak/ref are already released by the type-kind drop-glue arms;
+                 * do not also route them through Drop (would double-release). */
+                if (cap->type.kind == TY_RC || cap->type.kind == TY_WEAK ||
+                    cap->type.kind == TY_REF || cap->type.kind == TY_LREF)
+                    continue;
+                /* (b) Drop-implementing capture (e.g. an owned String).  MOVE it:
+                 * an opaque Drop type has NO scope-exit auto-drop (release is
+                 * manual), so retaining a second owner would leak the source (which
+                 * nothing releases).  Moving makes the closure the SOLE owner -- the
+                 * drop-glue releases it exactly once via the Drop instance, and a
+                 * second capture is a compile-time use-after-move. */
+                struct TypeClassInstance *di = drop_tc
+                    ? typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, &cap->type, 1)
+                    : NULL;
+                if (!di) continue;
+                if (!drops) {
+                    drops = (struct TypeClassInstance **)arena_alloc(
+                        e->arena, n_captures * sizeof(struct TypeClassInstance *));
+                    for (uint32_t k = 0; k < n_captures; k++) drops[k] = NULL;
+                }
+                drops[ci] = di;
+                (void)binding_mark_moved(cap, call->span);
+            }
+            closure->capture_drop_insts  = drops;
+            closure->capture_clone_insts = NULL;   /* unused: Drop captures MOVE */
+        }
 
         /* Store closure reference in FnDef for codegen */
         fd->closure = closure;
@@ -4540,6 +8049,14 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (return_fn_type) {
             clo_ty.as.fn.result_full_type = return_fn_type;
         }
+        /* closure-capture-escapes-linearity: the closure VALUE is what a `let`
+         * binds and what every downstream substructural check inspects, so the
+         * inherited obligation has to reach this type -- the thunk types above
+         * are internal.  This is the last of the three fn types elab_fn builds
+         * on the capturing path; all three are freshly type_fn()'d, so the mark
+         * has to be restated at each. */
+        if (capture_consumes_linear)      clo_ty.copy_kind = CK_LINEAR;
+        else if (capture_consumes_unique) clo_ty.copy_kind = CK_UNIQUE;
         Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, clo_ty, call->span);
         closure_expr->as.closure_.closure = closure;
 

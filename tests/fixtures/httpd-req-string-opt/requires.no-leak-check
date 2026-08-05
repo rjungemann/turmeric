@@ -1,0 +1,7 @@
+This fixture fabricates HttpdConn / HttpdHeader graphs directly in inline-C
+(there is no server, so no worker to reclaim them) to exercise the accessors
+without spinning up sockets. Those fake conns -- and the small owned Strings
+some(...) holds -- are never released, so LeakSanitizer reports them. They are
+an intentional, bounded, process-lifetime leak in the TEST HARNESS, not in the
+httpd-req-*-opt accessors themselves. The compiler/codegen path (emit-c /
+build) is still leak-checked; only the spawned program opts out.

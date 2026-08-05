@@ -1,0 +1,17 @@
+;; E7/C1 (cps-tramp-resume): a JOIN (a branch whose merged result feeds a
+;; subsequent perform) inside a perform continuation must DK-lower, not evict.
+;; Here (perform (W (if (> n 0) ...))) -- the `if` result is a join that flows
+;; into the Write perform, which the enclosing DK handle then catches.
+(defeffect R [] :int)
+(defeffect W [s :cstr] :nil)
+
+(defn f [] : nil
+  (let [n (perform (R))]
+    (perform (W (if (> n 0) "pos" "neg")))))
+
+(defn main [] : int
+  (handle
+    (handle
+      (do (f) 0)
+      (R [] k) (resume k 1))
+    (W [s] k) (do (println s) (resume k nil))))

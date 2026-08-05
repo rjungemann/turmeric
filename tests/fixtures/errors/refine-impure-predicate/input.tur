@@ -1,0 +1,44 @@
+;; A contract predicate must be pure, in all four positions it can appear.
+;;
+;; Whether a check runs is a property of the BUILD: `--no-contracts` strips
+;; every check, a release build drops them unless --keep-contracts, and
+;; `--enable=refined` elides the ones it can prove. A predicate with side
+;; effects therefore makes the program's behaviour depend on whether its own
+;; contracts were compiled in -- `(>= (tick) v)` advances a counter every time
+;; it is checked and not at all when it is not.
+;;
+;; TUR-E0375 was declared in diag.h and mapped in diag.c from the start and
+;; emitted by NOTHING, so this was accepted everywhere. The source-level fuzzer
+;; found it as BUG_output_divergence rather than a soundness bug: gate off
+;; printed 0 2 4, gate on printed 0 1 2. Both runs were internally consistent;
+;; they just disagreed, because turning an experiment on removed the check and
+;; with it the predicate's side effects.
+;;
+;; Reported only on PROVEN impurity -- see refine-pure-predicate-unmodelled for
+;; the other half of that rule.
+(defn tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn on-param [x : #refine{ v : int | (>= (tick) v) }] : int
+  x)
+
+(defn on-pre [x : int] : int
+  :pre (>= (tick) x)
+  x)
+
+(defn on-post [x : int] : int
+  :post (>= (tick) result)
+  x)
+
+(defn on-return [x : int] : #refine{ r : int | (>= (tick) r) }
+  x)
+
+(defn main [] : int
+  (println (on-param 1))
+  (println (on-pre 1))
+  (println (on-post 1))
+  (println (on-return 1))
+  0)

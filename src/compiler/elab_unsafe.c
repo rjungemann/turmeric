@@ -928,6 +928,7 @@ Expr *elab_unsafe(Elab *e, const Form *call) {
     handle->body = body;
     handle->cases = unsafe_case;
     handle->n_cases = 1;
+    handle->shallow = false;   /* arena mem is not zeroed; Unsafe is a deep marker */
     /* Mark this as the pure-marker Unsafe discharge so emit can run the body
      * in place rather than through the int64-truncating fiber result slot. */
     handle->is_unsafe_marker = true;

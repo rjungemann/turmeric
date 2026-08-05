@@ -1,0 +1,28 @@
+;; E3a (owning-cloneable-capture): a MULTI-WORD owning BY-VALUE AGGREGATE -- a
+;; by-value struct with an rc field (needs_drop_glue) -- captured ^borrow into a
+;; genuinely multi-shot cloneable continuation.  A multi-word aggregate does not
+;; fit the one-word frame env by value, so it rides the env by ADDRESS: the emit
+;; carries `&o` (o is run's stable by-value local; the reset runs synchronously in
+;; run's frame, so the pointer outlives every resume) and the frame fn derefs it
+;; (`*(tur_adt_Own *)env`).  No clone glue is needed: the frame only READS o
+;; (^borrow, `.tag`), and run's OWN per-field scope-exit drop `(defer (rc/drop
+;; (.r o)))` -- threaded into the continuation by the P5b trailing-defer path --
+;; releases the rc field exactly once.  LeakSanitizer-clean.
+
+(defstruct Own [r : rc<int> tag : int])
+
+(defn k-identity [k] : int k)
+
+(defn read-own [v : int ^borrow o : Own] : int
+  (+ v (.tag o)))
+
+(defn run [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 5)]
+    (let [k (cloneable-reset (read-own (cloneable-shift k-identity 0) o))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))          ; (10 + 5) + (20 + 5) = 40; o.r auto-dropped at exit
+
+(defn main [] : int
+  (println (run))
+  0)

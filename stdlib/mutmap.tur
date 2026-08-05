@@ -40,8 +40,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-new [K V]
-  []
+(defn mutmap-new [K V] []
   #fx{}
   : (MutableMap K V)
   ```c
@@ -85,8 +84,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-len [K V]
-  [m : (MutableMap K V)]
+(defn mutmap-len [K V] [m : (MutableMap K V)]
   #fx{}
   : int
   ```c
@@ -111,8 +109,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-set! [K V]
-  [m : (MutableMap K V) h : int key : K val : V]
+(defn mutmap-set! [K V] [m : (MutableMap K V) h : int key : K val : V]
   #fx{}
   : nil
   ```c
@@ -191,8 +188,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-get [K V]
-  [m : (MutableMap K V) h : int key : K]
+(defn mutmap-get [K V] [m : (MutableMap K V) h : int key : K]
   #fx{}
   : V
   ```c
@@ -227,8 +223,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-has? [K V]
-  [m : (MutableMap K V) h : int key : K]
+(defn mutmap-has? [K V] [m : (MutableMap K V) h : int key : K]
   #fx{}
   : bool
   ```c
@@ -264,8 +259,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-delete! [K V]
-  [m : (MutableMap K V) h : int key : K]
+(defn mutmap-delete! [K V] [m : (MutableMap K V) h : int key : K]
   #fx{}
   : bool
   ```c
@@ -303,8 +297,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-cap [K V]
-  [m : (MutableMap K V)]
+(defn mutmap-cap [K V] [m : (MutableMap K V)]
   #fx{}
   : int
   ```c
@@ -327,8 +320,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-occupied? [K V]
-  [m : (MutableMap K V) i : int]
+(defn mutmap-slot-occupied? [K V] [m : (MutableMap K V) i : int]
   #fx{}
   : bool
   ```c
@@ -353,8 +345,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-hash [K V]
-  [m : (MutableMap K V) i : int]
+(defn mutmap-slot-hash [K V] [m : (MutableMap K V) i : int]
   #fx{}
   : int
   ```c
@@ -378,8 +369,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-key [K V]
-  [m : (MutableMap K V) i : int]
+(defn mutmap-slot-key [K V] [m : (MutableMap K V) i : int]
   #fx{}
   : K
   ```c
@@ -403,8 +393,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-value [K V]
-  [m : (MutableMap K V) i : int]
+(defn mutmap-slot-value [K V] [m : (MutableMap K V) i : int]
   #fx{}
   : V
   ```c
@@ -489,19 +478,11 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-eq-loop [K V]
-  [m1
-   : (MutableMap K V)
-   m2
-   : (MutableMap K V)
-   i
-   : int
-   cap
-   : int
-   ^fat
-   val-cmp
-   : (fn [V V] bool)]
-  : bool
+(defn mutmap-eq-loop [K V] [m1 : (MutableMap K V)
+                            m2 : (MutableMap K V)
+                            i : int
+                            cap : int
+                            ^fat val-cmp : (fn [V V] bool)] : bool
   (if (= i cap)
     true
     (if (mutmap-slot-occupied? m1 i)
@@ -534,8 +515,9 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-eq? [K V]
-  [m1 : (MutableMap K V) m2 : (MutableMap K V) ^fat val-cmp]
+(defn mutmap-eq? [K V] [m1 : (MutableMap K V)
+                        m2 : (MutableMap K V)
+                        ^fat val-cmp]
   #fx{}
   : bool
   (mutmap-eq-storage? (.storage m1) (.storage m2) val-cmp))
@@ -549,8 +531,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-free [K V]
-  [m : (MutableMap K V)]
+(defn mutmap-free [K V] [m : (MutableMap K V)]
   #fx{}
   : void
   ```c

@@ -18,19 +18,24 @@
 
 (definstance Show [Point]
   (show [p]
-    (show-concat "("
-      (show-concat (show (.x p))
-        (show-concat "," (show-concat (show (.y p)) ")"))))))
+    (let [b (builder/new)]
+      (do
+        (builder/push-cstr! b "(")
+        (let [sx (show (.x p))] (do (builder/push-string! b sx) (string/release sx)))
+        (builder/push-cstr! b ",")
+        (let [sy (show (.y p))] (do (builder/push-string! b sy) (string/release sy)))
+        (builder/push-cstr! b ")")
+        (builder/finish b)))))
 
 (defn main [] : int
   (let [m (map-assoc
             (map-assoc (:: (map-new) (Map int Point)) 1 (Point 7 8))
             2 (Point 30 40))]
     ;; field projection out of a boxed multi-word value
-    (println (show (.x (:: (map-get m 1) Point))))   ;; 7
-    (println (show (.y (:: (map-get m 2) Point))))   ;; 40
+    (show-line (.x (:: (map-get m 1) Point)))   ;; 7
+    (show-line (.y (:: (map-get m 2) Point)))   ;; 40
     ;; whole-value read-back + Show[Point]
-    (println (show (:: (map-get m 1) Point)))        ;; (7,8)
+    (show-line (:: (map-get m 1) Point))        ;; (7,8)
     ;; free the map: the boxed struct values are released via the HAMT's
     ;; value-box ownership (compiled) exactly once; the interpreter native
     ;; deep-frees too.  Exercises the release path on both paths (no crash).

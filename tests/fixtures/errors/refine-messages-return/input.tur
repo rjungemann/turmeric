@@ -1,0 +1,17 @@
+;; RT6 message quality, shape 1: a function's own return refinement is
+;; falsifiable.  The diagnostic reads claim -> witness -> remedy:
+;;
+;;   error: refinement on the return value of 'wrong' cannot be proved
+;;   note:  the predicate (> r 0) does not hold for every input here
+;;   note:  counterexample: x = -2
+;;   help:  (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) }
+;;
+;; The help line is not a guess.  It is a SECOND query through the same solver
+;; seam: assert the candidate as a hypothesis and ask the chain again.  Only a
+;; candidate that actually discharges the goal is offered.
+(defn wrong [x : int] : #refine{ r : int | (> r 0) }
+  x)
+
+(defn main [] : int
+  (println (wrong 5))
+  0)

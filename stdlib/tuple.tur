@@ -92,9 +92,7 @@
 ;;;
 ;;; Since: Phase TP2
 
-(defn tuple3 [A B C]
-  [a :A b :B c :C]
-  : (Tuple3 A B C)
+(defn tuple3 [A B C] [a :A b :B c :C] : (Tuple3 A B C)
   (make-struct Tuple3 a b c))
 ;;; tuple3-1st -- first element of a Tuple3[A B C].
 ;;;
@@ -132,9 +130,7 @@
 ;;;
 ;;; Since: Phase TP2
 
-(defn tuple4 [A B C D]
-  [a :A b :B c :C d :D]
-  : (Tuple4 A B C D)
+(defn tuple4 [A B C D] [a :A b :B c :C d :D] : (Tuple4 A B C D)
   (make-struct Tuple4 a b c d))
 ;;; tuple4-1st -- first element of a Tuple4[A B C D].
 ;;;
@@ -178,9 +174,7 @@
 ;;;
 ;;; Since: Phase TP2
 
-(defn tuple5 [A B C D E]
-  [a :A b :B c :C d :D e :E]
-  : (Tuple5 A B C D E)
+(defn tuple5 [A B C D E] [a :A b :B c :C d :D e :E] : (Tuple5 A B C D E)
   (make-struct Tuple5 a b c d e))
 ;;; tuple5-1st -- first element of a Tuple5[A B C D E].
 ;;;
@@ -230,9 +224,12 @@
 ;;;
 ;;; Since: Phase TP3
 
-(defn tuple6 [A B C D E F]
-  [a :A b :B c :C d :D e :E f :F]
-  : (Tuple6 A B C D E F)
+(defn tuple6 [A B C D E F] [a :A b :B c :C d :D e :E f :F] : (Tuple6 A
+                                                               B
+                                                               C
+                                                               D
+                                                               E
+                                                               F)
   (make-struct Tuple6 a b c d e f))
 ;;; tuple6-1st -- first element of a Tuple6[A B C D E F].
 ;;;
@@ -296,9 +293,13 @@
 ;;;
 ;;; Since: Phase TP3
 
-(defn tuple7 [A B C D E F G]
-  [a :A b :B c :C d :D e :E f :F g :G]
-  : (Tuple7 A B C D E F G)
+(defn tuple7 [A B C D E F G] [a :A b :B c :C d :D e :E f :F g :G] : (Tuple7 A
+                                                                      B
+                                                                      C
+                                                                      D
+                                                                      E
+                                                                      F
+                                                                      G)
   (make-struct Tuple7 a b c d e f g))
 ;;; tuple7-1st -- first element of a Tuple7[A B C D E F G].
 ;;;
@@ -369,9 +370,14 @@
 ;;;
 ;;; Since: Phase TP3
 
-(defn tuple8 [A B C D E F G H]
-  [a :A b :B c :C d :D e :E f :F g :G h :H]
-  : (Tuple8 A B C D E F G H)
+(defn tuple8 [A B C D E F G H] [a :A b :B c :C d :D e :E f :F g :G h :H] : (Tuple8 A
+                                                                             B
+                                                                             C
+                                                                             D
+                                                                             E
+                                                                             F
+                                                                             G
+                                                                             H)
   (make-struct Tuple8 a b c d e f g h))
 ;;; tuple8-1st -- first element of a Tuple8[A B C D E F G H].
 ;;;

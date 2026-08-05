@@ -1,0 +1,7 @@
+tur/term-string's colorizers are inline-C (isatty(1)-gated strdup/malloc). The
+tree-walking interpreter cannot run them: try_exec_simple_inline_c ignores the
+`if (!isatty(1)) return strdup(s)` branch and always emits the ANSI form, and
+the module's own docstring states it "runs on the compiled path; use the
+underlying term/* cstr forms under --interpret". The show-line String-rendering
+part of this fixture is fixed (last_tc_env timing); the colorizer inline-C is
+the out-of-scope remainder. Compiled path is green (bash tests/run.sh).

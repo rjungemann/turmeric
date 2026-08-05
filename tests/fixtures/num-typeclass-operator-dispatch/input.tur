@@ -1,0 +1,66 @@
+;; num-typeclass-operator-dispatch -- N0: when no builtin operator row matches
+;; the argument types, `+`/`-`/`*`/`/` fall back to `Num` typeclass dispatch.
+;;
+;; The builtin rows are keyed by TypeKind and emit a C infix operator, a shape
+;; that cannot express arithmetic over a struct.  Rather than special-casing
+;; Rational and Complex in that table, a miss re-reads the call as the
+;; corresponding `Num` method -- which gives operator overloading to EVERY user
+;; numeric type, not just the two the stdlib ships.
+;;
+;; Two things are pinned here:
+;;   1. A user type with a `Num` instance -- declared in this file, nothing to
+;;      do with the stdlib -- works with the bare operators.
+;;   2. Primitive arithmetic is untouched: the builtin row still wins whenever
+;;      it matches, so there is no dictionary in the hot path and no drift.
+(load "stdlib/typeclass.tur")
+
+;; A 2-dimensional vector over floats, as an ordinary user type.
+(defstruct V2 :copy
+  [x : float
+   y : float])
+
+(definstance Num [V2]
+  (add [a b] (V2 (+ (.x a) (.x b)) (+ (.y a) (.y b))))
+  (sub [a b] (V2 (- (.x a) (.x b)) (- (.y a) (.y b))))
+  ;; Componentwise (Hadamard) product -- this is a Num instance, not an inner
+  ;; product, so the result stays a V2.
+  (mul [a b] (V2 (* (.x a) (.x b)) (* (.y a) (.y b))))
+  (div [a b] (V2 (/ (.x a) (.x b)) (/ (.y a) (.y b))))
+  (neg [a] (V2 (- 0.0 (.x a)) (- 0.0 (.y a)))))
+
+(defn pr [v : V2] : void
+  (do (println (.x v)) (println (.y v))))
+
+(defn main [] : int
+  (let [a (V2 3.25 1.5)
+        b (V2 0.5 2.5)]
+    ;; Binary operators reach the instance methods.
+    (pr (+ a b))
+    (pr (- a b))
+    (pr (* a b))
+    (pr (/ a b))
+    ;; Unary `-` reaches `neg`.
+    (pr (- a))
+    ;; Variadic calls left-fold into nested binary method calls, matching what
+    ;; BS_VARIADIC_FOLD does for the primitive rows: (+ a b c) is (add (add a b) c).
+    (pr (+ a b (V2 0.25 0.25)))
+    (pr (* a b (V2 2.0 2.0)))
+    ;; The named methods and the operators are the same thing.
+    (pr (add a b))
+    (pr (neg a))
+    ;; Primitives keep the builtin row -- ints, floats, and the mixed-arity
+    ;; variadic forms all behave exactly as before.
+    (println (+ 1 2))
+    (println (+ 1 2 3 4))
+    (println (- 10 3))
+    (println (* 6 7))
+    (println (/ 22 7))
+    (println (+ 2.5 0.25))
+    (println (* 2.5 4.5))
+    (println (/ 7.5 2.5))
+    (println (- 7.5 2.25))
+    ;; And the primitive Num instances still dispatch by name.
+    (println (add 2 3))
+    (println (add 2.5 0.25))
+    (println (neg 5))
+    0))

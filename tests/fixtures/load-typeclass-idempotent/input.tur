@@ -15,6 +15,6 @@
 (load "stdlib/typeclass.tur")
 
 (defn main [] : int
-  (println (show 42))            ;; => 42  (Show [int] from typeclass.tur)
-  (println (show (clone 7)))     ;; => 7   (Clone [int]: single, deduped instance)
+  (show-line 42)            ;; => 42  (Show [int] from typeclass.tur)
+  (show-line (clone 7))     ;; => 7   (Clone [int]: single, deduped instance)
   0)

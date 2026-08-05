@@ -1,0 +1,26 @@
+;; E3b (owning-cloneable-capture): an owning `rc` the CPS-colored FUNCTION OWNS,
+;; captured ^borrow across a genuinely multi-shot cloneable continuation, with
+;; NO explicit drop -- the elaborator's AUTO-inserted scope-exit drop
+;; `(defer (rc/drop r))` is threaded into the continuation and fires once after
+;; the reset completes.  This is the ergonomic companion to
+;; cloneable-owning-explicit-drop-crossing (which spelled the drop by hand).
+;;
+;; run allocates r, captures it ^borrow into the continuation, resumes twice
+;; (clone + original); r is borrowed read-only across every resume and released
+;; exactly once by the auto scope-exit drop.  LeakSanitizer-clean.
+
+(defn k-identity [k] : int k)
+
+(defn read-combine [v : int ^borrow r : rc] : int
+  (+ v (rc/strong-count r)))
+
+(defn run [] : int
+  (let [r (rc/of 99)]
+    (let [k (cloneable-reset (read-combine (cloneable-shift k-identity 0) r))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))          ; (10 + 1) + (20 + 1) = 32; r auto-dropped at exit
+
+(defn main [] : int
+  (println (run))
+  0)

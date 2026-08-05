@@ -548,12 +548,12 @@
 ;;;     nil)
 ;;;
 ;;; Since: Phase F3
-
 ;; ^fat on body: a captureless fiber body is a bare C function pointer, not a
 ;; heap fat-closure box.  Marking it ^fat auto-shims it into a heap
 ;; { fatshim, fn } box, so (a) the trampoline's fat-pointer dispatch is correct
 ;; for captureless bodies too, and (b) every body is a heap box the fiber group
 ;; can own and free at teardown (tur_local_disown_body opts a caller out).
+
 (defn local-spawn [g : ptr<void> ^fat body : int user-data : ptr<void>]
   #fx{}
   : int

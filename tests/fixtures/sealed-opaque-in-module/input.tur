@@ -1,0 +1,28 @@
+;; sealed-opaque, positive: inside the module that declares a :sealed opaque,
+;; `::` still works in BOTH directions -- the module needs to build and unwrap
+;; its own handles, which is why an opaque has a representation at all.
+;;
+;; Also pins that :sealed COMPOSES with :affine. The attribute slot used to
+;; accept exactly one keyword; :sealed is orthogonal to the substructural
+;; discipline (it governs `::` visibility, not use count), so the slot takes a
+;; set. See docs/upcoming/sealed-opaque-plan.md.
+(defopaque Box :int :affine :sealed)
+
+(defn box-alloc [] #fx{} : int
+  ```c return (int64_t)(intptr_t)calloc(2, sizeof(int64_t)); ```)
+(defn box-poke [c : int v : int] #fx{} : int
+  ```c int64_t* b=(int64_t*)(intptr_t)c; b[0]=v; return 0; ```)
+(defn box-peek [c : int] #fx{} : int
+  ```c int64_t* b=(int64_t*)(intptr_t)c; return b[0]; ```)
+
+(defn box-new [v : int] : Box
+  (let [c (box-alloc)
+        _ (box-poke c v)]
+    (:: c Box)))                  ;; fabricate: legal in the declaring module
+
+(defn box-get [b : Box] : int
+  (box-peek (:: b :int)))         ;; unwrap: legal in the declaring module
+
+(defn main [] : int
+  (println (box-get (box-new 7)))
+  0)

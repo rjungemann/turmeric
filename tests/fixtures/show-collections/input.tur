@@ -5,9 +5,9 @@
 (load "stdlib/typeclass.tur")
 
 (defn main [] : int
-  (println (show (vec-of 1 2 3)))
-  (println (show (vec-new)))
-  (println (show (set-of 7 8 9)))
-  (println (show (hamt-of 1 10 2 20)))
-  (println (show (hamt-of)))
+  (show-line (vec-of 1 2 3))
+  (show-line (vec-new))
+  (show-line (set-of 7 8 9))
+  (show-line (hamt-of 1 10 2 20))
+  (show-line (hamt-of))
   0)

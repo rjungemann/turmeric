@@ -114,13 +114,18 @@ static bool mkdirp(const char *path) {
 }
 
 /* ================================================================== */
+/* :tur-version is validated inline in the defpackage key loop (below) so the
+ * caret lands on the range the user wrote; defined further down beside the
+ * version-range helpers it depends on. */
+static void pkg_check_tur_version_span(const char *range, Span span);
+
 /* Form-walking helpers for defpackage parsing                         */
 /* ================================================================== */
 
 /* Get a value from an F_MAP by keyword name (without colon).
  * Returns NULL if not found. */
 static const Form *map_get_kw(const Form *map, const char *kw) {
-    if (!map || map->tag != F_MAP) return NULL;
+    if (!map || (map->tag != F_MAP && map->tag != F_MAP_LITERAL)) return NULL;
     const FormList *fl = &map->as.list;
     for (uint32_t i = 0; i + 1 < fl->len; i += 2) {
         const Form *key = fl->items[i];
@@ -131,18 +136,69 @@ static const Form *map_get_kw(const Form *map, const char *kw) {
 }
 
 /* Emit a diagnostic when a build.tur keyword expected a map but got something
- * else. The most common mistake is writing `{...}` (which the reader parses
- * as a contract-type annotation `F_CONTRACT_TYPE`) instead of `#{...}` (a
- * real `F_MAP`). Without this, parse_cmake_deps and parse_spices would
- * silently skip everything and write empty lockfiles. */
+ * else. The most common mistake by far is writing a bare `{...}` instead of
+ * `#map{...}`. Without this, parse_cmake_deps and parse_spices would silently
+ * skip everything and write empty lockfiles.
+ *
+ * docs/archive/spice-guides-bare-brace-manifest-syntax.md: the hint used to be
+ * gated on `got->tag == F_CONTRACT_TYPE`, from when a bare `{...}` read as a
+ * contract-type annotation. Contract types moved to `#refine{...}` and bare
+ * `{` is now unconditionally SRFI-105 curly-infix (reader.c), so that tag never
+ * appears in a manifest slot and the one diagnostic that could teach the fix
+ * had gone dead -- leaving a bare ":spices must be a map" with no hint of what
+ * a map looks like. Suggest the spelling unconditionally: the hint is useful
+ * for ANY wrong shape here, and it makes every stale copy of the docs
+ * self-correcting. Curly-infix gets the extra sentence naming what the reader
+ * actually saw, since that is the case a user is overwhelmingly in. */
 static void report_non_map(const Form *got, const char *what) {
     if (!got) return;
-    const char *hint =
-        (got->tag == F_CONTRACT_TYPE)
-        ? " (use `#{...}` for map syntax; bare `{...}` is a contract type)"
-        : "";
+    /* A bare `{a b c}` reads as curly-infix, which the reader lowers to an
+     * ordinary call form -- there is no distinguishing tag left by the time it
+     * reaches here, so key on the source text at the span instead. */
+    const SourceFile *sf = diag_source_file(got->span.file_id);
+    bool bare_brace = sf && sf->src && got->span.off_start < sf->len &&
+                      sf->src[got->span.off_start] == '{';
     diag_emit(DIAG_ERROR, got->span,
-              "build.tur: %s must be a map%s", what, hint);
+              "build.tur: %s must be a map -- use `#map{...}`%s", what,
+              bare_brace
+                ? " (a bare `{...}` is curly-infix arithmetic, not a map)"
+                : "");
+}
+
+/* Reject an effect-row literal sitting in a manifest slot that means "map".
+ *
+ * The reader gives `#{...}`, `#fx{...}`, and `@{...}` all the same F_MAP tag
+ * and distinguishes them only by `fx_prov`, so a slot that checks the tag
+ * alone silently accepts an effect row as a map.  `parse_exports` has guarded
+ * against this since exports-map-syntax-tighten-plan; this helper is that
+ * plan's follow-up audit, shared by every other map-shaped manifest slot.
+ *
+ * `alt` names an additional accepted shape (e.g. "a vector of source paths")
+ * or is NULL.  Returns true when `f` is an effect row -- a diagnostic has
+ * been emitted and the caller should bail. */
+static bool reject_fx_row(const Form *f, const char *what, const char *alt) {
+    if (!f || f->tag != F_MAP) return false;
+    const char *spelling =
+        (f->fx_prov == (uint8_t)PROV_FX_EXPLICIT)  ? "#fx{...}" :
+        (f->fx_prov == (uint8_t)PROV_FX_AT_LEGACY) ? "@{...}"   : NULL;
+    if (!spelling) return false;
+    diag_emit(DIAG_ERROR, f->span,
+              "TUR-E0620: build.tur: %s expects a map (`#{...}` or "
+              "`#map{...}`)%s%s; got an effect-row literal (`%s`).  Effect "
+              "rows are the spelling used in function type annotations "
+              "(e.g. `#fx{Net}`), not manifest maps.",
+              what, alt ? " or " : "", alt ? alt : "", spelling);
+    return true;
+}
+
+/* True when `f` is usable as a manifest map -- `#{...}` (F_MAP, non-effect
+ * provenance) or `#map{...}` (F_MAP_LITERAL).  Emits the appropriate
+ * diagnostic and returns false otherwise. */
+static bool expect_map(const Form *f, const char *what) {
+    if (reject_fx_row(f, what, NULL)) return false;
+    if (f && (f->tag == F_MAP || f->tag == F_MAP_LITERAL)) return true;
+    report_non_map(f, what);
+    return false;
 }
 
 /* Extract a string from an F_STR form, or NULL. */
@@ -160,10 +216,7 @@ static bool form_bool_val(const Form *f) {
 /* Parse the :spices map: #{"name" #{:url "..." :ref "..."} ...} */
 static bool parse_spices(const Form *map, PkgManifest *m) {
     if (!map) return true; /* missing keyword is OK */
-    if (map->tag != F_MAP) {
-        report_non_map(map, ":spices");
-        return false;
-    }
+    if (!expect_map(map, ":spices")) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     m->spices = (PkgSpice *)malloc(cap * sizeof(PkgSpice));
@@ -175,10 +228,7 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         const Form *val = fl->items[i + 1];
         if (key->tag != F_STR) continue;
         if (!val) continue;
-        if (val->tag != F_MAP) {
-            report_non_map(val, "entry in :spices");
-            continue;
-        }
+        if (!expect_map(val, "entry in :spices")) continue;
 
         if (m->n_spices >= cap) {
             cap *= 2;
@@ -208,10 +258,7 @@ static bool parse_cmake_opts(const Form *map,
     *out_opts = NULL;
     *out_n    = 0;
     if (!map) return true;
-    if (map->tag != F_MAP) {
-        report_non_map(map, ":options");
-        return false;
-    }
+    if (!expect_map(map, ":options")) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     *out_opts = (PkgCmakeOpt *)malloc(cap * sizeof(PkgCmakeOpt));
@@ -237,10 +284,7 @@ static bool parse_cmake_opts(const Form *map,
 /* Parse the :cmake-deps map */
 static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
     if (!map) return true; /* missing keyword is OK */
-    if (map->tag != F_MAP) {
-        report_non_map(map, ":cmake-deps");
-        return false;
-    }
+    if (!expect_map(map, ":cmake-deps")) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     m->cmake_deps = (PkgCmakeDep *)malloc(cap * sizeof(PkgCmakeDep));
@@ -252,10 +296,7 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         const Form *val = fl->items[i + 1];
         if (key->tag != F_STR) continue;
         if (!val) continue;
-        if (val->tag != F_MAP) {
-            report_non_map(val, "entry in :cmake-deps");
-            continue;
-        }
+        if (!expect_map(val, "entry in :cmake-deps")) continue;
 
         if (m->n_cmake_deps >= cap) {
             cap *= 2;
@@ -421,7 +462,9 @@ static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
  * `#fx{...}` (an effect-row literal) is REJECTED here with TUR-E0620.  The
  * reader tags all three of `#{...}`, `#fx{...}`, and (implicitly) `#map{...}`
  * with related F_MAP-family shapes, but effect rows are never a valid
- * `:exports` value.  See docs/upcoming/exports-map-syntax-tighten-plan.md.
+ * `:exports` value.  See docs/archive/exports-map-syntax-tighten-plan.md;
+ * the shared reject_fx_row()/expect_map() helpers extend the same guard to
+ * every other map-shaped manifest slot.
  *
  * Storing the keys lets the build driver validate declared exports against
  * on-disk sources and lets `tur emit-cmake` enumerate the modules. */
@@ -430,26 +473,8 @@ static bool parse_exports(const Form *f, char ***out, int *n_out) {
     *n_out = 0;
     if (!f) return true;
 
-    /* Reject `#fx{...}` -- an effect-row literal masquerading as a map. */
-    if (f->tag == F_MAP && f->fx_prov == (uint8_t)PROV_FX_EXPLICIT) {
-        diag_emit(DIAG_ERROR, f->span,
-                  "TUR-E0620: `:exports` expects a map literal (`#map{...}`) or "
-                  "a vector of source paths; got an effect-row literal "
-                  "(`#fx{...}`).  Effect rows are the spelling used in function "
-                  "type annotations, not exported-module maps.  Rewrite as "
-                  "`:exports #map{ \"mod/name\" [sym ...] ... }`.");
-        return false;
-    }
-    /* Also reject `@{...}` -- another effect-row spelling in the same trap. */
-    if (f->tag == F_MAP && f->fx_prov == (uint8_t)PROV_FX_AT_LEGACY) {
-        diag_emit(DIAG_ERROR, f->span,
-                  "TUR-E0620: `:exports` expects a map literal (`#map{...}`) or "
-                  "a vector of source paths; got an effect-row literal "
-                  "(`@{...}`).  Effect rows are the spelling used in function "
-                  "type annotations, not exported-module maps.  Rewrite as "
-                  "`:exports #map{ \"mod/name\" [sym ...] ... }`.");
-        return false;
-    }
+    /* Reject `#fx{...}` / `@{...}` -- effect rows masquerading as a map. */
+    if (reject_fx_row(f, ":exports", "a vector of source paths")) return false;
 
     if (f->tag != F_MAP && f->tag != F_MAP_LITERAL)
         return parse_str_vec(f, out, n_out);
@@ -613,6 +638,11 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
             out->name = form_str_dup(vf);
         } else if (strcmp(kw, "version") == 0) {
             out->version = form_str_dup(vf);
+        } else if (strcmp(kw, "tur-version") == 0) {
+            out->tur_version = form_str_dup(vf);
+            /* Checked here rather than after the loop so the caret lands on the
+             * range the user wrote. */
+            pkg_check_tur_version_span(out->tur_version, vf->span);
         } else if (strcmp(kw, "description") == 0) {
             out->description = form_str_dup(vf);
         } else if (strcmp(kw, "license") == 0) {
@@ -650,10 +680,7 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         } else if (strcmp(kw, "bin") == 0) {
             /* GS-M1: :bin #{ "tur-foo" "src/main.tur" ... } */
             if (!vf) continue;
-            if (vf->tag != F_MAP) {
-                report_non_map(vf, ":bin");
-                continue;
-            }
+            if (!expect_map(vf, ":bin")) continue;
             const FormList *bfl = &vf->as.list;
             int cap = (int)(bfl->len / 2 + 1);
             out->bin_names = (char **)malloc(cap * sizeof(char *));
@@ -684,7 +711,7 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
                 out->n_bins++;
             }
         } else if (strcmp(kw, "build-opts") == 0) {
-            if (vf && vf->tag == F_MAP) {
+            if (vf && expect_map(vf, ":build-opts")) {
                 const Form *cf = map_get_kw(vf, "c-flags");
                 const Form *lf = map_get_kw(vf, "link-libs");
                 const Form *nf = map_get_kw(vf, "no-stdlib");
@@ -703,8 +730,6 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
                                  &out->c_sources,  &out->n_c_sources);
                 parse_c_path_vec(if_, mdir, ":c-includes", false,
                                  &out->c_includes, &out->n_c_includes);
-            } else if (vf) {
-                report_non_map(vf, ":build-opts");
             }
         }
     }
@@ -713,6 +738,113 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
     symtab_free(&st);
     arena_free(&arena);
     return ok;
+}
+
+/* ================================================================== */
+/* :tur-version enforcement                                             */
+/* ================================================================== */
+
+/* The compiler's own version, injected by CMake on tur_core.  Guarded because
+ * pkg.c had no reason to know it before this check existed. */
+#ifndef TUR_VERSION
+#define TUR_VERSION "unknown"
+#endif
+
+/* Sticky record of a REJECTING :tur-version verdict, surviving diag_reset().
+ *
+ * The manifest is read once, before compilation; every compile entry point then
+ * calls diag_reset() to clear `had_error_` so a batch driver
+ * (`tur check <dir>`) does not mark later files failed because an earlier one
+ * was.  That reset is correct, and it also wiped this check's error -- so a
+ * floor violation printed an "error" and then exited 0, which is not an error
+ * at all.  (The pre-existing TUR-E0620 manifest error has the same shape.)
+ *
+ * So the verdict is recorded here and re-asserted after each diag_reset(), next
+ * to experiment_reset_warnings() which handles the same once-per-compile
+ * problem from the other direction. */
+static bool g_tv_rejected = false;
+static char g_tv_reject_brief[320];
+/* Report the verdict at most once per process: the manifest is read more than
+ * once per invocation (walk-up for build-dir, again for reader macros), and
+ * repeating the same verdict per read is pure noise. */
+static bool g_tv_reported = false;
+
+void pkg_tur_version_reassert(void) {
+    if (!g_tv_rejected) return;
+    /* Re-emitted per compile, deliberately: had_error_ must be set for THIS
+     * compile to fail, and there is no diag API to mark an error without
+     * printing.  The brief form keeps the repeat cheap to read. */
+    diag_emit(DIAG_ERROR, SPAN_UNKNOWN, "%s", g_tv_reject_brief);
+}
+
+void pkg_tur_version_reset(void) {
+    g_tv_rejected = false;
+    g_tv_reported = false;
+    g_tv_reject_brief[0] = '\0';
+}
+
+/* Check `range` (the :tur-version value) against the running compiler.  `span`
+ * is the value form's own span, so the caret lands on the range the user wrote
+ * rather than on the top of the file.
+ *
+ */
+static void pkg_check_tur_version_span(const char *range, Span span) {
+    if (!range || !*range) return;
+
+    if (!pkg_version_range_valid(range)) {
+        if (!g_tv_reported)
+            diag_emit(DIAG_ERROR, span,
+                      "TUR-E0622: :tur-version \"%s\" is not a valid version "
+                      "range.  Expected comma-separated comparators or a "
+                      "caret, e.g. \">=0.32.2\", \">=0.32.2, <0.35.0\", or "
+                      "\"^0.32\".  (`~`, `*` and `||` are not supported.)",
+                      range);
+        g_tv_reported = true;
+        g_tv_rejected = true;
+        snprintf(g_tv_reject_brief, sizeof(g_tv_reject_brief),
+                 "TUR-E0622: refusing to compile: build.tur declares "
+                 ":tur-version \"%s\", which is not a valid version range",
+                 range);
+        return;
+    }
+
+    /* A build that cannot report its own version cannot honour a range, and
+     * failing closed would break every non-release build.  Stay silent. */
+    if (strcmp(TUR_VERSION, "unknown") == 0) return;
+
+    bool below_floor = false;
+    if (pkg_version_range_match(range, TUR_VERSION, &below_floor)) return;
+
+    if (below_floor) {
+        /* The spice needs syntax / experiments / manifest keys this compiler
+         * does not have.  Stop rather than let the real failure surface later as
+         * an error about perfectly valid source -- which is the whole reason
+         * this key exists. */
+        if (!g_tv_reported)
+            diag_emit(DIAG_ERROR, span,
+                      "TUR-E0621: this spice requires tur %s, but this is tur "
+                      "%s.  Upgrade the compiler, or use a spice revision that "
+                      "supports %s.",
+                      range, TUR_VERSION, TUR_VERSION);
+        g_tv_reported = true;
+        g_tv_rejected = true;
+        snprintf(g_tv_reject_brief, sizeof(g_tv_reject_brief),
+                 "TUR-E0621: refusing to compile: build.tur requires tur %s, "
+                 "this is tur %s", range, TUR_VERSION);
+    } else {
+        /* Above a declared ceiling: the author never tested this combination,
+         * which is usually still fine.  A hard error would mean every compiler
+         * release breaks every spice until each author bumps a number, so this
+         * stays advisory. */
+        if (!g_tv_reported)
+            diag_emit(DIAG_WARNING, span,
+                      "TUR-W0623: this spice declares tur %s, but this is tur "
+                      "%s -- newer than the author tested against.  "
+                      "Continuing; if something breaks, report it upstream "
+                      "rather than assuming it is your build.",
+                      range, TUR_VERSION);
+        g_tv_reported = true;
+    }
 }
 
 /* ================================================================== */
@@ -731,6 +863,7 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
     fprintf(f, "(defpackage %s\n", m->name ? m->name : "unnamed");
     if (m->name)        fprintf(f, "  :name        \"%s\"\n", m->name);
     if (m->version)     fprintf(f, "  :version     \"%s\"\n", m->version);
+    if (m->tur_version) fprintf(f, "  :tur-version \"%s\"\n", m->tur_version);
     if (m->description) fprintf(f, "  :description \"%s\"\n", m->description);
     if (m->license)     fprintf(f, "  :license     \"%s\"\n", m->license);
     if (m->repository)  fprintf(f, "  :repository  \"%s\"\n", m->repository);
@@ -890,6 +1023,7 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
 void pkg_manifest_free(PkgManifest *m) {
     free(m->name);
     free(m->version);
+    free(m->tur_version);
     free(m->description);
     free(m->license);
     free(m->repository);
@@ -1276,18 +1410,29 @@ bool pkg_semver_parse(const char *v,
                       char **pre) {
     if (!v) return false;
     if (*v == 'v') v++;
+    if (*v < '0' || *v > '9') return false;   /* strtol would accept " +1", "-3" */
     /* parse major.minor.patch */
     char *end;
     long ma = strtol(v, &end, 10);
     if (*end != '.') return false;
     v = end + 1;
+    if (*v < '0' || *v > '9') return false;
     long mi = strtol(v, &end, 10);
     if (*end != '.' && *end != '\0' && *end != '-') return false;
     v = (*end == '.') ? end + 1 : end;
     long pa = 0;
     if (*end == '.') {
+        if (*v < '0' || *v > '9') return false;
         pa = strtol(v, &end, 10);
     }
+    /* Reject trailing garbage.  "0.32.2junk" used to parse as 0.32.2, which is
+     * tolerable for a lenient sort but wrong for validating a user-authored
+     * constraint -- a typo in a `:tur-version` range must be an error, not a
+     * silently different range.  Only end-of-string or a `-<pre>` suffix is
+     * accepted; `+build` metadata is deliberately unsupported (nothing in the
+     * toolchain emits it, and accepting it would imply we compare it). */
+    if (*end != '\0' && *end != '-') return false;
+    if (*end == '-' && end[1] == '\0') return false;  /* dangling '-' */
     *major = (int)ma;
     *minor = (int)mi;
     *patch = (int)pa;
@@ -1300,6 +1445,51 @@ bool pkg_semver_parse(const char *v,
     return true;
 }
 
+/* Compare one dot-separated pre-release identifier pair, semver rules:
+ * all-numeric identifiers compare numerically, others lexically, and a numeric
+ * identifier always ranks LOWER than an alphanumeric one. */
+static int semver_pre_ident_cmp(const char *a, size_t alen,
+                                const char *b, size_t blen) {
+    bool a_num = alen > 0, b_num = blen > 0;
+    for (size_t i = 0; i < alen; i++) if (a[i] < '0' || a[i] > '9') { a_num = false; break; }
+    for (size_t i = 0; i < blen; i++) if (b[i] < '0' || b[i] > '9') { b_num = false; break; }
+    if (a_num && b_num) {
+        /* Length-then-lexical rather than strtol: no overflow on a long
+         * identifier, and valid semver has no leading zeros anyway. */
+        while (alen > 1 && *a == '0') { a++; alen--; }
+        while (blen > 1 && *b == '0') { b++; blen--; }
+        if (alen != blen) return alen < blen ? -1 : 1;
+        int d = memcmp(a, b, alen);
+        return d < 0 ? -1 : (d > 0 ? 1 : 0);
+    }
+    if (a_num != b_num) return a_num ? -1 : 1;   /* numeric < alphanumeric */
+    size_t n = alen < blen ? alen : blen;
+    int d = memcmp(a, b, n);
+    if (d != 0) return d < 0 ? -1 : 1;
+    if (alen != blen) return alen < blen ? -1 : 1;
+    return 0;
+}
+
+/* Compare two pre-release strings ("rc1", "alpha.2").  NULL means "no
+ * pre-release", which ranks HIGHER than any pre-release: 1.0.0 > 1.0.0-rc1. */
+static int semver_pre_cmp(const char *a, const char *b) {
+    if (!a && !b) return 0;
+    if (!a) return  1;    /* release beats pre-release */
+    if (!b) return -1;
+    for (;;) {
+        if (!*a && !*b) return 0;
+        /* A shorter identifier list is lower when all preceding fields match. */
+        if (!*a) return -1;
+        if (!*b) return  1;
+        const char *ae = strchr(a, '.'); size_t alen = ae ? (size_t)(ae - a) : strlen(a);
+        const char *be = strchr(b, '.'); size_t blen = be ? (size_t)(be - b) : strlen(b);
+        int d = semver_pre_ident_cmp(a, alen, b, blen);
+        if (d != 0) return d;
+        a = ae ? ae + 1 : a + alen;
+        b = be ? be + 1 : b + blen;
+    }
+}
+
 int pkg_semver_compare(const char *a, const char *b) {
     int ma, mi, pa, mb, mib, pb;
     char *prea = NULL, *preb = NULL;
@@ -1309,9 +1499,149 @@ int pkg_semver_compare(const char *a, const char *b) {
     if (!oka) { free(prea); free(preb); return -1; }
     if (!okb) { free(prea); free(preb); return  1; }
     int d = (ma != mb) ? ma - mb : (mi != mib) ? mi - mib : pa - pb;
+    /* Pre-release is a TIE-BREAKER, not ignored.  It used to be parsed and then
+     * freed unread, so 0.33.0-rc1 and 0.33.0 compared EQUAL -- exactly the case
+     * a version floor has to get right during a release cycle. */
+    if (d == 0) d = semver_pre_cmp(prea, preb);
     free(prea);
     free(preb);
     return d;
+}
+
+/* ------------------------------------------------------------------ */
+/* Version ranges (`:tur-version`)                                     */
+/*                                                                     */
+/* Grammar, Cargo-flavoured -- comma-separated conjuncts, each either a */
+/* comparator or a caret:                                              */
+/*                                                                     */
+/*   range    := conjunct ("," conjunct)*                              */
+/*   conjunct := (">=" | "<=" | ">" | "<" | "=")? version              */
+/*             | "^" version                                           */
+/*                                                                     */
+/* A bare version means "=".  `^X.Y.Z` is the compatible-update range:  */
+/* >=X.Y.Z and < the next version that could break it -- which for a   */
+/* 0.x version is the next MINOR (0.32.2 -> <0.33.0), because pre-1.0  */
+/* minors are breaking by convention.  That 0.x rule is the one people  */
+/* get wrong, so it is spelled out in the guide.                        */
+/*                                                                     */
+/* Deliberately NOT supported: `~`, `*`, `||` disjunction, wildcards.   */
+/* Each is easy to add later and none is needed to express a floor, a   */
+/* ceiling, or a compatible range -- which is all this key is for.      */
+/* ------------------------------------------------------------------ */
+
+typedef enum { RG_GE, RG_GT, RG_LE, RG_LT, RG_EQ } RangeOp;
+
+/* Skip ASCII spaces/tabs. */
+static const char *rg_skip_ws(const char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    return s;
+}
+
+/* Parse one conjunct at *pp, advancing it past the conjunct.  On success writes
+ * through `op` and `ver` (the latter a malloc'd version string the caller
+ * frees) and returns true.  `is_caret` reports a `^` conjunct, which expands to
+ * TWO bounds rather than one. */
+static bool rg_parse_conjunct(const char **pp, RangeOp *op, char **ver,
+                              bool *is_caret) {
+    const char *s = rg_skip_ws(*pp);
+    *is_caret = false;
+    *op = RG_EQ;
+    if (s[0] == '^')                       { *is_caret = true; s += 1; }
+    else if (s[0] == '>' && s[1] == '=')   { *op = RG_GE; s += 2; }
+    else if (s[0] == '<' && s[1] == '=')   { *op = RG_LE; s += 2; }
+    else if (s[0] == '>')                  { *op = RG_GT; s += 1; }
+    else if (s[0] == '<')                  { *op = RG_LT; s += 1; }
+    else if (s[0] == '=')                  { *op = RG_EQ; s += 1; }
+    s = rg_skip_ws(s);
+    const char *start = s;
+    while (*s && *s != ',' && *s != ' ' && *s != '\t') s++;
+    if (s == start) return false;
+    size_t n = (size_t)(s - start);
+    char *v = (char *)malloc(n + 1);
+    if (!v) return false;
+    memcpy(v, start, n);
+    v[n] = '\0';
+    /* Validate eagerly: a malformed conjunct must be an error rather than a
+     * silently different constraint. */
+    int ma, mi, pa; char *pre = NULL;
+    if (!pkg_semver_parse(v, &ma, &mi, &pa, &pre)) { free(pre); free(v); return false; }
+    free(pre);
+    *ver = v;
+    *pp = rg_skip_ws(s);
+    return true;
+}
+
+bool pkg_version_range_valid(const char *range) {
+    if (!range || !*range) return false;
+    const char *p = range;
+    int n_conjuncts = 0;
+    for (;;) {
+        RangeOp op; char *ver = NULL; bool caret = false;
+        if (!rg_parse_conjunct(&p, &op, &ver, &caret)) return false;
+        free(ver);
+        n_conjuncts++;
+        p = rg_skip_ws(p);
+        if (*p == ',') { p++; continue; }
+        if (*p == '\0') break;
+        return false;                       /* junk between conjuncts */
+    }
+    return n_conjuncts > 0;
+}
+
+/* Upper bound implied by `^v`: next minor for 0.x, next major otherwise. */
+static void rg_caret_bound(const char *v, int *maj, int *min) {
+    int ma = 0, mi = 0, pa = 0; char *pre = NULL;
+    pkg_semver_parse(v, &ma, &mi, &pa, &pre);
+    free(pre);
+    if (ma == 0) { *maj = 0;      *min = mi + 1; }
+    else         { *maj = ma + 1; *min = 0; }
+}
+
+bool pkg_version_range_match(const char *range, const char *version,
+                             bool *out_below_floor) {
+    if (out_below_floor) *out_below_floor = false;
+    if (!range || !version) return true;
+    const char *p = range;
+    bool ok = true;
+    for (;;) {
+        RangeOp op; char *ver = NULL; bool caret = false;
+        if (!rg_parse_conjunct(&p, &op, &ver, &caret)) return true;  /* invalid: caller validates */
+        if (caret) {
+            /* >= ver */
+            if (pkg_semver_compare(version, ver) < 0) {
+                ok = false;
+                if (out_below_floor) *out_below_floor = true;
+            } else {
+                int bmaj, bmin;
+                rg_caret_bound(ver, &bmaj, &bmin);
+                char bound[64];
+                snprintf(bound, sizeof(bound), "%d.%d.0", bmaj, bmin);
+                if (pkg_semver_compare(version, bound) >= 0) ok = false;
+            }
+        } else {
+            int c = pkg_semver_compare(version, ver);
+            bool pass = (op == RG_GE) ? (c >= 0)
+                      : (op == RG_GT) ? (c >  0)
+                      : (op == RG_LE) ? (c <= 0)
+                      : (op == RG_LT) ? (c <  0)
+                      :                 (c == 0);
+            if (!pass) {
+                ok = false;
+                /* A lower-bound conjunct the version fails is a FLOOR miss --
+                 * the code genuinely predates what the spice needs.  Failing an
+                 * upper bound only means untested-against, which the caller
+                 * downgrades to a warning. */
+                if ((op == RG_GE || op == RG_GT || op == RG_EQ) && c < 0 &&
+                    out_below_floor)
+                    *out_below_floor = true;
+            }
+        }
+        free(ver);
+        p = rg_skip_ws(p);
+        if (*p == ',') { p++; continue; }
+        break;
+    }
+    return ok;
 }
 
 /* ================================================================== */
@@ -3637,7 +3967,7 @@ static const Symbol *pkg_intern(SymbolTable *st, const char *name) {
 static Form *pkg_build_spice_val(Arena *a, SymbolTable *st,
                                   const char *url, const char *ref,
                                   const char *path, const char *subdir,
-                                  bool optional) {
+                                  bool optional, bool literal) {
     Form *items[10];
     uint32_t n = 0;
     if (path) {
@@ -3660,7 +3990,10 @@ static Form *pkg_build_spice_val(Arena *a, SymbolTable *st,
         items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "optional"));
         items[n++] = form_bool(a, SPAN_UNKNOWN, true);
     }
-    return form_map(a, SPAN_UNKNOWN, items, n);
+    /* Match the spelling of the enclosing :spices map so one manifest does not
+     * end up mixing `#map{...}` and `#{...}` after a `tur add`. */
+    return literal ? form_map_literal(a, SPAN_UNKNOWN, items, n)
+                   : form_map(a, SPAN_UNKNOWN, items, n);
 }
 
 /* Return a new defpackage Form (F_LIST) with a new spice entry appended.
@@ -3674,8 +4007,6 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
                                        bool optional) {
     Form *entry_key = form_str(a, SPAN_UNKNOWN,
                                spice_name, (uint32_t)strlen(spice_name));
-    Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir, optional);
-
     uint32_t n = dp->as.list.len;
 
     /* Find :spices keyword index */
@@ -3693,9 +4024,23 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
     Span orig_span = dp->span;
 
     if (spices_val_idx >= 0) {
-        /* Extend existing :spices map */
+        /* Extend existing :spices map.
+         *
+         * Both spellings have to be handled here: `#{...}` is F_MAP and
+         * `#map{...}` is F_MAP_LITERAL. Reading only F_MAP silently produced
+         * map_n == 0, so `tur add` on a `#map{...}`-spelled manifest DROPPED
+         * every dependency already declared and wrote back a map holding only
+         * the new entry. `#map{...}` is the canonical spelling the guides now
+         * use, so that path is the common one, not an exotic case.
+         *
+         * Rebuild with the tag the manifest already had, so adding a dep does
+         * not silently respell the user's `#map{...}` as `#{...}`. */
         const Form *old_map = dp->as.list.items[spices_val_idx];
-        uint32_t map_n = (old_map->tag == F_MAP) ? old_map->as.list.len : 0;
+        bool is_literal = (old_map->tag == F_MAP_LITERAL);
+        Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir,
+                                              optional, is_literal);
+        uint32_t map_n = (old_map->tag == F_MAP || is_literal)
+                       ? old_map->as.list.len : 0;
         Form **new_map_items = (Form **)arena_alloc(
                 a, (map_n + 2) * sizeof(Form *));
         if (map_n > 0)
@@ -3703,7 +4048,9 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
                    map_n * sizeof(Form *));
         new_map_items[map_n]     = entry_key;
         new_map_items[map_n + 1] = entry_val;
-        Form *new_map = form_map(a, SPAN_UNKNOWN, new_map_items, map_n + 2);
+        Form *new_map = is_literal
+            ? form_map_literal(a, SPAN_UNKNOWN, new_map_items, map_n + 2)
+            : form_map(a, SPAN_UNKNOWN, new_map_items, map_n + 2);
 
         Form **new_dp = (Form **)arena_alloc(a, n * sizeof(Form *));
         memcpy(new_dp, dp->as.list.items, n * sizeof(Form *));
@@ -3712,6 +4059,8 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
     } else {
         /* Append :spices #{ entry } */
         Form *kw = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "spices"));
+        Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir,
+                                              optional, false);
         Form *new_map_items[2] = { entry_key, entry_val };
         Form *new_map = form_map(a, SPAN_UNKNOWN, new_map_items, 2);
 

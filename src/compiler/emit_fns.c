@@ -42,6 +42,13 @@ static void pbp_push(EmitCtx *ctx, Binding *b) {
  * lets `tco_params_simple` accept by-value-struct params (e.g.
  * `Vec__int`) that the generic form would reject as carrier-ABI. */
 static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i) {
+    /* A lifted CLOSURE thunk carries the env pointer as params[0], so its
+     * fd->params / fd->param_types are one longer than the SOURCE fn type
+     * (`fn_e->type.as.fn.arg_full_types`, which has no env).  Indexing the
+     * source type here would read the wrong param -- take the FnDef's own
+     * types, which are parallel to fd->params.  (The pbp scan above
+     * side-steps the same skew by skipping closures entirely.) */
+    if (fd->closure) return fd->param_types[i];
     if (ctx && ctx->current_abi_specialization
         && i < ctx->current_abi_specialization->n_args) {
         return ctx->current_abi_specialization->arg_types[i];
@@ -50,6 +57,16 @@ static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i)
         fn_e->type.as.fn.arg_full_types[i])
         return *fn_e->type.as.fn.arg_full_types[i];
     return fd->param_types[i];
+}
+
+/* Index of the first SOURCE parameter in fd->params: 1 for a lifted closure
+ * thunk (params[0] is the env pointer), 0 otherwise.  A self-tail backedge
+ * reassigns only the source params -- the env is loop-invariant, because the
+ * emitter routes a closure's own recursive self-call through the env pointer
+ * the thunk was called with (see the S5 self-call arm in emit_expr.c's
+ * closure-call emission), never a freshly built box. */
+static uint32_t tco_env_offset(const FnDef *fd) {
+    return (fd->closure && fd->n_params > 0) ? 1u : 0u;
 }
 
 /* A function is TCO-eligible only if every parameter is a plain scalar we can
@@ -65,8 +82,17 @@ static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i)
  * "int64_t" (the carrier fallback), which indicates the type would need
  * a bridge to/from the carrier on reassignment. */
 static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
-    if (fd->is_variadic || fd->closure) return false;
-    for (uint32_t i = 0; i < fd->n_params; i++) {
+    if (fd->is_variadic) return false;
+    /* A lifted closure thunk IS eligible: its env param is skipped (it is
+     * loop-invariant across a self-call, see tco_env_offset) and the remaining
+     * params are checked exactly as a plain defn's are.  This is what makes the
+     * CAPTURING named-let -- `(let go [...] ... (go ...))` inside a fn whose
+     * params the loop reads -- iterative instead of self-recursive; without it
+     * every such loop is one engine switch away from a stack overflow (it
+     * survives the cc path only because gcc -O2 turns the emitted self-call
+     * into a sibling call; MIR performs no such optimization).  See
+     * docs/archive/named-let-self-tail-not-tco.md. */
+    for (uint32_t i = tco_env_offset(fd); i < fd->n_params; i++) {
         if (fd->params[i]->is_poly_fn) return false;
         Type pty = tco_param_type(ctx, fn_e, fd, i);
         if (pty.kind == TY_FN) return false;
@@ -103,7 +129,15 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
      * existed for pre-Path-A indirect dispatch through the dict slot
      * cast, which `fn_expr != NULL` already filters out. */
     if (call->as.call_.is_poly_call) return false;     /* rank-2 poly call */
-    if (call->as.call_.n_args != fd->n_params) return false;
+    if (call->as.call_.n_args != fd->n_params - tco_env_offset(fd)) return false;
+    /* A lifted closure thunk is never NAMED by the call: the call's target is
+     * the enclosing letrec binding (`go`), whose closure_fn_binding points at
+     * the thunk being emitted.  That is the same identity test the closure-call
+     * emitter uses to decide it is looking at the closure's own recursive
+     * self-call (and so to thread the current env rather than an outer box), so
+     * matching it here keeps the backedge and the ordinary call in agreement. */
+    if (tco_env_offset(fd) > 0)
+        return call->as.call_.fn_binding->closure_fn_binding == fd->binding;
     if (call->as.call_.fn_binding == fd->binding) return true;  /* fast path */
     char *cn = raw_name_for_binding(call->as.call_.fn_binding);
     bool same = fn_cname && cn && strcmp(cn, fn_cname) == 0;
@@ -170,17 +204,44 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
                                FnDef *fd, const Expr *call) {
     uint32_t n = fd->n_params;
+    /* Closure thunk: params[0] is the env, which the self-call reuses unchanged
+     * -- reassign only params[env..n) from the call's args[0..). */
+    uint32_t off = tco_env_offset(fd);
     char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
-    for (uint8_t i = 0; i < n; i++) {
-        char *av = emit_value(ctx, body, call->as.call_.args[i]);
+    for (uint8_t i = (uint8_t)off; i < n; i++) {
+        char *av = emit_value(ctx, body, call->as.call_.args[i - off]);
         char *t = fresh_tmp(ctx);
         Type pty = tco_param_type(ctx, fn_e, fd, i);
+        const char *pcty = emit_type_c_name(ctx, pty);
+        /* gcc14-int-conversion (carrier-representation-tracking, reverse straddle
+         * at the tail-backedge): the param slot is the int64 carrier but the arg
+         * value is a bare temp recorded as a concrete pointer (a heap-producer
+         * call result, e.g. `int64_t __t160 = __ps_159;` where __ps_159 is a
+         * `tur_adt_Cons__int *`).  Reinterpret the pointer to the int64 carrier --
+         * value-preserving, and only fires for a genuine recorded pointer temp
+         * into an int64 param slot. */
+        bool av_is_bare = av && (av[0] == '_' || isalpha((unsigned char)av[0]));
+        if (av_is_bare)
+            for (const char *p = av + 1; *p && av_is_bare; p++)
+                if (!(*p == '_' || isalnum((unsigned char)*p))) av_is_bare = false;
+        if (pcty && strcmp(pcty, "int64_t") == 0 && av_is_bare) {
+            const char *lvty = emit_localvar_lookup_ctype(av);
+            size_t lL = lvty ? strlen(lvty) : 0;
+            if (lvty && lL >= 1 && lvty[lL - 1] == '*' && strcmp(lvty, "void *") != 0) {
+                Buf b; buf_init(&b);
+                buf_printf(&b, "(int64_t)(intptr_t)(%s)", av);
+                buf_putc(&b, '\0');
+                free(av);
+                av = strdup(b.data);
+                buf_free(&b);
+            }
+        }
         indent_buf(body, ctx->indent);
-        buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, pty), t, av);
+        buf_printf(body, "%s %s = %s;\n", pcty, t, av);
         tmps[i] = t;
         free(av);
     }
-    for (uint8_t i = 0; i < n; i++) {
+    for (uint8_t i = (uint8_t)off; i < n; i++) {
         char *pn = raw_name_for_binding(fd->params[i]);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", pn, tmps[i]);
@@ -212,6 +273,30 @@ static char *emit_fat_return_value(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     return emit_value(ctx, body, e);
 }
 
+/* CONV-S1 seam 4: the single question that decides an inline-C function's C
+ * return type -- does it return its declared aggregate BY VALUE, or through the
+ * int64 carrier?  Under the defstruct-as-defadt lowering a by-value
+ * record/product result (`Pos` -> `tur_adt_Pos`) is a concrete aggregate, so an
+ * inline-C body returns it by value (`Pos r; return r;`) and the C signature
+ * must say so, matching the dict slot.  A parametric ADT-app with no single C
+ * layout, a :heap ADT (a pointer), and a carrier-ABI ADT (a multi-variant sum
+ * returned as the int64 handle) all stay on the carrier.
+ *
+ * Factored out of two hand-duplicated copies (the definition signature here and
+ * the forward-decl mirror in emit_module.c) so they cannot drift, and so the
+ * CONSUMER side can ask the same question instead of guessing from the type's
+ * shape -- see fn_body_tail_byvalue_carrier_type in emit_expr.c.  Declared in
+ * emit_internal.h. */
+bool inline_c_returns_byvalue_adt(EmitCtx *ctx, bool body_is_inline_c,
+                                  const Type *rft) {
+    if (!body_is_inline_c || !rft) return false;
+    Type rft_r = emit_resolve_type(ctx, *rft);
+    return (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
+           !type_uses_carrier_abi(rft_r) &&
+           !type_is_heap_adt(rft_r) &&
+           type_has_concrete_codegen_layout(&rft_r);
+}
+
 /* M5 straddle (root cause C of m5-suite-residual-6-failures): true when every
  * tail leaf of `e` is a call that emits an int64 carrier value -- a
  * #{Construct} helper (some/ok/err/none) or a typeclass-method impl
@@ -239,7 +324,31 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
             if (!b) return false;
             if (b->is_construct_template) return true;
             if (b->name && b->name->name &&
-                strncmp(b->name->name, "__inst_", 7) == 0) return true;
+                strncmp(b->name->name, "__inst_", 7) == 0) {
+                /* consolidation increment 2 (method-result bridging): the
+                 * "__inst_ returns the carrier regardless of its declared
+                 * type" premise is stale for a PURE-TURMERIC instance method
+                 * whose declared result is a concrete by-value product -- the
+                 * M7 by-value path emits it returning the aggregate
+                 * (`tur_adt_FzW __inst_FzT_thru_FzW(tur_adt_FzW)`), and
+                 * classifying it as a carrier producer made the spec-call arg
+                 * path deref the aggregate as if it were a pointer
+                 * (class-method-result-into-generic-invalid-c; the let-bind
+                 * workaround dodged this classifier, which is why it worked).
+                 * Inline-C instance bodies still lower to the int64 carrier
+                 * and multi-variant/parametric/tyvar results stay on the
+                 * carrier -- those keep the producer classification. */
+                if (!b->body_is_inline_c && b->type.kind == TY_FN &&
+                    b->type.as.fn.result_full_type) {
+                    Type rr = *b->type.as.fn.result_full_type;
+                    if ((rr.kind == TY_ADT || rr.kind == TY_APP) &&
+                        !type_uses_carrier_abi(rr) &&
+                        !type_is_heap_adt(rr) && !type_is_heap_struct(rr) &&
+                        type_has_concrete_codegen_layout(&rr))
+                        return false;
+                }
+                return true;
+            }
             /* result-bridge-tail-call-from-pure-tur-to-inline-c: an inline-C
              * body whose declared return type uses the carrier ABI is lowered
              * with an int64_t C return type, so a tail call to it yields the
@@ -433,6 +542,63 @@ static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
     return expr_tail_is_catch_box(fd->body, fd->body);
 }
 
+/* macos-int-conversion-carrier-pointer-straddles (case B): true when the
+ * function's tail expression is EMITTED as the int64 carrier, decided from the
+ * typed AST rather than by sniffing the emitted C text.
+ *
+ * The `(int64_t)`-prefix / localvar-table sniff the return bridge below uses
+ * cannot see three shapes that reach it, all of which straddle a pointer
+ * return type:
+ *
+ *   static void * thru_hyfat(int64_t v)          { return v; }
+ *   static void * __fn_1374(void *p)             { return __env->c; }
+ *   static tur_adt_Cons__int * mk_hylist(void)   { return cons(...); }
+ *
+ * A parameter, a closure-env field read and a builtin call are all absent from
+ * the localvar table, and registering them there is unsafe (that table is keyed
+ * by bare C name and reset per PROGRAM, so one function's `v` would define the
+ * type every other function's `v` resolves to).  Ask the AST instead:
+ *
+ *  - EX_VAR: a fn-typed binding is carried as the int64 fn-ABI carrier both as
+ *    a parameter (the TY_FN param branch below) and as a closure-env field
+ *    (emit_expr.c pins TY_FN captures to int64_t).  Two spellings opt out and
+ *    keep a concrete C type -- a rank-2 poly param (`tur_poly_fn_t`) and a
+ *    cfnptr (a typed C function pointer) -- so both are excluded.
+ *  - EX_BUILTIN `cons`: the preamble cons-cell helper returns the int64
+ *    carrier.  Keyed on `c_op` the way elab_call.c:3351 and emit_core.c:3516
+ *    already key their carrier-ABI special cases for it, NOT on
+ *    `result_type.kind == TY_INT` generally -- a builtin's declared result kind
+ *    does not pin its C helper's return type (`tur_cloneable_cont_clone`
+ *    declares TY_INT and returns `tur_cloneable_cont *`), and a rule that
+ *    claimed "carrier" there would cast a pointer to a pointer through
+ *    intptr_t.
+ *
+ * Deliberately narrow: it must never claim "carrier" for a value that is
+ * already the pointer, or the bridge would paper over a genuinely mis-selected
+ * monomorph (the failure mode `data-literal-nested` documents). */
+static bool fn_tail_emits_int64_carrier(const FnDef *fd, const Expr *body) {
+    if (!fd || !body) return false;
+    if (body->kind == EX_VAR) {
+        Binding *b = body->as.var.binding;
+        if (!b || b->is_poly_fn) return false;
+        if (b->type.kind != TY_FN || b->type.as.fn.cfnptr) return false;
+        for (uint32_t i = 0; i < fd->n_params; i++)
+            if (fd->params[i] == b)
+                return fd->param_types[i].kind == TY_FN &&
+                       !fd->param_types[i].as.fn.cfnptr;
+        if (fd->closure && !b->is_global)
+            for (uint8_t i = 0; i < fd->closure->n_captures; i++)
+                if (fd->closure->captures[i] == b) return true;
+        return false;
+    }
+    if (body->kind == EX_BUILTIN) {
+        const BuiltinSpec *spec = body->as.builtin.spec;
+        return spec && spec->shape == BS_FUNC_CALL && spec->c_op &&
+               strcmp(spec->c_op, "cons") == 0;
+    }
+    return false;
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -583,10 +749,26 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         return;
     }
     indent_buf(body, ctx->indent);
-    if (is_main && result_kind == TY_INT)
+    if (is_main && result_kind == TY_INT) {
         buf_printf(body, "return (int)%s;\n", v);
-    else
+    } else if (!is_main && ctx->current_fn_ret_ctype &&
+               strcmp(ctx->current_fn_ret_ctype, "void") == 0) {
+        /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
+         * violation in a function returning void -- even when the expression is
+         * itself void-typed.  A `!`-returning defn whose tail is a call to
+         * another `!`-returning defn lands exactly there:
+         *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
+         * clang accepts it as an extension, so the cc path never complained,
+         * but c2mir rejects it and the program silently loses the JIT
+         * (panic-trace was the fixture that surfaced this).  Emit the tail as a
+         * statement and return separately; the cast keeps -Wunused-value quiet
+         * for a non-call tail and is valid on a void-typed one. */
+        buf_printf(body, "(void)(%s);\n", v);
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "return;\n");
+    } else {
         buf_printf(body, "return %s;\n", v);
+    }
     free(v);
 }
 
@@ -1317,6 +1499,16 @@ typedef struct GsSink {
     const LetBinding *binds; uint32_t bi, bn; const Expr *body;  /* GSK_ASSIGN */
     const Expr **items; uint32_t si, sn;                 /* GSK_SEQ */
     const struct GsSink *cont;                           /* GSK_ASSIGN / GSK_SEQ */
+    /* catch-unwind-panic-payload-leaks (Leak 3): C-name of a caught Result box
+     * to tur_result_box_free just before this sink consumes its value.  Set on
+     * the terminal sink of a let-bound catch-box continuation that is
+     * straight-line and non-escaping (gs_catch_descend), so the box (and its
+     * owned payload/message) is reclaimed once the reads that consume it have
+     * completed -- the stackless counterpart to the native let_binding_box_freeable
+     * scope-exit free.  The delivered value is proven not to alias the box (the
+     * escape check greenlights only scalar-returning accessor reads), so freeing
+     * before the delivery is safe. */
+    const char *free_box;                                /* deferred box free */
 } GsSink;
 
 typedef struct {
@@ -1608,6 +1800,14 @@ static void cps_emit_do(GsCtx *gs, Buf *b, const Expr **items, uint32_t i,
 /* Route a produced value `val` to its sink (may continue emitting a let/do
  * tail into the same segment, or end the segment with a RETURN + break). */
 static void gs_deliver(GsCtx *gs, Buf *b, const char *val, const GsSink *sink) {
+    /* catch-unwind-panic-payload-leaks (Leak 3): reclaim a let-bound caught
+     * Result box now that its consuming reads have run and `val` (proven not to
+     * alias the box) is ready to be delivered.  Emitted before the sink's
+     * terminal write/break so it is not stranded as dead code after it. */
+    if (sink->free_box) {
+        indent_buf(b, gs->cur_ind);
+        buf_printf(b, "tur_result_box_free((int64_t)(intptr_t)%s);\n", sink->free_box);
+    }
     switch (sink->kind) {
         case GSK_RETURN: {
             if (sink->ret_aggr) {
@@ -1665,11 +1865,22 @@ static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink
     gs_save(gs, b, node);
     char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
     for (uint32_t i = 0; i < na; i++) {
+        GsVar *pv = &gs->vars[pbase + (int)i];
         gs->ctx->indent = gs->cur_ind;
         char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
         char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
         indent_buf(b, gs->cur_ind);
-        buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+        /* S1 (jit-engine-plan section 4): name the temp's type instead of
+         * __auto_type (GNU-only; c2mir cannot parse it).  The type is not
+         * guessed: gs_param_class gates entry to this whole lowering and never
+         * succeeds without a ctype, and the temp's only consumer is the
+         * assignment into that same param below, so declaring it as the param's
+         * type moves the identical conversion one line earlier.  An is_ref
+         * param's arg is a borrow pointer, so the temp is `const <ctype> *`. */
+        if (pv->is_ref)
+            buf_printf(b, "const %s *%s = (%s);\n", pv->ctype, nm, av);
+        else
+            buf_printf(b, "%s %s = (%s);\n", pv->ctype, nm, av);
         free(av); tmps[i] = tur_strdup(nm);
     }
     for (uint32_t i = 0; i < na; i++) {
@@ -1864,7 +2075,33 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
             gs_deliver(gs, rb, aggnm, sink);
             free(bridged);
         } else {
-            gs_deliver(gs, rb, boxnm, sink);
+            /* catch-unwind-panic-payload-leaks (Leak 3): a let-bound caught box
+             * (`(let [r (catch-unwind ...)] BODY)`) whose BODY is straight-line
+             * (no further suspension / catch / panic) and reads `r` only through
+             * non-escaping scalar accessors is reclaimable at scope exit, just
+             * like the native let_binding_box_freeable path.  Arm the terminal
+             * sink of BODY to free the box once its consuming reads have run (the
+             * delivered value is proven not to alias the box), so the loop leak
+             * (~4.8 MB over 200k iters) is gone.  A body that suspends would save
+             * `r` across a descend, so the straight-line gate is required for the
+             * one-shot free to be sound. */
+            GsSink cont_copy, assign_copy;
+            const GsSink *dsink = sink;
+            if (sink->kind == GSK_ASSIGN && sink->bi >= 1 &&
+                sink->bi == sink->bn && sink->cont && sink->body) {
+                const Binding *boxbind = sink->binds[sink->bi - 1].binding;
+                if (boxbind && !gs_suspends_live(gs, sink->body) &&
+                    !gs_has_catch(sink->body, gs->fd) &&
+                    !gs_has_panic(sink->body) &&
+                    !catch_box_binding_escapes(sink->body, boxbind)) {
+                    cont_copy = *sink->cont;
+                    cont_copy.free_box = boxnm;
+                    assign_copy = *sink;
+                    assign_copy.cont = &cont_copy;
+                    dsink = &assign_copy;
+                }
+            }
+            gs_deliver(gs, rb, boxnm, dsink);
         }
     }
     gs->cur_ind = saved_ind;
@@ -1984,11 +2221,16 @@ static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *
             uint32_t na = S->as.call_.n_args;
             char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
             for (uint32_t i = 0; i < na; i++) {
+                GsVar *pv = &gs->vars[pbase + (int)i];
                 gs->ctx->indent = gs->cur_ind;
                 char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
                 char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
                 indent_buf(b, gs->cur_ind);
-                buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+                /* S1: same named-type reasoning as gs_self_descend above. */
+                if (pv->is_ref)
+                    buf_printf(b, "const %s *%s = (%s);\n", pv->ctype, nm, av);
+                else
+                    buf_printf(b, "%s %s = (%s);\n", pv->ctype, nm, av);
                 free(av); tmps[i] = tur_strdup(nm);
             }
             for (uint32_t i = 0; i < na; i++) {
@@ -2207,8 +2449,9 @@ static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
          * type-check as the C return type). */
         char *rz;
         if (done_typed && gs->mem_ret_aggr[0]) {
-            size_t n = strlen(gs->mem_retctype[0]) + 8;
-            rz = (char *)malloc(n); snprintf(rz, n, "(%s){0}", gs->mem_retctype[0]);
+            /* S1/findings 16.4: mem_retctype can be a pointer spelling, and a
+             * pointer zero is scalar; emit_c_zero_of picks the legal form. */
+            rz = emit_c_zero_of(gs->mem_retctype[0]);
         } else if (done_typed) {
             rz = sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "INT64_C(0)");
         } else {
@@ -2857,6 +3100,70 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             buf_puts(file, "};\n");
             free(thunk_typedef);
+
+            /* closure-drop-glue (Model R): emit the env's drop-glue beside its
+             * struct def (this pre-pass is the authoritative early emission site;
+             * the EX_CLOSURE path shares the env_struct_names guard, so the glue is
+             * emitted exactly once).  The glue RELEASES each refcounted owning
+             * capture (rc strong decrement, balancing the env-fill's retain) and
+             * frees the base allocation (the header word precedes the env pointer).
+             *
+             * The rc walk is sound regardless of aliasing -- rc counting is the
+             * sharing-safe owning mechanism.  Owning captures that are NOT
+             * refcounted -- a raw nested-closure handle (`!is_poly_fn` TY_FN), a
+             * `ref` -- are NOT walked here: recursing one blind is finding #1's
+             * double-free (a capture another owner also drops), which needs
+             * move/uniqueness analysis.  The httpd `_n`/string case additionally
+             * needs type-honest owned captures.  Both are the next slice. */
+            {
+                buf_printf(file, "static void drop_glue_%s(void *__p) {\n", env_name->name);
+                buf_printf(file, "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
+                           env_name->name, env_name->name);
+                for (int32_t i = (int32_t)fd->closure->n_captures - 1; i >= 0; i--) {
+                    Binding *cap = fd->closure->captures[i];
+                    if (cap && cap->is_global) continue;
+                    if (cap && cap->type.kind == TY_RC) {
+                        char *cf = raw_name_for_binding(cap);
+                        buf_printf(file,
+                            "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
+                            cf, cf);
+                        free(cf);
+                    } else if (cap && cap->is_fat &&
+                               !(cap->closure_fn_binding &&
+                                 fd->binding &&
+                                 cap->closure_fn_binding == fd->binding)) {
+                        /* Type-honesty (a): a `^fat` capture carries is_fat even
+                         * though its env field is the erased int64 carrier, so it
+                         * is provably an OWNED fat closure handle -- release it via
+                         * TUR_CLOSURE_DROP (uniform across representations).  Sound
+                         * because the capture is MOVED into this env (elab marks the
+                         * source consumed, so no other owner drops it -- an aliasing
+                         * second capture is a use-after-consume error, not a
+                         * double-free).  The letrec self-capture (the env storing
+                         * its OWN pointer) is excluded -- dropping it would recurse
+                         * into itself. */
+                        char *cf = raw_name_for_binding(cap);
+                        buf_printf(file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
+                        free(cf);
+                    } else if (fd->closure->capture_drop_insts &&
+                               fd->closure->capture_drop_insts[i] &&
+                               fd->closure->capture_drop_insts[i]->n_method_impls > 0 &&
+                               fd->closure->capture_drop_insts[i]->method_impls[0] &&
+                               fd->closure->capture_drop_insts[i]->method_impls[0]->binding) {
+                        /* Model R #1b: a capture whose type implements Drop -- release
+                         * it through the resolved Drop instance's `drop` method.  A
+                         * Drop+Clone (refcounted) capture was retained at env-fill, so
+                         * this decrement balances; a move-only Drop capture was
+                         * consumed at capture, so this is its sole release. */
+                        char *cf = raw_name_for_binding(cap);
+                        char *dm = raw_name_for_binding(
+                            fd->closure->capture_drop_insts[i]->method_impls[0]->binding);
+                        buf_printf(file, "    %s(__e->%s);\n", dm, cf);
+                        free(dm); free(cf);
+                    }
+                }
+                buf_puts(file, "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
+            }
         }
     }
 
@@ -3004,15 +3311,29 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * with a concrete codegen layout.  Carrier-ABI ADTs (multi-variant
              * sums returned as the int64 handle) are excluded and stay int64. */
             Type rft_r = emit_resolve_type(ctx, rft);
-            bool typed_byval_adt = body_is_inline_c &&
-                (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
-                !type_uses_carrier_abi(rft_r) &&
-                !type_is_heap_adt(rft_r) &&
-                type_has_concrete_codegen_layout(&rft_r);
+            bool typed_byval_adt =
+                inline_c_returns_byvalue_adt(ctx, body_is_inline_c, &rft);
+            /* inline-c-rc-return-misses-carrier-bridge: an owning return
+             * (rc/weak/ref/lref) lowers to `RcControlBlock *` even from an
+             * inline-C body, for the same reason typed_ptr does -- it IS a
+             * pointer, and the carrier holds exactly its bits.  Without this the
+             * base came out `int64_t` while every specialized consumer took
+             * `RcControlBlock *`, so an ordinary
+             *
+             *     (chain-cons item (chain-nil))
+             *
+             * emitted a -Wint-conversion warning in the user's build with
+             * nothing in their source to fix.  `return 0;` in the body stays
+             * valid (a null pointer constant), which is the shape that matters:
+             * a null rc is the one thing an inline-C body is reached for here.  */
+            bool typed_rc = body_is_inline_c &&
+                (rft.kind == TY_RC || rft.kind == TY_WEAK ||
+                 rft.kind == TY_REF || rft.kind == TY_LREF);
             if (fn_ret_td && !body_is_inline_c) {
                 buf_puts(file, fn_ret_td);
             } else if (!body_is_inline_c || typed_ptr || typed_struct ||
-                       typed_cfnptr || typed_heap_spec || typed_byval_adt) {
+                       typed_cfnptr || typed_heap_spec || typed_byval_adt ||
+                       typed_rc) {
                 buf_puts(file, emit_type_c_name(ctx, typed_byval_adt ? rft_r : rft));
             } else {
                 buf_puts(file, "int64_t");
@@ -3112,7 +3433,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * carrier. */
     bool *needs_box_load = (bool *)arena_alloc(ctx->type_arena, nbp * sizeof(bool));
     for (uint32_t i = 0; i < nbp; i++) needs_box_load[i] = false;
-    if (fd->closure) {
+    /* Blocker 2c: a closure stored into a typed fn-field is invoked through that
+     * field's by-value typed thunk, so its wide by-value ADT params cross by
+     * value -- suppress B4 b4box boxing (it would disagree with the typed thunk
+     * + call site and corrupt the arg). */
+    if (fd->closure && !fd->byval_fn_field_closure) {
         for (uint32_t i = 0; i < fd->n_params; i++) {
             if (fd->params[i]->is_poly_fn ||
                 fd->param_types[i].kind == TY_FN) continue;
@@ -3221,8 +3546,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                      * capture field as `tur_adt_Point *`.  Flag the param so the
                      * closure-capture site bridges int64->pointer (field reads
                      * already bridge via the heap-ADT-recv path). */
-                    if (fd->n_dict_clone > 0 && btc &&
-                        strcmp(btc, "int64_t") != 0 &&
+                    /* hkt-foldable-rc-param: the dict-clone gate used to be the
+                     * only way in.  The flag's meaning -- "carrier signature slot,
+                     * pointer-shaped binding type" -- holds for any such param, and
+                     * an HKT instance method over a pointer-family builtin is now
+                     * one: its receiver's elaborated type is `rc<a>`
+                     * (`RcControlBlock *`) while its dict-ABI slot stays int64_t.
+                     * Every consumer of the flag reacts by adding a value-preserving
+                     * int64->pointer bridge, which is correct wherever the flag's
+                     * meaning holds, so widening it can only remove straddles. */
+                    if (btc && strcmp(btc, "int64_t") != 0 &&
                         strchr(btc, '*') != NULL)
                         fd->params[i]->emit_carrier_holds_ptr = true;
                 }
@@ -3363,6 +3696,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * user-defined-main path; the synthesized-main paths in emit_module.c and
      * the CPS D2b wrapper in emit_cps_ir.c call the same helper. */
     if (is_main) {
+        /* S1b (jit-engine-plan): explicit static initialization, ahead of
+         * everything else in main -- that is where the `constructor`
+         * attributes it replaces used to run.  Idempotent, so the constructor
+         * wrapper emitted alongside the definition is harmless here. */
+        ctx->indent += 4;
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "__tur_static_init();\n");
+        ctx->indent -= 4;
         emit_win_binary_stdio_prologue(file);
     }
 
@@ -3730,8 +4071,30 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 if (body_cty && strcmp(body_cty, "int64_t") != 0)
                     struct_cty = body_cty;
             }
+            /* hkt-rc-construct-body-boxes-handle: the spill exists to pass a
+             * BY-VALUE aggregate through the dict's uniform `int64_t` slot.  A
+             * value that is already carrier-width needs no box, and boxing one
+             * anyway is a silent miscompile -- the consumer reads the
+             * pointer-to-value as the value.
+             *
+             * Two shapes qualify.  The int64 carrier itself was already handled
+             * (see below).  A POINTER is the other: an instance method whose
+             * result is a pointer-family handle -- `Functor [rc]`'s `(f b)`
+             * grounding to `rc<int>`, i.e. `RcControlBlock *` -- returns a
+             * pointer that fits the carrier exactly.  Boxing it emitted
+             * `RcControlBlock **__tur_ret_p = malloc(...)` and the dispatch
+             * consumer then cast that cell straight to `RcControlBlock *`, so
+             * `rc/strong-count` read a malloc header as a refcount and the value
+             * was never reachable (measured: garbage count, fold 0, 752768 bytes
+             * leaked over 5000 iterations).
+             *
+             * The next branch down already treats a TY_RC/TY_WEAK/TY_REF/TY_LREF
+             * body returned through the int64 carrier exactly this way -- a bare
+             * `(int64_t)(intptr_t)` bridge -- so this only stops the spill from
+             * intercepting a case that was already handled correctly downstream. */
+            bool spill_ty_is_ptr = struct_cty && strchr(struct_cty, '*') != NULL;
             if (struct_cty &&
-                strcmp(struct_cty, "int64_t") == 0) {
+                (strcmp(struct_cty, "int64_t") == 0 || spill_ty_is_ptr)) {
                 /* M7: the body already produced the carrier int64 handle --
                  * e.g. a partial-application `(Result _ E)` instance whose
                  * pure-Turmeric body lowered to the carrier `ok`/`err` (the
@@ -3955,6 +4318,63 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 buf_printf(file, "return %s;\n", bridged);
                 free(bridged);
             }
+        } else if (ret_ctype && !is_main && ret_val &&
+                   ret_ctype[strlen(ret_ctype) - 1] == '*' &&
+                   ((strcmp(ret_ctype, "void *") != 0 &&
+                     (strncmp(ret_val, "(int64_t)", 9) == 0 ||
+                      (emit_str_is_bare_ident(ret_val) &&
+                       emit_localvar_lookup_ctype(ret_val) &&
+                       strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) ||
+                    fn_tail_emits_int64_carrier(fd, fd->body))) {
+            /* gcc14-int-conversion (carrier-representation-tracking): a spec
+             * clone whose C return type is a concrete pointer (e.g. an element
+             * accessor `err-val [A B] : B` monomorphized to `const char *` /
+             * `tur_adt_Vec__X *`) but whose body VALUE is the int64 carrier --
+             * either an explicit `(int64_t)..` field read, or a bare call temp
+             * RECORDED as int64 (`return __ps_224;` where run_id__spec returns
+             * int64 but the fn returns `tur_adt_Point *`).  `return <int64>` into
+             * a pointer return type is `pointer from integer` -- a hard error
+             * under GCC >= 14.  Reinterpret to the return type (value-preserving).
+             *
+             * macos-int-conversion-carrier-pointer-straddles (case B): the
+             * `void *` exclusion above is conservatism from fe6f47b60, not
+             * semantics -- `return <int64>` into `void *` is the same
+             * -Wint-conversion error and the same intptr_t round-trip fixes it.
+             * It only stays because the string sniff cannot tell a carrier from
+             * a genuine pointer; the AST predicate can, so a tail it recognizes
+             * bridges for any pointer return type, `void *` included. */
+            buf_printf(file, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
+        } else if (ret_is_int64_carrier && ret_val &&
+                   emit_str_is_bare_ident(ret_val) &&
+                   emit_localvar_lookup_ctype(ret_val) &&
+                   emit_localvar_lookup_ctype(ret_val)[
+                       strlen(emit_localvar_lookup_ctype(ret_val)) - 1] == '*') {
+            /* clang int-conversion (reverse straddle): the function returns the
+             * int64 carrier but the body value is a bare temp whose real emitted C
+             * type is a pointer -- a `void *`-returning `extern-c ... :ptr` ascribed
+             * to an opaque carrier (e.g. `(:: (tur_string_from_cstr s) String)`
+             * whose __auto_type panic temp is `void *`).  `return <void*>;` from an
+             * `int64_t` function is `pointer to integer conversion` -- a hard error
+             * under clang's default `-Wint-conversion` (and GCC >= 14 -Werror).
+             * Bridge through intptr_t (value-preserving; a no-op for a genuine
+             * int64 temp, which this branch never sees -- the recorded type is a
+             * pointer). */
+            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (!is_main && ret_ctype && strcmp(ret_ctype, "void") == 0) {
+            /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
+             * violation in a function returning void -- even when the
+             * expression is itself void-typed.  A `!`-returning defn whose tail
+             * is a call to another `!`-returning defn lands exactly there:
+             *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
+             * clang accepts it as an extension, so the cc path never
+             * complained, but c2mir rejects it and the program silently loses
+             * the JIT (panic-trace was the fixture that surfaced this).  Emit
+             * the tail as a statement and return separately; the cast keeps
+             * -Wunused-value quiet for a non-call tail and is valid on a
+             * void-typed one. */
+            buf_printf(file, "(void)(%s);\n", ret_val);
+            indent_buf(file, ctx->indent);
+            buf_puts(file, "return;\n");
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

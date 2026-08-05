@@ -1,0 +1,27 @@
+;; SOUNDNESS FIXTURE -- match arms must not share hypotheses.
+;;
+;; Giving each arm a constructor-tag fact creates a hazard that did not exist
+;; when arms contributed nothing: two arms of the same match assert DIFFERENT
+;; tags for the SAME scrutinee. Let those accumulate in one environment and
+;; `(= (#dt/tag s) 0)` sits alongside `(= (#dt/tag s) 1)` -- a contradiction,
+;; and a contradictory hypothesis set proves every goal, so every arm after the
+;; first would be "proved" and have its check elided.
+;;
+;; The environment is therefore saved and restored around EACH arm, not just
+;; around the match. This fixture is what tells the two apart: with only the
+;; outer save/restore it compiles clean, prints -1, and exits 0.
+;;
+;; A runtime fixture rather than an error fixture -- the shape is not
+;; statically refutable, so what the bug would cost is a missing abort, and an
+;; abort is what this pins.
+(defdata Sign (Pos :int) (Neg :int) (Zero))
+
+(defn probe [s : Sign] : #refine{ r : int | (>= r 0) }
+  (match s
+    (Pos n) 0
+    (Neg n) -1
+    (Zero)  0))
+
+(defn main [] : int
+  (println (probe (Neg 2)))
+  0)

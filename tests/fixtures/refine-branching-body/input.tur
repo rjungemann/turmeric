@@ -1,0 +1,37 @@
+;; RT4 path splitting: a branching body is discharged PER PATH.
+;;
+;; `pred[body/r]` needs a value to substitute for `r`, and `(if c t e)` is not
+;; one -- so any function whose body branched answered unknown and kept its
+;; check, which rules out most real code. Splitting recovers them:
+;;
+;;     c |- pred[t/r]    and    (not c) |- pred[e/r]
+;;
+;; On each path the value returned is that branch's, and the condition that
+;; selected it is a fact. `(let [x v] body)` adds `x = v` and recurses.
+;;
+;; Note that neither arm proves the goal on its own here -- `x` is not
+;; non-negative, and `0` says nothing about `x`. Only the path condition makes
+;; each side go through, which is exactly what "path-sensitive" means.
+;;
+;; Splitting is tried silently and only ever proves MORE: if it fails, the
+;; ordinary whole-body obligation still runs and still reports in the ordinary
+;; place, so an unproven function looks exactly as it did before.
+(defn clamp-nonneg [x : int] : #refine{ r : int | (>= r 0) }
+  (if (>= x 0) x 0))
+
+(defn sign [x : int] : #refine{ r : int | (and (>= r -1) (<= r 1)) }
+  (if (> x 0) 1 (if (< x 0) -1 0)))
+
+(defn via-let [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
+  (let [y (* x 2)] y))
+
+(defn both [x : int] : #refine{ r : int | (>= r 0) }
+  (let [y (* x 2)] (if (>= y 0) y 0)))
+
+(defn main [] : int
+  (println (clamp-nonneg -5))
+  (println (sign -3))
+  (println (via-let 4))
+  (println (both -2))
+  (println "refine-branching-body")
+  0)

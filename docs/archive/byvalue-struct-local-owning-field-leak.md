@@ -8,7 +8,7 @@ field, mirroring the existing bare-`rc` auto-drop. See "Resolution" below.
 CT-IR lowering, so a COLORED function carrying such a local evicts to the
 whole-function fallback (`BODY-UNSUPPORTED ... EX_DEFER`). Lowering it under CPS
 -- the missing generalization of O1-b, which only lowered the `ref` shape -- is
-`docs/upcoming/cps-backend-owning-autodrop-lowering-plan.md`. (This closes the
+`docs/archive/cps-backend-owning-autodrop-lowering-plan.md`. (This closes the
 "not currently tracked anywhere" note below for the CPS side.)
 
 **Severity:** medium (memory leak; no crash / miscompile). Mainline codegen --

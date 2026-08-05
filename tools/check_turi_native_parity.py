@@ -44,6 +44,9 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAIN_C = os.path.join(ROOT, "src", "main.c")
+# The compiled-side autoload list moved out of main.c so the WASM
+# playground's analyzer can share it (try-turmeric-lsp-plan, L0).
+AUTOLOAD_C = os.path.join(ROOT, "src", "compiler", "stdlib_autoload.c")
 # The interpreter prelude array was relocated from cmd_eval (main.c) into the
 # shared preload helper so the native --interpret path and the WASM REPL load
 # one list (web-repl-missing-stdlib-preload).
@@ -73,8 +76,8 @@ def _module_array(src, header_regex):
 
 
 def compiled_autoload():
-    src = read(MAIN_C)
-    return _module_array(src, r"static const char\s*\*const g_stdlib_autoload_files\[\]")
+    src = read(AUTOLOAD_C)
+    return _module_array(src, r"static const char\s*\*const autoload_files_\[\]")
 
 
 def interpreter_prelude():

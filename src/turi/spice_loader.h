@@ -30,6 +30,18 @@ extern "C" {
  * interpreter-FFI limit, not a descriptor limit. */
 #define TUR_SPICE_ARITY_FASTPATH 16
 
+/* interpreter-arbitrary-arity-ffi (Phase 2): the uniform-signature FFI shim
+ * emitted next to each exported defn (see src/compiler/emit_module.c
+ * emit_ffi_export_shims).  It reads the interpreter's marshalled int-register
+ * / float args from `iv` / `fv` and writes the result to *out_i (int-class
+ * return) or *out_f (float-class return); a :void return writes neither.
+ * Calling through it lifts the shape-table arity ceiling entirely -- the shim
+ * was generated with the export's concrete signature, so arity and int/float
+ * mix are irrelevant.  NULL when the loaded .so predates shim emission; the
+ * caller then falls back to the generated shape table (still capped). */
+typedef void (*TurFfiShimFn)(const int64_t *iv, const double *fv,
+                             int64_t *out_i, double *out_f);
+
 /* One row from exports.manifest, post-parse. The dispatcher class chars
  * use the encoding shared with src/runtime/ffi_dispatch.h:
  *   'i' -- int64_t (covers :int / :cstr / :bool / :ptr / sized ints)
@@ -42,6 +54,7 @@ typedef struct TurSpiceExport {
     char    *name;        /* defn name, e.g. "add42" */
     char    *mangled;     /* C symbol name, e.g. "smokelib__add42" */
     void    *fn_ptr;      /* dlsym'd address */
+    TurFfiShimFn ffi_shim; /* dlsym'd `<mangled>__ffi` shim, or NULL (old .so) */
     char     ret_class;
     char    *arg_classes; /* heap array of length n_args (NULL iff n_args == 0) */
     uint32_t n_args;      /* unbounded -- no fixed arity cap */
@@ -88,6 +101,27 @@ const TurSpiceExport *tur_spice_image_find(const TurSpiceImage *img,
  * is newer, the library is missing, or img is NULL. Used by (reload) to
  * short-circuit when nothing changed. */
 bool tur_spice_image_is_fresh(const TurSpiceImage *img);
+
+/* ------------------------------------------------------------------ */
+/* J2 (jit-engine-plan section 3.3): in-process JIT hook.               */
+/* ------------------------------------------------------------------ */
+/* When installed, tur_spice_image_load builds the spice IN PROCESS via
+ * the MIR engine instead of the `tur build --shared` subprocess + dlopen:
+ * `build` compiles the spice at build_dir and hands back an opaque image
+ * plus the exports.manifest TEXT (malloc'd; the loader owns and frees
+ * it); `sym` replaces dlsym against that image; `free_image` replaces
+ * dlclose.  The hook lives behind a function-pointer table because the
+ * engine is only linked into `tur` under -DTUR_JIT=ON while this loader
+ * is part of tur_core -- main.c installs it at REPL start when the `jit`
+ * experiment is enabled.  NULL (the default) keeps the subprocess path. */
+typedef struct TurSpiceJitHook {
+    int   (*build)(const char *build_dir, void **out_image,
+                   char **out_manifest);
+    void *(*sym)(void *image, const char *mangled);
+    void  (*free_image)(void *image);
+} TurSpiceJitHook;
+
+void tur_spice_set_jit_hook(const TurSpiceJitHook *hook);
 
 #ifdef __cplusplus
 }

@@ -15,7 +15,7 @@
     return (const char *)buf;
     ```))
 
-(defn escape [] : (exists :linear [a] [(Show a)] a)
+(defn escaping [] : (exists :linear [a] [(Show a)] a)
   (pack 1 (exists :linear [a] [(Show a)] a)))
 
 (defn main [] : int

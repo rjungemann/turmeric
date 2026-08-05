@@ -1,0 +1,46 @@
+;; cps-tramp-resume-reopen -- effect re-opening on the DK path (flag-on).
+;;
+;; Exercises three admissions that together move the compound effect-reopen
+;; shape onto the CPS/DK backend under --enable=cps-tramp-resume:
+;;   1. println in a perform continuation (LH_PERFORM_CONT / LH_RESUME_CONT frame),
+;;   2. a non-tail cps->cps heap join whose jbody itself performs (jbody_has_perform
+;;      -> LH_RESUME_CONT so the interior perform threads __kont),
+;;   3. effect re-opening across a nested handle where the re-opening perform's
+;;      continuation is multi-suspension (dk_hgroup keeps this handle's cases
+;;      distinct from the enclosing handle after a chain-flattening re-install).
+;;
+;; The inner handler handles Log + Counter; the Log case re-opens Write to the
+;; outer handler.  counted-sum performs Counter (a non-tail colored call reified
+;; as a heap join in the Log-start perform continuation).
+;;
+;; Expected output:
+;; start
+;; done
+;; 142
+
+(defeffect Log [msg :cstr] :nil)
+(defeffect Write [msg :cstr] :nil)
+(defeffect Counter [] :int)
+
+(defn counted-sum [n : int] : int
+  (+ (perform (Counter)) n))
+
+(defn main [] : int
+  (handle
+    (handle
+      (do
+        (perform (Log "start"))
+        (let [result (counted-sum 100)]
+          (do
+            (perform (Log "done"))
+            (println result)
+            0)))
+      (Log [msg] k)
+        (do
+          (perform (Write msg))
+          (resume k 0))
+      (Counter [] k)
+        (resume k 42))
+    (Write [msg] k)
+      (do (println msg) (resume k 0)))
+  0)

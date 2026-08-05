@@ -1,0 +1,26 @@
+;; Regression: derive-debug / derive-display over a struct whose fields span
+;; cstr, bool, int, and float.  Previously Debug/Display only had int and
+;; ptr<void> instances, so a cstr/bool/float field dispatched .debug/.display to
+;; no matching instance (miscompile).  stdlib/typeclass.tur now carries the full
+;; primitive set (Display delegates to Show; Debug keeps the type(value) tag).
+(load "stdlib/typeclass.tur")
+(load "stdlib/str.tur")
+
+(defstruct Rec :copy [title : cstr flag : bool count : int ratio : float])
+;; derive-show emits the owned-String Show[Rec] (the stdlib Show returns
+;; String since stage 4); derive-debug / derive-display stay cstr.
+(derive-show Rec title flag count ratio)
+(derive-debug   Rec title flag count ratio)
+(derive-display Rec title flag count ratio)
+
+(defn main [] : int
+  (let [r (make-struct Rec "hi" true 3 7.5)]
+    (do
+      (show-line r)
+      (println (debug r))
+      (println (display r))
+      ;; standalone primitive instances
+      (println (debug (:: 7 int8)))
+      (println (debug (:: 250 uint8)))
+      (println (display false))
+      0)))

@@ -99,6 +99,24 @@ Every Turmeric project has one `build.tur` at its root. It is a valid
 Turmeric source file evaluated at build time. The top-level form is
 `defpackage`.
 
+> **Map slots take `#map{...}`, not bare `{...}`.** `:spices`, `:cmake-deps`,
+> `:options`, `:build-opts`, `:bin`, and `:exports` are maps, and so is each
+> per-entry value. A bare `{...}` is SRFI-105 curly-infix arithmetic in every
+> dialect, so it is a hard parse error in a manifest -- the compiler says
+> ``:spices must be a map -- use `#map{...}` ``. The older `#{...}` spelling is
+> equally valid and is what `tur add` and the `tur.lock` writer emit; `#map{...}`
+> is the canonical one to type.
+>
+> Manifest snippets in the guides are checked, not just proofread:
+> `tools/check-guide-pairs.py` shape-checks every fenced block in `README.md`
+> and `docs/guides/` whose first form is `(defpackage ...)` by running
+> `tur fetch --dry-run` over it. A ```` ```turmeric no-check ```` fence does
+> **not** opt out of that -- `no-check` only means "this block has no sweet-exp
+> companion", which is true of nearly every manifest snippet. Use
+> ```` ```turmeric no-manifest-check ```` for a snippet that is deliberately not
+> a valid manifest. The `tur.lock` examples below keep `#{...}` on purpose: that
+> is what the lockfile writer emits.
+
 ### Full example
 
 ```turmeric no-check
@@ -111,38 +129,41 @@ Turmeric source file evaluated at build time. The top-level form is
   :authors     ["Alice Smith <alice@example.com>"]
   :repository  "https://github.com/alice/tur-geom"
 
+  ;; Which `tur` compiler versions this package's source is valid under
+  :tur-version ">=0.32.2"
+
   ;; Turmeric package dependencies
   ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
-  :spices {
-    "math"  {:url    "https://github.com/rjungemann/turmeric-spices"
-             :ref    "math-v0.1.0"
-             :subdir "spices/math"}
-    "test"  {:url    "https://github.com/rjungemann/turmeric-spices"
-             :ref    "test-v0.1.0"
-             :subdir "spices/test"
-             :optional true}
-    "utils" {:path "../tur-utils"}   ; local dev path
+  :spices #map{
+    "math"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                 :ref    "math-v0.1.0"
+                 :subdir "spices/math"}
+    "test"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                 :ref    "test-v0.1.0"
+                 :subdir "spices/test"
+                 :optional true}
+    "utils" #map{:path "../tur-utils"}   ; local dev path
   }
 
   ;; C/C++ packages (CPM-compatible)
-  :cmake-deps {
-    "raylib" {:url     "https://github.com/raysan5/raylib"
-              :ref     "5.0"
-              :options {:BUILD_SHARED_LIBS "OFF"
-                        :BUILD_EXAMPLES   "OFF"}}
-    "cjson"  {:url "https://github.com/DaveGamble/cJSON"
-              :ref "v1.7.16"}
+  :cmake-deps #map{
+    "raylib" #map{:url     "https://github.com/raysan5/raylib"
+                  :ref     "5.0"
+                  :options #map{:BUILD_SHARED_LIBS "OFF"
+                                :BUILD_EXAMPLES   "OFF"}}
+    "cjson"  #map{:url "https://github.com/DaveGamble/cJSON"
+                  :ref "v1.7.16"}
   }
 
   ;; Compiler and C toolchain options
-  :build-opts {
+  :build-opts #map{
     :c-flags   ["-O3" "-DGEOM_PRECISION=f64"]
     :link-libs ["m"]
     :no-stdlib false
   }
 
   ;; What this package exports to consumers
-  :exports {
+  :exports #map{
     "geom/vector" ["vector-2d" "vector-3d" "cross-product"]
     "geom/matrix" ["matrix-2x2" "matrix-3x3" "multiply"]
   })
@@ -158,38 +179,41 @@ defpackage geom
   :authors     ["Alice Smith <alice@example.com>"]
   :repository  "https://github.com/alice/tur-geom"
 
+  ;; Which `tur` compiler versions this package's source is valid under
+  :tur-version ">=0.32.2"
+
   ;; Turmeric package dependencies
   ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
-  :spices {
-    "math"  {:url    "https://github.com/rjungemann/turmeric-spices"
-             :ref    "math-v0.1.0"
-             :subdir "spices/math"}
-    "test"  {:url    "https://github.com/rjungemann/turmeric-spices"
-             :ref    "test-v0.1.0"
-             :subdir "spices/test"
-             :optional true}
-    "utils" {:path "../tur-utils"}   ; local dev path
+  :spices #map{
+    "math"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                 :ref    "math-v0.1.0"
+                 :subdir "spices/math"}
+    "test"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                 :ref    "test-v0.1.0"
+                 :subdir "spices/test"
+                 :optional true}
+    "utils" #map{:path "../tur-utils"}   ; local dev path
   }
 
   ;; C/C++ packages (CPM-compatible)
-  :cmake-deps {
-    "raylib" {:url     "https://github.com/raysan5/raylib"
-              :ref     "5.0"
-              :options {:BUILD_SHARED_LIBS "OFF"
-                        :BUILD_EXAMPLES   "OFF"}}
-    "cjson"  {:url "https://github.com/DaveGamble/cJSON"
-              :ref "v1.7.16"}
+  :cmake-deps #map{
+    "raylib" #map{:url     "https://github.com/raysan5/raylib"
+                  :ref     "5.0"
+                  :options #map{:BUILD_SHARED_LIBS "OFF"
+                                :BUILD_EXAMPLES   "OFF"}}
+    "cjson"  #map{:url "https://github.com/DaveGamble/cJSON"
+                  :ref "v1.7.16"}
   }
 
   ;; Compiler and C toolchain options
-  :build-opts {
+  :build-opts #map{
     :c-flags   ["-O3" "-DGEOM_PRECISION=f64"]
     :link-libs ["m"]
     :no-stdlib false
   }
 
   ;; What this package exports to consumers
-  :exports {
+  :exports #map{
     "geom/vector" ["vector-2d" "vector-3d" "cross-product"]
     "geom/matrix" ["matrix-2x2" "matrix-3x3" "multiply"]
   }
@@ -203,14 +227,14 @@ A library with one Turmeric dependency:
 (defpackage my-lib
   :name    "my-lib"
   :version "0.1.0"
-  :spices  {"core" {:url "https://github.com/turm/tur-core" :ref "v1.0.0"}})
+  :spices  #map{"core" #map{:url "https://github.com/turm/tur-core" :ref "v1.0.0"}})
 ```
 
 ```sweet-exp
 defpackage my-lib
   :name    "my-lib"
   :version "0.1.0"
-  :spices  {"core" {:url "https://github.com/turm/tur-core" :ref "v1.0.0"}}
+  :spices  #map{"core" #map{:url "https://github.com/turm/tur-core" :ref "v1.0.0"}}
 ```
 
 A standalone binary with no dependencies:
@@ -224,6 +248,18 @@ A standalone binary with no dependencies:
 ```sweet-exp
 (defpackage hello :name "hello" :version "0.1.0")
 ```
+
+### `:tur-version` -- compiler compatibility
+
+`:version` is this package's own version. `:tur-version` is a separate,
+optional key naming which **`tur` compiler versions this package's source is
+valid under** -- a comma-separated range such as `">=0.32.2"` or
+`">=0.32.2, <0.35.0"`. A compiler below the floor is `TUR-E0621` (a hard
+error), a malformed range is `TUR-E0622`, and a compiler above a declared
+ceiling is `TUR-W0623` (a warning). Declare it whenever the package adopts
+version-dependent syntax, an `:experiments` entry, or a new manifest key. See
+[Declaring a compiler version range](developing-spices-guide.md#declaring-a-compiler-version-range-tur-version)
+in the developing-spices guide for the full syntax and the caret rule.
 
 ---
 
@@ -314,9 +350,9 @@ After `tur add https://github.com/alice/tur-geom --ref v0.2.1`:
 (defpackage my-app
   :name    "my-app"
   :version "0.1.0"
-  :spices {
-    "geom" {:url "https://github.com/alice/tur-geom"
-            :ref "v0.2.1"}
+  :spices #map{
+    "geom" #map{:url "https://github.com/alice/tur-geom"
+                :ref "v0.2.1"}
   })
 ```
 
@@ -324,9 +360,9 @@ After `tur add https://github.com/alice/tur-geom --ref v0.2.1`:
 defpackage my-app
   :name    "my-app"
   :version "0.1.0"
-  :spices {
-    "geom" {:url "https://github.com/alice/tur-geom"
-            :ref "v0.2.1"}
+  :spices #map{
+    "geom" #map{:url "https://github.com/alice/tur-geom"
+                :ref "v0.2.1"}
   }
 ```
 
@@ -354,24 +390,24 @@ so it can be parsed by the same reader and diffed cleanly in version control.
 
 (deflockfile
   :format-version 1
-  :spices {
-    "geom" {:url        "https://github.com/alice/tur-geom"
-            :ref        "v0.2.1"
-            :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
-            :sha256     "abc123..."
-            :fetched-at "2026-05-14T09:00:00Z"}
-    "math" {:url        "https://github.com/rjungemann/turmeric-spices"
-            :ref        "math-v0.1.0"
-            :subdir     "spices/math"
-            :resolved   "d6e7f8a9b0c1..."
-            :sha256     "def456..."
-            :fetched-at "2026-05-14T09:00:03Z"}
+  :spices #{
+    "geom" #{:url        "https://github.com/alice/tur-geom"
+             :ref        "v0.2.1"
+             :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
+             :sha256     "abc123..."
+             :fetched-at "2026-05-14T09:00:00Z"}
+    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+             :ref        "math-v0.1.0"
+             :subdir     "spices/math"
+             :resolved   "d6e7f8a9b0c1..."
+             :sha256     "def456..."
+             :fetched-at "2026-05-14T09:00:03Z"}
   }
-  :cmake-deps {
-    "raylib" {:url      "https://github.com/raysan5/raylib"
-              :ref      "5.0"
-              :resolved "5.0"
-              :sha256   "ghi789..."}
+  :cmake-deps #{
+    "raylib" #{:url      "https://github.com/raysan5/raylib"
+               :ref      "5.0"
+               :resolved "5.0"
+               :sha256   "ghi789..."}
   })
 ```
 
@@ -381,24 +417,24 @@ so it can be parsed by the same reader and diffed cleanly in version control.
 
 deflockfile
   :format-version 1
-  :spices {
-    "geom" {:url        "https://github.com/alice/tur-geom"
-            :ref        "v0.2.1"
-            :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
-            :sha256     "abc123..."
-            :fetched-at "2026-05-14T09:00:00Z"}
-    "math" {:url        "https://github.com/rjungemann/turmeric-spices"
-            :ref        "math-v0.1.0"
-            :subdir     "spices/math"
-            :resolved   "d6e7f8a9b0c1..."
-            :sha256     "def456..."
-            :fetched-at "2026-05-14T09:00:03Z"}
+  :spices #{
+    "geom" #{:url        "https://github.com/alice/tur-geom"
+             :ref        "v0.2.1"
+             :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
+             :sha256     "abc123..."
+             :fetched-at "2026-05-14T09:00:00Z"}
+    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+             :ref        "math-v0.1.0"
+             :subdir     "spices/math"
+             :resolved   "d6e7f8a9b0c1..."
+             :sha256     "def456..."
+             :fetched-at "2026-05-14T09:00:03Z"}
   }
-  :cmake-deps {
-    "raylib" {:url      "https://github.com/raysan5/raylib"
-              :ref      "5.0"
-              :resolved "5.0"
-              :sha256   "ghi789..."}
+  :cmake-deps #{
+    "raylib" #{:url      "https://github.com/raysan5/raylib"
+               :ref      "5.0"
+               :resolved "5.0"
+               :sha256   "ghi789..."}
   }
 ```
 
@@ -525,26 +561,26 @@ The `:cmake-deps` block declares C and C++ packages to link against. The
 invokes CMake automatically -- no CMake files need to be written by hand.
 
 ```turmeric no-check
-:cmake-deps {
-  "raylib"  {:url     "https://github.com/raysan5/raylib"
-             :ref     "5.0"
-             :options {:BUILD_SHARED_LIBS "OFF"
-                       :BUILD_EXAMPLES   "OFF"}}
+:cmake-deps #map{
+  "raylib"  #map{:url     "https://github.com/raysan5/raylib"
+                 :ref     "5.0"
+                 :options #map{:BUILD_SHARED_LIBS "OFF"
+                               :BUILD_EXAMPLES   "OFF"}}
 
-  "sqlite3" {:url "https://github.com/sqlite/sqlite"
-             :ref "version-3.45.0"}
+  "sqlite3" #map{:url "https://github.com/sqlite/sqlite"
+                 :ref "version-3.45.0"}
 }
 ```
 
 ```sweet-exp
-:cmake-deps {
-  "raylib"  {:url     "https://github.com/raysan5/raylib"
-             :ref     "5.0"
-             :options {:BUILD_SHARED_LIBS "OFF"
-                       :BUILD_EXAMPLES   "OFF"}}
+:cmake-deps #map{
+  "raylib"  #map{:url     "https://github.com/raysan5/raylib"
+                 :ref     "5.0"
+                 :options #map{:BUILD_SHARED_LIBS "OFF"
+                               :BUILD_EXAMPLES   "OFF"}}
 
-  "sqlite3" {:url "https://github.com/sqlite/sqlite"
-             :ref "version-3.45.0"}
+  "sqlite3" #map{:url "https://github.com/sqlite/sqlite"
+                 :ref "version-3.45.0"}
 }
 ```
 
@@ -557,7 +593,7 @@ tur add --cmake https://github.com/raysan5/raylib --ref 5.0
 The entry goes into `:cmake-deps` instead of `:spices`.
 
 For projects that need direct control of the CMake build, see
-[cmake-cpm-integration-plan.md](../archive/cmake-cpm-integration-plan.md).
+[cmake-cpm-integration-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 

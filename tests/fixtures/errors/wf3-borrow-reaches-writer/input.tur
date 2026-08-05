@@ -1,0 +1,48 @@
+;; WF3 widening negative: the borrow of an assigned name REACHES a writer, so
+;; the whole-body decline correctly returns even with the widening enabled.
+;;
+;; This is the guard that makes wf3-borrow-write-free's rescue mean something.
+;; The two differ only in what happens to `__b`: there it is never used, here
+;; it is handed to `clobber!`, whose CHECKED `#writes [p]` frame says that slot
+;; is written.  So `acc` may change between the guard and the read after all,
+;; the frame is not disjoint, and every hypothesis for this crossing must be
+;; dropped -- TUR-W0372, a hard error under --strict-refine.
+;;
+;; Delete the `(clobber! __b)` call and this same program proves.  That is what
+;; makes this a test of the reaches-a-writer question specifically, rather than
+;; of borrows in general.
+;;
+;; Note it is the CHECKED frame doing the work.  Strip `#writes [p]` from
+;; `clobber!` and the answer is the same (an unannotated non-`^borrow` slot
+;; also assumes a write), but declare it and leave the body inline-C -- trusted,
+;; not checked -- and it is STILL the same, because a promise may not narrow a
+;; caller.  Only a fact can.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+;; Declares it writes its argument.  The body writes less than that, which is
+;; fine -- a frame is an UPPER BOUND, so writing less honors it -- and is not
+;; what is under test: what matters to the caller is the bound, not the body.
+(defn clobber! [^mut p : &int] #writes [p] : int
+  0)
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [^mut acc 0]
+      (let [__b (& acc)]
+        (let [__f (& w)]
+          (if (alive? w 0)
+            (do (clobber! __b)
+                (set! acc (+ acc (get! w 0)))
+                acc)
+            -1))))))
+
+(defn main [] : int
+  (println (run))
+  0)

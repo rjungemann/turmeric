@@ -1,0 +1,28 @@
+;; E2b (cps-dk-sole-effect-lowering): a fat-closure (is_poly_fn) fn-value PARAM
+;; that is CAPTURED into a continuation and CALLED there is admitted onto the
+;; CPS/DK backend under --enable=cps-tramp-resume.
+;;
+;; `f`'s post-handle continuation is `(fnv r)` -- a call through the rank-2 fn-value
+;; param `fnv` (a fat closure `tur_poly_fn_t` = { fn ptr; env ptr }, 16 bytes).
+;; fn_sig_ok used to reject ANY is_poly_fn param (a fat closure cannot cross a
+;; one-word slot).  It now admits one, guarded by fatparam_only_called: `fnv` is
+;; only CALLED (never threaded as a call argument, which would spill the fat
+;; closure to a void* temp and miscompile).  cap_add carries the captured fnv as a
+;; `tur_poly_fn_t` env field; the delegated `fnv.fn(fnv.env, r)` call resolves it.
+;;
+;; direct-vs-CPS equal: handle resumes 50; fnv=dbl; dbl(50) = 100.
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn dbl [n : int] : int
+  (* n 2))
+
+(defn f [fnv : (fn [int] int)] : int
+  (let [r (handle (g) (E [] k) (resume k 50))]
+    (fnv r)))
+
+(defn main [] : int
+  (println (f dbl))
+  0)

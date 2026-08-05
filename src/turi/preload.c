@@ -36,6 +36,85 @@ void turi_env_preload_macros(TuriEnv *env, const char *stdlib_root) {
     preload_one(env, root, "contract.tur");
 }
 
+void turi_env_preload_native_stubs(TuriEnv *env) {
+    if (!env) return;
+    /* Inject typed stubs so the elaborator knows the signatures of the native
+     * functions used by benchmark scripts AND the untyped carrier-list ops
+     * (nil-value/cons/head/tail).  Without these, a bare `cons`/`head`/`tail`
+     * resolves to the elaborator's BS_FUNC_CALL builtin, which the tree-walker's
+     * eval_builtin cannot execute -- its default arm silently returns nil (see
+     * src/turi/eval.c).  That is exactly the REPL-only
+     * `(list-head (cons 65 (cons 66 0))) => nil` divergence
+     * (docs/reported/repl-list-head-over-cons-returns-nil.md): under
+     * `--interpret` these stubs make `cons` a user-defn call the runtime native
+     * (registered by wk_register_stdlib_natives, which overrides the stub body)
+     * actually services, so the same expression returns 65.  Loaded AFTER
+     * turi_env_preload_macros and BEFORE turi_env_preload_collections so the real
+     * module defns own any overlapping name, and BEFORE
+     * turi_env_register_interpreter_natives so the native shims, registered last,
+     * override any inline-C module body the interpreter cannot execute.  The
+     * stubs whose names ARE defined by a preloaded collection module (vec-get,
+     * ok?/some?/err?, ...) are deliberately omitted to avoid the "already defined
+     * by an auto-loaded stdlib module" collision. */
+    TuriValue sv = turi_eval(env,
+        /* list operations */
+        "(defn nil-value [] :int 0)\n"
+        /* Head is a polymorphic tyvar, not :int, so the stub matches the
+         * compiled-path `cons` builtin's wildcard head (elab_call.c's
+         * cons_wildcard bypass): a cons cell is a pointer-as-int64 carrier and
+         * accepts any 64-bit-sized head -- int, cstr, opaque handle.  Typing it
+         * :int made the elaborator reject a cstr head (`(cons "a" 0)`) under
+         * --interpret while the compiled path accepted it, the re-string parity
+         * gap.  The tail stays :int (the carrier) and the return stays :int; the
+         * runtime native (native_cons) boxes the head through intptr_t exactly
+         * as codegen does. */
+        "(defn cons [A] [v :A n :int] :int 0)\n"
+        "(defn head [lst :int] :int 0)\n"
+        "(defn tail [lst :int] :int 0)\n"
+        /* vec operations.  vec-get/vec-set!/vec-free are dropped here -- the real
+         * vec.tur (preloaded next) defines them, and a stub would collide with
+         * "already defined by an auto-loaded stdlib module".  vec-new-filled is
+         * benchmark-only (no module defn). */
+        "(defn vec-new-filled [n :int v :int] :int 0)\n"
+        /* numeric helpers.  cstr->parse-int / int->float / bit-shr / bit-xor
+         * stubs are dropped: all are native-backed and/or kind-preserving
+         * builtins the bare call resolves at elaboration -- a :int stub would
+         * shadow the narrow-int builtin behavior. */
+        "(defn println-float [x :float d :int] :nil nil)\n"
+        "(defn int->unit-float [x :int] :float 0.0)\n"
+        "(defn tur-sqrt [x :float] :float 0.0)\n"
+        /* HAMT operations for hash_map benchmark */
+        "(defn hamt-new [] :int 0)\n"
+        "(defn hamt-free [m :int] :nil nil)\n"
+        "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
+        "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
+        "(defn hamt-hash-ptr [p :int] :int 0)\n"
+        /* I/O benchmark helpers (file_read.tur, file_write.tur) */
+        "(defn write-temp-file [path :cstr n :int] :nil nil)\n"
+        "(defn io-fopen-read [path :cstr] :int 0)\n"
+        "(defn io-fread-chunk [fp :int buf :int] :int 0)\n"
+        "(defn io-fclose [fp :int] :nil nil)\n"
+        "(defn io-remove [path :cstr] :nil nil)\n"
+        "(defn io-buf-new [] :int 0)\n"
+        "(defn io-buf-free [buf :int] :nil nil)\n"
+        "(defn io-alloc [n :int v :int] :int 0)\n"
+        "(defn io-free [buf :int] :nil nil)\n"
+        "(defn io-fopen-write [path :cstr] :int 0)\n"
+        "(defn io-fwrite-chunk [fp :int buf :int offset :int chunk :int] :int 0)\n"
+        /* Whole-benchmark natives (random_access, thread_ring, nbody, ray_tracing) */
+        "(defn random-access-bench [size :int reads :int] :int 0)\n"
+        "(defn run-ring [n :int m :int] :nil nil)\n"
+        "(defn run-nbody [n :int steps :int] :nil nil)\n"
+        "(defn run-raytracer [w :int h :int] :int 0)\n"
+        /* none? predicate signature the elaborator needs so the native types as
+         * :bool (not :int, which trips the strict "if condition must be bool"
+         * check).  ok?/err?/some? are dropped because result.tur / option.tur
+         * (both preloaded next) define them; none? has no module defn. */
+        "(defn none? [r :int] :bool false)\n"
+    );
+    (void)sv;
+}
+
 void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
     if (!env) return;
     const char *root = preload_root(stdlib_root);
@@ -49,6 +128,7 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
     static const char *prelude[] = {
         "safe.tur",
         "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
+        "typeclass-drop.tur",
         "typeclass-hash.tur", "typeclass-applicative.tur",
         "typeclass-alternative.tur", "typeclass-monad.tur",
         "typeclass-monaderror.tur", "typeclass-bifunctor.tur",

@@ -38,9 +38,9 @@
   ```c
   extern int memcmp(const void *, const void *, size_t);
   struct { const char *p; size_t len; } *a =
-      (struct { const char *p; size_t len; } *)(intptr_t)s1;
+      (void *)(intptr_t)s1;
   struct { const char *p; size_t len; } *b =
-      (struct { const char *p; size_t len; } *)(intptr_t)s2;
+      (void *)(intptr_t)s2;
   if (!a && !b) return true;
   if (!a || !b) return false;
   if (a->len != b->len) return false;
@@ -90,9 +90,9 @@
 (defn lopt-eq? [o1 o2 cmp-fn] : bool
   ```c
   struct { bool is_some; int64_t value; } *a =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o1;
+      (void *)(intptr_t)o1;
   struct { bool is_some; int64_t value; } *b =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o2;
+      (void *)(intptr_t)o2;
   bool a_some = a && a->is_some;
   bool b_some = b && b->is_some;
   if (!a_some && !b_some) return true;
@@ -125,9 +125,9 @@
 (defn u-result-eq? [r1 r2 ok-cmp err-cmp] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      (void *)(intptr_t)r1;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      (void *)(intptr_t)r2;
   if (!a && !b) return true;
   if (!a || !b) return false;
   if (a->is_ok != b->is_ok) return false;
@@ -168,9 +168,9 @@
 (defn lv-eq? [v1 v2 cmp-fn] : bool
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *a =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v1;
+      (void *)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v2;
+      (void *)(intptr_t)v2;
   if (a == b) return true;
   if (!a || !b) return false;
   if (a->len != b->len) return false;
@@ -202,15 +202,15 @@
 (defn llist-eq? [l1 l2 cmp-fn] : bool
   ```c
   struct { int64_t value; int64_t next; } *a =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)l1;
+      (void *)(intptr_t)l1;
   struct { int64_t value; int64_t next; } *b =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)l2;
+      (void *)(intptr_t)l2;
   while (a && b) {
       if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value)) {
           return false;
       }
-      a = (struct { int64_t value; int64_t next; } *)(intptr_t)a->next;
-      b = (struct { int64_t value; int64_t next; } *)(intptr_t)b->next;
+      a = (void *)(intptr_t)a->next;
+      b = (void *)(intptr_t)b->next;
   }
   return a == b;
   ```)

@@ -3,6 +3,6 @@
 ;; whose build links this vendored .c via :c-sources propagation.
 (defpackage aux-c-vendor
   :name "aux-c-vendor"
-  :build-opts #fx{
+  :build-opts #map{
     :c-sources ["c/vendor.c"]
   })

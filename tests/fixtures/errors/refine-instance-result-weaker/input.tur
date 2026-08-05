@@ -1,0 +1,22 @@
+;; RESULT variance, the direction that is NOT the parameter rule.
+;;
+;; For a PARAMETER the class predicate is the hypothesis and the instance's is
+;; the goal: an instance may accept more than the class promises. For a RESULT
+;; it is the other way round -- the instance's predicate is the hypothesis and
+;; the class's is the goal -- because a caller programming against the class
+;; signature relies on the result refinement.
+;;
+;; Here the class promises a non-negative result and the instance promises only
+;; `>= -5`, so a generic caller could be handed -3 while the class told it that
+;; could not happen. The obligation is `instance_pred(r) |- class_pred(r)`, and
+;; -3 refutes it.
+(defclass Boxed [a]
+  (unbox [self : a, k : int] : #refine{ r : int | (>= r 0) }))
+
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : #refine{ r : int | (>= r -5) }
+    (+ self k)))
+
+(defn main [] : int
+  (println (.unbox 3 4))
+  0)

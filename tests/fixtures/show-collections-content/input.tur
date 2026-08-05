@@ -14,8 +14,8 @@
 (load "stdlib/typeclass.tur")
 
 (defn main [] : int
-  (println (show (vec-of "alpha" "beta" "gamma")))  ;; cstr: was pointers
-  (println (show (vec-of true false true)))         ;; bool: was 1/0
-  (println (show (vec-of 1 2 3)))                    ;; int: regression
-  (println (show (vec-of 1.5 3.25)))                ;; float: was bit patterns
+  (show-line (vec-of "alpha" "beta" "gamma"))  ;; cstr: was pointers
+  (show-line (vec-of true false true))         ;; bool: was 1/0
+  (show-line (vec-of 1 2 3))                    ;; int: regression
+  (show-line (vec-of 1.5 3.25))                ;; float: was bit patterns
   0)

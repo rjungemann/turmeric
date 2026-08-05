@@ -1,0 +1,80 @@
+;;; tur/re-string -- owned String siblings for the tur/re string builders.
+;;;
+;;; re/replace, re/replace-all, and re/union-patterns each return a
+;;; freshly-allocated cstr the caller must free -- a spliced/accumulated buffer
+;;; typed as a borrowed cstr, the exact ownership/leak hazard the owned String
+;;; type fixes (see string-adoption-stdlib-plan.md). This opt-in module returns
+;;; each as an owned String.
+;;;
+;;; Each sibling adopts the completed result via string/adopt-cstr. The internal
+;;; accumulation (re/wrap-paren, re/union-acc, re-replace-go) already builds a
+;;; single fresh cstr and frees its intermediates, so adopting the finished
+;;; buffer is correct with no extra churn. (The StringBuilder rule in the Bucket
+;;; B plan governs *new* multi-join String formatters, not the wrapping of a
+;;; builder that already returns one buffer.) re/union-patterns returns 0 for an
+;;; empty or null-containing pattern list; adopt renders that as an empty String.
+;;;
+;;; Separate module so the lean tur/re stays free of the map/typeclass
+;;; dependency; only programs wanting owned results load this.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 3)
+(load "stdlib/re.tur")
+
+(load "stdlib/string.tur")
+;;; re/replace-string -- replace the first match with a literal, as an owned
+;;; String.
+;;;
+;;; Parameters:
+;;;   re          -- compiled Regex from re/compile
+;;;   input       -- input string cstr
+;;;   replacement -- literal replacement cstr (no backreferences)
+;;;
+;;; Returns:
+;;;   An owned String with the first match replaced (a copy of the input if
+;;;   there is no match).
+;;;
+;;; Example:
+;;;   (string/to-cstr (re/replace-string (re/compile "[0-9]") "a1b2" "X"))
+;;;   ; => "aXb2"
+;;;
+;;; Since: v2
+
+(defn re/replace-string [re : Regex input : cstr replacement : cstr] : String
+  (string/adopt-cstr (re/replace re input replacement)))
+;;; re/replace-all-string -- replace all non-overlapping matches with a literal,
+;;; as an owned String.
+;;;
+;;; Parameters:
+;;;   re          -- compiled Regex from re/compile
+;;;   input       -- input string cstr
+;;;   replacement -- literal replacement cstr (no backreferences)
+;;;
+;;; Returns:
+;;;   An owned String with every match replaced.
+;;;
+;;; Example:
+;;;   (string/to-cstr (re/replace-all-string (re/compile "[0-9]") "a1b2c3" "X"))
+;;;   ; => "aXbXcX"
+;;;
+;;; Since: v2
+
+(defn re/replace-all-string [re : Regex input : cstr replacement : cstr] : String
+  (string/adopt-cstr (re/replace-all re input replacement)))
+;;; re/union-patterns-string -- build an alternation regex from a cons list of
+;;; patterns, as an owned String.
+;;;
+;;; Parameters:
+;;;   patterns -- :int cons list of cstr patterns (head = cstr pointer)
+;;;
+;;; Returns:
+;;;   An owned String of the unioned pattern, or an empty String if the list is
+;;;   empty or contains a null element.
+;;;
+;;; Example:
+;;;   (string/to-cstr (re/union-patterns-string (cons "[A-Za-z]+" (cons "[0-9]+" 0))))
+;;;   ; => "([A-Za-z]+)|([0-9]+)"
+;;;
+;;; Since: v2
+
+(defn re/union-patterns-string [patterns : int] : String
+  (string/adopt-cstr (re/union-patterns patterns)))

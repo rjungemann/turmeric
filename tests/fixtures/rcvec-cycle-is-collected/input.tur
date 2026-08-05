@@ -1,0 +1,36 @@
+; collections-cannot-hold-rc-values item 3: a cycle routed through an RcVec's
+; flat buffer IS reclaimed -- the assertion the vec arm of
+; gc-blind-spot-cycle-through-vec strands at "0 freed / 50 live".
+;
+; Same topology as that fixture's vec arm and as rcchain-cycle-is-collected:
+; a node whose collection holds the node back.
+;
+;   n --.kids--> rc<RcVec> --slot--> n
+;
+; The difference from the plain Vec is that the container is itself an rc
+; block carrying a walk hook (tur_rcvec_walk), so gc_each_child enumerates the
+; slot and trial deletion sees the cycle whole.  The difference from RcChain
+; is that the elements live in one flat buffer -- this is the O(1) container
+; the blind spot said could not be traced, traced.
+(load "stdlib/rcvec.tur")
+
+(defstruct N :move [kids : rc<RcVec>])
+
+(defn build [] : int
+  (let [v (rcvec-new)]
+    (let [n (rc/of (make-struct N (rc/clone v)))]
+      (rcvec-push! v n)))
+  0)
+
+(defn main [] : int
+  (gc-enable!)
+
+  ;; 50 cycles, each: node -> vector -> slot -> node.
+  (let [^mut i 0]
+    (while (< i 50)
+      (build)
+      (set! i (+ i 1))))
+  (gc!)
+  (println (if (> (gc-objects-freed) 0) 1 0))  ; 1
+  (println (gc-live-blocks))                   ; 0
+  0)

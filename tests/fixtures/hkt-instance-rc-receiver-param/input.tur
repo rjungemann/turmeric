@@ -1,0 +1,54 @@
+; An HKT instance body over a pointer-family builtin can hold its own receiver
+; at a usable type.
+;
+; It used to see the applied `(t a)` -- `(type-app rc<?> tyvar 'a')` -- which
+; unified with nothing, so the receiver could not be handed to anything typed
+; `rc<A>`:
+;
+;   error [TUR-E0001]: function 'rc-value' arg 1:
+;     expected rc<?>, got (type-app rc<?> tyvar 'a')
+;
+; That forced every such instance body into inline-C, and calling the method's
+; own `fn` parameter from C meant hand-writing the poly-fn ABI --
+; `((int64_t (*)(void *, int64_t, int64_t))fn.fn)(fn.env, init, value)` -- a copy
+; of a calling convention living in stdlib, waiting for the convention to move.
+; stdlib/rc.tur shipped exactly that.
+;
+; The receiver now collapses to a real `rc<a>`, so the body is ordinary Turmeric
+; and the compiler emits the ABI. Two things are pinned here:
+;
+;   * the fold VALUES, with the non-commutative `sub` in both directions, so a
+;     swapped or garbage argument shows up rather than passing silently;
+;   * that the receiver survives the carrier ABI intact -- `rc/strong-count`
+;     read through the same handle the instance was given must still be 1. The
+;     parameter slot is the int64 carrier while the binding's type is a pointer,
+;     and a missing bridge there reads a pointer-sized integer as a pointer.
+;
+; This fixture is deliberately standalone rather than relying on stdlib/rc.tur's
+; own Foldable instance, so the compiler behaviour stays pinned independently of
+; what that module chooses to do.
+(defclass Foldable [^t]
+  (foldl [ta : (t a) init : b fn : (fn [b a] b)] : b)
+  (foldr [ta : (t a) init : b fn : (fn [a b] b)] : b))
+
+(defn rc-value [A] [^borrow r : rc<A>] : A
+  ```c
+  if (!r || !r->value) return 0;
+  return *(int64_t *)rc_get_value(r);
+  ```)
+
+;; Pure Turmeric: no inline-C, no hand-written calling convention.
+(definstance Foldable [rc]
+  (foldl [ta init f] (f init (rc-value ta)))
+  (foldr [ta init f] (f (rc-value ta) init)))
+
+(defn add [a : int b : int] : int (+ a b))
+(defn sub [a : int b : int] : int (- a b))
+
+(defn main [] : int
+  (let [r (rc/of 7)]
+    (println (:: (foldl r 100 add) int))   ; 100 + 7 = 107
+    (println (:: (foldr r 100 sub) int))   ; 7 - 100 = -93
+    (println (:: (foldl r 0 sub) int))     ; 0 - 7 = -7
+    (println (rc/strong-count r)))         ; 1 -- receiver borrowed, intact
+  0)

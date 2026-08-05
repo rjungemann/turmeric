@@ -64,6 +64,9 @@
 #include "kind_check.h"   /* Phase HKT H0: kind inference pass */
 #include "elab.h"
 #include "emit.h"
+#include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
+#include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
+#include "turi/spice_loader.h" /* J2: the REPL's in-process jit hook */
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "fmt.h"
@@ -71,6 +74,8 @@
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
 #include "reader_macros.h"
+#include "lang_layers.h"  /* L5: `tur lang-layers` registry listing */
+#include "refine_discharge.h" /* RT3: per-compile refinement stats reset */
 #include "span_audit.h"  /* debugger Phase 1: breakpoint-span coverage audit */
 #include "symbols.h"
 /* Phase S0: eval API for tur repl */
@@ -87,10 +92,13 @@
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 #include "experiments.h"  /* XF1: --enable=<name> experimental-flag registry */
+#include "jit_engine.h"   /* J1: tur jit (TUR_HAVE_JIT builds only) */
 #include "mono_specs.h"   /* VBM1: --dump-mono-specs registry dump */
 /* LSP server */
 #include "lsp/lsp.h"
 #include "lsp/lsp_sym.h"
+#include "lsp/lsp_collect.h"
+#include "stdlib_autoload.h"
 #include "lsp/lsp_docs.h"
 /* MCP server */
 #include "lsp/mcp.h"
@@ -148,18 +156,35 @@ static bool g_dump_kinds = false;
 static bool g_audit_spans = false;
 static int  g_audit_span_holes = 0;
 
-/* Helper to detect language and adjust source for #lang directive */
+/* Helper to detect language and adjust source for #lang directive.  Also
+ * yields the additive `#lang` layer set (lang-layers-plan L1) via
+ * `out_layers` (may be NULL for callers that don't thread it). */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
-                                        const char **out_src, size_t *out_len) {
+                                        const char **out_src, size_t *out_len,
+                                        LangLayerSet *out_layers) {
     ReaderType ext_type = reader_type_from_extension(path);
 
     /* Always run detect_lang so any leading "#lang ..." line is stripped from
      * the source — otherwise the chosen reader would choke on the '#'. When
      * the extension already selected a non-default reader, the extension
-     * still wins; the directive is treated as an optional, redundant hint. */
+     * still wins for the base; the directive is treated as an optional,
+     * redundant hint.  Layers ride alongside the base regardless of source. */
     const char *src_rest = src;
     size_t len_rest = len;
-    ReaderType lang_type = detect_lang(src, len, &src_rest, &len_rest);
+    LangLayerSet layers = 0;
+    const char *bad = NULL;
+    size_t bad_len = 0;
+    ReaderType lang_type = detect_lang_layered(src, len, &src_rest, &len_rest,
+                                               &layers, &bad, &bad_len);
+
+    if (bad) {
+        /* Unknown layer token -- hard error (TUR-E0330), mirroring the
+         * unimplemented-base exit below. */
+        fprintf(stderr,
+                "tur: error [TUR-E0330]: unknown #lang layer '%.*s' in %s\n",
+                (int)bad_len, bad, path);
+        exit(1);
+    }
 
     ReaderType detected_type = (ext_type != READER_TURMERIC) ? ext_type : lang_type;
 
@@ -172,6 +197,7 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
 
     *out_src = src_rest;
     *out_len = len_rest;
+    if (out_layers) *out_layers = layers;
     return detected_type;
 }
 
@@ -245,13 +271,39 @@ static const char *resolve_stdlib_root(void) {
     }
     g_stdlib_root_state = 2;  /* assume not-found until we succeed */
 
+    /* TUR_STDLIB_DIR is honored, but no longer taken on faith.
+     *
+     * It is an ordinary environment variable, so it is inherited by anything
+     * a tur process spawns and it outlives the install that set it. A stale
+     * value therefore points a freshly built `tur` at a stdlib that has moved
+     * or been deleted, and taking it verbatim meant the failure surfaced much
+     * later as a wall of `load: cannot open .../macros.tur` errors with
+     * nothing naming the variable that caused them.
+     *
+     * macros.tur is the anchor, matching the walk-up probe below: it is the
+     * first file every preload touches, so if it is missing nothing else will
+     * resolve either. A directory that fails the check is reported once and
+     * then ignored, letting the walk-up find the stdlib shipped beside this
+     * binary -- which is nearly always what the user actually wanted. */
     const char *env = getenv("TUR_STDLIB_DIR");
     if (env && *env) {
         size_t n = strlen(env);
         if (n < sizeof(g_stdlib_root)) {
-            memcpy(g_stdlib_root, env, n + 1);
-            g_stdlib_root_state = 1;
-            return g_stdlib_root;
+            char probe[4096];
+            int pn = snprintf(probe, sizeof(probe), "%s/macros.tur", env);
+            if (pn > 0 && (size_t)pn < sizeof(probe) && access(probe, R_OK) == 0) {
+                memcpy(g_stdlib_root, env, n + 1);
+                g_stdlib_root_state = 1;
+                return g_stdlib_root;
+            }
+            fprintf(stderr,
+                    "tur: ignoring TUR_STDLIB_DIR=%s "
+                    "(no readable macros.tur there); "
+                    "falling back to the stdlib beside the binary\n", env);
+            /* Drop it so every downstream reader -- elab_toplevel.c, the REPL
+             * preload, lsp_lite.c -- agrees with the value resolved below
+             * instead of re-reading the bad one out of the environment. */
+            unsetenv("TUR_STDLIB_DIR");
         }
     }
 
@@ -547,6 +599,66 @@ static bool g_no_auto_stdlib;
  * set by parse_no_abi_cache in main(). */
 static bool g_no_abi_cache;
 
+/* tur-link-and-build-split-plan Phase 2/3c/6: runtime-linkage mode, read by
+ * apply_runtime_lib_mode() in cmd_build / cmd_compile.  Set by the build/compile
+ * dispatch and seeded from TUR_RUNTIME.  Values:
+ *   TUR_RT_AUTO   (0, the default) -- prefer the lean non-ASan libturt_runtime.a
+ *                 when it is locatable, else transparently fall back to
+ *                 recompiling the bare runtime sources.  Never links the
+ *                 (possibly ASan) full libturi.a on its own, so a default build
+ *                 is always behaviorally identical to the old source path.
+ *   TUR_RT_LIB    (1) -- force the archive link (lean preferred, else libturi.a,
+ *                 else a -lturi fallback with a warning); explicit opt-in.
+ *   TUR_RT_SOURCE (2) -- force recompiling the bare runtime sources. */
+enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2 };
+static int g_runtime_mode = TUR_RT_AUTO;
+
+/* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): resolve whether the emitted preamble
+ * should DECLARE the rc<T>/GC runtime -- because libturt_runtime.a will supply
+ * it -- instead of defining its own hand-written replica, and tell the emitter
+ * before codegen runs.
+ *
+ * ON by default, but ONLY when `tur` is the one doing the linking.  A preamble
+ * that declares without defining is not self-contained C, and bare
+ * `tur emit-c` exists precisely to hand someone a translation unit they will
+ * build themselves -- so that path keeps the definitions (and its snapshots
+ * keep matching).  `tur build` / project builds control their own link line, so
+ * they take the archive.  g_emit_for_link is what distinguishes the two.
+ *
+ * Also requires an actual archive: without one the program would link nothing
+ * at all, so a failed probe silently keeps the emitted definitions.  That is
+ * what makes this safe to default -- a toolchain with no archive still builds,
+ * it just keeps running the replica.
+ *
+ * TUR_RCGC_FROM_ARCHIVE=0 forces the replica back (escape hatch if an archive
+ * link ever misbehaves); =1 forces the archive even for bare `emit-c`, for
+ * someone who links libturt_runtime.a from their own build system.
+ *
+ * Safe to call before the link step decides anything: locate_runtime_lib is a
+ * pure filesystem probe with no side effects. */
+static int locate_runtime_lib(char *libdir, size_t dcap,
+                              char *libname, size_t ncap);
+
+/* True while emitting C that `tur` itself will go on to compile and link. */
+static bool g_emit_for_link = false;
+
+/* J2: when non-NULL, compile_to_c also appends the exports manifest of the
+ * compiled program here (set only by the REPL's in-process spice build). */
+static Buf *g_manifest_sink = NULL;
+
+static void resolve_rcgc_from_archive(void) {
+    const char *opt = getenv("TUR_RCGC_FROM_ARCHIVE");
+    bool forced_on = opt && strcmp(opt, "1") == 0;
+
+    if (opt && strcmp(opt, "0") == 0)     { emit_set_rcgc_from_archive(false); return; }
+    if (g_runtime_mode == TUR_RT_SOURCE)  { emit_set_rcgc_from_archive(false); return; }
+    if (!g_emit_for_link && !forced_on)   { emit_set_rcgc_from_archive(false); return; }
+
+    char libdir[4096], libname[128];
+    int found = locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname));
+    emit_set_rcgc_from_archive(found && strcmp(libname, "turt_runtime") == 0);
+}
+
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
  * (called by the LSP server) and the per-file dispatchers.
  *
@@ -562,80 +674,9 @@ static int auto_append_spice_includes(const char *input,
 
 static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
 
-/* Global state for symbol collection -- set by tur_collect_symbols before
- * calling compile_to_c, cleared after.  Single-threaded LSP use only. */
-static LspSymbol  *g_collect_syms_out   = NULL;
-static int         g_collect_syms_cap   = 0;
-static int        *g_collect_syms_count = NULL;
-
-/* Walk one level of Expr items and record global bindings into the collector. */
-static void collect_items(const Expr **items, uint32_t n);
-
-static void collect_binding(const Binding *b) {
-    if (!b || !b->name || !b->is_global) return;
-    if (!g_collect_syms_out || !g_collect_syms_count) return;
-    if (*g_collect_syms_count >= g_collect_syms_cap) return;
-    LspSymbol *sym = &g_collect_syms_out[(*g_collect_syms_count)++];
-    memset(sym, 0, sizeof(*sym));
-    size_t nlen = strlen(b->name->name);
-    if (nlen >= sizeof(sym->name)) nlen = sizeof(sym->name) - 1;
-    memcpy(sym->name, b->name->name, nlen);
-    const char *tn = type_name(b->type);
-    if (tn) {
-        size_t tlen = strlen(tn);
-        if (tlen >= sizeof(sym->type_str)) tlen = sizeof(sym->type_str) - 1;
-        memcpy(sym->type_str, tn, tlen);
-    }
-    sym->line      = (int)b->span.line;
-    sym->col_start = (int)b->span.col_start;
-    sym->col_end   = (int)b->span.col_end;
-    const char *fp = diag_file_path(b->span.file_id);
-    if (fp) {
-        size_t flen = strlen(fp);
-        if (flen >= sizeof(sym->file_path)) flen = sizeof(sym->file_path) - 1;
-        memcpy(sym->file_path, fp, flen);
-    }
-}
-
-static void collect_items(const Expr **items, uint32_t n) {
-    for (uint32_t i = 0; i < n; i++) {
-        const Expr *item = items[i];
-        if (!item) continue;
-        switch (item->kind) {
-            case EX_FN_DEF:
-                collect_binding(item->as.fn_def_.fn ? item->as.fn_def_.fn->binding : NULL);
-                break;
-            case EX_DEF:
-                collect_binding(item->as.def_.binding);
-                break;
-            case EX_DEFDATA:
-                collect_binding(item->as.defdata_.binding);
-                break;
-            case EX_DEFGADT:
-                collect_binding(item->as.defgadt_.binding);
-                break;
-            case EX_DEFMODULE:
-                if (item->as.defmodule_.mod)
-                    collect_items((const Expr **)item->as.defmodule_.mod->body,
-                                  item->as.defmodule_.mod->n_body);
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-static void collect_symbols_from_prog(const Expr *prog) {
-    if (!prog || prog->kind != EX_PROGRAM) return;
-    collect_items((const Expr **)prog->as.program.items, prog->as.program.n);
-}
-
 int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
                         int *count_out) {
-    *count_out = 0;
-    g_collect_syms_out   = out;
-    g_collect_syms_cap   = cap;
-    g_collect_syms_count = count_out;
+    lsp_collect_begin(out, cap, count_out);
     Buf discard;
     buf_init(&discard);
     int rm_n = 0;
@@ -644,9 +685,7 @@ int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
                           (const char **)rm_p, rm_n);
     free_reader_macro_paths(rm_p, rm_n);
     buf_free(&discard);
-    g_collect_syms_out   = NULL;
-    g_collect_syms_cap   = 0;
-    g_collect_syms_count = NULL;
+    lsp_collect_end();
     return rc;
 }
 
@@ -657,121 +696,21 @@ int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
  * `(reader-macros/define ...)` definition files that are preloaded into
  * the reader's macro registry before the entry file is parsed. Typically
  * derived from the project's `build.tur :reader-macros [...]` entry. */
-/* Auto-loaded stdlib files.  Shared by compile_to_c (single-file) and
- * compile_to_h / compile_to_implementation (project-mode multi-file) so
- * spice code in `tur build .` sees `Cons`, `tnil?`, `Option`, etc. without
- * explicit imports -- matching single-file semantics.  Each TU embeds its
- * own static copy of stdlib defns; emit_module.c's
- * `is_from_stdlib`-aware paths static-ify them per TU so multi-TU links
- * don't see duplicate symbols. */
-static const char *const g_stdlib_autoload_files[] = {
-    "macros.tur",
-    "safe.tur",
-    "contract.tur",
-    "hamt.tur",
-    "typeclass-eq.tur",
-    "typeclass-functor.tur",
-    "typeclass-clone.tur",
-    "typeclass-hash.tur",
-    "typeclass-applicative.tur",
-    "typeclass-alternative.tur",
-    "typeclass-monad.tur",
-    "typeclass-monaderror.tur",
-    "typeclass-bifunctor.tur",
-    "map.tur",
-    "vec.tur",
-    "slice.tur",
-    "option.tur",
-    "result.tur",
-    "pair.tur",
-    "tuple.tur",
-    "list.tur",
-    "grid.tur",
-    "zipper.tur",
-    "set.tur",
-    "mutmap.tur",
-    "json.tur",
-    "schema.tur",
-    "sym.tur",
-    "unique.tur",
-    NULL
-};
-
-/* Read every stdlib file in g_stdlib_autoload_files into `arena`/`st`, then
- * prepend the resulting forms onto `*forms_in_out` (growing the array via a
- * fresh arena allocation).  Updates `*nforms_in_out` and the running
- * `*file_id_in_out` counter.  Returns the count of prepended stdlib forms
- * (which the caller passes to `elaborate_program` as `stdlib_prefix`) so the
- * elab loop can bracket those forms with `in_stdlib_load = true` and the
- * binding records get `is_from_stdlib` set -- the same flag the
- * separate-compilation emit path keys off to static-ify stdlib defns per
- * TU.  `entry_path` is the user-visible input file: used by the suffix-skip
- * rule for `--no-auto-stdlib` builds where the entry file IS one of the
- * stdlib files (everything from that file onward is skipped). */
+/* Thin adapter over the shared prepend in compiler/stdlib_autoload.c.
+ * The list, the read loop, and the form splice moved there so the WASM
+ * playground's in-process analyzer prepends exactly the same stdlib this
+ * does; what stays here is the CLI's own two answers -- where the stdlib
+ * lives (resolve_stdlib_root, an exe-relative walk-up that means nothing in
+ * a browser) and whether --no-auto-stdlib was passed. */
 static uint32_t prepend_stdlib_forms(Arena *arena, SymbolTable *st,
                                      const char *entry_path,
                                      Form ***forms_in_out,
                                      uint32_t *nforms_in_out,
                                      uint8_t *file_id_in_out) {
-    int no_stdlib_skip_from = -1;
-    if (g_no_auto_stdlib) {
-        const char *input_base = basename_of(entry_path);
-        for (int j = 0; g_stdlib_autoload_files[j] != NULL; j++) {
-            if (strcmp(input_base, g_stdlib_autoload_files[j]) == 0) {
-                no_stdlib_skip_from = j;
-                break;
-            }
-        }
-    }
-
-    uint32_t total = 0;
-    Form **all = NULL;
-    for (int i = 0; g_stdlib_autoload_files[i] != NULL; i++) {
-        if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from) continue;
-        char path_buf[4096];
-        tur_stdlib_path(g_stdlib_autoload_files[i], path_buf, sizeof(path_buf));
-        char *stdlib_src = NULL;
-        size_t stdlib_len = 0;
-        if (read_entire_file_quiet(path_buf, &stdlib_src, &stdlib_len) != 0)
-            continue;
-
-        char *src_copy = (char *)arena_alloc(arena, stdlib_len);
-        memcpy(src_copy, stdlib_src, stdlib_len);
-        char *path_copy = (char *)arena_alloc(arena, strlen(path_buf) + 1);
-        memcpy(path_copy, path_buf, strlen(path_buf) + 1);
-
-        SourceFile *stdlib_file = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
-        *stdlib_file = (SourceFile){0};
-        stdlib_file->path = path_copy;
-        stdlib_file->src = src_copy;
-        stdlib_file->len = stdlib_len;
-        stdlib_file->file_id = (*file_id_in_out)++;
-        stdlib_file->reader_type = READER_TURMERIC;
-        diag_register_file(stdlib_file);
-
-        uint32_t n = 0;
-        Form **fs = read_all(arena, st, stdlib_file, &n);
-        if (fs && n > 0) {
-            Form **new_all = (Form **)arena_alloc(arena,
-                (total + n) * sizeof(Form *));
-            for (uint32_t j = 0; j < total; j++) new_all[j] = all[j];
-            for (uint32_t j = 0; j < n; j++) new_all[total + j] = fs[j];
-            all = new_all;
-            total += n;
-        }
-        free(stdlib_src);
-    }
-
-    if (all && total > 0) {
-        Form **out = (Form **)arena_alloc(arena,
-            (*nforms_in_out + total) * sizeof(Form *));
-        for (uint32_t i = 0; i < total; i++) out[i] = all[i];
-        for (uint32_t i = 0; i < *nforms_in_out; i++)
-            out[total + i] = (*forms_in_out)[i];
-        *forms_in_out = out;
-        *nforms_in_out += total;
-    }
-    return total;
+    return tur_stdlib_prepend_forms(arena, st, resolve_stdlib_root(),
+                                    entry_path, g_no_auto_stdlib,
+                                    forms_in_out, nforms_in_out,
+                                    file_id_in_out);
 }
 
 static int compile_to_c(const char *path, Buf *out_c,
@@ -785,7 +724,8 @@ static int compile_to_c(const char *path, Buf *out_c,
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+    LangLayerSet lang_layers = 0;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
 
     /* Each compile_to_c call is a self-contained compilation unit.  Clear the
      * global diagnostic state (the `had_error_` flag and the file registry)
@@ -797,6 +737,8 @@ static int compile_to_c(const char *path, Buf *out_c,
      * gate below. */
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
+    pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
     file.path = path;
@@ -804,6 +746,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     file.len = len_adj;
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -862,16 +805,25 @@ static int compile_to_c(const char *path, Buf *out_c,
         rc = run_core_passes(&ctx);
         /* Collect symbols whether or not later passes failed -- elaboration
          * may have succeeded even when borrow-check reports errors. */
-        if (g_collect_syms_out && ctx.prog)
-            collect_symbols_from_prog(ctx.prog);
+        if (lsp_collect_active() && ctx.prog)
+            lsp_collect_program(ctx.prog);
         if (g_audit_spans) {
             /* Audit-only mode: never emit.  A clean audit is rc 0; remaining
              * holes surface as rc 3 (distinct from rc 1 = elaboration failure,
              * rc 2 = file error) so harnesses can tell "audited, found holes"
              * apart from "could not audit". */
             if (rc == 0 && g_audit_span_holes > 0) rc = 3;
-        } else if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
-            rc = 1;
+        } else if (rc == 0) {
+            /* DEDUP-4b: decide before emitting -- the preamble's text depends
+             * on whether the archive will supply the rc<T>/GC runtime. */
+            resolve_rcgc_from_archive();
+            if (emit_program(out_c, ctx.prog) != 0) rc = 1;
+            /* J2: the REPL's in-process spice build wants the exports
+             * manifest from this same single-TU compile (the sink is set
+             * only around that call; every other caller leaves it NULL). */
+            if (rc == 0 && g_manifest_sink
+                && emit_exports_manifest(g_manifest_sink, ctx.prog) != 0)
+                rc = 1;
         }
     }
 
@@ -915,7 +867,7 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
      * stdlib bindings; exported ones (`ok`, `ok-val`,
      * `make-struct Result ...`) are static-or-inline-C wrappers so the
      * per-TU duplication mirrors `emit_closure_fat_runtime`. */
-    const char *const *prelude_files = g_stdlib_autoload_files;
+    const char *const *prelude_files = tur_stdlib_autoload_files();
 
     uint32_t total = 0;
     Form **all = NULL;
@@ -981,7 +933,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+    LangLayerSet lang_layers = 0;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -989,6 +942,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
+    pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
     file.path = path;
@@ -996,6 +951,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     file.len = len_adj;
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -1079,7 +1035,8 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+    LangLayerSet lang_layers = 0;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1087,6 +1044,8 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
+    pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
     file.path = path;
@@ -1094,6 +1053,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     file.len = len_adj;
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -1659,16 +1619,42 @@ static void hoist_tur_include_directives(Buf *csrc) {
     const char *inc_mark = "/* __tur_include__: ";
     size_t inc_mlen = strlen(inc_mark);
     const char *p = csrc->data;
-    Buf hdr;
+    /* TWO buckets, not one.  `__tur_include__` carries two different kinds of
+     * payload -- preprocessor directives (`#include <stdlib.h>`) and file-scope
+     * CODE (a `typedef`, or a `static` helper).  Concatenating them in source
+     * order lets a code payload land ahead of a directive payload it depends
+     * on, which is exactly what stdlib/httpd.tur does: the malloc-using
+     * `httpd_conn_own_cstr` is hoisted from line 93 and `#include <stdlib.h>`
+     * from line 3916, so the emitted TU called malloc with no declaration in
+     * scope.  That compiled only because every cc invocation passed
+     * -Wno-error=implicit-function-declaration, and it is UB regardless.
+     *
+     * So: all directive payloads first (in their own source order, which keeps
+     * any feature-test `#define` ahead of the include it conditions), then all
+     * code payloads (likewise in source order).  Relative order within each
+     * bucket is preserved; only the two kinds are separated.
+     * See docs/reported/hoisted-inline-c-precedes-includes.md. */
+    Buf hdr, code;
     buf_init(&hdr);
+    buf_init(&code);
     while (p && (p = strstr(p, inc_mark)) != NULL) {
         p += inc_mlen;
         const char *end = strstr(p, " */");
         if (!end) break;
-        buf_write(&hdr, p, (size_t)(end - p));
-        buf_putc(&hdr, '\n');
+        const char *q = p;
+        while (q < end && (*q == ' ' || *q == '\t')) q++;
+        int is_directive = (q < end && *q == '#')
+            && (strncmp(q, "#include", 8) == 0 || strncmp(q, "#define", 7) == 0
+                || strncmp(q, "#undef", 6) == 0 || strncmp(q, "#pragma", 7) == 0);
+        Buf *dst = is_directive ? &hdr : &code;
+        buf_write(dst, p, (size_t)(end - p));
+        buf_putc(dst, '\n');
         p = end + 3;
     }
+    if (code.len > 0) {
+        buf_write(&hdr, code.data, code.len);
+    }
+    buf_free(&code);
     if (hdr.len > 0) {
         Buf new_csrc;
         buf_init(&new_csrc);
@@ -1790,11 +1776,454 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
     out[i] = '\0';
 }
 
+/* tur-link-and-build-split-plan Phase 3: scan generated C for
+ * `__tur_autolink__` comments and collect the linker flags they embed (e.g.
+ * -lturi from stdlib/turi/eval.tur).  The marker format is:
+ *   slash-star __tur_autolink__: FLAGS star-slash
+ * On return `autolink` holds the raw space-joined flag string (NUL-terminated
+ * content when non-empty), before any SDK/ASan/anchor resolution.  Shared by
+ * cmd_build and cmd_compile so the two cannot drift. */
+static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
+    const char *marker = "/* __tur_autolink__: ";
+    size_t mlen = strlen(marker);
+    const char *p = csrc->data;
+    while (p && (p = strstr(p, marker)) != NULL) {
+        p += mlen;
+        const char *end = strstr(p, " */");
+        if (!end) break;
+        if (autolink->len > 0) buf_putc(autolink, ' ');
+        buf_write(autolink, p, (size_t)(end - p));
+        p = end + 3;
+    }
+    if (autolink->len > 0) buf_putc(autolink, '\0');
+}
+
+/* tur-link-and-build-split-plan Phase 3: collect the enclosing spice's cmake
+ * dep flags (-I/-L/-l from cmake/spice-deps-manifest.json) plus its
+ * `:c-includes` (-I) and `:c-sources` (vendored .c) by walking up from the
+ * input file to the project root.  No-op when the input is not inside a
+ * manifested project.  Shared by cmd_build and cmd_compile. */
+static void collect_build_aux(const char *input, Buf *cmake_flags,
+                              Buf *aux_includes, Buf *aux_sources) {
+    /* Walk up from the input file's directory to find project root.  Resolve
+     * to an absolute path first -- find_project_root walks via strrchr('/'),
+     * so a bare "." or "foo.tur" would stop after one step. */
+    char input_dir[4096];
+    strncpy(input_dir, input, sizeof(input_dir) - 1);
+    input_dir[sizeof(input_dir) - 1] = '\0';
+    char *slash = strrchr(input_dir, '/');
+    if (slash) *slash = '\0';
+    else strncpy(input_dir, ".", sizeof(input_dir));
+    char abs_input_dir[4096];
+    if (realpath(input_dir, abs_input_dir)) {
+        strncpy(input_dir, abs_input_dir, sizeof(input_dir) - 1);
+        input_dir[sizeof(input_dir) - 1] = '\0';
+    }
+    char *proj_root = find_project_root(input_dir);
+    if (proj_root) {
+        char manifest_path[4096];
+        snprintf(manifest_path, sizeof(manifest_path),
+                 "%s/cmake/spice-deps-manifest.json", proj_root);
+        PkgCmakeManifest cmake_manifest;
+        if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
+            pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
+            pkg_cmake_manifest_free(&cmake_manifest);
+        }
+        collect_spice_aux_c(proj_root, aux_includes, aux_sources);
+        free(proj_root);
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 3: append the -I tokens from a resolved
+ * autolink/link flag string to `dst` (each space-prefixed).  The `-c` compile
+ * of the generated TU needs the include dirs (e.g. -Isrc/runtime for inline-C
+ * referencing runtime headers) but must not receive -l/-L or bare .c sources. */
+static void append_include_tokens(Buf *dst, const char *flags) {
+    if (!flags) return;
+    const char *p = flags;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ' ') p++;
+        size_t tlen = (size_t)(p - start);
+        if (tlen >= 2 && start[0] == '-' && start[1] == 'I') {
+            buf_putc(dst, ' ');
+            buf_write(dst, start, tlen);
+        }
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c: true when the raw autolink string
+ * carries at least one bare `.c` source arg (a runtime TU like
+ * src/runtime/hamt.c).  These are exactly what --runtime=lib replaces with a
+ * link against the prebuilt libturi.a. */
+static int autolink_has_bare_c_source(const Buf *autolink) {
+    if (!autolink || autolink->len == 0) return 0;
+    const char *p = autolink->data;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *s = p;
+        while (*p && *p != ' ') p++;
+        size_t t = (size_t)(p - s);
+        if (t > 2 && s[0] != '-' && s[t - 2] == '.' && s[t - 1] == 'c') return 1;
+    }
+    return 0;
+}
+
+/* Probe `dir` for a runtime archive, preferring the lean non-sanitized
+ * libturt_runtime.a over the full libturi.a.  On a hit, writes the linker name
+ * (`turt_runtime` or `turi`) to `libname` and returns 1. */
+static int probe_runtime_lib_in(const char *dir, char *libname, size_t ncap) {
+    struct stat st;
+    char probe[4096];
+    snprintf(probe, sizeof(probe), "%s/libturt_runtime.a", dir);
+    if (stat(probe, &st) == 0) { snprintf(libname, ncap, "turt_runtime"); return 1; }
+    snprintf(probe, sizeof(probe), "%s/libturi.a", dir);
+    if (stat(probe, &st) == 0) { snprintf(libname, ncap, "turi"); return 1; }
+    return 0;
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c + Phase 6 prereq: locate the runtime
+ * archive to link under --runtime=lib.  Prefers the lean, non-sanitized
+ * libturt_runtime.a (behaviorally identical to a bare-source recompile) and
+ * falls back to the full libturi.a (which is ASan-instrumented in Debug builds).
+ * Resolution order for the directory:
+ *   1. $TUR_RUNTIME_LIB (an archive file path, or the directory holding one).
+ *   2. <exe_dir>/src         (dev layout: build/tur -> build/src).
+ *   3. <turmeric_root>/build/src.
+ * A prefix-installed SDK's libturi.a is picked up separately by
+ * resolve_autolink_flags step 1 once -lturi is on the line.  Returns 1 with the
+ * dir in `libdir` and the linker name in `libname` on success, else 0. */
+static int locate_runtime_lib(char *libdir, size_t dcap,
+                              char *libname, size_t ncap) {
+    libdir[0] = '\0';
+    libname[0] = '\0';
+    struct stat st;
+    const char *env = getenv("TUR_RUNTIME_LIB");
+    if (env && *env && stat(env, &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+            if (probe_runtime_lib_in(env, libname, ncap)) {
+                snprintf(libdir, dcap, "%s", env);
+                return 1;
+            }
+            return 0;
+        }
+        /* A file path: derive libname from lib<name>.a and use its dir. */
+        char d[4096];
+        dir_of_path(env, d, sizeof(d));
+        snprintf(libdir, dcap, "%s", d);
+        const char *base = strrchr(env, '/');
+        base = base ? base + 1 : env;
+        if (strncmp(base, "lib", 3) == 0) base += 3;
+        snprintf(libname, ncap, "%s", base);
+        char *dot = strrchr(libname, '.');
+        if (dot) *dot = '\0';
+        return libname[0] ? 1 : 0;
+    }
+    char exe[4096];
+    if (get_exe_path(exe, sizeof(exe)) == 0) {
+        char d[4096];
+        dir_of_path(exe, d, sizeof(d));
+        char sd[4200];
+        snprintf(sd, sizeof(sd), "%s/src", d);
+        if (probe_runtime_lib_in(sd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", sd);
+            return 1;
+        }
+        /* DEDUP-4b: the INSTALLED layout -- <prefix>/bin/tur next to
+         * <prefix>/lib/libturt_runtime.a.  Without this probe the archive was
+         * only ever findable in a dev build tree, so an installed toolchain
+         * silently recompiled the runtime on every build and (since 4b) kept
+         * running the emitted GC replica.  Checked after the dev layout so a
+         * build tree still wins over a stale system install. */
+        snprintf(sd, sizeof(sd), "%s/../lib", d);
+        if (probe_runtime_lib_in(sd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", sd);
+            return 1;
+        }
+    }
+    char root[4096];
+    resolve_turmeric_root(root, sizeof(root));
+    if (root[0]) {
+        char bd[4200];
+        snprintf(bd, sizeof(bd), "%s/build/src", root);
+        if (probe_runtime_lib_in(bd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", bd);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Rebuild `autolink` dropping every bare `.c` source token (a runtime TU),
+ * keeping all flags.  Used when --runtime=lib replaces the recompiled sources
+ * with a link against a runtime archive.  Appends into a fresh buffer. */
+static void autolink_drop_bare_sources(const Buf *autolink, Buf *out) {
+    const char *p = autolink->data;
+    while (p && *p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *s = p;
+        while (*p && *p != ' ') p++;
+        size_t t = (size_t)(p - s);
+        int bare_c = t > 2 && s[0] != '-' && s[t - 2] == '.' && s[t - 1] == 'c';
+        if (bare_c) continue;
+        if (out->len > 0) buf_putc(out, ' ');
+        buf_write(out, s, t);
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c/6: replace the bare runtime `.c`
+ * autolink sources with a link against a prebuilt runtime archive so the
+ * runtime TUs (hamt/symbols/tur_string) are linked instead of recompiled per
+ * build.  Behavior by mode (see g_runtime_mode):
+ *   AUTO (default) -- use the lean non-ASan libturt_runtime.a when locatable;
+ *     otherwise leave the bare sources in place (recompile).  Never links the
+ *     full libturi.a here, so a default build cannot regress into a link
+ *     failure (no archive -> source) or an unexpected ASan/LSan run.
+ *   LIB -- force the archive: lean preferred, else the full libturi.a, else a
+ *     -lturi fallback (with a warning) that relies on a -L in TUR_CC_FLAGS.
+ * No-op when the program autolinks no runtime sources or already links -lturi.
+ * `autolink` is consumed and replaced in place. */
+static void apply_runtime_lib_mode(Buf *autolink) {
+    if (g_runtime_mode == TUR_RT_SOURCE) return;
+    if (!autolink_has_bare_c_source(autolink)) return;
+    if (autolink->len > 0 && strstr(autolink->data, "-lturi")) return;
+
+    char libdir[4096], libname[128];
+    int found = locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname));
+
+    /* AUTO only links the lean, guaranteed-non-ASan archive; anything else
+     * (only the full libturi.a, or no archive at all) falls back to recompiling
+     * the sources so a default build stays behaviorally identical to source. */
+    if (g_runtime_mode == TUR_RT_AUTO &&
+        !(found && strcmp(libname, "turt_runtime") == 0))
+        return;
+
+    Buf inj;
+    buf_init(&inj);
+    if (found) {
+        buf_printf(&inj, "-l%s -L%s", libname, libdir);
+    } else {
+        /* Reachable only in explicit LIB mode: rely on a -L in TUR_CC_FLAGS. */
+        buf_puts(&inj, "-lturi");
+        fprintf(stderr,
+                "tur: --runtime=lib could not locate a runtime archive; relying "
+                "on a -L in TUR_CC_FLAGS (set TUR_RUNTIME_LIB to override)\n");
+    }
+    /* Keep every flag, drop the bare .c sources the archive supersedes.  The
+     * drop helper inserts the separating space before each kept token. */
+    if (autolink->len > 1) autolink_drop_bare_sources(autolink, &inj);
+    buf_putc(&inj, '\0');
+    buf_free(autolink);
+    *autolink = inj;
+}
+
+/* tur-link-and-build-split-plan Phase 1: resolve the raw `__tur_autolink__`
+ * flag string (as scanned out of the generated C, or read from a `.link`
+ * sidecar) into the final link-ready flag set, and report whether the linked
+ * libturi was ASan-instrumented.
+ *
+ * This is the shared link-side flag logic factored out of the old monolithic
+ * cmd_build.  It performs, in order:
+ *   1. -lturi SDK anchoring -- prepend absolute -I/-L for a prefix-installed SDK.
+ *   2. ASan autodetect -- scan libturi.a for __asan_init via nm.
+ *   3. Turmeric-tree-relative path anchoring (src/runtime/hamt.c -> abs).
+ *   4. -lturi supersedes bare .c source args (drop them; libturi has the objs).
+ *
+ * `autolink` is consumed and replaced in place: on return it holds the resolved
+ * flag string (NUL-terminated content, like the caller's original buffer).
+ * `cc_flags` is read for -L paths during the ASan probe.  `*out_needs_asan` is
+ * set true when a sanitized libturi.a is on the link line.
+ *
+ * Behavior is byte-for-byte identical to the inline blocks it replaces; both
+ * cmd_build and `tur link` call it so they cannot drift. */
+static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
+                                    bool *out_needs_asan) {
+    *out_needs_asan = false;
+
+    /* 1. -lturi SDK anchoring. */
+    if (autolink->len > 0 && strstr(autolink->data, "-lturi")) {
+        char sdk_root[4096] = "";
+        const char *sdk_env = getenv("TUR_SDK_ROOT");
+        if (sdk_env && *sdk_env) {
+            snprintf(sdk_root, sizeof(sdk_root), "%s", sdk_env);
+        } else {
+            char exe_buf[4096] = "";
+            if (get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
+                char dir[4096];
+                dir_of_path(exe_buf, dir, sizeof(dir));
+                for (int d = 0; d < 8; d++) {
+                    char probe[4096];
+                    struct stat sdk_st;
+                    snprintf(probe, sizeof(probe),
+                             "%s/share/turmeric/src/turi/eval.h", dir);
+                    if (stat(probe, &sdk_st) == 0 && S_ISREG(sdk_st.st_mode)) {
+                        snprintf(sdk_root, sizeof(sdk_root),
+                                 "%s/share/turmeric", dir);
+                        break;
+                    }
+                    char *sl = strrchr(dir, '/');
+                    if (!sl || sl == dir) break;
+                    *sl = '\0';
+                }
+            }
+        }
+        if (sdk_root[0]) {
+            Buf sdk_flags;
+            buf_init(&sdk_flags);
+            buf_printf(&sdk_flags, "-I%s/src -I%s/src/compiler -I%s/src/runtime",
+                       sdk_root, sdk_root, sdk_root);
+            struct stat sdk_lib_st;
+            char lib_probe[4096];
+            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libturi.a", sdk_root);
+            if (stat(lib_probe, &sdk_lib_st) == 0)
+                buf_printf(&sdk_flags, " -L%s/lib", sdk_root);
+            snprintf(lib_probe, sizeof(lib_probe), "%s/build/src/libturi.a", sdk_root);
+            if (stat(lib_probe, &sdk_lib_st) == 0)
+                buf_printf(&sdk_flags, " -L%s/build/src", sdk_root);
+            Buf new_al;
+            buf_init(&new_al);
+            buf_write(&new_al, sdk_flags.data, sdk_flags.len);
+            buf_free(&sdk_flags);
+            buf_putc(&new_al, ' ');
+            if (autolink->len > 1)
+                buf_write(&new_al, autolink->data, autolink->len - 1);
+            buf_putc(&new_al, '\0');
+            buf_free(autolink);
+            *autolink = new_al;
+        }
+    }
+
+    /* 2. ASan autodetect: sanitized libturi.a needs -fsanitize on the link. */
+    if (autolink->len > 0 && strstr(autolink->data, "-lturi")) {
+        char nm_cmd[512];
+        const char *cf = cc_flags;
+        while (cf && *cf) {
+            const char *lf = strstr(cf, "-L");
+            if (!lf) break;
+            lf += 2;
+            const char *lf_end = lf;
+            while (*lf_end && *lf_end != ' ') lf_end++;
+            if (lf_end > lf) {
+                char lib_path[512];
+                size_t plen = (size_t)(lf_end - lf);
+                if (plen < sizeof(lib_path) - 20) {
+                    memcpy(lib_path, lf, plen);
+                    snprintf(lib_path + plen, sizeof(lib_path) - plen, "/libturi.a");
+                    snprintf(nm_cmd, sizeof(nm_cmd),
+                             "nm %s 2>/dev/null | grep -q __asan_init", lib_path);
+                    if (system(nm_cmd) == 0) {
+                        *out_needs_asan = true;
+                        break;
+                    }
+                }
+            }
+            cf = lf_end;
+        }
+    }
+
+    /* 3. Anchor turmeric-tree-relative autolink paths at the located root. */
+    if (autolink->len > 1) {
+        char tur_root[4096];
+        resolve_turmeric_root(tur_root, sizeof(tur_root));
+        if (tur_root[0] && strcmp(tur_root, ".") != 0) {
+            Buf rewritten;
+            buf_init(&rewritten);
+            rewrite_autolink_relative_paths(autolink->data, tur_root, &rewritten);
+            buf_putc(&rewritten, '\0');
+            buf_free(autolink);
+            *autolink = rewritten;
+        }
+    }
+
+    /* 4. -lturi supersedes bare .c source args; drop them to avoid duplicate
+     * symbols (libturi.a already provides every runtime TU's object). */
+    if (autolink->len > 1 && strstr(autolink->data, "-lturi")) {
+        Buf filtered;
+        buf_init(&filtered);
+        const char *p = autolink->data;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            const char *start = p;
+            while (*p && *p != ' ') p++;
+            size_t tlen = (size_t)(p - start);
+            bool is_c_source = tlen > 2 && start[0] != '-' &&
+                               start[tlen - 2] == '.' && start[tlen - 1] == 'c';
+            if (is_c_source) continue;
+            if (filtered.len > 0) buf_putc(&filtered, ' ');
+            buf_write(&filtered, start, tlen);
+        }
+        buf_putc(&filtered, '\0');
+        buf_free(autolink);
+        *autolink = filtered;
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 1: assemble and run the final link `cc`
+ * command.  `inputs` is the space-joined list of primary inputs -- the single
+ * generated `.c` for the monolithic path, or one-or-more `.o`/`.c` args for the
+ * split/`tur link` path.  Every other argument mirrors what the old inline
+ * assembly appended, in the same order, so a monolithic build (inputs = the
+ * generated `.c`) produces a byte-identical command.
+ *
+ * Returns 0 on success, 2 on cc failure or a failed exe settle.  Does not touch
+ * the generated-C temp file (the caller owns that lifecycle). */
+static int link_command_run(const char *cc, const char *cc_flags,
+                            const char *inputs,
+                            const Buf *aux_includes, const Buf *aux_sources,
+                            const Buf *autolink, bool needs_asan,
+                            const Buf *cmake_flags,
+                            const char **include_dirs, int n_include_dirs,
+                            const char *out_path) {
+    Buf cmd;
+    buf_init(&cmd);
+    buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, inputs);
+    if (aux_includes && aux_includes->len > 0) buf_puts(&cmd, aux_includes->data);
+    if (aux_sources  && aux_sources->len  > 0) buf_puts(&cmd, aux_sources->data);
+    if (autolink && autolink->len > 0) buf_printf(&cmd, " %s", autolink->data);
+    if (needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
+    if (cmake_flags && cmake_flags->len > 0) buf_puts(&cmd, cmake_flags->data);
+    for (int _i = 0; _i < n_include_dirs; _i++) {
+        if (include_dirs[_i] && include_dirs[_i][0])
+            buf_printf(&cmd, " -I%s", include_dirs[_i]);
+    }
+    buf_puts(&cmd, " -lm");
+#ifdef _WIN32
+    buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
+#endif
+    buf_putc(&cmd, '\0');
+    int sys_rc = system(cmd.data);
+    buf_free(&cmd);
+
+    if (sys_rc == 0 && tur_settle_exe_output(out_path) != 0) {
+        fprintf(stderr, "tur: could not place the linked binary at '%s'\n", out_path);
+        return 2;
+    }
+    if (sys_rc != 0) {
+        fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
+        return 2;
+    }
+    return 0;
+}
+
 static int cmd_build(const char *input, const char *out_path,
                      const char **include_dirs, int n_include_dirs,
                      const char *target,
                      const char **reader_macro_paths,
                      int n_reader_macro_paths) {
+    /* RT3: reset per-compile refinement state, like the check/run/emit-c entry
+     * points. The memo caches VC pointers into the per-compile arena; a process
+     * that builds >1 file (`tur test`, LSP) otherwise keeps stale pointers and
+     * memo_lookup dereferences them on a fingerprint collision. Partial fix for
+     * the strict-refine multi-compile crash (see docs/reported). */
+    refine_discharge_reset();
+    /* DEDUP-4b: `tur` links this output, so the rc<T>/GC runtime may come
+     * from the archive rather than being replicated into the preamble. */
+    g_emit_for_link = true;
     Buf csrc;
     buf_init(&csrc);
     /* used-attr-whole-program: this single-file/whole-program path inlines only
@@ -1847,25 +2276,11 @@ static int cmd_build(const char *input, const char *out_path,
     }
     fclose(tf);
 
-    /* Phase S2: scan generated C for __tur_autolink__ comments and collect
-     * any linker flags they embed (e.g. -lturi from stdlib/turi/eval.tur).
-     * The marker format is: slash-star __tur_autolink__: FLAGS star-slash */
+    /* Phase S2 / tur-link-and-build-split-plan Phase 3: scan the generated C
+     * for __tur_autolink__ comments (shared helper). */
     Buf autolink;
     buf_init(&autolink);
-    {
-        const char *marker = "/* __tur_autolink__: ";
-        size_t mlen = strlen(marker);
-        const char *p = csrc.data;
-        while (p && (p = strstr(p, marker)) != NULL) {
-            p += mlen;
-            const char *end = strstr(p, " */");
-            if (!end) break;
-            if (autolink.len > 0) buf_putc(&autolink, ' ');
-            buf_write(&autolink, p, (size_t)(end - p));
-            p = end + 3;
-        }
-        if (autolink.len > 0) buf_putc(&autolink, '\0');
-    }
+    scan_autolink_markers(&csrc, &autolink);
     buf_free(&csrc);
 
     bool wasm_target = target && strcmp(target, "wasm") == 0;
@@ -1920,255 +2335,32 @@ static int cmd_build(const char *input, const char *out_path,
      * manifest dir found by walking up from the input file. */
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    {
-        /* Walk up from the input file's directory to find project root.
-         * Resolve to an absolute path first -- find_project_root walks via
-         * strrchr('/'), so a bare "." or "foo.tur" would stop after one
-         * step and miss the enclosing spice. */
-        char input_dir[4096];
-        strncpy(input_dir, input, sizeof(input_dir) - 1);
-        input_dir[sizeof(input_dir) - 1] = '\0';
-        char *slash = strrchr(input_dir, '/');
-        if (slash) *slash = '\0';
-        else strncpy(input_dir, ".", sizeof(input_dir));
-        char abs_input_dir[4096];
-        if (realpath(input_dir, abs_input_dir)) {
-            strncpy(input_dir, abs_input_dir, sizeof(input_dir) - 1);
-            input_dir[sizeof(input_dir) - 1] = '\0';
-        }
-        char *proj_root = find_project_root(input_dir);
-        if (proj_root) {
-            char manifest_path[4096];
-            snprintf(manifest_path, sizeof(manifest_path),
-                     "%s/cmake/spice-deps-manifest.json", proj_root);
-            PkgCmakeManifest cmake_manifest;
-            if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
-                pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
-                pkg_cmake_manifest_free(&cmake_manifest);
-            }
-            collect_spice_aux_c(proj_root, &aux_includes, &aux_sources);
-            free(proj_root);
-        }
-    }
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
 
-    /* If the autolink flags include -lturi, locate the turmeric SDK and
-     * prepend absolute -I/-L paths so the build succeeds regardless of the
-     * working directory.  This is required for prefix-installed builds
-     * (e.g. Homebrew) where `tur install` cannot anchor to the source tree
-     * and the relative -Lbuild/src / -Isrc in __tur_autolink__ won't resolve.
-     *
-     * Resolution order:
-     *   1. $TUR_SDK_ROOT (explicit override)
-     *   2. Walk up from exe looking for share/turmeric/src/turi/eval.h
-     *      (prefix/Homebrew installed layout written by the formula)
-     *
-     * For dev builds the cwd is already set to the turmeric root by
-     * `tur install`, so the relative paths already work; the extra absolute
-     * flags are harmless redundancy in that case. */
-    if (autolink.len > 0 && strstr(autolink.data, "-lturi")) {
-        char sdk_root[4096] = "";
-        const char *sdk_env = getenv("TUR_SDK_ROOT");
-        if (sdk_env && *sdk_env) {
-            snprintf(sdk_root, sizeof(sdk_root), "%s", sdk_env);
-        } else {
-            char exe_buf[4096] = "";
-            if (get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
-                char dir[4096];
-                dir_of_path(exe_buf, dir, sizeof(dir));
-                for (int d = 0; d < 8; d++) {
-                    char probe[4096];
-                    struct stat sdk_st;
-                    snprintf(probe, sizeof(probe),
-                             "%s/share/turmeric/src/turi/eval.h", dir);
-                    if (stat(probe, &sdk_st) == 0 && S_ISREG(sdk_st.st_mode)) {
-                        snprintf(sdk_root, sizeof(sdk_root),
-                                 "%s/share/turmeric", dir);
-                        break;
-                    }
-                    char *sl = strrchr(dir, '/');
-                    if (!sl || sl == dir) break;
-                    *sl = '\0';
-                }
-            }
-        }
-        if (sdk_root[0]) {
-            Buf sdk_flags;
-            buf_init(&sdk_flags);
-            buf_printf(&sdk_flags, "-I%s/src -I%s/src/compiler -I%s/src/runtime",
-                       sdk_root, sdk_root, sdk_root);
-            struct stat sdk_lib_st;
-            char lib_probe[4096];
-            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libturi.a", sdk_root);
-            if (stat(lib_probe, &sdk_lib_st) == 0)
-                buf_printf(&sdk_flags, " -L%s/lib", sdk_root);
-            snprintf(lib_probe, sizeof(lib_probe), "%s/build/src/libturi.a", sdk_root);
-            if (stat(lib_probe, &sdk_lib_st) == 0)
-                buf_printf(&sdk_flags, " -L%s/build/src", sdk_root);
-            /* Prepend SDK flags so absolute paths take priority over the relative
-             * -Lbuild/src and -Isrc entries that follow in the autolink block. */
-            Buf new_al;
-            buf_init(&new_al);
-            buf_write(&new_al, sdk_flags.data, sdk_flags.len);
-            buf_free(&sdk_flags);
-            buf_putc(&new_al, ' ');
-            /* autolink has a '\0' terminator counted in len; copy content only. */
-            if (autolink.len > 1)
-                buf_write(&new_al, autolink.data, autolink.len - 1);
-            buf_putc(&new_al, '\0');
-            buf_free(&autolink);
-            autolink = new_al;
-        }
-    }
+    /* tur-link-and-build-split-plan Phase 2/3c: under --runtime=lib, swap bare
+     * runtime .c autolink sources for a link against the prebuilt libturi.a
+     * (native builds only -- emcc/wasm has no libturi.a). */
+    if (!wasm_target) apply_runtime_lib_mode(&autolink);
 
-    /* If the autolink flags include -lturi, check whether the installed
-     * libturi.a was compiled with AddressSanitizer (common in debug builds).
-     * When it was, propagate -fsanitize=address,undefined so the linker can
-     * resolve the ASAN runtime symbols.  We detect ASAN by looking for the
-     * __asan_init symbol via `nm`; if nm is unavailable we skip the check. */
+    /* tur-link-and-build-split-plan Phase 1: resolve the raw autolink flags
+     * (SDK anchoring, ASan autodetect, tree-relative path anchoring, and the
+     * -lturi bare-.c filter) via the shared helper -- the same resolution
+     * `tur link` runs on flags read from a `.link` sidecar. */
     bool autolink_needs_asan = false;
-    if (autolink.len > 0 && strstr(autolink.data, "-lturi")) {
-        /* Walk -L flags in cc_flags and autolink to find libturi.a */
-        /* Build a best-effort nm command: check build/src/libturi.a (dev layout)
-         * and any -L<dir> paths specified in cc_flags. */
-        char nm_cmd[512];
-        /* Collect -L paths from cc_flags */
-        const char *cf = cc_flags;
-        while (cf && *cf) {
-            const char *lf = strstr(cf, "-L");
-            if (!lf) break;
-            lf += 2;
-            /* Extract the path (no space between -L and path in our cc_flags) */
-            const char *lf_end = lf;
-            while (*lf_end && *lf_end != ' ') lf_end++;
-            if (lf_end > lf) {
-                char lib_path[512];
-                size_t plen = (size_t)(lf_end - lf);
-                if (plen < sizeof(lib_path) - 20) {
-                    memcpy(lib_path, lf, plen);
-                    snprintf(lib_path + plen, sizeof(lib_path) - plen, "/libturi.a");
-                    snprintf(nm_cmd, sizeof(nm_cmd),
-                             "nm %s 2>/dev/null | grep -q __asan_init", lib_path);
-                    if (system(nm_cmd) == 0) {
-                        autolink_needs_asan = true;
-                        break;
-                    }
-                }
-            }
-            cf = lf_end;
-        }
-    }
+    resolve_autolink_flags(&autolink, cc_flags, &autolink_needs_asan);
 
-    /* T2: anchor any turmeric-tree-relative autolink paths (e.g.
-     * `src/runtime/hamt.c -Isrc/runtime`) at the located turmeric root so
-     * the cc step resolves the runtime sources regardless of cwd.  Without
-     * this, project-mode `tur run` from an arbitrary directory fails with
-     * `src/runtime/hamt.c: No such file`.  The -lturi SDK block above
-     * already prepends absolute -I/-L flags; rewriting the trailing relative
-     * ones is harmless redundancy there and the fix for the hamt.c case. */
-    if (autolink.len > 1) {
-        char tur_root[4096];
-        resolve_turmeric_root(tur_root, sizeof(tur_root));
-        if (tur_root[0] && strcmp(tur_root, ".") != 0) {
-            Buf rewritten;
-            buf_init(&rewritten);
-            rewrite_autolink_relative_paths(autolink.data, tur_root, &rewritten);
-            buf_putc(&rewritten, '\0');
-            buf_free(&autolink);
-            autolink = rewritten;
-        }
-    }
-
-    /* When -lturi is linked, libturi.a already contains every runtime
-     * translation unit (hamt.c.o, gc.c.o, eval.c.o, ...).  A program that
-     * also pulls in a runtime source directly via a `__tur_autolink__:
-     * src/runtime/<x>.c` hint (e.g. stdlib/hamt.tur's hamt/autolink-hint,
-     * dragged in transitively by `import turi/eval`) would then define those
-     * symbols twice and the link fails with `multiple definition of
-     * tur_hamt_*`.  The library supersedes the standalone sources, so drop
-     * any bare `.c` source argument from the autolink flags whenever -lturi
-     * is present.  See docs/archive/tur-eval-import-duplicate-hamt-symbols.md. */
-    if (autolink.len > 1 && strstr(autolink.data, "-lturi")) {
-        Buf filtered;
-        buf_init(&filtered);
-        const char *p = autolink.data;
-        while (*p) {
-            while (*p == ' ') p++;          /* skip leading spaces */
-            if (!*p) break;
-            const char *start = p;
-            while (*p && *p != ' ') p++;     /* token = [start, p) */
-            size_t tlen = (size_t)(p - start);
-            /* Drop a source-file argument (does not begin with '-', ends in
-             * ".c") -- libturi already provides its object.  Keep flags and
-             * non-source paths (-I.../-L.../-lturi/-fsanitize=...). */
-            bool is_c_source = tlen > 2 && start[0] != '-' &&
-                               start[tlen - 2] == '.' && start[tlen - 1] == 'c';
-            if (is_c_source) continue;
-            if (filtered.len > 0) buf_putc(&filtered, ' ');
-            buf_write(&filtered, start, tlen);
-        }
-        buf_putc(&filtered, '\0');
-        buf_free(&autolink);
-        autolink = filtered;
-    }
-
-    Buf cmd;
-    buf_init(&cmd);
-    buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
-    /* spices-c-sources-plan: vendored include dirs (-I) early so inline-C in
-     * the generated TU can find its private headers; vendored sources before
-     * the autolink/-lm flags so they can resolve against them. */
-    if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
-    if (aux_sources.len  > 0) buf_puts(&cmd, aux_sources.data);
+    /* tur-link-and-build-split-plan Phase 1: assemble + run the link `cc`
+     * command via the shared helper.  Inputs is the single generated `.c`, so
+     * this is the byte-identical monolithic compile+link -- the same helper
+     * `tur link` calls with `.o` inputs. */
+    int link_rc = link_command_run(cc, cc_flags, tmpl, &aux_includes,
+                                   &aux_sources, &autolink, autolink_needs_asan,
+                                   &cmake_flags, include_dirs, n_include_dirs,
+                                   out_path);
     buf_free(&aux_includes);
     buf_free(&aux_sources);
-    /* Append any __tur_autolink__ flags discovered in the generated C. */
-    if (autolink.len > 0) buf_printf(&cmd, " %s", autolink.data);
     buf_free(&autolink);
-    /* If libturi was ASAN-instrumented, add sanitizer flags to avoid linker errors. */
-    if (autolink_needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
-    /* Append cmake dep flags (-I/-L/-l). */
-    if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
-    /* Append spice include dirs (-I). */
-    for (int _i = 0; _i < n_include_dirs; _i++) {
-        if (include_dirs[_i] && include_dirs[_i][0])
-            buf_printf(&cmd, " -I%s", include_dirs[_i]);
-    }
-    /* Always link libm last. Pure spices can reference libm symbols
-     * (sqrt/fabs/sin/cos/...) directly from inline-C, and static spice deps
-     * (e.g. plutovg) reference them without carrying -lm themselves. GNU ld
-     * resolves archives left-to-right, so -lm must come AFTER any
-     * -l<staticlib> flags or the math symbols go unresolved -- hence it is
-     * appended last. On Linux an unused -lm is a harmless no-op; on macOS
-     * libm lives in libSystem so -lm is a no-op there too. Linking it
-     * unconditionally means libm is usable from a pure spice without forcing
-     * a fake cmake-dep just to pull it in. */
-    /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
-     * warnings to hard errors.  The generated C trips both -- that is a real
-     * codegen defect (see docs/reported/codegen-gcc14-permerrors.md), NOT a
-     * Windows problem: it would break any Linux box on GCC >= 14 too.  MSYS2
-     * ships GCC 16, so it surfaces there first, while CI's older GCC still only
-     * warns.  Downgrade them back to warnings so the latent defect does not
-     * block builds today, and so a CI toolchain bump does not detonate.
-     *
-     * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
-     * accidentally drop them. */
-    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
-                   " -Wno-error=int-conversion"
-                   " -Wno-error=implicit-function-declaration");
-    buf_puts(&cmd, " -lm");
-#ifdef _WIN32
-    /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
-     * On glibc both live in libc; MinGW puts pthreads in winpthreads and
-     * select() in Winsock, so they must be linked explicitly.  This is a LINK
-     * decision about the host toolchain, not codegen, so keying it off the
-     * host is correct -- the generated C itself stays portable. */
-    buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
-#endif
-    /* Ensure the command string is null-terminated before passing to system(). */
-    buf_putc(&cmd, '\0');
-    int sys_rc = system(cmd.data);
-    buf_free(&cmd);
     /* Leave the stable temp file for ccache; only unlink random fallbacks.
      * Tested against the real prefix rather than a literal "/tmp/tur-build/":
      * on Windows the path starts with a drive letter, so the old check was
@@ -2180,19 +2372,7 @@ static int cmd_build(const char *input, const char *out_path,
             unlink(tmpl);
         }
     }
-
-    /* Windows: the linker may have appended ".exe" to a -o with no extension.
-     * Put the binary back where the caller asked for it. */
-    if (sys_rc == 0 && tur_settle_exe_output(out_path) != 0) {
-        fprintf(stderr, "tur: could not place the linked binary at '%s'\n", out_path);
-        return 2;
-    }
-
-    if (sys_rc != 0) {
-        fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
-        return 2;
-    }
-    return 0;
+    return link_rc;
 }
 
 /* Walk up from 'start' to find a directory containing build.tur.
@@ -2331,6 +2511,12 @@ static char *find_spice_root(const char *file_path) {
  * hard configuration error: emit TUR-E0310 and abort, the same "typos surface
  * immediately" contract the CLI path enforces. */
 static void apply_manifest_experiments(const PkgManifest *m) {
+    /* lang-layers L4: a manifest that states its own :experiments list (even
+     * the empty one) has SCOPED the experiment set for this project.  A file
+     * that then asks for a semantic `#lang` layer whose experiment is not in
+     * that list is a hard error rather than a silent ignore -- see
+     * lang_layers_apply_semantic. */
+    if (m->has_experiments_key) g_manifest_experiments_scoped = true;
     for (int i = 0; i < m->n_experiments; i++) {
         if (!experiment_enable(m->experiments[i], XF_SRC_MANIFEST)) {
             fprintf(stderr,
@@ -2821,10 +3007,16 @@ static char **collect_project_src_files(const char *root, int *n_out) {
  * and add its :spices' src/ dirs too.  Walking only direct deps left tourist
  * unable to resolve `thread-pool/pool` (httpd's dep), even with the workspace
  * `:members` declaring it -- imports from one spice into another silently
- * dropped at the first hop.  The visited set is path-keyed to dedupe shared
- * deps across multiple parents (e.g. httpd + template both pulling json) and
- * to prevent cycles.  Capacity grows as we go since transitive width is not
- * bounded by m->n_spices. */
+ * dropped at the first hop.  Capacity grows as we go since transitive width is
+ * not bounded by m->n_spices.
+ *
+ * Two separate dedups are at work, and they are not interchangeable:
+ *   - include_dir_seen / push_include_dir dedupe the OUTPUT list, so a dep
+ *     pulled in by several parents contributes one -I.
+ *   - VisitedRoots below dedupes the WALK, so a cycle terminates.
+ * This comment used to claim the first also did the second; it does not, and
+ * a manifest cycle recursed until something else gave out.  See
+ * docs/archive/spice-cycle-include-path-blowup.md. */
 static bool include_dir_seen(const char **dirs, int n, const char *cand) {
     for (int i = 0; i < n; i++)
         if (dirs[i] && strcmp(dirs[i], cand) == 0) return true;
@@ -2839,8 +3031,61 @@ static void grow_include_dirs(const char ***dirs, int *cap, int need) {
     *cap = new_cap;
 }
 
+/* Append `cand` to the include list unless an equivalent entry is already
+ * there.  The path is canonicalized first (realpath, falling back to the raw
+ * spelling when it fails): a transitively-resolved dep dir arrives as
+ * `a/../b/src`, which the textual dedup would otherwise treat as distinct from
+ * the `b/src` a different parent contributed.  Canonicalizing keeps the `-I`
+ * list short and caps the damage from any future unbounded walk independently
+ * of the visited set. */
+static void push_include_dir(const char ***dirs, int *n, int *cap,
+                             const char *cand) {
+    char canon_buf[4096];
+    const char *canon = cand;
+    if (realpath(cand, canon_buf)) canon = canon_buf;
+    if (include_dir_seen(*dirs, *n, canon)) return;
+    grow_include_dirs(dirs, cap, *n + 1);
+    if (!*dirs) return;
+    (*dirs)[(*n)++] = strdup(canon);
+}
+
+/* spice-cycle-include-path-blowup: visited set for the transitive :spices walk,
+ * keyed on each package root's canonical (realpath'd) path.  Without it a
+ * manifest cycle (A declares B, B declares A) recurses forever: each lap
+ * resolves through one more `../` hop, so the textual paths never repeat and
+ * the output-dir dedup below never fires.  The symptom was either a
+ * multi-kilobyte `-I` argument that cc rejected with "File name too long" on an
+ * unrelated system header, or -- on a sanitized build -- a stack overflow.
+ * Mirrors the keying pkg_collect_transitive_cmake_deps already uses for the
+ * same shape of walk. */
+typedef struct { char **paths; int n; int cap; } VisitedRoots;
+
+/* True if `dir` was already visited; otherwise records it and returns false. */
+static bool visited_roots_mark(VisitedRoots *v, const char *dir) {
+    char canon_buf[4096];
+    const char *canon = dir;
+    if (realpath(dir, canon_buf)) canon = canon_buf;
+    for (int i = 0; i < v->n; i++)
+        if (strcmp(v->paths[i], canon) == 0) return true;
+    if (v->n >= v->cap) {
+        int nc = v->cap ? v->cap * 2 : 8;
+        char **np = (char **)realloc(v->paths, (size_t)nc * sizeof(char *));
+        if (!np) return true;   /* OOM: treat as visited so the walk terminates */
+        v->paths = np;
+        v->cap   = nc;
+    }
+    v->paths[v->n++] = strdup(canon);
+    return false;
+}
+
+static void visited_roots_free(VisitedRoots *v) {
+    for (int i = 0; i < v->n; i++) free(v->paths[i]);
+    free(v->paths);
+}
+
 static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
-                                       const char ***dirs, int *n, int *cap);
+                                       const char ***dirs, int *n, int *cap,
+                                       VisitedRoots *visited);
 
 static void resolve_include_dirs_from_manifest(const char *root,
                                                const PkgManifest *m,
@@ -2861,10 +3106,15 @@ static void resolve_include_dirs_from_manifest(const char *root,
         snprintf(own_src, sizeof(own_src), "%s/src", root);
         struct stat ss;
         if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
-            dirs[n++] = strdup(own_src);
+            push_include_dir(&dirs, &n, &cap, own_src);
     }
 
-    collect_dep_dirs_recursive(root, m, &dirs, &n, &cap);
+    /* Seed the visited set with the root itself, so a dep that declares the
+     * root back (the minimal A -> B -> A cycle) stops at the second hop. */
+    VisitedRoots visited; memset(&visited, 0, sizeof(visited));
+    visited_roots_mark(&visited, root);
+    collect_dep_dirs_recursive(root, m, &dirs, &n, &cap, &visited);
+    visited_roots_free(&visited);
 
     *out_dirs = dirs;
     *out_n    = n;
@@ -2873,7 +3123,8 @@ static void resolve_include_dirs_from_manifest(const char *root,
 /* Walk every :spices entry in m, resolve its on-disk dir, push its src/ (or
  * dep_dir) into *dirs (deduped), then recurse into the dep's own manifest. */
 static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
-                                       const char ***dirs, int *n, int *cap) {
+                                       const char ***dirs, int *n, int *cap,
+                                       VisitedRoots *visited) {
     char spices_dir[4096];
     snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
     for (int i = 0; i < m->n_spices; i++) {
@@ -2936,9 +3187,7 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
                 snprintf(sib_src, sizeof(sib_src),
                          "%s/%s/src", ancestor, s->subdir);
                 if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    grow_include_dirs(dirs, cap, *n + 1);
-                    if (!include_dir_seen(*dirs, *n, sib_src))
-                        (*dirs)[(*n)++] = strdup(sib_src);
+                    push_include_dir(dirs, n, cap, sib_src);
                     snprintf(resolved_root, sizeof(resolved_root),
                              "%s/%s", ancestor, s->subdir);
                     chosen = NULL;
@@ -2949,9 +3198,7 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
                 snprintf(sib_dir, sizeof(sib_dir),
                          "%s/%s", ancestor, s->subdir);
                 if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    grow_include_dirs(dirs, cap, *n + 1);
-                    if (!include_dir_seen(*dirs, *n, sib_dir))
-                        (*dirs)[(*n)++] = strdup(sib_dir);
+                    push_include_dir(dirs, n, cap, sib_dir);
                     strncpy(resolved_root, sib_dir, sizeof(resolved_root) - 1);
                     resolved_root[sizeof(resolved_root) - 1] = '\0';
                     chosen = NULL;
@@ -2960,22 +3207,22 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
                 }
             }
         }
-        if (chosen) {
-            grow_include_dirs(dirs, cap, *n + 1);
-            if (!include_dir_seen(*dirs, *n, chosen))
-                (*dirs)[(*n)++] = strdup(chosen);
-        }
+        if (chosen) push_include_dir(dirs, n, cap, chosen);
 
         /* Recurse into the dep's own manifest so its :spices contribute their
          * src/ too.  Use `resolved_root` (the real on-disk package root) for
          * manifest lookup; `dep_dir` may have :subdir appended to a :path,
          * yielding a non-existent path when both are set together. */
         if (!resolved_root[0]) continue;
+        /* Stop on re-entry. A diamond (two parents pulling the same dep) is
+         * deduped for free by the same check -- its src/ was already pushed on
+         * the first visit. */
+        if (visited_roots_mark(visited, resolved_root)) continue;
         char dmp[4096];
         if (!pkg_resolve_manifest_path(resolved_root, dmp, sizeof(dmp))) continue;
         PkgManifest dm; memset(&dm, 0, sizeof(dm));
         if (!pkg_manifest_read(dmp, &dm)) continue;
-        collect_dep_dirs_recursive(resolved_root, &dm, dirs, n, cap);
+        collect_dep_dirs_recursive(resolved_root, &dm, dirs, n, cap, visited);
         pkg_manifest_free(&dm);
     }
 }
@@ -3086,6 +3333,547 @@ static int decode_exit_status(int status) {
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return 1;
 }
+
+static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
+
+#ifdef TUR_HAVE_JIT
+/* S2 (findings 25): swap an emitted TU's fixed preamble for the committed
+ * declarations region when this compiler still matches the committed
+ * artifacts.  Returns true and fills `out` with
+ * [hoisted user prefix][committed decls][program half]; false (out
+ * untouched) on hash mismatch, missing marker, or TUR_JIT_NO_SPLIT=1.
+ * Shared by cmd_jit and the J2 REPL image build.  See cmd_jit's call site
+ * for the full rationale. */
+static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
+    const char *no_split = getenv("TUR_JIT_NO_SPLIT");
+    if (no_split && *no_split && strcmp(no_split, "0") != 0) return false;
+    if (!csrc->data) return false;
+    Buf probe;
+    buf_init(&probe);
+    emit_rt_split_source(&probe);
+    uint64_t cur = tur_hamt_hash_xxh64(probe.data, probe.len);
+    buf_free(&probe);
+    if (cur != tur_rt_split_hash) return false;
+    buf_putc(csrc, '\0');
+    csrc->len--;   /* NUL-terminate for strstr, keep logical len */
+    static const char pre_start[] = "/* generated by tur (phase 2) */\n";
+    static const char pre_end[] =
+        "/* ==== tur: end of fixed runtime preamble ==== */\n";
+    const char *ps = strstr(csrc->data, pre_start);
+    const char *pe = ps ? strstr(ps, pre_end) : NULL;
+    if (!ps || !pe) return false;
+    const char *after = pe + sizeof(pre_end) - 1;
+    buf_write(out, csrc->data, (size_t)(ps - csrc->data));
+    buf_write(out, tur_rt_split_decls, tur_rt_split_decls_len);
+    buf_write(out, after, csrc->len - (size_t)(after - csrc->data));
+    return true;
+}
+
+/* The engine's `#include "hamt.h"` (et al.) include path: the Turmeric tree
+ * (dev checkout, walking up from the executable) or the installed SDK.
+ * Fills inc0/inc1 (caller-owned, >= 4096 each) and incs[0..1]; returns the
+ * count (0 when no root was found). */
+static int jit_sdk_include_dirs(char *inc0, size_t cap0,
+                                char *inc1, size_t cap1,
+                                const char *incs[2]) {
+    int n = 0;
+    char root[4096] = "";
+    const char *env = getenv("TUR_SDK_ROOT");
+    if (env && *env) {
+        snprintf(root, sizeof(root), "%s/share/turmeric", env);
+        struct stat st;
+        char probe[4200];
+        snprintf(probe, sizeof(probe), "%s/src/runtime/hamt.h", root);
+        if (stat(probe, &st) != 0) snprintf(root, sizeof(root), "%s", env);
+    } else {
+        char exe[4096] = "";
+        if (get_exe_path(exe, sizeof(exe)) == 0) {
+            char dir[4096];
+            dir_of_path(exe, dir, sizeof(dir));
+            for (int d = 0; d < 8; d++) {
+                char probe[4200];
+                struct stat st;
+                snprintf(probe, sizeof(probe), "%s/src/runtime/hamt.h", dir);
+                if (stat(probe, &st) == 0) { snprintf(root, sizeof(root), "%s", dir); break; }
+                snprintf(probe, sizeof(probe),
+                         "%s/share/turmeric/src/runtime/hamt.h", dir);
+                if (stat(probe, &st) == 0) {
+                    snprintf(root, sizeof(root), "%s/share/turmeric", dir);
+                    break;
+                }
+                char *sl = strrchr(dir, '/');
+                if (!sl || sl == dir) break;
+                *sl = '\0';
+            }
+        }
+    }
+    if (root[0]) {
+        snprintf(inc0, cap0, "%s/src", root);
+        snprintf(inc1, cap1, "%s/src/runtime", root);
+        incs[n++] = inc0;
+        incs[n++] = inc1;
+    }
+    return n;
+}
+#endif /* TUR_HAVE_JIT */
+
+/* S2 (jit-engine-plan, findings 19.4): dump the feature-complete single-file
+ * runtime preamble -- every program-gated block on, rc/GC in archive mode,
+ * ending at the preamble marker -- for the split-generation tool
+ * (tools/gen-runtime-split.py), or with --hash just the xxHash64 of that
+ * text.  The hash spelling here IS the JIT-time compare: both sides call
+ * tur_hamt_hash_xxh64 over the same emission, so the recorded artifact hash
+ * and cmd_jit's probe can never disagree on hash function or input framing.
+ *
+ * Archive mode is hard-set rather than probed so the generated text is a
+ * property of the compiler, not of which build tree generated it; cmd_jit's
+ * probe runs under real process state, and a JIT invocation with no runtime
+ * archive (rc/GC emitted as definitions) therefore hashes differently and
+ * falls back to full-preamble emission -- the guard is self-enforcing. */
+static int cmd_emit_rt_split(int argc, char **argv) {
+    bool hash_only = false;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--hash") == 0) { hash_only = true; continue; }
+        fprintf(stderr, "usage: tur emit-rt-split [--hash]\n");
+        return 2;
+    }
+    emit_set_rcgc_from_archive(true);
+    Buf out; buf_init(&out);
+    emit_rt_split_source(&out);
+    if (hash_only) {
+        printf("%016llx\n",
+               (unsigned long long)tur_hamt_hash_xxh64(out.data, out.len));
+    } else {
+        fwrite(out.data, 1, out.len, stdout);
+    }
+    buf_free(&out);
+    return 0;
+}
+
+/* J1 (docs/upcoming/jit-engine-plan.md section 3.2): `tur jit <file>` --
+ * compile and execute in process via c2mir + MIR-gen, no cc subprocess, no
+ * disk artifacts.  Front half is cmd_build's exactly: run_core_passes via
+ * compile_to_c, then the same in-memory post-passes.  The back half hands the
+ * buffer to tur_jit_execute (src/jit_engine.c, built under -DTUR_JIT=ON).
+ *
+ * Fallback (plan step 6): any engine-level failure -- c2mir rejecting a GNU
+ * construct in user inline-C is the expected case -- prints a TUR-W and
+ * delegates to cmd_run, which recompiles through cc.  Never a hard stop.
+ *
+ * Usage: tur jit [-I <dir>...] <file> [-- <args>...]  */
+static int cmd_jit(int argc, char **argv) {
+    if (!g_opt_jit) {
+        fprintf(stderr,
+                "tur: 'jit' is an experimental feature; enable it with "
+                "--enable=jit\n"
+                "     (see docs/upcoming/jit-engine-plan.md, and `tur "
+                "experiments` for status)\n");
+        return 2;
+    }
+    experiment_warn_if_used("jit");
+#ifndef TUR_HAVE_JIT
+    fprintf(stderr,
+            "tur: this build carries no JIT engine; reconfigure with "
+            "-DTUR_JIT=ON\n"
+            "     (vendors MIR at configure time -- see cmake/mir.cmake)\n");
+    return 2;
+#else
+    const char *input = NULL;
+    int passthrough_start = -1;
+    int scan_end = argc;
+    for (int i = 2; i < argc; i++)
+        if (strcmp(argv[i], "--") == 0) { scan_end = i; break; }
+    char **user_inc = NULL;
+    int n_user_inc = parse_include_flags(scan_end, argv, 2, &user_inc);
+    if (n_user_inc < 0) { free(user_inc); return 2; }
+    for (int i = 2; i < scan_end; i++) {
+        int c;
+        if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+        if (argv[i][0] != '-' && !input) input = argv[i];
+    }
+    for (int i = 2; i < argc; i++)
+        if (strcmp(argv[i], "--") == 0) { passthrough_start = i + 1; break; }
+    if (!input) {
+        fprintf(stderr, "usage: tur jit [-I <dir>...] <file> [-- <args>...]\n");
+        free(user_inc);
+        return 2;
+    }
+
+    refine_discharge_reset();
+    g_emit_for_link = true;
+    Buf csrc;
+    buf_init(&csrc);
+    int rc = compile_to_c(input, &csrc, (const char **)user_inc, n_user_inc,
+                          NULL, 0);
+    if (rc != 0) { buf_free(&csrc); free(user_inc); return rc; }
+    hoist_tur_include_directives(&csrc);
+    Buf autolink;
+    buf_init(&autolink);
+    scan_autolink_markers(&csrc, &autolink);
+
+    /* S2 (findings 19.4 item 3): swap the fixed preamble for the committed
+     * declarations region when this compiler still matches the committed
+     * artifacts.  The runtime then stays host-resident (tur_rt_split.c is
+     * linked into this executable and exported for the engine's dlsym
+     * resolver), and c2mir compiles ~60% less fixed text per program.
+     *
+     * The guard: re-emit the all-gates preamble under CURRENT process state
+     * and hash it against the recorded artifact hash.  Emitter drift, knob
+     * drift (--backtrack-depth, experiments), and a missing runtime archive
+     * all change that text, fail the compare, and keep the full preamble --
+     * never wrong, just slower.  Probe cost is one in-memory emission,
+     * microseconds against the ~90ms c2mir spend it can save.  Runs AFTER
+     * compile_to_c: emit_rt_split_source resets per-TU codegen registries,
+     * which must not disturb the program's own emission.
+     *
+     * The TU layout post-hoist is [hoisted user includes/code][preamble ...
+     * marker][program half]; the splice replaces exactly the preamble
+     * span, keeping any hoisted prefix.  TUR_JIT_NO_SPLIT=1 opts out. */
+    Buf split_src;
+    buf_init(&split_src);
+    bool split_used = jit_try_split_preamble(&csrc, &split_src);
+
+    /* Program argv: argv[0] = the source path (matches what a compiled binary
+     * would see as its own name closely enough for *args*), then everything
+     * after `--`. */
+    int prog_argc = 1 + (passthrough_start > 0 ? argc - passthrough_start : 0);
+    char **prog_argv = (char **)malloc(((size_t)prog_argc + 1) * sizeof(char *));
+    if (!prog_argv) {
+        buf_free(&csrc); buf_free(&split_src); buf_free(&autolink);
+        free(user_inc); return 2;
+    }
+    prog_argv[0] = (char *)input;
+    for (int i = 0; i < prog_argc - 1; i++)
+        prog_argv[i + 1] = argv[passthrough_start + i];
+    prog_argv[prog_argc] = NULL;
+
+    /* Include path for `#include "hamt.h"` et al. */
+    static char jit_inc0[4096], jit_inc1[4096];
+    const char *jit_incs[2];
+    int n_jit_incs = jit_sdk_include_dirs(jit_inc0, sizeof(jit_inc0),
+                                          jit_inc1, sizeof(jit_inc1),
+                                          jit_incs);
+
+    int prog_rc = 0;
+    int jrc;
+    if (split_used) {
+        /* Split first; if the split half fails to COMPILE or LINK, retry the
+         * full TU in the engine before conceding to cc -- the hash guard
+         * covers emitter drift but not, e.g., an export the host build
+         * dropped, and the full TU is self-contained against that.  A RUN
+         * failure is the program's own (a panic aborts identically either
+         * way), so it is not retried. */
+        jrc = tur_jit_execute(split_src.data, split_src.len,
+                              autolink.len ? autolink.data : NULL,
+                              jit_incs, n_jit_incs,
+                              prog_argc, prog_argv, &prog_rc);
+        if (jrc == TUR_JIT_ERR_COMPILE || jrc == TUR_JIT_ERR_LINK) {
+            fprintf(stderr,
+                    "tur: warning: TUR-W0071: split-runtime path failed to "
+                    "%s; retrying with the full preamble\n",
+                    jrc == TUR_JIT_ERR_COMPILE ? "compile" : "link");
+            jrc = tur_jit_execute(csrc.data, csrc.len,
+                                  autolink.len ? autolink.data : NULL,
+                                  jit_incs, n_jit_incs,
+                                  prog_argc, prog_argv, &prog_rc);
+        }
+    } else {
+        jrc = tur_jit_execute(csrc.data, csrc.len,
+                              autolink.len ? autolink.data : NULL,
+                              jit_incs, n_jit_incs,
+                              prog_argc, prog_argv, &prog_rc);
+    }
+    free(prog_argv);
+    buf_free(&csrc);
+    buf_free(&split_src);
+    buf_free(&autolink);
+    free(user_inc);
+    if (jrc == TUR_JIT_OK) return prog_rc;
+
+    /* Plan step 6: clean per-program fallback to the cc path.  cmd_run parses
+     * the same argv shape (it never looks at argv[1]), so delegate whole. */
+    fprintf(stderr,
+            "tur: warning: TUR-W0070: jit engine could not %s this program "
+            "(see diagnostics above); falling back to the cc path\n",
+            jrc == TUR_JIT_ERR_COMPILE ? "compile"
+            : jrc == TUR_JIT_ERR_LINK  ? "link"
+                                       : "run");
+    return cmd_run(argc, argv);
+#endif /* TUR_HAVE_JIT */
+}
+
+#ifdef TUR_HAVE_JIT
+/* ------------------------------------------------------------------ */
+/* J2 (jit-engine-plan 3.3): the REPL's in-process spice build.        */
+/* ------------------------------------------------------------------ */
+/* Replaces the `tur build --shared` subprocess + dlopen with the MIR
+ * engine, via the TurSpiceJitHook the loader consults.  The whole spice
+ * is compiled as ONE in-memory TU through the well-tested single-file
+ * path: a synthetic root module imports every source module, so imports
+ * dedupe through the ordinary module machinery (a load-based root
+ * duplicated any module that was also imported intra-spice).
+ *
+ * Module names come from each file's `(defmodule <name>` (filename stem
+ * when absent), and files whose module name does not match their
+ * filename are made importable through a SHADOW DIR of symlinks under
+ * .tur-repl-cache/jit-mods/ -- module resolution is filename-based, and
+ * on the --shared path a mismatched file was reachable only because each
+ * file was compiled separately.
+ *
+ * v1 limits (recorded, not silent): transitive :spices deps are not
+ * auto-appended (single-spice projects only -- the subprocess path
+ * remains the default and handles them), and POSIX symlinks gate this
+ * out of Windows along with the engine itself. */
+
+/* Peek a source file's defmodule name into out (cap bytes).  Textual scan
+ * of the first non-comment occurrence -- both `(defmodule x` and sweet-exp
+ * `defmodule x` spellings.  Returns false when the file has none. */
+static bool repl_jit_peek_module_name(const char *path, char *out, size_t cap) {
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    char line[4096];
+    bool found = false;
+    while (!found && fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ';') continue;
+        if (*p == '(') { p++; while (*p == ' ') p++; }
+        if (strncmp(p, "defmodule", 9) != 0) continue;
+        p += 9;
+        if (*p != ' ' && *p != '\t') continue;
+        while (*p == ' ' || *p == '\t') p++;
+        size_t o = 0;
+        while (*p && *p != ' ' && *p != '\t' && *p != ')' && *p != '\n'
+               && *p != '\r' && o + 1 < cap)
+            out[o++] = *p++;
+        out[o] = '\0';
+        found = o > 0;
+    }
+    fclose(f);
+    return found;
+}
+
+struct repl_jit_mod {
+    char *src_path;   /* absolute source file path */
+    char *mod_name;   /* module name (may contain '/') */
+};
+
+static int repl_jit_scan_dir(const char *dir, struct repl_jit_mod **mods,
+                             uint32_t *n, uint32_t *cap) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;   /* unreadable subdir: skip, the build would too */
+    struct dirent *e;
+    int rc = 0;
+    while (rc == 0 && (e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char path[4600];
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            rc = repl_jit_scan_dir(path, mods, n, cap);
+            continue;
+        }
+        size_t nl = strlen(e->d_name);
+        if (nl < 5 || strcmp(e->d_name + nl - 4, ".tur") != 0) continue;
+        char modname[512];
+        if (!repl_jit_peek_module_name(path, modname, sizeof(modname))) {
+            snprintf(modname, sizeof(modname), "%.*s",
+                     (int)(nl - 4), e->d_name);
+        }
+        if (*n == *cap) {
+            uint32_t nc = *cap ? *cap * 2 : 8;
+            struct repl_jit_mod *na =
+                realloc(*mods, nc * sizeof(**mods));
+            if (!na) { rc = -1; break; }
+            *mods = na;
+            *cap = nc;
+        }
+        (*mods)[*n].src_path = strdup(path);
+        (*mods)[*n].mod_name = strdup(modname);
+        (*n)++;
+    }
+    closedir(d);
+    return rc;
+}
+
+static void repl_jit_mods_free(struct repl_jit_mod *mods, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        free(mods[i].src_path);
+        free(mods[i].mod_name);
+    }
+    free(mods);
+}
+
+/* mkdir -p for the directory part of shadow/<modname>.tur. */
+static void repl_jit_mkdirs_for(const char *shadow, const char *modname) {
+    char path[4800];
+    snprintf(path, sizeof(path), "%s/%s", shadow, modname);
+    for (char *p = path + strlen(shadow) + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(path, 0755);
+            *p = '/';
+        }
+    }
+}
+
+static int repl_jit_build(const char *build_dir, void **out_image,
+                          char **out_manifest) {
+    *out_image = NULL;
+    *out_manifest = NULL;
+
+    /* Spice root: the dir holding build.tur -- build_dir's parent when the
+     * conventional src/ layout is in play, else build_dir itself. */
+    char rootd[4300];
+    snprintf(rootd, sizeof(rootd), "%s", build_dir);
+    size_t rl = strlen(rootd);
+    if (rl > 4 && strcmp(rootd + rl - 4, "/src") == 0) rootd[rl - 4] = '\0';
+
+    struct repl_jit_mod *mods = NULL;
+    uint32_t n_mods = 0, cap_mods = 0;
+    if (repl_jit_scan_dir(build_dir, &mods, &n_mods, &cap_mods) != 0
+        || n_mods == 0) {
+        fprintf(stderr, "tur repl: jit: no .tur sources under %s\n",
+                build_dir);
+        repl_jit_mods_free(mods, n_mods);
+        return -1;
+    }
+
+    /* Shadow dir: module-name -> file symlinks + the synthetic root. */
+    char shadow[4400];
+    snprintf(shadow, sizeof(shadow), "%s/.tur-repl-cache", rootd);
+    mkdir(shadow, 0755);
+    snprintf(shadow, sizeof(shadow), "%s/.tur-repl-cache/jit-mods", rootd);
+    mkdir(shadow, 0755);
+
+    Buf root_src;
+    buf_init(&root_src);
+    buf_puts(&root_src, "(defmodule __jit-root\n");
+    int rc = 0;
+    for (uint32_t i = 0; i < n_mods && rc == 0; i++) {
+        repl_jit_mkdirs_for(shadow, mods[i].mod_name);
+        char link[4900];
+        snprintf(link, sizeof(link), "%s/%s.tur", shadow, mods[i].mod_name);
+        unlink(link);
+        if (symlink(mods[i].src_path, link) != 0) {
+            fprintf(stderr, "tur repl: jit: symlink %s: %s\n", link,
+                    strerror(errno));
+            rc = -1;
+            break;
+        }
+        buf_printf(&root_src, "  (import %s)\n", mods[i].mod_name);
+    }
+    buf_puts(&root_src, ")\n");
+    repl_jit_mods_free(mods, n_mods);
+
+    char root_file[4600];
+    snprintf(root_file, sizeof(root_file), "%s/__jit_root.tur", shadow);
+    if (rc == 0) {
+        FILE *rf = fopen(root_file, "w");
+        if (!rf || fwrite(root_src.data, 1, root_src.len, rf) != root_src.len) {
+            fprintf(stderr, "tur repl: jit: cannot write %s\n", root_file);
+            rc = -1;
+        }
+        if (rf) fclose(rf);
+    }
+    buf_free(&root_src);
+    if (rc != 0) return -1;
+
+    /* Compile the whole spice as one TU, capturing the exports manifest
+     * from the same program.  Same emission posture as cmd_jit -- which
+     * means COMPILED-mode elaboration: the REPL process runs with
+     * g_interpret_mode=true (turi_env_new sets it), and inheriting that
+     * here would select `#?(:turi ...)` branches into native code and
+     * demote unknown names from hard errors to W0040 runtime-dispatch
+     * warnings.  The subprocess build never saw the flag; clear it for
+     * exactly the compile. */
+    refine_discharge_reset();
+    bool saved_efl = g_emit_for_link;
+    bool saved_interp = g_interpret_mode;
+    g_emit_for_link = true;
+    g_interpret_mode = false;
+    Buf csrc, manifest;
+    buf_init(&csrc);
+    buf_init(&manifest);
+    const char *incs[1] = { shadow };
+    g_manifest_sink = &manifest;
+    g_emit_ffi_export_shims = true;   /* high-arity exports need __ffi shims */
+    rc = compile_to_c(root_file, &csrc, incs, 1, NULL, 0);
+    g_emit_ffi_export_shims = false;
+    g_manifest_sink = NULL;
+    g_emit_for_link = saved_efl;
+    g_interpret_mode = saved_interp;
+    if (rc != 0) {
+        /* Same actionable wording as the subprocess path (run_build): the
+         * user story -- fix the source, (reload) -- is identical. */
+        fprintf(stderr,
+                "tur repl: spice rebuild failed; fix the error above, then "
+                "type (reload) at the prompt to retry.\n");
+        buf_free(&csrc);
+        buf_free(&manifest);
+        return -1;
+    }
+    hoist_tur_include_directives(&csrc);
+    Buf autolink;
+    buf_init(&autolink);
+    scan_autolink_markers(&csrc, &autolink);
+
+    /* S2: same hash-gated preamble swap as cmd_jit -- a REPL reload is
+     * exactly the loop the split exists for. */
+    Buf split_src;
+    buf_init(&split_src);
+    bool split_used = jit_try_split_preamble(&csrc, &split_src);
+
+    static char jinc0[4096], jinc1[4096];
+    const char *jincs[2];
+    int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
+                                       jinc1, sizeof(jinc1), jincs);
+
+    TurJitImage *img = NULL;
+    const Buf *use = split_used ? &split_src : &csrc;
+    int jrc = tur_jit_compile_image(use->data, use->len,
+                                    autolink.len ? autolink.data : NULL,
+                                    jincs, n_jincs, &img);
+    if (jrc != TUR_JIT_OK && split_used) {
+        /* Same ladder as cmd_jit: the full TU is self-contained against a
+         * hole the hash guard cannot see. */
+        fprintf(stderr,
+                "tur: warning: TUR-W0071: split-runtime path failed; "
+                "retrying with the full preamble\n");
+        jrc = tur_jit_compile_image(csrc.data, csrc.len,
+                                    autolink.len ? autolink.data : NULL,
+                                    jincs, n_jincs, &img);
+    }
+    buf_free(&csrc);
+    buf_free(&split_src);
+    buf_free(&autolink);
+    if (jrc != TUR_JIT_OK) {
+        fprintf(stderr,
+                "tur repl: jit: engine could not %s the spice; fix the "
+                "error above and type (reload) to retry.\n",
+                jrc == TUR_JIT_ERR_COMPILE ? "compile" : "link");
+        buf_free(&manifest);
+        return -1;
+    }
+
+    buf_putc(&manifest, '\0');
+    *out_manifest = strdup(manifest.data);
+    buf_free(&manifest);
+    *out_image = img;
+    return 0;
+}
+
+static void *repl_jit_hook_sym(void *image, const char *mangled) {
+    return tur_jit_image_sym((TurJitImage *)image, mangled);
+}
+static void repl_jit_hook_free(void *image) {
+    tur_jit_image_free((TurJitImage *)image);
+}
+static const TurSpiceJitHook g_repl_jit_hook = {
+    repl_jit_build, repl_jit_hook_sym, repl_jit_hook_free,
+};
+#endif /* TUR_HAVE_JIT */
 
 static int cmd_run(int argc, char **argv) {
     /* tur run [-I <dir>...] [--release] [--offline] [<file>] [-- <args>...] */
@@ -3502,6 +4290,49 @@ static int cmd_run(int argc, char **argv) {
 #undef RUN_ENTRY
 }
 
+/* Per-test directives, read from a test file's leading comment lines:
+ *
+ *   ;; tur-test-flags: --strict-refine     -- extra compile flags for THIS test
+ *   ;; tur-test-expect-error: TUR-W0372    -- this test must FAIL to compile and
+ *                                             its diagnostics must contain this
+ *                                             text; the run phase is skipped.
+ *
+ * A file with no directive behaves exactly as before.  This is what lets a
+ * refined ecs test enforce its proof (`--strict-refine`, so an unproven crossing
+ * is a hard error, not a warning) and lets an expected-fail negative be a real
+ * test rather than documentation.  `--enable=refined` needs no flag here: the
+ * file's `#lang turmeric refined` line enables it for that compile. */
+typedef struct TestDirectives {
+    bool strict_refine;
+    char expect_error[128];   /* empty => not an expect-error test */
+} TestDirectives;
+
+static void parse_test_directives(const char *path, TestDirectives *out) {
+    out->strict_refine = false;
+    out->expect_error[0] = '\0';
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[512];
+    int scanned = 0;
+    while (scanned < 40 && fgets(line, sizeof(line), f)) {
+        scanned++;
+        const char *d;
+        if ((d = strstr(line, "tur-test-flags:")) != NULL) {
+            if (strstr(d, "--strict-refine")) out->strict_refine = true;
+        }
+        if ((d = strstr(line, "tur-test-expect-error:")) != NULL) {
+            d += strlen("tur-test-expect-error:");
+            while (*d == ' ' || *d == '\t') d++;
+            size_t k = 0;
+            while (*d && *d != '\n' && *d != '\r' && k + 1 < sizeof(out->expect_error))
+                out->expect_error[k++] = *d++;
+            while (k > 0 && (out->expect_error[k-1] == ' ' || out->expect_error[k-1] == '\t')) k--;
+            out->expect_error[k] = '\0';
+        }
+    }
+    fclose(f);
+}
+
 static int cmd_test(const char *dir) {
     int n_files = 0;
     char **tur_files = collect_tur_files(dir, &n_files);
@@ -3554,12 +4385,78 @@ static int cmd_test(const char *dir) {
         close(fd);
         tur_exe_path(out_path, sizeof(out_path));
 
+        TestDirectives td;
+        parse_test_directives(tur_files[i], &td);
+        bool prev_strict = g_strict_refine;
+        if (td.strict_refine) g_strict_refine = true;
+        bool expect_fail = td.expect_error[0] != '\0';
+
+        /* For an expect-error test, capture stderr so we can confirm the
+         * front-end emitted the named diagnostic (not some unrelated failure). */
+        int stderr_bak = -1;
+        char cap_path[512] = {0};
+        if (expect_fail) {
+            snprintf(cap_path, sizeof(cap_path), "%s/tur-test-err-XXXXXX", tur_temp_dir());
+            int cfd = mkstemp(cap_path);
+            if (cfd >= 0) {
+                fflush(stderr);
+                stderr_bak = dup(fileno(stderr));
+                dup2(cfd, fileno(stderr));
+                close(cfd);
+            } else {
+                cap_path[0] = '\0';
+            }
+        }
+
         int rm_n = 0;
         char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
         int build_rc = cmd_build(tur_files[i], out_path,
                                   spice_inc_dirs, n_spice_inc_dirs, NULL,
                                   (const char **)rm_p, rm_n);
         free_reader_macro_paths(rm_p, rm_n);
+
+        if (expect_fail && stderr_bak >= 0) {
+            fflush(stderr);
+            dup2(stderr_bak, fileno(stderr));
+            close(stderr_bak);
+        }
+        g_strict_refine = prev_strict;
+
+        if (expect_fail) {
+            /* Pass iff the build FAILED and the captured diagnostics name the
+             * expected error -- so a negative test cannot pass on an unrelated
+             * compile error. The run phase is skipped. */
+            char *cap = NULL;
+            bool found = false;
+            if (cap_path[0]) {
+                FILE *cf = fopen(cap_path, "r");
+                if (cf) {
+                    cap = (char *)malloc(65536);
+                    size_t got = cap ? fread(cap, 1, 65535, cf) : 0;
+                    if (cap) cap[got] = '\0';
+                    fclose(cf);
+                }
+                unlink(cap_path);
+            }
+            if (cap) found = strstr(cap, td.expect_error) != NULL;
+            unlink(out_path);
+            if (build_rc != 0 && found) {
+                passed++;
+                putchar('.');
+            } else {
+                failed_files[failed++] = tur_files[i];
+                putchar('F');
+                fprintf(stderr,
+                        "\nEXPECT-ERROR %s: wanted diagnostic '%s' with a failed "
+                        "build; got build_rc=%d, diagnostic %s\n",
+                        tur_files[i], td.expect_error, build_rc,
+                        found ? "found" : "NOT found");
+                if (cap && !found && cap[0]) fprintf(stderr, "%s\n", cap);
+            }
+            free(cap);
+            continue;
+        }
+
         int run_rc = 1;
         if (build_rc == 0) {
             /* Quoted: the temp dir is user-controlled (TMP/TMPDIR) and may
@@ -3851,6 +4748,21 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                                  bool shared, const char *manifest_path,
                                  const char **inc, int n_inc,
                                  const char *build_dir) {
+    /* DEDUP-4b: an EXECUTABLE links here, so the rc<T>/GC runtime may come from
+     * the archive rather than being replicated into every module TU.
+     *
+     * A `--shared` build must not: the archive is never injected into a shared
+     * library's link line, so declaring-without-defining would leave the .so
+     * with undefined rc_cb_alloc / rc_cb_alloc_struct -- a shared object
+     * tolerates unresolved symbols at link time and only fails, or silently
+     * binds to whatever the host exports, at dlopen.  A .so stays
+     * self-contained on the DEDUP-3 owner-TU replica (already one instance per
+     * library), which is also the right shape: a dlopened .so carrying its own
+     * collector must not half-share one with its host.
+     *
+     * Caught by build-shared-rc-runtime in tests/run-build-project.sh, which
+     * asserts exactly one owning definition of gc_all_blocks in the .so. */
+    g_emit_for_link = !shared;
     /* build-output-directory-plan: every intermediate (.c/.h/_main.c/
      * tur_runtime.{c,h}) lands under `<build_dir>/obj/`; the final exe goes
      * to `<build_dir>/bin/<name>` and shared libs to `<build_dir>/lib/lib<name>.so`.
@@ -4212,10 +5124,17 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * owner TU tur_runtime.c -- it alone #defines TUR_RT_OWNER, so it alone
      * defines the runtime's file-scope globals (one GC registry / free queue /
      * panic + scheduler state) while every module TU carries static replicas of
-     * the runtime functions that operate on those shared globals.  Linked into
-     * the output below; cleaned up alongside _main.c. */
+     * the runtime functions that operate on those shared globals.
+     *
+     * DEDUP-3 (docs/archive/gc-cycle-collection-plan.md): the rc<T>/GC family is no longer
+     * replicated -- its definitions sit inside the same TUR_RT_OWNER guard as
+     * the globals, so the owner TU carries the one externally-linked copy of
+     * the collector and the other module TUs see only prototypes.
+     *
+     * Linked into the output below; cleaned up alongside _main.c. */
     {
         Buf rt_h; buf_init(&rt_h);
+        resolve_rcgc_from_archive();   /* DEDUP-4b: before emitting the header */
         emit_shared_runtime_header(&rt_h);
         Buf rt_c; buf_init(&rt_c);
         buf_puts(&rt_c, "/* generated by tur -- shared runtime owner TU */\n");
@@ -4237,7 +5156,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";
 
-    /* See the note on -fno-strict-aliasing and -Wno-error=int-conversion above. */
+    /* See the note on -fno-strict-aliasing and the GCC-14 warning policy above. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
     if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
 
@@ -4331,19 +5250,34 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * libm lives in libSystem so -lm is a no-op there too. Linking it
      * unconditionally means libm is usable from a pure spice without forcing
      * a fake cmake-dep just to pull it in. */
-    /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
-     * warnings to hard errors.  The generated C trips both -- that is a real
-     * codegen defect (see docs/reported/codegen-gcc14-permerrors.md), NOT a
-     * Windows problem: it would break any Linux box on GCC >= 14 too.  MSYS2
-     * ships GCC 16, so it surfaces there first, while CI's older GCC still only
-     * warns.  Downgrade them back to warnings so the latent defect does not
-     * block builds today, and so a CI toolchain bump does not detonate.
+    /* GCC 14 / Apple clang 15+ promoted -Wincompatible-pointer-types and
+     * -Wint-conversion from warnings to hard errors.  The generated C used to
+     * trip both -- carrier<->concrete representation straddles (void*<->int64_t)
+     * -- tracked under docs/archive/codegen-gcc14-permerrors.md and
+     * docs/archive/macos-clang-int-conversion-hard-error.md.  Every straddle is
+     * now bridged at emit time (String returns, cloneable-frame call args,
+     * cps->direct spawn/void* params, closure-env void* fields, and __ps_N
+     * binder-init crossings), and the whole fixture tree emits 0
+     * -Wint-conversion / -Wincompatible-pointer-types hard errors, so the two
+     * downgrades are removed -- a NEW straddle now fails the build (as intended)
+     * instead of hiding behind the macOS CI red.
      *
-     * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
-     * accidentally drop them. */
-    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
-                   " -Wno-error=int-conversion"
-                   " -Wno-error=implicit-function-declaration");
+     * -Wno-error=implicit-function-declaration used to be appended here and at
+     * the two sibling cc invocations.  It is gone from all three: the two things
+     * it was covering are fixed at the source -- the undeclared
+     * `tur_hamt_hash_xxh64` call (now declared in the preamble) and the
+     * `__tur_include__` hoist emitting code payloads ahead of directive payloads
+     * (hoist_tur_include_directives now buckets the two).  An implicit
+     * declaration is UB, and suppressing it here is what let a wrong-code bug
+     * ride all the way to a second backend on another platform; it now fails the
+     * build, as intended.
+     *
+     * Do NOT re-add it to paper over a new implicit declaration -- fix the
+     * declaration.  And do not verify any change in this area with `emit-c`
+     * output or a plain `tests/run.sh`: neither exercises the hoist path, and
+     * both reported a false all-clear on exactly this question.  Use
+     * tools/jit-spike/sweep-turjit.sh.  See findings 21.2/21.3 and
+     * docs/archive/hoisted-inline-c-precedes-includes.md. */
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -4798,6 +5732,286 @@ static int cmd_build_project(const char *root_in, const char *out_path,
     return rc;
 }
 
+/* tur-link-and-build-split-plan Phase 3: derive the `.link` sidecar path for an
+ * object -- strip a trailing ".o" and append ".link"; otherwise append ".link"
+ * to the whole name.  Also used to derive the intermediate ".c" path (with a
+ * ".c" suffix) for `tur compile`. */
+static void obj_sibling_path(const char *obj, const char *suffix,
+                             char *out, size_t cap) {
+    size_t n = strlen(obj);
+    if (n >= 2 && obj[n - 2] == '.' && obj[n - 1] == 'o') n -= 2;
+    snprintf(out, cap, "%.*s%s", (int)n, obj, suffix);
+}
+
+/* Write one sidecar field line.  Handles both NUL-terminated buffers (autolink)
+ * and non-terminated ones (cmake/aux) by writing exact content bytes minus a
+ * single trailing NUL. */
+static void sidecar_write_field(FILE *f, const char *key, const Buf *b) {
+    fputs(key, f);
+    if (b && b->len > 0) {
+        size_t n = b->len;
+        if (b->data[n - 1] == '\0') n--;
+        if (n > 0) fwrite(b->data, 1, n, f);
+    }
+    fputc('\n', f);
+}
+
+/* tur-link-and-build-split-plan Phase 3a-A: write the `.link` sidecar next to a
+ * compiled object.  It records the fully resolved link flags so `tur link` can
+ * reproduce the link without re-running the frontend -- the single source of
+ * truth for link-flag drift (plan section 7). */
+static int write_link_sidecar(const char *path, const Buf *autolink,
+                              bool needs_asan, const Buf *cmake_flags,
+                              const Buf *aux_sources) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    fputs("# tur link sidecar v1\n", f);
+    fprintf(f, "asan: %d\n", needs_asan ? 1 : 0);
+    sidecar_write_field(f, "autolink:", autolink);
+    sidecar_write_field(f, "cmake:", cmake_flags);
+    sidecar_write_field(f, "auxsrc:", aux_sources);
+    fclose(f);
+    return 0;
+}
+
+/* Append `val` to `dst` (NUL-terminating) only if that exact value has not been
+ * appended before, tracked via the caller's seen-list.  Keeps `tur link` from
+ * duplicating identical sidecar content when several objects of one program
+ * each carry the same resolved flags (which would re-link a runtime .c twice
+ * and fail with multiple-definition). */
+static void sidecar_accum_unique(Buf *dst, char ***seen, int *n_seen,
+                                 const char *val) {
+    if (!val || !*val) return;
+    for (int i = 0; i < *n_seen; i++)
+        if (strcmp((*seen)[i], val) == 0) return;
+    *seen = (char **)realloc(*seen, sizeof(char *) * (size_t)(*n_seen + 1));
+    (*seen)[(*n_seen)++] = tur_strdup(val);
+    buf_puts(dst, val);
+}
+
+/* Read one object's `.link` sidecar, accumulating its fields into the caller's
+ * link-flag buffers.  ASan is OR-accumulated; the string fields are unioned via
+ * sidecar_accum_unique.  Missing sidecar is not an error (a bare .o may have
+ * none). */
+static void read_link_sidecar(const char *path, Buf *autolink, bool *needs_asan,
+                              Buf *cmake_flags, Buf *aux_sources,
+                              char ***seen_al, int *n_seen_al,
+                              char ***seen_cm, int *n_seen_cm,
+                              char ***seen_ax, int *n_seen_ax) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char line[8192];
+    while (fgets(line, sizeof(line), f)) {
+        size_t L = strlen(line);
+        while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r'))
+            line[--L] = '\0';
+        if (strncmp(line, "asan:", 5) == 0) {
+            if (atoi(line + 5) != 0) *needs_asan = true;
+        } else if (strncmp(line, "autolink:", 9) == 0) {
+            sidecar_accum_unique(autolink, seen_al, n_seen_al, line + 9);
+        } else if (strncmp(line, "cmake:", 6) == 0) {
+            sidecar_accum_unique(cmake_flags, seen_cm, n_seen_cm, line + 6);
+        } else if (strncmp(line, "auxsrc:", 7) == 0) {
+            sidecar_accum_unique(aux_sources, seen_ax, n_seen_ax, line + 7);
+        }
+    }
+    fclose(f);
+}
+
+/* tur-link-and-build-split-plan Phase 3a-0: `tur compile <in.tur> -o <out.o>`.
+ * Lowers one Turmeric source to an object file (the emit-c lowering fused with
+ * `cc -c`) plus a `.link` sidecar carrying the resolved link flags.  This is
+ * the cacheable half of the compile/link pipeline -- ccache hits on unchanged
+ * input.  `emit-c` is untouched; this is the additive fused step. */
+static int cmd_compile(const char *input, const char *out_obj,
+                       const char **include_dirs, int n_include_dirs,
+                       const char **reader_macro_paths,
+                       int n_reader_macro_paths) {
+    /* Frontend: lower to C, force-loading any #[used] sibling modules just as
+     * cmd_build does (single-file whole-program TU). */
+    Buf csrc;
+    buf_init(&csrc);
+    int n_used_mods = 0;
+    char **used_mods = collect_used_attr_modules(input, include_dirs,
+                                                 n_include_dirs, &n_used_mods);
+    UsedModulesCtx used_ctx = { (const char **)used_mods, n_used_mods };
+    if (n_used_mods > 0) used_modules_ctx_set(&used_ctx);
+    int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
+                          reader_macro_paths, n_reader_macro_paths);
+    if (n_used_mods > 0) used_modules_ctx_set(NULL);
+    free_tur_files(used_mods, n_used_mods);
+    if (rc != 0) { buf_free(&csrc); return rc; }
+    hoist_tur_include_directives(&csrc);
+
+    /* Resolve the object path (default: <name>.o beside cwd). */
+    char obj_buf[1024];
+    if (!out_obj) {
+        char base[512];
+        default_output_name(input, base, sizeof(base));
+        snprintf(obj_buf, sizeof(obj_buf), "%s.o", base);
+        out_obj = obj_buf;
+    }
+
+    /* Write the generated C next to the object (deterministic -> ccache-able). */
+    char cpath[1100];
+    obj_sibling_path(out_obj, ".c", cpath, sizeof(cpath));
+    FILE *tf = fopen(cpath, "wb");
+    if (!tf || fwrite(csrc.data, 1, csrc.len, tf) != csrc.len) {
+        fprintf(stderr, "tur compile: cannot write generated C to '%s'\n", cpath);
+        if (tf) fclose(tf);
+        buf_free(&csrc);
+        return 2;
+    }
+    fclose(tf);
+
+    Buf autolink;
+    buf_init(&autolink);
+    scan_autolink_markers(&csrc, &autolink);
+    buf_free(&csrc);
+
+    /* Phase 2/3c: --runtime=lib swaps bare runtime sources for libturi.a so the
+     * sidecar records the -lturi link and the object never carries the runtime
+     * TUs.  cmd_compile is native-only, so no wasm guard is needed. */
+    apply_runtime_lib_mode(&autolink);
+
+    const char *cc = getenv("CC");
+    if (!cc || !*cc) cc = "cc";
+    const char *cc_flags = getenv("TUR_CC_FLAGS");
+    if (!cc_flags || !*cc_flags) {
+        cc_flags = g_emit_debug_lines
+            ? "-g -Og -std=c99 -Wall -fno-strict-aliasing"
+            : "-O2 -std=c99 -Wall -fno-strict-aliasing";
+    }
+
+    Buf cmake_flags;  buf_init(&cmake_flags);
+    Buf aux_includes; buf_init(&aux_includes);
+    Buf aux_sources;  buf_init(&aux_sources);
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
+
+    bool needs_asan = false;
+    resolve_autolink_flags(&autolink, cc_flags, &needs_asan);
+
+    /* The cacheable `cc -c`.  Include dirs come from the spice aux includes,
+     * cmake -I, the autolink -I tokens (e.g. -Isrc/runtime), and any explicit
+     * -I.  -l/-L and bare .c sources are link-time only and stay out of here. */
+    Buf cmd;
+    buf_init(&cmd);
+    buf_printf(&cmd, "%s %s", cc, cc_flags);
+    if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
+    if (cmake_flags.len > 0)  buf_puts(&cmd, cmake_flags.data);
+    append_include_tokens(&cmd, autolink.len > 0 ? autolink.data : NULL);
+    for (int i = 0; i < n_include_dirs; i++) {
+        if (include_dirs[i] && include_dirs[i][0])
+            buf_printf(&cmd, " -I%s", include_dirs[i]);
+    }
+    buf_printf(&cmd, " -c %s -o %s", cpath, out_obj);
+    buf_putc(&cmd, '\0');
+    int sys_rc = system(cmd.data);
+    buf_free(&cmd);
+    buf_free(&aux_includes);
+
+    if (sys_rc != 0) {
+        fprintf(stderr, "tur compile: cc -c invocation failed (status %d)\n", sys_rc);
+        buf_free(&autolink);
+        buf_free(&cmake_flags);
+        buf_free(&aux_sources);
+        return 2;
+    }
+
+    /* Emit the .link sidecar carrying the resolved link flags. */
+    char side[1100];
+    obj_sibling_path(out_obj, ".link", side, sizeof(side));
+    if (write_link_sidecar(side, &autolink, needs_asan, &cmake_flags,
+                           &aux_sources) != 0) {
+        fprintf(stderr, "tur compile: cannot write link sidecar '%s'\n", side);
+        buf_free(&autolink);
+        buf_free(&cmake_flags);
+        buf_free(&aux_sources);
+        return 2;
+    }
+
+    buf_free(&autolink);
+    buf_free(&cmake_flags);
+    buf_free(&aux_sources);
+    return 0;
+}
+
+/* tur-link-and-build-split-plan Phase 3a: `tur link <obj-or-source>... -o <out>`.
+ * Links precompiled objects (+ their `.link` sidecars) and/or .c sources into an
+ * executable (or a shared library with --shared).  Reuses link_command_run --
+ * the same link path `tur build` drives -- so the two cannot drift. */
+static int cmd_link(const char *out, const char **inputs, int n_inputs,
+                    bool shared, const char *extra_link_flags) {
+    if (n_inputs == 0) {
+        fprintf(stderr, "tur link: no input objects/sources\n");
+        return 1;
+    }
+
+    /* Join the input paths and gather link flags from each object's sidecar. */
+    Buf inputs_joined; buf_init(&inputs_joined);
+    Buf autolink;      buf_init(&autolink);
+    Buf cmake_flags;   buf_init(&cmake_flags);
+    Buf aux_sources;   buf_init(&aux_sources);
+    bool needs_asan = false;
+    char **seen_al = NULL; int n_seen_al = 0;
+    char **seen_cm = NULL; int n_seen_cm = 0;
+    char **seen_ax = NULL; int n_seen_ax = 0;
+
+    for (int i = 0; i < n_inputs; i++) {
+        if (inputs_joined.len > 0) buf_putc(&inputs_joined, ' ');
+        buf_puts(&inputs_joined, inputs[i]);
+        /* A .o (or bare object) may carry a sidecar; look it up. */
+        char side[1100];
+        obj_sibling_path(inputs[i], ".link", side, sizeof(side));
+        read_link_sidecar(side, &autolink, &needs_asan, &cmake_flags,
+                          &aux_sources, &seen_al, &n_seen_al,
+                          &seen_cm, &n_seen_cm, &seen_ax, &n_seen_ax);
+    }
+    buf_putc(&inputs_joined, '\0');
+    for (int i = 0; i < n_seen_al; i++) free(seen_al[i]);
+    for (int i = 0; i < n_seen_cm; i++) free(seen_cm[i]);
+    for (int i = 0; i < n_seen_ax; i++) free(seen_ax[i]);
+    free(seen_al); free(seen_cm); free(seen_ax);
+
+    /* User-supplied extra link flags fold into the autolink buffer (which
+     * link_command_run appends verbatim after the inputs). */
+    if (extra_link_flags && *extra_link_flags) {
+        if (autolink.len > 0) buf_putc(&autolink, ' ');
+        buf_puts(&autolink, extra_link_flags);
+    }
+    /* NUL-terminate the accumulated flag buffers so link_command_run's `%s` /
+     * buf_puts reads stop cleanly. */
+    if (autolink.len > 0)    buf_putc(&autolink, '\0');
+    if (cmake_flags.len > 0) buf_putc(&cmake_flags, '\0');
+    if (aux_sources.len > 0) buf_putc(&aux_sources, '\0');
+
+    /* --shared rides on cc_flags (position-independent shared object). */
+    const char *cc = getenv("CC");
+    if (!cc || !*cc) cc = "cc";
+    const char *base_flags = getenv("TUR_CC_FLAGS");
+    if (!base_flags || !*base_flags) base_flags = "-O2 -fno-strict-aliasing";
+    Buf cc_flags; buf_init(&cc_flags);
+    buf_puts(&cc_flags, base_flags);
+    if (shared) buf_puts(&cc_flags, " -shared -fPIC");
+    buf_putc(&cc_flags, '\0');
+
+    char out_buf[1024];
+    if (!out) {
+        default_output_name(inputs[0], out_buf, sizeof(out_buf));
+        out = out_buf;
+    }
+
+    int link_rc = link_command_run(cc, cc_flags.data, inputs_joined.data,
+                                   NULL, &aux_sources, &autolink, needs_asan,
+                                   &cmake_flags, NULL, 0, out);
+    buf_free(&inputs_joined);
+    buf_free(&autolink);
+    buf_free(&cmake_flags);
+    buf_free(&aux_sources);
+    buf_free(&cc_flags);
+    return link_rc;
+}
+
 static int is_directory(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
@@ -5124,55 +6338,14 @@ static bool fmt_is_tur_file(const char *name) {
 
 
 /* Core: read src, parse, format, return formatted Buf.
- * Returns 0 on success with *out populated, -1 on error. */
+ * Returns 0 on success with *out populated, -1 on error.
+ *
+ * The pipeline itself lives in fmt.c so the LSP's textDocument/formatting
+ * handler -- which is linked into tur_core, not into main.c -- can reach the
+ * same code instead of shelling out to this binary. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
-    /* Reset BEFORE registering: diag_reset() clears the file registry, so
-     * registering first (as this used to) wiped this file's entry and left
-     * any format-time parse-error diagnostic without a source snippet
-     * (files_[0] == NULL -> "<unknown>"). */
-    diag_reset();
-
-    SourceFile file = {0};
-    file.path        = path_label;
-    file.src         = src;
-    file.len         = len;
-    file.file_id     = 0;
-    file.reader_type = rtype;
-    diag_register_file(&file);
-
-    Arena arena;
-    arena_init(&arena, 0);
-    SymbolTable st;
-    symtab_init(&st, &arena);
-
-    ReaderMacroRegistry rmreg;
-    reader_macros_init(&rmreg, &arena);
-    rmreg.strict = true;
-
-    uint32_t nforms = 0;
-    Form **forms = read_all_with_registry(&arena, &st, &file, &rmreg, &nforms);
-
-    int rc = 0;
-    if (!forms || diag_had_error()) {
-        rc = -1;
-    } else {
-        FmtOptions opts = {0};
-        opts.indent_width = 2;
-        opts.line_width   = 80;
-        opts.src          = src;
-        opts.src_len      = len;
-        buf_init(out);
-        if (fmt_print(out, forms, nforms, opts) != 0) {
-            fprintf(stderr, "tur fmt: internal error formatting %s\n", path_label);
-            buf_free(out);
-            rc = -1;
-        }
-    }
-
-    symtab_free(&st);
-    arena_free(&arena);
-    return rc;
+    return fmt_format_buffer(path_label, src, len, rtype, out);
 }
 
 typedef enum {
@@ -5521,6 +6694,18 @@ static int cmd_eval_h(const char *path, bool use_color,
      * preloaded stdlib registers no reader macros and the user file is parsed
      * in a single pass (no self-replay of its own `reader-macros/define`). */
     env->reader_macros->strict = true;
+    /* Debug sessions (`tur dap`) need real per-file span provenance: the DAP
+     * server resolves each frame's source from diag_file_path(span.file_id)
+     * and matches breakpoints by that file's basename.  The TR2 incremental
+     * elaboration path re-attributes spans to the accumulated `<eval>` source
+     * blob rather than the originating file, so frames come back with no
+     * `source` object and file-scoped breakpoints stop matching -- the
+     * observable symptom was a post-stepOut frame reported as `?:19` followed
+     * by a conditional breakpoint that never fired.  A debug session loads one
+     * program once, so the incremental win (a long-lived REPL amortising a
+     * growing prefix) does not apply here and opting out costs nothing.
+     * See docs/reported/incremental-elab-loses-span-file-provenance.md. */
+    if (debug) turi_env_set_incremental_elab(env, false);
     /* Pre-detect the user file's #lang so the prelude loads under the SAME
      * reader.  Otherwise the user file's `#lang sweet-exp` (etc.) flips
      * env->reader_type mid-stream, and turi_eval_impl discards the accumulated
@@ -5540,9 +6725,17 @@ static int cmd_eval_h(const char *path, bool use_color,
             fclose(pf);
             head[hn] = '\0';
             const char *rest = head; size_t rest_len = hn;
-            ReaderType rt = detect_lang(head, hn, &rest, &rest_len);
-            if (rest != head && reader_type_is_implemented(rt))
+            LangLayerSet layers = 0;
+            ReaderType rt = detect_lang_layered(head, hn, &rest, &rest_len,
+                                                &layers, NULL, NULL);
+            if (rest != head && reader_type_is_implemented(rt)) {
                 env->reader_type = rt;
+                /* Pre-seed the layer set too so the prelude and the user file
+                 * read under the same layers (lang-layers-plan L1); turi_eval
+                 * unions the authoritative set again when it strips the
+                 * directive. */
+                env->lang_layers = layers;
+            }
         }
     }
     /* Preload macros.tur so that and/or/when/cond/for etc. are available.
@@ -5576,70 +6769,13 @@ static int cmd_eval_h(const char *path, bool use_color,
      * turi_env_preload_macros (src/turi/preload.c) is the shared helper the WASM
      * REPL also calls, so the two entry points cannot drift. */
     turi_env_preload_macros(env, resolve_stdlib_root());
-    /* Inject typed stubs so the elaborator knows the signatures of native
-     * functions used by benchmark scripts.  The native shims registered below
-     * replace these no-op closures at runtime. */
-    {
-        TuriValue sv = turi_eval(env,
-            /* list operations */
-            "(defn nil-value [] :int 0)\n"
-            "(defn cons [v :int n :int] :int 0)\n"
-            "(defn head [lst :int] :int 0)\n"
-            "(defn tail [lst :int] :int 0)\n"
-            /* vec operations.  TI8.b/W1: vec-get/vec-set!/vec-free are dropped
-             * here -- the real vec.tur (preloaded below) defines them, and a
-             * stub would collide with "already defined by an auto-loaded stdlib
-             * module".  vec-new-filled is benchmark-only (no module defn). */
-            "(defn vec-new-filled [n :int v :int] :int 0)\n"
-            /* numeric helpers.  cstr->parse-int and int->float stubs were dropped:
-             * both are native-backed (their natives resolve the bare call at
-             * elaboration), so the stubs were redundant -- and a fixture that
-             * (load ...)s str.tur / math.tur no longer collides with them via the
-             * "already defined by an auto-loaded stdlib module" guard. */
-            /* bit-shr / bit-xor stubs dropped: both are kind-preserving builtins
-             * (builtins.c BITWISE_OPS, registered for every integer kind) AND
-             * native-backed (native_bit_shr / native_bit_xor below), so the bare
-             * call resolves at elaboration without a stub.  The :int-typed stubs
-             * actually *shadowed* the kind-preserving builtins, breaking narrow-int
-             * use (e.g. (bit-xor 65535u16 3855u16) -> "expected int, got uint16")
-             * -- a divergence from the compiled path.  bit-and/bit-or/bit-shl were
-             * never stubbed and worked on narrow types all along. */
-            "(defn println-float [x :float d :int] :nil nil)\n"
-            "(defn int->unit-float [x :int] :float 0.0)\n"
-            "(defn tur-sqrt [x :float] :float 0.0)\n"
-            /* HAMT operations for hash_map benchmark */
-            "(defn hamt-new [] :int 0)\n"
-            "(defn hamt-free [m :int] :nil nil)\n"
-            "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
-            "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
-            "(defn hamt-hash-ptr [p :int] :int 0)\n"
-            /* I/O benchmark helpers (file_read.tur, file_write.tur) */
-            "(defn write-temp-file [path :cstr n :int] :nil nil)\n"
-            "(defn io-fopen-read [path :cstr] :int 0)\n"
-            "(defn io-fread-chunk [fp :int buf :int] :int 0)\n"
-            "(defn io-fclose [fp :int] :nil nil)\n"
-            "(defn io-remove [path :cstr] :nil nil)\n"
-            "(defn io-buf-new [] :int 0)\n"
-            "(defn io-buf-free [buf :int] :nil nil)\n"
-            "(defn io-alloc [n :int v :int] :int 0)\n"
-            "(defn io-free [buf :int] :nil nil)\n"
-            "(defn io-fopen-write [path :cstr] :int 0)\n"
-            "(defn io-fwrite-chunk [fp :int buf :int offset :int chunk :int] :int 0)\n"
-            /* Whole-benchmark natives (random_access, thread_ring, nbody, ray_tracing) */
-            "(defn random-access-bench [size :int reads :int] :int 0)\n"
-            "(defn run-ring [n :int m :int] :nil nil)\n"
-            "(defn run-nbody [n :int steps :int] :nil nil)\n"
-            "(defn run-raytracer [w :int h :int] :int 0)\n"
-            /* none? predicate signature the elaborator needs so the native
-             * types as :bool (not :int, which trips the strict "if condition
-             * must be bool" check).  TI8.b/W1b: ok?/err?/some? are dropped here
-             * because result.tur / option.tur (both preloaded below) define them
-             * -- a stub would collide with the auto-loaded module defn.  none?
-             * has no module defn, so its stub stays. */
-            "(defn none? [r :int] :bool false)\n"
-        );
-        (void)sv;
-    }
+    /* Inject typed stubs so the elaborator knows the signatures of the native
+     * functions used by benchmark scripts and the carrier-list ops.  The native
+     * shims registered below replace these no-op closures at runtime.  Factored
+     * into turi_env_preload_native_stubs (src/turi/preload.c) so the REPL shares
+     * the exact same set and cannot drift (the missing stubs there were the
+     * `(list-head (cons ...)) => nil` REPL bug). */
+    turi_env_preload_native_stubs(env);
     /* TI8.b/W1 (turi-interpreter-gap-closure-plan): preload the typeclass-stub
      * + typed-collection stdlib set that the compiled path auto-loads in
      * compile_to_c().  Without it the interpreter cannot resolve Cons/Option/
@@ -5695,6 +6831,10 @@ static int cmd_eval_h(const char *path, bool use_color,
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
+    /* Pin the accumulated preload (prelude + json/schema above) so an inline
+     * `#lang` directive in the evaluated program truncates src_acc back to here
+     * rather than emptying it (web-repl-lang-switch-drops-stdlib). */
+    turi_env_pin_prelude(env);
     /* Register the full interpreter native override set (stdlib inline-C
      * shims, contracts, safe/typeclass/comonad/mutex/future/bytes/taskgroup/
      * chan/backtrack/proc-fs/serial/sym/seq/json/schema).  Relocated into
@@ -5741,19 +6881,31 @@ static int cmd_eval_h(const char *path, bool use_color,
      * breakpoints and install its pause handler before any program node runs. */
     if (debug && hooks && hooks->on_ready)
         hooks->on_ready(env, hooks->ud);
+    /* The user file is brought in via `(load "path")` rather than
+     * turi_eval_file's concatenate-into-<eval> path: a loaded file gets its own
+     * file_id and keeps its real path + 1-based line numbers, so diagnostics,
+     * breakpoints (`break <line>`), source listings, and stack frames resolve
+     * against the user's source instead of the synthetic <eval> blob (which
+     * offsets every line by the preloaded prelude).
+     *
+     * incremental-elab-loses-span-file-provenance: this used to be the debug
+     * path only, and plain `--interpret` went through turi_eval_file -- so a
+     * type error in the user's file was reported as `<eval>:64:10` instead of
+     * `file.tur:3:10`.  That half of the report was never actually about
+     * incremental elaboration (TUR_NO_INCREMENTAL_ELAB=1 reproduced it
+     * identically); it is the eval-blob concatenation, which both paths shared.
+     * Routing both through `(load ...)` fixes it at the source.
+     *
+     * This became possible only once the load splicer learned to honour a
+     * loaded file's inline `#lang` directive (load-ignores-inline-lang-directive,
+     * elab_toplevel.c) -- before that, switching the entry file onto this route
+     * broke every `#lang`/sweet-exp fixture that did not also carry a
+     * dialect-bearing extension. */
     TuriValue result;
-    if (debug) {
-        /* Under the debugger the user file is brought in via `(load "path")`
-         * rather than turi_eval_file's concatenate-into-<eval> path: a loaded
-         * file gets its own file_id and keeps its real path + 1-based line
-         * numbers, so breakpoints (`break <line>`), source listings, and stack
-         * frames resolve against the user's source instead of the synthetic
-         * <eval> blob (which would offset every line by the preloaded prelude). */
+    {
         char load_form[4200];
         snprintf(load_form, sizeof load_form, "(load \"%s\")", path);
         result = turi_eval(env, load_form);
-    } else {
-        result = turi_eval_file(env, path);
     }
     int rc = 0;
     if (turi_is_error(result)) {
@@ -5964,6 +7116,7 @@ static void wk_apply_flags(const char *flags_str) {
         if      (is_known_deprecated_x_flag(tok))             { /* TUR-W0050: silently accept in worker; fixtures get cleaned up separately. */ }
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
+        else if (strcmp(tok, "--strict-refine")     == 0) g_strict_refine            = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
         else if (strcmp(tok, "--dump-cps-coloring") == 0) g_dump_cps_coloring        = true;
         else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
@@ -6589,7 +7742,8 @@ static void list_external_subcommands(void) {
     if (!path_env || !*path_env) return;
 
     static const char *const builtins[] = {
-        "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
+        "build", "compile", "link",
+        "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
         "init", "add", "add-cmake", "fetch",
@@ -6681,11 +7835,11 @@ cleanup:
 static const char *const CANONICAL_COMMANDS[] = {
     "emit-c", "emit-h", "emit-cmake", "check", "audit-spans",
     "lsp", "mcp", "dap", "lsp-lite",
-    "build", "run", "repl", "worker", "interpret", "debug",
+    "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
     "eval", "doc", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test",
     "new", "init", "add", "add-cmake", "fetch",
-    "install", "uninstall", "list", "upgrade", "experiments",
+    "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
     NULL,
 };
 
@@ -6720,6 +7874,8 @@ static int usage(void) {
         "usage:\n"
         "  tur build <file.tur> [-o <out>]    build a single file\n"
         "  tur build <dir> [-o <out>]         build all .tur files in directory\n"
+        "  tur compile <file.tur> -o <out.o>  lower a .tur to an object (+ .link sidecar)\n"
+        "  tur link <obj/src>... -o <out>     link objects (+ .link sidecars) into an exe\n"
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
         "  tur emit-h <input.tur>            print the generated header to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
@@ -6737,6 +7893,8 @@ static int usage(void) {
         "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
         "  tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking\n"
         "  tur parse-check <a> <b>           exit 0 if both files read to the same AST\n"
+        "  tur experiments                   list experimental features (--enable=<name>)\n"
+        "  tur lang-layers                   list the `#lang` layers a file may request\n"
         "\n"
         "package management (Spice, Phase PKG-1):\n"
         "  tur init [--bin|--lib] <name>     create a new project\n"
@@ -6758,6 +7916,7 @@ static int usage(void) {
         "  tur emit-c --output-dir <dir> <files...>  compile each .tur to <dir>/<mod>.h + .c\n"
         "\n"
         "global flags:\n"
+        "  --enable=<name>[,<name>...]      turn on an experimental feature; see 'tur experiments'\n"
         "  --no-color                       disable colored diagnostics\n"
         "  --json                           structured JSON output (tur doc, tur test, tur check)\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
@@ -6765,6 +7924,7 @@ static int usage(void) {
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --strict-effects                 warn on unannotated effectful functions (ER1)\n"
+        "  --strict-refine                  hard-fail refinement obligations the solver cannot prove\n"
         "  --dump-effects                   print inferred effect row for each defn (ER6)\n"
         "  --dump-cps-coloring              print whole-program may-capture coloring per defn (CPS1)\n"
         "  --dump-cps                       print the ANF/CPS IR for each colored defn (CPS2)\n"
@@ -6798,6 +7958,8 @@ static int usage_build(void) {
         "  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file\n"
         "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
         "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library\n"
+        "  tur compile [-I <dir>...] <file.tur> -o <out.o>  lower a .tur to an object + .link\n"
+        "  tur link [--shared] <obj/src>... -o <out>        link objects (+ .link) into an exe/.so\n"
         "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
         "  tur emit-c [-I <dir>...] --build-dir <dir> <files...>  emit per-module .h/.c\n"
         "  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout\n"
@@ -6811,10 +7973,24 @@ static int usage_build(void) {
         "                    (subdirs: obj/, bin/, lib/). Defaults to\n"
         "                    <project-root>/build or <cwd>/build. Override layers:\n"
         "                    CLI flag > TUR_BUILD_DIR env > build.tur :build-dir.\n"
-        "  --shared          build a shared library (`-shared`, no main); requires\n"
-        "                    a directory argument. Exported defns are callable via\n"
-        "                    dlopen/dlsym as `<module>__<name>`. Default output is\n"
-        "                    <build-dir>/lib/lib<name>.so, or <name>.dll on Windows.\n"
+        "  --shared          build a shared library (`-fPIC -shared`, no main;\n"
+        "                    Windows drops the -fPIC, which PE ignores anyway).\n"
+        "                    Requires a directory argument. Exported defns are\n"
+        "                    callable via dlopen/dlsym as `<module>__<name>`.\n"
+        "                    Default output is <build-dir>/lib/lib<name>.so, or\n"
+        "                    <name>.dll on Windows.\n"
+        "  --split-build     build a single file as `compile` + `link` (cacheable\n"
+        "                    `cc -c` object compiles + a link). Native builds only.\n"
+        "  --no-split-build  force the monolithic single-`cc` build (the default).\n"
+        "  --runtime=auto    (default) link the lean non-ASan libturt_runtime.a when\n"
+        "                    locatable, else recompile the bare src/runtime autolink\n"
+        "                    sources -- never links the ASan libturi.a on its own, so\n"
+        "                    a default build matches the old source path.\n"
+        "  --runtime=lib     force the archive link (lean preferred, else libturi.a).\n"
+        "                    Set TUR_RUNTIME_LIB to point at the archive if not found.\n"
+        "  --runtime=source  force recompiling the runtime sources.\n"
+        "                    TUR_RUNTIME=auto|lib|source seeds the default for a build.\n"
+        "  --link-flags <f>  (tur link) extra linker flags, e.g. \"-L<dir> -lfoo\"\n"
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
         "                    (defaults to `<out>.manifest`). Lists each export\n"
         "                    as `<mod>/<defn> -> <mangled> :: (:args) -> :ret`.\n"
@@ -6991,6 +8167,13 @@ static int usage_test(void) {
     fprintf(stderr,
         "usage:\n"
         "  tur test <dir>   run all .tur test files in a directory\n"
+        "\n"
+        "Each test compiles and runs; it passes iff both succeed (exit 0).\n"
+        "A test file may carry directives in its leading comment lines:\n"
+        "  ;; tur-test-flags: --strict-refine   extra compile flags for this test\n"
+        "  ;; tur-test-expect-error: TUR-W0372  this test must FAIL to compile and\n"
+        "                                       its diagnostics must contain the\n"
+        "                                       text; the run phase is skipped\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -7293,6 +8476,65 @@ static int cmd_experiments(int argc, char **argv) {
     return 0;
 }
 
+/* L5: list the curated `#lang` layer registry (LANG_LAYERS[]), mirroring
+ * `tur experiments`.  `--json` emits the machine-readable form. */
+static int cmd_lang_layers(int argc, char **argv) {
+    bool json = use_json_output;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0) {
+            json = true;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("usage:\n  tur lang-layers [--json]\n\n"
+                   "List the curated `#lang` additive layers.  A `#lang "
+                   "<base> <layer>*`\nline may name any of these after the "
+                   "base dialect; each is order-\nindependent and file-scoped."
+                   "  --json emits the machine-readable form.\n");
+            return 0;
+        } else {
+            fprintf(stderr, "tur lang-layers: unexpected argument '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+
+    size_t n = lang_layers_count();
+
+    if (json) {
+        printf("[");
+        for (size_t i = 0; i < n; i++) {
+            const LangLayerDescriptor *d = lang_layer_at(i);
+            if (i) printf(",");
+            printf("\n  {");
+            printf("\"name\":");    xf_json_puts(stdout, d->name);
+            printf(",\"kind\":");   xf_json_puts(stdout,
+                                        d->kind == LAYER_READER ? "reader"
+                                                                : "semantic");
+            printf(",\"summary\":"); xf_json_puts(stdout, d->summary);
+            printf(",\"since\":");  xf_json_puts(stdout, d->since);
+            if (d->kind == LAYER_SEMANTIC && d->experiment) {
+                printf(",\"experiment\":"); xf_json_puts(stdout, d->experiment);
+            }
+            printf("}");
+        }
+        printf("%s]\n", n ? "\n" : "");
+        return 0;
+    }
+
+    if (n == 0) {
+        printf("No `#lang` layers are registered.\n");
+        return 0;
+    }
+
+    printf("%-12s %-9s %-7s %s\n", "NAME", "KIND", "SINCE", "SUMMARY");
+    for (size_t i = 0; i < n; i++) {
+        const LangLayerDescriptor *d = lang_layer_at(i);
+        printf("%-12s %-9s %-7s %s\n",
+               d->name, d->kind == LAYER_READER ? "reader" : "semantic",
+               d->since, d->summary);
+    }
+    printf("\n%zu `#lang` layer%s registered.\n", n, n == 1 ? "" : "s");
+    return 0;
+}
+
 static int cmd_explain(const char *code) {
     /* Phase HKT-P5: If the argument looks like a diagnostic code (TUR-E####),
      * look it up in the explanation table instead of compiling a snippet. */
@@ -7450,6 +8692,17 @@ int main(int argc, char **argv) {
     /* J6: --no-abi-cache / TUR_NO_ABI_CACHE disables the persistent
      * cross-module ABI specialization cache (.tur-abi-cache/). */
     g_no_abi_cache = parse_no_abi_cache(argc, argv);
+    /* tur-link-and-build-split-plan Phase 2/3c/6: TUR_RUNTIME overrides the
+     * default runtime-linkage mode (auto).  A CLI --runtime= flag, parsed
+     * later, still wins. */
+    {
+        const char *rt = getenv("TUR_RUNTIME");
+        if (rt) {
+            if      (strcmp(rt, "lib") == 0)    g_runtime_mode = TUR_RT_LIB;
+            else if (strcmp(rt, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+            else if (strcmp(rt, "auto") == 0)   g_runtime_mode = TUR_RT_AUTO;
+        }
+    }
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
@@ -7589,6 +8842,17 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-kinds") == 0) {
             /* Phase HKT-P6: enable kind-annotation dump after kind-check */
             g_dump_kinds = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--strict-refine") == 0) {
+            /* RT3: upgrade every undecided/refuted refinement obligation from
+             * "keep the runtime check" to a hard compile error.  A
+             * diagnostic-strictness knob, NOT an experiment -- it changes how
+             * loudly the compiler reports, not what it compiles. */
+            g_strict_refine = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -8052,6 +9316,11 @@ int main(int argc, char **argv) {
         bool        shared = false;  /* RP0: --shared selects shared-library build */
         const char *manifest_out = NULL; /* RP1: --manifest <path> override */
         const char *cli_build_dir = NULL; /* build-output-directory-plan: --build-dir/-B */
+        /* tur-link-and-build-split-plan Phase 3b/4: opt in to the compile+link
+         * split for a single-file build.  Default stays the monolithic `cc`
+         * call so output is byte-identical until the split is proven; the two
+         * flags let a build force either path during rollout. */
+        int split_build = 0;  /* 0 = default(monolithic), 1 = split, -1 = forced monolithic */
         /* SC1: collect -I flags once via the shared helper, then walk argv
          * a second time for the build-specific flags (`-o`, `--target`)
          * and the positional input. */
@@ -8067,6 +9336,21 @@ int main(int argc, char **argv) {
                 out = argv[++i];
             } else if (strcmp(argv[i], "--shared") == 0) {
                 shared = true;
+            } else if (strcmp(argv[i], "--split-build") == 0) {
+                split_build = 1;
+            } else if (strcmp(argv[i], "--no-split-build") == 0) {
+                split_build = -1;
+            } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
+                       (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
+                const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
+                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
+                else {
+                    fprintf(stderr, "tur build: unknown --runtime '%s' "
+                            "(supported: auto, lib, source)\n", mode);
+                    free(build_inc); return 1;
+                }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
                 /* J6: consumed globally by parse_no_abi_cache; no-op here. */
             } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
@@ -8150,8 +9434,37 @@ int main(int argc, char **argv) {
             auto_append_spice_includes(input, &build_inc, &n_build_inc,
                                        &b_owned, &n_b_owned, &b_ls2);
             ls2_resolver_ctx_set(&b_ls2);
-            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
-                           build_target, (const char **)b_rm, b_n);
+            if (split_build == 1 && !build_target) {
+                /* tur-link-and-build-split-plan Phase 3b: `tur build` defined as
+                 * `tur compile` + `tur link` composed -- the exact subcommand
+                 * code paths, so the three can never drift.  The generated
+                 * object + `.link` sidecar land under the build temp dir. */
+                char base[512];
+                default_output_name(input, base, sizeof(base));
+                char objp[1200];
+                snprintf(objp, sizeof(objp), "%s%s.o", stable_c_prefix(), base);
+                rc = cmd_compile(input, objp, (const char **)build_inc,
+                                 n_build_inc, (const char **)b_rm, b_n);
+                if (rc == 0) {
+                    const char *outp = out;
+                    char outbuf[1024];
+                    if (!outp) {
+                        default_output_name(input, outbuf, sizeof(outbuf));
+                        outp = outbuf;
+                    }
+                    const char *lk[1] = { objp };
+                    rc = cmd_link(outp, lk, 1, false, NULL);
+                }
+                /* Drop the intermediate .o/.c/.link (ccache keyed on content
+                 * already caches the underlying object compile). */
+                char scrap[1300];
+                unlink(objp);
+                obj_sibling_path(objp, ".c",    scrap, sizeof(scrap)); unlink(scrap);
+                obj_sibling_path(objp, ".link", scrap, sizeof(scrap)); unlink(scrap);
+            } else {
+                rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
+                               build_target, (const char **)b_rm, b_n);
+            }
             ls2_resolver_ctx_set(NULL);
             ls2_resolver_ctx_dispose(&b_ls2);
             for (int i = 0; i < n_b_owned; i++) free(b_owned[i]);
@@ -8161,6 +9474,123 @@ int main(int argc, char **argv) {
         }
         free(build_inc);
         return rc;
+    }
+    /* tur-link-and-build-split-plan Phase 3a-0: tur compile <in.tur> -o <out.o> */
+    if (strcmp(cmd, "compile") == 0) {
+        const char *input = NULL;
+        const char *out = NULL;
+        const char *cli_build_dir = NULL;
+        char  **comp_inc = NULL;
+        int     n_comp_inc = parse_include_flags(argc, argv, 2, &comp_inc);
+        if (n_comp_inc < 0) { free(comp_inc); return usage_build(); }
+        for (int i = 2; i < argc; i++) {
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(comp_inc); return usage_build();
+            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+                out = argv[++i];
+            } else if ((strcmp(argv[i], "--build-dir") == 0 ||
+                        strcmp(argv[i], "-B") == 0) && i + 1 < argc) {
+                cli_build_dir = argv[++i];
+            } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
+                       (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
+                const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
+                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
+                else {
+                    fprintf(stderr, "tur compile: unknown --runtime '%s' "
+                            "(supported: auto, lib, source)\n", mode);
+                    free(comp_inc); return 1;
+                }
+            } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
+                /* global, consumed elsewhere */
+            } else if (argv[i][0] != '-') {
+                if (input) { free(comp_inc); return usage_build(); }
+                input = argv[i];
+            } else {
+                free(comp_inc); return usage_build();
+            }
+        }
+        if (!input) { free(comp_inc); return usage_build(); }
+        if (is_directory(input)) {
+            fprintf(stderr, "tur compile: expects a single .tur file, not a directory\n");
+            free(comp_inc); return 1;
+        }
+        /* Default the object under <build-dir>/obj/ when --build-dir/-B (or a
+         * manifest :build-dir) applies and no explicit -o was given. */
+        char obj_default[1200];
+        if (!out) {
+            char *bd = resolve_build_dir(input, cli_build_dir);
+            if (bd) {
+                char base[512];
+                default_output_name(input, base, sizeof(base));
+                snprintf(obj_default, sizeof(obj_default), "%s/obj/%s.o", bd, base);
+                out = obj_default;
+                free(bd);
+            }
+        }
+        /* Reader macros + spice include auto-discovery, mirroring cmd_build. */
+        char *c_root = find_spice_root(input);
+        char **c_rm = NULL; int c_n = 0;
+        if (c_root) {
+            char mp[4096];
+            (void)pkg_resolve_manifest_path(c_root, mp, sizeof(mp));
+            PkgManifest cm; memset(&cm, 0, sizeof(cm));
+            if (pkg_manifest_read(mp, &cm))
+                c_rm = resolve_manifest_reader_macros(c_root, &cm, &c_n);
+            pkg_manifest_free(&cm);
+        }
+        char **c_owned = NULL; int n_c_owned = 0;
+        Ls2ResolverCtx c_ls2 = {0};
+        auto_append_spice_includes(input, &comp_inc, &n_comp_inc,
+                                   &c_owned, &n_c_owned, &c_ls2);
+        ls2_resolver_ctx_set(&c_ls2);
+        int rc = cmd_compile(input, out, (const char **)comp_inc, n_comp_inc,
+                             (const char **)c_rm, c_n);
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&c_ls2);
+        for (int i = 0; i < n_c_owned; i++) free(c_owned[i]);
+        free(c_owned);
+        free_reader_macro_paths(c_rm, c_n);
+        free(c_root);
+        free(comp_inc);
+        return rc;
+    }
+    /* tur-link-and-build-split-plan Phase 3a: tur link <obj/src>... -o <out> */
+    if (strcmp(cmd, "link") == 0) {
+        const char *out = NULL;
+        bool shared = false;
+        const char *link_flags = NULL;
+        const char **inputs = (const char **)malloc((size_t)argc * sizeof(char *));
+        int n_inputs = 0;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(inputs); return usage_build();
+            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+                out = argv[++i];
+            } else if (strcmp(argv[i], "--shared") == 0) {
+                shared = true;
+            } else if (strcmp(argv[i], "--link-flags") == 0 && i + 1 < argc) {
+                link_flags = argv[++i];
+            } else if (argv[i][0] != '-') {
+                inputs[n_inputs++] = argv[i];
+            } else {
+                fprintf(stderr, "tur link: unknown option '%s'\n", argv[i]);
+                free(inputs); return usage_build();
+            }
+        }
+        if (n_inputs == 0) { free(inputs); return usage_build(); }
+        int rc = cmd_link(out, inputs, n_inputs, shared, link_flags);
+        free(inputs);
+        return rc;
+    }
+    if (strcmp(cmd, "jit") == 0) {
+        return cmd_jit(argc, argv);
+    }
+    if (strcmp(cmd, "emit-rt-split") == 0) {
+        return cmd_emit_rt_split(argc, argv);
     }
     if (strcmp(cmd, "run") == 0) {
         /* Disambiguate: if the first non-flag argument ends in .tur or
@@ -8213,6 +9643,16 @@ int main(int argc, char **argv) {
             fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
             return usage_repl();
         }
+#ifdef TUR_HAVE_JIT
+        /* J2 (jit-engine-plan 3.3): with the jit experiment enabled, spice
+         * auto-discovery builds in process through the MIR engine instead
+         * of the `tur build --shared` subprocess + dlopen.  Off (the
+         * default) keeps the subprocess path byte-for-byte. */
+        if (g_opt_jit) {
+            experiment_warn_if_used("jit");
+            tur_spice_set_jit_hook(&g_repl_jit_hook);
+        }
+#endif
         return cmd_repl(watch_mode);
     }
     /* Tier 3: persistent fixture worker for the test suite. */
@@ -8355,6 +9795,9 @@ int main(int argc, char **argv) {
     /* XF3: experimental-feature registry listing */
     if (strcmp(cmd, "experiments") == 0)
         return cmd_experiments(argc, argv);
+    /* L5: `#lang` layer registry listing */
+    if (strcmp(cmd, "lang-layers") == 0)
+        return cmd_lang_layers(argc, argv);
 
     /* GS-M2: subcommand fallthrough — `tur foo bar` execs `tur-foo bar`
      * from $PATH when "foo" isn't a built-in. Built-ins always win.

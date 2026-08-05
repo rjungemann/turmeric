@@ -64,8 +64,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn pair-free [A B]
-  [p : (Pair A B)]
+(defn pair-free [A B] [p : (Pair A B)]
   #fx{}
   :void
   ```c

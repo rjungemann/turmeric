@@ -1,0 +1,36 @@
+;; SOUNDNESS REGRESSION FIXTURE.
+;;
+;; `tick` returns a different value on every call, so `(- (tick) (tick))` is
+;; never 0 -- it is -1 -- and the declared `(>= r 0)` is false.  With the gate
+;; off the runtime check catches that and the program aborts.
+;;
+;; It used to NOT abort with `--enable=refined`. Encoding a call as an
+;; uninterpreted function makes its occurrences congruent, so both `(tick)`s
+;; became the same term `t`, the solver proved `t - t >= 0`, and the runtime
+;; check was elided. Turning the experiment on changed a correct program into
+;; one that silently returns a value violating its own refinement -- the one
+;; thing the design forbids.
+;;
+;; Congruence is now opt-in: only a callee KNOWN pure gets it -- one whose body
+;; passes a default-deny whitelist walk, or a name that resolves to no function
+;; at all and is therefore an abstract measure. `tick` is neither (inline C is
+;; not on the whitelist, and `#fx{Unsafe}` is a further veto), so each
+;; occurrence is a distinct opaque value and the obligation is refuted rather
+;; than proved. See the sibling fixture refine-impure-fx-empty for why the
+;; effect row alone was not enough evidence.
+;;
+;; This fixture asserts the DIAGNOSTIC. The behavioural half -- that the check
+;; survives and fires -- is what the exit code of the gate-off build showed;
+;; here the build must not succeed at all.
+(defn tick [] #fx{Unsafe} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn always-nonneg [] #fx{Unsafe} : #refine{ r : int | (>= r 0) }
+  (- (tick) (tick)))
+
+(defn main [] : int
+  (println (unsafe (always-nonneg)))
+  0)

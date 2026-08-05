@@ -1,0 +1,10 @@
+pipe()
+
+MinGW ships _pipe(), not pipe(), so this fixture does not compile on Windows.
+Making it compile would not help: this registers the pipe fds with the reactor,
+and Windows select() is socket-only -- it cannot poll a pipe or file fd at all,
+so the select-based backend (src/async/io_iocp.c) could never service them.
+Skipping is the honest answer; switching to _pipe() would trade a clear build
+error for a hang.
+
+See docs/reported/windows-pipe-reactor-fixtures-do-not-build.md

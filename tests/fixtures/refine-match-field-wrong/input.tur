@@ -1,0 +1,21 @@
+;; SOUNDNESS FIXTURE -- the field selector must select the RIGHT field.
+;;
+;; A pattern binder is tied to its field by position: the k-th binder of
+;; `(Box w h)` becomes `(= w (.width b))` because `width` is the constructor's
+;; k-th declared field. Get the indexing wrong -- off by one, or reading the
+;; pattern's own order instead of the declaration's -- and the hypothesis says
+;; something false about the value, which proves the goal and elides the check.
+;;
+;; This function returns `h` while promising `(.width b)`. It is a genuine
+;; violation, so the obligation must stay unknown and the surviving check must
+;; fire. Its sibling refine-match-datatype-theory pins the honest version of
+;; the same shape compiling clean under --strict-refine, so the two together
+;; pin the selector as precise in both directions.
+(defdata Box (Box [width : int height : int]))
+
+(defn get-width [b : Box] : #refine{ v : int | (= v (.width b)) }
+  (match b (Box w h) h))
+
+(defn main [] : int
+  (println (get-width (Box 7 3)))
+  0)

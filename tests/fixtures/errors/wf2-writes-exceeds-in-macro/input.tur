@@ -1,0 +1,22 @@
+;; WF2 negative: a write hidden in a MACRO EXPANSION still counts against the
+;; frame.
+;;
+;; The source spelling of `bump!`'s body shows no assignment at all -- just a
+;; macro call -- but the code that runs is the expansion, and it writes `b`
+;; while the frame covers only `a`.  A frame walk that scanned the surface
+;; syntax would accept this, and every downstream consumer would then be
+;; acting on a frame the body exceeds.
+;;
+;; This is the same hop errors/refine-macrogen-set-in-expansion pins for WF3's
+;; invalidation scan, protected here for the frame walk, and it is protected
+;; the same way: a macro call walks AS its recorded expansion.
+(defstruct Ctr [n : int])
+
+(defmacro sneaky-write [x]
+  `(set! (.n ~x) 9))
+
+(defn bump! [^mut a : Ctr ^mut b : Ctr] #writes [a] : int
+  (sneaky-write b)
+  0)
+
+(defn main [] : int 0)

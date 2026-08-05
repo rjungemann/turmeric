@@ -69,6 +69,31 @@ To abandon an incomplete expression, enter a blank line.
 
 ---
 
+## Switching readers with `#lang`
+
+A line beginning with `#lang ` is handled before evaluation and switches the
+reader for the rest of the session:
+
+```
+> #lang turmeric/sweet
+; reader set to sweet-exp (session reset)
+```
+
+The switch **resets the session** -- the source you have accumulated so far is
+discarded, because it was read under the old reader and may not parse under the
+new one.  Repeating the reader you are already in prints
+`; reader already set to ...` and changes nothing.
+
+The preloaded stdlib survives the reset.  It is pinned as a prelude prefix when
+the REPL starts, and the reset rewinds to that pin rather than to zero, so
+macros (`when`) and collection literals (`#map{...}`, `#set{...}`, `[...]`)
+still resolve immediately after a switch.  That works only because the preload
+is plain s-expressions, which parse under every reader; without the pin the
+first literal after a switch failed with `unknown function or operator
+'hamt-of'`.
+
+---
+
 ## Meta-commands
 
 Meta-commands begin with `:` and are processed before evaluation.
@@ -85,11 +110,77 @@ Meta-commands:
   :type <expr>        print inferred type without evaluating
   :doc  <sym>         print documentation for a symbol or builtin
   :reload <file>      evaluate a .tur file into the current session
+  :load-string "<src>"  evaluate source directly (\n for newlines)
+  :pwd                print the working directory
+  :cd [dir]           change the working directory (bare :cd goes home)
 ```
 
 ### `:quit` / `:q`
 
 Exits the REPL.  Equivalent to `Ctrl-D`.
+
+### `:pwd` and `:cd [dir]`
+
+`:pwd` prints the working directory; `:cd` changes it, resolving relative
+paths against the current one.  Bare `:cd` goes to `$HOME`.
+
+```
+> :pwd
+/Users/you/projects/demo
+> :cd src
+/Users/you/projects/demo/src
+> :cd /nope
+:cd /nope: No such file or directory
+```
+
+This moves the **running** process, so everything you have defined stays
+in scope -- relative paths in a later `:reload` or `(load ...)` simply
+resolve against the new directory.
+
+When shell integration is active (see
+[Shell integration](#shell-integration-osc-markers)), a successful `:cd` also
+emits an OSC 7 `file://` report, the same notification terminals use to track
+the working directory.  A host editor can follow along without restarting the
+REPL or scraping its output.
+
+**The reported path is logical, not resolved.**  `getcwd(3)` always answers
+with symlinks expanded, so a REPL launched in `/tmp/demo` reports
+`/private/tmp/demo` on macOS -- a path that never string-matches the one the
+host holds.  `:pwd` and the OSC 7 report therefore use `pwd -L` semantics:
+`$PWD` when it still names the current directory, falling back to `getcwd()`
+when it does not.  The fallback is guarded by a `(device, inode)` comparison,
+so the answer is never a path that is not this directory:
+
+```
+$ cd /tmp/demo          # /tmp is a symlink to /private/tmp on macOS
+> :pwd
+/tmp/demo               # matches the host's own path
+```
+
+Note that `:cd` itself still moves *physically*: `:cd ..` from a symlinked
+directory lands in the real parent, where a shell's logical `cd` would go to
+the symlink's parent.  When the two disagree, the reported path describes
+where the process actually is.
+
+### `:load-string "<src>"`
+
+Evaluates source handed over directly, with no file involved.  The argument is
+a single double-quoted literal with C-style escapes, so a whole multi-line
+region collapses onto the one line the prompt reads:
+
+```
+> :load-string "(defn dbl [x :int] :int (* x 2))\n(dbl 21)"
+=> 42
+```
+
+This exists for host editors implementing "run selection".  Without it the
+only route was writing the region to a scratch file and sending
+`(load "...")`, which pays a disk round-trip and leaves temp files behind for
+something the evaluator does from memory anyway.
+
+Results, `_` binding, Show-instance rendering, and error reporting are
+identical to typing the same forms at the prompt -- it runs the same
+evaluation path, not a separate one.  Definitions persist into the session.
 
 ### `:type <expr>`
 
@@ -169,6 +260,52 @@ To force-disable colour, redirect output through a pipe:
 ```
 tur repl 2>/dev/null | cat
 ```
+
+---
+
+## Shell integration (OSC markers)
+
+The REPL can emit the OSC escape sequences terminals and host editors use to
+follow along without scraping output:
+
+| Marker | Meaning |
+|---|---|
+| `OSC 133;A` | a prompt is about to be written -- the REPL is **idle** |
+| `OSC 133;C` | input accepted, evaluation starting -- the REPL is **busy** |
+| `OSC 133;D;<status>` | evaluation finished; `0` = ok, `1` = the form errored |
+| `OSC 7` | working directory report, emitted at startup and after `:cd` |
+
+`A` -> `C` -> `D` is the full idle/busy cycle, which is what lets a host show
+a spinner, disable its "run" button while a form is evaluating, and tell a
+failed form from a successful one without parsing stderr.
+
+`OSC 133;B` (end of prompt, start of the typed command) is deliberately **not**
+emitted.  Placing it correctly means writing it between the prompt string and
+the user's keystrokes -- inside editline's own output -- which would require
+embedding it in the prompt behind `\1..\2` non-printing guards that libedit
+does not reliably honour, risking a visibly corrupted prompt.  `B` only serves
+command extraction; busy/idle needs only `A`/`C`/`D`.
+
+Markers are on automatically when stdout is a TTY.  Two environment variables
+override that:
+
+| Variable | Effect |
+|---|---|
+| `TUR_SHELL_INTEGRATION=1` | force **on** even when stdout is not a TTY |
+| `TUR_NO_SHELL_INTEGRATION=1` | force **off** (wins if both are set) |
+
+The force-on switch is what a GUI host wants.  Driving the REPL over pipes
+rather than a pty is the common case for an embedding editor, and it is
+precisely the case that gets no markers by default -- leaving the host unable
+to distinguish "evaluating" from "waiting at the prompt", with no safe option
+but to assume busy forever:
+
+```sh
+TUR_SHELL_INTEGRATION=1 tur repl    # markers even when stdout is a pipe
+```
+
+The default stays off over a pipe on purpose: emitting escapes into a
+redirect nobody asked for would corrupt captured output.
 
 ---
 
@@ -391,6 +528,35 @@ printf ':reload myfile.tur\n:quit\n' | tur repl
 printf ':reload myfile.tur\n:quit\n' | tur repl 2>/dev/null \
     | sed '1d'   # strip the banner line
 ```
+
+To run source without putting it on disk first, use `:load-string` -- escape
+the newlines so the whole region arrives as one line:
+
+```sh
+printf ':load-string "(defn f [] 7)\\n(f)"\n:quit\n' | tur repl
+```
+
+### `TUR_STDLIB_DIR`
+
+`TUR_STDLIB_DIR` overrides where the stdlib is loaded from.  Because it is an
+ordinary environment variable it is inherited by every child process and
+outlives the install that set it, so a stale value can point a freshly built
+`tur` at a stdlib that has since moved or been deleted.
+
+It is now validated before use: if `$TUR_STDLIB_DIR/macros.tur` is not
+readable, `tur` prints one line naming the variable, unsets it, and falls back
+to the stdlib beside the binary.
+
+```
+$ TUR_STDLIB_DIR=/gone tur repl
+tur: ignoring TUR_STDLIB_DIR=/gone (no readable macros.tur there); falling back to the stdlib beside the binary
+```
+
+Previously the value was taken verbatim, and the first sign of trouble was a
+wall of `load: cannot open .../macros.tur` errors with nothing pointing at the
+variable that caused them.  A directory that *does* contain a stdlib is still
+honoured silently -- an explicit override remains an override, so pinning a
+host's bundled stdlib works exactly as before.
 
 ---
 

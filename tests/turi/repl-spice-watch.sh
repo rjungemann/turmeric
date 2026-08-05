@@ -170,15 +170,29 @@ else
 fi
 
 # -------- scenario 4: --watch doesn't confuse the help dispatch ----------
-if "$TUR" repl --watch --help 2>&1 | grep -q 'tur repl'; then
+#
+# NOTE: capture the output first, then grep the captured string.  Do NOT
+# write these as `"$TUR" ... | grep -q ...`.  `grep -q` exits the instant it
+# matches and closes the read end of the pipe; glibc emits an unbuffered
+# stderr stream in several write() calls, so `tur` is still writing the rest
+# of the usage text and takes SIGPIPE (exit 141).  With `set -o pipefail`
+# (line 19) the pipeline then reports 141 even though grep matched, and the
+# assertion fails with a message that is a flat lie -- the help output did
+# mention 'tur repl'.  Measured at roughly 1 invocation in 300 locally; it is
+# the cause of the intermittent CI red on this target, and it flakes the two
+# assertions below and no others (they were the only piped ones).
+out=$("$TUR" repl --watch --help 2>&1)
+if echo "$out" | grep -q 'tur repl'; then
     pass "rp6-watch-with-help"
 else
-    fail "rp6-watch-with-help" "expected help output to mention 'tur repl'"
+    fail "rp6-watch-with-help" \
+         "expected help output to mention 'tur repl'; got: $out"
 fi
 
 # Unknown flag still errors.
-if ! "$TUR" repl --nope 2>&1 | grep -q "unknown option"; then
-    fail "rp6-watch-unknown-flag" "no 'unknown option' diagnostic"
+out=$("$TUR" repl --nope 2>&1)
+if ! echo "$out" | grep -q "unknown option"; then
+    fail "rp6-watch-unknown-flag" "no 'unknown option' diagnostic; got: $out"
 else
     pass "rp6-watch-unknown-flag"
 fi

@@ -5,13 +5,15 @@
 ;;; Since: Phase 15
 ;; Phase 15: Typeclasses
 ;; Built-in typeclasses: Eq, Ord, Show, Num
-;; Show (the class, its primitive instances, and the Show[Vec]/Show[Set]/
-;; Show[Map] collection instances) lives in stdlib/typeclass-show.tur -- loaded
-;; here so `(load "stdlib/typeclass.tur")` still provides Show, but kept in its
-;; own file so the REPL can preload just Show without this file's
-;; Error[ptr<void>] / Display / Debug instances (whose inline-C bodies would
-;; shadow interpreter builtins such as the async error-message).
-(load "stdlib/typeclass-show.tur")
+;; Show (the class + primitive/collection instances) lives in
+;; stdlib/typeclass-show.tur and is loaded at the END of this file, not here:
+;; since stage 4 its owned `String` result makes typeclass-show.tur load
+;; stdlib/string.tur, which loads this file back.  Deferring the load until
+;; Ord/Num/Display/Debug/Error are all defined breaks that cycle -- the
+;; reentrant (load "stdlib/typeclass.tur") from string.tur then finds every
+;; class it needs.  `(load "stdlib/typeclass.tur")` still ends up providing Show.
+;; Display/Debug here are self-contained (no `show` call), so they do not need
+;; Show in scope before the trailing load.
 ;;; Ord -- typeclass for total ordering.
 ;;;
 ;;; Parameters:
@@ -19,7 +21,6 @@
 ;;;
 ;;; Since: Phase 15
 ;; Ord typeclass - ordering
-
 (defclass Ord [a]
   (lt? [x y] : bool)
   (lte? [x y] : bool)
@@ -91,25 +92,30 @@
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 ;; Show class + primitive Show instances live in stdlib/typeclass-show.tur
-;; (loaded at the top of this file).
+;; (loaded at the END of this file -- see the header note).
 ;;; Num -- typeclass for numeric arithmetic.
 ;;;
 ;;; Parameters:
 ;;;   a -- the numeric type
 ;;;
 ;;; Returns:
-;;;   Results are typed as :int (int64_t) in v1; specific numeric types
-;;;   are handled by each instance.
+;;;   Every method is closed over the instance type `a`: `add`/`sub`/`mul`/
+;;;   `div`/`neg` take and return `a`, so a `Num` instance for a non-integer
+;;;   type (Rational, Complex, a user newtype) types correctly at call sites.
 ;;;
-;;; Since: Phase 15
+;;; Example:
+;;;   (add 2 3)          ; => 5      (Num [int])
+;;;   (add 2.5 0.25)     ; => 2.75   (Num [float])
+;;;
+;;; Since: Phase 15 (N0: de-:int-ified)
 ;; Num typeclass - numeric operations
 
 (defclass Num [a]
-  (add [x y] : int)
-  (sub [x y] : int)
-  (mul [x y] : int)
-  (div [x y] : int)
-  (neg [x] : int))
+  (add [x : a y : a] : a)
+  (sub [x : a y : a] : a)
+  (mul [x : a y : a] : a)
+  (div [x : a y : a] : a)
+  (neg [x : a] : a))
 ;; Instance for int
 ;;; Num [int] -- Num instance for int.
 
@@ -184,6 +190,14 @@
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0.0f32 x)))
+;;; Num [float] -- Num instance for float (double).
+
+(definstance Num [float]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0.0 x)))
 ;;; Clone -- typeclass for deep copying a value.
 ;;;
 ;;; Parameters:
@@ -416,6 +430,222 @@
     snprintf(buf, 32, "int(%lld)", (long long)x);
     return (const char *)buf;
     ```))
+;; ---------------------------------------------------------------------------
+;; Display / Debug for the remaining primitive types.  Show already carries
+;; cstr / bool / the numeric set (stdlib/typeclass-show.tur); Display is the
+;; plain user-facing form, so it delegates to `show`.  Debug is the diagnostic
+;; form and keeps the `type(value)` tagging the existing Debug [int] / [ptr<void>]
+;; instances use (cstr and bool follow the conventional quoted / bare spellings).
+;;
+;; Without these, `derive-debug` / `derive-display` over a struct with a cstr,
+;; bool, or sized-numeric field emit a `.debug` / `.display` call whose element
+;; type has no instance, and dispatch silently falls back to the enclosing
+;; instance -- a miscompile.  See
+;; docs/archive/history/derive-debug-display-missing-primitive-instances.md.
+;;; Display [cstr] -- the string itself (delegates to Show [cstr]).
+
+(definstance Display [cstr] (display [x] : cstr x))
+;;; Debug [cstr] -- the string in double quotes.
+
+(definstance Debug [cstr]
+  (debug [x]
+    : cstr
+    ```c
+    const char *s = (const char *)x;
+    size_t n = strlen(s);
+    char *buf = (char *)malloc(n + 3);
+    buf[0] = '"';
+    memcpy(buf + 1, s, n);
+    buf[n + 1] = '"';
+    buf[n + 2] = '\0';
+    return (const char *)buf;
+    ```))
+;;; Display [bool] -- "true" / "false" (delegates to Show [bool]).
+
+(definstance Display [bool] (display [x] : cstr (if x "true" "false")))
+;;; Debug [bool] -- "true" / "false".
+
+(definstance Debug [bool] (debug [x] : cstr (if x "true" "false")))
+;;; Display [int8] -- decimal (delegates to Show [int8]).
+
+(definstance Display [int8]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%d", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Debug [int8] -- "int8(v)".
+
+(definstance Debug [int8]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "int8(%d)", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Display [int16] -- decimal (delegates to Show [int16]).
+
+(definstance Display [int16]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%d", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Debug [int16] -- "int16(v)".
+
+(definstance Debug [int16]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "int16(%d)", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Display [int32] -- decimal (delegates to Show [int32]).
+
+(definstance Display [int32]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%d", x);
+    return (const char *)buf;
+    ```))
+;;; Debug [int32] -- "int32(v)".
+
+(definstance Debug [int32]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int32(%d)", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint8] -- decimal (delegates to Show [uint8]).
+
+(definstance Display [uint8]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%u", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Debug [uint8] -- "uint8(v)".
+
+(definstance Debug [uint8]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "uint8(%u)", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint16] -- decimal (delegates to Show [uint16]).
+
+(definstance Display [uint16]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%u", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Debug [uint16] -- "uint16(v)".
+
+(definstance Debug [uint16]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "uint16(%u)", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint32] -- decimal (delegates to Show [uint32]).
+
+(definstance Display [uint32]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%u", x);
+    return (const char *)buf;
+    ```))
+;;; Debug [uint32] -- "uint32(v)".
+
+(definstance Debug [uint32]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "uint32(%u)", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint64] -- decimal (delegates to Show [uint64]).
+
+(definstance Display [uint64]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%llu", (unsigned long long)x);
+    return (const char *)buf;
+    ```))
+;;; Debug [uint64] -- "uint64(v)".
+
+(definstance Debug [uint64]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "uint64(%llu)", (unsigned long long)x);
+    return (const char *)buf;
+    ```))
+;;; Display [float] -- "%g" (delegates to Show [float]).
+
+(definstance Display [float]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", (double)x);
+    return (const char *)buf;
+    ```))
+;;; Debug [float] -- "float(v)".
+
+(definstance Debug [float]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(40);
+    snprintf(buf, 40, "float(%g)", (double)x);
+    return (const char *)buf;
+    ```))
+;;; Display [float32] -- "%g" (delegates to Show [float32]).
+
+(definstance Display [float32]
+  (display [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", (double)x);
+    return (const char *)buf;
+    ```))
+;;; Debug [float32] -- "float32(v)".
+
+(definstance Debug [float32]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(40);
+    snprintf(buf, 40, "float32(%g)", (double)x);
+    return (const char *)buf;
+    ```))
 ;;; Display [ptr<void>] -- Display instance for result<T,E> represented as ptr<void>.
 ;; Phase R1: Display, Debug, Error instances for result<T, E>
 ;; In v1, result is represented as ptr<void>
@@ -452,7 +682,7 @@
     return (const char *)buf;
     ```))
 ;; Show [ptr<void>] -- moved to stdlib/typeclass-show.tur alongside the Show
-;; class (loaded at the top of this file).
+;; class (loaded at the END of this file -- see the header note).
 ;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
 
 (definstance Error [ptr<void>]
@@ -507,3 +737,9 @@
 ;;; removed from this module so that loading typeclass.tur on demand does
 ;;; not redefine the always-present stub.  Reference `hash` directly; the
 ;;; class is in scope by default.
+;; ---------------------------------------------------------------------------
+;; Show (owned String result) -- loaded LAST so that its transitive load of
+;; stdlib/string.tur (which loads this file back) finds Ord/Num/Display/Debug/
+;; Error already defined.  See the note at the top of this file.
+
+(load "stdlib/typeclass-show.tur")

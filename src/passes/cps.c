@@ -9,7 +9,8 @@
 #include "arena.h"
 #include "expr.h"
 #include "typeclass.h"
-#include "globals.h"   /* F3: g_opt_cps_async */
+#include "effect.h"   /* effect_row_is_empty */
+#include "globals.h"   /* g_opt_cps_tramp_resume */
 
 /* Phase 18: CPS transformation for delimited continuations
  * 
@@ -111,11 +112,10 @@ bool cps_expr_contains_shift(const Expr *e) {
             }
             return cps_expr_contains_shift(e->as.dynvar_binding_.body);
         case EX_AWAIT:
-            /* F3 (cps-async): under the flag, `await` lowers to a dk_shift, so a
-             * function containing it must be CPS-colored.  Otherwise it is a
-             * self-contained runtime call (no coloring needed here). */
-            if (g_opt_cps_async) return true;
-            return cps_expr_contains_shift(e->as.await_.fut_expr);
+            /* cps-async (graduated 2026-07-19): `await` lowers to a dk_shift (or,
+             * inside a handler case, delegates to the fiber path), so a function
+             * containing it must always be CPS-colored. */
+            return true;
         case EX_PERFORM:
             /* perform lowers to shift - always needs CPS marking */
             return true;
@@ -319,12 +319,11 @@ static bool cps_directly_uses_control(const Expr *e) {
          * emits natively instead of wholly direct-emitting through emit_cps_callcc. */
         case EX_CALLCC:
             return true;
-        /* F3 (cps-async): under the flag, `await` lowers to a dk_shift, so it is a
-         * control seed that colors its function; otherwise it is a self-contained
-         * runtime call (recurse into the future sub-expr for any nested control). */
+        /* cps-async (graduated 2026-07-19): `await` lowers to a dk_shift (or, in a
+         * handler case, delegates to the fiber path), so it is always a control
+         * seed that colors its function. */
         case EX_AWAIT:
-            if (g_opt_cps_async) return true;
-            return cps_directly_uses_control(e->as.await_.fut_expr);
+            return true;
         /* Structural recursion (no descent into nested fn bodies). */
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++)
@@ -382,6 +381,32 @@ static bool cps_directly_uses_control(const Expr *e) {
             /* Ascription is erased at codegen; seed on a control op that is
              * only reachable through (:: <control-op> T). */
             return cps_directly_uses_control(e->as.ascribe_.inner);
+        /* B3 (cps-tramp-resume): a `(with-handler hv body)` / `(compose-handlers
+         * ...)` is a delimited handler install -- a control seed under the flag,
+         * so a `main`/fn whose only control op is a first-class handler value is
+         * colored and its inner `perform` is not hidden.  build_with_handler
+         * DK-lowers a literal (or compose-of-literals) handler value; a dynamic
+         * handler value evicts and falls back gracefully under the experiment.
+         * Flag-off the with-handler path is fiber-lowered and was never colored
+         * here (default: false), so preserve that exactly. */
+        case EX_WITH_HANDLER:
+        case EX_COMPOSE_HANDLERS:
+            return g_opt_cps_tramp_resume;
+        /* A control op (perform / shift / handle / ...) inside a `match` arm colors
+         * its function just like one in an `if` branch -- without this recursion a
+         * `(defn pick [b] (match b (Full v) (+ v (perform (Choose))) ...))` reads as
+         * uncolored and fiber-performs the effect, tainting it for the enclosing
+         * DK handler (cps-backend-effect-under-match).  Flag-gated: flag-off such a
+         * fn is uncolored and fiber-lowered today, and coloring it there perturbs
+         * the shipping path -- so seed only under the experiment. */
+        case EX_MATCH:
+            if (!g_opt_cps_tramp_resume) return false;
+            if (cps_directly_uses_control(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (cps_directly_uses_control(e->as.match_.arms[i].body)) return true;
+                if (cps_directly_uses_control(e->as.match_.arms[i].guard)) return true;
+            }
+            return false;
         /* Nested function definitions are call-graph boundaries. */
         case EX_FN_DEF:
         case EX_FN:
@@ -411,11 +436,43 @@ static void cps_node_add_edge(CpsNode *self, uint32_t target) {
     self->edges[self->n_edges++] = target;
 }
 
-/* Find the top-level node whose function binding == b, or -1. */
+/* The C symbol a binding resolves to, for call-target identity.  A captureless
+ * letrec lambda -- the named-let `(let go [...] ...)` idiom -- binds `go` to a
+ * DIFFERENT Binding object than the lifted `__fn_N`'s own FnDef binding, and
+ * records the lifted function's C name in `c_export_name`.  That is precisely
+ * how the emitter resolves the call (raw_name_for_binding consults
+ * c_export_name first, and emit_fns.c's self-TCO check compares the same
+ * mangled names), so it is the identity the coloring analysis must use too. */
+static const char *cps_binding_c_symbol(const Binding *b) {
+    if (!b) return NULL;
+    if (b->c_export_name) return b->c_export_name;
+    return b->name ? b->name->name : NULL;
+}
+
+/* Find the top-level node whose function binding == b, or -1.
+ *
+ * The pointer compare is the fast, exact case.  The C-symbol fallback resolves
+ * the alias above: without it a named let's self-call read as an UNRESOLVED
+ * call, which set `has_indirect` and conservatively colored the loop -- so a
+ * plain `(let go [i 0 acc 0] ... (go ...))` with no control operator anywhere
+ * was CPS-emitted, and its self-call then re-entered the function's own DK
+ * entry wrapper (a dk_prompt malloc + setjmp) once per iteration, overflowing
+ * the stack on every engine.  Two bindings that carry the SAME C symbol are the
+ * same C function by construction (the emitter emits one definition), so the
+ * fallback resolves a real edge rather than widening anything: the callee's own
+ * seed still colors it if it uses control, and the fixpoint still propagates
+ * that to callers.  See
+ * docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md. */
 static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
     if (!b) return -1;
     for (uint32_t i = 0; i < n; i++)
         if (nodes[i].fd->binding == b) return (int)i;
+    const char *bsym = cps_binding_c_symbol(b);
+    if (!bsym || !*bsym) return -1;
+    for (uint32_t i = 0; i < n; i++) {
+        const char *nsym = cps_binding_c_symbol(nodes[i].fd->binding);
+        if (nsym && strcmp(nsym, bsym) == 0) return (int)i;
+    }
     return -1;
 }
 
@@ -443,8 +500,20 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                  * argument is still caught by the seed scan (cps_directly_uses_
                  * control) and the arg recursion below, so skipping the call
                  * itself is sound.  See
-                 * docs/archive/history/cps-coloring-overcolors-nonnode-calls.md. */
-                if (e->as.call_.ctor == NULL)
+                 * docs/archive/history/cps-coloring-overcolors-nonnode-calls.md.
+                 *
+                 * Same reasoning for a RESOLVED call whose callee's body is
+                 * inline-C (`body_is_inline_c`): an inline-C body is opaque C with
+                 * NO Turmeric control op, so it can never reach a perform/handle/
+                 * shift -- it is a leaf exactly like a constructor.  This stops a
+                 * contract macro (`require-msg!` -> `tur-contract-check`, an
+                 * embedded inline-C `defn` absent from the node set) from
+                 * spuriously coloring an otherwise-pure function, which then
+                 * SIG-REJECTs and cascades its callers onto the fiber path (the
+                 * sized-bitvec/matrix `main`s tail-call such a contract helper). */
+                bool callee_inline_c = e->as.call_.fn_binding
+                    && e->as.call_.fn_binding->body_is_inline_c;
+                if (e->as.call_.ctor == NULL && !callee_inline_c)
                     self->has_indirect = true;
             }
             cps_collect_calls(e->as.call_.fn_expr, nodes, n_nodes, self);
@@ -531,27 +600,222 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
     }
 }
 
+/* E2 (cps-tramp-resume): peel a fn-value ARG's wrappers to the EX_VAR naming a
+ * (lifted-lambda) binding. */
+static const Expr *cps_peel_fnvalue_arg(const Expr *e) {
+    while (e) {
+        switch (e->kind) {
+            case EX_ASCRIBE:     e = e->as.ascribe_.inner;     break;
+            case EX_FN_TO_FAT:   e = e->as.fn_to_fat_.inner;   break;
+            case EX_POLY_TO_FAT: e = e->as.poly_to_fat_.inner; break;
+            case EX_POLY_WRAP:   e = e->as.poly_wrap_.inner;   break;
+            case EX_CAST:        e = e->as.cast_.expr;         break;
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr;  break;
+            default:             return e;
+        }
+    }
+    return e;
+}
+
+/* E2 (cps-tramp-resume): force-color a lifted lambda passed as an arg to an
+ * effectful TY_FN param, so a PURE such lambda still gets a __cps entry the HOF's
+ * registry thread needs (effect-subtype cluster).  Best-effort recursion. */
+static bool cps_force_color_eff_fnval_args(const Expr *e, CpsNode *nodes, uint32_t n) {
+    if (!e) return false;
+    bool ch = false;
+    switch (e->kind) {
+        case EX_CALL: {
+            if (e->as.call_.fn_binding) {
+                int ci = cps_find_node(nodes, n, e->as.call_.fn_binding);
+                if (ci >= 0) {
+                    FnDef *cfd = nodes[ci].fd;
+                    uint32_t np = cfd->n_params;
+                    for (uint32_t p = 0; p < np && p < e->as.call_.n_args; p++) {
+                        const Binding *pb = cfd->params ? cfd->params[p] : NULL;
+                        if (!pb || pb->type.kind != TY_FN) continue;
+                        EffectRow *pr = (EffectRow *)pb->type.as.fn.effect_row;
+                        if (effect_row_is_empty(pr)) continue;
+                        const Expr *arg = cps_peel_fnvalue_arg(e->as.call_.args[p]);
+                        if (arg && arg->kind == EX_VAR && arg->as.var.binding) {
+                            int li = cps_find_node(nodes, n, arg->as.var.binding);
+                            if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
+                        }
+                    }
+                }
+            }
+            /* E2c: a `(make-struct S ...)` lowers to a CONSTRUCTOR call.  A fn-value
+             * stored in an EFFECTFUL capability field (`[run : fn #fx{E}]`) is
+             * threaded via the registry at each `(.run obj)` call, which needs even
+             * a PURE such fn-value force-colored so it gets a __cps entry to
+             * register (effect-subtype-capability). */
+            if (e->as.call_.ctor) {
+                const CtorDef *ctor = e->as.call_.ctor;
+                for (uint32_t p = 0; p < e->as.call_.n_args && p < ctor->n_fields; p++) {
+                    if (effect_row_is_empty(ctor->fields[p].effect_row)) continue;
+                    const Expr *arg = cps_peel_fnvalue_arg(e->as.call_.args[p]);
+                    if (arg && arg->kind == EX_VAR && arg->as.var.binding) {
+                        int li = cps_find_node(nodes, n, arg->as.var.binding);
+                        if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
+                    }
+                }
+            }
+            if (cps_force_color_eff_fnval_args(e->as.call_.fn_expr, nodes, n)) ch = true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (cps_force_color_eff_fnval_args(e->as.call_.args[i], nodes, n)) ch = true;
+            return ch;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cps_force_color_eff_fnval_args(e->as.let_.bindings[i].init, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.let_.body, nodes, n)) ch = true;
+            return ch;
+        case EX_IF:
+            if (cps_force_color_eff_fnval_args(e->as.if_.cond, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.if_.then_, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.if_.else_or_null, nodes, n)) ch = true;
+            return ch;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cps_force_color_eff_fnval_args(e->as.do_.items[i], nodes, n)) ch = true;
+            return ch;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (cps_force_color_eff_fnval_args(e->as.builtin.args[i], nodes, n)) ch = true;
+            return ch;
+        case EX_WHILE:
+            if (cps_force_color_eff_fnval_args(e->as.while_.cond, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.while_.body, nodes, n)) ch = true;
+            return ch;
+        case EX_SET:    return cps_force_color_eff_fnval_args(e->as.set_.value, nodes, n);
+        case EX_RETURN: return cps_force_color_eff_fnval_args(e->as.return_.value, nodes, n);
+        case EX_DEFER:  return cps_force_color_eff_fnval_args(e->as.defer_.body, nodes, n);
+        case EX_DEF:    return cps_force_color_eff_fnval_args(e->as.def_.init, nodes, n);
+        case EX_ASCRIBE:return cps_force_color_eff_fnval_args(e->as.ascribe_.inner, nodes, n);
+        case EX_RESET:  return cps_force_color_eff_fnval_args(e->as.reset_.body, nodes, n);
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            if (cps_force_color_eff_fnval_args(h->body, nodes, n)) ch = true;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (cps_force_color_eff_fnval_args(h->cases[i].body, nodes, n)) ch = true;
+            return ch;
+        }
+        default: return false;
+    }
+}
+
+/* E2 (cps-tramp-resume): does `e` contain a `with-handler` anywhere (structural,
+ * no descent into nested fn bodies)?  Used to color a fn that discharges one
+ * effect via with-handler but leaves a LEFTOVER (fh-discharge-row's do-work) --
+ * gated additionally on the fn having a non-empty effect row, so the top-level
+ * with-handler mains that discharge EVERYTHING (empty row) are NOT colored and
+ * keep their existing DK-lowering. */
+static bool cps_body_has_with_handler(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_WITH_HANDLER: {
+            /* Only a LITERAL handler is translatable (build_with_handler); a dynamic
+             * handler value (a `handler`-typed param, e.g. run-with's `h`, or a
+             * compose-handlers) would evict -- do NOT color those, so they keep
+             * their existing lowering. */
+            const Expr *hv = e->as.with_handler_.handler;
+            while (hv && hv->kind == EX_ASCRIBE) hv = hv->as.ascribe_.inner;
+            return hv && hv->kind == EX_HANDLER_LIT;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cps_body_has_with_handler(e->as.let_.bindings[i].init)) return true;
+            return cps_body_has_with_handler(e->as.let_.body);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cps_body_has_with_handler(e->as.do_.items[i])) return true;
+            return false;
+        case EX_IF:
+            return cps_body_has_with_handler(e->as.if_.cond)
+                || cps_body_has_with_handler(e->as.if_.then_)
+                || cps_body_has_with_handler(e->as.if_.else_or_null);
+        case EX_ASCRIBE: return cps_body_has_with_handler(e->as.ascribe_.inner);
+        case EX_RETURN:  return cps_body_has_with_handler(e->as.return_.value);
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            if (cps_body_has_with_handler(h->body)) return true;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (cps_body_has_with_handler(h->cases[i].body)) return true;
+            return false;
+        }
+        default: return false;
+    }
+}
+
+/* The fn's declared/inferred effect row is non-empty -- it has a LEFTOVER effect
+ * that escapes (not fully discharged by an internal with-handler). */
+static bool cps_fn_has_leftover_effect(const FnDef *fd) {
+    if (!fd) return false;
+    if (fd->inferred_effect_row && !effect_row_is_empty(fd->inferred_effect_row))
+        return true;
+    if (fd->binding && fd->binding->type.kind == TY_FN
+        && !effect_row_is_empty(fd->binding->type.as.fn.effect_row))
+        return true;
+    return false;
+}
+
 void cps_color_program(Arena *a, Expr *program) {
     (void)a;
     if (!program || program->kind != EX_PROGRAM) return;
 
-    /* Collect top-level function nodes. */
+    /* Collect top-level function nodes -- AND the function members nested inside
+     * `(defmodule ...)` bodies.  A module member never appears as a top-level
+     * EX_FN_DEF (it lives in EX_DEFMODULE's `mod->body`), so without descending
+     * here an effectful module `defn` (e.g. a `run` that installs a `handle`) is
+     * never colored and silently falls to the fiber effect runtime -- the same
+     * self-contained handle DK-lowers fine as a bare top-level defn.  Only
+     * control-using members become colored (cps_directly_uses_control); pure
+     * module members stay uncolored, so the blast radius is effectful code. */
     uint32_t cap = 16, n = 0;
     CpsNode *nodes = calloc(cap, sizeof(CpsNode));
+    #define CPS_ADD_FN_NODE(FDEXPR) do {                                        \
+        FnDef *_fd = (FDEXPR)->as.fn_def_.fn;                                   \
+        if (_fd) {                                                              \
+            _fd->cps_colored = false; /* reset (idempotent) */                 \
+            if (n == cap) { cap *= 2; nodes = realloc(nodes, cap * sizeof(CpsNode)); } \
+            memset(&nodes[n], 0, sizeof(CpsNode));                              \
+            nodes[n].fd = _fd;                                                  \
+            n++;                                                               \
+        }                                                                      \
+    } while (0)
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         Expr *item = program->as.program.items[i];
-        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
-        FnDef *fd = item->as.fn_def_.fn;
-        fd->cps_colored = false; /* reset (idempotent) */
-        if (n == cap) { cap *= 2; nodes = realloc(nodes, cap * sizeof(CpsNode)); }
-        memset(&nodes[n], 0, sizeof(CpsNode));
-        nodes[n].fd = fd;
-        n++;
+        if (!item) continue;
+        if (item->kind == EX_FN_DEF && item->as.fn_def_.fn) {
+            CPS_ADD_FN_NODE(item);
+        } else if (g_opt_cps_tramp_resume
+                   && item->kind == EX_DEFMODULE && item->as.defmodule_.mod) {
+            /* Flag-gated: descending into module members changes which fns are
+             * colored, so it must not perturb the shipping (flag-off) path. */
+            DefModule *m = item->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn)
+                    CPS_ADD_FN_NODE(mb);
+            }
+        }
     }
+    #undef CPS_ADD_FN_NODE
 
     /* Seed + build edges. */
     for (uint32_t i = 0; i < n; i++) {
         nodes[i].colored = cps_directly_uses_control(nodes[i].fd->body);
+        /* E2 (cps-tramp-resume): a fn that discharges an effect via `with-handler`
+         * but leaves a LEFTOVER (non-empty effect row) must be colored so its
+         * leftover threads to the enclosing DK handler instead of fiber-emitting
+         * (fh-discharge-row's do-work).  Narrow: only fires for a genuine-leftover
+         * fn, so a with-handler main / helper that discharges EVERYTHING (empty
+         * row) is untouched and keeps its existing lowering. */
+        if (!nodes[i].colored && g_opt_cps_tramp_resume
+            && cps_fn_has_leftover_effect(nodes[i].fd)
+            && cps_body_has_with_handler(nodes[i].fd->body))
+            nodes[i].colored = true;
         cps_collect_calls(nodes[i].fd->body, nodes, n, &nodes[i]);
         if (nodes[i].has_indirect) nodes[i].colored = true;
     }
@@ -569,6 +833,24 @@ void cps_color_program(Arena *a, Expr *program) {
                     changed = true;
                     break;
                 }
+            }
+        }
+    }
+
+    if (g_opt_cps_tramp_resume) {
+        bool fc = true;
+        while (fc) {
+            fc = false;
+            for (uint32_t i = 0; i < n; i++)
+                if (cps_force_color_eff_fnval_args(nodes[i].fd->body, nodes, n)) fc = true;
+        }
+        changed = true;
+        while (changed) {
+            changed = false;
+            for (uint32_t i = 0; i < n; i++) {
+                if (nodes[i].colored) continue;
+                for (uint32_t e = 0; e < nodes[i].n_edges; e++)
+                    if (nodes[nodes[i].edges[e]].colored) { nodes[i].colored = true; changed = true; break; }
             }
         }
     }
@@ -890,6 +1172,18 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             FnDef *new_fd = arena_alloc(a, sizeof(FnDef));
             *new_fd = *fd;
             new_fd->body = cps_mark_expr(a, fd->body);
+            /* This clone replaces `fd` in the program tree the backend emits, so
+             * keep the binding's canonical-defn link pointing at it.  Downstream
+             * passes gate on `binding->source_fn_def == fd` to recognize the
+             * canonical top-level defn -- notably the stackless catch-unwind
+             * eligibility in emit_fns.c (gs_basic_ok).  Left stale, the clone
+             * fails that check, so every catch-unwind function in an async
+             * program silently loses its flat-stack trampoline and recurses
+             * natively -> fiber stack overflow (fiber-rec).  See
+             * docs/archive/fiber-rec-async-fiber-segfault.md. */
+            if (new_fd->binding && new_fd->binding->source_fn_def == fd) {
+                new_fd->binding->source_fn_def = new_fd;
+            }
             /* CPS-CL1: populate live_captures at each cloneable-shift site */
             if (cps_fn_needs_cloneable_transform(new_fd)) {
                 cps_compute_live_at_shift(a, new_fd->body);

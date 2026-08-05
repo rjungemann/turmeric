@@ -1,0 +1,50 @@
+;; collections-cannot-hold-rc-values, map side, steps (c) and (d): a Map can
+;; hold rc<T> VALUES, taking a strong reference on insert and handing the caller
+;; its own reference on read.
+;;
+;; Before this, `(map-assoc m k some-rc)` was a hard error -- "cannot store an
+;; owning value (rc) in a collection" -- because a map value rides an int64
+;; carrier, and erasing an rc handle into that carrier would drop the reference
+;; on the floor.
+;;
+;; Three things had to line up:
+;;
+;;   (c) The HAMT's value retain/release ops are caller-supplied (step b), and
+;;       map.tur routes a bit-2 insert through tur_hamt_set_eq_vo passing the
+;;       EMITTED shims __tur_rc_val_retain / __tur_rc_val_release.  They have to
+;;       be emitted rather than living in hamt.c: hamt.c is precompiled into the
+;;       runtime archive, so an rc call inside it would always bind the
+;;       archive's collector -- wrong in a build carrying its own replica.
+;;
+;;   (c) `tur-rc-value?` folds to 1 at emit time when the value's monomorphized
+;;       type is rc<T>, giving bit 2.  Like tur-wide-byval? it takes a BORROW,
+;;       so probing the type does not consume the move-typed value.
+;;
+;;   (d) map-assoc-eq-o's value slot and map-get-eq-o's result are registered as
+;;       ownership sinks, so the carrier bridge mints the reference rather than
+;;       rejecting the erasure.
+;;
+;; The overwrite assertion is the interesting one.  A Map is PERSISTENT: writing
+;; key 1 in m2 does not disturb m1, which still holds the old value -- so `a`
+;; must NOT be released there.  A naive "release the value being replaced" would
+;; pass a non-persistent test and corrupt this one.
+
+(defn main [] : int
+  (let [a (rc/of 41)
+        b (rc/of 42)]
+    (println (rc/strong-count a))        ; 1 -- just the local
+
+    (let [m1 (map-assoc (:: (map-new) (Map int rc<int>)) 1 (rc/clone a))]
+      (println (rc/strong-count a))      ; 2 -- the map owns one
+
+      ;; A read hands the caller its own reference, like vec-get.
+      (let [got (:: (map-get m1 1) rc<int>)]
+        (println (rc/strong-count a)))   ; 3 -- local + m1 + got
+      (println (rc/strong-count a))      ; 2 -- got's reference released at scope exit
+
+      ;; Persistent overwrite: m2 gets b, m1 keeps a.
+      (let [m2 (map-assoc m1 1 (rc/clone b))]
+        (println (rc/strong-count a))    ; 2 -- unchanged; m1 still holds it
+        (println (rc/strong-count b))    ; 2 -- local + m2
+        (println (map-count m2)))))      ; 1
+  0)

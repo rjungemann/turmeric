@@ -1,0 +1,27 @@
+;; generic-show-wrapper-cps-monomorphization-plan: a generic `^Show a` wrapper
+;; (show-line) called in a CPS-lowered HELPER used to misdispatch through the int
+;; carrier representative (__inst_Show_show_int), silently misrendering every
+;; non-int element type. This fixture exercises all three fix pieces at once, each
+;; in a helper `defn` (the CPS-lowered context that broke; top-level `main` always
+;; worked):
+;;   - RC1  (nominal types): show-line resolves + routes to the per-element DIRECT
+;;           clone instead of the generic base clone -> Vec/Set/Map render.
+;;   - RC2  (carrier scalars): the colored cstr/bool clone body re-resolves its
+;;           inner (show x) to __inst_Show_show_<T> instead of the baked int rep.
+;;   - 2b.3 (multiple scalar specs): find_mono_clone_for_call's tie-breaker picks
+;;           the right scalar spec when several (int/bool/cstr) coexist, so bool
+;;           renders "true", not "1".
+;; Also depends on Edge 2a (the :void wrapper call compiles under CPS lowering).
+(load "stdlib/typeclass.tur")
+
+(defn render [] : int
+  (do
+    (show-line 42)               ;; int    -> 42
+    (show-line true)             ;; bool   -> true  (2b.3: not "1")
+    (show-line "hi")             ;; cstr   -> hi    (RC2: colored clone body)
+    (show-line (vec-of 1 2 3))   ;; Vec    -> [1 2 3]  (RC1)
+    (show-line (set-of 5 6))     ;; Set    -> #set{5 6} (RC1)
+    (show-line (hamt-of 1 10))   ;; Map    -> #map{1 10} (RC1)
+    0))
+
+(defn main [] : int (render))

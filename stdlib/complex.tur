@@ -1,0 +1,410 @@
+;;; tur/complex -- Complex numbers as a plain re/im pair of doubles.
+;;;
+;;; A Complex is a two-`float` record, and every operation on it is written in
+;;; ordinary Turmeric.  Neither `_Complex` nor `<complex.h>` appears anywhere in
+;;; the emitted C, deliberately:
+;;;
+;;;   * `c2mir` (the JIT front end) implements a C11 subset that does not
+;;;     include the optional `_Complex` feature; and
+;;;   * even on a C compiler that supports it, `a * b` and `a / b` on
+;;;     `double _Complex` do not compile to arithmetic -- they compile to calls
+;;;     into `__muldc3` / `__divdc3` in the compiler runtime, which would become
+;;;     external symbols the JIT must resolve.
+;;;
+;;; So the arithmetic is hand-written here, division uses Smith's algorithm
+;;; (scale by the larger-magnitude denominator component before dividing), and
+;;; the overflow behaviour is ours, identical on every engine, and testable.
+;;;
+;;; Complex numbers are not ordered, so there is deliberately NO `Ord`
+;;; instance.  `(lt? c1 c2)` is a type error, and that is the right answer --
+;;; do not add a lexicographic one to fill the table.
+;;;
+;;; Since: Phase N2 (numeric-tower-rational-complex-plan)
+(load "stdlib/typeclass.tur")
+
+(load "stdlib/math.tur")
+;;; Complex -- a re/im pair of doubles.
+;;;
+;;; `:copy` -- two plain doubles, no owned resource, so a Complex is freely
+;;; copyable and never interacts with the rc/ref/borrow machinery.
+;;;
+;;; Since: Phase N2
+
+(defstruct Complex :copy [re : float im : float])
+;; -- construction ------------------------------------------------------------
+;;; complex/of -- build the complex number re + im*i.
+;;;
+;;; Parameters:
+;;;   re -- real part
+;;;   im -- imaginary part
+;;;
+;;; Returns:
+;;;   The Complex re + im*i.  This is what the `#cx{re im}` literal expands to.
+;;;
+;;; Example:
+;;;   (complex/re (complex/of 3.25 -1.5))  ; => 3.25
+;;;
+;;; Since: Phase N2
+
+(defn complex/of [re : float im : float] : Complex (Complex re im))
+;;; complex/from-float -- embed a real number in the complex plane.
+;;;
+;;; Parameters:
+;;;   x -- the real value
+;;;
+;;; Returns:
+;;;   x + 0i.
+;;;
+;;; Example:
+;;;   (complex/im (complex/from-float 2.5))  ; => 0
+;;;
+;;; Since: Phase N2
+
+(defn complex/from-float [x : float] : Complex (Complex x 0.0))
+;;; complex/zero -- the complex number 0.
+;;;
+;;; Returns:
+;;;   0 + 0i.
+;;;
+;;; Example:
+;;;   (complex/re (complex/zero))  ; => 0
+;;;
+;;; Since: Phase N2
+
+(defn complex/zero [] : Complex (Complex 0.0 0.0))
+;;; complex/one -- the complex number 1.
+;;;
+;;; Returns:
+;;;   1 + 0i.
+;;;
+;;; Example:
+;;;   (complex/re (complex/one))  ; => 1
+;;;
+;;; Since: Phase N2
+
+(defn complex/one [] : Complex (Complex 1.0 0.0))
+;;; complex/i -- the imaginary unit.
+;;;
+;;; Returns:
+;;;   0 + 1i.
+;;;
+;;; Example:
+;;;   (complex/im (complex/i))  ; => 1
+;;;
+;;; Since: Phase N2
+
+(defn complex/i [] : Complex (Complex 0.0 1.0))
+;; -- accessors ---------------------------------------------------------------
+;;; complex/re -- the real part.
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   The real component.
+;;;
+;;; Example:
+;;;   (complex/re (complex/of 3.25 -1.5))  ; => 3.25
+;;;
+;;; Since: Phase N2
+
+(defn complex/re [z : Complex] : float (.re z))
+;;; complex/im -- the imaginary part.
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   The imaginary component.
+;;;
+;;; Example:
+;;;   (complex/im (complex/of 3.25 -1.5))  ; => -1.5
+;;;
+;;; Since: Phase N2
+
+(defn complex/im [z : Complex] : float (.im z))
+;;; complex/real? -- does this value lie on the real axis?
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   true when the imaginary part is exactly 0.
+;;;
+;;; Example:
+;;;   (complex/real? (complex/from-float 2.5))  ; => true
+;;;
+;;; Since: Phase N2
+
+(defn complex/real? [z : Complex] : bool (= (.im z) 0.0))
+;; -- arithmetic --------------------------------------------------------------
+;;; complex/add -- sum of two complex numbers.
+;;;
+;;; Parameters:
+;;;   x -- left addend
+;;;   y -- right addend
+;;;
+;;; Returns:
+;;;   (a+bi) + (c+di) = (a+c) + (b+d)i.
+;;;
+;;; Example:
+;;;   (complex/re (complex/add (complex/of 3.25 1.5) (complex/of 0.75 0.5)))  ; => 4
+;;;
+;;; Since: Phase N2
+
+(defn complex/add [x : Complex y : Complex] : Complex
+  (Complex (+ (.re x) (.re y)) (+ (.im x) (.im y))))
+;;; complex/sub -- difference of two complex numbers.
+;;;
+;;; Parameters:
+;;;   x -- minuend
+;;;   y -- subtrahend
+;;;
+;;; Returns:
+;;;   (a+bi) - (c+di) = (a-c) + (b-d)i.
+;;;
+;;; Example:
+;;;   (complex/im (complex/sub (complex/of 3.25 1.5) (complex/of 0.75 0.5)))  ; => 1
+;;;
+;;; Since: Phase N2
+
+(defn complex/sub [x : Complex y : Complex] : Complex
+  (Complex (- (.re x) (.re y)) (- (.im x) (.im y))))
+;;; complex/neg -- negate a complex number.
+;;;
+;;; Parameters:
+;;;   x -- a Complex
+;;;
+;;; Returns:
+;;;   -(a+bi) = -a - bi.
+;;;
+;;; Example:
+;;;   (complex/re (complex/neg (complex/of 3.25 -1.5)))  ; => -3.25
+;;;
+;;; Since: Phase N2
+
+(defn complex/neg [x : Complex] : Complex
+  (Complex (- 0.0 (.re x)) (- 0.0 (.im x))))
+;;; complex/conj -- complex conjugate.
+;;;
+;;; Parameters:
+;;;   x -- a Complex
+;;;
+;;; Returns:
+;;;   conj(a+bi) = a - bi.
+;;;
+;;; Example:
+;;;   (complex/im (complex/conj (complex/of 3.25 -1.5)))  ; => 1.5
+;;;
+;;; Since: Phase N2
+
+(defn complex/conj [x : Complex] : Complex (Complex (.re x) (- 0.0 (.im x))))
+;;; complex/mul -- product of two complex numbers.
+;;;
+;;; Parameters:
+;;;   x -- left factor
+;;;   y -- right factor
+;;;
+;;; Returns:
+;;;   (a+bi)(c+di) = (ac - bd) + (ad + bc)i, written out as arithmetic rather
+;;;   than deferred to a `__muldc3`-style compiler-runtime helper.
+;;;
+;;; Example:
+;;;   (complex/re (complex/mul (complex/of 3.25 1.5) (complex/of 0.5 2.0)))  ; => -1.375
+;;;
+;;; Since: Phase N2
+
+(defn complex/mul [x : Complex y : Complex] : Complex
+  (let [a (.re x)
+        b (.im x)
+        c (.re y)
+        d (.im y)]
+    (Complex (- (* a c) (* b d)) (+ (* a d) (* b c)))))
+;;; complex/scale -- multiply a complex number by a real scalar.
+;;;
+;;; Parameters:
+;;;   x -- a Complex
+;;;   k -- the real scale factor
+;;;
+;;; Returns:
+;;;   k*(a+bi) = ka + kb*i.
+;;;
+;;; Example:
+;;;   (complex/re (complex/scale (complex/of 3.25 -1.5) 2.0))  ; => 6.5
+;;;
+;;; Since: Phase N2
+
+(defn complex/scale [x : Complex k : float] : Complex
+  (Complex (* (.re x) k) (* (.im x) k)))
+;;; complex/div -- quotient of two complex numbers (Smith's algorithm).
+;;;
+;;; Parameters:
+;;;   x -- dividend
+;;;   y -- divisor
+;;;
+;;; Returns:
+;;;   x/y.  The naive `(ac+bd)/(c^2+d^2)` form overflows whenever `c` or `d` is
+;;;   large enough that its square leaves the double range, even when the true
+;;;   quotient is perfectly ordinary.  Smith's algorithm divides through by the
+;;;   larger-magnitude denominator component first, so the intermediates stay
+;;;   near the magnitude of the result:
+;;;
+;;;     |c| >= |d|:  r = d/c, den = c + d*r, x/y = ((a + b*r) + (b - a*r)i)/den
+;;;     |c| <  |d|:  r = c/d, den = c*r + d, x/y = ((a*r + b) + (b*r - a)i)/den
+;;;
+;;;   Dividing by the zero complex number yields the IEEE infinity/NaN result
+;;;   float division already produces; it is not an error here.
+;;;
+;;; Example:
+;;;   (complex/re (complex/div (complex/of 3.25 1.5) (complex/of 0.5 0.0)))  ; => 6.5
+;;;
+;;; Since: Phase N2
+
+(defn complex/div [x : Complex y : Complex] : Complex
+  (let [a (.re x)
+        b (.im x)
+        c (.re y)
+        d (.im y)]
+    (if (>= (fabs c) (fabs d))
+      (let [r   (/ d c)
+            den (+ c (* d r))]
+        (Complex (/ (+ a (* b r)) den) (/ (- b (* a r)) den)))
+      (let [r   (/ c d)
+            den (+ (* c r) d)]
+        (Complex (/ (+ (* a r) b) den) (/ (- (* b r) a) den))))))
+;; -- magnitude / transcendentals ---------------------------------------------
+;;; complex/abs2 -- squared magnitude |z|^2.
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   re^2 + im^2, with no square root.  Prefer this to `complex/abs` when only
+;;;   comparing magnitudes -- it is exact where the square root is not.
+;;;
+;;; Example:
+;;;   (complex/abs2 (complex/of 3.0 4.0))  ; => 25
+;;;
+;;; Since: Phase N2
+
+(defn complex/abs2 [z : Complex] : float
+  (+ (* (.re z) (.re z)) (* (.im z) (.im z))))
+;;; complex/abs -- magnitude |z|.
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   sqrt(re^2 + im^2), computed by scaling out the larger component first
+;;;   (`|a| * sqrt(1 + (b/a)^2)`) so a value whose square would overflow still
+;;;   reports its true magnitude.
+;;;
+;;; Example:
+;;;   (complex/abs (complex/of 3.0 4.0))  ; => 5
+;;;
+;;; Since: Phase N2
+
+(defn complex/abs [z : Complex] : float
+  (let [a (fabs (.re z))
+        b (fabs (.im z))]
+    (if (= a 0.0)
+      b
+      (if (= b 0.0)
+        a
+        (if (>= a b)
+          (let [r (/ b a)] (* a (sqrt (+ 1.0 (* r r)))))
+          (let [r (/ a b)] (* b (sqrt (+ 1.0 (* r r))))))))))
+;;; complex/arg -- principal argument (phase angle) of z, in radians.
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   atan2(im, re), in (-pi, pi].
+;;;
+;;; Example:
+;;;   (complex/arg (complex/of 0.0 1.5))  ; => 1.5708
+;;;
+;;; Since: Phase N2
+
+(defn complex/arg [z : Complex] : float (atan2 (.im z) (.re z)))
+;;; complex/exp -- e raised to a complex power.
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   e^(a+bi) = e^a * (cos b + i sin b), built from the real libm wrappers in
+;;;   stdlib/math.tur rather than from a complex-valued runtime helper.
+;;;
+;;; Example:
+;;;   (complex/re (complex/exp (complex/of 0.0 0.0)))  ; => 1
+;;;
+;;; Since: Phase N2
+
+(defn complex/exp [z : Complex] : Complex
+  (let [m (exp (.re z))] (Complex (* m (cos (.im z))) (* m (sin (.im z))))))
+;; -- comparison / printing ---------------------------------------------------
+;;; complex/eq? -- componentwise equality.
+;;;
+;;; Parameters:
+;;;   x -- left value
+;;;   y -- right value
+;;;
+;;; Returns:
+;;;   true when both the real and the imaginary parts compare equal.  This is
+;;;   IEEE float equality, with all the usual caveats.
+;;;
+;;; Example:
+;;;   (complex/eq? (complex/of 3.25 -1.5) (complex/of 3.25 -1.5))  ; => true
+;;;
+;;; Since: Phase N2
+
+(defn complex/eq? [x : Complex y : Complex] : bool
+  (and (= (.re x) (.re y)) (= (.im x) (.im y))))
+;;; complex->string -- render a Complex as "3.25+4.5i" / "3.25-4.5i".
+;;;
+;;; Parameters:
+;;;   z -- a Complex
+;;;
+;;; Returns:
+;;;   A fresh owned String.  The sign of the imaginary part is ALWAYS explicit,
+;;;   so the output is unambiguous and never depends on how the imaginary part
+;;;   happens to format.
+;;;
+;;; Example:
+;;;   (complex->string (complex/of 3.25 -1.5))  ; => String "3.25-1.5i"
+;;;
+;;; Since: Phase N2
+
+(defn complex->string [z : Complex] : String
+  (let [b  (builder/new)
+        rs (show (.re z))
+        im (.im z)
+        is (show (if (< im 0.0) (- 0.0 im) im))]
+    (do
+      (builder/push-string! b rs)
+      (string/release rs)
+      (builder/push-cstr! b (if (< im 0.0) "-" "+"))
+      (builder/push-string! b is)
+      (string/release is)
+      (builder/push-cstr! b "i")
+      (builder/finish b))))
+;; -- typeclass instances -----------------------------------------------------
+;;; Num [Complex] -- hand-written complex arithmetic behind + - * /.
+
+(definstance Num [Complex]
+  (add [x y] (complex/add x y))
+  (sub [x y] (complex/sub x y))
+  (mul [x y] (complex/mul x y))
+  (div [x y] (complex/div x y))
+  (neg [x] (complex/neg x)))
+;;; Eq [Complex] -- componentwise IEEE equality.
+
+(definstance Eq [Complex] (eq? [x y] (complex/eq? x y)))
+;; There is deliberately NO `Ord [Complex]` instance: the complex numbers are
+;; not an ordered field, so `(lt? z1 z2)` must stay a type error.  A missing
+;; instance is the correct answer -- see the module docstring.
+;;; Show [Complex] -- "3.25+4.5i" with an always-explicit imaginary sign.
+
+(definstance Show [Complex] (show [x] (complex->string x)))

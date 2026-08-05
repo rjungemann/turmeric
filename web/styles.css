@@ -632,6 +632,23 @@ body.split-dragging * {
     50% { opacity: 0.4; }
 }
 
+/* Analysis indicator. The footer is a two-item flex row (WASM status | cursor
+ * position), so this sits in the middle and is pushed away from both. */
+.lsp-status {
+    margin-left: auto;
+    margin-right: var(--spacing-md);
+    color: var(--text-dim);
+}
+
+/* `display: flex` on .status-indicator is a class rule and beats the user
+ * agent's `[hidden] { display: none }`, so the attribute alone does not hide
+ * this -- the indicator stayed on screen for every visitor whose language
+ * server never booted, which is the one case it is supposed to say nothing
+ * about. */
+.lsp-status[hidden] {
+    display: none;
+}
+
 .cursor-position {
     color: var(--text-dim);
     font-size: 11px;
@@ -797,7 +814,7 @@ body.split-dragging * {
 .repl-prompt {
     color: var(--gold);
     font-family: var(--font-mono);
-    font-size: 14px;
+    font-size: 12.5px;
     user-select: none;
     white-space: nowrap;
     opacity: 0.9;
@@ -815,7 +832,7 @@ body.split-dragging * {
     outline: none;
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 1.6;
     caret-color: var(--gold);
 }
@@ -1549,6 +1566,7 @@ body.split-dragging * {
 /* The overflow popover is a mobile-only affordance; on desktop the
    buttons themselves are present in the tab bar. */
 .more-wrap { display: none; position: relative; }
+.examples-wrap { position: relative; display: inline-flex; }
 .more-menu {
     position: fixed;
     min-width: 180px;
@@ -1592,7 +1610,7 @@ body.split-dragging * {
     .editor-actions > #share-btn,
     .editor-actions > #download-btn,
     .editor-actions > #open-btn,
-    .editor-actions > #examples-select { display: none; }
+    .editor-actions > .examples-wrap { display: none; }
     .more-wrap { display: inline-flex; }
 }
 
@@ -1611,10 +1629,18 @@ body.split-dragging * {
    breakpoint when the URL bar collapses. */
 @media (pointer: coarse), (max-width: 1024px) {
     .monaco-editor .inputarea,
-    #repl-input,
     #doc-search {
         font-size: 16px !important;
     }
+}
+
+/* The REPL input tracks the console font size (12.5px) on desktop so it
+   matches the `turi>` prompt and the printed output. Only real touch
+   devices trigger iOS's focus auto-zoom, so restrict the 16px anti-zoom
+   override to coarse pointers rather than the width-based fallback -- a
+   narrow desktop window should keep the 12.5px input. */
+@media (pointer: coarse) {
+    #repl-input { font-size: 16px !important; }
 }
 
 @media (max-width: 768px) {
@@ -1633,10 +1659,6 @@ body.split-dragging * {
 
     /* Collapse button labels, keep icons */
     .btn-label { display: none; }
-}
-
-@media (max-width: 480px) {
-    .editor-actions .select { max-width: 90px; }
 }
 
 /* ==========================================================================

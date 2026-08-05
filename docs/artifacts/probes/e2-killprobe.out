@@ -1,0 +1,9 @@
+[tramp] N=1000000 result=0 side_sum=500001500000 expect=500001500000  max_stack_bytes=263
+[naive] N=2000 result=0  max_stack_bytes=320087
+[naive] N=4000 result=0  max_stack_bytes=640087
+[naive] per-iteration stack growth ~= 160.0 bytes/element -> at N=1e6 ~= 152.6 MB
+
+=== VERDICT ===
+(a) handler search crosses the fn-value __fn_cps slot: YES (results correct)
+(b) deep (1e6) recursion stays flat (trampolined tail-resume): YES
+(b') naive recursive resume is O(N) stack: YES (confirmed -- why the current DK backend evicts it) (160.0 B/elt)

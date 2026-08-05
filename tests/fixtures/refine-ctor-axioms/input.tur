@@ -1,0 +1,37 @@
+;; Constructor axioms -- the defining equation of a record constructor.
+;;
+;; The match-arm theory gives a selector its meaning one way only: a binder is
+;; the field it destructures. It says nothing about a value that was just
+;; BUILT. `roundtrip` had the whole chain -- `b = Box(p,3)` from the let split,
+;; `w = (.width b)` from the arm -- and no rule connecting `.width` back to the
+;; `Box` that produced it. Both functions were `0 proven, 1 unknown`.
+;;
+;; The missing fact is `(= (.width (Box p 3)) p)`. It is universally true, not
+;; path-dependent, so it is asserted once per constructor application in the
+;; obligation rather than per path; congruence closure does the rest.
+;;
+;; It needed a second fix to do anything. A constructor HAS a global binding
+;; and no `defn` body, so the default-deny purity walk found no evidence and
+;; landed on UNKNOWN -- which congruence reads as impure, giving every
+;; occurrence its own symbol. The `Box(p,3)` in the axiom and the `Box(p,3)` in
+;; the goal were different terms and the axiom was inert. A data constructor
+;; stores its arguments and runs no user code, so it is now answered pure
+;; directly.
+;;
+;; Under --strict-refine: losing either is a compile error.
+(defdata Box :copy (Box [width : int height : int]))
+
+;; The axiom alone.
+(defn direct [p : int] : #refine{ r : int | (= r p) }
+  (.width (Box p 3)))
+
+;; Build, bind, destructure -- the axiom, the let split, and the arm's field
+;; hypothesis all three.
+(defn roundtrip [p : int] : #refine{ r : int | (= r p) }
+  (let [b (Box p 3)]
+    (match b (Box w h) w)))
+
+(defn main [] : int
+  (println (direct 7))
+  (println (roundtrip 7))
+  0)

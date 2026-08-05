@@ -24,48 +24,48 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 ### `tur-httpd` only
 
 ```turmeric no-check
-:spices {
-  "httpd" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "httpd-v0.1.0"
-           :subdir "spices/httpd"}
+:spices #map{
+  "httpd" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "httpd-v0.1.0"
+               :subdir "spices/httpd"}
 }
 ```
 ```sweet-exp
 :spices
-{
-  "httpd" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "httpd-v0.1.0"
-           :subdir "spices/httpd"}
+#map{
+  "httpd" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "httpd-v0.1.0"
+               :subdir "spices/httpd"}
 }
 ```
 
 ### Full stack (httpd + template + tourist)
 
 ```turmeric no-check
-:spices {
-  "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "httpd-v0.1.0"
-              :subdir "spices/httpd"}
-  "template" {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "template-v0.1.0"
-              :subdir "spices/template"}
-  "tourist"  {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "tourist-v0.1.0"
-              :subdir "spices/tourist"}
+:spices #map{
+  "httpd"    #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "httpd-v0.1.0"
+                  :subdir "spices/httpd"}
+  "template" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "template-v0.1.0"
+                  :subdir "spices/template"}
+  "tourist"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "tourist-v0.1.0"
+                  :subdir "spices/tourist"}
 }
 ```
 ```sweet-exp
 :spices
-{
-  "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "httpd-v0.1.0"
-              :subdir "spices/httpd"}
-  "template" {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "template-v0.1.0"
-              :subdir "spices/template"}
-  "tourist"  {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "tourist-v0.1.0"
-              :subdir "spices/tourist"}
+#map{
+  "httpd"    #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "httpd-v0.1.0"
+                  :subdir "spices/httpd"}
+  "template" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "template-v0.1.0"
+                  :subdir "spices/template"}
+  "tourist"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "tourist-v0.1.0"
+                  :subdir "spices/tourist"}
 }
 ```
 
@@ -198,25 +198,29 @@ with-header(resp-ok("text/plain" "Not found") "x-reason" "missing")
 (import template/render :refer [render])
 (import template/env    :refer [env-new env-set env-free])
 
-(defn greet [name : cstr] : cstr
+(defn greet [name : cstr] : String
   (let [e (env-new)]
     (env-set e "name" name)
     (let [out (render "Hello, <%= name %>!" e)]
       (env-free e)
-      out)))
+      (string/adopt-cstr out))))  ;; owned result -- adopt render's heap buffer
 ```
 ```sweet-exp
 import template/render :refer [render]
 import template/env :refer [env-new env-set env-free]
-defn greet [name :cstr] :cstr
+defn greet [name :cstr] :String
   let [e (env-new)]
     env-set(e "name" name)
     let [out (render "Hello, <%= name %>!" e)]
       env-free(e)
-      out
+      string/adopt-cstr(out)  ;; owned result -- adopt render's heap buffer
 ```
 
-The returned string is heap-allocated; the caller must free it.
+`render` returns a heap-allocated `cstr` that the caller must free -- exactly the
+manual-free footgun the owned `String` type removes. Returning `String` (adopt
+`render`'s buffer with `string/adopt-cstr`) hands the caller an owned value it
+releases once with `string/release`, with no raw `free` to forget. See
+[strings-guide.md](strings-guide.md) for `cstr` vs `str` vs `String`.
 
 ### Template syntax
 
@@ -564,6 +568,12 @@ defn main [] :int
     server-stop(s)
     0
 ```
+
+`render-view` returns `render`'s heap buffer past `env-free`, so the caller owns
+those bytes. As with `greet` above, you can make that ownership explicit by
+returning an owned `String` (`(string/adopt-cstr (render name env))`) and having
+the handler borrow it back with `string/to-cstr` for `html`. See
+[strings-guide.md](strings-guide.md).
 
 ---
 

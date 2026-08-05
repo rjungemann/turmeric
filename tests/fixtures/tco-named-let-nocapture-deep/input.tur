@@ -1,0 +1,30 @@
+;; CF1 follow-up: self-TCO through a NON-CAPTURING named let.
+;;
+;; `(let go [...] ... (go ...))` that reads nothing from the enclosing fn
+;; lowers to a plain lifted `__fn_N`, and the call names a letrec binding
+;; whose `c_export_name` IS that function.  The CPS coloring analysis matched
+;; call targets by Binding pointer only, so this self-call read as an
+;; UNRESOLVED (indirect) call and conservatively colored the loop -- even
+;; though no control operator appears anywhere in it.  Being colored routed
+;; it away from the direct emitter's self-TCO, and its self-call then went
+;; through the function's own delimited-control ENTRY WRAPPER (a dk_prompt
+;; malloc + setjmp) once per iteration.  Unlike the capturing form, there was
+;; nothing for gcc's sibling-call optimization to elide, so this overflowed
+;; the stack on cc as well as under `tur jit`.
+;;
+;; The coloring now resolves a call target by C symbol when the Binding
+;; pointer does not match -- the same identity the emitter uses -- so the loop
+;; is uncolored, direct-emitted, and TCO'd.  5,000,000 iterations complete.
+;;
+;; See docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md.
+
+(defn sum-to-5m [] : int
+  (let go [i   :int 0
+           acc :int 0]
+    (if (>= i 5000000)
+      acc
+      (go (+ i 1) (+ acc i)))))
+
+(defn main [] : int
+  (println (sum-to-5m))
+  0)

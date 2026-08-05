@@ -34,6 +34,20 @@ Run these in parallel and report findings before proceeding:
 If any check fails, stop and report. Do not proceed without the user
 explicitly overriding.
 
+### Advisory: experiment expiries (NEVER blocking)
+
+Run `./build/tur experiments` (or read `EXPERIMENTS[]` in
+`src/runtime/experiments.c`) and list any row whose `expires_at` is at or
+before the version being cut.
+
+**This is a notice, not a precondition. It NEVER blocks the release.** Report
+the rows and continue with the cut. The author decides separately whether to
+graduate, shelve, or bump `expires_at` -- in this release or a later one.
+
+`expires_at` is a deadline, not an earliest date, and there is no registry
+check anywhere in this file's preconditions. Do not invent one: treating this
+as a gate has stranded two releases.
+
 ## Step 1: Compute the new version
 
 Read `VERSION`. Parse `MAJOR.MINOR.PATCH`. Compute `NEW = MAJOR.MINOR.(PATCH+1)`.
@@ -118,6 +132,10 @@ In parallel:
 1. Write `NEW` to `VERSION` (no trailing newline beyond the existing format).
 2. Edit `src/web/wasm_glue.h` -- update the `TURMERIC_VERSION "<OLD>"`
    define to `TURMERIC_VERSION "<NEW>"`.
+2b. Edit `web/public/sw.js` -- update the `CACHE_VERSION = 'tur-try-v1-<OLD>'`
+   literal to `<NEW>`. Vite rewrites this token at build time, so the deployed
+   worker is correct either way, but the in-tree literal is the dev/no-build
+   fallback and silently drifts a release behind if you skip it.
 3. Edit `CHANGELOG.md` -- insert the new entry immediately after the
    `# Changelog\n\nAll notable changes...\n` header and before the
    existing `## [<OLD>]` entry. Keep one blank line between entries.
@@ -129,7 +147,7 @@ Do not commit yet.
 ## Step 6: Commit locally
 
 ```sh
-git add VERSION src/web/wasm_glue.h CHANGELOG.md README.md
+git add VERSION src/web/wasm_glue.h web/public/sw.js CHANGELOG.md README.md
 git commit -m "$(cat <<'EOF'
 chore: release v<NEW>
 
@@ -160,6 +178,14 @@ just deploy-web
 This runs `just wasm` (which runs `just docs`), then `just web-deps`,
 then `npm run build`, then `wrangler deploy ...` to push the web app
 to Cloudflare. The user must already be authenticated with `wrangler`.
+
+This regenerates `web/public/turmeric.{js,wasm}` and `web/public/doc-names.json`.
+They are **gitignored build outputs -- do NOT commit them.** `git status` stays
+clean through this step; if it does not, something else changed and is worth
+looking at. There is no follow-up "regenerate web artifacts" commit any more:
+that habit is what left every release tag carrying the previous release's
+binary, and (until v0.32.3) a doc-name index missing the release's own new
+stdlib symbols.
 
 If `just deploy-web` fails:
 - Report the failure to the user.
@@ -205,6 +231,9 @@ End by reporting:
 ## Things to refuse
 
 - Refuse to bypass any precondition without explicit user override.
+- **Never** refuse or delay a release because an experiment's `expires_at` is
+  at or past the version being cut. That is advisory (see the Advisory section
+  above); surface it and proceed.
 - Refuse to push the tag before the deploy succeeds.
 - Refuse to skip the changelog/README updates -- they're load-bearing
   for users discovering the release.

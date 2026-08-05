@@ -90,6 +90,54 @@ two-letter mnemonic, remaining bytes get `_xHH`. Crucially, a literal `_` is
 lossy fold is safe there. Struct fields are scoped to their struct, so no
 linker collision is possible.
 
+## The `tur_u_` guard prefix -- names C already owns
+
+Both schemes above pass a pure `[A-Za-z0-9_]` name through byte for byte. That
+is correct for injectivity but not sufficient for *validity*: some spellings are
+already claimed on the C side, and emitting them verbatim produces a translation
+unit that does not compile. Two such classes get a `tur_u_` prefix at the
+mangling chokepoint:
+
+| Class | Predicate | Symptom without the guard |
+|---|---|---|
+| libc / POSIX symbols the system headers declare | `tur_name_collides_libc` | `static int64_t read(...)` -- "static declaration of 'read' follows non-static declaration" |
+| C reserved words, C89 through C23 | `tur_name_is_c_keyword` | `static int64_t double(int64_t);` -- a syntax error that derails the rest of the file |
+
+The guard is applied by `raw_name_for_binding` (`emit_core.c`) and mirrored
+byte-for-byte by `elab_mangle_binding_name` (`elab_core.c`), so a definition,
+every call site, and an inline-C `__TUR_CNAME_` splice all resolve to the same
+C name.
+
+Where it applies differs slightly between the two:
+
+- **libc collisions** only matter for a *bare* global. A module-qualified
+  global is already `geom__read`, which no header declares, and an `extern-c`
+  binding names the real libc symbol on purpose.
+- **Keywords** also only matter unqualified (`geom__double` is a fine C
+  identifier), but they additionally hit the legacy-fold contexts that libc
+  collisions cannot: a **parameter or local** (`f(int64_t double)`) and a
+  **struct field** (`int64_t int;`). `mangle_field_name` in `emit_core.c`
+  carries the same guard for fields, ADT constructors, and dynvars.
+
+  Guarding a parameter or field is safe for inline-C precisely because the
+  unguarded spelling could never have been referenced -- an inline-C body
+  naming `double` would not have parsed either.
+
+A user name spelled literally `tur_u_double` cannot alias the guarded form of
+`double`: under the injective scheme its literal underscores encode as `_un`,
+so it mangles to `tur_unu_undouble`.
+
+Note that `tur_demangle` does not strip the guard -- a guarded symbol decodes
+with the prefix still attached. The guard sits *outside* the encoded region, and
+both classes are rare enough that ABI traces reading `tur_u_double` are clearer
+than a demangler that would have to guess whether `tur_u_` was data.
+
+The keyword table in `mangle.c` is complete by construction (the standard fixes
+the set); the libc table is grown as real collisions surface, since an
+over-broad entry renames a user's function for no reason. Both are `bsearch`ed,
+so both must stay sorted -- `tests/mangle_test.c` probes across each table so a
+mis-sorted entry fails loudly rather than silently ceasing to match.
+
 ## Module/file-name split
 
 `mangle_mod_basename` in `src/main.c` maps `/` -> `__`, `-` -> `_` for the
@@ -110,6 +158,8 @@ distinct symbols even though their generated filenames might collide.
 | `tur_demangle(mangled, out, cap)` | `mangle.c` | Inverse: C identifier -> source name |
 | `tur_mangle_bound(src_len)` | `mangle.h` | Worst-case output length (4x input) |
 | `tur_name_is_c_identifier(name, len)` | `mangle.h` | True if name needs no mangling |
+| `tur_name_collides_libc(name, len)` | `mangle.c` | True if the name is a libc/POSIX symbol -- guard with `tur_u_` |
+| `tur_name_is_c_keyword(name, len)` | `mangle.c` | True if the name is a C reserved word -- guard with `tur_u_` |
 
 ## Spice manifests
 
@@ -127,4 +177,4 @@ manual update is needed when the mangling scheme changes.
   `tur_mangle_unit` ctest target
 - Regression fixtures: [`tests/fixtures/mangle-kebab-snake-coexist/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-kebab-snake-coexist) and
   [`tests/fixtures/mangle-arrow-name-vs-module/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-arrow-name-vs-module)
-- Plan: [reversible-name-mangling-plan](../upcoming/reversible-name-mangling-plan.md)
+- Plan: [reversible-name-mangling-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/reversible-name-mangling-plan.md)

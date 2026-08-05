@@ -192,7 +192,8 @@ section {
   align-items: center;
   justify-content: center;
   margin-bottom: 20px;
-  font-size: 16px;
+  font-size: 18px;
+  color: var(--gold-bright);
 }
 
 .feat-title {

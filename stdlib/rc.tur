@@ -12,62 +12,51 @@
 ;;   (rc/drop r)  - decrement refcount, free if zero
 ;;   (rc->ptr r)  - get raw pointer (non-owning)
 ;;
-;; HKT instances use ptr<void> as the container type since v1 doesn't have
-;; generic type constructors yet.
-;;; SINCE: Phase HKT H3
-;; Functor instance for rc<T>
-;; Functor for rc - map a function over the contained value, returning a new rc
-;; fmap :: (a -> b) -> rc a -> rc b
-;; Implementation: clone the rc, unwrap to get the value, apply fn, wrap in new rc
-;;; __functor_rc_fmap -- internal Functor fmap implementation for rc<T>.
+;;; rc-payload -- read the value stored in an rc<A>.
 ;;;
-;;; Since: Phase HKT H3
-(defn __functor_rc_fmap [container fn] : int
+;;; Borrows its handle, so reading does not consume the caller's rc.  v1 assumes
+;;; the payload is a plain int64_t carrier.
+;;;
+;;; Parameters:
+;;;   r -- the rc<A> to read (borrowed, not consumed)
+;;;
+;;; Returns:
+;;;   The contained value. Zero for a null handle.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 7)]
+;;;     (println (rc-payload r)))  ; => 7
+;;;
+;;; Since: Phase HKT S6
+(defn rc-payload [A] [^borrow r : rc<A>] : A
   ```c
-  /* In v1, rc<T> is represented as RcControlBlock* (see src/rc.c)
-   * We can't easily implement fmap without modifying the RcControlBlock
-   * to store the actual value. For v1, we return a cloned rc with the
-   * function applied to the value. This requires rc->ptr access.
-   *
-   * Note: This is a simplified v1 implementation. A proper implementation
-   * would need to handle the case where the value is not a plain int64_t.
-   */
-  void *rc_ptr = (void*)(intptr_t)container;
-  if (!rc_ptr) return 0;
-  /* Clone the rc to get an owned pointer */
-  void *cloned = tur_rc_clone(rc_ptr);
-  if (!cloned) return 0;
-  /* Get the raw pointer value */
-  int64_t value = *(int64_t*)tur_rc_ptr(cloned);
-  /* Apply the function */
-  int64_t new_value = ((int64_t(*)(int64_t))(intptr_t)fn)(value);
-  /* Create a new rc with the new value */
-  void *new_rc = tur_rc_of((void*)(intptr_t)new_value);
-  /* Drop the clone */
-  tur_rc_drop(cloned);
-  return (int64_t)(intptr_t)new_rc;
+  if (!r || !r->value) return 0;
+  return *(int64_t *)rc_get_value(r);
   ```)
 ;; Functor instance for rc
 ;; KB-027: dispatch on the built-in rc<T> type constructor (kind * -> *), not
 ;; on ptr<void> (kind *).  rc is rc.tur's home type, so the instance is not an
 ;; orphan even though Functor is declared elsewhere.
+;;
+;; A standalone `__functor_rc_fmap [container fn] : int` helper used to sit here,
+;; predating the instance.  It is gone: nothing referenced it, and its untyped
+;; params meant `container` was `:int`, so it could not be passed an actual
+;; rc<T> at all ("expected int, got rc<int>") -- the CLAUDE.md :int-stand-in
+;; defect in its purest form.  The definstance below is the implementation.
 ;;; Functor [rc] -- Functor instance for rc<T>.
 ;;;
 ;;; Since: Phase HKT H3
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
+;; Ordinary Turmeric: read the payload, apply g, wrap the result.  This spelling
+;; briefly shipped as inline-C because it MISCOMPILED -- a body that constructs
+;; an rc had its control-block pointer heap-boxed on the way out
+;; (`__tur_ret_p = malloc(...); *__tur_ret_p = cb;`) while the dispatch consumer
+;; read that cell as the handle, one indirection too many.  Fixed by not boxing
+;; a value that is already carrier-width; see
+;; docs/archive/hkt-rc-construct-body-boxes-handle.md and
+;; tests/fixtures/hkt-instance-rc-construct-result.
 
 (definstance Functor [rc]
-  (fmap [container fn]
-    ```c
-    void *rc_ptr = (void *)(intptr_t)container;
-    void *cloned = tur_rc_clone(rc_ptr);
-    if (!cloned) return 0;
-    int64_t value = *(int64_t*)tur_rc_ptr(cloned);
-    int64_t new_value = fn.fn(fn.env, value);
-    void *new_rc = tur_rc_of((void*)(intptr_t)new_value);
-    tur_rc_drop(cloned);
-    return (int64_t)(intptr_t)new_rc;
-    ```))
+  (fmap [container g] (rc/of (g (rc-payload container)))))
 ;;; SINCE: Phase HKT §6
 ;; Foldable class stub.  Unlike Functor/Clone (auto-loaded via
 ;; typeclass-functor.tur / typeclass-clone.tur), Foldable is not auto-loaded,
@@ -87,34 +76,39 @@
 ;; An rc contains exactly one value, so:
 ;;   foldl init fn (rc v) = fn(init, v)
 ;;   foldr fn init (rc v) = fn(v, init)
-;; KB-027: the bodies dispatch on rc<T> directly (inline C, mirroring the
-;; Functor instance) instead of round-tripping through a ptr<void> helper.
-;; M7 migration NOTE: under the typed Foldable sig the bodies stay inline-C
-;; carrier (carrier-essential) -- rc<T> value extraction goes through
-;; tur_rc_ptr, which has no pure-Turmeric accessor.  fn lowers to a raw
-;; fn pointer for these element types, so the casts remain valid; the
-;; instance stays on the uniform carrier ABI (verified: suite byte-identical).
+;; KB-027: the bodies dispatch on rc<T> directly instead of round-tripping
+;; through a ptr<void> helper.
+;;
+;; Both bodies are ordinary Turmeric.  They used to be inline-C, and had to be:
+;; an instance body saw its own receiver as the applied `(t a)`, which unified
+;; with nothing, so `ta` could not be handed to anything typed `rc<A>`.  Worse,
+;; calling `fn` from C meant hand-writing the poly-fn ABI
+;; (`((int64_t (*)(void *, int64_t, int64_t))fn.fn)(fn.env, init, value)`) --
+;; the compiler emits exactly that, and a stdlib copy of a calling convention is
+;; a silent miscompile waiting for the convention to move.  The receiver now
+;; collapses to a real `rc<a>`, so the call is just `(f init ...)` and the
+;; compiler generates the ABI.
+;;
+;; `rc-payload` stays inline-C because payload extraction goes through
+;; rc_get_value, which has no pure-Turmeric accessor -- but it is a typed
+;; one-liner, not a calling convention.
+;;
+;; The earlier M7 note here claimed `fn` "lowers to a raw fn pointer for these
+;; element types, so the casts remain valid ... verified: suite byte-identical."
+;; That was wrong on both counts.  Under the TYPED Foldable signature above,
+;; `fn : (fn [b a] b)` lowers to a tur_poly_fn_t STRUCT, so
+;; `(int64_t(*)(int64_t,int64_t))(intptr_t)fn` is "aggregate value used where an
+;; integer was expected" -- rc.tur did not compile at all.  And the suite could
+;; not have verified anything, because no fixture loaded this module; the C
+;; stage was never reached.  tests/fixtures/rc-tur-typeclass-instances is that
+;; missing fixture.  See docs/archive/rc-tur-legacy-instances-do-not-compile.md.
 ;;; Foldable [rc] -- Foldable instance for rc<T>.
 ;;;
 ;;; Since: Phase HKT S6
 
 (definstance Foldable [rc]
-  (foldl [ta init fn]
-    ```c
-    /* In v1, rc<T> is an RcControlBlock*.  tur_rc_ptr returns the
-     * pointer to the stored value (an int64_t in v1). */
-    void *rc_ptr = (void *)(intptr_t)ta;
-    if (!rc_ptr) return init;
-    int64_t value = *(int64_t *)tur_rc_ptr(rc_ptr);
-    return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, value);
-    ```)
-  (foldr [ta init fn]
-    ```c
-    void *rc_ptr = (void *)(intptr_t)ta;
-    if (!rc_ptr) return init;
-    int64_t value = *(int64_t *)tur_rc_ptr(rc_ptr);
-    return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(value, init);
-    ```))
+  (foldl [ta init f] (f init (rc-payload ta)))
+  (foldr [ta init f] (f (rc-payload ta) init)))
 ;;; SINCE: Phase B1
 ;; Clone instance for the built-in rc type (TY_RC) -- shallow clone.
 ;;

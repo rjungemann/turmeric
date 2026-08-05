@@ -1,0 +1,42 @@
+;; A DYNAMIC typeclass dispatch crosses into the CLASS parameter refinement.
+;;
+;; When the receiver is an abstract type variable no instance is selected --
+;; the dispatch falls back to an arbitrary carrier-compatible one, which is not
+;; necessarily the instance that runs. Checking against that fallback would
+;; demand whatever it happens to declare; checking against the CLASS demands
+;; the one thing every instance honours.
+;;
+;; Sound by the same variance argument that licenses result propagation, run in
+;; the other direction: TUR-E0374 rejects an instance that demands MORE than
+;; its class, so every instance's parameter predicate is implied by the class's.
+;; An argument satisfying the class predicate is therefore acceptable to
+;; whichever instance runs.
+;;
+;; This layer reports; it never elides. The method's own entry check still
+;; guards the call.
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+;; A WEAK instance -- demands less than the class, which is legal.
+(definstance Scaler [int]
+  (scale-by [self : int, k : int] : int (* self k)))
+
+;; A STRONG instance -- restates the class demand.
+(definstance Scaler [float]
+  (scale-by [self : float, k : #refine{ v : int | (> v 0) }] : int k))
+
+;; Dynamic: the receiver is a type variable, so which instance runs is not
+;; known here. A satisfying argument discharges from the class predicate alone.
+(defn use-dynamic [^Scaler a x : a] : int
+  (.scale-by x 5))
+
+;; A satisfying argument still proves when the caller's own value is
+;; constrained rather than literal.
+(defn use-dynamic-hyp [^Scaler a x : a k : #refine{ v : int | (> v 10) }] : int
+  (.scale-by x k))
+
+(defn main [] : int
+  (println (use-dynamic 3))
+  (println (use-dynamic 3.5))
+  (println (use-dynamic-hyp 4 11))
+  0)

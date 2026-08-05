@@ -39,9 +39,9 @@
 (defn main [] : int
   (let [m (map-assoc (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 99)
                                                                (Point 3 4) 77)]
-    (println (show (map-get m (Point 1 2))))   ;; 99 -- content key hit (distinct box)
-    (println (show (map-get m (Point 3 4))))   ;; 77
-    (println (show (map-get m (Point 9 9))))   ;; 0  -- miss
+    (show-line (map-get m (Point 1 2)))   ;; 99 -- content key hit (distinct box)
+    (show-line (map-get m (Point 3 4)))   ;; 77
+    (show-line (map-get m (Point 9 9)))   ;; 0  -- miss
     (let [a (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 5)
           b (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 5)
           c (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 6)]

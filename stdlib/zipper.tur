@@ -65,9 +65,11 @@
   ```)
 ;;; zipper-new -- by-value: recover A from the typed focus element.
 
-(defn zipper-new [A]
-  [left : ptr<void> left-len : int focus : A right : ptr<void> right-len : int]
-  : (Zipper A)
+(defn zipper-new [A] [left : ptr<void>
+                      left-len : int
+                      focus : A
+                      right : ptr<void>
+                      right-len : int] : (Zipper A)
   (:: (zipper-new-raw left left-len (:: focus :int) right right-len) (Zipper A)))
 ;;; zipper-focus -- return the focused element of a Zipper[A].
 ;;;
@@ -91,9 +93,7 @@
   ```)
 ;;; zipper-focus -- by-value: return the focused element typed as A.
 
-(defn zipper-focus [A]
-  [z : (Zipper A)]
-  : A
+(defn zipper-focus [A] [z : (Zipper A)] : A
   (:: (zipper-focus-raw (:: z :int)) A))
 ;;; zipper-move-left -- move the focus one step to the left; returns Option[Zipper[A]].
 ;;;
@@ -127,9 +127,7 @@
   ```)
 ;;; zipper-move-left -- by-value: some(z') if a left neighbor exists, else none.
 
-(defn zipper-move-left [A]
-  [z : (Zipper A)]
-  : (Option (Zipper A))
+(defn zipper-move-left [A] [z : (Zipper A)] : (Option (Zipper A))
   (let [r (zipper-move-left-raw (:: z :int))]
     (if (= r 0) (none) (some (:: r (Zipper A))))))
 ;;; zipper-move-right -- move the focus one step to the right; returns Option[Zipper[A]].
@@ -164,9 +162,7 @@
   ```)
 ;;; zipper-move-right -- by-value: some(z') if a right neighbor exists, else none.
 
-(defn zipper-move-right [A]
-  [z : (Zipper A)]
-  : (Option (Zipper A))
+(defn zipper-move-right [A] [z : (Zipper A)] : (Option (Zipper A))
   (let [r (zipper-move-right-raw (:: z :int))]
     (if (= r 0) (none) (some (:: r (Zipper A))))))
 ;;; zipper-free -- free a Zipper[A] and its neighbor arrays.

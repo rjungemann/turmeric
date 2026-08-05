@@ -21,6 +21,35 @@ void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
 void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     char *bn = name_for_binding(ctx, e->as.set_.target);
     char *v = emit_value(ctx, body, e->as.set_.value);
+
+    /* set-bang-rc-release: release the value being overwritten.  Only when the
+     * elaborator proved this binding owns a continuous strong reference -- see
+     * elab_set_rc_release for why a hand-managed binding must NOT come here.
+     *
+     * The spill to a temp is load-bearing, not a readability nicety: `v` is an
+     * expression string that may still READ the binding being assigned.
+     * `(set! h (.next h))` lowers to `((tur_adt_Node *)h->value)->next` inline,
+     * so releasing first could free `h` and then dereference it.  Materializing
+     * `v` first makes the order [evaluate new] -> [release old] -> [store]
+     * regardless of the value's shape, which is also what keeps
+     * `(set! h (rc/of ... (rc/clone h) ...))` correct: the clone's +1 is taken
+     * while the old value is still alive, so the release drops it to the count
+     * the new structure holds rather than to zero. */
+    if (e->as.set_.release_old) {
+        const char *tcn =
+            type_c_name(emit_resolve_type(ctx, e->as.set_.target->type));
+        char *tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = (%s)(%s);\n", tcn, tmp, tcn, v);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) { rc_strong_decrement(%s); rc_free_queue_drain(); }\n",
+                   bn, bn);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s = %s;\n", bn, tmp);
+        free(tmp); free(bn); free(v);
+        return;
+    }
+
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", bn, v);
     free(bn); free(v);
@@ -82,6 +111,23 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
          * Guarded by `if (lhs)` so a NULL sentinel (e.g. the construction-time
          * placeholder) is a no-op. */
         TypeKind afk = ctor->fields[fi].kind;
+        bool releases_old = (afk == TY_RC || afk == TY_WEAK ||
+                             afk == TY_REF || afk == TY_LREF);
+        /* set-bang-rc-release: spill the incoming value before releasing the old
+         * one.  `vv` is an expression string that can still READ the very field
+         * being written -- `(set! (.next a) (.next a))` lowers to the same
+         * `a->value->next` path on both sides, so releasing first could free the
+         * block and then read it.  Same ordering device as emit_set_stmt. */
+        if (releases_old) {
+            const CtorField *cf = &ctor->fields[fi];
+            const char *fcn = cf->full_type ? type_c_name(*cf->full_type)
+                                            : type_c_name(emit_type_from_kind(afk));
+            char *vtmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = (%s)(%s);\n", fcn, vtmp, fcn, vv);
+            free(vv);
+            vv = vtmp;
+        }
         if (afk == TY_RC) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "if (%s) { rc_strong_decrement(%s); rc_free_queue_drain(); }\n",
@@ -742,6 +788,16 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Set flag to indicate return has been emitted */
             ctx->return_emitted = true;
+
+            /* S1b/dynvar early-exit: pop every dynamic binding still in scope,
+             * innermost first -- the order the cleanup attribute would use.
+             * Without this the JIT (where c2mir drops that attribute) leaves
+             * the dynvar key pointing into this frame after it returns. */
+            for (uint32_t di = ctx->n_dynvar_guards; di-- > 0; ) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "_dynvar_pop_%s(&%s);\n",
+                           ctx->dynvar_guard_names[di], ctx->dynvar_guard_ptrs[di]);
+            }
 
             /* Fire all defers in the frame chain if we're in a scope with defers */
             if (ctx->frame_var) {

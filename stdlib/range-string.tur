@@ -1,0 +1,95 @@
+;;; tur/range-string -- owned String siblings for the tur/range formatters.
+;;;
+;;; range-fmt, range->str, bound-fmt (tur/range-bound) and bound-show-fmt
+;;; (tur/range) each return a freshly-allocated cstr the caller must free -- a
+;;; str-concat/malloc result typed as a borrowed cstr, the exact ownership/leak
+;;; hazard the owned String type fixes (see string-adoption-stdlib-plan.md).
+;;; This opt-in module returns each as an owned String; the owned return removes
+;;; the free-obligation even though these usually feed println/show immediately.
+;;;
+;;; Every branch of range-fmt / range->str / bound-fmt / bound-show-fmt
+;;; allocates a fresh result, so a plain string/adopt-cstr wrapper is safe.
+;;; `bound->str` is deliberately NOT here: its Unbounded branch returns a static
+;;; "unbounded" literal (never a fresh alloc), so it cannot be blindly adopted --
+;;; its owned sibling `bound->str-string` (per-branch adopt/from-cstr) ships in
+;;; stdlib/range-bound-string.tur (the Bucket B plan,
+;;; string-owned-builders-and-optional-accessors-plan.md, Part 2).
+;;;
+;;; Separate module so the lean tur/range* modules stay free of the
+;;; map/typeclass dependency; only programs wanting owned formatter Strings load
+;;; this.
+;;;
+;;; Note: bound-show-fmt is inline-C, so this module runs on the compiled path;
+;;; use the underlying cstr forms under --interpret.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 3)
+(load "stdlib/range-bound.tur")
+
+(load "stdlib/string.tur")
+;;; range-fmt-string -- render a pair of endpoint kinds/values in interval
+;;; notation, as an owned String.
+;;;
+;;; Parameters:
+;;;   lo-kind -- 0 unbounded, 1 inclusive, 2 exclusive (low endpoint)
+;;;   lo-val  -- low endpoint value (ignored when unbounded)
+;;;   hi-kind -- 0 unbounded, 1 inclusive, 2 exclusive (high endpoint)
+;;;   hi-val  -- high endpoint value (ignored when unbounded)
+;;;
+;;; Returns:
+;;;   An owned String, e.g. "[1, 5)".
+;;;
+;;; Example:
+;;;   (string/to-cstr (range-fmt-string 1 1 2 5))  ; => "[1, 5)"
+;;;
+;;; Since: v2
+
+(defn range-fmt-string [lo-kind : int lo-val : int hi-kind : int hi-val : int] : String
+  (string/adopt-cstr (range-fmt lo-kind lo-val hi-kind hi-val)))
+;;; range->str-string -- render a Range in interval notation, as an owned String.
+;;;
+;;; Parameters:
+;;;   r -- an :int Range pointer
+;;;
+;;; Returns:
+;;;   An owned String, e.g. "[1, 5)".
+;;;
+;;; Example:
+;;;   (string/to-cstr (range->str-string (closed-open-range 1 5)))  ; => "[1, 5)"
+;;;
+;;; Since: v2
+
+(defn range->str-string [r : int] : String (string/adopt-cstr (range->str r)))
+;;; bound-fmt-string -- render a single inclusive/exclusive endpoint, as an
+;;; owned String.
+;;;
+;;; Parameters:
+;;;   kind -- 1 inclusive, 2 exclusive
+;;;   v    -- the endpoint value
+;;;
+;;; Returns:
+;;;   An owned String, e.g. "[3" or "(3".
+;;;
+;;; Example:
+;;;   (string/to-cstr (bound-fmt-string 1 3))  ; => "[3"
+;;;
+;;; Since: v2
+
+(defn bound-fmt-string [kind : int v : int] : String
+  (string/adopt-cstr (bound-fmt kind v)))
+;;; bound-show-fmt-string -- render a single inclusive/exclusive endpoint (the
+;;; Show-backing inline-C formatter), as an owned String.
+;;;
+;;; Parameters:
+;;;   kind -- 1 inclusive, 2 exclusive
+;;;   v    -- the endpoint value
+;;;
+;;; Returns:
+;;;   An owned String, e.g. "[3" or "(3".
+;;;
+;;; Example:
+;;;   (string/to-cstr (bound-show-fmt-string 2 3))  ; => "(3"
+;;;
+;;; Since: v2
+
+(defn bound-show-fmt-string [kind : int v : int] : String
+  (string/adopt-cstr (bound-show-fmt kind v)))

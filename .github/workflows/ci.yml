@@ -10,6 +10,20 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
+    # across runs. ccache launches every `cc -c` in the cmake build of `tur`
+    # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
+    # the bulk of each job's build step. (Fixture builds see little benefit now:
+    # the auto/runtime-lib default already skips the runtime recompile, and each
+    # fixture's generated .c is unique and invalidated by any src/ change.)
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,17 +43,41 @@ jobs:
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install libedit || true
+        # coreutils is for `gtimeout`, and it is load-bearing, not a nicety.
+        # Stock macOS ships no `timeout(1)`; both tests/run.sh and
+        # tests/run-jit.sh detect `timeout` then `gtimeout` and, finding
+        # NEITHER, run every fixture UNTIMED -- a tradeoff their own comments
+        # spell out ("a hung fixture then hangs the run").  On this runner that
+        # turned one flaky networking fixture into a 45-minute job kill with no
+        # FAIL line, three times on 2026-08-02.  With gtimeout present the same
+        # fixture dies at its per-fixture timeout and reports as a FAIL, which
+        # is a result you can act on.
+        run: brew install libedit ccache coreutils || true
+
+      # Restore + explicit save (not the combined cache action): the combined
+      # action's post-save defaults to save-always:false, so it would skip
+      # saving whenever a later step -- e.g. the fixture suite below -- fails,
+      # exactly the runs where the freshly-built ccache is most worth keeping.
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-test-${{ runner.os }}-
 
       - name: Configure (Debug + ASAN)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build -j
+
+      - name: ccache stats
+        run: ccache -s
 
       - name: Smoke check (tur --version must not hang)
         run: |
@@ -74,20 +112,394 @@ jobs:
         # this runs unconditionally once per OS.
         run: ctest --output-on-failure --progress --test-dir build -E '^tur_tests$'
 
+      # Save after everything (incl. the fixture suite, which also feeds ccache
+      # via run.sh) regardless of whether the suite passed. The exact key never
+      # pre-exists (it embeds the commit SHA), so this always writes a fresh entry.
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+
+  jit:
+    name: JIT engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The MIR JIT engine had NO CI coverage at all: the `test` job configures
+    # without -DTUR_JIT=ON, so `tur_jit_fixture_tests` and `tur_repl_spice_jit`
+    # never register (CMakeLists.txt:634-655 gates both on TUR_JIT) and the
+    # whole engine shipped untested on every platform.  Every macOS JIT number
+    # in docs/upcoming/jit-engine-j0-findings.md was hand-measured on someone's
+    # laptop as a result.
+    #
+    # This is a SEPARATE job rather than a flag on `test`, for three reasons:
+    #   1. TUR_JIT makes configure fetch MIR over the network (cmake/mir.cmake
+    #      FetchContent, full clone of a pinned fork).  Folding that into the
+    #      main gate would make a GitHub/network blip fail every PR.
+    #   2. tur_jit_fixture_tests re-runs the whole ~2500-fixture corpus through
+    #      the engine.  It is fast (~2 min on Apple Silicon, run serially and
+    #      fanned out internally), but it is a second full corpus pass and
+    #      belongs on its own clock.
+    #   3. `jit` is still an experiment (--enable=jit, TUR-W0060), so it should
+    #      not gate merges at the same strength as the AOT suite.
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        # coreutils is for `gtimeout`, and it is load-bearing, not a nicety.
+        # Stock macOS ships no `timeout(1)`; both tests/run.sh and
+        # tests/run-jit.sh detect `timeout` then `gtimeout` and, finding
+        # NEITHER, run every fixture UNTIMED -- a tradeoff their own comments
+        # spell out ("a hung fixture then hangs the run").  On this runner that
+        # turned one flaky networking fixture into a 45-minute job kill with no
+        # FAIL line, three times on 2026-08-02.  With gtimeout present the same
+        # fixture dies at its per-fixture timeout and reports as a FAIL, which
+        # is a result you can act on.
+        run: brew install libedit ccache coreutils || true
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-jit-${{ runner.os }}-
+
+      - name: Configure (Debug + JIT)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets, not `--target tur`: the engine's step-6 cc fallback links
+      # -lturi, and `tur` itself never links turi, so a tur-only build leaves
+      # every fallback fixture dying with `ld: library 'turi' not found`.
+      # (CLAUDE.md records this exact trap.)
+      - name: Build (all targets -- the cc fallback links libturi.a)
+        run: cmake --build build -j
+
+      # Load-bearing: tests/run-jit.sh probes the binary for the engine and
+      # SKIPs the entire corpus with exit 0 when it is absent.  That is the
+      # right behaviour for a local build, but in CI it means a job that
+      # silently lost -DTUR_JIT=ON would report GREEN having run nothing --
+      # precisely the failure mode that let this gap persist.  Fail loudly
+      # instead.  `perl -e alarm` is the portable timeout (macOS runners ship
+      # no coreutils `timeout`), matching the smoke check in the `test` job.
+      - name: Verify the JIT engine is actually present
+        run: |
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur --enable=jit jit 2>&1) || true
+          echo "$out"
+          case "$out" in
+            *"usage: tur jit"*)
+              echo "JIT engine present." ;;
+            *)
+              echo "::error::tur was built without the MIR JIT engine -- the JIT suites would self-skip and this job would pass vacuously."
+              exit 1 ;;
+          esac
+
+      # BLOCKING on macOS, non-blocking on Linux -- deliberately asymmetric,
+      # by evidence rather than by preference:
+      #
+      #   macOS: verified green on arm64 (Apple clang 21, macOS 27) --
+      #     2416 passed, 0 failed, 48 skipped (17 via the cc fallback), measured
+      #     2026-08-01 in THIS JOB'S OWN CONFIGURATION (Debug + -DTUR_JIT=ON,
+      #     TUR_DEBUG_SANITIZE at its default ON).  A green baseline exists, so
+      #     the leg gates.  This is also the leg that matters most: macOS is
+      #     where the engine's platform-specific hazards live (MAP_JIT/W^X, the
+      #     AAPCS64 __uint128_t alignment skew, the Apple-SDK-header cc
+      #     fallbacks).
+      #
+      #     Re-measure IN THIS CONFIGURATION when you update these numbers.  The
+      #     previous baseline (2414 / 47 skipped / 31 fallback) was taken on an
+      #     unsanitized local build, and that mismatch is exactly why the leg
+      #     read red-for-months against a "known green" figure: six GC/Rc/weak
+      #     fixtures asserted on a process-wide malloc probe that ASan and
+      #     one-process `tur jit` both perturb.  See
+      #     docs/archive/jit-macos-gc-rc-weak-fixtures-fail.md.  A local
+      #     `-DTUR_DEBUG_SANITIZE=OFF` or Release build will NOT reproduce this
+      #     job.
+      #
+      #   Linux: NOT verified locally when this job was written, so it runs and
+      #     publishes its counts without gating.
+      #
+      # FLIP LINUX TO BLOCKING (drop the matrix condition, leaving no
+      # continue-on-error) as soon as the first run publishes a clean ubuntu
+      # leg.  Do not let this sit asymmetric indefinitely.
+      #
+      #   The precondition is MET: run 30685603734 published a clean ubuntu leg
+      #   (ctest target passing outright, not continue-on-error hiding it).  The
+      #   flip is a gating-policy change and is deliberately left to a human.
+      #   One caveat worth knowing before making it: that green was PARTLY
+      #   VACUOUS on the GC/Rc/weak family, because the malloc probe those
+      #   fixtures used is `mallinfo2`, which reports ~nothing once ASan
+      #   replaces glibc's allocator.  As of 2026-08-01 they assert on the CG6
+      #   collector counters instead, so the Linux leg's green now means
+      #   something there too -- which makes the flip more worthwhile, not less.
+      - name: Run JIT suites
+        continue-on-error: ${{ matrix.os != 'macos-latest' }}
+        shell: bash
+        run: |
+          # `-V` rather than `--output-on-failure`, so the harness's own counts
+          # reach the log on a PASSING run too.
+          #
+          # This is not cosmetic.  Under --output-on-failure a green run prints
+          # nothing but ctest's own "100% tests passed", so the corpus counts
+          # are unobservable from CI -- and the baseline documented above can
+          # only ever be checked by running the suite by hand.  That is exactly
+          # how it drifted: 2414 / 47 skipped / 31 fallback, hand-measured on an
+          # unsanitized local build, against a job that builds sanitized.  The
+          # numbers disagreed for months and nothing surfaced it.
+          #
+          # -V alone would dump ~2500 PASS lines per leg, so the output is
+          # filtered to what is worth reading -- about 20 lines: each harness's
+          # summary, every FAIL line, ctest's own verdict, and the cc-fallback
+          # fixtures BY NAME (two archived JIT reports track exactly which
+          # fixtures fall back, and the count alone does not say which moved).
+          #
+          # STREAMED, not redirected-then-filtered.  This step used to do
+          # `ctest > jit-ctest.log` and run the grep afterwards, which is fine
+          # for a run that finishes and useless for one that does not: when the
+          # job hits `timeout-minutes: 45` ctest is killed, the grep never runs,
+          # and the log dies with the runner -- so a HANG printed literally
+          # nothing and there was no way to tell how far it got.  That is not
+          # hypothetical; it is how both `main` (f865097db, 2026-08-02 19:52)
+          # and a PR leg burned 45 minutes each with zero diagnostic output.
+          # `tee` keeps the full log on disk as it goes (so the artifact below
+          # survives a kill) and `grep --line-buffered` emits each interesting
+          # line as it appears.
+          #
+          # `Start <n>: <name>` lines are in the filter so a hang says WHICH
+          # ctest test it is inside.  That is coarse -- one ctest test is a
+          # whole ~2500-fixture harness run -- so per-fixture resolution comes
+          # from the uploaded artifact, not from the console.
+          #
+          # ctest's status is taken from PIPESTATUS[0], so neither the grep's
+          # exit code (1 when nothing matches) nor the pipe can mask a failing
+          # suite -- the property the old `rc=$?`-before-grep ordering had, kept
+          # across the change to a pipeline.
+          #
+          # --no-tests=error because a `-R` that matches NOTHING exits 0.  The
+          # "Verify the JIT engine is actually present" step above catches the
+          # main way that happens (a build that silently lost -DTUR_JIT=ON), but
+          # any other break in test registration would sail through as a green
+          # step that ran no tests -- the same vacuous-pass shape that step
+          # exists to prevent.
+          set +e
+          ctest --test-dir build -V --no-tests=error \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' 2>&1 \
+            | tee jit-ctest.log \
+            | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
+          rc=${PIPESTATUS[0]}
+          exit $rc
+
+      # `always()` covers the cancellation a `timeout-minutes` kill produces, so
+      # the partial log from a HANG is uploaded too -- which is the case the
+      # console filter cannot serve and the whole reason this exists.
+      - name: Upload JIT ctest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jit-ctest-log-${{ matrix.os }}
+          path: jit-ctest.log
+          if-no-files-found: warn
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+
+  windows:
+    name: Windows build (MSYS2/UCRT64)
+    runs-on: windows-latest
+
+    # Windows had NO CI coverage: `test` and `jit` both pin
+    # [ubuntu-latest, macos-latest].  In the ~899 commits after the bring-up
+    # merged (7a16ef1de), five independent breaks accumulated -- three of them
+    # inside one five-day window -- and `tur.exe` stopped building entirely
+    # before anyone noticed.  This job exists so that cannot happen silently
+    # again.
+    #
+    # It BUILDS ONLY.  It deliberately does not run the fixture suite: ~54
+    # fixtures fail on Windows today for known, pre-existing reasons (Winsock
+    # setsockopt in stdlib/httpd.tur, POSIX-only inline-C, and carrier<->pointer
+    # straddles that are not Windows-specific at all).  Those are tracked in
+    # docs/reported/windows-*.md and docs/upcoming/v1/windows-remaining-plan.md.
+    # A permanently-red job teaches people to ignore it, which is strictly worse
+    # than no job; every one of the five breaks above was a COMPILE error, so
+    # building is what actually guards this platform.  Turn the suite on here
+    # once those classes are closed.
+    #
+    # Separate job rather than a third entry in the `test` matrix because
+    # nothing in that job's shape transfers: it wants apt/brew, a POSIX ccache
+    # setup, and ends in `ctest`.
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      # Before checkout: git on Windows defaults to core.autocrlf=true, which
+      # would rewrite every LF file in the tree.  The committed split-runtime
+      # artifacts (src/runtime/generated/) and the shell harnesses are
+      # line-ending sensitive, and a CRLF checkout makes any regeneration here
+      # produce a whole-file diff.  `input` keeps the working tree as committed.
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v4
+
+      # UCRT64 (not MINGW64, not the plain MSYS shell): the port targets the
+      # UCRT runtime, and MSYSTEM selects which toolchain lands on PATH.
+      # UCRT64 (not MINGW64, not the plain MSYS shell): the port targets the
+      # UCRT runtime, and MSYSTEM selects which toolchain lands on PATH.
+      #
+      # Only what the BUILD genuinely requires goes here.  A pacman -S
+      # transaction is all-or-nothing, so one unresolvable name aborts the whole
+      # step and the job never reaches Configure -- which is exactly what
+      # happened when this list carried a nonexistent
+      # `mingw-w64-ucrt-x86_64-libedit`: the leg produced zero Windows signal
+      # while still appearing green-adjacent in the checks list.  Optional
+      # packages go in the non-fatal step below instead.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      # Optional: line editing for the REPL (HAVE_EDITLINE in
+      # src/CMakeLists.txt).  The package is `wineditline`, NOT `libedit` --
+      # verified with `pacman -Qo /ucrt64/lib/libedit.dll.a`, which is the exact
+      # file CMake's HAVE_EDITLINE probe finds, and it is owned by
+      # mingw-w64-ucrt-x86_64-wineditline.  (CLAUDE.md says the same: "MSYS2
+      # ships wineditline".)
+      #
+      # `|| true` regardless, mirroring the macOS legs' `brew install libedit
+      # ccache || true`: the build succeeds without it, just with a degraded
+      # REPL, so an unavailable optional package must never be able to take the
+      # whole leg down again.
+      - name: Install optional REPL line editing (non-fatal)
+        run: pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-wineditline || true
+
+      - name: Toolchain versions
+        run: |
+          echo "MSYSTEM=$MSYSTEM"
+          cc --version | head -1
+          cmake --version | head -1
+
+      # Ninja, not the default generator: matches `just build-windows`, so a
+      # local repro of a CI failure is the same command.  Sanitizers are off on
+      # this leg regardless -- MinGW gcc ships no ASan/UBSan runtime, and
+      # src/CMakeLists.txt already reports that at configure time.
+      - name: Configure
+        run: >-
+          cmake -S . -B build-win -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build build-win -j
+
+      - name: Smoke check (tur.exe --version must not hang)
+        run: |
+          out=$(timeout 10 ./build-win/tur.exe --version)
+          rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::tur.exe --version failed or hung (exit $rc)"
+            exit 1
+          fi
+          case "$out" in
+            *"the Turmeric compiler"*) ;;
+            *) echo "::error::unexpected tur.exe --version output"; exit 1 ;;
+          esac
+
+      # A bare compile of `tur` proves far less than it looks: it says nothing
+      # about whether the compiler can drive cc, link against libturi, and
+      # produce a binary that runs.  One real fixture end-to-end covers the
+      # whole emit -> cc -> link -> execute path for the cost of a few seconds.
+      - name: End-to-end (compile and run a fixture)
+        run: |
+          ./build-win/tur.exe build tests/fixtures/arith/input.tur -o ./arith-smoke.exe
+          ./arith-smoke.exe > ./arith-smoke.out
+          # Compared in bash, not with `diff`.  The UCRT64 environment installs
+          # only what the build needs (gcc/cmake/ninja) and diffutils is not in
+          # that set, so `diff` was `command not found` -- which `if !` then
+          # reported as "output did not match".  The comparison had never run,
+          # and the message named the wrong cause: this leg's FIRST green build
+          # (after the libedit fix in d7ed892c let it past pacman at all) was
+          # reported as a codegen failure.  Same shape as the bare `timeout` in
+          # run-jit.sh that hid 407 macOS failures.
+          #
+          # Bash string equality needs no package and cannot go missing, and
+          # `$(< f)` is a builtin redirection, so not even `cat` is required.
+          # The CR strip keeps the check honest if stdout ever stops being set
+          # to binary mode (the emitted main() calls _setmode(_O_BINARY) today,
+          # so output is LF and matches the LF-checked-out fixture).
+          expected=$(< tests/fixtures/arith/expected.stdout)
+          actual=$(< ./arith-smoke.out)
+          expected=${expected//$'\r'/}
+          actual=${actual//$'\r'/}
+          if [ "$expected" != "$actual" ]; then
+            echo "expected:"; printf '%s\n' "$expected"
+            echo "actual:";   printf '%s\n' "$actual"
+            echo "::error::fixture 'arith' ran but its output did not match expected.stdout"
+            exit 1
+          fi
+          echo "fixture 'arith' compiled, ran, and matched expected.stdout"
+
   check-guides:
     name: Check guide toggle pairs
     runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-guides-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-guides-${{ runner.os }}-
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
       - name: Build tur
         run: cmake --build build -j --target tur
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-guides-${{ runner.os }}-${{ github.sha }}
       - name: Check guide pairs (AST-verified via tur parse-check)
         run: python3 tools/check-guide-pairs.py --tur build/tur docs/guides/
 
@@ -107,19 +519,42 @@ jobs:
     runs-on: ubuntu-latest
     # Only run when src/codegen/ changed or expected.c files changed.
     # This prevents the job from failing on PRs that don't touch codegen at all.
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-snapshots-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-snapshots-${{ runner.os }}-
 
       - name: Configure (Debug)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build tur
         run: cmake --build build -j --target tur
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-snapshots-${{ runner.os }}-${{ github.sha }}
 
       - name: Check for snapshot drift
         run: ./build/tur run regen-snapshots -- --check
@@ -130,11 +565,27 @@ jobs:
     # Pre-deploy gate for try.turmeric-lang.com: builds the wasm bundle and
     # drives the browser REPL through one evaluation.  If this fails, the
     # branch is not safe to `npm run deploy` from web/.
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-web-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-web-${{ runner.os }}-
 
       - name: Set up Python (for gendocs)
         uses: actions/setup-python@v5
@@ -161,10 +612,17 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Configure (Debug, native tur)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build native tur (needed for docs / doc-names.json)
         run: cmake --build build -j --target tur
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-web-${{ runner.os }}-${{ github.sha }}
 
       - name: Generate stdlib docs (writes web/public/doc-names.json)
         run: ./build/tur run docs

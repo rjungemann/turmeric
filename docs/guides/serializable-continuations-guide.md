@@ -167,19 +167,25 @@ serial-resume(k v) : T
 ### The `serial-continuation<T>` Type
 
 ```turmeric
-(defalias serial-continuation<T>
-  (struct
-    [resume    : (-> T (serial-continuation<T>))
-     to-bytes  : (-> bytes)
-     schema-id : cstr]))  ; Stable hash of frame chain shape
+(defstruct serial-continuation<T>
+  [resume    : (-> T serial-continuation<T>)
+   to-bytes  : (-> bytes)
+   schema-id : cstr])  ; Stable hash of frame chain shape
 ```
 ```sweet-exp
-defalias serial-continuation<T>
-  struct
-    [resume    : (-> T (serial-continuation<T>))
-     to-bytes  : (-> bytes)
-     schema-id : cstr]  ; Stable hash of frame chain shape
+defstruct serial-continuation<T>
+  [resume    : (-> T serial-continuation<T>)
+   to-bytes  : (-> bytes)
+   schema-id : cstr]  ; Stable hash of frame chain shape
 ```
+
+> **`schema-id` should be an owned `String`.** The comment calls it a *stable
+> hash of the frame chain shape* -- a **computed** value, stored in the struct and
+> serialized alongside the continuation. A `cstr` field here borrows a pointer
+> that dangles once the buffer that produced the hash is freed; only a hash that
+> is always a static literal could stay `cstr`. Since it is computed, use
+> `schema-id : String` so the continuation owns its own copy. See
+> [strings-guide.md](strings-guide.md).
 
 ## Examples
 
@@ -671,7 +677,7 @@ functions are excluded (CF7.3), but same-function bindings that happen to be
 in lexical scope may be flagged even if they are dead at the shift point.
 
 Full precision requires the post-1.0 CPS liveness pass (tracked in
-[control-flow-completeness-plan.md](../control-flow-completeness-plan.md) CF7.5).
+[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md) CF7.5).
 
 **Workaround:** consume or drop non-Serializable values before the shift point,
 or restructure so only Serializable bindings remain in scope.

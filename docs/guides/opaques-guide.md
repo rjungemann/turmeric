@@ -66,12 +66,19 @@ Opaques are *not* for:
 (defopaque Name :rep-type)
 (defopaque Name :rep-type :linear)
 (defopaque Name :rep-type :affine)
+(defopaque Name :rep-type :sealed)          ; experiment; see below
+(defopaque Name :rep-type :affine :sealed)  ; attributes compose
 ```
 
-The optional trailing keyword promotes the newtype to a substructural
-handle. Without it the opaque is freely copyable (`is_copy = true`); with
-`:linear` or `:affine` it becomes a resource the checker tracks for
-single use.
+The optional trailing keywords are a *set*. `:linear` and `:affine`
+promote the newtype to a substructural handle -- without either, the
+opaque is freely copyable (`is_copy = true`); with one it becomes a
+resource the checker tracks for single use. The two are mutually
+exclusive ("exactly once" and "at most once" are contradictory claims).
+
+`:sealed` is orthogonal to those: it governs *who may use `::` on the
+type*, not how many times a value may be used, so it composes with
+either. See [Sealing an opaque](#sealing-an-opaque-sealed) below.
 
 The C ABI of a substructurally-marked opaque is identical to a freely
 copyable one -- the handle still lowers to `int64_t`; only the
@@ -137,6 +144,57 @@ Conventions worth following:
 - For `:int` handles that have a sentinel error value (e.g. `-1` for
   POSIX fds), expose a `name-valid?` predicate instead of forcing
   callers to compare integers.
+
+## Sealing an opaque: `:sealed`
+
+> **Experiment.** Requires `--enable=sealed-opaque` (or `:experiments` in
+> `build.tur`). Without it `:sealed` still parses but imposes nothing --
+> deliberately, so adopting it in a library is not a breaking change for
+> consumers who have not opted in. See
+> [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/sealed-opaque-plan.md).
+
+`::` is a **coercing** cast, not a checked one. That means a plain
+`defopaque` does *not* encapsulate its handle: any module can unwrap a
+value to the representation and re-wrap the result as a fresh value of
+the opaque type. Both directions compile, anywhere.
+
+That is fine for interop, and it silently bounds every guarantee built
+on top of an opaque handle:
+
+```turmeric
+(let [__b (& w)]                 ; w is immutably borrowed
+  (let [w2 (:: (:: w :int) H)]   ; unwrap, re-wrap -> a NEW handle
+    (h-bump! w2)))               ; w2 is OWNED, not the borrowed w: no TUR-E0200
+```
+
+Mutating the borrowed `w` directly is correctly rejected. Mutating the
+alias is not -- so a uniqueness-based argument ("no second mutable
+handle can exist here") does not survive one `::`.
+
+`:sealed` closes that. Inside the declaring module `::` behaves as
+always; outside it, both directions are `TUR-E0302`:
+
+| use site | `(:: n H)` | `(:: h :int)` |
+| --- | --- | --- |
+| declaring module | allowed | allowed |
+| any other module | **TUR-E0302** | **TUR-E0302** |
+
+Sealing the *unwrap* direction as well as fabrication is what makes the
+representation genuinely private rather than merely awkward to rebuild:
+once the raw carrier escapes, inline-C can do anything with it.
+
+**What `:sealed` does not claim.** It is a compile-time discipline over
+the `::` surface, not a capability and not a runtime protection.
+inline-C in any module can still cast an `int64_t` to whatever it likes.
+So sealing raises an aliasing bypass from "one `::` away, in ordinary
+code" to "requires deliberate inline-C" -- which is a real improvement,
+and is the honest claim to make in your module's docs. If you document a
+sealed handle as an adversarial guarantee, you are overselling it.
+
+One limitation: a `defopaque` outside any `defmodule` belongs to the
+implicit top-level module, so two moduleless files are not separated by
+this check. Single-file programs are where sealing has the least to
+offer anyway.
 
 ## Inline-C and the ABI
 

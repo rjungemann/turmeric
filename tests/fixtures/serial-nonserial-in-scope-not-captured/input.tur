@@ -1,0 +1,30 @@
+;; E4a (cps-backend-multishot-continuations-owning-capture-plan): a non-
+;; Serializable value in scope at a serial-shift, but NOT captured by the
+;; continuation, must not require a Serializable instance.
+;;
+;; The sibling of cloneable-owning-in-scope-not-captured for the serial
+;; (Serializable) continuation path.  Before the E4a fix,
+;; check_serializable_capture walked EVERY binding in scope at a serial-shift
+;; and rejected any non-Serializable type with TUR-E0018 -- so merely having a
+;; non-Serializable value in scope (here a plain `defstruct` with no
+;; Serializable instance) broke every serial-shift in the function, even when
+;; the reified continuation never touched it.  The check now runs once per
+;; serial-reset on the full delimited body and flags only the bindings that are
+;; FREE in that body (the ones the continuation actually captures).  `ns` is
+;; never referenced by the continuation, so it needs no Serializable instance.
+
+(load "stdlib/serial.tur")
+
+;; NoSer has no Serializable instance.
+(defstruct NoSer :copy [x : int])
+
+;; Receiver ignores the captured continuation and returns a constant.
+(defn k-const [k : ptr<void>] : int 42)
+
+(defn run [] : int
+  (let [ns (make-struct NoSer 7)]        ; non-Serializable, in scope, NOT captured
+    (serial-reset (serial-shift k-const 0))))
+
+(defn main [] : int
+  (println (run))
+  0)

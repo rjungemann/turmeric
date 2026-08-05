@@ -1,0 +1,62 @@
+;; complex-basics -- Complex construction, the #cx{...} literal, arithmetic
+;; through the N0 Num dispatch, magnitude, argument, exp, and Show.
+;;
+;; Every literal here carries a non-zero fractional part on purpose: a
+;; whole-number float cannot show a truncation or int/float divergence bug, so
+;; #cx{3.25 -1.5} is the probe and #cx{3.0 4.0} is only used where the exact
+;; 3-4-5 triangle is the point.
+(load "stdlib/complex.tur")
+
+(defn pr [z : Complex] : void
+  (let [s (complex->string z)]
+    (do (println (string/to-cstr s)) (string/release s))))
+
+(defn pr-show [z : Complex] : void
+  (let [s (show z)]
+    (do (println (string/to-cstr s)) (string/release s))))
+
+(defn main [] : int
+  ;; Literal and accessors.  The imaginary sign is always explicit in the
+  ;; rendering, so "3.25-1.5i" is never ambiguous.
+  (pr #cx{3.25 -1.5})
+  (pr #cx{3.25 1.5})
+  (println (complex/re #cx{3.25 -1.5}))
+  (println (complex/im #cx{3.25 -1.5}))
+  ;; The slots are ordinary forms, so a curly-infix expression composes.
+  (pr #cx{3.25 {1.0 + 0.5}})
+  ;; Named constructors.
+  (pr (complex/from-float 2.5))
+  (pr (complex/zero))
+  (pr (complex/one))
+  (pr (complex/i))
+  (println (complex/real? (complex/from-float 2.5)))
+  (println (complex/real? #cx{2.5 0.25}))
+  ;; Arithmetic through `+`/`-`/`*`/`/`, i.e. through Num dispatch.
+  (pr (+ #cx{3.25 1.5} #cx{0.5 2.0}))
+  (pr (- #cx{3.25 1.5} #cx{0.5 2.0}))
+  (pr (* #cx{3.25 1.5} #cx{0.5 2.0}))
+  (pr (/ #cx{3.25 1.5} #cx{0.5 2.0}))
+  (pr (- #cx{3.25 1.5}))
+  (pr (complex/conj #cx{3.25 -1.5}))
+  (pr (complex/scale #cx{3.25 -1.5} 2.0))
+  ;; i^2 = -1, the defining identity, with no compiler-runtime helper involved.
+  (pr (* (complex/i) (complex/i)))
+  ;; Magnitude: the exact 3-4-5 triangle, plus the squared form.
+  (println (complex/abs #cx{3.0 4.0}))
+  (println (complex/abs2 #cx{3.0 4.0}))
+  (println (complex/abs #cx{0.0 -2.5}))
+  (println (complex/abs #cx{-2.5 0.0}))
+  ;; Argument: straight up the imaginary axis is pi/2.
+  (println (complex/arg #cx{0.0 1.5}))
+  (println (complex/arg #cx{2.5 0.0}))
+  ;; exp(0) = 1, and Euler's identity: the real part of exp(i*pi) is -1.  Only
+  ;; the real part is pinned -- the imaginary part is a double-rounding residue
+  ;; (~1.2e-16) rather than the exact 0 the identity promises.
+  (pr (complex/exp #cx{0.0 0.0}))
+  (println (complex/re (complex/exp (complex/of 0.0 PI))))
+  ;; Eq is componentwise.
+  (println (eq? #cx{3.25 -1.5} #cx{3.25 -1.5}))
+  (println (eq? #cx{3.25 -1.5} #cx{3.25 1.5}))
+  ;; Show.
+  (pr-show #cx{3.25 -1.5})
+  0)

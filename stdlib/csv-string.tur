@@ -1,0 +1,95 @@
+;;; tur/csv-string -- owned String siblings for the tur/csv emitters.
+;;;
+;;; The csv/emit* functions accumulate their output into a malloc/realloc'd
+;;; buffer and return it as a borrowed-typed cstr the caller must free -- the
+;;; exact ownership/leak hazard the owned String type fixes (see
+;;; string-adoption-stdlib-plan.md). Serialized CSV is almost always returned,
+;;; stored, or written past the call frame, so this opt-in module returns it as
+;;; an owned String.
+;;;
+;;; Each sibling adopts the completed buffer via string/adopt-cstr. The
+;;; accumulation itself already happens once inside the emitter (a single
+;;; growable buffer, not a fold of str-concat), so adopting the finished result
+;;; is linear -- there is no per-join churn to route through a StringBuilder
+;;; here. (The StringBuilder rule in the Bucket B plan governs *new* multi-join
+;;; String formatters, not the wrapping of an emitter that already builds one
+;;; buffer.) On an invalid delimiter the underlying emitter returns 0; adopt
+;;; renders that as an empty String rather than crashing.
+;;;
+;;; Separate module so the lean tur/csv stays free of the map/typeclass
+;;; dependency; only programs wanting owned emit results load this.
+;;;
+;;; Note: the emitters are inline-C, so like tur/csv itself this runs on the
+;;; compiled path; use the underlying csv/emit* cstr forms under --interpret.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 3)
+(load "stdlib/csv.tur")
+
+(load "stdlib/string.tur")
+;;; csv/emit-row-with-delim-string -- serialize one row vec with a custom
+;;; delimiter, as an owned String.
+;;;
+;;; Parameters:
+;;;   v     -- a row vec (as from csv/parse)
+;;;   delim -- field separator byte (e.g. 44 = ',')
+;;;
+;;; Returns:
+;;;   An owned String of the delimiter-separated row (no trailing newline),
+;;;   or an empty String if delim is invalid.
+;;;
+;;; Example:
+;;;   (string/to-cstr (csv/emit-row-with-delim-string my-row 59))  ; => "a;b"
+;;;
+;;; Since: v2
+
+(defn csv/emit-row-with-delim-string [v : int delim : int] : String
+  (string/adopt-cstr (csv/emit-row-with-delim v delim)))
+;;; csv/emit-row-string -- serialize one row vec (comma-delimited), as an owned
+;;; String.
+;;;
+;;; Parameters:
+;;;   v -- a row vec (as from csv/parse)
+;;;
+;;; Returns:
+;;;   An owned String of the comma-separated row.
+;;;
+;;; Example:
+;;;   (string/to-cstr (csv/emit-row-string my-row))  ; => "a,b"
+;;;
+;;; Since: v2
+
+(defn csv/emit-row-string [v : int] : String
+  (string/adopt-cstr (csv/emit-row v)))
+;;; csv/emit-with-delim-string -- serialize a cons list of row vecs with a
+;;; custom delimiter, as an owned String.
+;;;
+;;; Parameters:
+;;;   rows  -- cons list of row vecs (as from csv/parse)
+;;;   delim -- field separator byte (e.g. 44 = ',')
+;;;
+;;; Returns:
+;;;   An owned String of the newline-separated document, or an empty String if
+;;;   delim is invalid.
+;;;
+;;; Example:
+;;;   (string/to-cstr (csv/emit-with-delim-string my-rows 59))  ; => "a;b\n1;2\n"
+;;;
+;;; Since: v2
+
+(defn csv/emit-with-delim-string [rows : int delim : int] : String
+  (string/adopt-cstr (csv/emit-with-delim rows delim)))
+;;; csv/emit-string -- serialize a cons list of row vecs (comma-delimited) to a
+;;; full CSV document, as an owned String.
+;;;
+;;; Parameters:
+;;;   rows -- cons list of row vecs (as from csv/parse)
+;;;
+;;; Returns:
+;;;   An owned String of the newline-separated CSV document.
+;;;
+;;; Example:
+;;;   (string/to-cstr (csv/emit-string my-rows))  ; => "a,b\n1,2\n"
+;;;
+;;; Since: v2
+
+(defn csv/emit-string [rows : int] : String (string/adopt-cstr (csv/emit rows)))

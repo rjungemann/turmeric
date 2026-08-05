@@ -413,6 +413,7 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
     ctor->effect = effect;
     ctor->result_full_type = NULL;   /* Tier C: set by defeffect when aggregate */
     ctor->param_full_types = NULL;
+    ctor->resumable_payload_param = -1;   /* set by defeffect from the param form */
 
     effect->constructor = ctor;
 

@@ -61,6 +61,9 @@ typedef enum CKontKind {
     KK_RET,       /* the function's return continuation parameter `k : cont<T>` */
     KK_VAR,       /* a local continuation variable introduced by CT_LETCONT */
     KK_PROMPT,    /* the value delivered to the nearest delimited prompt (reset) */
+    KK_LOOP,      /* cps-while-native: transform-internal marker -- a body tail in
+                   * this position is the loop back-edge (lowered to CT_CONTINUE);
+                   * never reaches emission. */
 } CKontKind;
 
 typedef struct CKont {
@@ -99,6 +102,22 @@ typedef enum CTermKind {
                       * an upward tur_escape_resume delivers), continue body.  Does
                       * NOT thread the DK continuation.  Native for a capture-free
                       * receiver f; a capturing receiver still delegates via LETRAW. */
+    CT_LOOP,         /* cps-while-native: a `while` with an interior control op,
+                      * lowered to a synthesized tail-recursive colored `__cps`
+                      * helper.  The ^mut loop-carried vars are the helper params;
+                      * the body is a CT_IF(cond, iter, exit) whose iter arm ends in
+                      * a CT_CONTINUE back-edge and whose exit arm delivers the
+                      * live-after var to KK_RET.  The interior handle lowers as a
+                      * normal CT_HANDLE inside the body; its continuation carries the
+                      * back-edge, which is why a same-function join is impossible and
+                      * the loop must be a real recursive fn (see
+                      * docs/reported/cps-while-loop-with-interior-handle-no-native-lowering.md). */
+    CT_CONTINUE,     /* the CT_LOOP back-edge: re-enter the loop helper with the
+                      * next-iteration argument atoms (the pre-created `$next` CVars
+                      * a `set!` binds), threading the helper's own continuation. */
+    CT_MATCH,        /* B4: a `match` on a heap-ADT scrutinee -- an N-way tag
+                      * dispatch (each arm binds its ctor fields and delivers its
+                      * CPS body to the match continuation, like CT_IF's arms). */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
@@ -149,7 +168,29 @@ typedef struct CHandleCase {
     uint32_t        n_params;
     const Binding  *k;
     CTerm          *case_body;
+    /* cps-dk-multishot-user-effects (Phase A): this case handles a RESUMABLE-PAYLOAD
+     * effect (its constructor has a `(fn [effect-cont] R)` param) and resumes
+     * through the payload.  Selects the DK-backed cloneable-cont wrap for `k` PLUS
+     * the boxed-payload `arg` reap at emit (generalizes the `is_shift_effect`
+     * gate), so the payload's `(k v)` / `resume` resumes the DK chain through
+     * `tur_cloneable_cont_resume`.  Scoped to resumable-payload effects -- NOT set
+     * for a hand-written `^multishot` handler on a non-payload effect (whose `arg`
+     * is not a boxed pointer and must not be reaped as one). */
+    bool            resumable_payload;
 } CHandleCase;
+
+/* B4: one arm of a restricted `match` on a heap-ADT scrutinee.  `ctor` selects
+ * the arm (its ->tag is tested against the scrutinee's tag word; ->adt gives the
+ * C aggregate name); `fields` are the pattern's field bindings extracted from
+ * the scrutinee (via adt_field_member_path); `body` is the CPS-translated arm
+ * body, delivered to the match continuation.  A catch-all (wildcard / bare var)
+ * arm has ctor == NULL and is emitted as the trailing `else`. */
+typedef struct CMatchArm {
+    const struct CtorDef *ctor;
+    const struct Binding **fields;
+    uint32_t              n_fields;
+    CTerm                *body;
+} CMatchArm;
 
 typedef struct CVar {     /* a CPS-introduced binder */
     uint32_t    id;
@@ -168,8 +209,29 @@ struct CTerm {
         struct { CKont kont; CAtom v; }                                   appcont;
         struct { CVar x; CAtom v; CTerm *body; }                          letval;
         struct { CVar x; const char *op; const BuiltinSpec *spec; CAtom *args; uint32_t n; CTerm *body; } letprim;
-        struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body; } letcall;
-        struct { const Binding *fn; CAtom *args; uint32_t n; CKont kont; } tailcall;
+        struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body;
+                 /* RC2 (generic-show-wrapper-cps-monomorphization-plan): the source
+                  * EX_CALL, retained so the CPS emitter can run the same per-ABI-spec
+                  * typeclass re-resolution (emit_reresolve_method_call) the direct
+                  * emitter uses -- the CTerm otherwise drops the dispatch dict_arg,
+                  * leaving a carrier-erased `(show x)` baked to the int rep. NULL for
+                  * synthetic calls with no source Expr. */
+                 const Expr *call_expr; } letcall;
+        /* fn_atom is the callee key when fn == NULL (E2c: a via_registry call
+         * whose callee is a struct-field fn-value load `(.f obj)`, not a named
+         * binding).  The emitter uses fn_atom's atom_str as the `__tur_cps_lookup`
+         * key in that case. */
+        struct { const Binding *fn; CAtom fn_atom; CAtom *args; uint32_t n; CKont kont; bool via_registry;
+                 /* E2 (fat-closure fn-value threading): the callee `fn` is a
+                  * poly-fn PARAM whose runtime value is a `tur_poly_fn_t` fat
+                  * closure.  Dispatch through its `fn_cps` DK-threading slot when
+                  * populated (an effectful fn-value), else the direct `fn.fn`
+                  * call delivered to the continuation.  Single int arg only (the
+                  * tur_poly_fn_t.fn_cps ABI is `(void*, int64_t, DK*)`). */
+                 bool via_fncps;
+                 /* RC2: source EX_CALL retained for per-ABI-spec typeclass
+                  * re-resolution in the CPS emitter (see letcall.call_expr). */
+                 const Expr *call_expr; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
@@ -182,16 +244,36 @@ struct CTerm {
          * shallow == true (from `handle-shallow`, F2) lowers each case to
          * dk_handler_shallow (NOT re-installed on resume, the effect-side analogue
          * of shift0); false is a plain deep dk_handler. */
+        /* B3 part 2: `dyn` marks a DYNAMIC first-class with-handler -- the handler
+         * cases are not statically known; `dyn_table` is the runtime
+         * tur_handler_table_t* value (a variable / field read).  The emitter
+         * installs the handler group via dk_hgroup_from_table(dyn_table, ...)
+         * instead of the static per-case chain, and emits no case fns
+         * (they were emitted at the handler literal's creation site).  n_cases is
+         * 0 for a dyn handle. */
         struct { CVar x; CTerm *delim; CTerm *body;
-                 CHandleCase *cases; uint32_t n_cases; bool shallow; }    handle;
+                 CHandleCase *cases; uint32_t n_cases; bool shallow;
+                 bool dyn; CAtom dyn_table; }                             handle;
+        /* B4: `scrut` is the heap-ADT carrier atom; `adt` the ADT def (for the C
+         * aggregate name / tag word); `arms` the ctor arms (last may be a
+         * ctor==NULL catch-all).  Each arm delivers its body to the enclosing
+         * continuation (tail) or to a join point (bind), like CT_IF. */
+        struct { CAtom scrut; const struct AdtDef *adt;
+                 CMatchArm *arms; uint32_t n_arms; }                      match;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
-                 CVar x; CTerm *body; }                                   perform;
+                 CVar x; CTerm *body; bool resumable_payload; }           perform;
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;
          * body = the continuation.  Emitted as a dk_shift whose body is the fixed
          * __tur_await_body runtime helper (resume-if-ready / park-if-pending). */
         struct { CAtom fut; CVar x; CTerm *body; }                       await;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
-        struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
+        /* reap_env: e is a freeable, provably-non-escaping capturing closure
+         * whose heap fat-env the direct emitter does NOT free at this leaf
+         * position (only emit_value(EX_LET) applies the scoped-env free).  When
+         * set, emit_letraw registers the bound env pointer for a single-node free
+         * at the outermost DK entry boundary (safe: the closure is dead after its
+         * lifted body, and boundary reap never double-frees). */
+        struct { CVar x; const Expr *e; CTerm *body; bool reap_env; }      letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.
@@ -236,6 +318,16 @@ struct CTerm {
          * type = e->type).  The receiver is capture-free (a named fn or a
          * zero-capture fn value), so no env rides the escape landing. */
         struct { CVar x; const Expr *e; CTerm *body; }                    callcc;
+        /* cps-while-native.  params/inits: the loop-carried ^mut vars (each param
+         * CVar carries its source Binding so every in-body read of the var names
+         * the param via name_for_binding -- reads resolve to the loop-ENTRY version
+         * by naming, no rebinding map).  body: CT_IF(cond, iter, exit).  result_kont
+         * is the caller's continuation kind (KK_RET / KK_PROMPT) -- the emitter uses
+         * it only to pick the threaded continuation for the entry call; the exit arm
+         * itself delivers to the helper's own KK_RET. */
+        struct { CVar *params; uint32_t n_params; CAtom *inits;
+                 CTerm *body; CKont result_kont; }                        loop;
+        struct { CAtom *args; uint32_t n; }                               cont_;
         struct { const char *why; }                                       unsupported;
     } as;
 };
@@ -250,5 +342,10 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent);
 /* --dump-cps: color `program`, then translate and print every colored
  * user-level top-level function in CPS form. */
 void cps_ir_dump_program(Arena *a, Expr *program, FILE *out);
+
+/* E2a: fn-value PARAM bindings whose effectful tail calls thread the DK. */
+void cps_ir_thread_param_reset(void);
+void cps_ir_thread_param_add(const Binding *param);
+bool cps_ir_thread_param_has(const Binding *param);
 
 #endif

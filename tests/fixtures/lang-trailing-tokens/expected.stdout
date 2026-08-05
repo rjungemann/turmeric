@@ -1,0 +1,1 @@
+trailing #lang layer tokens are stripped, not leaked into the body

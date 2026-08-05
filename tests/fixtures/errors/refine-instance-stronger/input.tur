@@ -1,0 +1,22 @@
+;; A typeclass method's parameter refinement in the CLASS signature is the
+;; promise callers program against.  An instance may accept MORE than the class
+;; promises; it may not accept less.
+;;
+;; Here the class admits 0 and the instance rejects it, so a generic caller
+;; honouring the class contract would be handed to a method that panics on a
+;; value it was entitled to pass.  That is a bug in the instance, and it now
+;; fails the build instead of waiting for the entry check to fire at run time.
+;;
+;; The obligation is `class_pred(k) |- instance_pred(k)` -- an ordinary query
+;; through the same solver seam, reported only on a REFUTATION.  An undecidable
+;; pair keeps the runtime check, like everything else here.
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (>= v 0) }] : int))
+
+(definstance Scaler [int]
+  (scale-by [self : int, k : #refine{ v : int | (> v 0) }] : int
+    (* self k)))
+
+(defn main [] : int
+  (println (.scale-by 3 4))
+  0)

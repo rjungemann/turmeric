@@ -1,0 +1,10 @@
+; Congruence at arity 2.
+(set-logic QF_UF)
+(set-info :status unsat)
+(declare-fun a () Int)
+(declare-fun b () Int)
+(declare-fun g (Int Int) Int)
+(assert (= a b))
+(assert (not (= (g a a) (g b b))))
+(check-sat)
+(exit)

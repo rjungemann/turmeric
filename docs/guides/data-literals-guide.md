@@ -30,6 +30,8 @@ def small #set{1 2 3}
 | `#map{k1 v1 k2 v2 ...}` | `(hamt-of k1' v1 k2' v2 ...)` | keys normalized (see below); last duplicate key wins |
 | `#set{e1 e2 e3 ...}` | `(set-of e1 e2 e3 ...)` | duplicate elements collapse |
 | `#refine{ var : T \| pred }` | contract-type annotation | see [Contract Types Guide](contract-types-guide.md) |
+| `#rat{n/d}` | `(rat/of! n' d')` | normalized at **read** time; see [Numeric literals](#numeric-literals-rat-and-cx) |
+| `#cx{re im}` | `(complex/of re im)` | two ordinary expression slots |
 
 ```turmeric no-check
 [1 2 3]                       ; => (vec-of 1 2 3)
@@ -162,7 +164,7 @@ let [m #map{"name" 1 "age" 2}]
   there is one `hamt-of` builder for every key type (the old `smap-of` /
   `smap-*` split was retired in TMS3). (Runtime-built string keys must outlive
   the map -- the HAMT does not copy keys; see
-  [GMK / TCE4](../archive/history/typed-collection-elements-plan.md).) 
+  [GMK / TCE4](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/typed-collection-elements-plan.md).) 
 
 An odd number of slot forms is a `TUR-E0280` read error.
 
@@ -227,6 +229,12 @@ fused `:T` element-type suffix immediately after the closer:
 ; empty Vec[Vec[int]]  (parenthesize a compound element type)
 ```
 
+The `#set{}:cstr` above pins the element type, but note the element *type* you
+pick still matters for lifetimes: a `Set[cstr]` of **computed** keys borrows
+each key pointer and dangles once the source is freed. When the keys are built or
+stored (not static literals), use `#set{}:String` -- a `Set[String]` copies each
+key into a box the set owns. See [strings-guide.md](strings-guide.md).
+
 The suffix desugars to an ascription on the literal, so `[]:int` is exactly
 `(:: (vec-of) (Vec int))` and `#set{}:T` is `(:: (set-of) (Set T))` -- the
 generated code is identical. It replaces the verbose
@@ -267,6 +275,61 @@ Rules:
 - `#map{}` has two type parameters (key and value); a typed-empty suffix for
   maps is not yet supported -- ascribe the full `(Map K V)` type instead.
 
+## Numeric literals: `#rat{...}` and `#cx{...}`
+
+The numeric tower ships two more literals, for the exact rational type in
+[`stdlib/rational.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/rational.tur) and the complex type in
+[`stdlib/complex.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/complex.tur). Both are always on -- they are
+core data-literal dispatches, not `#lang` layers.
+
+### `#rat{n/d}` -- exact rationals
+
+```turmeric no-check
+#rat{3/4}      ; => (rat/of! 3 4)
+#rat{-3/4}     ; => (rat/of! -3 4)
+#rat{3/-4}     ; => (rat/of! -3 4)   -- the sign moves to the numerator
+#rat{6/8}      ; => (rat/of! 3 4)    -- normalized at READ time
+#rat{5}        ; => (rat/of! 5 1)    -- a bare whole number
+#rat{1/0}      ; => read-time error (TUR-E0284)
+```
+
+Bare `3/4` is deliberately **not** rational syntax. `read_number` stops at `/`,
+so `3/4` already reads as `3` followed by the symbol `/4`; making it a rational
+would collide with `/` as division and with module-qualified names like
+`tur/list`. Hence the `#`-dispatch.
+
+The body is read **raw**, not as forms. That matters because curly-infix is
+enabled in every dialect: an ordinarily-read `{3 / 4}` would be infix division,
+not a literal. So the slots of `#rat{...}` are plain int64 digit runs with an
+optional sign -- no expressions, no whitespace tricks beyond padding.
+
+Normalizing at read time means `#rat{6/8}` and `#rat{3/4}` are the *same*
+literal, which is what makes structural equality on a `Rational` equal
+mathematical equality:
+
+```turmeric no-check
+(eq? #rat{2/4} #rat{1/2})   ; => true
+```
+
+### `#cx{re im}` -- complex numbers
+
+```turmeric no-check
+#cx{3.25 -1.5}        ; => (complex/of 3.25 -1.5)
+#cx{3.25 {1.0 + 0.5}} ; => (complex/of 3.25 (+ 1.0 0.5))
+```
+
+Unlike `#rat{...}`, the two slots are read as ordinary **forms**, so a computed
+component composes -- including a curly-infix inner expression, which is exactly
+what it looks like.
+
+`#cx` rather than `#c`: a single-letter dispatch is too scarce a name to spend,
+and `#c` reads as "C" in a codebase full of inline-C blocks.
+
+There is deliberately no `i` imaginary suffix (`4.0i`). It only pays off with
+mixed `float + Complex` arithmetic, which means an implicit widening coercion in
+operator resolution -- a real type-system decision that should not ride along on
+a literal-syntax change.
+
 ## Errors
 
 | Code | Condition |
@@ -274,12 +337,14 @@ Rules:
 | `TUR-E0280` | Odd number of slot forms in `#map{...}` (unmatched key) |
 | `TUR-E0281` | Unexpected EOF inside `#map{...}` or `#set{...}` |
 | `TUR-E0282` | Invalid key form in `#map{...}` (must be keyword, string, or int literal) |
-| `TUR-E0283` | Unknown `#<tag>{...}` dispatch tag (only `#map{`/`#set{` are defined) |
+| `TUR-E0283` | Unknown `#<tag>{...}` dispatch tag |
+| `TUR-E0284` | Malformed `#rat{...}`: bad body, trailing junk, zero denominator, or a part that does not fit in int64 |
+| `TUR-E0285` | `#cx{...}` given other than exactly two slot forms |
 
 ## Relationship to the JSON reader macro
 
 The data literals supersede the [JSON reader-macro
-plan](../archive/history/json-reader-macro-plan.md) for the common "literal shape, computed
+plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/json-reader-macro-plan.md) for the common "literal shape, computed
 values" case: `#map{...}` already accepts arbitrary value expressions, which a
 JSON-only reader cannot. A `#json(...)` reader would remain useful only for
 pasting a literal JSON blob verbatim; for everything else, write the map

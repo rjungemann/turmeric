@@ -40,6 +40,51 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         uint32_t *out_n_file_scope_defs,
                         struct ReaderMacroRegistry *user_macros);
 
+/* TR2 (turi-incremental-elaboration-design): persistent elaboration session.
+ *
+ * A long-lived interpreter env (REPL / notebook kernel / embedded turi) re-runs
+ * `elaborate_program` over the WHOLE accumulated program on every eval, because
+ * the elaborator builds its scope, typeclass env, and ADT/effect/module
+ * registries from scratch each call -- so resolving a new form's references to
+ * earlier definitions requires re-elaborating those definitions too. That is
+ * O(N^2) in retained elaboration memory over a session.
+ *
+ * An ElabSession keeps that state alive between calls. The caller hands
+ * `elaborate_program_session` only the NEW forms; references to earlier
+ * definitions resolve out of the session's accumulated scope. Nothing inside
+ * the elaborator changes -- the caller slices the form array.
+ *
+ * Lifetime: Expr/Type nodes produced by a call live in the Arena passed to that
+ * call, so every arena whose output the session still references must stay
+ * alive (the interpreter retains all eval arenas, which is why this is sound
+ * there). The session itself owns malloc'd bookkeeping freed by
+ * elab_session_free.
+ *
+ * On ANY failed call the session must be discarded (partial definitions from
+ * the failed program may have entered its scope); the caller then starts a
+ * fresh session and replays the accumulated forms. */
+typedef struct Elab ElabSession;
+
+ElabSession *elab_session_new(void);
+void         elab_session_free(ElabSession *session);
+
+/* As elaborate_program, but threads `session`. When `session` is NULL this is
+ * exactly elaborate_program (every compiler path), so behavior there is
+ * unchanged. When non-NULL, state accumulates into the session instead of being
+ * torn down at return. */
+Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
+                                Form *const *forms, uint32_t nforms,
+                                uint32_t stdlib_prefix,
+                                const char *module_base_dir,
+                                bool separate_compilation,
+                                bool sandboxed,
+                                TypeClassEnv *out_tc_env,
+                                const char **include_dirs,
+                                int n_include_dirs,
+                                uint32_t *out_n_file_scope_defs,
+                                struct ReaderMacroRegistry *user_macros,
+                                ElabSession *session);
+
 /* LS2 (local-spice-dev-workflow-plan): per-compile workspace-sibling
  * resolution context. Set by the entry-point (main.c's compile_to_c)
  * around a call into the elaborator and cleared after; the elaborator

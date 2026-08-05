@@ -1181,6 +1181,47 @@ else
 fi
 rm -f "$SF2B_ERR"; rm -rf "$SF2B"
 
+# docs/archive/spice-guides-bare-brace-manifest-syntax.md follow-up: `tur add`
+# spliced the new entry into the existing :spices map by reading
+# `old_map->tag == F_MAP` only.  `#map{...}` reads as F_MAP_LITERAL, so the
+# splice saw an empty map and wrote back a :spices holding ONLY the new dep --
+# every previously declared dependency silently deleted.  `#map{...}` is the
+# canonical spelling the guides use, so this was the common path, not an
+# exotic one.  Both spellings must survive an add, and the manifest's own
+# spelling must be preserved rather than respelled underneath the user.
+for add_case in 'maplit|#map' 'legacy|#'; do
+    add_name=${add_case%%|*}
+    add_pre=${add_case#*|}
+    ADDDIR=$(mktemp -d)
+    mkdir -p "$ADDDIR/src"
+    cat >"$ADDDIR/build.tur" <<EOF
+(defpackage addcase
+  :name    "addcase"
+  :version "0.1.0"
+  :spices ${add_pre}{"geom" ${add_pre}{:url "https://example.invalid/geom" :ref "v1"}})
+EOF
+    echo '(defn main [] : int 0)' >"$ADDDIR/src/main.tur"
+    ADD_ERR=$(mktemp)
+    ( cd "$ADDDIR" && "$LS6_ABS_TUR" add https://example.invalid/math --ref v2 ) \
+        >/dev/null 2>"$ADD_ERR"
+    add_rc=$?
+    if [ "$add_rc" -eq 0 ] \
+       && grep -qF '"geom"' "$ADDDIR/build.tur" \
+       && grep -qF '"math"' "$ADDDIR/build.tur" \
+       && grep -qF ":spices ${add_pre}{" "$ADDDIR/build.tur"; then
+        echo "PASS tur-add-preserves-existing-spices-$add_name"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL tur-add-preserves-existing-spices-$add_name"
+        echo "  exit: $add_rc"
+        echo "  build.tur:"; sed 's/^/    /' "$ADDDIR/build.tur"
+        echo "  stderr:"; sed 's/^/    /' "$ADD_ERR"
+        FAIL=$((FAIL + 1))
+        FAILED+=("tur-add-preserves-existing-spices-$add_name")
+    fi
+    rm -f "$ADD_ERR"; rm -rf "$ADDDIR"
+done
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

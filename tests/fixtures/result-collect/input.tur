@@ -97,25 +97,27 @@
 ;; ── u-result-collect ────────────────────────────────────────────────────────────
 (defn u-result-collect [v : ptr<void>] : ptr<void>
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *rp;
+  typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } __AS0;
+  typedef struct { int64_t *data; size_t len; size_t cap; } __AS1;
+  __AS1 *vec =
+      (void *)(void*)v;
+  __AS0 *rp;
   for (size_t i = 0; i < vec->len; i++) {
     rp = (void *)(intptr_t)vec->data[i];
     if (rp == NULL || !rp->is_ok) {
       int64_t ev = rp ? rp->err_val : 0;
-      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+      __AS0 *out = malloc(sizeof(*out));
       out->is_ok = false; out->ok_val = 0; out->err_val = ev; return out;
     }
   }
-  struct { int64_t *data; size_t len; size_t cap; } *ov = malloc(sizeof(*ov));
+  __AS1 *ov = malloc(sizeof(*ov));
   ov->len = vec->len; ov->cap = vec->len;
   ov->data = vec->len > 0 ? malloc(sizeof(int64_t) * vec->len) : NULL;
   for (size_t i = 0; i < vec->len; i++) {
     rp = (void *)(intptr_t)vec->data[i];
     ov->data[i] = rp->ok_val;
   }
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  __AS0 *out = malloc(sizeof(*out));
   out->is_ok = true; out->ok_val = (int64_t)(intptr_t)ov; out->err_val = 0;
   return out;
   ```)
@@ -123,17 +125,18 @@
 ;; ── u-result-partition ─────────────────────────────────────────────────────────
 (defn u-result-partition [v : ptr<void>] : ptr<void>
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  typedef struct { int64_t *data; size_t len; size_t cap; } __AS0;
+  __AS0 *vec =
+      (void *)(void*)v;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *rp;
-  struct { int64_t *data; size_t len; size_t cap; } *ov = malloc(sizeof(*ov));
+  __AS0 *ov = malloc(sizeof(*ov));
   ov->data = NULL; ov->len = 0; ov->cap = 0;
-  struct { int64_t *data; size_t len; size_t cap; } *ev2 = malloc(sizeof(*ev2));
+  __AS0 *ev2 = malloc(sizeof(*ev2));
   ev2->data = NULL; ev2->len = 0; ev2->cap = 0;
   for (size_t i = 0; i < vec->len; i++) {
     rp = (void *)(intptr_t)vec->data[i];
     int64_t val;
-    struct { int64_t *data; size_t len; size_t cap; } *dst;
+    __AS0 *dst;
     if (rp != NULL && rp->is_ok) { val = rp->ok_val; dst = ov; }
     else { val = rp ? rp->err_val : 0; dst = ev2; }
     if (dst->len >= dst->cap) {

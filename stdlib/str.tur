@@ -85,6 +85,7 @@
 ;; so range-bound.tur can pull the same builders without also loading str.tur's
 ;; Eq [str] instance (which perturbs unrelated instance resolution). load dedups
 ;; by file, so consumers loading both str.tur and str-build.tur are fine.
+
 (load "stdlib/str-build.tur")
 ;;; Eq [str] -- eq? delegates to str-eq? for byte-level string equality.
 ;; Phase E1: Eq instance for str -- wires eq? to str-eq?

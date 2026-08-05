@@ -6,7 +6,7 @@
   :name    "transitive-cmake-deps-conflict"
   :version "0.1.0"
   :members ["spice-a" "spice-b"]
-  :spices #fx{
-    "spice-a" #fx{:path "spice-a"}
-    "spice-b" #fx{:path "spice-b"}
+  :spices #map{
+    "spice-a" #map{:path "spice-a"}
+    "spice-b" #map{:path "spice-b"}
   })

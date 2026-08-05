@@ -1,0 +1,8 @@
+(defmodule mainmod
+  (import shared :refer [base])
+  (import mid1 :refer [mid1-tag])
+  (import mid2 :refer [mid2-tag])
+  (defn main [] : int
+    (if (= (+ (base) (+ (mid1-tag) (mid2-tag))) 43)
+      (do (println "diamond-ok") 0)
+      (do (println "diamond-bad") 1))))

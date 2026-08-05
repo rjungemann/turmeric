@@ -1,0 +1,16 @@
+;; Show [Sym] renders an interned keyword as ":name" (not the raw carrier int).
+;; Regression for docs/archive/map-show-keyword-key-raw-int.md: before the
+;; instance existed, showing a :Sym fell through to the raw pointer integer.
+;; Direct (monomorphic) show is covered here.  Generic collection show over Sym
+;; was a separate defect -- NOT a carrier collision, but TY_SYM missing from
+;; type_has_concrete_codegen_layout, so (Vec Sym) never became a by-value
+;; monomorph.  Fixed 2026-07-29; covered by tests/fixtures/show-sym-collection-elems/.
+(load "stdlib/typeclass.tur")
+
+(defn main [] : int
+  (do
+    (show-line :hello)
+    (show-line :world)
+    (print-show :a)
+    (println "")
+    0))

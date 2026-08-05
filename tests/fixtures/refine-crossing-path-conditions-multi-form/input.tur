@@ -1,0 +1,59 @@
+;; Path conditions for a call in a NON-LAST body form.
+;;
+;; `caller_body` used to be the defn's LAST body form -- which is the return
+;; obligation's subject, not the body. A crossing anywhere earlier was then
+;; invisible to the walk that recovers path conditions (it descends from
+;; `caller_body` down to `call_form` and gives up when it does not find it), so
+;; the call was checked without the branch that makes it legal.
+;;
+;; A zero-parameter caller made it plainest: `main`'s last form is the literal
+;; `0`, so the walk searched `0` for the call and every guard was lost. The
+;; sibling fixture refine-crossing-path-conditions could not see any of this --
+;; every caller in it has a single-form body.
+;;
+;; The body now arrives as a synthetic `(do ...)` when there is more than one
+;; form. `do` is not one of the three heads the walk treats specially, so it
+;; falls to the generic descent -- which is exactly right: a later body form is
+;; not guarded by an earlier one.
+;;
+;; Every case below is deliberately shaped so the guarded call is NOT in the
+;; last form. Put the `if` last instead and the case passes with or without the
+;; fix, which is how the gap survived this long.
+
+(defn sdiv [n : int d : #refine{ d : int | (not= d 0) }] : int
+  (/ n d))
+
+;; Control: one body form. Unchanged by the fix, and passed before it -- here
+;; so a future regression that breaks the single-form path shows up too.
+(defn one-form [x : int] : int
+  (if (not= x 0)
+    (sdiv 10 x)
+    0))
+
+;; The `if` is the FIRST of two forms; the last is a bare literal.
+(defn guard-then-literal [x : int] : int
+  (if (not= x 0)
+    (println (sdiv 10 x))
+    (println 0))
+  0)
+
+;; A `let` in a non-last form contributes its equation too -- `y = x + 1` with
+;; `x > 0` is what makes `y != 0` provable, and it was lost by the same walk.
+(defn let-then-more [x : #refine{ x : int | (> x 0) }] : int
+  (let [y (+ x 1)]
+    (sdiv 10 y))
+  0)
+
+;; The zero-parameter case. `main` has no parameters, so there is no refined
+;; environment to fall back on: the path condition is the ONLY thing that can
+;; discharge this crossing.
+(defn main [] : int
+  (println (one-form 5))
+  (println (guard-then-literal 5))
+  (println (let-then-more 3))
+  (let [x 3]
+    (if (not= x 0)
+      (println (sdiv 10 x))
+      (println 0)))
+  (println "refine-crossing-path-conditions-multi-form")
+  0)

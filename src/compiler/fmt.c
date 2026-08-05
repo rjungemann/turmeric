@@ -230,9 +230,12 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             buf_puts(b, ": ");
             if (f->as.list.len > 0) fmt_form_flat(b, f->as.list.items[0]);
             break;
-        /* CT0: Contract type { var : T | pred } */
+        /* CT0: Contract type #refine{ var : T | pred }.  The tag is not
+         * optional: bare `{...}` reads as curly-infix now (read_contract_type
+         * is reachable only from read_refine_literal), so printing the brace
+         * body alone round-trips a refinement into an arithmetic form. */
         case F_CONTRACT_TYPE:
-            buf_puts(b, "{ ");
+            buf_puts(b, "#refine{ ");
             for (uint32_t _i = 0; _i < f->as.list.len; _i++) {
                 if (_i) buf_putc(b, ' ');
                 fmt_form_flat(b, f->as.list.items[_i]);
@@ -325,6 +328,7 @@ typedef enum SpecialForm {
     SF_WHEN, SF_UNLESS,
     SF_DO,
     SF_CASE,
+    SF_COND,
     SF_HANDLE,
     SF_DEFCLASS,
     SF_DEFINSTANCE,
@@ -353,6 +357,7 @@ static SpecialForm classify_list(const Form *f) {
     if (sym_eq(h, "unless"))      return SF_UNLESS;
     if (sym_eq(h, "do"))          return SF_DO;
     if (sym_eq(h, "case"))        return SF_CASE;
+    if (sym_eq(h, "cond"))        return SF_COND;
     if (sym_eq(h, "loop"))        return SF_LOOP;
     if (sym_eq(h, "handle"))      return SF_HANDLE;
     if (sym_eq(h, "handle-shallow")) return SF_HANDLE;  /* F2: same layout as handle */
@@ -488,6 +493,52 @@ static void fmt_param_vec(FmtState *s, const Form *vec) {
     }
 }
 
+/* Index of the parameter vector in a defn/defmacro form.
+ *
+ * A defn may carry a type-parameter vector, and optionally a class-constraint
+ * vector, ahead of its parameters:
+ *
+ *   (defn name [params] :ret body)                          -> 2
+ *   (defn name [A B] [params] :ret body)                    -> 3
+ *   (defn name [A] [(Class A) ...] [params] :ret body)       -> 4
+ *
+ * This mirrors the elaborator's detection in elab_fns.c
+ * (`elab_defn`, the name_idx + 1 / + 2 / + 3 checks) *exactly*, and must keep
+ * doing so. The two-consecutive-vectors test is genuinely ambiguous in the
+ * language -- `(defn f [x] [1 2 3])` reads as a type-parameterized defn, not
+ * as one returning a vector literal -- so a formatter that disambiguated it
+ * differently would silently reprint code as something that means something
+ * else. Agreeing with the elaborator is the only safe rule, whatever one
+ * thinks of the ambiguity itself.
+ *
+ * Getting this wrong is what kept `stdlib/rcvec.tur` un-self-formatted: with
+ * params assumed at index 2, the real parameter vector and the return
+ * annotation of a `(defn f [A] [params] : ret ...)` fell past the header and
+ * were laid out as body forms, one per line. */
+static uint32_t defn_params_index(const Form *f) {
+    uint32_t n = f->as.list.len;
+    Form *const *it = f->as.list.items;
+
+    if (!(n > 3 && it[2]->tag == F_VEC && it[3]->tag == F_VEC))
+        return 2;                     /* no type-parameter vector */
+
+    /* items[2] is the type-parameter vector; params are at 3 unless a
+     * constraint vector sits between them. A constraint vector is non-empty
+     * and every element is `(ClassName TyVar ...)`. */
+    if (n > 4 && it[4]->tag == F_VEC) {
+        const Form *maybe = it[3];
+        bool looks_like_constraints = (maybe->as.list.len > 0);
+        for (uint32_t i = 0; looks_like_constraints && i < maybe->as.list.len; i++) {
+            const Form *cf = maybe->as.list.items[i];
+            if (cf->tag != F_LIST || cf->as.list.len < 1 ||
+                cf->as.list.items[0]->tag != F_SYM)
+                looks_like_constraints = false;
+        }
+        if (looks_like_constraints) return 4;
+    }
+    return 3;
+}
+
 /* (defn name [params] :ret\n  body...) */
 static void fmt_defn(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
@@ -496,14 +547,17 @@ static void fmt_defn(FmtState *s, const Form *f) {
 
     fs_putc(s, '(');
 
-    /* Header items: defn/defmacro, name, params, optional :ret keyword or type annotation */
-    uint32_t header_end = 3;
-    if (n > 3 && (f->as.list.items[3]->tag == F_KEYWORD
-               || f->as.list.items[3]->tag == F_TYPE_ANN)) header_end = 4;
+    /* Header items: defn/defmacro, name, any type-parameter and constraint
+     * vectors, params, optional :ret keyword or type annotation */
+    uint32_t params_idx = defn_params_index(f);
+    uint32_t header_end = params_idx + 1;
+    if (n > header_end && (f->as.list.items[header_end]->tag == F_KEYWORD
+                        || f->as.list.items[header_end]->tag == F_TYPE_ANN))
+        header_end++;
 
     for (uint32_t i = 0; i < header_end && i < n; i++) {
         if (i) fs_putc(s, ' ');
-        if (i == 2 && f->as.list.items[i]->tag == F_VEC)
+        if (i == params_idx && f->as.list.items[i]->tag == F_VEC)
             fmt_param_vec(s, f->as.list.items[i]);
         else
             fmt_form(s, f->as.list.items[i]);
@@ -696,6 +750,46 @@ static void fmt_case(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
+/* (cond test1 body1\n      test2 body2\n      :else  bodyN) — clause table.
+ * The head `cond` and the first test share the opening line; every subsequent
+ * test aligns under the first test's column, and all bodies align at a common
+ * column one space past the widest single-line test, so the test/body pairs
+ * read like a table (the documented Clojure-style cond layout).  A body that is
+ * itself multi-line wraps from the shared body column.  The whole-form-fits
+ * inline case is handled by fmt_list before this runs. */
+static void fmt_cond(FmtState *s, const Form *f) {
+    uint32_t n = f->as.list.len;
+
+    fs_putc(s, '(');
+    if (n >= 1) fmt_form(s, f->as.list.items[0]);   /* 'cond' */
+
+    /* The first test sits one space after the head; later tests align there. */
+    uint32_t test_col = s->col + 1;
+
+    /* Widest single-line test, so every body shares one column.  A test that is
+     * itself multi-line (rare) is skipped from the width like fmt_let does. */
+    uint32_t max_test = 0;
+    for (uint32_t i = 1; i + 1 < n; i += 2) {
+        uint32_t w = fmt_measure(f->as.list.items[i]);
+        if (w != UINT32_MAX && w > max_test) max_test = w;
+    }
+    uint32_t value_col = test_col + max_test + 1;
+
+    uint32_t i = 1;
+    while (i < n) {
+        if (i == 1) fs_putc(s, ' ');
+        else        fs_newline_indent(s, test_col);
+        fmt_form(s, f->as.list.items[i]); i++;             /* test */
+        if (i < n) {
+            uint32_t pad = (value_col > s->col) ? (value_col - s->col) : 1;
+            for (uint32_t k = 0; k < pad; k++) fs_putc(s, ' ');
+            fmt_form(s, f->as.list.items[i]); i++;         /* body */
+        }
+    }
+
+    fs_putc(s, ')');
+}
+
 /* (handle expr\n  arm...) */
 static void fmt_handle(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
@@ -797,7 +891,10 @@ static void fmt_vec_broken(FmtState *s, const Form *f) {
 
 /* #{k v\n  k v} */
 static void fmt_map_broken(FmtState *s, const Form *f) {
-    const char *open = fx_map_open(f);
+    /* `#map{...}` (F_MAP_LITERAL) shares this layout -- it is the canonical
+     * manifest spelling, and a `:spices #map{...}` with several deps is exactly
+     * the case that overruns the line width. */
+    const char *open = (f->tag == F_MAP_LITERAL) ? "#map{" : fx_map_open(f);
     uint32_t inner = s->col + (uint32_t)strlen(open); /* past the '#{'/'#fx{' */
     uint32_t n = f->as.list.len;
     fs_puts(s, open);
@@ -921,6 +1018,7 @@ static void fmt_list(FmtState *s, const Form *f) {
         case SF_UNLESS:      fmt_when(s, f);       break;
         case SF_DO:          fmt_do(s, f);         break;
         case SF_CASE:        fmt_case(s, f);       break;
+        case SF_COND:        fmt_cond(s, f);       break;
         case SF_HANDLE:      fmt_handle(s, f);     break;
         case SF_DEFPACKAGE:  fmt_defpackage(s, f);  break;
         case SF_DEFCLASS:    fmt_defclass(s, f);   break;
@@ -1036,8 +1134,18 @@ static void fmt_form(FmtState *s, const Form *f) {
         case F_RANGE_VAR:
             if (f->as.list.len > 1) fmt_form(s, f->as.list.items[1]);
             break;
-        /* DL0: data literals -- emit inline (#map{...} / #set{...} / #row{...}) */
-        case F_MAP_LITERAL:
+        /* DL0: data literals.  `#map{...}` breaks across lines when it does not
+         * fit, exactly as `#{...}` does: it is the canonical spelling for a
+         * manifest's :spices / :cmake-deps map, and squashing one of those onto
+         * a single 200-column line is not a formatting outcome anyone wants.
+         * #set{...} / #row{...} stay inline -- their elements are short and
+         * their line-per-element layout has no established shape. */
+        case F_MAP_LITERAL: {
+            uint32_t w = fmt_measure(f);
+            if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
+            else fmt_map_broken(s, f);
+            break;
+        }
         case F_SET_LITERAL:
         case F_ROW_LITERAL:
             fmt_emit_inline(s, f);
@@ -1050,15 +1158,50 @@ static void fmt_form(FmtState *s, const Form *f) {
  * ---------------------------------------------------------------------------
  */
 
+static uint32_t count_blank_lines(const char *src, uint32_t from_off,
+                                  uint32_t to_off, uint32_t max);
+
+/* Terminate the current line, then emit `blanks` empty lines. */
+static void fs_break_and_blank(FmtState *s, uint32_t blanks) {
+    if (s->col > 0) fs_putc(s, '\n');
+    for (uint32_t i = 0; i < blanks; i++) fs_putc(s, '\n');
+}
+
 /* Emit any ';' comments found in src[from_off .. to_off).
- * Comments are placed on their own lines.  Returns true if anything was emitted. */
-static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off) {
+ *
+ * Comments are placed on their own lines, and the gap's blank-line structure is
+ * reproduced around them rather than relocated: blank lines before the first
+ * comment and between successive comments are preserved as-is (capped at 2).
+ * `min_lead` is a floor on the blanks emitted before the first comment, for
+ * callers that want a comment forced away from whatever preceded it; every
+ * caller currently passes 0, because forcing a blank in front of a comment is
+ * what moved a docstring's separating blank to the wrong side of it.  Blank
+ * lines *after* the last comment are the caller's business -- see fmt_print,
+ * which keeps a `;;;` docstring flush against the definition it documents.
+ *
+ * `*out_end`, when non-NULL, receives the offset just past the last comment
+ * emitted (or `from_off` when the gap held none).
+ *
+ * Returns true if anything was emitted. */
+static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off,
+                                 uint32_t min_lead, uint32_t *out_end) {
     const char *src = s->opts.src;
+    if (out_end) *out_end = from_off;
     if (!src || from_off >= to_off) return false;
 
     const char *p   = src + from_off;
     const char *end = src + to_off;
     bool emitted = false;
+    uint32_t prev_end = from_off; /* offset just past the last comment emitted */
+
+    /* Break the line and emit the blanks that separated `prev_end` from the
+     * comment starting at `cstart`. */
+    #define EMIT_GAP_BLANKS(cstart)                                            \
+        do {                                                                   \
+            uint32_t _n = count_blank_lines(src, prev_end, (cstart), 2);       \
+            if (!emitted && _n < min_lead) _n = min_lead;                      \
+            fs_break_and_blank(s, _n);                                         \
+        } while (0)
 
     while (p < end) {
         if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') { p++; continue; }
@@ -1067,10 +1210,11 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
         if (*p == ';') {
             const char *line_end = p;
             while (line_end < end && *line_end != '\n') line_end++;
-            if (s->col > 0) fs_putc(s, '\n');
+            EMIT_GAP_BLANKS((uint32_t)(p - src));
             fs_write(s, p, (size_t)(line_end - p));
             emitted = true;
             p = line_end;
+            prev_end = (uint32_t)(p - src);
             continue;
         }
 
@@ -1080,9 +1224,10 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
             p += 2;
             while (p + 1 < end && !(p[0] == '|' && p[1] == '#')) p++;
             if (p + 1 < end) p += 2;
-            if (s->col > 0) fs_putc(s, '\n');
+            EMIT_GAP_BLANKS((uint32_t)(blk - src));
             fs_write(s, blk, (size_t)(p - blk));
             emitted = true;
+            prev_end = (uint32_t)(p - src);
             continue;
         }
 
@@ -1129,15 +1274,18 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
                     }
                 }
             }
-            if (s->col > 0) fs_putc(s, '\n');
+            EMIT_GAP_BLANKS((uint32_t)(blk - src));
             fs_write(s, blk, (size_t)(p - blk));
             emitted = true;
+            prev_end = (uint32_t)(p - src);
             continue;
         }
 
         /* Anything else is part of a form — stop */
         break;
     }
+    #undef EMIT_GAP_BLANKS
+    if (out_end) *out_end = prev_end;
     return emitted;
 }
 
@@ -1319,30 +1467,42 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
         if (i == 0) {
             /* Emit any leading comments before the first form */
             if (s.opts.src && f->span.off_start > 0) {
-                emit_comments_in_gap(&s, 0, f->span.off_start);
+                emit_comments_in_gap(&s, 0, f->span.off_start, 0, NULL);
                 if (s.col > 0) fs_putc(&s, '\n');
             }
         } else {
             uint32_t gap_start = prev_end;
             uint32_t gap_end   = f->span.off_start;
 
-            /* Emit comments in the gap */
-            bool had_comment = emit_comments_in_gap(&s, gap_start, gap_end);
+            /* Emit the gap's comments, reproducing the blank lines that led up
+             * to them exactly as the source had them. */
+            uint32_t comments_end = gap_start;
+            bool had_comment =
+                emit_comments_in_gap(&s, gap_start, gap_end, 0, &comments_end);
 
-            /* Determine how many blank lines to insert */
+            /* Determine how many blank lines to insert before the form. */
             uint32_t blanks = 0;
-            if (s.opts.src) {
-                blanks = count_blank_lines(s.opts.src, gap_start, gap_end, 2);
-            }
-            /* At least one blank line between top-level forms */
-            if (blanks == 0) blanks = 1;
-            /* One extra blank line after a comment section header (;;) */
-            if (had_comment && s.opts.src && gap_end > gap_start) {
-                /* already handled by preserving blanks */
+            if (had_comment) {
+                /* Preserve the source's blanks between the last comment and the
+                 * form -- exactly, with no minimum.  A `;;;` docstring block
+                 * must stay flush against the definition it documents: any
+                 * intervening blank resets the docstring buffer, so injecting
+                 * one here would silently detach every docstring in the file
+                 * from its `defn`/`deftype` (tools/gendocs.py and `(doc ...)`
+                 * both read the block immediately above the definition). */
+                if (s.opts.src) {
+                    blanks = count_blank_lines(s.opts.src, comments_end,
+                                               gap_end, 2);
+                }
+            } else {
+                if (s.opts.src) {
+                    blanks = count_blank_lines(s.opts.src, gap_start, gap_end, 2);
+                }
+                /* At least one blank line between adjacent top-level forms */
+                if (blanks == 0) blanks = 1;
             }
 
-            if (s.col > 0) fs_putc(&s, '\n');
-            for (uint32_t b = 0; b < blanks; b++) fs_putc(&s, '\n');
+            fs_break_and_blank(&s, blanks);
         }
 
         fmt_form(&s, f);
@@ -1351,7 +1511,7 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
 
     /* Trailing comments after the last form */
     if (s.opts.src && prev_end < (uint32_t)s.opts.src_len) {
-        emit_comments_in_gap(&s, prev_end, (uint32_t)s.opts.src_len);
+        emit_comments_in_gap(&s, prev_end, (uint32_t)s.opts.src_len, 0, NULL);
     }
 
     /* Ensure exactly one trailing newline */
@@ -1360,4 +1520,67 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
     }
 
     return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Whole-buffer entry point
+ * ---------------------------------------------------------------------------
+ */
+
+#include "arena.h"
+#include "reader.h"
+#include "reader_macros.h"
+#include "symbols.h"
+
+int fmt_format_buffer(const char *path_label, const char *src, size_t len,
+                      ReaderType rtype, Buf *out) {
+    /* Reset BEFORE registering: diag_reset() clears the file registry, so
+     * registering first (as this used to) wiped this file's entry and left
+     * any format-time parse-error diagnostic without a source snippet
+     * (files_[0] == NULL -> "<unknown>"). */
+    diag_reset();
+
+    SourceFile file = {0};
+    file.path        = path_label;
+    file.src         = src;
+    file.len         = len;
+    file.file_id     = 0;
+    file.reader_type = rtype;
+    diag_register_file(&file);
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    ReaderMacroRegistry rmreg;
+    reader_macros_init(&rmreg, &arena);
+    rmreg.strict = true;
+    /* Keep `(reader-macros/define ...)` directives in the form stream so the
+     * formatter emits them -- stripping them (the compiler default) would make
+     * `tur fmt` silently delete the definition. */
+    rmreg.keep_define_forms = true;
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&arena, &st, &file, &rmreg, &nforms);
+
+    int rc = 0;
+    if (!forms || diag_had_error()) {
+        rc = -1;
+    } else {
+        FmtOptions opts = {0};
+        opts.indent_width = 2;
+        opts.line_width   = 80;
+        opts.src          = src;
+        opts.src_len      = len;
+        buf_init(out);
+        if (fmt_print(out, forms, nforms, opts) != 0) {
+            buf_free(out);
+            rc = -1;
+        }
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    return rc;
 }

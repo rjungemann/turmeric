@@ -1,0 +1,80 @@
+; rc<T> over a :heap defstruct -- regression guard for
+; docs/archive/gc-heap-struct-rc-not-a-control-block.md.
+;
+; A :heap ADT is already represented as a POINTER to its payload, so boxing it
+; the generic way (malloc a cell, store the pointer) left cb->value a `T **`
+; while every consumer cast it straight to `T *`. Consequences: `.next` read the
+; pointer cell as the struct and yielded the struct pointer, which reached
+; rc_strong_decrement as a bogus control block (a segfault once the cycle
+; collector touched fields past weak_count); the walker traced garbage; and the
+; drop glue freed the cell while leaking the struct itself.
+;
+; Every other GC fixture uses :move structs, which is why this shape went
+; uncovered. Asserts both halves: no leak for the acyclic case (the drop-glue
+; bug), and collection of a :heap cycle (the walker + control-block bug).
+(defstruct H :heap [next : rc<H>])
+
+(defn nullp [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn heap-bytes [] : int
+  ```c
+  /* Bytes currently handed out by malloc.  Spelled per-platform: mallinfo2 is
+     glibc-only (macOS has no <malloc.h> and no struct mallinfo2).  Any platform
+     without a precise probe reports 0, so the no-growth assertions below degrade
+     to vacuously true there -- the precise leak check runs on glibc CI.
+
+     Darwin has NO reliable byte-exact probe for this fixture.
+     malloc_zone_statistics on the default zone reports size_in_use at
+     page/bucket granularity, and this fixture's :heap nodes (a second malloc
+     per node) churn the zone enough that its delta around a gc! cycle jumps in
+     ~16-32 KB steps unrelated to the live set: measured non-monotonically as
+     0 / 16320 / 32768 / 0 across iteration counts (and 0 over 5000 iterations
+     rules out any per-cycle leak -- a real leak is monotonic in n).
+     blocks_in_use and malloc_zone_pressure_relief were equally noisy.  So on
+     Darwin this probe degrades to vacuous, exactly like an unmeasured platform;
+     a real regression of the original bug still crashes here (the cycle
+     collector touched a bogus control block -> segfault).  See
+     docs/archive/gc-heap-struct-rc-nonzero-on-darwin.md.  The sibling gc
+     fixtures use lighter allocation and measure 0 on Darwin today, so they keep
+     the Darwin probe; if one ever flakes, this is the fix. */
+  #if defined(__GLIBC__)
+  #include <malloc.h>
+  struct mallinfo2 mi = mallinfo2();
+  return (int64_t)mi.uordblks;
+  #else
+  return 0;
+  #endif
+  ```)
+
+; Acyclic: allocate and drop. Nothing may be retained.
+(defn acyclic [] : int
+  (let [h (rc/of (make-struct H (nullp)))]
+    (rc/drop h))
+  0)
+
+; Cyclic: two nodes referring to each other; only the collector can reclaim it.
+(defn ring [] : int
+  (let [h1 (rc/of (make-struct H (nullp)))
+        h2 (rc/of (make-struct H (rc/clone h1)))]
+    (set! (.next h1) (rc/clone h2))
+    0))
+
+(defn run-acyclic [n : int] : int
+  (let [^mut i 0] (while (< i n) (do (acyclic) (set! i (+ i 1))))) 0)
+
+(defn run-ring [n : int] : int
+  (let [^mut i 0] (while (< i n) (do (ring) (gc!) (set! i (+ i 1))))) 0)
+
+(defn main [] : int
+  (gc-enable!)
+  (run-acyclic 500) (run-ring 500)          ; warm up
+  (let [a0 (heap-bytes)]
+    (run-acyclic 5000)
+    (println (- (heap-bytes) a0)))          ; 0 -- acyclic :heap rc leaks nothing
+  (let [c0 (heap-bytes)]
+    (run-ring 5000)
+    (println (- (heap-bytes) c0)))          ; 0 -- :heap cycle is collected
+  0)

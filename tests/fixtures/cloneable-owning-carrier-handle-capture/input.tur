@@ -1,0 +1,29 @@
+;; E3a (owning-cloneable-capture): a ONE-WORD owning CARRIER HANDLE -- a `:heap`
+;; struct pointer, not an rc -- captured ^borrow into a genuinely multi-shot
+;; cloneable continuation.  Widens the owning-capture channel beyond `rc` to any
+;; one-word owning handle (rc OR :heap ADT/struct): both ride the frame env by a
+;; bare pointer copy, and a ^borrow capture never drops the handle in the frame,
+;; so the shallow-shared env is read-only-correct across resumes.
+;;
+;; `run` OWNS h (a heap allocation); it is captured ^borrow into the continuation
+;; (read-h reads .tag, never drops it), resumed twice (clone + original), then
+;; freed exactly once by the auto-inserted scope-exit drop (drop!/free), threaded
+;; into the continuation by the P5b trailing-defer path.  LeakSanitizer-clean.
+
+(defstruct H :heap [tag : int])
+
+(defn k-identity [k] : int k)
+
+(defn read-h [v : int ^borrow h : H] : int
+  (+ v (.tag h)))
+
+(defn run [] : int
+  (let [h (make-struct H :tag 5)]
+    (let [k (cloneable-reset (read-h (cloneable-shift k-identity 0) h))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))          ; (10 + 5) + (20 + 5) = 40; h auto-freed at exit
+
+(defn main [] : int
+  (println (run))
+  0)

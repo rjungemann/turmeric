@@ -1,0 +1,37 @@
+;; show-owned-result-plan stage 3: complete the ShowString surface for the two
+;; instances stage 1 deferred -- ptr<void> (the result<T,E> carrier) and Bound.
+;; Both Show bodies mix a borrowed literal with a fresh malloc, so ShowString
+;; builds the owned String directly (ptr<void>: from a stack buffer; Bound:
+;; adopt the malloc arms, from-cstr the "unbounded" literal).  Content matches
+;; Show exactly.
+(load "stdlib/range.tur")
+
+;; A result<T,E>-shaped carrier as a raw ptr<void> (is_ok, ok_val, err_val).
+(defn mk-ok [v : int] : ptr<void>
+  ```c
+  struct R { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct R *r = (struct R*)malloc(sizeof(struct R));
+  r->is_ok = true; r->ok_val = v; r->err_val = 0;
+  return (void*)r;
+  ```)
+(defn mk-err [v : int] : ptr<void>
+  ```c
+  struct R { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct R *r = (struct R*)malloc(sizeof(struct R));
+  r->is_ok = false; r->ok_val = 0; r->err_val = v;
+  return (void*)r;
+  ```)
+
+(defn emit [s : String] : void
+  (do (println (string/to-cstr s)) (string/release s)))
+
+(defn main [] : int
+  (do
+    ;; Bound: Show vs ShowString parity
+    (emit (show (Inclusive 3)))     ; [3
+    (emit (show (Exclusive 5)))     ; (5
+    (emit (show (Unbounded)))       ; unbounded
+    ;; ptr<void> result carrier: Show vs ShowString parity
+    (let [a (mk-ok 42)] (emit (show (:: a ptr<void>))))   ; ok(42)
+    (let [b (mk-err 7)] (emit (show (:: b ptr<void>))))   ; err(7)
+    0))

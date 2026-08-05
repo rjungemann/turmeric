@@ -1,10 +1,45 @@
 # Windows Support -- Remaining Work
 
-**Status:** WIN0 (compiler/runtime), WIN1 (generated-code portability), and the
-hard core of WIN3 (async I/O + fiber context switches) are **done and on the
-`windows-bringup` branch**. `tur.exe` builds under MSYS2/UCRT64, `tur build`
-compiles and runs real programs, and the async/reactor/httpd/fiber subset passes
-~65 fixtures. This plan tracks only what is left.
+**Status (revised 2026-07-31):** WIN0 (compiler/runtime), WIN1 (generated-code
+portability), and the hard core of WIN3 (async I/O + fiber context switches) are
+done and **merged to `main`** -- squash-merged as `7a16ef1de` ("Windows Bringup
+(#682)"). The `windows-bringup` branch is stale (~900 commits behind main); do
+not work from it.
+
+`tur.exe` builds under MSYS2/UCRT64, and `tur build` compiles and runs real
+programs. Measured on main at `f630230e5` with gcc 16.1.0:
+
+```
+TUR=./build-win/tur.exe bash tests/run.sh
+# summary: 2478 passed, 21 failed
+```
+
+That is the whole fixture tree, not the async subset -- roughly 99%. (An earlier
+revision of this plan cited "~65 fixtures"; that was the async/reactor/httpd
+subset at bring-up time, not a ceiling.)
+
+The 21 are four known classes and nothing else: 9 pipe-fd fixtures, 5
+carrier<->pointer straddles (not Windows-specific; **all five fixed 2026-08-01**,
+though not re-measured on Windows -- see below), 5 POSIX-only inline-C, and 2
+scheduler stdout mismatches. Each is a section below. The run was 2445/54 before
+the Winsock setsockopt/getsockopt shim landed; the whole `httpd-*` family moved
+in one change.
+
+**WIN0 regressed between the merge and 2026-07-31 and had to be re-fixed.** Five
+independent breaks accumulated, three of them within five days, because nothing
+guards Windows in CI. The compiler did not build at all. See
+`docs/reported/windows-*.md` and the `fix(windows): restore the Windows build on
+main` commit.
+
+**The single highest-value item in this plan is therefore a `windows-latest` CI
+job**, which is not otherwise listed here -- `.github/workflows/ci.yml` runs
+`[ubuntu-latest, macos-latest]` on both the `test` and `jit` legs, and
+`release.yml` ships no Windows artifact. Without a guard, everything below
+rots as fast as it is fixed. Note also that `src/CMakeLists.txt:45-49` disables
+`-Werror` on Windows pending a warning-clean port, so a new job runs with
+warnings unpromoted until that is revisited.
+
+This plan tracks what is left.
 
 The original end-to-end plan (toolchain rationale, the WIN0/WIN1 blockers, the
 Wine loop, the full WIN3 investigation) is archived at
@@ -26,7 +61,7 @@ compiler/runtime work exists to serve it.
 
 ### Prerequisite in this repo: shared-library output naming -- DONE
 
-`tur build --shared` now emits `<name>.dll` (no `lib` prefix) on Windows.
+`tur build --shared` emits `<name>.dll` (no `lib` prefix) on Windows.
 `TUR_SHLIB_PREFIX` / `TUR_SHLIB_EXT` in `src/platform_fs.h` are the single
 source of truth; `src/main.c` (default output path) and
 `src/turi/spice_loader.c` (the `.tur-repl-cache/` image) both build their names
@@ -34,29 +69,31 @@ from them. macOS deliberately keeps `lib<name>.so` -- see the header comment.
 
 `tests/run-build-shared.sh` passes 11/11 against `build-win/tur.exe`: the .dll
 links, exports `smokelib__add42`, dlopens through `src/platform_dl.h`, calls,
-and writes `exports.manifest`. Getting there needed three real fixes:
+and writes `exports.manifest`. Three fixes were needed to get there:
 
 - **Multi-TU collision in the emitted ucontext shim.** The WIN3-C register-
-  snapshot shim is emitted into *every* generated TU with `.globl`
-  `__tur_uctx_swap` / `__tur_uctx_tramp` and an external `__tur_uctx_run`, so
-  any build with more than one TU died with "multiple definition". A `--shared`
-  build always has two (the generated `tur_runtime.c`), and so does every
-  multi-module `tur build <dir>`. The definitions now sit in COMDAT
-  (`.text$<name>` + `.linkonce discard`), the same mechanism a C++ inline
-  function uses. Plain `.scl 3` is not enough for `__tur_uctx_swap` -- the C
-  code calls it, so GCC re-externalises the symbol underneath you.
+  snapshot shim goes into *every* generated TU with `.globl __tur_uctx_swap` /
+  `__tur_uctx_tramp`, so any build with more than one TU died with "multiple
+  definition". Not `--shared`-specific: every multi-module `tur build <dir>`
+  hits it; `--shared` just always has a second TU (`tur_runtime.c`). The
+  definitions now sit in COMDAT (`.text$<name>` + `.linkonce discard`), the
+  mechanism a C++ inline function uses. Two traps: `.scl 3` alone is not enough
+  for `__tur_uctx_swap` (the C code calls it, so GCC re-externalises it), and
+  the asm block **must** end by switching back to `.text` -- otherwise later
+  compiler output lands in the discardable section and every generated program
+  segfaults in `main()`.
 - **`basename_of()` split on `/` only.** Windows `realpath()` returns the
   backslash spelling, so `tur build --shared .` used the whole absolute path as
   the artifact name and ld rejected it. Now splits on `\` too, under `_WIN32`.
-- **`dlfcn.h` in the test harness.** MinGW has none; the harness includes the
-  repo's existing `src/platform_dl.h` instead.
+- **`dlfcn.h` in the smoke harness.** MinGW has none; it now includes the
+  repo's existing `src/platform_dl.h`.
 
 Nine harnesses also hardcoded `TUR="./build/tur"` rather than honouring a `TUR`
 override, so they could not be pointed at `build-win/tur.exe` at all. They now
 read `${TUR:-./build/tur}` like the other 35.
 
-Still open for WIN2: confirm the shim's "compile script on demand" subprocess
-invokes `tur.exe` (with the suffix). `tur_settle_exe_output` already handles the
+Still open: confirm the shim's "compile script on demand" subprocess invokes
+`tur.exe` (with the suffix). `tur_settle_exe_output` already handles the
 executable case.
 
 ### Scope (mostly in `../turmeric-godot/`)
@@ -89,62 +126,118 @@ Clang-cl -- see the archived plan.)
 ## WIN3 tail -- the async fixtures still failing
 
 None of these block WIN2; they are the long tail of the async subset.
-Current Windows suite: **2165 passed, 14 failed** (`TUR=./build-win/tur.exe
-bash tests/run.sh`), and all 14 are listed below.
 
-### Pipe-fd polling: a hard platform limit (9 fixtures) -- SKIPPED, option 1 taken
+### Pipe-fd fixtures: do not build, and would not poll either (9 fixtures)
 
-`reactor-fd-{modify,readable,remove,writable}`,
-`reactor-fibers-cancel-on-free`, `reactor-fibers-park-fd`,
+`reactor-fd-*`, `reactor-fibers-cancel-on-free`, `reactor-fibers-park-fd`,
 `reactor-stop-from-callback`, `reactor-wake-cross-thread`, `scheduler-io-park`
-create a `pipe()` and register the pipe fds with the reactor. They now carry a
-`requires.pollable-pipes` marker and PASS-skip on Windows.
+create a `pipe()` and register the pipe fds with the reactor.
 
-This is blocked **twice over**, and the first reason is the one you actually
-hit -- an earlier draft of this plan named only the second:
+**Correction (2026-07-31): these fail at `cc`, not at runtime.** MinGW does not
+declare `pipe()` -- it ships `_pipe`, with a different signature -- and
+`-Wimplicit-function-declaration` is a hard error on gcc >= 14. No reactor code
+is reached. See `docs/reported/windows-pipe-reactor-fixtures-do-not-build.md`.
 
-1. The generated C calls POSIX `pipe(fds)`. MinGW does not provide it under
-   that name or signature (it has `_pipe(fds, size, mode)`), so every one of
-   these fixtures fails at **link** time -- `undefined reference to 'pipe'`.
-   They never reach the reactor at all.
-2. Shimming `pipe()` in does not rescue them, which was measured rather than
-   assumed: with `_pipe(fds, 65536, 0)` patched into the generated C the
-   fixture links and runs, and prints `poll-count=-1` where it expects
-   `poll-count=1`. Windows `select()` is SOCKET-only, so it rejects the CRT
-   file descriptors with WSAENOTSOCK. Note it fails *fast* -- there is no hang
-   or timeout risk in this family.
+The runtime limitation below is still real and still applies the moment they do
+compile, so the two causes compound rather than compete: **Windows `select()` is
+socket-only** -- it cannot poll pipe or file fds at all, so the select-based
+backend (`src/async/io_iocp.c`) cannot service them.
 
-The remaining option (route `pipe()` through a loopback socketpair AND
-`read`/`write` through `recv`/`send` for those fds) is intricate, collides with
-file I/O, and is only worth it if a real turmeric-godot use case needs
-pipe-style async. Godot scripts do not poll pipes.
+Options, in rough order of effort:
+1. Accept as a platform limit (Godot scripts don't poll pipes). Mark the fixtures
+   `requires.*`-skip on Windows.
+2. Route `pipe()` through a loopback socket pair AND `read`/`write` through
+   `recv`/`send` for those fds -- intricate, collides with file I/O, fragile.
+   Only worth it if a real turmeric-godot use case needs pipe-style async.
 
-### Concurrency mismatches (5 fixtures, still open)
+Recommendation: option 1 unless a use case forces option 2.
 
-`httpd-async-limit`, `httpd-h4-keepalive`, `httpd-h6-routing`, `taskgroup-async`
-build and run but produce diverging output -- scheduler/timing under the select
-backend, not yet diagnosed. Worth a focused pass; start by comparing
-fiber/worker scheduling order against Linux.
+### Concurrency stdout mismatches (2 fixtures)
 
-`scheduler-multithread` has regressed from "passes with a distribution nuance"
-to a hard **timeout (exit 124)**. That one is worth pinpointing first -- a hang
-is a different animal from a scheduling-order difference, and it is the only
-fixture in the suite that eats its full timeout.
+`fiber-effect` and `p19-8-fiber-effect-chain` build and run but produce
+diverging output -- scheduler/timing under the select backend, not yet
+diagnosed. Worth a focused diagnosis pass; start by comparing fiber/worker
+scheduling order against Linux.
+
+(An earlier revision named `httpd-h4-keepalive`, `httpd-h6-routing` and
+`taskgroup-async` here. All three now pass -- the first two were collateral of
+the Winsock `setsockopt` build failure, not a scheduler difference.)
+
+---
+
+## Winsock / POSIX gaps in the stdlib
+
+Found 2026-07-31. Not regressions: these predate the bring-up or were missed by
+it.
+
+- **`setsockopt`/`getsockopt` against Winsock (~40 fixtures) -- RESOLVED.** The
+  whole `httpd-*` / `httpd-async-*` family failed to build: Winsock declares the
+  option value as `char *` rather than `void *`. Fixed in the emitter's Winsock
+  compat shim (`emit_winsock_compat_shim`), which already remapped
+  `socket`/`fcntl`/`recv`/`send`/`accept`/`connect`/`close` and was simply
+  missing these two -- so every current and future POSIX-shaped call in any
+  inline-C is covered, not just the three sites in `stdlib/httpd.tur`. Two
+  subtleties handled there rather than per call site: `SO_RCVTIMEO`/`SO_SNDTIMEO`
+  take a DWORD of milliseconds, not a `struct timeval` (a plain cast sets a
+  garbage timeout), and `SO_REUSEADDR` is *dropped* on Windows because its
+  meaning inverts -- Winsock's permits binding over a LIVE socket. See
+  [docs/archive/windows-httpd-setsockopt-winsock.md](../../archive/windows-httpd-setsockopt-winsock.md).
+- **POSIX-only inline-C (5 fixtures).** `_mkdir` (3), `ioctl`/`struct winsize`
+  (1), `fork`/`getppid` (1). The `_mkdir` case is **not** a source bug --
+  `stdlib/fs.tur` is correctly written with `#ifdef _WIN32` /
+  `#include <direct.h>`. The include hoister
+  (`tur_hoist_top_includes_scan`, `src/compiler/emit_core.c:3005`) consumes only
+  blank lines, `//` comments, `#include` and object-like `#define` at the top of
+  an inline-C body and stops at anything else -- including `/* */` comments and
+  `#ifdef`. So a platform-conditional include is never lifted to file scope, and
+  because an in-body include is block-scoped AND the header's include guard makes
+  the *second* function's copy expand to nothing, the next function that needs it
+  sees an implicit declaration. That is precisely the class the hoister exists to
+  fix (see its own `#define`-hoisting comment), just an unhandled gap in it.
+  Fixing it generally -- lift a top-of-body conditional block verbatim when it
+  contains only includes/defines/comments -- also unblocks the natural port of
+  `term/width`/`term/height`, which would otherwise break the same way the moment
+  their `#include <sys/ioctl.h>` is wrapped in an `#ifdef`. See
+  [docs/reported/windows-posix-inline-c-gaps.md](../../reported/windows-posix-inline-c-gaps.md).
+
+## Subprocess and shared-library layers (not fixture-visible)
+
+The commands that shell out or produce/load a shared library are unported:
+`tur install`, `tur fetch`, `tur new`, and REPL spice loading. They pass
+`/bin/sh` command strings with single-quote quoting to `cmd.exe`, and the REPL
+JIT module graph hits the deliberate `symlink` `ENOSYS` stub. This is the
+highest-impact group
+for an actual Windows user and is a prerequisite for WIN2 above. See
+[docs/reported/windows-subprocess-and-shared-lib-gaps.md](../../reported/windows-subprocess-and-shared-lib-gaps.md).
 
 ---
 
 ## Codegen defects the port surfaced (NOT Windows-specific)
 
-Both are latent on Linux too and will bite when CI's toolchain advances.
+- **Carrier<->pointer straddles (5 fixtures).** Generated C trips
+  `-Wint-conversion` / `-Wincompatible-pointer-types`, hard errors on gcc >= 14
+  and Apple clang >= 15. **Correction (2026-07-31): the `-Wno-error=`
+  workaround this plan previously cited is gone** -- both downgrades were
+  deliberately removed (`src/main.c:5231-5251`) on the grounds that every
+  straddle was bridged at emit time. Five remained under gcc 16.1.0, so that
+  claim did not hold; do not re-add the downgrades, the removal is what exposed
+  them.
 
-- **GCC >= 14 permerrors.** Generated C trips `-Wincompatible-pointer-types`,
-  `-Wint-conversion`, and `-Wimplicit-function-declaration` (a missing `hamt.h`
-  include), all promoted to hard errors in GCC 14. Worked around with
-  `-Wno-error=` in `src/main.c`; the real fix is well-typed codegen. See
-  [docs/reported/codegen-gcc14-permerrors.md](../../reported/codegen-gcc14-permerrors.md).
-- **`-O0` link failure.** Generated C references `tur_get_contract_handler` /
-  `tur_set_contract_handler`, which are declared but never defined; at `-O1`+ the
-  calls are optimised away so it links. Surfaces only in a debug (`-O0`) build.
+  **Update (2026-08-01): four of the five are fixed and archived** --
+  [docs/archive/macos-int-conversion-carrier-pointer-straddles.md](../../archive/macos-int-conversion-carrier-pointer-straddles.md)
+  (not macOS-specific despite the filename -- it is "any toolchain new enough";
+  verified on Apple clang 21, which promotes `-Wint-conversion` the same way
+  gcc >= 14 does). The fifth, `data-literal-nested`, was never a straddle but a
+  wrong-monomorph selection that gcc's promoted `-Wincompatible-pointer-types`
+  catches and clang's does not; re-filed as
+  [docs/archive/vec-empty-like-monomorph-selects-int-element.md](../../archive/vec-empty-like-monomorph-selects-int-element.md)
+  and **also fixed** (2026-08-01), so all five of this class should now build
+  under gcc >= 14 -- unverified on Windows, since the fixes were made and
+  measured on Apple clang 21. The older gcc-14 reports are resolved and archived
+  under `docs/archive/history/`.
+- **`-O0` link failure -- RESOLVED.** Generated C referenced
+  `tur_get_contract_handler` / `tur_set_contract_handler` with no definition.
+  Both are now defined in `src/runtime/contract_handler.c:21,30`.
 
 ---
 
@@ -158,7 +251,13 @@ wanted.
 - **REPL:** MSYS2 ships wineditline, so line editing already works; nothing to do
   unless targeting a non-MSYS2 build.
 - **Release packaging:** add `windows-x86_64` to `.github/workflows/release.yml`,
-  producing a `.zip`.
+  producing a `.zip` (the other targets ship `.tar.gz`). The binary links two
+  non-system DLLs -- `/ucrt64/bin/libwinpthread-1.dll` and `/ucrt64/bin/edit.dll`
+  (libedit, and hence the REPL's line editing) -- so either bundle them in the
+  zip or link statically; a bare `tur.exe` will not start on a machine without
+  MSYS2. Confirm by unzipping with MSYS2 off `PATH` and running `tur --version`.
+  Make sure the runner installs `mingw-w64-ucrt-x86_64-libedit`, or the build
+  quietly succeeds and ships a REPL with no line editing.
 
 ---
 

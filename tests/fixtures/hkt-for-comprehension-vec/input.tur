@@ -33,7 +33,7 @@
 (defn __vec_push [v val] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   if (vec->len >= vec->cap) {
       size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
       int64_t *nd = malloc(sizeof(int64_t) * new_cap);
@@ -47,14 +47,14 @@
 (defn __vec_len [v] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   return (int64_t)vec->len;
   ```)
 
 (defn print-vec [v]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   for (size_t i = 0; i < vec->len; i++) {
       printf("%lld\n", (long long)vec->data[i]);
   }
@@ -67,14 +67,14 @@
 (defn __vec_bind [ma f] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
+      (void *)(intptr_t)ma;
   if (!v) return 0;
   /* Two-pass: count total length, then fill. Safe for pure f. */
   size_t total = 0;
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)f)(v->data[i]);
       struct { int64_t *data; size_t len; size_t cap; } *sv =
-          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+          (void *)(intptr_t)sub;
       if (sv) total += sv->len;
   }
   struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
@@ -84,7 +84,7 @@
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)f)(v->data[i]);
       struct { int64_t *data; size_t len; size_t cap; } *sv =
-          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+          (void *)(intptr_t)sub;
       if (sv) for (size_t j = 0; j < sv->len; j++) r->data[idx++] = sv->data[j];
   }
   return (int64_t)(intptr_t)r;

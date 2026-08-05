@@ -1,0 +1,14 @@
+;; sealed-opaque: fabricating a :sealed opaque FROM its representation outside
+;; the declaring module is TUR-E0302.
+;;
+;; This is the direction that closes the reported aliasing hole. Without it, a
+;; caller holding an immutable borrow of a handle can unwrap and re-wrap it to
+;; mint an ALIAS the uniqueness checker does not recognise as the same value,
+;; and mutate through the alias inside a region that is supposed to forbid
+;; exactly that -- see docs/reported/frozen-region-aliasing-via-coercing-cast.md.
+(defmodule main
+  (import sealedlib/world :refer [W w-read])
+  (defn main [] : int
+    (let [w2 (:: 12345 W)]      ;; TUR-E0302: cannot fabricate sealed 'W'
+      (println (w-read w2)))
+    0))

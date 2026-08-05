@@ -1,0 +1,24 @@
+;; A field read is exactly as pure as its receiver, so a getter is congruent.
+;; Under --strict-refine, so losing that is a compile error rather than a
+;; silently-kept check. This reported `0 proven, 1 unknown` before.
+;;
+;; There is no per-field `mut` marker in the language and none is needed:
+;; `set!` on `(.f s)` requires `s` to be bound `^mut`, which is the same
+;; declaration-level guarantee that already makes a non-mut variable read
+;; congruent. Behind `rc`/`ref`/a borrow the receiver is DECLINED -- see the
+;; guide -- because a caller can hold a `^mut` handle to the same object and
+;; mutate it between two reads, which is exactly what congruence assumes away.
+;;
+;; Note this does NOT make `width-of` interchangeable with `.width`: they are
+;; two different uninterpreted symbols and nothing unfolds one into the other.
+;; Congruence is about repeated occurrences of the SAME call.
+(defdata Box :copy (Box [width : int height : int]))
+
+(defn width-of [b : Box] : int (.width b))
+
+(defn diff [b : Box] : #refine{ r : int | (>= r 0) }
+  (- (width-of b) (width-of b)))
+
+(defn main [] : int
+  (println (diff (Box 7 3)))
+  0)

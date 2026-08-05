@@ -22,7 +22,7 @@ something we don't have.
 For the introductory tutorial see
 [`ecs-guide.md`](ecs-guide.md). For the long-form plan and the
 load-bearing prereqs that closed in 2026-06-11 see
-[`../upcoming/ecs-spice-plan.md`](../upcoming/ecs-spice-plan.md).
+[`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md).
 
 ## The bottom line
 
@@ -34,10 +34,10 @@ load-bearing prereqs that closed in 2026-06-11 see
 | **Storage choice** (dense vs sparse vs tag) | Type-family `Storage c` -- resolved at compile time, but the user can lie via orphan instances | Associated type, same caveat | Per-component; macro registers, accessor type bakes it in. No orphan-instance surface |
 | **Typeclass coherence** | Open instances; orphans are a maintenance hazard | Open instances | Coherent -- one `Component T` instance per `T`, enforced by the elaborator |
 | **Polymorphic-system bound** ("any world with `Pos` and `Vel`") | `Has w Pos, Has w Vel => …` constraint, solved by GHC | Same | `(HasPos W) (HasVel W) => …` Turmeric class constraint -- shipped via `defcomponent-class` / `definstance` |
-| **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | `option`-returning reads (`(none)` on dead-handle) -- same model, runtime-checked |
+| **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness by importing the `ecs/refined-world` facade: a read whose entity is not proven alive is a compile error |
 | **Query arity** | Tuples up to 8-ish via type-class hackery; degrades past that | `Query` arrow combinators -- no cap, but composition cost is real | Truly variadic via row-kinded `for-each`; row type is the kind-`[*]` of components |
 | **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check (lifts when the spice wires `SizedVec<n, T>` -- SZ6+ shipped, spice wiring still TODO) |
-| **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](../upcoming/v1/ecs-cross-world-systems-plan.md)); single-world is v1 |
+| **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-cross-world-systems-plan.md)); single-world is v1 |
 
 The single largest delta is **write-set enforcement**. Both Haskell
 libraries trust the programmer not to write to a component they didn't
@@ -260,10 +260,10 @@ A body that did not declare `:writes [Vel]` has no `Vel-write-cap`;
 the `set-Vel!` call name-resolves, but its first argument is unbound.
 
 The Phase I report
-([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](../archive/history/ecs-defsystem-write-caps-not-enforced.md))
+([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md))
 walks the implementation. The load-bearing prereq was the parametric
 `:linear` propagation fix
-([`docs/archive/history/parametric-linear-opaque-not-enforced.md`](../archive/history/parametric-linear-opaque-not-enforced.md));
+([`docs/archive/history/parametric-linear-opaque-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/parametric-linear-opaque-not-enforced.md));
 without it, `WriteCap<T>` would compile-check fine but its
 single-use discipline would silently drop on every application.
 
@@ -306,22 +306,46 @@ here's where tur-ecs still trusts runtime checks.
 ### Entity aliveness
 
 ```turmeric
-(defstruct Entity [index : int generation : int])
+(defopaque Entity :int)   ;; low 32 = slot index, high 32 = generation
 ```
 
-`get-Pos` returns `option<Pos>`. A dead-entity handle's generation
-counter mismatches the slot's current generation, so the read returns
-`(none)`. This is a runtime u32 compare per access. apecs and aztecs
-do the same thing the same way -- nobody ships compile-time alive-set
-proofs.
+A dead-entity handle's generation mismatches the slot's current
+generation, and `sized-alive?` is the runtime u32 compare that says so.
+apecs and aztecs do the same thing the same way -- neither ships
+compile-time alive-set proofs, and tur-ecs's *default* path doesn't
+either.
 
-A compile-time version would require refinement types
-([`docs/upcoming/v1/refinement-types-plan.md`](../upcoming/v1/refinement-types-plan.md)),
-which are in plan but not shipping. When they do land, the
-`entity-alive!` strict surface will lift the runtime check out of the
-inner loop in the cases where the elaborator can prove it -- but the
-default `option`-returning forgiving API will stay, because that's the
-sound choice when the prover can't.
+Two honesty notes the earlier version of this section got wrong. The
+reads are **not** `option`-returning: `defcomponent-accessors` emits a
+`get-<Comp>` that returns the component directly. And on the unsized
+world the comparison is not performed anywhere on the read path -- a
+stale handle reads stale bits. Sized worlds have `sized-alive?`;
+unsized worlds leave the check to you.
+
+A compile-time version now **ships as an opt-in module** -- you opt in
+by importing it, not by setting a flag. Refinement types are checked
+statically on every compile
+([`refinement-types-guide.md`](refinement-types-guide.md)), and the
+impure-measure question -- `alive?` reads mutable world state through
+inline C, which is exactly what congruence must refuse in general -- was
+answered by `#reads` + `frozen` regions
+([`docs/upcoming/v1/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md)):
+a `#reads w` measure is congruent while `w` is immutably borrowed, and
+the borrow makes `^unique ^mut` despawn a compile error inside the
+region, which is what makes trusting the guard sound. The
+`ecs/refined-world` module puts that to work: `rgworld-get-x!` refines
+its entity with `(rgworld-alive? w x)`, a guarded read in a `frozen`
+region proves, and the `for-each-alive!` macro generates loop + borrow +
+guard so a per-entity body read discharges. Under `--strict-refine` an
+unproven read is a hard error. The same family ships for the real sized
+stack via `ecs/sized-refined` (`sized-defworld-refined` /
+`sized-defcomponent-accessor-refined` / `for-each-alive`), emitted per
+world/component beside the unchanged forgiving accessors. Honest scope
+notes: the guarantee is against ordinary code, not a deliberate
+`::`-cast / inline-C bypass (the same trust boundary `#reads` itself
+carries); and the forgiving default API stays -- that remains the sound
+choice when
+the prover can't.
 
 ### Dense-storage length matching
 
@@ -330,7 +354,7 @@ checks at runtime that both storages have the same length and rejects
 otherwise. The prereq for lifting this to compile time -- `SizedVec<n,
 T>` with a load-bearing size index -- shipped in 2026-06-10 (SZ6-SZ8;
 see
-[`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md)).
+[`docs/archive/history/sized-types-phantom-index.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-phantom-index.md)).
 The spice has not yet wired its dense storages through `SizedVec`.
 When it does, dense-vs-dense zip becomes statically rectangular; the
 runtime check disappears for that case.
@@ -405,12 +429,12 @@ scheduler ever runs.
 ## Where to look next
 
 - [`ecs-guide.md`](ecs-guide.md) -- the introductory tutorial.
-- [`../upcoming/ecs-spice-plan.md`](../upcoming/ecs-spice-plan.md)
+- [`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md)
   -- the long-form plan, status, and what's still queued for v2.
-- [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](../archive/history/ecs-defsystem-write-caps-not-enforced.md)
+- [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md)
   -- the Phase I implementation log for the cap-gating surface that
   delivered the headline compile-time-write-set claim.
-- [`../upcoming/v1/ecs-cross-world-systems-plan.md`](../upcoming/v1/ecs-cross-world-systems-plan.md)
+- [`../upcoming/v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-cross-world-systems-plan.md)
   -- post-v1 follow-up extending the cap surface to multi-world
   render-extract / client-prediction patterns.
 - [`substructural-types-guide.md`](substructural-types-guide.md) --
@@ -423,10 +447,15 @@ If you take only one thing from this guide, take this:
 - **Component membership and write-set enforcement** are the rows
   where tur-ecs is unambiguously better than apecs and aztecs in v1.
   The cap-gating ships as of 2026-06-11; this is not a future claim.
-- **Aliveness** is the row where everyone is the same, runtime-checked,
-  shipping `option`-returning reads, and where the compile-time
-  upgrade is on the refinement-types roadmap for all three (Haskell's
-  `liquid-haskell` is the analog; nobody ships it as default).
+- **Aliveness** is the row where the *defaults* are the same and
+  runtime-checked everywhere (Haskell's `liquid-haskell` is the analog;
+  nobody ships it as default). tur-ecs now has an opt-in compile-time
+  surface here -- the `ecs/refined-world` facade, which you opt into by
+  importing it instead of the forgiving module, and where an
+  unproven read fails to compile -- which neither Haskell library
+  offers. On the default path tur-ecs is still arguably a step
+  *behind*: the unsized read skips the generation compare entirely,
+  where apecs and aztecs return a `Maybe`.
 - **Query composition** is the row where aztecs is genuinely ahead of
   tur-ecs for code that treats queries as first-class data.
 - **Convenience for tiny one-off games** is the row where apecs's

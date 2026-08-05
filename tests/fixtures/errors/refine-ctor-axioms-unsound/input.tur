@@ -1,0 +1,30 @@
+;; SOUNDNESS, inverted -- both must stay UNPROVEN, and --strict-refine makes an
+;; unproven obligation a hard error, so a regression makes this fixture start
+;; COMPILING and fail. Its sibling refine-ctor-axioms pins the honest versions.
+;;
+;;   wrong-field -- the axiom is per FIELD. Index it wrong and `(.height ...)`
+;;   would be equated with the width argument, which is false and would prove
+;;   the goal.
+;;
+;;   impure-arg -- a constructor is pure, but that says nothing about its
+;;   ARGUMENTS. Two `(Box (tick) 3)` applications are not the same value, so
+;;   they must not unify through the axiom. This is the congruence miscompile
+;;   this feature has hit three times, reached through a fourth door.
+(defdata Box :copy (Box [width : int height : int]))
+
+(defn tick [] : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn wrong-field [p : int] : #refine{ r : int | (= r p) }
+  (.height (Box p 3)))
+
+(defn impure-arg [p : int] : #refine{ r : int | (= r 0) }
+  (- (.width (Box (tick) 3)) (.width (Box (tick) 3))))
+
+(defn main [] : int
+  (println (wrong-field 7))
+  (println (impure-arg 7))
+  0)

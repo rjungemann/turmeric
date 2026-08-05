@@ -1,9 +1,47 @@
 /* elab_effects.c -- delimited continuations and algebraic effects. */
 #include "elab_internal.h"
 
+/* E3a (owning-cloneable-capture, cps-backend-owning-env-teardown): an owning
+ * value captured ^borrow into a genuinely multi-shot cloneable continuation that
+ * lacks a Clone instance is admitted -- rather than rejected with TUR-E0014 --
+ * when the `owning-cloneable-capture` experiment is on AND the owning kind is a
+ * ONE-WORD handle the cloneable frame env can carry:
+ *   - `rc<T>`   (TY_RC): a reference-counted handle;
+ *   - a `:heap` ADT / struct carrier handle (a one-word typed pointer).
+ * Both ride the frame env by a bare pointer copy; for a ^borrow capture the
+ * frame never drops the handle, so the shallow-shared env is read-only-correct
+ * across resumes and the owner drops it once (see the borrow teardown in
+ * build_marshal_reset).  An owning BY-VALUE aggregate (multi-word) does not fit
+ * the one-word env and is not admitted here -- it needs a boxed / widened env
+ * captured by a pointer to the owner's by-value local (see the cloneable emit),
+ * so it too is admitted -- it fits the one-word env by ADDRESS. */
+static bool owning_byvalue_agg(const Type *t) {
+    if (!t) return false;
+    const AdtDef *def = NULL;
+    if (t->kind == TY_ADT) {
+        def = t->as.adt_.def;
+        if (!def || !adt_is_byvalue_product(def)) return false;
+    } else if (t->kind == TY_APP) {
+        def = type_adt_app_def((Type *)t);
+        if (!def || !adt_app_is_byvalue_product(*(Type *)t)) return false;
+    } else {
+        return false;
+    }
+    return def->needs_drop_glue && !def->is_heap && def->n_ctors == 1;
+}
+static bool owning_multishot_admissible(const Type *t) {
+    if (!g_opt_owning_cloneable_capture || !t) return false;
+    return t->kind == TY_RC
+        || type_is_heap_adt(*(Type *)t)
+        || type_is_heap_struct(*(Type *)t)
+        || owning_byvalue_agg(t);
+}
+
 /* ---- file-local helper forward declarations ---- */
-static void check_cloneable_capture(Elab *e, Span span);
-static void check_serializable_capture(Elab *e, Span span);
+static void check_cloneable_capture_precise(Elab *e, Span span,
+                                            const Expr *reset_body);
+static void check_serializable_capture_precise(Elab *e, Span span,
+                                               const Expr *reset_body);
 static bool is_effect_handled(Elab *e, const Symbol *name);
 static void push_handled_effect(Elab *e, const Symbol *name);
 static bool elab_effect_is_referred(const Elab *e, const Effect *eff);
@@ -169,12 +207,28 @@ Expr *elab_reset(Elab *e, const Form *call) {
      * (which need EX_RESET -- proven by the reset-alias experiment) stays EX_RESET. */
     int d = ++e->cloneable_reset_depth;
     bool track = d >= 0 && d < 64;
-    if (track) e->reified_shift_at_depth[d] = false;
+    if (track) { e->reified_shift_at_depth[d] = false;
+                 e->reified_serial_at_depth[d] = false;
+                 /* A plain `reset` is flavor-flexible -- not pinned cloneable. */
+                 e->pinned_cloneable_at_depth[d] = false; }
     Expr *body = elab_form(e, call->as.list.items[1]);
     bool reified = track && e->reified_shift_at_depth[d];
+    bool serial  = track && e->reified_serial_at_depth[d];
     e->cloneable_reset_depth--;
     if (!body) return NULL;
+    if (reified && serial) {
+        /* Capability-folding item 1: a resuming shift with a `serial-cont`
+         * receiver bound here, so this plain `reset` IS the serial delimiter --
+         * lower it exactly like `serial-reset` (EX_SERIAL_RESET), including the
+         * Serializable-capture check on the reified continuation body. */
+        check_serializable_capture_precise(e, call->span, body);
+        Expr *out = expr_new(e->arena, EX_SERIAL_RESET, body->type, call->span);
+        out->as.serial_reset_.body = body;
+        return out;
+    }
     if (reified) {
+        /* CPS-CL10 / E4: a resuming shift bound here -- verify the captures. */
+        check_cloneable_capture_precise(e, call->span, body);
         Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
         out->as.cloneable_reset_.body = body;
         record_reset_node(e, out);
@@ -302,20 +356,36 @@ Expr *elab_shift0(Elab *e, const Form *call) {
 
 /* Phase B2: Cloneable continuations */
 
-/* CPS-CL10 (elab-time): Walk all local bindings visible at a cloneable-shift
- * site and emit TUR-E0014 for any that lack a Clone instance.  This is a
- * conservative check — it covers every binding in scope, not just those that
- * are actually live at the shift; liveness-precise checking would require the
- * CPS pass.  Running early (in elab) gives diagnostics before codegen. */
-static void check_cloneable_capture(Elab *e, Span span) {
+/* CPS-CL10 / E4 (elab-time): emit TUR-E0014 for a binding CAPTURED into a
+ * cloneable-shift's multi-shot continuation that lacks a Clone instance.
+ *
+ * This runs once per reset, on the full reset body (the delimited context the
+ * continuation reifies), so it knows exactly which fn-local bindings the
+ * continuation actually references -- the free variables of that body.  The
+ * old per-shift check ran before the body existed and had to over-approximate
+ * to EVERY in-scope binding; that spuriously rejected an owning value (an `rc`,
+ * a non-Clone struct, ...) merely being *in scope* at a cloneable-shift, even
+ * when the continuation never touches it (E4).  An owning value that is not
+ * free in the continuation is provably not captured, so it needs no Clone; one
+ * that IS free (genuinely captured owning) stays rejected -- the native
+ * multi-shot env cannot own a reference without the E3 env clone/drop teardown,
+ * which is unbuilt.  fn-local bindings only (walk stops at
+ * fn_entry_outer_scope): an ENCLOSING-fn binding is not captured into the
+ * continuation env (CF7.3) and a top-level def is global, so neither is a
+ * capture candidate. */
+static void check_cloneable_capture_precise(Elab *e, Span span,
+                                            const Expr *reset_body) {
     const Symbol *clone_sym = intern_cstr(e->st, "Clone");
     TypeClass *clone_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, clone_sym);
     if (!clone_tc) return; /* No Clone typeclass in scope; nothing to check */
+    if (!reset_body) return;
 
-    /* CF7.3: stop at the outer-function boundary so bindings from enclosing
-     * functions (which are NOT captured in the continuation env) are not
-     * falsely flagged as needing Clone.  For top-level defns fn_entry_outer_scope
-     * is &e->global, giving the same behavior as before. */
+    /* The free variables of the reifiable continuation context.  A binding not
+     * in this set is not referenced by the continuation and so is never cloned
+     * on resume -- it does not need Clone regardless of its type. */
+    uint32_t n_fv = 0;
+    Binding **fvs = collect_free_vars(reset_body, NULL, 0, NULL, 0, &n_fv);
+
     Scope *stop = e->fn_entry_outer_scope ? e->fn_entry_outer_scope : &e->global;
     for (Scope *s = e->scope; s != NULL && s != stop; s = s->parent) {
         for (uint32_t i = 0; i < s->n; i++) {
@@ -325,9 +395,20 @@ static void check_cloneable_capture(Elab *e, Span span) {
             /* Primitive/function/continuation types are always safe to capture */
             if (t.kind == TY_NIL || t.kind == TY_FN ||
                 t.kind == TY_CLONEABLE_CONT) continue;
+            /* Only a binding the continuation actually references is captured. */
+            bool captured = false;
+            for (uint32_t j = 0; j < n_fv; j++)
+                if (fvs[j] == b) { captured = true; break; }
+            if (!captured) continue;
             TypeClassInstance *inst =
                 typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &t, 1);
             if (!inst) {
+                /* E3a (graduated): an owning kind we can emit multi-shot env
+                 * teardown for is ADMITTED instead of rejected -- the cloneable
+                 * codegen gives its captured frame env clone glue so each resume
+                 * owns its own +1. */
+                if (owning_multishot_admissible(&t))
+                    continue;
                 diag_emit_with_code(DIAG_ERROR, span,
                                     TUR_E0014_NOT_CLONE,
                                     "captured binding '%s' does not implement Clone "
@@ -335,6 +416,7 @@ static void check_cloneable_capture(Elab *e, Span span) {
             }
         }
     }
+    if (fvs) free(fvs);
 }
 
 /* (cloneable-reset body) - Establish a continuation boundary with cloneable captures.
@@ -347,10 +429,15 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
         return NULL;
     }
     /* CPS-CL7: track nesting depth so cloneable-shift can detect missing reset */
-    e->cloneable_reset_depth++;
+    int d = ++e->cloneable_reset_depth;
+    /* Capability-folding item 1: this depth is pinned cloneable by the keyword, so
+     * a `serial-cont` plain-`shift` bound here is rejected with a clear message. */
+    if (d >= 0 && d < 64) e->pinned_cloneable_at_depth[d] = true;
     Expr *body = elab_form(e, call->as.list.items[1]);
     e->cloneable_reset_depth--;
     if (!body) return NULL;
+    /* CPS-CL10 / E4: verify captures of the reified continuation body. */
+    check_cloneable_capture_precise(e, call->span, body);
     Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
     out->as.cloneable_reset_.body = body;
     record_reset_node(e, out);
@@ -463,6 +550,123 @@ static Form *reflavor_shift_receiver(Elab *e, Form *recv) {
     for (uint32_t i = 0; i < fn_n; i++) new_fn[i] = recv->as.list.items[i];
     new_fn[1] = new_params;
     return form_list(e->arena, recv->span, new_fn, fn_n);
+}
+
+/* Does form `f` (recursively) contain a CONTINUATION-RESUME of `kname` --
+ * `(resume kname ...)` OR the `(kname ...)` application sugar (k applied as a
+ * function)?  Either proves kname is a continuation. */
+static bool form_resumes_sym(const Form *f, const Symbol *resume_sym, const Symbol *kname) {
+    if (!f || (f->tag != F_LIST && f->tag != F_VEC)) return false;
+    if (f->as.list.len >= 1) {
+        const Form *h = f->as.list.items[0];
+        if (h->tag == F_SYM) {
+            /* (k ...) -- k applied as a function (resume sugar). */
+            if (h->as.sym == kname) return true;
+            /* (resume k ...) */
+            if (h->as.sym == resume_sym && f->as.list.len >= 2) {
+                const Form *a = f->as.list.items[1];
+                if (a->tag == F_SYM && a->as.sym == kname) return true;
+            }
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (form_resumes_sym(f->as.list.items[i], resume_sym, kname)) return true;
+    return false;
+}
+
+/* cps-dk-multishot-user-effects (Phase C): is `payload` a lambda `(fn [k ...] body)`
+ * whose body RESUMES its first param -- `(resume k ...)` or the `(k ...)` sugar?
+ * The reliable signal that a raw-`int`-typed payload param is actually a
+ * continuation (its type carries no cont flavor), so a `(fn [int] R)` payload can
+ * be reflavored to the DK cloneable substrate WITHOUT disturbing a genuine
+ * non-continuation `(fn [int] R)` payload (which never resumes its param). */
+static bool form_lambda_resumes_first_param(Elab *e, const Form *payload) {
+    if (!payload || payload->tag != F_LIST || payload->as.list.len < 3) return false;
+    const Form *head = payload->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_fn) return false;
+    const Form *params = payload->as.list.items[1];
+    if ((params->tag != F_VEC && params->tag != F_LIST) || params->as.list.len < 1)
+        return false;
+    const Form *p0 = params->as.list.items[0];
+    if (p0->tag != F_SYM) return false;
+    const Symbol *kname = p0->as.sym;
+    const Symbol *resume_sym = intern_cstr(e->st, "resume");
+    for (uint32_t i = 2; i < payload->as.list.len; i++)
+        if (form_resumes_sym(payload->as.list.items[i], resume_sym, kname)) return true;
+    return false;
+}
+
+/* cps-dk-multishot-user-effects (Phase A): reflavor a USER effect's fn PAYLOAD
+ * lambda's `effect-cont` param to `multishot-effect-cont` BEFORE elaboration, so
+ * `(k v)` inside the payload lowers to the DK-backed `tur_cloneable_cont_resume`
+ * (CK_MULTISHOT snapshot resume) rather than the fiber `tur_effect_cont_resume`.
+ * This is the user-effect analogue of reflavor_shift_receiver: it lets a
+ * `(perform (E (fn [k : effect-cont] (k v))))` performer + its `(E [f] k) (f k)`
+ * handler CPS-emit through the same cloneable-cont substrate __Shift uses, instead
+ * of co-evicting to fiber.  Multishot is the sound generalization of one-shot
+ * (resume-once behaves identically -- snapshot once, resume once), so upgrading a
+ * one-shot `effect-cont` payload does not change observable behaviour on any
+ * backend.  Only a lambda-literal payload `(fn [k : effect-cont] ...)` is
+ * rewritable from the perform site; anything else returns NULL (unchanged).  Only
+ * the parameter vector is reflavored -- the body is untouched. */
+static Form *reflavor_effect_payload(Elab *e, Form *payload) {
+    if (!payload || payload->tag != F_LIST || payload->as.list.len < 2) return NULL;
+    Form *head = payload->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_fn) return NULL;
+    Form *params = payload->as.list.items[1];
+    if (params->tag != F_VEC && params->tag != F_LIST) return NULL;
+    const Symbol *to = intern_cstr(e->st, "multishot-effect-cont");
+    /* Reflavor `effect-cont` (the annotated case) OR a raw `int` continuation
+     * handle (cps-dk-multishot Phase C) -- the latter only when the payload body
+     * actually resumes its first param (form_lambda_resumes_first_param), so a
+     * genuine `(fn [int] R)` non-continuation payload is never disturbed.  Both
+     * upgrade to `multishot-effect-cont` so `(k v)`/`resume` lowers to the DK
+     * cloneable substrate.  The int->cont reflavor type-checks: a TY_CONT payload
+     * unifies with the effect's declared `(fn [int] R)` param (int carrier). */
+    Form *new_params = reflavor_cont_sym(e, params, intern_cstr(e->st, "effect-cont"), to);
+    if (new_params == params && form_lambda_resumes_first_param(e, payload))
+        new_params = reflavor_cont_sym(e, params, intern_cstr(e->st, "int"), to);
+    if (new_params == params) return NULL;  /* nothing to reflavor */
+    uint32_t fn_n = payload->as.list.len;
+    Form **new_fn = (Form **)arena_alloc(e->arena, fn_n * sizeof(Form *));
+    for (uint32_t i = 0; i < fn_n; i++) new_fn[i] = payload->as.list.items[i];
+    new_fn[1] = new_params;
+    return form_list(e->arena, payload->span, new_fn, fn_n);
+}
+
+/* cps-dk-multishot-user-effects (Phase A): does effect `eff` declare a RESUMABLE
+ * fn PAYLOAD -- a param `(fn [<cont>] R)` whose first arg is a continuation
+ * (`effect-cont` / `multishot-effect-cont`, TY_CONT)?  Such an effect is resumed
+ * THROUGH the payload (`(E [f] k) (f k)`): the payload's `(k v)` resumes the
+ * handler continuation.  For the CPS/DK backend to emit performer + handler
+ * through the shared DK-backed cloneable-cont substrate (the __Shift bridge,
+ * generalized), the payload's cont param is reflavored to multishot at the
+ * perform site (reflavor_effect_payload) AND the handler's `k` is auto-upgraded to
+ * CK_MULTISHOT (below) so both halves agree on the cloneable substrate -- matching
+ * a hand-written `^multishot` handler.  Returns the index of the resumable payload
+ * param, or -1. */
+static int effect_resumable_payload_param(const Effect *eff) {
+    if (!eff || !eff->constructor) return -1;
+    return eff->constructor->resumable_payload_param;
+}
+
+/* Does a param TYPE form denote a resumable fn payload -- `(fn [effect-cont] R)`
+ * / `(fn [multishot-effect-cont] R)`?  The `effect-cont` cont flavor collapses to
+ * its TY_INT carrier in the stored Type (arg_kinds), so the FORM is the reliable
+ * signal.  Scans for the flavor symbol as the fn's first param annotation (a bare
+ * symbol, keyword, or type-annotation head) inside the type form's spine. */
+static bool form_type_is_cont_payload(Elab *e, const Form *f) {
+    if (!f) return false;
+    const Symbol *ec  = intern_cstr(e->st, "effect-cont");
+    const Symbol *mec = intern_cstr(e->st, "multishot-effect-cont");
+    if ((f->tag == F_SYM || f->tag == F_KEYWORD)
+        && (f->as.sym == ec || f->as.sym == mec))
+        return true;
+    if ((f->tag == F_LIST || f->tag == F_VEC || f->tag == F_TYPE_ANN)) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_type_is_cont_payload(e, f->as.list.items[i])) return true;
+    }
+    return false;
 }
 
 /* cps-backend-n6 cross-function resume.  Lazily register the synthetic __Shift
@@ -733,6 +937,35 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
      * is lexically scoped).  A plain `reset` counts too (item B): it promotes
      * itself to a reified delimiter when a resuming shift binds to it. */
     if (e->cloneable_reset_depth == 0) {
+        /* Capability-folding symmetric twin (cps-cloneable-shift-under-serial-
+         * reset-misleading-e0016): a RESUMING cloneable (`cont`) shift with no
+         * enclosing plain/cloneable reset but lexically inside a `serial-reset`
+         * is NOT a cross-function resume -- there IS an enclosing delimiter, just
+         * a serial one whose marshal substrate cannot host an in-memory
+         * multi-shot continuation.  Reject with the real flavor-mismatch cause
+         * (mirror of the serial-cont-under-cloneable-reset TUR-E0019 above)
+         * instead of falling into the cross-function __Shift desugar, which post-
+         * elaboration finds no plain EX_RESET and emits the MISLEADING TUR-E0016
+         * "no enclosing reset / cross-function resume".  Sound because a plain
+         * `reset` and `cloneable-reset` BOTH bump cloneable_reset_depth, so
+         * reaching this branch means none intervenes: serial_reset_depth > 0 here
+         * => the NEAREST delimiter is the serial-reset (a nested
+         * `reset`-in-`serial-reset` bumps cloneable_reset_depth and never reaches
+         * here, so it keeps working).  Abortive (ignore-k) shifts return via the
+         * abort route above and never reach this branch.  The genuine
+         * cross-function case (no enclosing delimiter anywhere) has
+         * serial_reset_depth == 0 and keeps its TUR-E0016 path. */
+        if (e->serial_reset_depth > 0) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                "a `cont` (cloneable) shift receiver needs a cloneable-capable "
+                "delimiter, but the nearest enclosing reset is a `serial-reset` "
+                "(whose marshal substrate cannot host an in-memory multi-shot "
+                "continuation)\n"
+                "  = help: use a plain `reset` (it adopts the receiver's flavor) "
+                "or `cloneable-reset` to delimit a cloneable continuation");
+            return NULL;
+        }
         /* For the `shift` surface, tailor the message: the common cause
          * now is a resuming shift whose reset is in a CALLER (cross-function
          * resume, unsupported -- only cross-function ABORT works).  Keep the exact
@@ -809,6 +1042,7 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
                 pargs[0] = recv;
                 perform->args = pargs;
                 perform->n_args = 1;
+                perform->resumable_payload = false;  /* __Shift: own admission path */
                 Type rt = sheff->constructor->result_full_type
                         ? *sheff->constructor->result_full_type
                         : type_from_kind(sheff->constructor->result_type);
@@ -863,6 +1097,49 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
 
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
+
+    /* Capability-folding item 1: preserve the continuation's flavor from the
+     * receiver's `cont` capability annotation.  A `serial-cont` receiver
+     * (CONT_SERIAL) yields a serial continuation -- lower this shift exactly like
+     * `serial-shift` (EX_SERIAL_SHIFT) and mark the enclosing plain `reset` to
+     * promote to EX_SERIAL_RESET.  Any other cont flavor (plain `cont` /
+     * `cloneable-cont`, CONT_CLONEABLE) keeps the multi-shot cloneable lowering.
+     * NOT applied to the literal `cloneable-shift` keyword (which pins the
+     * cloneable flavor regardless of the receiver's annotation). */
+    bool shift_kw = call->as.list.items[0]->tag == F_SYM
+                    && call->as.list.items[0]->as.sym == e->sym_shift;
+    const Type *kpt = receiver_cont_param_type(k_expr);
+    bool serial_route = shift_kw && kpt && kpt->kind == TY_CONT
+                        && (ContFlavor)kpt->as.cont.flavor == CONT_SERIAL;
+    if (serial_route) {
+        /* Capability-folding item 1: the nearest enclosing delimiter is the
+         * literal `cloneable-reset` keyword, which pins the cloneable flavor and
+         * cannot host a serial continuation.  Reject here with the actual fix
+         * ("use a plain `reset` or `serial-reset`") instead of letting the
+         * flavor-mismatched EX_SERIAL_SHIFT reach the downstream serial-context
+         * lowering, which fails with the misleading TUR-E0706 "context not
+         * capturable" (it points at the context shape, not the real cause). */
+        int cd = e->cloneable_reset_depth;
+        if (cd >= 0 && cd < 64 && e->pinned_cloneable_at_depth[cd]) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,
+                "a `serial-cont` shift receiver needs a serial-capable delimiter, "
+                "but the nearest enclosing reset is a `cloneable-reset` (which pins "
+                "the multi-shot cloneable flavor)\n"
+                "  = help: use a plain `reset` (it adopts the receiver's flavor) or "
+                "`serial-reset` to delimit a serial continuation");
+            return NULL;
+        }
+        Expr *out = expr_new(e->arena, EX_SERIAL_SHIFT, body->type, call->span);
+        out->as.serial_shift_.k_fn = k_expr;
+        out->as.serial_shift_.body = body;
+        if (e->cloneable_reset_depth >= 0 && e->cloneable_reset_depth < 64) {
+            e->reified_shift_at_depth[e->cloneable_reset_depth] = true;
+            e->reified_serial_at_depth[e->cloneable_reset_depth] = true;
+        }
+        return out;
+    }
+
     Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
     out->as.cloneable_shift_.k_fn = k_expr;
     out->as.cloneable_shift_.body = body;
@@ -871,8 +1148,10 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
      * delimiter, so a plain `reset` becomes EX_CLONEABLE_RESET. */
     if (e->cloneable_reset_depth >= 0 && e->cloneable_reset_depth < 64)
         e->reified_shift_at_depth[e->cloneable_reset_depth] = true;
-    /* CPS-CL10: verify all local captures implement Clone at elaboration time */
-    check_cloneable_capture(e, call->span);
+    /* CPS-CL10 / E4: the Clone-capture check now runs once per enclosing reset
+     * (check_cloneable_capture_precise), on the full reset body, so it can tell
+     * a genuinely-captured owning value from one merely in scope.  See the
+     * enclosing reset elaborators (elab_reset / elab_cloneable_reset). */
     return out;
 }
 
@@ -952,12 +1231,26 @@ Expr *elab_call_cc_star(Elab *e, const Form *call) {
 
 /* Phase 21: Serializable continuations */
 
-/* Check that all local bindings visible at a serial-shift site implement
- * the Serializable typeclass.  Mirrors check_cloneable_capture() for Clone. */
-static void check_serializable_capture(Elab *e, Span span) {
+/* E4a (mirrors check_cloneable_capture_precise): emit TUR-E0018 for a binding
+ * CAPTURED into a serial-shift's continuation that lacks a Serializable
+ * instance.  Runs once per serial-reset, on the full reset body, and flags only
+ * the bindings that are FREE in that body -- the ones the continuation actually
+ * captures.  The old per-shift check ran before the body existed and had to
+ * over-approximate to EVERY in-scope binding, so a non-Serializable value merely
+ * being in scope at a serial-shift (never captured) was spuriously rejected.
+ * The scope walk keeps its original reach (to &e->global -- serial captures may
+ * include enclosing-fn bindings); only the free-variable gate is new. */
+static void check_serializable_capture_precise(Elab *e, Span span,
+                                               const Expr *reset_body) {
     const Symbol *ser_sym = intern_cstr(e->st, "Serializable");
     TypeClass *ser_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, ser_sym);
     if (!ser_tc) return; /* Serializable not yet in scope; defer to a later pass */
+    if (!reset_body) return;
+
+    /* Free variables of the reifiable continuation context -- a binding not in
+     * this set is never captured, so it needs no Serializable instance. */
+    uint32_t n_fv = 0;
+    Binding **fvs = collect_free_vars(reset_body, NULL, 0, NULL, 0, &n_fv);
 
     for (Scope *s = e->scope; s != NULL && s != &e->global; s = s->parent) {
         for (uint32_t i = 0; i < s->n; i++) {
@@ -967,6 +1260,11 @@ static void check_serializable_capture(Elab *e, Span span) {
             /* Primitive types that are always serializable */
             if (t.kind == TY_NIL || t.kind == TY_FN ||
                 t.kind == TY_CLONEABLE_CONT || t.kind == TY_CONT) continue;
+            /* Only a binding the continuation actually references is captured. */
+            bool captured = false;
+            for (uint32_t j = 0; j < n_fv; j++)
+                if (fvs[j] == b) { captured = true; break; }
+            if (!captured) continue;
             TypeClassInstance *inst =
                 typeclass_env_lookup_instance(&e->typeclass_env, ser_tc, &t, 1);
             if (!inst) {
@@ -980,6 +1278,7 @@ static void check_serializable_capture(Elab *e, Span span) {
             }
         }
     }
+    if (fvs) free(fvs);
 }
 
 /* (serial-reset body) - Establish a serializable continuation boundary.
@@ -994,6 +1293,8 @@ Expr *elab_serial_reset(Elab *e, const Form *call) {
     Expr *body = elab_form(e, call->as.list.items[1]);
     e->serial_reset_depth--;
     if (!body) return NULL;
+    /* E4a: verify captures of the reified serial continuation body. */
+    check_serializable_capture_precise(e, call->span, body);
     Expr *out = expr_new(e->arena, EX_SERIAL_RESET, body->type, call->span);
     out->as.serial_reset_.body = body;
     return out;
@@ -1041,8 +1342,10 @@ Expr *elab_serial_shift(Elab *e, const Form *call) {
     out->as.serial_shift_.k_fn = k_expr;
     out->as.serial_shift_.body = body;
 
-    /* Check that all captured bindings implement Serializable. */
-    check_serializable_capture(e, call->span);
+    /* E4a: the Serializable-capture check now runs once per enclosing serial-
+     * reset (check_serializable_capture_precise), on the full reset body, so a
+     * value merely in scope but not captured is no longer flagged.  See
+     * elab_serial_reset. */
     return out;
 }
 
@@ -1127,6 +1430,7 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     const Type **param_full = arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(const Type *));
     for (uint32_t j = 0; j < n_params; j++) param_full[j] = NULL;
     bool any_agg_param = false;
+    int resumable_payload = -1;   /* index of a `(fn [effect-cont] R)` payload */
 
     {
         uint8_t p = 0;
@@ -1145,8 +1449,10 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
             /* Check if the next item is a type keyword or F_TYPE_ANN */
             TypeKind pk = TY_INT;
             Type *ann = NULL;
+            Form *type_form = NULL;   /* the param's type form, for cont-payload scan */
             if (i + 1 < raw_n) {
                 Form *next = params_f->as.list.items[i + 1];
+                type_form = next;
                 if (next->tag == F_KEYWORD) {
                     pk = typekind_from_symbol(next->as.sym->name);
                     if (pk == TY_UNKNOWN) {
@@ -1182,6 +1488,13 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                 if (stored->kind == TY_FN) stored->as.fn.boxed = true;
                 param_full[p] = stored;
                 any_agg_param = true;
+                /* cps-dk-multishot-user-effects (Phase A): a `(fn [effect-cont] R)`
+                 * payload marks this a resumable-payload effect (resumed through the
+                 * payload).  Detect from the type FORM -- the cont flavor collapses
+                 * to TY_INT in the stored Type's arg_kinds. */
+                if (stored->kind == TY_FN && resumable_payload < 0
+                    && form_type_is_cont_payload(e, type_form))
+                    resumable_payload = (int)p;
             }
             p++;
         }
@@ -1275,6 +1588,10 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
      * would fail field access in the case body). */
     if (effect->constructor && any_agg_param)
         effect->constructor->param_full_types = param_full;
+    /* cps-dk-multishot-user-effects (Phase A): record a resumable fn-payload param
+     * so perform reflavors the payload cont to multishot and handle upgrades `k`. */
+    if (effect->constructor)
+        effect->constructor->resumable_payload_param = resumable_payload;
 
     /* ET4: Resolve parent effect if ^extends was specified */
     if (parent_name) {
@@ -1404,8 +1721,39 @@ Expr *elab_perform(Elab *e, const Form *call) {
     uint8_t n_args = effect_call_f->as.list.len - 1;
     Expr **args = arena_alloc(e->arena, n_args * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {
-        args[i] = elab_form(e, effect_call_f->as.list.items[i + 1]);
+        /* cps-dk-multishot-user-effects (Phase A): reflavor a resumable fn-payload
+         * lambda's `effect-cont` param to `multishot-effect-cont` before elaborating
+         * (see reflavor_effect_payload) so its `(k v)` resumes through the DK-backed
+         * cloneable-cont substrate the CPS handler produces.  A non-lambda / non-
+         * effect-cont arg is returned unchanged. */
+        Form *arg_form = effect_call_f->as.list.items[i + 1];
+        Form *reflav = reflavor_effect_payload(e, arg_form);
+        if (reflav) {
+            arg_form = reflav;
+            /* cps-dk-multishot-user-effects (Phase C): a reflavored RAW-INT payload
+             * (form_lambda_resumes_first_param -- the body resumes its param, but
+             * the `(fn [int] R)` declaration carries no cont flavor for defeffect to
+             * detect) marks the effect resumable-payload here, on the shared effect
+             * object, so the enclosing handler (elaborated after the performer)
+             * upgrades its `k` and takes the cloneable-cont wrap too.  Order note:
+             * this relies on the performer being elaborated before the handler
+             * (top-level defns elaborate in source order; the annotated
+             * effect-cont/multishot-effect-cont case is order-independent, detected
+             * at defeffect).  Skips the annotated case (already set). */
+            if (effect->constructor && effect->constructor->resumable_payload_param < 0)
+                effect->constructor->resumable_payload_param = (int)i;
+        }
+        args[i] = elab_form(e, arg_form);
         if (!args[i]) return NULL;
+        /* cps-dk-multishot-user-effects (Phase A): mark a CAPTURING closure payload
+         * of the resumable-payload param `is_effect_payload` so the CPS backend
+         * delegates its build (is_delegatable_value) even though it captures --
+         * paired with the handler-case boxed-env reap.  A capture-free payload
+         * (EX_FN / EX_FN_TO_FAT) needs no flag (already delegatable). */
+        if ((int)i == effect_resumable_payload_param(effect)
+            && args[i]->kind == EX_CLOSURE && args[i]->as.closure_.closure
+            && args[i]->as.closure_.closure->n_captures > 0)
+            args[i]->as.closure_.closure->is_effect_payload = true;
         /* An fn-value payload is carried as a BOXED closure (one-word `void *` to
          * the heap `{thunk, env}` box; defeffect marks the param `boxed`), so a
          * capturing receiver's env rides along in the one-word effect slot.  A
@@ -1429,6 +1777,9 @@ Expr *elab_perform(Elab *e, const Form *call) {
     perform->effect_name = effect_name;
     perform->args = args;
     perform->n_args = n_args;
+    /* cps-dk-multishot-user-effects (Phase A): flag a resumed-through-payload
+     * effect so the CPS/DK perform-arg gate admits the boxed-fn payload atom. */
+    perform->resumable_payload = effect_resumable_payload_param(effect) >= 0;
     
     /* The return type of perform is the result type of the effect.  Tier C: when
      * the effect declares a by-value aggregate result, use the full Type (which
@@ -1555,6 +1906,7 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
          * 3 items: (Effect [params...] k)             -> CK_UNIQUE (default)
          * 4 items: (Effect [params...] ^annotation k) -> CK_LINEAR or CK_COPY */
         cases[i].cont_kind = CK_UNIQUE;
+        cases[i].resumable_payload = false;
         Form *k_f;
         if (hdr_len == 4) {
             Form *ann_f = case_f->as.list.items[2];
@@ -1573,6 +1925,25 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
             }
         } else {
             k_f = case_f->as.list.items[2];
+        }
+
+        /* cps-dk-multishot-user-effects (Phase A): auto-upgrade an UN-annotated
+         * handler `k` to CK_MULTISHOT when this effect is resumed THROUGH a fn
+         * payload whose cont param the perform site reflavored to multishot
+         * (reflavor_effect_payload).  Both halves must agree on the cloneable
+         * substrate: the payload's `(k v)` lowers to `tur_cloneable_cont_resume`,
+         * so the handler must provide a cloneable `k` (a `^multishot`-equivalent
+         * continuation), not a one-shot fiber cont.  An EXPLICIT annotation always
+         * wins (the user asked for ^linear/^multishot deliberately). */
+        {
+            const Effect *ceff = effect_env_lookup(e->effect_env, cases[i].effect_name);
+            if (ceff && effect_resumable_payload_param(ceff) >= 0) {
+                cases[i].resumable_payload = true;
+                /* Auto-upgrade an UN-annotated `k` to multishot (an explicit
+                 * ^linear/^multishot always wins). */
+                if (cases[i].cont_kind == CK_UNIQUE)
+                    cases[i].cont_kind = CK_MULTISHOT;
+            }
         }
 
         if (k_f->tag != F_SYM) {

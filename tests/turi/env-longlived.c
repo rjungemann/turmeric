@@ -94,6 +94,15 @@ static void test_steady_state(void) {
     CHECK(env->value_perm.total_bytes == perm_after_warmup,
           "perm grew after warmup: %zu -> %zu",
           perm_after_warmup, env->value_perm.total_bytes);
+    /* TR0 instrumentation: plain transient churn must rewind every cycle with no
+     * declines (promo_* counters, turi-interp-incremental-reclamation-plan.md). */
+    CHECK(env->promo_rewinds >= 200,
+          "promotion did not rewind every churn cycle (rewinds=%llu)",
+          (unsigned long long)env->promo_rewinds);
+    CHECK(env->promo_decline_busy == 0 && env->promo_decline_unrelocatable == 0,
+          "unexpected promotion decline on plain churn (busy=%llu unreloc=%llu)",
+          (unsigned long long)env->promo_decline_busy,
+          (unsigned long long)env->promo_decline_unrelocatable);
     turi_env_free(env);
 
     /* Control: same loop, promotion OFF -> scratch grows without bound. */
@@ -419,6 +428,118 @@ static void test_gen_drain_across_evals(void) {
     turi_env_free(env);
 }
 
+/* ---------------------------------------------------------------------------
+ * TR3 (turi-interp-incremental-reclamation): eval-boundary collection sweep.
+ *
+ * With promotion on, tracked collection boxes (Vec/Set/Map wrappers, TVar
+ * cells) that nothing references after a rewind are freed at the eval
+ * boundary instead of accumulating until teardown.  Asserted here:
+ *
+ *   - transient churn is BOUNDED: 100 dropped vecs leave the live tracked-box
+ *     count where it started, and the sweep counters show the frees;
+ *   - liveness is exact: a global vec, a vec behind a struct field, a vec
+ *     inside another vec, and a vec held only by a TVar all survive sweeps
+ *     and read back correctly (under ASan a wrongly-swept box is a hard UAF);
+ *   - a TVar itself survives promotion rewinds -- its cell used to live in
+ *     value_scratch, where the first rewind poisoned it under the REPL's
+ *     defaults (the handle is an opaque int carrier promotion cannot see);
+ *   - the leak-on-doubt gate: once a LIVE non-empty Map exists (entries are
+ *     untyped, so the mark cannot prove completeness), sweeps go mark-only
+ *     and free nothing.
+ * --------------------------------------------------------------------------- */
+static size_t live_coll_boxes(TuriEnv *env) {
+    size_t n = 0;
+    for (TuriCollBuf *b = env->coll_bufs; b; b = b->next)
+        if (b->box) n++;
+    return n;
+}
+
+static void test_collection_sweep(void) {
+    TuriEnv *env = turi_env_new();
+    turi_env_set_scratch_promotion(env, true);
+
+    TuriValue pr = turi_eval(env,
+        "(defn churn [] : int\n"
+        "  (let [v (vec-new)] (vec-push! v 7) (vec-push! v 8) 0))\n");
+    CHECK(pr.tag != TURI_ERROR, "sweep prelude failed: %s",
+          pr.tag == TURI_ERROR ? pr.as_error : "");
+
+    /* Bounded transient churn: every dropped vec is swept at its boundary. */
+    size_t live0 = live_coll_boxes(env);
+    for (int i = 0; i < 100; i++)
+        CHECK(eval_int(env, "(churn)\n", "vec churn") == 0, "vec churn result");
+    CHECK(live_coll_boxes(env) == live0,
+          "transient vecs not swept: %zu live at start, %zu after churn",
+          live0, live_coll_boxes(env));
+    CHECK(env->collsweep_freed >= 100,
+          "sweep freed too few boxes (%llu)",
+          (unsigned long long)env->collsweep_freed);
+    CHECK(env->collsweep_markonly == 0,
+          "unexpected mark-only cycles during plain vec churn (%llu)",
+          (unsigned long long)env->collsweep_markonly);
+
+    /* Liveness: a global vec, one behind a struct field, one nested in a vec,
+     * and one held only by a TVar must all survive further sweeps. */
+    CHECK(eval_int(env,
+        "(def g (vec-new))\n(vec-push! g 41)\n(vec-len g)\n",
+        "global vec") == 1, "global vec setup");
+    CHECK(eval_int(env,
+        "(defstruct Holder [v : int])\n"
+        "(def h (make-struct Holder (let [v (vec-new)] (vec-push! v 51) v)))\n"
+        "0\n", "struct-held vec") == 0, "struct-held vec setup");
+    CHECK(eval_int(env,
+        "(def vv (vec-new))\n"
+        "(let [inner (vec-new)] (vec-push! inner 61) (vec-push! vv inner))\n"
+        "0\n", "nested vec") == 0, "nested vec setup");
+    CHECK(eval_int(env,
+        "(def tvv (tvar/new (let [v (vec-new)] (vec-push! v 71) v)))\n0\n",
+        "tvar-held vec") == 0, "tvar-held vec setup");
+    CHECK(eval_int(env, "(def tv (tvar/new 33))\n0\n", "plain tvar") == 0,
+          "plain tvar setup");
+
+    for (int i = 0; i < 50; i++)
+        (void)eval_int(env, "(churn)\n", "churn between liveness checks");
+
+    CHECK(eval_int(env, "(vec-get g 0)\n", "global vec read") == 41,
+          "global vec lost to the sweep");
+    CHECK(eval_int(env, "(vec-get (.v h) 0)\n", "struct-held vec read") == 51,
+          "struct-field vec lost to the sweep");
+    CHECK(eval_int(env, "(vec-get (vec-get vv 0) 0)\n", "nested vec read") == 61,
+          "vec-in-vec lost to the sweep");
+    CHECK(eval_int(env,
+        "(vec-get (atomically (stm (tvar/read tvv))) 0)\n",
+        "tvar-held vec read") == 71, "tvar-held vec lost to the sweep");
+    /* The TVar cell itself survived every rewind (pre-fix: use-after-reset). */
+    CHECK(eval_int(env, "(atomically (stm (tvar/read tv)))\n", "tvar read") == 33,
+          "tvar cell did not survive promotion rewinds");
+    CHECK(env->collsweep_markonly == 0,
+          "liveness section unexpectedly went mark-only (%llu)",
+          (unsigned long long)env->collsweep_markonly);
+
+    /* Leak-on-doubt: a live NON-EMPTY Set/Map's entries are untyped, so the
+     * sweep must decline to free anything while one is reachable.  Built on
+     * the raw set natives (map-new is an elaborator builtin with a typed
+     * (Map K V) result, so it cannot ride the untyped-native path used here;
+     * a Set box is the same 2-word HAMT wrapper with the same scan). */
+    CHECK(eval_int(env,
+        "(defn mk-set [] : int\n"
+        "  (let [e (set-new)] (set-add-eq-o e 42 7 0 0)))\n"
+        "(def m (mk-set))\n(if (= m 0) 0 1)\n",
+        "non-empty set") == 1, "set setup");
+    uint64_t freed_before = env->collsweep_freed;
+    for (int i = 0; i < 20; i++)
+        (void)eval_int(env, "(churn)\n", "churn with live set");
+    CHECK(env->collsweep_markonly >= 20,
+          "live non-empty set did not force mark-only sweeps (%llu)",
+          (unsigned long long)env->collsweep_markonly);
+    CHECK(env->collsweep_freed == freed_before,
+          "sweep freed boxes despite an unscannable live set (%llu -> %llu)",
+          (unsigned long long)freed_before,
+          (unsigned long long)env->collsweep_freed);
+
+    turi_env_free(env);
+}
+
 int main(void) {
     turi_init(false);
     test_steady_state();
@@ -428,6 +549,7 @@ int main(void) {
     test_effectcont_relocation();
     test_effectcont_bail();
     test_gen_drain_across_evals();
+    test_collection_sweep();
 
     if (failures) {
         fprintf(stderr, "env-longlived: %d failure(s).\n", failures);

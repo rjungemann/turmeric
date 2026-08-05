@@ -1,5 +1,7 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include "refine_discharge.h"     /* RT1: instance/class refinement variance */
+#include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
 #include "forms.h"
 #include "mangle.h"
 
@@ -717,12 +719,20 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * substitution site at elab_definstance consults this flag to leave
      * explicit-`:int` params alone instead of rewriting them to the class tyvar. */
     bool *param_explicit_type = NULL;
+    const Form **param_refine_preds = NULL;
+    const char **param_refine_vars  = NULL;
 
     if (n_params > 0) {
         param_names = (const Symbol **)arena_alloc(e->arena, n_params * sizeof(const Symbol *));
         param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
         param_is_fn = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
         param_explicit_type = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
+        param_refine_preds = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
+        param_refine_vars  = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        for (uint8_t _i = 0; _i < n_params; _i++) {
+            param_refine_preds[_i] = NULL;
+            param_refine_vars[_i]  = NULL;
+        }
         for (uint32_t i = 0; i < n_params; i++) {
             param_is_fn[i] = false;
             param_explicit_type[i] = false;
@@ -858,7 +868,13 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type in typeclass method parameter");
                         return NULL;
                     }
-                    param_types[actual_p - 1] = *ft;
+                    /* CT0/RT1: a `k : #refine{...}` class parameter -- peel to
+                     * the base type and remember the predicate.  This is the
+                     * branch the spaced-colon form actually takes; the two
+                     * nested-vector sites below handle `[k : T]`. */
+                    param_types[actual_p - 1] = *rt_peel_contract(
+                        ft, &param_refine_preds[actual_p - 1],
+                        &param_refine_vars[actual_p - 1]);
                 }
             } else if (p->tag == F_VEC && p->as.list.len >= 2) {
                 /* [name : type] or [name :fn] nested vector syntax */
@@ -916,7 +932,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                       "unsupported type form in typeclass method parameter");
                             return NULL;
                         }
-                        param_types[actual_p] = *ft;
+                        param_types[actual_p] = *rt_peel_contract(
+                            ft, &param_refine_preds[actual_p],
+                            &param_refine_vars[actual_p]);
                     }
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
@@ -928,7 +946,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type form in typeclass method parameter");
                         return NULL;
                     }
-                    param_types[actual_p] = *ft;
+                    param_types[actual_p] = *rt_peel_contract(
+                        ft, &param_refine_preds[actual_p],
+                        &param_refine_vars[actual_p]);
                 } else {
                     param_types[actual_p] = TYPE_INT; /* default */
                 }
@@ -951,6 +971,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * the method so effect_check_pass can enforce it against instance method bodies. */
     EffectRow *method_effect_row = NULL;
     Type return_type = TYPE_NIL;
+    const Form *return_refine_pred = NULL;   /* RT1: `: #refine{ r : T | q }` */
+    const char *return_refine_var  = NULL;
     uint32_t ret_idx = 2;   /* first element after params vector */
     if (method_form->as.list.len > ret_idx) {
         Form *maybe_row = method_form->as.list.items[ret_idx];
@@ -1080,7 +1102,14 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                           "unsupported return type form in typeclass method");
                 return NULL;
             }
-            return_type = *ft;
+            /* RT1: `: #refine{ r : T | q }` on a class method result.  Peel to
+             * the base type -- otherwise the contract type reaches codegen and
+             * the method does not compile -- and KEEP the predicate, which is
+             * the class's promise to callers.  Dropping it silently (which is
+             * what happened before) produced a class signature that read like a
+             * guarantee and enforced nothing. */
+            return_type = *rt_peel_contract(ft, &return_refine_pred,
+                                            &return_refine_var);
         } else if (ret_form->tag == F_LIST || ret_form->tag == F_VEC) {
             /* Phase HRT3: allow forall/exists type forms as return types.
              * Prereq 5: same as above -- pass class type params so a
@@ -1108,13 +1137,24 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     if (out_body_start) *out_body_start = body_start_idx;
 
     TypeClassMethod *method = (TypeClassMethod *)arena_alloc(e->arena, sizeof(TypeClassMethod));
+    /* arena_alloc does not zero.  Zero the whole struct before the field
+     * assignments so any member NOT set below (refine_class_binding was the
+     * one that bit: the RT1 memo slot read junk from a recycled slab and a
+     * later dynamic dispatch dereferenced it -- the refined multi-compile
+     * SIGSEGV) -- and any field added later -- starts NULL instead of
+     * whatever the recycled slab held. */
+    memset(method, 0, sizeof(*method));
     method->name = name;
     method->param_names = param_names;
     method->param_types = param_types;
     method->param_is_fn = param_is_fn;
+    method->param_refine_preds = param_refine_preds;
+    method->param_refine_vars  = param_refine_vars;
     method->param_explicit_type = param_explicit_type;
     method->n_params = n_params;
     method->return_type = return_type;
+    method->return_refine_pred = return_refine_pred;
+    method->return_refine_var  = return_refine_var;
     method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
     method->default_fn_expr = NULL;          /* ER3: set by elab_defclass if body forms exist */
     return method;
@@ -2035,6 +2075,51 @@ static bool m7_result_is_int_carrier(Type t) {
     if (t.kind == TY_ADT)
         return t.as.adt_.def && t.as.adt_.def->is_opaque;
     return false;
+}
+
+/* hkt-fmap-result-is-not-droppable: collapse an applied HKT result whose head is
+ * a POINTER-FAMILY builtin type constructor -- `(type-app rc<?> int)` -- down to
+ * the concrete `rc<int>` the rest of the compiler recognizes.
+ *
+ * An instance over the built-in `rc` constructor (stdlib/rc.tur's `Functor [rc]`)
+ * gets its result substituted correctly to `(type-app rc<?> int)`, but nothing
+ * consumed that shape: `rc/drop` and friends test for TY_RC, so the fmap result
+ * could not be released and every `(fmap r f)` leaked a control block plus a
+ * payload slot.  The head substitution builds a TY_APP because that is what an
+ * HKT class result `(f b)` is; `rc<T>` is not spelled as a TY_APP anywhere else,
+ * so the two representations have to be reconciled here.
+ *
+ * Sound to commit WITHOUT minting a by-value spec, for exactly the reason the
+ * opaque-newtype arm beside it is: an rc/weak is an `RcControlBlock *` and a ref
+ * is a plain pointer, so the by-value representation IS the int64 carrier the
+ * method returns -- 8 bytes, same bits, no aggregate layout to misread.  (The
+ * emitter already relies on this: TY_RC sits in emit_fns.c's typed-pointer
+ * return escape-hatch list, pinned by tests/fixtures/inline-c-rc-return-typed.)
+ *
+ * Returns false for any other head, leaving the neighbouring arms untouched. */
+static bool m7_app_to_ptr_family(Type t, Type *out) {
+    if (t.kind != TY_APP || !t.as.app.fn || !t.as.app.arg) return false;
+    TypeKind head = t.as.app.fn->kind;
+    if (head != TY_RC && head != TY_WEAK && head != TY_REF && head != TY_LREF)
+        return false;
+    const Type *arg = t.as.app.arg;
+    /* An aggregate element carries its def so field access through the handle
+     * still resolves, mirroring type_rc_adt on the struct-field path. */
+    if (head == TY_RC && arg->kind == TY_ADT && arg->as.adt_.def) {
+        *out = type_rc_adt(arg->as.adt_.def);
+        return true;
+    }
+    if (head == TY_WEAK && arg->kind == TY_ADT && arg->as.adt_.def) {
+        *out = type_weak_adt(arg->as.adt_.def);
+        return true;
+    }
+    switch (head) {
+        case TY_RC:   *out = type_rc(arg->kind);   return true;
+        case TY_WEAK: *out = type_weak(arg->kind); return true;
+        case TY_REF:  *out = type_ref(arg->kind);  return true;
+        case TY_LREF: *out = type_lref(arg->kind); return true;
+        default:      return false;
+    }
 }
 
 /* Parse a single instance-head argument form into a Type.  A primitive type
@@ -3246,6 +3331,9 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Form *impl_params_form = impl_form->as.list.items[1];
         uint32_t impl_body_start = 2;
         Type return_type = tc->methods[i].return_type;  /* Default from typeclass */
+        /* RT1: the class's promise about this method's result, if any. */
+        const Form *m_class_ret_pred = tc->methods[i].return_refine_pred;
+        const char *m_class_ret_var  = tc->methods[i].return_refine_var;
         /* carrier-aware-return-unification Phase 3: did the class-decl return name
          * the class type variable (so the substitution below grounds it to this
          * instance's concrete type)?  Only then is the method a genuine
@@ -3322,6 +3410,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             arrow_return = true;
             return_type.as.fn.boxed = true;
         }
+        /* RT1: the refinement this impl promises about its RESULT.  Starts as
+         * the class's promise, which an impl that writes a plain return type
+         * INHERITS -- otherwise a class could declare a guarantee that no
+         * instance ever enforces. */
+        const Form *impl_ret_pred = m_class_ret_pred;
+        const char *impl_ret_var  = m_class_ret_var;
+        bool        impl_ret_pred_own = false;
         /* Check for return type annotation after params */
         if (impl_form->as.list.len >= 3) {
             Form *ret_or_body = impl_form->as.list.items[2];
@@ -3334,6 +3429,29 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                        (ret_or_body->as.list.items[0]->tag == F_SYM ||
                         ret_or_body->as.list.items[0]->tag == F_KEYWORD)) {
                 kw = ret_or_body->as.list.items[0]->as.sym;
+            }
+            /* RT1: `: #refine{ r : T | q }` on an impl result.  This branch did
+             * not exist, so the annotation fell through to the body and came
+             * back as "type annotation ': type' is only valid after a parameter
+             * name or as a return type" -- a class could declare a result
+             * refinement that an instance was syntactically forbidden to
+             * restate.  Peel to the base type and keep the predicate. */
+            if (!kw && ret_or_body->tag == F_TYPE_ANN &&
+                ret_or_body->as.list.len == 1 &&
+                ret_or_body->as.list.items[0]->tag == F_CONTRACT_TYPE) {
+                Type *ft = type_expr_from_form(e, ret_or_body->as.list.items[0],
+                                               NULL, NULL, NULL, 0);
+                if (ft) {
+                    ret_was_class_var = false;
+                    const Form *rp = NULL; const char *rv = NULL;
+                    return_type = *rt_peel_contract(ft, &rp, &rv);
+                    if (rp) {
+                        impl_ret_pred = rp;
+                        impl_ret_var  = rv;
+                        impl_ret_pred_own = true;
+                    }
+                    impl_body_start = 3;
+                }
             }
             if (kw) {
                 /* carrier-aware-return-unification Phase 3: an explicit instance
@@ -3389,6 +3507,22 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Binding **method_params = NULL;
         uint8_t n_method_params = 0;
         Type *method_param_types = NULL;
+        /* CT0/CT1: contract-typed parameters of this instance method.  Collected
+         * while the annotations are resolved, injected as entry checks once the
+         * body exists -- the same treatment a `defn` or `fn` parameter gets. */
+        const Form *m_ct_preds[MAX_FN_ARITY];
+        const char *m_ct_vars[MAX_FN_ARITY];
+        uint32_t    m_ct_param_idx[MAX_FN_ARITY];
+        uint32_t    n_m_ct_preds = 0;
+        /* RT1: which parameters the INSTANCE annotated for itself.  An
+         * unannotated parameter inherits the class's refinement, exactly as an
+         * unannotated result inherits the class's promise; writing an explicit
+         * annotation -- including a bare `: int`, which carries no predicate --
+         * is how an instance opts out and demands less.  Without this an
+         * omitted annotation inherited NOTHING, so a class demand was enforced
+         * only by an instance that happened to restate it. */
+        bool m_param_annotated[MAX_FN_ARITY];
+        memset(m_param_annotated, 0, sizeof(m_param_annotated));
         
         if (impl_params_form->tag == F_VEC) {
             uint8_t max_method_params = (uint8_t)impl_params_form->as.list.len;
@@ -3407,6 +3541,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             return NULL;
                         }
                         uint8_t prev = n_method_params - 1;
+                        if (prev < MAX_FN_ARITY) m_param_annotated[prev] = true;
                         Type param_type = method_param_types[prev];
                         if (p->tag == F_TYPE_ANN) {
                             Type *ann = (p->as.list.len > 0)
@@ -3416,6 +3551,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 diag_emit(DIAG_ERROR, p->span,
                                           "unsupported type form in method parameter");
                                 return NULL;
+                            }
+                            /* CT0: peel a contract annotation to its base type and
+                             * keep the predicate for the entry check below.
+                             * Without this the parameter's type stayed the
+                             * contract type and the method body could not use
+                             * the value at all. */
+                            const Form *ct_pred = NULL;
+                            const char *ct_var  = NULL;
+                            ann = rt_peel_contract(ann, &ct_pred, &ct_var);
+                            if (ct_pred && n_m_ct_preds < MAX_FN_ARITY) {
+                                m_ct_preds[n_m_ct_preds]    = ct_pred;
+                                m_ct_vars[n_m_ct_preds]     = ct_var;
+                                m_ct_param_idx[n_m_ct_preds] = prev;
+                                n_m_ct_preds++;
                             }
                             param_type = *ann;
                         } else {
@@ -3545,7 +3694,24 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * method body sees; lower the ABI/signature type to the
                          * int64 carrier for applied/parametric types, matching the
                          * dispatch ABI used for concrete instances elsewhere. */
-                        if (elab_param_type.kind == TY_APP) {
+                        /* hkt-foldable-rc-param: an instance over a pointer-family
+                         * builtin sees its receiver as the applied `(t a)` ->
+                         * `(type-app rc<?> tyvar 'a')`, which unifies with nothing
+                         * -- so an instance body could not pass its own receiver to
+                         * anything typed `rc<A>` ("expected rc<?>, got (type-app
+                         * rc<?> tyvar 'a')") and had to reach for inline-C.
+                         * Collapse it to the concrete `rc<a>` the rest of the
+                         * compiler recognizes, the parameter-side mirror of the
+                         * result-side collapse in the dispatch path.
+                         *
+                         * The ABI/signature type stays TYPE_INT: this changes only
+                         * what the BODY sees, never the dict's uniform carrier
+                         * calling convention. */
+                        Type ptr_family_param;
+                        if (m7_app_to_ptr_family(elab_param_type, &ptr_family_param)) {
+                            elab_param_type = ptr_family_param;
+                            param_type = TYPE_INT;
+                        } else if (elab_param_type.kind == TY_APP) {
                             param_type = TYPE_INT;
                         } else {
                             param_type = elab_param_type;
@@ -3793,6 +3959,214 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * the use site (the dict initializer rebuilds the same name fresh). Pin
          * it via c_export_name, the documented "emit this C name as-is" bypass. */
         method_binding->c_export_name = method_sym->name;
+        method_binding->is_instance_method = true;   /* B6: internal export, CPS-eligible */
+
+        /* RT1 VARIANCE: an instance may accept MORE than its class signature
+         * promises, never less.  The class signature is the contract callers
+         * program against, so an instance that demands more would reject an
+         * argument a generic caller was entitled to pass -- and find out at
+         * run time, in the method's own entry check.
+         *
+         * The obligation is `class_pred(p) |- instance_pred(p)` over a fresh
+         * parameter `p`, which is an ordinary query through the same seam.  A
+         * class parameter with NO refinement promises nothing, so any instance
+         * refinement on it is a strengthening unless the predicate is a
+         * tautology -- and asking the solver is exactly how to tell those
+         * apart.  Reported only on a REFUTATION; an undecidable pair keeps the
+         * runtime check, as everywhere else. */
+        if (n_m_ct_preds > 0) {
+            for (uint32_t _ci = 0; _ci < n_m_ct_preds; _ci++) {
+                uint32_t _pi = m_ct_param_idx[_ci];
+                if (_pi >= n_method_params || !method_params[_pi] ||
+                    !method_params[_pi]->name) continue;
+                const char *pname = method_params[_pi]->name->name;
+
+                const Form *cls_pred = NULL;
+                const char *cls_var  = NULL;
+                if (tc->methods[i].param_refine_preds &&
+                    _pi < tc->methods[i].n_params) {
+                    cls_pred = tc->methods[i].param_refine_preds[_pi];
+                    cls_var  = tc->methods[i].param_refine_vars[_pi];
+                }
+                /* Identical predicates are the overwhelmingly common case
+                 * (an instance restating its class signature); skip the
+                 * solver entirely for them. */
+                if (cls_pred == m_ct_preds[_ci]) continue;
+
+                RefineEnv *venv = refine_env_new(e->arena);
+                refine_env_set_resolver(venv, rt_refine_resolver(e), e);
+                refine_env_declare(venv, pname,
+                                   rt_sort_of_kind(method_params[_pi]->type.kind));
+                if (cls_pred) refine_env_push(venv, cls_pred, cls_var, pname);
+
+                Form *subj = form_sym(e->arena, impl_form->span,
+                                      symtab_intern(e->st,
+                                          strslice(pname, (uint32_t)strlen(pname))));
+                char what[192];
+                snprintf(what, sizeof(what),
+                         "parameter '%s' of instance method '%s'", pname,
+                         tc->methods[i].name ? tc->methods[i].name->name : "?");
+                RefineObligation *vob = refine_collect_obligation(
+                    &e->refine_obs, m_ct_preds[_ci], m_ct_vars[_ci], subj,
+                    rt_sort_of_kind(method_params[_pi]->type.kind),
+                    type_name(method_params[_pi]->type),
+                    impl_form->span, venv,
+                    arena_strdup(e->arena, what, strlen(what)), NULL);
+                if (!vob) continue;
+                /* Decide it silently, then ask separately for a witness.  The
+                 * ordinary reporting path is wrong for this obligation: its
+                 * failure is a declaration-vs-declaration inconsistency with
+                 * its own diagnostic, not a `TUR-E0371` about a value. */
+                vob->speculative = true;
+                bool ok = refine_discharge_one(vob, e->arena);
+                if (!ok && vob->vc && refine_model_search(vob->vc, e->arena)) {
+                    diag_emit_with_code(DIAG_ERROR, impl_form->span,
+                        TUR_E0374_REFINE_INSTANCE_STRONGER,
+                        "instance method '%s' demands more of parameter '%s' "
+                        "than the '%s' class signature promises",
+                        tc->methods[i].name ? tc->methods[i].name->name : "?",
+                        pname, tc->name ? tc->name->name : "?");
+                    if (!cls_pred)
+                        diag_emit(DIAG_NOTE, impl_form->span,
+                                  "the class signature places no refinement on "
+                                  "'%s', so callers may pass any value of its type",
+                                  pname);
+                }
+            }
+        }
+        /* RT1: RESULT variance, which runs the OPPOSITE way to parameters.
+         * A caller programming against the class signature relies on the
+         * result predicate, so an instance must deliver at least as much as
+         * the class promises: `instance_pred(r) |- class_pred(r)`.  (For
+         * parameters it is `class_pred(p) |- instance_pred(p)` -- the class is
+         * the hypothesis there and the goal here.)
+         *
+         * Only checked when the instance RESTATED a predicate.  An instance
+         * that writes a plain return type inherits the class's, which cannot
+         * be a weakening. */
+        bool ret_variance_proved = false;
+        if (impl_ret_pred_own && m_class_ret_pred &&
+            impl_ret_pred != m_class_ret_pred) {
+            const char *rvar = impl_ret_var ? impl_ret_var
+                             : (m_class_ret_var ? m_class_ret_var : "r");
+            RefineEnv *venv = refine_env_new(e->arena);
+            refine_env_set_resolver(venv, rt_refine_resolver(e), e);
+            refine_env_declare(venv, rvar, rt_sort_of_kind(return_type.kind));
+            refine_env_push(venv, impl_ret_pred, impl_ret_var, rvar);
+
+            Form *subj = form_sym(e->arena, impl_form->span,
+                                  symtab_intern(e->st,
+                                      strslice(rvar, (uint32_t)strlen(rvar))));
+            char what[192];
+            snprintf(what, sizeof(what), "the result of instance method '%s'",
+                     tc->methods[i].name ? tc->methods[i].name->name : "?");
+            RefineObligation *vob = refine_collect_obligation(
+                &e->refine_obs, m_class_ret_pred, m_class_ret_var, subj,
+                rt_sort_of_kind(return_type.kind), type_name(return_type),
+                impl_form->span, venv,
+                arena_strdup(e->arena, what, strlen(what)), NULL);
+            if (vob) {
+                vob->speculative = true;
+                bool ok = refine_discharge_one(vob, e->arena);
+                ret_variance_proved = ok;
+                if (!ok && vob->vc && refine_model_search(vob->vc, e->arena)) {
+                    diag_emit_with_code(DIAG_ERROR, impl_form->span,
+                        TUR_E0374_REFINE_INSTANCE_STRONGER,
+                        "instance method '%s' promises less about its result "
+                        "than the '%s' class signature does",
+                        tc->methods[i].name ? tc->methods[i].name->name : "?",
+                        tc->name ? tc->name->name : "?");
+                    diag_emit(DIAG_NOTE, impl_form->span,
+                              "a caller programming against the class signature "
+                              "relies on the class's result refinement, so an "
+                              "instance must deliver at least as much");
+                }
+            }
+        }
+        /* CT0/RT1: carry this method's contract parameters on its binding.  The
+         * parameters are resolved in THIS pass but the body is elaborated in
+         * pass 2, so the binding is the record that spans both -- and it is
+         * also where a dispatch site would look for them. */
+        /* An UNANNOTATED parameter inherits the class's refinement, mirroring
+         * the result direction below.  So the arrays are published whenever
+         * either side has a predicate, not only when the instance restated
+         * one -- otherwise inheritance would produce a predicate the entry
+         * check (which reads exactly these arrays) never sees. */
+        bool _inherits_any = false;
+        if (tc->methods[i].param_refine_preds) {
+            for (uint8_t _pi = 0; _pi < n_method_params &&
+                                  _pi < tc->methods[i].n_params; _pi++) {
+                if (_pi < MAX_FN_ARITY && !m_param_annotated[_pi] &&
+                    tc->methods[i].param_refine_preds[_pi]) {
+                    _inherits_any = true;
+                    break;
+                }
+            }
+        }
+        if ((n_m_ct_preds > 0 || _inherits_any) && n_method_params > 0) {
+            const Form **rp = (const Form **)arena_alloc(e->arena, n_method_params * sizeof(Form *));
+            const char **rv = (const char **)arena_alloc(e->arena, n_method_params * sizeof(char *));
+            const char **rn = (const char **)arena_alloc(e->arena, n_method_params * sizeof(char *));
+            for (uint8_t _pi = 0; _pi < n_method_params; _pi++) {
+                rp[_pi] = NULL;
+                rv[_pi] = NULL;
+                rn[_pi] = (method_params[_pi] && method_params[_pi]->name)
+                        ? method_params[_pi]->name->name : NULL;
+            }
+            for (uint32_t _ci = 0; _ci < n_m_ct_preds; _ci++) {
+                uint32_t _pi = m_ct_param_idx[_ci];
+                if (_pi >= n_method_params) continue;
+                rp[_pi] = m_ct_preds[_ci];
+                rv[_pi] = m_ct_vars[_ci];
+            }
+            if (_inherits_any) {
+                for (uint8_t _pi = 0; _pi < n_method_params &&
+                                      _pi < tc->methods[i].n_params; _pi++) {
+                    if (_pi >= MAX_FN_ARITY || m_param_annotated[_pi]) continue;
+                    if (rp[_pi]) continue;   /* instance restated it: keep that */
+                    rp[_pi] = tc->methods[i].param_refine_preds[_pi];
+                    rv[_pi] = tc->methods[i].param_refine_vars
+                            ? tc->methods[i].param_refine_vars[_pi] : NULL;
+                }
+            }
+            method_binding->refine_param_preds = rp;
+            method_binding->refine_param_vars  = rv;
+            method_binding->refine_param_names = rn;
+            method_binding->n_refine_params    = n_method_params;
+        }
+        /* RT1/RT4: and the result refinement -- its own if it restated one, the
+         * class's otherwise.  The binding is the only record that reaches pass
+         * 2, where the body exists and the check can be injected.
+         *
+         * Publishing it is gated on the check actually being emitted, matching
+         * `rt_ret_guaranteed` on the `defn` path.  `refine_return_pred` is read
+         * by RT4 as a FACT about the value a call produced, so a build that
+         * strips contracts (`--no-contracts`, or a release build without
+         * --keep-contracts) must not leave the fact behind after removing the
+         * thing that enforced it.  Nothing reads this binding today -- a
+         * dispatch does not resolve to it -- but the field's contract is
+         * "published only when enforced", and a latent violation of it is a
+         * trap for whoever wires the propagation up. */
+        if (rt_contracts_emitted()) {
+            method_binding->refine_return_pred = impl_ret_pred;
+            method_binding->refine_return_var  = impl_ret_var;
+            /* An instance that RESTATED its own promise only enforces that
+             * one.  A dispatch site is handed the CLASS's promise (it cannot
+             * know which instance runs), so the class predicate has to be
+             * enforced here too -- unless the variance obligation actually
+             * proved that the instance's implies it, in which case the
+             * instance's own check already covers it.
+             *
+             * Reporting only on a refutation is right for the diagnostic and
+             * not enough for this: an UNDECIDABLE pair emits no error, so
+             * without the extra check the class promise would be enforced by
+             * nothing while callers relied on it. */
+            if (impl_ret_pred_own && m_class_ret_pred &&
+                impl_ret_pred != m_class_ret_pred && !ret_variance_proved) {
+                method_binding->refine_class_ret_pred = m_class_ret_pred;
+                method_binding->refine_class_ret_var  = m_class_ret_var;
+            }
+        }
         method_fd->binding = method_binding;
         method_fd->params = method_params;
         method_fd->n_params = n_method_params;
@@ -3906,6 +4280,55 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         }
 
         e->fn_body_depth--;
+
+        /* CT1: inject this instance method's parameter contract checks, while
+         * the method scope is still current (the predicate elaborates in it).
+         * Shared with `defn` and `fn` so a refined method parameter is enforced
+         * rather than decorative. */
+        {
+            const Binding *mb = mp->method_fd ? mp->method_fd->binding : NULL;
+            if (mb && mb->refine_param_preds && method_body && rt_contracts_emitted()) {
+                /* The arrays are indexed by parameter, with NULL where there is
+                 * no refinement, so the index list is just 0..n-1. */
+                uint32_t idx[MAX_FN_ARITY];
+                uint32_t n_idx = mb->n_refine_params < MAX_FN_ARITY
+                               ? mb->n_refine_params : MAX_FN_ARITY;
+                for (uint32_t _i = 0; _i < n_idx; _i++) idx[_i] = _i;
+                Binding *m_check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+                method_body = rt_inject_param_checks(
+                    e, method_body, m_check_fn,
+                    mp->method_params, mp->n_method_params,
+                    mb->refine_param_preds, mb->refine_param_vars,
+                    idx, n_idx, impl_form->span);
+            }
+        }
+
+        /* RT1: check this method's RESULT against the refinement it promises --
+         * its own if it restated one, otherwise the class's, which it inherits.
+         * Before this, a `defclass` result refinement produced no check
+         * anywhere: the identical predicate on a plain `defn` panicked, while a
+         * class method returning -9 under `: #refine{ r : int | (>= r 0) }`
+         * printed -9 and exited 0. */
+        {
+            const Binding *rb = mp->method_fd ? mp->method_fd->binding : NULL;
+            if (rb && rb->refine_return_pred && method_body &&
+                rt_contracts_emitted()) {
+                Binding *m_check_fn =
+                    scope_lookup(&e->global, e->sym_tur_contract_check);
+                method_body = rt_wrap_return_check(
+                    e, method_body, m_check_fn, rb->refine_return_pred,
+                    rb->refine_return_var, "Return contract violated",
+                    impl_form->span);
+                /* ...and the class's promise on top, when the instance's own
+                 * was not proved to imply it.  See the comment where this is
+                 * set: a dispatch site relies on the class predicate. */
+                if (rb->refine_class_ret_pred)
+                    method_body = rt_wrap_return_check(
+                        e, method_body, m_check_fn, rb->refine_class_ret_pred,
+                        rb->refine_class_ret_var,
+                        "Class result contract violated", impl_form->span);
+            }
+        }
 
         /* Pop method scope */
         e->scope = method_scope.parent;
@@ -4151,6 +4574,71 @@ Expr *elab_definstance(Elab *e, const Form *call) {
  * using the same naming convention as emit.c (emit_dict_name / EX_INSTANCE_DEF).
  * Returns a TY_PTR_VOID-typed Expr that, when emitted, yields the address of
  * the global dictionary singleton cast to int64_t. */
+/* RT1: the Binding standing for a class method's CLASS-LEVEL signature, used to
+ * record a crossing at a dispatch that never resolved to an instance.
+ *
+ * Checking the caller's argument against the class predicate is sound by the
+ * same variance argument that already licenses result propagation, run in the
+ * other direction.  `TUR-E0374` rejects an instance that demands MORE than its
+ * class, so every instance's parameter predicate is implied by the class's --
+ * which makes the class predicate the strongest demand true of EVERY instance,
+ * and an argument satisfying it acceptable to whichever instance runs.
+ *
+ * It is also strictly stronger than what a dynamic site could otherwise use.
+ * With no resolved instance the dispatch falls back to an arbitrary
+ * carrier-compatible one, and that instance's predicate is *weaker* than the
+ * class's (or absent), so checking against it would demand less than the
+ * contract while claiming to check the contract.
+ *
+ * Returns NULL -- meaning "record nothing" -- when no parameter carries a
+ * refinement, which is the overwhelmingly common case. */
+static const Binding *rt_class_method_refine_binding(Elab *e, TypeClass *tc,
+                                                     uint8_t mi) {
+    if (!e || !tc || mi >= tc->n_methods) return NULL;
+    TypeClassMethod *m = &tc->methods[mi];
+    if (m->refine_class_binding) return m->refine_class_binding;
+    if (!m->param_refine_preds || m->n_params == 0) return NULL;
+
+    bool any = false;
+    for (uint8_t p = 0; p < m->n_params; p++)
+        if (m->param_refine_preds[p]) { any = true; break; }
+    if (!any) return NULL;
+
+    Binding *b = (Binding *)arena_alloc(e->arena, sizeof(Binding));
+    memset(b, 0, sizeof(*b));
+    b->name      = m->name;
+    b->is_global = true;
+
+    /* Arg kinds matter: refine_resolve_call_sites falls back to TY_INT for a
+     * parameter it cannot type, which would encode a float argument into the
+     * wrong sort. */
+    TypeKind kinds[MAX_FN_ARITY];
+    uint32_t arity = m->n_params < MAX_FN_ARITY ? m->n_params : MAX_FN_ARITY;
+    for (uint32_t p = 0; p < arity; p++)
+        kinds[p] = m->param_types ? m->param_types[p].kind : TY_INT;
+    b->type = type_fn(kinds, arity, m->return_type.kind);
+
+    const Form **preds = (const Form **)arena_alloc(e->arena,
+                              m->n_params * sizeof(const Form *));
+    const char **vars  = (const char **)arena_alloc(e->arena,
+                              m->n_params * sizeof(const char *));
+    const char **names = (const char **)arena_alloc(e->arena,
+                              m->n_params * sizeof(const char *));
+    for (uint8_t p = 0; p < m->n_params; p++) {
+        preds[p] = m->param_refine_preds[p];
+        vars[p]  = m->param_refine_vars ? m->param_refine_vars[p] : NULL;
+        names[p] = (m->param_names && m->param_names[p])
+                 ? m->param_names[p]->name : NULL;
+    }
+    b->refine_param_preds = preds;
+    b->refine_param_vars  = vars;
+    b->refine_param_names = names;
+    b->n_refine_params    = m->n_params;
+
+    m->refine_class_binding = b;
+    return b;
+}
+
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
     Expr *d = expr_new(e->arena, EX_DICT, type_from_kind(TY_PTR_VOID), span);
     d->as.dict_.instance = inst;
@@ -4447,6 +4935,55 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                     inst = it;
                     break;
                 }
+            }
+            /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the search above
+             * looks for a kind-`*` `int`-headed representative, which a
+             * higher-kinded class never has -- every `Applicative`/`Monad`
+             * instance head is a type CONSTRUCTOR.  So `pure`/`empty` on an
+             * abstract `m` inside a constrained poly fn found no representative
+             * and hard-errored ("no instance 'Applicative tyvar'"), even though
+             * the receiver-directed methods of the very same constraint (`ap`,
+             * `bind`) resolve fine through the representative path in
+             * elab_method_call.
+             *
+             * Mirror that path for the higher-kinded case: when the abstract
+             * tyvar IS this function's constraint variable and `tc` is the
+             * constraint's class, use the constraint's ambient representative
+             * instance as the polymorphic base.  Emit-side re-resolution then
+             * specializes it per monomorphization, exactly as for the kind-`*`
+             * representative above.  Gated on the ambient constraint so an
+             * unconstrained `(pure 42)` with no expected type still reports the
+             * ascription-required diagnostic rather than silently picking an
+             * instance.
+             *
+             * The gate is that `bound` names THIS body's abstract constraint
+             * variable -- not that `tc` is the ambient class.  A body may
+             * constrain several classes on one type constructor (`[^Monad m
+             * ^Applicative m ...]`), and only the first is recorded as ambient;
+             * keying on the tyvar covers the rest.  This is the same latitude
+             * the receiver-directed path already takes, which picks a
+             * representative for `ap`/`bind` without consulting the constraint
+             * set at all. */
+            if (!inst && e->cur_hkt_constraint_tyvar && bound.as.tyvar_.name &&
+                strcmp(bound.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0) {
+                TypeClassInstance *repr =
+                    (e->cur_hkt_dict_binding && e->cur_hkt_dict_binding->ambient_repr)
+                        ? e->cur_hkt_dict_binding->ambient_repr : NULL;
+                /* The ambient repr belongs to the FIRST constraint's class; it is
+                 * only usable here when that is also `tc`. */
+                if (repr && (repr->typeclass != tc ||
+                             midx >= repr->n_method_impls || !repr->method_impls[midx]))
+                    repr = NULL;
+                if (!repr) {
+                    for (TypeClassInstance *it = env->instances; it; it = it->next) {
+                        if (it->typeclass != tc) continue;
+                        if (midx >= it->n_method_impls || !it->method_impls[midx])
+                            continue;
+                        repr = it;
+                        break;
+                    }
+                }
+                inst = repr;
             }
             abstract_return_dispatch = (inst != NULL);
         }
@@ -5041,10 +5578,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                  * of the tagged union (the value's tag proves the variant), the
                  * same member path a match field-bind uses. */
                 const CtorDef *ctor = NULL;
+                /* A defdata that failed mid-elaboration (e.g. an unresolvable
+                 * constructor field type) can leave n_ctors set with NULL
+                 * ctors entries; guard so the error path degrades to "field
+                 * not found" instead of a NULL-deref SIGSEGV. */
                 if (adt_is_flat_product(adt) && adt->n_ctors == 1 &&
-                    adt->ctors[0]->is_record) {
+                    adt->ctors && adt->ctors[0] && adt->ctors[0]->is_record) {
                     ctor = adt->ctors[0];
-                } else if (adt_is_narrowed_to_record_variant(*adt_base)) {
+                } else if (adt_is_narrowed_to_record_variant(*adt_base) &&
+                           adt->ctors) {
                     ctor = adt->ctors[adt_base->as.adt_.narrowed_ctor_idx];
                 }
                 if (ctor) {
@@ -5701,6 +6243,61 @@ found_method:;
         return NULL;
     }
 
+    /* ambiguous-dispatch-error-quality + method-dispatch-missing-instance:
+     * when the receiver's static type is a genuinely DISTINCT concrete type and
+     * NO instance matches it exactly, the true cause is "no instance of <Class>
+     * for <that type>" -- regardless of how many carrier-compatible fallbacks
+     * exist.  A positive whitelist (bool / cstr / float / sized ints / a TY_ADT
+     * with a real def -- structs, opaque newtypes, user ADTs), NOT merely "not a
+     * tyvar".  Two bugs collapse here:
+     *   - fallback_count > 1: the misleading TUR-E0020 "ambiguous / Show[?] /
+     *     annotate" wording (this report).
+     *   - fallback_count == 1: a SILENT bind to the single carrier-compatible
+     *     representative -- a wrong-instance dispatch that SIGSEGVs when the
+     *     representative's layout differs (method-dispatch-missing-instance-
+     *     falls-back-to-carrier-representative.md).
+     * The bare int64 carrier (:int) is EXCLUDED (a `:int` receiver is
+     * indistinguishable from an erased value -- errors/hkt-dispatch-ambiguous),
+     * as are abstract tyvars / carrier-erased element reads (obj_is_abstract_-
+     * tyvar) and null-def ADTs (abstract-tyvar stand-ins).  EXACT matches set
+     * exact_match_found and never reach here, so the recursive self-type case
+     * (a Debug[Tree] body calling .debug on a Tree subfield) still resolves to
+     * self. */
+    {
+        TypeKind rrk = obj->type.kind;
+        bool concrete_distinct_receiver = !obj_is_abstract_tyvar && (
+            rrk == TY_BOOL   || rrk == TY_CSTR   || rrk == TY_FLOAT  ||
+            rrk == TY_FLOAT32|| rrk == TY_NIL    || rrk == TY_SYM    ||
+            rrk == TY_INT8   || rrk == TY_INT16  || rrk == TY_INT32  ||
+            rrk == TY_UINT8  || rrk == TY_UINT16 || rrk == TY_UINT32 ||
+            rrk == TY_UINT64 ||
+            (rrk == TY_ADT && obj->type.as.adt_.def != NULL));
+        if (!exact_match_found && fallback_count >= 1 &&
+            concrete_distinct_receiver) {
+            const char *cn = best_inst ? best_inst->typeclass->name->name : "?";
+            /* Attribute a macro-emitted `.method` call (e.g. derive-show's
+             * `(.show (.field __p))`) to the USER's derive call site rather than
+             * the macro body in stdlib/macros.tur; a direct user call keeps its
+             * own receiver span.  Scoped to THIS diagnostic. */
+            Span err_span = call->as.list.items[1]->span;
+            bool from_macro = e->macro_expand_depth > 0;
+            if (from_macro) err_span = e->macro_call_site_span;
+            diag_emit_with_code(DIAG_ERROR, err_span,
+                                TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                                "no instance of typeclass '%s' for type '%s' "
+                                "(method '.%.*s'). Add (definstance %s [%s] ...) "
+                                "or dispatch on a type that has one.",
+                                cn, type_name(obj->type),
+                                (int)method_name_len, method_name,
+                                cn, type_name(obj->type));
+            if (from_macro)
+                diag_emit(DIAG_NOTE, call->as.list.items[1]->span,
+                          "the '.%.*s' call is emitted by this macro expansion",
+                          (int)method_name_len, method_name);
+            return NULL;
+        }
+    }
+
     /* Phase D0: Ambiguous dispatch diagnostic.
      * If we reached here via the fallback path (no exact type match) and
      * more than one instance matched by name, emit TUR_E0020 so the user
@@ -5714,16 +6311,19 @@ found_method:;
             best_inst = user_fallback_inst;
             goto resolved_user_fallback;
         }
-        /* Build a comma-separated list of matching instance names for the message. */
+        /* Build a comma-separated list of matching instance names for the message,
+         * and capture the typeclass name for the concrete-receiver diagnosis. */
         char inst_list[512];
         int pos = 0;
         int listed = 0;
+        const char *class_name = NULL;
         for (TypeClassInstance *ci = e->typeclass_env.instances;
              ci != NULL && pos < (int)sizeof(inst_list) - 2; ci = ci->next) {
             for (uint8_t mi = 0; mi < ci->typeclass->n_methods; mi++) {
                 const TypeClassMethod *cm = &ci->typeclass->methods[mi];
                 if (cm->name->len != method_name_len ||
                     memcmp(cm->name->name, method_name, method_name_len) != 0) continue;
+                if (!class_name) class_name = ci->typeclass->name->name;
                 if (listed > 0 && pos < (int)sizeof(inst_list) - 3) {
                     inst_list[pos++] = ','; inst_list[pos++] = ' ';
                 }
@@ -5742,6 +6342,7 @@ found_method:;
             }
         }
         inst_list[pos] = '\0';
+        (void)class_name;
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0020_AMBIGUOUS_DISPATCH,
                             "ambiguous method dispatch: '.%.*s' matches %d instances "
                             "(%s) -- receiver type is erased (int64_t). "
@@ -5859,6 +6460,38 @@ resolved_user_fallback:;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;
+            /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
+             * type constructor of a constrained poly fn, this method call lowers to
+             * a dictionary-slot dispatch, whose method pointer returns the int64
+             * carrier -- and the instance impl invokes this `:fn` argument through
+             * `((int64_t (*)(void*, int64_t))k.fn)(...)`.  A continuation returning
+             * a by-value aggregate (e.g. `(fn [v] (some (dbl v)))` at `(Option
+             * int)`) therefore had a struct-returning thunk cast to an
+             * int64-returning pointer: an x86-64 return-ABI mismatch (RAX:RDX vs
+             * RAX) that handed the instance garbage, which the caller then
+             * dereferenced -- the Gap 2 segfault.
+             *
+             * Ask for the carrier-spill shim so the thunk boxes its aggregate
+             * return, matching the carrier ABI on both sides.  Only the abstract
+             * receiver opts in: a CONCRETE receiver resolves to the instance's own
+             * by-value entry point and must keep consuming the struct directly,
+             * which is what the existing gate protects.  The shim is itself
+             * defensive -- ensure_aggregate_spill_shim returns NULL unless the
+             * result really is a by-value aggregate -- so this is a no-op for
+             * carrier-returning continuations. */
+            {
+                /* The receiver is `(m int)` -- a TY_APP spine headed by the
+                 * abstract constructor -- not a bare TY_TYVAR, so walk to the
+                 * head before comparing against this body's constraint var. */
+                Type rcv = obj->type;
+                while (rcv.kind == TY_APP && rcv.as.app.fn) rcv = *rcv.as.app.fn;
+                bool rcv_is_ambient_ctor =
+                    rcv.kind == TY_TYVAR && rcv.as.tyvar_.name &&
+                    e->cur_hkt_constraint_tyvar &&
+                    strcmp(rcv.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0;
+                if (obj_is_abstract_tyvar || rcv_is_ambient_ctor)
+                    wrap->as.poly_wrap_.boxes_aggregate = true;
+            }
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
             } else if (inner_b->closure_fn_binding && !inner_b->is_global) {
@@ -6151,6 +6784,45 @@ resolved_user_fallback:;
             if (m7_nb > 0) {
                 Type substituted = elab_subst_class_tyvars(
                     e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
+                Type ptr_family_result;
+                bool ptr_family = m7_app_to_ptr_family(substituted, &ptr_family_result);
+                /* hkt-inline-c-instance-body-loses-result-type: a :heap ADT is
+                 * the third carrier-width result class, alongside the
+                 * int-carrier newtypes below and the pointer-family handles
+                 * above.  `(HBox int)` for a `:heap` parametric struct emits as
+                 * `tur_adt_HBox__int *` -- a pointer, so the by-value
+                 * representation IS the int64 carrier the method returns and
+                 * committing the precise type needs no by-value spec.  Unlike
+                 * the pointer-family case there is nothing to collapse: the
+                 * applied type is already the right one. */
+                bool heap_app = !ptr_family &&
+                    (type_is_heap_adt(substituted) ||
+                     type_is_heap_struct(substituted));
+                /* hkt-inline-c-instance-body-loses-result-type: the last class,
+                 * and the only one that is NOT carrier-width -- a by-value
+                 * aggregate.  Committing it is safe because the CONSUMER bridges:
+                 * emit_expr.c's fn_body_tail_byvalue_carrier_type reports the
+                 * grounded aggregate for an inline-C-bodied dispatch call, so the
+                 * existing carrier -> by-value deref runs at the binding
+                 * (`Box__int m = *(Box__int *)(intptr_t)__ps_N`).  The argument
+                 * was heap-spilled to reach the dict's int64 slot, so the carrier
+                 * really is a pointer to the aggregate -- nothing new is
+                 * generated, no wrapper and no second ABI.
+                 *
+                 * m7_byvalue_grounded still stays false: dispatch remains on the
+                 * uniform carrier ABI and no by-value spec is minted.  That is the
+                 * point -- an inline-C body cannot be re-specialized, so the
+                 * PRODUCER keeps the carrier and only the consumer adapts.
+                 *
+                 * Recognized with type_app_is_concrete_adt, the same predicate
+                 * the by-value HKT spec machinery uses for a monomorphizable
+                 * parametric result.  It already excludes an opaque head (that
+                 * is the int-carrier arm's job) and demands every type argument
+                 * have a concrete layout, so a still-parametric result never
+                 * reaches here. */
+                bool byval_agg = !ptr_family && !heap_app &&
+                    substituted.kind == TY_APP &&
+                    type_app_is_concrete_adt(&substituted);
                 /* Only commit the by-value result type (and, below, the by-value
                  * element bindings) when the result fully grounds.  A residual
                  * free element tyvar -- the `ap` fat-closure-carrier case --
@@ -6158,11 +6830,31 @@ resolved_user_fallback:;
                  * uniform carrier ABI instead of emitting a broken half-by-value
                  * spec with a dangling carrier-base dict reference. */
                 if (!m7_type_has_free_tyvar(substituted)) {
-                    if (m7_body_byvalue_ok) {
+                    if (ptr_family && result_type.kind == TY_APP) {
+                        /* hkt-fmap-result-is-not-droppable: a pointer-family head
+                         * (`(type-app rc<?> int)`) collapses to the concrete
+                         * `rc<int>`, so `(rc/drop (fmap r f))` type-checks instead
+                         * of failing on the def-less `(type-app ? ?)` shell.
+                         *
+                         * Checked BEFORE m7_body_byvalue_ok, not after: committing
+                         * the TY_APP form for a pure-Turmeric body would leave the
+                         * same un-droppable shape, and the by-value spec is not
+                         * wanted here anyway -- an rc IS the carrier, so the
+                         * uniform carrier dispatch is already the right ABI.
+                         * m7_byvalue_grounded deliberately stays false, exactly as
+                         * in the int-carrier-newtype arm below.
+                         *
+                         * Same `result_type.kind == TY_APP` guard as that arm: only
+                         * REFINE the def-less carrier shell, never clobber an
+                         * instance that overrode the class result with a concrete
+                         * scalar (typeclass-instance-float-return). */
+                        result_type = ptr_family_result;
+                    } else if (m7_body_byvalue_ok) {
                         result_type = substituted;
                         m7_byvalue_grounded = true;
                     } else if (result_type.kind == TY_APP &&
-                               m7_result_is_int_carrier(substituted)) {
+                               (heap_app || byval_agg ||
+                                m7_result_is_int_carrier(substituted))) {
                         /* method-result-functor-inference: the instance body
                          * delegates to a carrier helper (`(mk-box ...)`), so it
                          * is not by-value-constructible -- but the grounded
@@ -6194,6 +6886,60 @@ resolved_user_fallback:;
      * annotation for downstream passes that may still want to know which
      * instance was selected.  Fall back to dict dispatch only when there is
      * no resolved instance (defensive). */
+    /* RT1: a statically-resolved method dispatch is a crossing into whatever
+     * refinements the SELECTED INSTANCE's method parameters declare.  The
+     * receiver sits at argument 0 of the impl and at index 1 of the source
+     * form, so the parameter/argument slots line up exactly as for a named
+     * call.
+     *
+     * A dispatch on an ABSTRACT receiver never resolved to an instance -- it
+     * fell back to an arbitrary carrier-compatible one, which is not the
+     * instance that will run.  Cross into the CLASS signature there instead:
+     * it is the one demand every instance honours (see
+     * rt_class_method_refine_binding).  Class parameter indices line up with
+     * instance ones -- both count the receiver at 0 -- so the same arg_offset
+     * of 1 applies.  Either way the method's own entry check still guards the
+     * call; this layer reports, it never elides. */
+    const Binding *rt_cs_callee = NULL;
+    if (obj_is_abstract_tyvar && best_inst && best_inst->typeclass) {
+        TypeClass *rt_tc = best_inst->typeclass;
+        for (uint8_t rt_mi = 0; rt_mi < rt_tc->n_methods; rt_mi++) {
+            const Symbol *mn = rt_tc->methods[rt_mi].name;
+            if (mn && strlen(mn->name) == method_name_len &&
+                strncmp(mn->name, method_name, method_name_len) == 0) {
+                rt_cs_callee = rt_class_method_refine_binding(e, rt_tc, rt_mi);
+                break;
+            }
+        }
+    }
+    bool rt_is_class_cs = (rt_cs_callee != NULL);
+    if (!rt_cs_callee && best_method) rt_cs_callee = best_method->binding;
+    if (rt_cs_callee) {
+        (void)refine_note_call_site(e, rt_cs_callee, call, 1);
+        /* Reading B + lint: a STATICALLY-resolved dispatch is obliged to
+         * satisfy the instance it resolved to, which is the more precise
+         * contract.  Carry the class's predicates alongside so a call the
+         * class would reject can be linted (TUR-W0377) without changing
+         * what it must prove.  Not for a dynamic crossing -- that one IS
+         * the class signature, so there is nothing to compare against. */
+        if (!rt_is_class_cs && best_inst && best_inst->typeclass) {
+            TypeClass *rt_tc = best_inst->typeclass;
+            for (uint8_t rt_mi = 0; rt_mi < rt_tc->n_methods; rt_mi++) {
+                const Symbol *mn = rt_tc->methods[rt_mi].name;
+                if (!mn || strlen(mn->name) != method_name_len ||
+                    strncmp(mn->name, method_name, method_name_len) != 0)
+                    continue;
+                if (rt_tc->methods[rt_mi].param_refine_preds)
+                    refine_note_call_site_class_preds(
+                        e, rt_cs_callee, call,
+                        rt_tc->methods[rt_mi].param_refine_preds,
+                        rt_tc->methods[rt_mi].param_refine_vars,
+                        rt_tc->methods[rt_mi].n_params);
+                break;
+            }
+        }
+    }
+
     if (best_method && best_method->binding) {
         out->as.call_.fn_binding = best_method->binding;
         out->as.call_.fn_expr    = NULL;

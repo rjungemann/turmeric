@@ -218,3 +218,103 @@ size_t tur_demangle(const char *mangled, char *out, size_t cap) {
     out[k] = '\0';
     return k;
 }
+
+/* Curated denylist of libc / POSIX function symbols that a modern C toolchain's
+ * system headers (unistd.h, stdio.h, stdlib.h, string.h, time.h, sys/socket.h,
+ * ...) declare in a translation unit -- so a user top-level `defn` lowered to a
+ * bare `static int64_t <name>(...)` of the SAME spelling is a redeclaration
+ * conflict ("static declaration of 'X' follows non-static declaration").  The
+ * defect is toolchain-dependent (e.g. macOS SDKs added `pipe2` to <unistd.h>,
+ * turning a long-compiling fixture red) and platform-independent in principle,
+ * so `raw_name_for_binding` mangles ONLY a bare (non-module-prefixed) global
+ * whose spelling lands here.  Kept sorted for bsearch; extend it as real
+ * collisions surface rather than pre-emptively (over-broad entries would mangle
+ * a user's function for no reason).  See
+ * docs/archive/codegen-user-defn-collides-with-libc-pipe2.md. */
+static int sorted_strcmp(const void *key, const void *elem) {
+    return strcmp((const char *)key, *(const char *const *)elem);
+}
+
+int tur_name_collides_libc(const char *name, size_t len) {
+    if (!name || len == 0) return 0;
+    /* Callers pass a NUL-terminated Symbol whose text is exactly `len` bytes;
+     * a slice with an interior NUL or extra trailing bytes is not a real
+     * identifier and cannot match a libc symbol -- reject it so the strcmp
+     * below compares the whole spelling. */
+    if (strlen(name) != len) return 0;
+    static const char *const libc_names[] = {
+        "abort", "abs", "accept", "alarm", "atoi", "atol", "atoll",
+        "bcopy", "bind", "bsearch", "bzero",
+        "calloc", "chdir", "chmod", "clock", "close", "connect", "ctime",
+        "difftime", "dup", "dup2",
+        "exit",
+        "fclose", "fcntl", "fdopen", "fflush", "fgets", "fopen", "fork",
+        "fprintf", "fputs", "fread", "free", "fscanf", "fseek", "fstat",
+        "ftell", "fwrite",
+        "getcwd", "getenv", "getgid", "getline", "getpid", "getppid",
+        "getsockopt", "getuid", "gmtime",
+        "index", "kill",
+        "labs", "link", "listen", "localtime", "lockf", "longjmp", "lseek",
+        "lstat",
+        "malloc", "memccpy", "memchr", "memcmp", "memcpy", "memmove", "memset",
+        "mkdir", "mktime",
+        "nanosleep",
+        "open",
+        "pause", "pclose", "pipe", "pipe2", "poll", "popen", "printf",
+        "putenv", "puts",
+        "qsort",
+        "raise", "rand", "random", "read", "realloc", "recv", "recvfrom",
+        "remove", "rename", "rewind", "rindex", "rmdir",
+        "scanf", "select", "send", "sendto", "setenv", "setgid", "setjmp",
+        "setsockopt", "setuid", "shutdown", "signal", "sleep", "snprintf",
+        "socket", "socketpair", "sprintf", "srand", "srandom", "sscanf",
+        "stat", "strcat", "strchr", "strcmp", "strcpy", "strdup", "strlen",
+        "strncat", "strncmp", "strncpy", "strrchr", "strstr", "strtod",
+        "strtok", "strtol", "strtoul", "symlink", "system",
+        "time", "times", "tmpfile",
+        "unlink", "unsetenv", "usleep",
+        "wait", "waitpid", "write",
+    };
+    return bsearch(name, libc_names,
+                   sizeof(libc_names) / sizeof(libc_names[0]),
+                   sizeof(libc_names[0]), sorted_strcmp) != NULL;
+}
+
+int tur_name_is_c_keyword(const char *name, size_t len) {
+    if (!name || len == 0) return 0;
+    /* Same slice guard as tur_name_collides_libc: an interior NUL or trailing
+     * bytes mean this is not a whole identifier, so it cannot be a keyword. */
+    if (strlen(name) != len) return 0;
+    /* Every C reserved word, C89 through C23, plus `asm` / `typeof` (which
+     * every toolchain we target accepts).  Sorted for bsearch under strcmp,
+     * where the leading '_' (0x5F) of the C99/C11 spellings sorts before every
+     * lowercase letter, so the `_X` block comes first.  Unlike the libc list
+     * this one is complete by construction rather than grown on demand: the
+     * keyword set is fixed by the standard, and a missing entry is the same
+     * unreadable cc cascade the guard exists to prevent. */
+    static const char *const c_keywords[] = {
+        "_Alignas", "_Alignof", "_Atomic", "_BitInt", "_Bool", "_Complex",
+        "_Decimal128", "_Decimal32", "_Decimal64", "_Generic", "_Imaginary",
+        "_Noreturn", "_Static_assert", "_Thread_local",
+        "alignas", "alignof", "asm", "auto",
+        "bool", "break",
+        "case", "char", "const", "constexpr", "continue",
+        "default", "do", "double",
+        "else", "enum", "extern",
+        "false", "float", "for",
+        "goto",
+        "if", "inline", "int",
+        "long",
+        "nullptr",
+        "register", "restrict", "return",
+        "short", "signed", "sizeof", "static", "static_assert", "struct",
+        "switch",
+        "thread_local", "true", "typedef", "typeof", "typeof_unqual",
+        "union", "unsigned",
+        "void", "volatile",
+        "while",
+    };
+    return bsearch(name, c_keywords,
+                   sizeof(c_keywords) / sizeof(c_keywords[0]),
+                   sizeof(c_keywords[0]), sorted_strcmp) != NULL;
+}

@@ -12,8 +12,13 @@ This guide is the front door to Turmeric's surface syntax. It teaches you to
 1. The default **S-expression** dialect used by `.tur` files. SRFI-105
    **curly-infix** is enabled here too -- `{a + b}` reads as `(+ a b)` in
    every dialect, no `#lang` directive required.
-2. The **sweet-expression** dialect activated by `#lang sweet-exp` or a
-   `.tur.sweet` extension (indentation + neoteric + `$` + curly-infix).
+2. The **sweet-expression** dialect activated by `#lang turmeric/sweet`
+   (legacy alias: `#lang sweet-exp`) or a `.tur.sweet` extension (indentation
+   + neoteric + `$` + curly-infix).
+
+The `#lang` line also carries an optional set of additive **layers** after the
+base dialect (e.g. `#lang turmeric stringed`); see
+[Part 2.5](#part-25----lang-base-dialects-and-layers).
 
 It does not re-explain the semantics of every special form -- the deep-dive
 guides own that. Instead it shows you the *shape* of the language and points
@@ -224,6 +229,54 @@ compound-annotation grammar is in the
 [Type Annotations Guide](type-annotations-guide.md); variadic rules are in the
 function-arity section of the project conventions.
 
+### Naming a type -- `defalias` vs `deftype`
+
+Two forms bind a type name, and they do different things.
+
+`defalias` is the **transparent** alias. The name and its target are the same
+type everywhere, so the alias never shows up in unification -- it is a
+readability tool, not a new type. The target can be any type expression:
+
+```turmeric
+(defalias Sample    :int)                            ; primitive
+(defalias IntList   (Cons int))                      ; type application
+(defalias Point     P)                               ; struct / ADT name
+(defalias Backtrack (fn [] int))                     ; function type
+(defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
+```
+```sweet-exp
+defalias Sample    :int                              ; primitive
+defalias IntList   (Cons int)                        ; type application
+defalias Point     P                                 ; struct / ADT name
+defalias Backtrack (fn [] int)                       ; function type
+defalias NonZero   #refine{ q : int | (not= q 0) }   ; refinement
+```
+
+Because it is transparent, `(defn f [b : Backtrack] : int (b))` applies `b`
+exactly as `(fn [] int)` would, and a `Point` is accepted anywhere a `P` is.
+
+`deftype` is the **recursive type binder**. It wraps its body in a recursive
+type, which is what `Fix`/`Free` need, and takes its parameters as a bracket
+vector:
+
+```turmeric
+(deftype Fix [^f] (f (Fix f)))
+```
+
+That wrapping makes `deftype` the wrong tool for naming a non-recursive type:
+the bound name is a distinct nominal type, so use sites fail to unify with the
+body. Reach for `defalias` there. The one exception is a bare refinement body,
+which `deftype` binds transparently for `stdlib/refine.tur`'s benefit --
+`defalias` handles that case too, and is the clearer spelling in new code.
+
+Neither form takes alias type parameters: `(defalias Name [a] ...)` is an
+error, and a `deftype`'s parameters belong to the recursive type, not to an
+alias. For a named parametric shape, use `defstruct`/`defdata`.
+
+Two more forms are adjacent but distinct: `defopaque` makes a **nominal**
+newtype (deliberately *not* interchangeable with its representation), and
+`defstruct` declares a record.
+
 ### Indentation conventions
 
 Turmeric source follows Clojure-style indentation.
@@ -309,6 +362,15 @@ guide do). If the directive is absent and the file is not `.tur.sweet`, the
 reader stays in plain s-expression mode and treats indentation as
 insignificant.
 
+Both activations work the same way whether the file is the one you compile or
+one pulled in by `(load "...")`: a loaded file's dialect is read from its own
+first line and its own extension, independently of whatever dialect the loading
+file is written in. When both are present the extension picks the base dialect
+and the directive is a redundant hint; layers on the `#lang` line apply either
+way. (Before 2026-07-29 a loaded file's dialect came from its extension alone,
+so `(load ...)` on a plain-`.tur` file whose first line was
+`#lang turmeric/sweet` failed to parse.)
+
 ### The three tools
 
 Sweet-exp gives you three independent tools. Use whichever reduces noise for a
@@ -347,8 +409,26 @@ call takes exactly one argument:
 (println (vec-get squares i))
 ```
 ```sweet-exp
-println(vec-get(squares i))
+println $ vec-get squares i
 ```
+
+`$` wraps everything to its right in one pair of parens -- but only when the
+rest of the line is a bare token sequence that needs the wrap. When the rest is
+*already* one complete delimited expression -- a neoteric call, a parenthesised
+form, a curly-infix group, a data literal -- the wrap is suppressed, so `$`
+composes with the other two tools instead of double-applying them:
+
+| Rest-of-line shape | Written | Reads as |
+|---|---|---|
+| bare token sequence | `println $ vec-get squares i` | `(println (vec-get squares i))` |
+| neoteric call | `println $ vec-get(squares i)` | `(println (vec-get squares i))` |
+| parenthesised form | `println $ (vec-get squares i)` | `(println (vec-get squares i))` |
+| curly-infix group | `println $ {a + b}` | `(println (+ a b))` |
+| chained `$` | `println $ normalize $ vec3(x y z)` | `(println (normalize (vec3 x y z)))` |
+
+A *bare atom* after `$` is still wrapped, per SRFI-110 -- `f $ g` reads as
+`(f (g))`, a zero-argument call, not `(f g)`. Pass a function value with
+plain juxtaposition (`f(g)` or `(f g)`) rather than `$`.
 
 ### Curly-infix `{a op b}`
 
@@ -412,6 +492,91 @@ let [add3 make-adder(3)
   println(add3(10))    ; 13
   println(add7(10))    ; 17
 ```
+
+---
+
+## Part 2.5 -- `#lang` base dialects and layers
+
+A `#lang` line is more than a dialect switch. Its full shape is:
+
+```
+#lang <base>[/<dialect>] <layer>*
+```
+
+The whole line is read *before the first form*, so everything that changes how
+the file reads or checks is declared up front and is guaranteed file-scoped.
+
+### Base dialect (mutually exclusive)
+
+The first, possibly slash-namespaced, token picks exactly one **base reader**:
+
+| Base | Reader |
+|---|---|
+| `turmeric` | plain s-expression (the default; curly-infix is always on) |
+| `turmeric/curly-infix` | curly-infix emphasis (same as the default) |
+| `turmeric/neoteric` | curly-infix + neoteric `f(x)` |
+| `turmeric/sweet` | full sweet-expressions (indentation + neoteric + `$`) |
+
+`turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
+`#lang sweet-exp` is still accepted as a legacy alias, so
+`#lang sweet-exp` and `#lang turmeric/sweet` are equivalent -- migrate to the
+slash-namespaced form when convenient. A `.tur.sweet` extension selects the
+sweet base without any directive.
+
+Bases do not compose (sweet-exp is a whole indentation pass; curly/neoteric are
+flags on the same reader), which is exactly why they share the one slash-named
+slot.
+
+### Layers (an additive, order-independent set)
+
+The space-separated tokens *after* the base are **layers**: a set, not a
+pipeline. Order does not matter, and each layer is either a **reader layer**
+(it flips on a `#`-dispatch) or a **semantic layer** (it flips on an
+elaboration/checker gate). Layers are a small, curated set -- an arbitrary
+one-off macro bundle still belongs in a `#use-reader-macros` file, not here.
+
+The reader layer available today is **`stringed`**, which turns on the
+`#s"..."` owned-String literal with no `#use-reader-macros` directive:
+
+```turmeric
+#lang turmeric stringed
+(load "stdlib/string.tur")
+(defn main [] : int
+  (let [g #s"hello"]        ; owned String, not a borrowed cstr
+    (string/len g)))
+```
+
+Because layers ride alongside the base, they compose with any dialect --
+`#lang turmeric/sweet stringed` gives sweet-exp *and* `#s"..."`:
+
+```sweet-exp
+#lang turmeric/sweet stringed
+$ load "stdlib/string.tur"
+defn main [] : int
+  string/len(#s"hello")
+```
+
+There is no semantic layer today. `refined` was one until it graduated in
+v0.33.0; static discharge of `#refine{...}` predicates is now unconditional, so
+there is nothing left for the token to turn on. A file that still carries
+`#lang turmeric refined` keeps compiling -- the token is accepted and ignored
+with a one-time `TUR-W0064` -- but it can be dropped. See
+[refinement-types-guide.md](refinement-types-guide.md).
+
+When a semantic layer does exist, it is never a second enable path: it points
+at an existing `EXPERIMENTS[]` row, so `#lang turmeric <name>` is *exactly*
+`--enable=<name>` scoped to one file, and the experiment's lifecycle warning
+and `expires_at` govern both spellings. If a project manifest states its own
+`:experiments` list and leaves the backing experiment out, such a file is a
+**hard error** rather than a silent downgrade -- compiling it under different
+semantics than it asked for would be worse than refusing.
+
+A `#lang` layer is a hard requirement of the file: an unrecognised layer token
+is a compile error (`TUR-E0330`), never silently ignored. A *graduated* token
+is the one exception, and deliberately so -- deleting the row on graduation
+would otherwise break every file that opted in, which is the wrong population
+to break. Run `tur lang-layers` (add `--json` for the machine-readable form) to
+list every registered layer, its kind, and a one-line summary.
 
 ---
 
@@ -499,3 +664,53 @@ A short list of pitfalls newcomers hit:
 6. **Mixing up `[...]` positions.** `[...]` is a value (lowers to `vec-of`)
    in expression position and a binding spec (parameter list / `let` bindings)
    in binding position -- the context determines which.
+7. **Naming a definition after a special form.** `(defn return ...)`,
+   `(defn match ...)`, `(defmacro open ...)` are accepted, but a bare call site
+   dispatches to the form, never to your definition. See
+   [Reserved names](#reserved-names) below -- the compiler now flags this as
+   `TUR-W0042` at the definition.
+
+### Reserved names
+
+A call head is matched against the special forms **by name, before any binding,
+macro, or typeclass-method lookup**. Naming a `defn` or `defmacro` after one of
+them is accepted and the binding is created, but every bare `(name ...)` call
+site elaborates as the form, so the definition is unreachable by its bare name.
+The compiler emits **`TUR-W0042`** at the definition; run
+`tur explain TUR-W0042` for the full write-up.
+
+`return` is the one that bites most often -- it is the conventional name for a
+monadic unit, and `(return x)` is always the early-return form. Use `pure`.
+
+Reserved in call-head position:
+
+| Group | Names |
+|---|---|
+| Binding / control | `def` `define` `let` `let*` `letrec` `if` `do` `unsafe` `set!` `while` `case` `defer` `return` `match` `quote` `gensym` `?` `->` `->>` |
+| Definition forms | `defn` `fn` `λ` `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
+| Generators | `gen` `yield` `gen-next` `gen-done?` |
+| References / rc / weak | `ref` `deref` `drop!` `ref?` `weak` `weak?` `upgrade` `lref/new` `rc/of` `rc/clone` `rc/drop` `rc->ptr` `rc/strong-count` `rc/from-ref` `ref/from-rc` |
+| Continuations | `reset` `shift` `shift0` `call/cc` `call/cc*` `escape` `cloneable-reset` `cloneable-shift` `serial-reset` `serial-shift` `cont?` |
+| Effects | `binding` `perform` `handle` `handle-shallow` `try-with` `with-handler` `resume` `discontinue` `compose-handlers` |
+| Types / casts | `as` `type-of` `cast` `is?` `coerce` `&` `&mut` `forall` `exists` `type-app` `::` `pack` `open` |
+| Sessions | `make-protocol` `make-session` |
+| Panic | `panic` `panic-with` `catch-unwind` `catch-panic-of` `panic-payload-type` `panic-payload-value` `panic-payload-file` `panic-payload-line` `panic-payload-downcast` |
+| Unsafe / FFI | `ptr-deref` `ptr-write` `ptr-add` `ptr-sub` `ptr-null?` `ptr-of` `unsafe-cast` `reinterpret` `transmute` `array-get-unchecked` `array-set-unchecked` `raw-malloc` `raw-free` `raw-realloc` `raw-memcpy` `raw-memset` `c-call` `dlopen` `dlsym` `dlclose` |
+| STM / GC | `stm` `retry` `gc!` `gc-enable!` `gc-disable!` `gc-auto!` `gc-collections` `gc-objects-freed` `gc-live-blocks` `gc-candidate-high-water` |
+
+A leading `.` is reserved too: `(.method obj ...)` is method-call syntax, so a
+definition named `.foo` is never reachable as a call head.
+
+**Not reserved -- these are deliberately shadowable.** A user definition of
+`handler`, `with`, `default-of`, or a session op (`send` `recv` `close` `offer`
+`send-to` `recv-from` `choose-left` `choose-right` `recv-timeout`) wins over the
+form, and the map surface (`map-new` `assoc` `dissoc` `get` `has?` `count`
+`merge`) falls back to ordinary call resolution. The arity-gated forms (`async`
+`await` `select` `atomically` `check` `or-else` `thread-spawn` and the `tvar-*`
+ops) intercept only one call shape, so a definition at a different arity is
+genuinely callable -- no warning is emitted for those, and the shadowing is
+worth avoiding anyway.
+
+Inside a `defmodule`, a shadowing definition remains reachable through its
+**qualified** name (`mymod/return`) -- a qualified head symbol never matches a
+special form -- but the bare name stays shadowed, so renaming is still better.

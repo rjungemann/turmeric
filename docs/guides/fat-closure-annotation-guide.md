@@ -221,6 +221,20 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
 
 - `^fat` is independent of `#fx{Unsafe}`, `:linear`, and effect rows.
   It is a representation marker, not a discipline or capability.
+- A **named effectful `defn` may be used as the value** of a `^fat`
+  fn-typed parameter in any position -- inside a `do`, nested in another
+  call, in tail position. Taking a function's address is not performing
+  its effect, so boxing one into a fat closure costs the caller nothing.
+- A `^fat` parameter typed `(fn [T] #fx{E} R)` with a **non-empty effect
+  row is callable**. Effectful callbacks through `^fat` parameters --
+  middleware, logging hooks, visitors that may `perform` -- work, whether
+  the argument is an inline lambda or a named top-level `defn`.
+
+  A shape worth knowing if you are working on the compiler: a `^fat`
+  parameter holds a boxed `{ shim, direct-entry }` record, not a bare fn,
+  so anything that keys off "the function" -- an effect registry lookup,
+  an identity comparison, a table of known entry points -- must read the
+  **direct entry** out of the box, not the box itself.
 - `^fat` on a parameter and `^fat` on the return type compose: a
   factory that takes a captureless callback *and* returns a captureless
   fat closure marks both positions.

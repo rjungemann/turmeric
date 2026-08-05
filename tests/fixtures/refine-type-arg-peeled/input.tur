@@ -1,0 +1,41 @@
+;; A refinement in TYPE-ARGUMENT position is peeled to its base type, with
+;; TUR-W0380 saying the payload predicate is not enforced.
+;;
+;; Before the peel, `(Box #refine{ v : int | (> v 0) })` stored the TY_CONTRACT
+;; node whole and nothing between the type reader and codegen peeled it, so the
+;; payload a `match` arm binds stayed contract-typed and every ordinary use of
+;; it failed:
+;;
+;;   - `(+ v 1)`      -- TUR-E0006, operator lookup, "first arg type { v : int | ... }"
+;;   - `(println v)`  -- no matching overload
+;;   - a float base   -- TUR-E0707, "declares float but returns { v : float | ... }",
+;;                       because the register-class check compares kinds without
+;;                       peeling, so a float-carried contract reads as non-float
+;;
+;; So the annotation broke the program rather than merely failing to help it.
+;; Peeling makes it inert; the warning is what keeps "inert" from being silent.
+;;
+;; Both an int and a float base are exercised: the int case passed the
+;; register-class check by accident (an int-carried contract against an `int`
+;; return is not a mismatch), which is exactly what hid how general the gap was.
+(defdata Box [a] (MkBox a))
+
+(defn add-i [b : (Box #refine{ v : int | (> v 0) })] : int
+  (match b (MkBox v) (+ v 1)))
+
+(defn get-f [b : (Box #refine{ v : float | (> v 0.0) })] : float
+  (match b (MkBox v) v))
+
+;; The declared return is a contract in type-argument position too.  This is the
+;; shape that used to be a latent `cc` error the moment TY_CONTRACT was admitted
+;; to type_has_concrete_codegen_layout: the ctor call is typed from its argument
+;; as (Box int) while the declaration said (Box contract), and nothing
+;; reconciled the two monomorphs.  The peel removes the divergence at the source.
+(defn mk-i [] : (Box #refine{ v : int | (> v 0) })
+  (MkBox 5))
+
+(defn main [] : int
+  (println (add-i (MkBox 5)))
+  (println (get-f (MkBox 2.5)))
+  (match (mk-i) (MkBox v) (println v))
+  0)

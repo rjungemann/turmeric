@@ -245,9 +245,13 @@ char *lsp_uri_to_path(const char *uri, char *dest, size_t dest_cap) {
 void lsp_doc_free_symbols(LspDoc *doc) {
     if (!doc) return;
     free(doc->symbols);
-    doc->symbols      = NULL;
-    doc->symbol_count = 0;
-    doc->symbol_cap   = 0;
+    doc->symbols       = NULL;
+    doc->symbol_count  = 0;
+    doc->symbol_cap    = 0;
+    doc->symbols_stale = 0;
+    /* ever_analyzed is deliberately NOT cleared: this is called to swap one
+     * index for another, and the fact that an analysis once succeeded is a
+     * property of the document, not of the array being replaced. */
 }
 
 static LspDoc *make_doc(const char *uri, size_t uri_len,
@@ -277,6 +281,7 @@ LspDoc *lsp_doc_open(const char *uri, size_t uri_len,
         memcpy(d->text, text, text_len);
         d->text[text_len] = '\0';
         d->text_len = text_len;
+        d->dirty = 1;
         return d;
     }
 
@@ -284,6 +289,7 @@ LspDoc *lsp_doc_open(const char *uri, size_t uri_len,
         rehash();
 
     LspDoc *d = make_doc(uri, uri_len, text, text_len);
+    d->dirty = 1;
     uint32_t h = fnv1a(uri, uri_len) % (uint32_t)capacity_;
     while (slots_[h].doc) h = (h + 1) % (uint32_t)capacity_;
     slots_[h].doc = d;
@@ -304,6 +310,7 @@ void lsp_doc_change(const char *uri, size_t uri_len,
     memcpy(d->text, text, text_len);
     d->text[text_len] = '\0';
     d->text_len = text_len;
+    d->dirty = 1;
 }
 
 void lsp_doc_close(const char *uri, size_t uri_len) {
@@ -326,4 +333,18 @@ void lsp_docs_iterate(void (*cb)(const LspDoc *doc, void *ctx), void *ctx) {
         if (slots_[i].doc)
             cb(slots_[i].doc, ctx);
     }
+}
+
+void lsp_docs_iterate_mut(void (*cb)(LspDoc *doc, void *ctx), void *ctx) {
+    for (size_t i = 0; i < capacity_; i++) {
+        if (slots_[i].doc)
+            cb(slots_[i].doc, ctx);
+    }
+}
+
+int lsp_docs_any_dirty(void) {
+    for (size_t i = 0; i < capacity_; i++) {
+        if (slots_[i].doc && slots_[i].doc->dirty) return 1;
+    }
+    return 0;
 }

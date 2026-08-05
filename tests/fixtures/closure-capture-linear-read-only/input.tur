@@ -1,0 +1,17 @@
+;; closure-capture-escapes-linearity: the negative control for the narrow rule.
+;;
+;; A closure that only READS a captured ^linear value is safe at any arity, so it
+;; must NOT inherit linearity -- calling it twice is fine, and the capture is
+;; consumed once, later, by the enclosing scope.  A blanket capture-based rule
+;; (the shape TUR-E0500 uses for ^multishot handlers) would reject this and 72
+;; other fixtures with it; only the "consumes" test keeps them working.
+(load "stdlib/str-build.tur")
+(load "stdlib/serial.tur")
+
+(defn main [] : int
+  (let [b (bytes-alloc 8)]
+    (let [len (fn [] : int (bytes-len b))]
+      (println (int->str (len)))
+      (println (int->str (len)))
+      (bytes-free b)))
+  0)

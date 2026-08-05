@@ -1,0 +1,696 @@
+;;; tur/rational -- exact Rational arithmetic over an int64 num/den pair.
+;;;
+;;; A Rational is a normalized `num/den` pair: `den > 0` and
+;;; `gcd(|num|, den) = 1`.  Because every value is normalized at construction,
+;;; structural equality IS mathematical equality -- `(rat/of! 2 4)` and
+;;; `(rat/of! 1 2)` are the same value -- which makes Eq and Hash trivial.
+;;;
+;;; The whole module is ordinary Turmeric with no inline C, so it runs
+;;; byte-identically under the compiler, the tree-walking interpreter, and the
+;;; JIT, and needs no interpreter native overrides.
+;;;
+;;; Arbitrary precision is out of scope: num and den are int64.  The plain
+;;; arithmetic (`rat/add`, and therefore the `Num` instance behind `+`) WRAPS on
+;;; int64 overflow, exactly as `int` arithmetic does.  A program that cares uses
+;;; the `rat/try-*` forms, which return `(Result Rational ArithError)` and
+;;; detect overflow BEFORE it happens.
+;;;
+;;; Since: Phase N1 (numeric-tower-rational-complex-plan)
+(load "stdlib/typeclass.tur")
+
+(load "stdlib/math.tur")
+;;; ArithError -- the failure modes of exact integer/rational arithmetic.
+;;;
+;;; DivByZero -- a zero denominator or a division by the zero rational.
+;;; Overflow  -- an int64 numerator or denominator would not fit.
+;;;
+;;; Since: Phase N1
+
+(defdata ArithError :copy (DivByZero) (Overflow))
+;;; Rational -- an exact num/den pair over int64.
+;;;
+;;; Invariant (maintained by every constructor in this module):
+;;; `den > 0` and `gcd(|num|, den) = 1`.  Construct with `rat/of` or
+;;; `rat/of!`, never with the raw `(Rational n d)` record constructor, which
+;;; does not normalize.
+;;;
+;;; `:copy` -- two plain int64 fields, no owned resource, so a Rational is
+;;; freely copyable and never interacts with the rc/ref/borrow machinery.
+;;;
+;;; Since: Phase N1
+
+(defstruct Rational :copy [num : int den : int])
+;; -- integer helpers ---------------------------------------------------------
+;;; int/abs -- absolute value of an int.
+;;;
+;;; Parameters:
+;;;   x -- the integer
+;;;
+;;; Returns:
+;;;   |x|.  `int/abs` of the int64 minimum is not representable and wraps back
+;;;   to itself, matching two's-complement negation.
+;;;
+;;; Example:
+;;;   (int/abs -7)  ; => 7
+;;;
+;;; Since: Phase N1
+
+(defn int/abs [x : int] : int (if (< x 0) (- 0 x) x))
+;;; int/gcd -- greatest common divisor of two non-negative ints (Euclid).
+;;;
+;;; Parameters:
+;;;   a -- first value, >= 0
+;;;   b -- second value, >= 0
+;;;
+;;; Returns:
+;;;   gcd(a, b); gcd(0, 0) is 0.
+;;;
+;;; Example:
+;;;   (int/gcd 6 8)  ; => 2
+;;;
+;;; Since: Phase N1
+
+(defn int/gcd [a : int b : int] : int (if (= b 0) a (int/gcd b (mod a b))))
+;;; int/max-value -- the largest representable int (2^63 - 1).
+;;;
+;;; Returns:
+;;;   9223372036854775807.
+;;;
+;;; Example:
+;;;   (int/max-value)  ; => 9223372036854775807
+;;;
+;;; Since: Phase N1
+
+(defn int/max-value [] : int 9223372036854775807)
+;;; int/min-value -- the smallest representable int (-2^63).
+;;;
+;;; Returns:
+;;;   -9223372036854775808.  Written as `-(2^63 - 1) - 1` because the literal
+;;;   itself is one past the positive range.
+;;;
+;;; Example:
+;;;   (int/min-value)  ; => -9223372036854775808
+;;;
+;;; Since: Phase N1
+
+(defn int/min-value [] : int (- (- 0 9223372036854775807) 1))
+;;; int/add-overflows? -- would `(+ a b)` leave the int64 range?
+;;;
+;;; Parameters:
+;;;   a -- left addend
+;;;   b -- right addend
+;;;
+;;; Returns:
+;;;   true when the exact sum is outside [int/min-value, int/max-value].
+;;;   The test itself never overflows: each comparison subtracts b from a
+;;;   bound, which stays in range for the sign of b being tested.
+;;;
+;;; Example:
+;;;   (int/add-overflows? (int/max-value) 1)  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn int/add-overflows? [a : int b : int] : bool
+  (if (> b 0)
+    (> a (- (int/max-value) b))
+    (if (< b 0) (< a (- (int/min-value) b)) false)))
+;;; int/sub-overflows? -- would `(- a b)` leave the int64 range?
+;;;
+;;; Parameters:
+;;;   a -- minuend
+;;;   b -- subtrahend
+;;;
+;;; Returns:
+;;;   true when the exact difference is outside the int64 range.
+;;;
+;;; Example:
+;;;   (int/sub-overflows? (int/min-value) 1)  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn int/sub-overflows? [a : int b : int] : bool
+  (if (< b 0)
+    (> a (+ (int/max-value) b))
+    (if (> b 0) (< a (+ (int/min-value) b)) false)))
+;;; int/mul-overflows? -- would `(* a b)` leave the int64 range?
+;;;
+;;; Parameters:
+;;;   a -- left factor
+;;;   b -- right factor
+;;;
+;;; Returns:
+;;;   true when the exact product is outside the int64 range.  The `-1` cases
+;;;   are peeled off first so the remaining tests can divide a bound by a
+;;;   factor without tripping the one division that overflows
+;;;   (`int/min-value / -1`).
+;;;
+;;; Example:
+;;;   (int/mul-overflows? 4294967296 4294967296)  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn int/mul-overflows? [a : int b : int] : bool
+  (if (or (= a 0) (= b 0))
+    false
+    (if (= a -1)
+      (= b (int/min-value))
+      (if (= b -1)
+        (= a (int/min-value))
+        (if (> a 0)
+          (if (> b 0) (> a (/ (int/max-value) b)) (< b (/ (int/min-value) a)))
+          (if (> b 0) (< a (/ (int/min-value) b)) (< b (/ (int/max-value) a))))))))
+;; -- construction ------------------------------------------------------------
+;;; rat/normalize -- build a Rational in lowest terms with a positive denominator.
+;;;
+;;; Parameters:
+;;;   n -- numerator
+;;;   d -- denominator; must be non-zero (callers check first)
+;;;
+;;; Returns:
+;;;   The normalized Rational n/d.
+;;;
+;;; Example:
+;;;   (rat/num (rat/normalize 6 -8))  ; => -3
+;;;
+;;; Since: Phase N1
+
+(defn rat/normalize [n : int d : int] : Rational
+  (let [sn (if (< d 0) (- 0 n) n)
+        sd (if (< d 0) (- 0 d) d)
+        g  (int/gcd (int/abs sn) sd)]
+    (if (= g 0) (Rational 0 1) (Rational (/ sn g) (/ sd g)))))
+;;; rat/of -- construct a Rational, reporting a zero denominator as an error.
+;;;
+;;; Parameters:
+;;;   n -- numerator
+;;;   d -- denominator
+;;;
+;;; Returns:
+;;;   `(ok r)` with r normalized, or `(err (DivByZero))` when d is 0.
+;;;
+;;; Example:
+;;;   (rat/of 6 8)  ; => ok 3/4
+;;;   (rat/of 1 0)  ; => err DivByZero
+;;;
+;;; Since: Phase N1
+
+(defn rat/of [n : int d : int] : (Result Rational ArithError)
+  (if (= d 0) (err (DivByZero)) (ok (rat/normalize n d))))
+;;; rat/of! -- construct a Rational, panicking on a zero denominator.
+;;;
+;;; Parameters:
+;;;   n -- numerator
+;;;   d -- denominator; must not be 0
+;;;
+;;; Returns:
+;;;   The normalized Rational n/d.  Panics when d is 0 -- this is the form
+;;;   `#rat{n/d}` expands to, and the reader rejects a literal zero denominator
+;;;   at read time, so the panic is reachable only from a computed denominator.
+;;;
+;;; Example:
+;;;   (rat/num (rat/of! 6 8))  ; => 3
+;;;
+;;; Since: Phase N1
+
+(defn rat/of! [n : int d : int] : Rational
+  (if (= d 0)
+    (do (panic "rat/of!: zero denominator") (Rational 0 1))
+    (rat/normalize n d)))
+;;; rat/from-int -- the Rational n/1.
+;;;
+;;; Parameters:
+;;;   n -- the integer
+;;;
+;;; Returns:
+;;;   n as an exact Rational.
+;;;
+;;; Example:
+;;;   (rat/den (rat/from-int 5))  ; => 1
+;;;
+;;; Since: Phase N1
+
+(defn rat/from-int [n : int] : Rational (Rational n 1))
+;;; rat/zero -- the Rational 0/1.
+;;;
+;;; Returns:
+;;;   0 as an exact Rational.
+;;;
+;;; Example:
+;;;   (rat/num (rat/zero))  ; => 0
+;;;
+;;; Since: Phase N1
+
+(defn rat/zero [] : Rational (Rational 0 1))
+;;; rat/one -- the Rational 1/1.
+;;;
+;;; Returns:
+;;;   1 as an exact Rational.
+;;;
+;;; Example:
+;;;   (rat/num (rat/one))  ; => 1
+;;;
+;;; Since: Phase N1
+
+(defn rat/one [] : Rational (Rational 1 1))
+;; -- accessors ---------------------------------------------------------------
+;;; rat/num -- the numerator (carries the sign).
+;;;
+;;; Parameters:
+;;;   r -- a Rational
+;;;
+;;; Returns:
+;;;   The numerator.
+;;;
+;;; Example:
+;;;   (rat/num (rat/of! -6 8))  ; => -3
+;;;
+;;; Since: Phase N1
+
+(defn rat/num [r : Rational] : int (.num r))
+;;; rat/den -- the denominator (always positive).
+;;;
+;;; Parameters:
+;;;   r -- a Rational
+;;;
+;;; Returns:
+;;;   The denominator.
+;;;
+;;; Example:
+;;;   (rat/den (rat/of! -6 8))  ; => 4
+;;;
+;;; Since: Phase N1
+
+(defn rat/den [r : Rational] : int (.den r))
+;;; rat/zero? -- is this the rational 0?
+;;;
+;;; Parameters:
+;;;   r -- a Rational
+;;;
+;;; Returns:
+;;;   true when the numerator is 0.
+;;;
+;;; Example:
+;;;   (rat/zero? (rat/of! 0 5))  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn rat/zero? [r : Rational] : bool (= (.num r) 0))
+;;; rat/integer? -- does this rational denote a whole number?
+;;;
+;;; Parameters:
+;;;   r -- a Rational
+;;;
+;;; Returns:
+;;;   true when the (normalized) denominator is 1.
+;;;
+;;; Example:
+;;;   (rat/integer? (rat/of! 6 3))  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn rat/integer? [r : Rational] : bool (= (.den r) 1))
+;; -- arithmetic (wrapping) ---------------------------------------------------
+;;; rat/add -- exact sum of two rationals.
+;;;
+;;; Parameters:
+;;;   x -- left addend
+;;;   y -- right addend
+;;;
+;;; Returns:
+;;;   The normalized sum.  Cross-cancels by `g = gcd(b, d)` first and computes
+;;;   `(a*(d/g) + c*(b/g)) / (b*(d/g))`, which keeps the common case in int64
+;;;   range far longer than the naive `(a*d + c*b) / (b*d)`.  Wraps on int64
+;;;   overflow; use `rat/try-add` to detect it.
+;;;
+;;; Example:
+;;;   (rat/den (rat/add (rat/of! 1 3) (rat/of! 1 6)))  ; => 2
+;;;
+;;; Since: Phase N1
+
+(defn rat/add [x : Rational y : Rational] : Rational
+  (let [a  (.num x)
+        b  (.den x)
+        c  (.num y)
+        d  (.den y)
+        g  (int/gcd b d)
+        db (/ d g)
+        bb (/ b g)]
+    (rat/normalize (+ (* a db) (* c bb)) (* b db))))
+;;; rat/neg -- negate a rational.
+;;;
+;;; Parameters:
+;;;   x -- a Rational
+;;;
+;;; Returns:
+;;;   -x, still normalized (the denominator is untouched).
+;;;
+;;; Example:
+;;;   (rat/num (rat/neg (rat/of! 3 4)))  ; => -3
+;;;
+;;; Since: Phase N1
+
+(defn rat/neg [x : Rational] : Rational (Rational (- 0 (.num x)) (.den x)))
+;;; rat/sub -- exact difference of two rationals.
+;;;
+;;; Parameters:
+;;;   x -- minuend
+;;;   y -- subtrahend
+;;;
+;;; Returns:
+;;;   The normalized difference.  Wraps on int64 overflow.
+;;;
+;;; Example:
+;;;   (rat/num (rat/sub (rat/of! 1 2) (rat/of! 1 6)))  ; => 1
+;;;
+;;; Since: Phase N1
+
+(defn rat/sub [x : Rational y : Rational] : Rational (rat/add x (rat/neg y)))
+;;; rat/mul -- exact product of two rationals.
+;;;
+;;; Parameters:
+;;;   x -- left factor
+;;;   y -- right factor
+;;;
+;;; Returns:
+;;;   The normalized product.  Cross-cancels each numerator against the OTHER
+;;;   denominator before multiplying, so the intermediates stay small.  Wraps on
+;;;   int64 overflow; use `rat/try-mul` to detect it.
+;;;
+;;; Example:
+;;;   (rat/num (rat/mul (rat/of! 2 3) (rat/of! 3 4)))  ; => 1
+;;;
+;;; Since: Phase N1
+
+(defn rat/mul [x : Rational y : Rational] : Rational
+  (let [a  (.num x)
+        b  (.den x)
+        c  (.num y)
+        d  (.den y)
+        g1 (int/gcd (int/abs a) d)
+        g2 (int/gcd (int/abs c) b)]
+    (if (or (= g1 0) (= g2 0))
+      (Rational 0 1)
+      (rat/normalize (* (/ a g1) (/ c g2)) (* (/ b g2) (/ d g1))))))
+;;; rat/div -- exact quotient of two rationals; panics on a zero divisor.
+;;;
+;;; Parameters:
+;;;   x -- dividend
+;;;   y -- divisor; must not be the zero rational
+;;;
+;;; Returns:
+;;;   The normalized quotient.  Panics when y is 0 -- use `rat/try-div` for the
+;;;   checked form.  Wraps on int64 overflow.
+;;;
+;;; Example:
+;;;   (rat/num (rat/div (rat/of! 1 2) (rat/of! 3 4)))  ; => 2
+;;;
+;;; Since: Phase N1
+
+(defn rat/div [x : Rational y : Rational] : Rational
+  (if (rat/zero? y)
+    (do (panic "rat/div: division by the zero rational") (Rational 0 1))
+    (rat/mul x (Rational (.den y) (.num y)))))
+;;; rat/recip -- the reciprocal; panics on the zero rational.
+;;;
+;;; Parameters:
+;;;   x -- a non-zero Rational
+;;;
+;;; Returns:
+;;;   1/x, normalized (the sign moves back to the numerator).
+;;;
+;;; Example:
+;;;   (rat/num (rat/recip (rat/of! -3 4)))  ; => -4
+;;;
+;;; Since: Phase N1
+
+(defn rat/recip [x : Rational] : Rational
+  (if (rat/zero? x)
+    (do (panic "rat/recip: reciprocal of the zero rational") (Rational 0 1))
+    (rat/normalize (.den x) (.num x))))
+;; -- checked arithmetic ------------------------------------------------------
+;;; rat/try-add -- checked sum; `Err Overflow` instead of wrapping.
+;;;
+;;; Parameters:
+;;;   x -- left addend
+;;;   y -- right addend
+;;;
+;;; Returns:
+;;;   `(ok (rat/add x y))`, or `(err (Overflow))` when any intermediate of the
+;;;   cross-cancelled formula would leave the int64 range.
+;;;
+;;; Example:
+;;;   (rat/try-add (rat/of! 1 3) (rat/of! 1 6))  ; => ok 1/2
+;;;
+;;; Since: Phase N1
+
+(defn rat/try-add [x : Rational y : Rational] : (Result Rational ArithError)
+  (let [a  (.num x)
+        b  (.den x)
+        c  (.num y)
+        d  (.den y)
+        g  (int/gcd b d)
+        db (/ d g)
+        bb (/ b g)]
+    (if (or (int/mul-overflows? a db)
+          (or (int/mul-overflows? c bb) (int/mul-overflows? b db)))
+      (err (Overflow))
+      (if (int/add-overflows? (* a db) (* c bb))
+        (err (Overflow))
+        (ok (rat/normalize (+ (* a db) (* c bb)) (* b db)))))))
+;;; rat/try-sub -- checked difference; `Err Overflow` instead of wrapping.
+;;;
+;;; Parameters:
+;;;   x -- minuend
+;;;   y -- subtrahend
+;;;
+;;; Returns:
+;;;   `(ok (rat/sub x y))`, or `(err (Overflow))`.  Negating the subtrahend is
+;;;   itself checked: the int64 minimum has no positive counterpart.
+;;;
+;;; Example:
+;;;   (rat/try-sub (rat/of! 1 2) (rat/of! 1 6))  ; => ok 1/3
+;;;
+;;; Since: Phase N1
+
+(defn rat/try-sub [x : Rational y : Rational] : (Result Rational ArithError)
+  (if (= (.num y) (int/min-value)) (err (Overflow)) (rat/try-add x (rat/neg y))))
+;;; rat/try-mul -- checked product; `Err Overflow` instead of wrapping.
+;;;
+;;; Parameters:
+;;;   x -- left factor
+;;;   y -- right factor
+;;;
+;;; Returns:
+;;;   `(ok (rat/mul x y))`, or `(err (Overflow))` when either cross-cancelled
+;;;   product would leave the int64 range.
+;;;
+;;; Example:
+;;;   (rat/try-mul (rat/of! 2 3) (rat/of! 3 4))  ; => ok 1/2
+;;;
+;;; Since: Phase N1
+
+(defn rat/try-mul [x : Rational y : Rational] : (Result Rational ArithError)
+  (let [a  (.num x)
+        b  (.den x)
+        c  (.num y)
+        d  (.den y)
+        g1 (int/gcd (int/abs a) d)
+        g2 (int/gcd (int/abs c) b)]
+    (if (or (= g1 0) (= g2 0))
+      (ok (Rational 0 1))
+      (let [na (/ a g1)
+            nc (/ c g2)
+            nb (/ b g2)
+            nd (/ d g1)]
+        (if (or (int/mul-overflows? na nc) (int/mul-overflows? nb nd))
+          (err (Overflow))
+          (ok (rat/normalize (* na nc) (* nb nd))))))))
+;;; rat/try-div -- checked quotient; `Err DivByZero` / `Err Overflow`.
+;;;
+;;; Parameters:
+;;;   x -- dividend
+;;;   y -- divisor
+;;;
+;;; Returns:
+;;;   `(err (DivByZero))` when y is the zero rational, `(err (Overflow))` when
+;;;   the product would leave the int64 range, else `(ok (rat/div x y))`.
+;;;
+;;; Example:
+;;;   (rat/try-div (rat/of! 1 2) (rat/of! 0 1))  ; => err DivByZero
+;;;
+;;; Since: Phase N1
+
+(defn rat/try-div [x : Rational y : Rational] : (Result Rational ArithError)
+  (if (rat/zero? y)
+    (err (DivByZero))
+    (if (= (.num y) (int/min-value))
+      (err (Overflow))
+      (rat/try-mul x (rat/normalize (.den y) (.num y))))))
+;; -- comparison --------------------------------------------------------------
+;;; rat/eq? -- exact equality of two rationals.
+;;;
+;;; Parameters:
+;;;   x -- left value
+;;;   y -- right value
+;;;
+;;; Returns:
+;;;   true when the two denote the same number.  Both are normalized, so this
+;;;   is plain structural equality.
+;;;
+;;; Example:
+;;;   (rat/eq? (rat/of! 2 4) (rat/of! 1 2))  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn rat/eq? [x : Rational y : Rational] : bool
+  (and (= (.num x) (.num y)) (= (.den x) (.den y))))
+;;; rat/cmp -- three-way comparison of two rationals.
+;;;
+;;; Parameters:
+;;;   x -- left value
+;;;   y -- right value
+;;;
+;;; Returns:
+;;;   -1 when x < y, 0 when equal, 1 when x > y.  Compares `a*(d/g)` against
+;;;   `c*(b/g)` for `g = gcd(b, d)`, so the cross-products stay small; both
+;;;   denominators are positive, so the comparison direction is preserved.
+;;;
+;;; Example:
+;;;   (rat/cmp (rat/of! 1 3) (rat/of! 1 2))  ; => -1
+;;;
+;;; Since: Phase N1
+
+(defn rat/cmp [x : Rational y : Rational] : int
+  (let [g   (int/gcd (.den x) (.den y))
+        lhs (* (.num x) (/ (.den y) g))
+        rhs (* (.num y) (/ (.den x) g))]
+    (if (< lhs rhs) -1 (if (> lhs rhs) 1 0))))
+;;; rat/lt? -- is x strictly less than y?
+;;;
+;;; Parameters:
+;;;   x -- left value
+;;;   y -- right value
+;;;
+;;; Returns:
+;;;   true when x < y.
+;;;
+;;; Example:
+;;;   (rat/lt? (rat/of! 1 3) (rat/of! 1 2))  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn rat/lt? [x : Rational y : Rational] : bool (< (rat/cmp x y) 0))
+;;; rat/lte? -- is x less than or equal to y?
+;;;
+;;; Parameters:
+;;;   x -- left value
+;;;   y -- right value
+;;;
+;;; Returns:
+;;;   true when x <= y.
+;;;
+;;; Example:
+;;;   (rat/lte? (rat/of! 1 2) (rat/of! 1 2))  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn rat/lte? [x : Rational y : Rational] : bool (<= (rat/cmp x y) 0))
+;;; rat/gt? -- is x strictly greater than y?
+;;;
+;;; Parameters:
+;;;   x -- left value
+;;;   y -- right value
+;;;
+;;; Returns:
+;;;   true when x > y.
+;;;
+;;; Example:
+;;;   (rat/gt? (rat/of! 1 2) (rat/of! 1 3))  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn rat/gt? [x : Rational y : Rational] : bool (> (rat/cmp x y) 0))
+;;; rat/gte? -- is x greater than or equal to y?
+;;;
+;;; Parameters:
+;;;   x -- left value
+;;;   y -- right value
+;;;
+;;; Returns:
+;;;   true when x >= y.
+;;;
+;;; Example:
+;;;   (rat/gte? (rat/of! 1 2) (rat/of! 1 2))  ; => true
+;;;
+;;; Since: Phase N1
+
+(defn rat/gte? [x : Rational y : Rational] : bool (>= (rat/cmp x y) 0))
+;; -- conversion / printing ---------------------------------------------------
+;;; rat->float -- the nearest float to this rational.
+;;;
+;;; Parameters:
+;;;   r -- a Rational
+;;;
+;;; Returns:
+;;;   `num / den` as a double.  Inexact by construction -- this is the lossy
+;;;   direction out of the exact tower.
+;;;
+;;; Example:
+;;;   (rat->float (rat/of! 1 4))  ; => 0.25
+;;;
+;;; Since: Phase N1
+
+(defn rat->float [r : Rational] : float
+  (/ (int->float (.num r)) (int->float (.den r))))
+;;; rat->string -- render a Rational as "3/4", "-3/4", or "5".
+;;;
+;;; Parameters:
+;;;   r -- a Rational
+;;;
+;;; Returns:
+;;;   A fresh owned String.  A whole number prints without a denominator; every
+;;;   other value round-trips through the `#rat{...}` literal.
+;;;
+;;; Example:
+;;;   (rat->string (rat/of! 6 8))  ; => String "3/4"
+;;;
+;;; Since: Phase N1
+
+(defn rat->string [r : Rational] : String
+  (if (= (.den r) 1)
+    (int->string (.num r))
+    (let [b (builder/new)
+          n (int->string (.num r))
+          d (int->string (.den r))]
+      (do
+        (builder/push-string! b n)
+        (string/release n)
+        (builder/push-cstr! b "/")
+        (builder/push-string! b d)
+        (string/release d)
+        (builder/finish b)))))
+;; -- typeclass instances -----------------------------------------------------
+;;; Num [Rational] -- exact rational arithmetic behind + - * /.
+
+(definstance Num [Rational]
+  (add [x y] (rat/add x y))
+  (sub [x y] (rat/sub x y))
+  (mul [x y] (rat/mul x y))
+  (div [x y] (rat/div x y))
+  (neg [x] (rat/neg x)))
+;;; Eq [Rational] -- structural equality, which normalization makes exact.
+
+(definstance Eq [Rational] (eq? [x y] (rat/eq? x y)))
+;;; Ord [Rational] -- total order via the cross-cancelled cross-product.
+
+(definstance Ord [Rational]
+  (lt? [x y] (rat/lt? x y))
+  (lte? [x y] (rat/lte? x y))
+  (gt? [x y] (rat/gt? x y))
+  (gte? [x y] (rat/gte? x y)))
+;;; Hash [Rational] -- mixes the normalized numerator and denominator.
+
+(definstance Hash [Rational] (hash [x] (+ (* (.num x) 31) (.den x))))
+;;; Show [Rational] -- "3/4" / "-3/4" / "5"; round-trips through #rat{...}.
+
+(definstance Show [Rational] (show [x] (rat->string x)))

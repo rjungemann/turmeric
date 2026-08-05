@@ -1,0 +1,25 @@
+;; C2 (#reads): a measure declared `#reads w` is congruent inside a frozen
+;; region (a live `(& w)` borrow), so a guard discharges the crossing it
+;; protects. Under --strict-refine this compiles ONLY because the obligation
+;; proves; before C2 the impure `alive?` gave a fresh symbol per occurrence and
+;; the guard could not discharge. See docs/guides/stateful-refinements-guide.md.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 42)]
+    (let [__frz (& w)]                 ;; frozen region: w borrowed
+      (if (alive? w 0)
+        (get-Pos! w 0)                 ;; discharges from the guard
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

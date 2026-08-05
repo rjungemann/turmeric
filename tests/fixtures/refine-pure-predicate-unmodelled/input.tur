@@ -1,0 +1,37 @@
+;; The other half of the TUR-E0375 rule: a predicate is diagnosed only when it
+;; is PROVEN effectful, never when the purity walk merely cannot model it.
+;;
+;; `area-ish` is pure, and its body is a `match` -- a form the walk does not
+;; understand. The congruence question and the diagnostic question want
+;; opposite conservatism here:
+;;
+;;   congruence  "may two occurrences be the same value?"  yes-when-wrong
+;;               elides a real check, so unknown must read as impure.
+;;   diagnostic  "does evaluating this DO something?"      yes-when-wrong
+;;               rejects working code, so unknown must read as pure.
+;;
+;; They are not negations of each other. Driving the diagnostic off the
+;; default-deny purity test would reject this file. That is why the classifier
+;; is three-valued: PURE / IMPURE / UNKNOWN, with each caller reading UNKNOWN
+;; its own way.
+;;
+;; So this compiles and runs, while its refinement still falls back to a
+;; runtime check rather than being proved from an unmodelled body.
+(defdata Shape :copy
+  (Circle [r : int])
+  (Square [s : int]))
+
+(defn area-ish [x : Shape] : int
+  (match x
+    (Circle r) (* r r)
+    (Square s) (* s s)))
+
+(defn target [x : Shape] : int
+  :post (>= (area-ish x) 0)
+  (area-ish x))
+
+(defn main [] : int
+  (println (target (Circle 3)))
+  (println (target (Square 4)))
+  (println "refine-pure-predicate-unmodelled")
+  0)

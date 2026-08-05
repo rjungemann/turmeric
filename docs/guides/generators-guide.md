@@ -167,7 +167,7 @@ Workaround -- unroll the recursion into an explicit loop:
 ```
 
 Both limitations are tracked in Phase CF5 of
-[control-flow-completeness-plan.md](../control-flow-completeness-plan.md)
+[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md)
 and require the post-1.0 CPS pass to lift.
 
 ### Generated C

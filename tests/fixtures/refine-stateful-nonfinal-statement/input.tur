@@ -1,0 +1,25 @@
+;; A guarded #reads crossing in a NON-FINAL statement of a multi-form function
+;; body discharges. Before the whole-body caller_body fix, `cs->caller_body` was
+;; only the RETURN subject (the last body form), so a crossing in an earlier
+;; statement was absent from it -- rt_form_occurrences reported 0 and the guard
+;; was dropped, giving a spurious `0 proven, 1 unknown` (TUR-W0372 under strict)
+;; even though the identical crossing as the SOLE/return form proved. `main` here
+;; has two body forms: the `(let ...)` statement (which holds the crossing) and a
+;; trailing `0` return. Under --strict-refine this compiles + prints 42 only
+;; because the crossing discharges.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn main [] : int
+  (let [^mut w (World 42)]
+    (let [__frz (& w)]
+      (println (if (alive? w 0)
+                 (get-Pos! w 0)          ;; crossing in a NON-FINAL statement
+                 -1))))
+  0)

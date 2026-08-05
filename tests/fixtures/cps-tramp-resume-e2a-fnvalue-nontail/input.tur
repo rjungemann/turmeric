@@ -1,0 +1,15 @@
+;; E2a tier-`nontail`: an effectful fn-value called in NON-TAIL position -- its result
+;; feeds `{(f) * 2} + base`, so the continuation runs AFTER the call.  Under
+;; --enable=cps-tramp-resume the call threads the DK by reifying that continuation as
+;; a heap-join frame threaded to the fn-value's __cps (via the registry).  Handler in
+;; the helper `run`.  Ask resumes with 10, so (10 * 2) + 7 = 27.
+(defeffect Ask [] :int)
+
+(defn apply-cb [f : (fn [] #fx{Ask} int) base : int] #fx{Ask} : int
+  {{(f) * 2} + base})
+
+(defn run [] : int
+  (handle (apply-cb (fn [] (perform (Ask))) 7)
+    (Ask [] k) (resume k 10)))
+
+(defn main [] : int (do (println (run)) 0))

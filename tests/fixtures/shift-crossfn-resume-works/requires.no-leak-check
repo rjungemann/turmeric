@@ -1,6 +1,0 @@
-Cross-function shift now emits natively (DK): the __Shift receiver's continuation
-is bridge-wrapped as a tur_cloneable_cont and resumed via tur_continuation_snapshot,
-which snapshots (clones the DK chain) per resume without freeing the snapshot -- the
-same snapshot-not-freed leak the fiber path had (this native path leaks far less).
-Memory-safe (no UAF/double-free/UB); leak-cleanup is a tracked follow-up
-(docs/reported/cps-resume-frame-node-leak.md).

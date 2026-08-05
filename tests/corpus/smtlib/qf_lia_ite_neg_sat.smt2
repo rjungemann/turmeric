@@ -1,0 +1,6 @@
+(set-logic QF_LIA)
+(set-info :status sat)
+(declare-fun x () Int)
+(assert (> x 0))
+(assert (not (= (ite (> x 0) 5 7) 7)))
+(check-sat)

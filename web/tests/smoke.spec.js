@@ -82,6 +82,58 @@ test.describe('Try Turmeric smoke tests', () => {
         await expect(page.locator('#console')).toContainText('42', { timeout: 10_000 });
     });
 
+    test('Run invokes a top-level main entry point', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForReady(page);
+
+        // A program that defines `main` should have it invoked (like `tur run`),
+        // showing its computed value -- not the bare `#<fn main>` closure.
+        await setCode(page, '(defn main [] :int (+ 1 1))');
+        await page.click('#run-btn');
+        await expect(page.locator('#console')).toContainText('2', { timeout: 10_000 });
+        await expect(page.locator('#console')).not.toContainText('#<fn main>');
+    });
+
+    test('Run invokes main and shows its printed output', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForReady(page);
+
+        await setCode(page, '(defn main [] :int\n  (println "from main")\n  0)');
+        await page.click('#run-btn');
+        await expect(page.locator('#console')).toContainText('from main', { timeout: 10_000 });
+        await expect(page.locator('#console')).not.toContainText('#<fn main>');
+    });
+
+    test('Force update clears caches and reloads', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForReady(page);
+
+        // Stub the destructive bits so the test observes intent without actually
+        // unregistering the SW or navigating away.
+        await page.evaluate(() => {
+            window.__cachesDeleted = [];
+            window.__reloaded = false;
+            if (window.caches) {
+                caches.keys = async () => ['stale-cache'];
+                caches.delete = async (k) => { window.__cachesDeleted.push(k); return true; };
+            }
+            if (navigator.serviceWorker) {
+                navigator.serviceWorker.getRegistrations = async () => [];
+            }
+            // reload is non-configurable on some engines; override via defineProperty.
+            Object.defineProperty(window.location, 'reload', {
+                configurable: true,
+                value: () => { window.__reloaded = true; },
+            });
+        });
+
+        await page.locator('#more-btn').click();
+        await page.locator('.more-item[data-action="force-update"]').click();
+
+        await expect.poll(() => page.evaluate(() => window.__reloaded)).toBe(true);
+        expect(await page.evaluate(() => window.__cachesDeleted)).toContain('stale-cache');
+    });
+
     test('REPL history navigates with arrow keys', async ({ page }) => {
         await page.goto('/try/');
         await waitForReady(page);

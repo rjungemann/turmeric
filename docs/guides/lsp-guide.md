@@ -25,11 +25,66 @@ Editors launch it as a subprocess and communicate via stdin/stdout.
 | Workspace symbols (`workspace/symbol`) | Supported (open documents only) |
 | Hover documentation | Supported |
 | Go-to-definition | Supported |
-| Completion | Not yet supported |
+| Completion (`textDocument/completion`) | Supported |
+| Signature help (`textDocument/signatureHelp`) | Supported |
+| Formatting (`textDocument/formatting`) | Supported |
+| Cancellation (`$/cancelRequest`) | Supported |
+| Semantic tokens | Not supported |
 
 When you open or edit a `.tur` file, the server compiles it in check-only mode
 and publishes any parse or type errors back to the editor as diagnostics
 (red underlines, error panel entries, etc.).
+
+Behaviours worth knowing about:
+
+- **Analysis is debounced.** Compiling is not free and runs on the same thread
+  that serves requests, so a changed file is not analyzed until the editor has
+  been quiet for ~200ms. Requests that need symbols (hover, completion,
+  definition, document symbols) force any pending analysis to run first, so
+  this delays diagnostics slightly but never returns a stale answer.
+- **Positions are byte offsets.** The server advertises
+  `"positionEncoding": "utf-8"` (LSP 3.17), so `character` in a `Position`
+  counts UTF-8 bytes rather than the UTF-16 code units the specification
+  defaults to. Clients that honour the negotiated encoding need no special
+  handling; a client that assumes UTF-16 regardless will be off on lines
+  containing non-ASCII.
+- **Completion degrades in two tiers, never to nothing.** Completion, hover,
+  and go-to-definition are driven by the symbols a compile produced. A buffer
+  that does not parse -- one with an unclosed paren, which is the normal state
+  mid-keystroke -- produces none, so the server falls back rather than
+  answering with an empty list. If the document has *ever* parsed
+  successfully, the last good index is retained and served until a compile
+  yields a new one; a few stale entries are far more useful than nothing, and
+  the index changes much more slowly than the text does. If it has never
+  parsed -- opening a file that already contains a syntax error -- there is no
+  last-good index, so the server serves a process-wide stdlib-only fallback
+  instead. That cache is primed lazily from an empty buffer (the stdlib is
+  auto-loaded, so an empty file alone yields the whole surface), costs roughly
+  8ms once per process, and its membership is a path-prefix test against
+  `TUR_STDLIB_DIR`. It deliberately carries no document-local symbols: while
+  the file does not parse, what the document itself declares cannot be known.
+- **Completion returns a `CompletionList`**, with `isIncomplete` set when the
+  200-item cap truncated the result. Items are prefix-filtered against what has
+  been typed before the cursor, and the document's own definitions are emitted
+  ahead of stdlib symbols so they are never the ones the cap drops.
+- **Cancellation has a real window.** The server is single-threaded, so a
+  `$/cancelRequest` is honoured if it arrives while the request it names is
+  waiting on analysis — the expensive step. A cancel for a request already
+  answered is ignored, as the specification requires. Cancelled requests are
+  answered with error code `-32800`.
+- **Hover honours `contentFormat`.** A client that advertises only
+  `plaintext` in `capabilities.textDocument.hover.contentFormat` gets
+  unfenced text instead of markdown it would have to strip itself.
+- **Formatting runs in-process.** `textDocument/formatting` returns a single
+  full-document `TextEdit` produced by the same code as `tur fmt`, so there is
+  no need to shell out to the binary. `FormattingOptions.tabSize` and
+  `insertSpaces` are ignored: the formatter is not configurable (two-space
+  indent, 80 columns), and honouring the request halfway would produce output
+  that `tur fmt --check` then rejects. A buffer that does not parse yields
+  `null` — "no edits" — rather than an error.
+- **Unsaved buffers work.** Analysis routes the buffer through a temp file, so
+  a document with an `untitled:` URI and no filesystem path still gets
+  diagnostics, symbols, completion, and formatting.
 
 ## Editor configuration
 
@@ -160,8 +215,10 @@ extension:
 }
 ```
 
-Native VS Code LSP support (using `vscode-languageclient` inside the Turmeric
-extension) is planned for a future phase.
+The bundled extension in `vscode-syntax-ext/` already speaks LSP natively via
+`vscode-languageclient`, spawning `tur lsp` over stdio; the `turmeric.serverPath`
+setting overrides which `tur` it uses. The multi-lsp recipe above is only needed
+if you would rather drive the server yourself.
 
 ### Emacs (eglot)
 
@@ -240,12 +297,20 @@ manually or rely on generic highlighting.
 
 When a `.tur` file is opened or modified, the server:
 
-1. Writes the current buffer text to a temporary file under `/tmp/`.
+1. Writes the current buffer text to a temporary file in the platform temp
+   directory (`$TMPDIR` on Unix, `%TMP%`/`%TEMP%` on Windows).
 2. Runs the Turmeric compiler in type-check-only mode (`tur_check_only`).
 3. Collects all diagnostics via the internal `diag_lsp_*` API.
 4. Remaps temp-file paths back to the real document URI.
-5. Sends a `textDocument/publishDiagnostics` notification to the editor.
-6. Deletes the temporary file.
+5. Adopts the collected symbols as the document's index — unless the compile
+   produced none *and* failed, in which case the previous index is kept (see
+   "the last good symbol index is retained" above).
+6. Sends a `textDocument/publishDiagnostics` notification to the editor.
+7. Deletes the temporary file.
+
+Diagnostics whose span is zero-width are widened by one character before they
+go out. A zero-width range paints nothing, so the diagnostic would be present
+in the response but invisible in the editor.
 
 The server uses `TextDocumentSyncKind.Full` (sync kind 1): the entire file
 content is sent on every change, not just diffs. This keeps the implementation

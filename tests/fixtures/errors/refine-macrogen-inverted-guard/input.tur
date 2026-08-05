@@ -1,0 +1,24 @@
+;; A macro-generated guard in the WRONG branch must not prove: the template
+;; puts the user's read in the ELSE branch, so the path condition is
+;; (not (alive? w e)) -- walking INTO the expansion must collect the same
+;; negation a written if contributes, keeping the read TUR-W0372.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defmacro guard-inverted [w e body]
+  `(if (alive? ~w ~e) -1 ~body))
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [__f (& w)]
+      (guard-inverted w 0 (get! w 0)))))
+
+(defn main [] : int
+  (println (run))
+  0)

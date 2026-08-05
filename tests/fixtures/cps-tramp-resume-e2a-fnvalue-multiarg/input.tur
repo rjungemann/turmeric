@@ -1,0 +1,14 @@
+;; E2a (tier-`now`, multi-arg): a two-argument effectful lambda threaded onto the DK
+;; through a HOF whose param is called in tail position.  Confirms the registry
+;; threading + the fn-value-arg admission (E2a-pass) generalize past a single arg.
+(defeffect Emit [n :int] :nil)
+
+(defn apply2 [f :(fn [int int] #fx{Emit} nil) a : int b : int] #fx{Emit} : nil
+  (f a b))
+
+(defn run [] : nil
+  (handle
+    (apply2 (fn [x y] (perform (Emit (+ x y)))) 10 32)
+    (Emit [n] k) (do (println n) (resume k nil))))
+
+(defn main [] : int (do (run) 0))

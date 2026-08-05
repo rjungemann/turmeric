@@ -1,0 +1,65 @@
+;;; tur/term-string -- owned String siblings for the tur/term ANSI colorizers.
+;;;
+;;; Each term/{bold,dim,red,green,yellow,blue,cyan} returns a freshly-allocated
+;;; cstr the caller must free -- a strdup of the input on a non-tty, or a fresh
+;;; malloc+snprintf with the ANSI escapes on a tty. Either way the result is a
+;;; borrowed-typed owned buffer, the exact hazard the owned String type fixes
+;;; (see string-adoption-stdlib-plan.md). This opt-in module returns each as an
+;;; owned String; the owned return removes the free-obligation even though these
+;;; usually feed println immediately.
+;;;
+;;; Separate module so the lean tur/term stays free of the map/typeclass
+;;; dependency; only programs wanting owned colorized Strings load this.
+;;;
+;;; Note: the colorizers are inline-C, so like tur/term itself this runs on the
+;;; compiled path; use the underlying term/* cstr forms under --interpret.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 3)
+(load "stdlib/term.tur")
+
+(load "stdlib/string.tur")
+;;; term/bold-string -- wrap a string in ANSI bold codes, as an owned String.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr to colorize
+;;;
+;;; Returns:
+;;;   An owned String with ANSI bold (on a tty) or a plain copy (non-tty).
+;;;
+;;; Example:
+;;;   (string/to-cstr (term/bold-string "hi"))  ; => "\x1b[1mhi\x1b[0m" (on a tty)
+;;;
+;;; Since: v2
+
+(defn term/bold-string [s : cstr] : String (string/adopt-cstr (term/bold s)))
+;;; term/dim-string -- wrap a string in ANSI dim codes, as an owned String.
+;;;
+;;; Since: v2
+
+(defn term/dim-string [s : cstr] : String (string/adopt-cstr (term/dim s)))
+;;; term/red-string -- wrap a string in ANSI red codes, as an owned String.
+;;;
+;;; Since: v2
+
+(defn term/red-string [s : cstr] : String (string/adopt-cstr (term/red s)))
+;;; term/green-string -- wrap a string in ANSI green codes, as an owned String.
+;;;
+;;; Since: v2
+
+(defn term/green-string [s : cstr] : String (string/adopt-cstr (term/green s)))
+;;; term/yellow-string -- wrap a string in ANSI yellow codes, as an owned String.
+;;;
+;;; Since: v2
+
+(defn term/yellow-string [s : cstr] : String
+  (string/adopt-cstr (term/yellow s)))
+;;; term/blue-string -- wrap a string in ANSI blue codes, as an owned String.
+;;;
+;;; Since: v2
+
+(defn term/blue-string [s : cstr] : String (string/adopt-cstr (term/blue s)))
+;;; term/cyan-string -- wrap a string in ANSI cyan codes, as an owned String.
+;;;
+;;; Since: v2
+
+(defn term/cyan-string [s : cstr] : String (string/adopt-cstr (term/cyan s)))

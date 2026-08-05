@@ -9,6 +9,9 @@ A web-based REPL for the [Turmeric programming language](https://github.com/turm
 - **Interactive Console** - ANSI-colored output with execution history
 - **Code Examples** - Pre-loaded examples covering key language features
 - **URL Sharing** - Share your code via compressed URL hash
+- **Editor intelligence** - Diagnostics, completion, hover, signature help,
+  go-to-definition, and document symbols, served by the real `tur lsp` running
+  in a WebAssembly worker
 - **Tutorial System** - Guided learning with interactive tutorials (CLI only for now)
 - **Responsive Design** - Works on desktop and mobile devices
 
@@ -64,8 +67,11 @@ web/
 ├── examples.js         # Example code snippets
 ├── package.json        # Node dependencies
 ├── vite.config.js      # Vite build configuration
+├── lsp-client.js       # Monaco adapter for the language server
 └── public/
-    └── turmeric.js      # Compiled WASM module (generated)
+    ├── turmeric.js      # Compiled WASM module (generated)
+    ├── eval-worker.js   # Worker hosting the interpreter
+    └── lsp-worker.js    # Worker hosting the language server
 ```
 
 ## Configuration
@@ -115,6 +121,41 @@ The WASM module exposes the following functions:
 - `turi_wasm_eval(input)` - Evaluate code and return result as string
 - `turi_wasm_eval_ex(input, out_result, out_error)` - Evaluate with separate result/error
 - `turi_wasm_version()` - Get version string
+- `turi_wasm_lsp_request(json)` - Feed one JSON-RPC message to the language
+  server; returns a JSON array of the messages it produced
+- `turi_wasm_lsp_flush()` - Analyze documents with pending edits
+- `turi_wasm_lsp_reset()` - Drop every open document and start a fresh session
+
+### Language server
+
+The playground runs the same `tur lsp` the native editors use. No language
+intelligence is implemented in JavaScript; `lsp-client.js` translates between
+Monaco's provider APIs and JSON-RPC, and that is all it does.
+
+It lives in its own worker with its own WASM instance, separate from the
+evaluator. Analysis and evaluation must not queue behind each other -- a
+three-second loop should not block completion -- and `turi_wasm_reset` tears
+the eval environment back to prelude, which a server sharing that instance
+would notice. Instantiation is lazy, on first editor focus: it is the same
+`/turmeric.js` URL so it is a cache hit rather than a second download, but the
+memory is real and a visitor who only reads code should not pay for it.
+
+Every open tab is an open document, which is what makes `workspace/symbol` and
+cross-tab go-to-definition work here without the filesystem crawl a native
+client needs.
+
+**If the server does not come up** -- an old cached `turmeric.wasm` without the
+LSP exports, a browser with no `SharedArrayBuffer`, a worker that throws --
+every provider returns empty, markers stay clear, and the footer indicator
+hides itself. The playground is exactly as usable as it was before any of this
+existed, which is the contract `web/tests/lsp.spec.js` checks first.
+
+Rebuilding the bundle with the LSP exports:
+
+```bash
+cmake -S .. -B ../build-wasm -DTUR_WASM=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build ../build-wasm --target tur_wasm     # copies into web/public/
+```
 
 ### Monaco Editor Configuration
 

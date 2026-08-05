@@ -1,0 +1,4 @@
+#lang turmeric stringed
+(defn main [] : int
+  (println "trailing #lang layer tokens are stripped, not leaked into the body")
+  0)

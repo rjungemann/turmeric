@@ -1,5 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
+#include "experiments.h"  /* sealed-opaque: experiment_warn_if_used */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
@@ -143,27 +144,39 @@ Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     return NULL;
 }
 
-/* CONV-S1 (slice 5): the rc<Name> inner-def resolver for a record-variant field.
- * When a record-variant field is annotated `rc<Name>` and `Name` resolves to an
- * in-scope struct or single-variant record ADT, build the inner-carrying rc Type
- * (`type_rc_struct` / `type_rc_adt`) so field access through the rc receiver can
- * auto-deref to the named field -- exactly the surface a `defstruct` rc<Struct>
- * field already exposes (DS3 / slice 2), now reached by the lowered struct path.
- * Returns NULL (the field stays a bare rc carrier) when `tname` is not an
- * `rc<...>` over a known aggregate, so a scalar inner (`rc<int>`) or an unknown
- * name is unaffected. */
+/* CONV-S1 (slice 5): the rc<Name> / weak<Name> inner-def resolver for a
+ * record-variant field.  When a record-variant field is annotated `rc<Name>` and
+ * `Name` resolves to an in-scope struct or single-variant record ADT, build the
+ * inner-carrying rc Type (`type_rc_struct` / `type_rc_adt`) so field access
+ * through the rc receiver can auto-deref to the named field -- exactly the
+ * surface a `defstruct` rc<Struct> field already exposes (DS3 / slice 2), now
+ * reached by the lowered struct path.  Returns NULL (the field stays a bare
+ * carrier) when `tname` is not an `rc<...>` / `weak<...>` over a known
+ * aggregate, so a scalar inner (`rc<int>`) or an unknown name is unaffected.
+ *
+ * stdlib-weak-ref-audit WR1: `weak<Name>` resolves the same way.  It used not
+ * to, and the omission bit exactly the shape weak<T> exists for -- the
+ * back-edge of a parent/child graph.  `(weak parent)` over an `rc<Node>` yields
+ * `weak<ADT>`, while an unresolved `[parent : weak<Node>]` field stayed
+ * `weak<?>`, so `(set! (.parent child) (weak parent))` failed to type-check with
+ * "value type weak<<adt>> does not match field type weak<?>" and the canonical
+ * cycle break was not expressible at all. */
 static Type *adt_rc_inner_full_type(Elab *e, const char *tname, uint32_t tlen) {
-    if (tlen <= 4 || memcmp(tname, "rc<", 3) != 0 || tname[tlen - 1] != '>') {
-        return NULL;
-    }
-    const char *inner_name = tname + 3;
-    uint32_t inner_len = tlen - 4;  /* strip "rc<" and ">" */
+    TypeKind family;
+    uint32_t prefix_len;
+    if (tlen > 4 && memcmp(tname, "rc<", 3) == 0)          { family = TY_RC;   prefix_len = 3; }
+    else if (tlen > 6 && memcmp(tname, "weak<", 5) == 0)   { family = TY_WEAK; prefix_len = 5; }
+    else return NULL;
+    if (tname[tlen - 1] != '>') return NULL;
+    const char *inner_name = tname + prefix_len;
+    uint32_t inner_len = tlen - prefix_len - 1;  /* strip the prefix and '>' */
     const Symbol *sym = symtab_intern(e->st, strslice(inner_name, inner_len));
     Binding *tb = scope_lookup_type_def(e->scope, sym);
     if (!tb) return NULL;
     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
     if (tb->type.kind == TY_ADT) {
-        *t = type_rc_adt(tb->type.as.adt_.def);
+        *t = (family == TY_WEAK) ? type_weak_adt(tb->type.as.adt_.def)
+                                 : type_rc_adt(tb->type.as.adt_.def);
         return t;
     }
     return NULL;
@@ -344,6 +357,21 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
         if (head == e->sym_lref || head == e->sym_borrow_mut) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
+        /* assoc-types: `(Storage Pos)` where the head is an ASSOCIATED TYPE
+         * member of some registered typeclass is a type-level projection, not
+         * a type application.  type_expr_from_form has the resolver (it
+         * matches the instance and substitutes the bound type); the generic
+         * app loop below would instead apply the kind-* head and emit a
+         * spurious TUR-E0012 -- which is exactly what broke `defworld`'s
+         * `(Storage ~Comp)` fields when defstruct lowered onto this path.
+         * Guarded on the head actually being a declared associated type, so
+         * an ordinary constructor application is never intercepted. */
+        {
+            uint8_t assoc_idx;
+            if (typeclass_env_find_assoc_type(&e->typeclass_env, head, &assoc_idx))
+                return type_expr_from_form(e, form, NULL, type_params,
+                                           type_param_kinds, n_type_params);
+        }
         bool has_pipe = false, has_amp = false;
         for (uint32_t i = 0; i < form->as.list.len; i++) {
             Form *item = form->as.list.items[i];
@@ -358,8 +386,32 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
                                                 type_params, type_param_kinds, n_type_params);
         if (!cur) return NULL;
         for (uint32_t i = 1; i < form->as.list.len; i++) {
-            Type *arg = struct_field_type_from_form(e, form->as.list.items[i],
-                                                    type_params, type_param_kinds, n_type_params);
+            Form *arg_form = form->as.list.items[i];
+            Type *arg = NULL;
+            /* SZ8 non-GADT: a Size GADT literal (Static N)/(Add s s)/(Mul s s)
+             * in a type-app argument slot lowers to a placeholder TY_INT --
+             * the size information is recovered from the retained field Form
+             * by size_term_from_form.  Mirrors type_expr_from_form's app loop;
+             * without it a sized phantom index like `(SizedDense (Static 8)
+             * Pos)` in a lowered defstruct/defdata field recursed into
+             * `(Static 8)` as a type application and died on the integer
+             * literal ("unsupported type expression form"). */
+            if (arg_form->tag == F_LIST && arg_form->as.list.len >= 1 &&
+                    arg_form->as.list.items[0]->tag == F_SYM) {
+                const char *op = arg_form->as.list.items[0]->as.sym->name;
+                bool is_size_op = (strcmp(op, "Static") == 0 ||
+                                   strcmp(op, "Add")    == 0 ||
+                                   strcmp(op, "Mul")    == 0);
+                if (is_size_op &&
+                        size_term_from_form(e->arena, arg_form, NULL, NULL) != NULL) {
+                    Type *ph = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *ph = type_from_kind(TY_INT);
+                    arg = ph;
+                }
+            }
+            if (!arg)
+                arg = struct_field_type_from_form(e, arg_form,
+                                                  type_params, type_param_kinds, n_type_params);
             if (!arg) return NULL;
             Type *next = (Type *)arena_alloc(e->arena, sizeof(Type));
             *next = type_app(e->arena, *cur, *arg, form->span);
@@ -1138,20 +1190,37 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
         }
     }
 
-    /* Optional substructural discipline keyword after the base type. */
+    /* Optional attributes after the base type.  These used to be a single
+     * substructural keyword; `:sealed` is orthogonal to :linear/:affine (it
+     * governs `::` visibility, not how many times the value may be used), so
+     * the slot now takes a SET.  :linear and :affine remain mutually exclusive
+     * -- "exactly once" and "at most once" are contradictory claims. */
     bool opaque_linear = false;
     bool opaque_affine = false;
-    if (call->as.list.len >= base_idx + 2) {
-        Form *attr = call->as.list.items[base_idx + 1];
+    bool opaque_sealed = false;
+    for (uint32_t ai = base_idx + 1; ai < call->as.list.len; ai++) {
+        Form *attr = call->as.list.items[ai];
         if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
             opaque_linear = true;
         } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_affine) {
             opaque_affine = true;
+        } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_sealed) {
+            opaque_sealed = true;
         } else {
             diag_emit(DIAG_ERROR, attr->span,
-                      "defopaque: unexpected attribute -- expected :linear or :affine");
+                      "defopaque: unexpected attribute -- expected :linear, "
+                      ":affine or :sealed");
             return NULL;
         }
+    }
+    /* Lifecycle warning (TUR-W0060/W0061) fires where the feature is USED --
+     * declaring a sealed opaque -- not where the check happens to run. */
+    if (opaque_sealed) experiment_warn_if_used("sealed-opaque");
+    if (opaque_linear && opaque_affine) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defopaque: :linear and :affine are mutually exclusive "
+                  "(exactly-once vs at-most-once)");
+        return NULL;
     }
     AdtDef *def;
     Binding *b;
@@ -1179,6 +1248,12 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     def->is_linear = opaque_linear;
     def->is_affine = opaque_affine;
     def->is_opaque = true;
+    /* sealed-opaque: assigned UNCONDITIONALLY, like the flags above -- the
+     * forward-declared-stub path reuses an existing def rather than the
+     * freshly memset one, so a conditional assignment would silently leave a
+     * re-elaborated def unsealed. */
+    def->sealed = opaque_sealed;
+    def->sealed_module = e->current_module_name;   /* NULL at a moduleless top level */
     def->n_ctors = 0;        /* an opaque newtype has no constructors */
     def->ctors = NULL;
     def->origin_file_id = call->span.file_id;
@@ -1252,6 +1327,31 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                       "defdata: could not resolve constructor field type");
             return false;
         }
+        /* capturing-closure-in-struct-field-segv: a concrete `(fn ...)` field
+         * uses the FAT closure representation (a `{thunk, env}` handle in the
+         * int64 slot), so a CAPTURING closure stored in it dispatches correctly
+         * -- not the thin fn-pointer path, which called a fat env block as code
+         * (SIGSEGV).  Marking the field type `boxed` steers every `(.f v)` read to
+         * the fat dispatch (TUR_APPLY*); the make-struct store shims a bare/thin
+         * fn into a fat handle (elab_call.c constructor arg loop).  Storage stays
+         * the int64 carrier -- only the dispatch/representation changes. */
+        /* Bound to arity 1..4: the store shim (elab_call.c) shims arity >=1 and
+         * the field-call fat dispatch (emit_expr.c TUR_APPLY<N>_T) covers N<=4, so
+         * boxing outside that range would make the store and read disagree.  A
+         * nullary or >4-arg fn field stays on the pre-existing thin path. */
+        if (t && t->kind == TY_FN && !t->as.fn.boxed &&
+            t->as.fn.arity >= 1 && t->as.fn.arity <= 4) {
+            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *bt = *t;
+            bt->as.fn.boxed = true;
+            t = bt;
+            /* closure-drop-glue S2 (Model U): the boxed fn-field owns a heap fat
+             * handle (a shim box for a bare fn, or a capturing env), so the struct
+             * needs drop glue to free it -- which also makes the struct move-only,
+             * the precondition that keeps a single owner and avoids a copy
+             * double-freeing the shared handle. */
+            def->needs_drop_glue = true;
+        }
         TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
         struct_field_storage_from_type(t, &fkind, &finner);
         if (fkind == TY_UNKNOWN) { fkind = TY_INT; finner = TY_UNKNOWN; }
@@ -1261,6 +1361,25 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
         if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
             def->needs_drop_glue = true;
+        }
+        /* drop-glue-shallow-nested-owning-aggregate: a nominal by-value
+         * aggregate field whose inner def itself `needs_drop_glue` is stored
+         * behind the int64 carrier (adt_field_is_inline_byval excludes a
+         * drop-glue inner).  Flag the owner and remember the inner def so the
+         * by-value drop/walk glue releases the boxed sub-aggregate.  Restricted
+         * to a non-parametric nominal ADT: its drop glue is the plain
+         * `drop_glue_tur_adt_<name>`, whereas a parametric applied monomorph
+         * (`(Pair rc<int> int)`) uses a mangled monomorph name -- threading that
+         * through is separate work.  A :heap inner is a typed pointer whose
+         * teardown is separate deferred work. */
+        if (t->kind == TY_ADT) {
+            const AdtDef *iad = t->as.adt_.def;
+            if (iad && iad->needs_drop_glue && !iad->is_heap &&
+                iad->n_type_params == 0 && adt_is_byvalue_product(iad) &&
+                (fkind == TY_INT || fkind == TY_ADT)) {
+                ctor->fields[fi].drop_inner_def = iad;
+                def->needs_drop_glue = true;
+            }
         }
         return true;
     }
@@ -1277,17 +1396,23 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     uint32_t tlen = ft_form->as.sym->len;
     TypeKind fkind, finner;
     parse_struct_field_type(tname, tlen, &fkind, &finner);
-    if (fkind == TY_RC && finner == TY_UNKNOWN) {
+    if ((fkind == TY_RC || fkind == TY_WEAK) && finner == TY_UNKNOWN) {
         /* CONV-S1 (slice 5): rc<Name> over a user struct / record ADT -- carry
          * the inner def on the field's full_type so receivers of the rc field
          * auto-deref through it (mirrors DS3's lookup_rc_inner_struct_def on the
          * struct path).  The field still stores as the TY_RC carrier (the
          * inline-byval gate rejects a TY_RC full_type), so layout is unchanged;
-         * only field-access resolution gains the inner layout. */
+         * only field-access resolution gains the inner layout.
+         *
+         * stdlib-weak-ref-audit WR1: weak<Name> takes the same path, so a
+         * `[parent : weak<Node>]` back-edge agrees with the `weak<ADT>` that
+         * `(weak r)` produces.  TY_WEAK is the same carrier as TY_RC
+         * (RcControlBlock *), so this is likewise layout-neutral. */
         Type *rc_full = adt_rc_inner_full_type(e, tname, tlen);
         if (rc_full) {
             ctor->fields[fi].full_type = rc_full;
-            finner = (rc_full->kind == TY_RC) ? rc_full->as.rc.inner : finner;
+            finner = (rc_full->kind == TY_RC || rc_full->kind == TY_WEAK)
+                         ? rc_full->as.rc.inner : finner;
         }
     }
     if (fkind == TY_UNKNOWN) {
@@ -1343,8 +1468,8 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
             /* structdef-retirement DS-D: no Type is ever TY_STRUCT, so the
              * former struct branch (reading the removed `.as.struct_` member) is
              * dead -- the guard above only admits TY_ADT here. */
+            AdtDef *ad = tb->type.as.adt_.def;
             {
-                AdtDef *ad = tb->type.as.adt_.def;
                 /* by-value ADT product (inlined, slice 4), a :heap record ADT
                  * (typed-pointer carrier, seam 3 -- the ADT analogue of a :heap
                  * struct field), or a forward-declared stub (n_ctors == 0) whose
@@ -1360,6 +1485,19 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                 Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *ft = tb->type;
                 ctor->fields[fi].full_type = ft;
+            }
+            /* drop-glue-shallow-nested-owning-aggregate: a nested by-value
+             * aggregate field whose inner def itself `needs_drop_glue` is stored
+             * behind the int64 carrier (record_full is false above, so full_type
+             * stays NULL and the read path is unchanged).  Flag the owner as
+             * needing drop glue and stash the inner def so the by-value drop/walk
+             * glue tears the boxed sub-aggregate down (a `drop_glue_<Inner>` /
+             * `walk_glue_<Inner>` call) instead of leaking it.  A :heap inner is
+             * excluded -- its typed-pointer teardown is separate deferred work. */
+            if (ad && ad->needs_drop_glue && !ad->is_heap &&
+                adt_is_byvalue_product(ad)) {
+                ctor->fields[fi].drop_inner_def = ad;
+                def->needs_drop_glue = true;
             }
         } else {
             diag_emit(DIAG_ERROR, ft_form->span,
@@ -1617,24 +1755,33 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         }
     }
 
-    /* Parse each constructor */
-    for (uint32_t ci = 0; ci < n_ctors; ci++) {
+    /* Parse each constructor.
+     * `ci` is declared outside the loop so the `data_ctor_parse_error`
+     * bail-out below can truncate `def->n_ctors` to the number of slots we
+     * actually filled (every error path bails before `def->ctors[ci]` is
+     * assigned, so `ci` is exactly the populated-slot count) -- the same
+     * guard defgadt's ctor loop carries.  Without it, the pre-registered
+     * binding advertises n_ctors slots whose pointers were never written
+     * (arena memory is NOT zeroed), and later field-access elaboration in
+     * the same failing compile dereferences the junk. */
+    uint32_t ci = 0;
+    for (; ci < n_ctors; ci++) {
         Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
         if (ctor_form->tag != F_LIST) {
             diag_emit(DIAG_ERROR, ctor_form->span,
                       "defdata: constructor must be a list form (Ctor :T1 :T2 ...)");
-            return NULL;
+            goto data_ctor_parse_error;
         }
         if (ctor_form->as.list.len < 1) {
             diag_emit(DIAG_ERROR, ctor_form->span,
                       "defdata: constructor form cannot be empty");
-            return NULL;
+            goto data_ctor_parse_error;
         }
         Form *ctor_name_form = ctor_form->as.list.items[0];
         if (ctor_name_form->tag != F_SYM) {
             diag_emit(DIAG_ERROR, ctor_name_form->span,
                       "defdata: constructor name must be a symbol");
-            return NULL;
+            goto data_ctor_parse_error;
         }
         const Symbol *ctor_name = ctor_name_form->as.sym;
 
@@ -1669,7 +1816,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, rec_vec->span,
                           "defdata: record-style variant '%s' field list cannot be empty",
                           ctor_name->name);
-                return NULL;
+                goto data_ctor_parse_error;
             }
             /* Walk name/type pairs with a cursor rather than fixed `fi*2`
              * indexing: structdef-retirement slice 5 A1 -- a `fn`-typed field may
@@ -1692,13 +1839,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, name_f->span,
                               "defdata: record-style variant '%s' expected a field "
                               "name symbol", ctor_name->name);
-                    return NULL;
+                    goto data_ctor_parse_error;
                 }
                 if (ci >= n_items) {
                     diag_emit(DIAG_ERROR, rec_vec->span,
                               "defdata: record-style variant '%s' field list must be "
                               "[name : type ...] pairs", ctor_name->name);
-                    return NULL;
+                    goto data_ctor_parse_error;
                 }
                 Form *type_f = rec_vec->as.list.items[ci++];
                 /* Unwrap `: T` (F_TYPE_ANN) to the bare type form. */
@@ -1739,6 +1886,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         ctor->fields = n_fields > 0
             ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
             : NULL;
+        /* arena_alloc does not zero, and resolve_ctor_field writes
+         * `drop_inner_def` only on the nested-owning-aggregate branch -- so
+         * every other field kept the arena's 0xbe poison and the drop/walk glue
+         * emitter dereferenced it.  Latent for as long as the emitter only
+         * walked ctor 0; it surfaced when the sum-type glue fix widened that
+         * walk to every ctor.  Zero the whole array once rather than chase
+         * per-field defaults. */
+        if (ctor->fields) memset(ctor->fields, 0, n_fields * sizeof(CtorField));
         /* F6-1 (cross-plan-followups): stash the raw field-type forms so pattern
          * extraction at match time can recover the declared ADT/struct type. */
         ctor->field_forms = n_fields > 0
@@ -1749,7 +1904,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         for (uint32_t fi = 0; fi < n_fields; fi++) {
             if (!resolve_ctor_field(e, def, ctor, fi, field_type_forms[fi],
                                     tp_syms, n_type_params, is_record)) {
-                return NULL;
+                goto data_ctor_parse_error;
             }
             ctor->fields[fi].name = rec_field_names ? rec_field_names[fi]->name : NULL;
 
@@ -1794,7 +1949,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                                         "cannot copy linear field '%s' -- "
                                         "linear values cannot appear in :copy structs",
                                         ctor->fields[fi].name);
-                    return NULL;
+                    goto data_ctor_parse_error;
                 }
                 const char *fdesc = ctor->fields[fi].name;
                 if (fdesc) {
@@ -1808,7 +1963,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                               "field %u of variant '%s'",
                               def->name, fi, ctor->name);
                 }
-                return NULL;
+                goto data_ctor_parse_error;
             }
         }
 
@@ -1868,6 +2023,17 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     out->as.defdata_.def = def;
     out->as.defdata_.binding = adt_binding;
     return out;
+
+data_ctor_parse_error:
+    /* A constructor failed to parse after the AdtDef was pre-registered in
+     * scope.  The slots `[ci, n_ctors)` were never written -- and arena
+     * memory is NOT zeroed, so they hold junk, not NULL -- while `def->
+     * n_ctors` advertises the full declared count.  Later field-access /
+     * match elaboration in the same (already failing) compile would then
+     * dereference the junk (the ecs sized-* suite crash).  Truncate to the
+     * slots actually filled, mirroring defgadt's ctor_parse_error. */
+    def->n_ctors = ci;
+    return NULL;
 }
 
 /* Phase G2: Look up a type parameter name in the current skolem environment.
@@ -2527,6 +2693,14 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         ctor->fields = n_fields > 0
             ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
             : NULL;
+        /* arena_alloc does not zero, and resolve_ctor_field writes
+         * `drop_inner_def` only on the nested-owning-aggregate branch -- so
+         * every other field kept the arena's 0xbe poison and the drop/walk glue
+         * emitter dereferenced it.  Latent for as long as the emitter only
+         * walked ctor 0; it surfaced when the sum-type glue fix widened that
+         * walk to every ctor.  Zero the whole array once rather than chase
+         * per-field defaults. */
+        if (ctor->fields) memset(ctor->fields, 0, n_fields * sizeof(CtorField));
         ctor->adt = def;
         ctor->tag = ci;
         ctor->result_type_form = return_type_form;
@@ -2542,6 +2716,11 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
             ctor->fields[fi].kind = fkind;
             ctor->fields[fi].inner_kind = TY_UNKNOWN;
             ctor->fields[fi].name = NULL; /* CONV-S0: positional */
+            /* A positional/GADT ctor field carries no `#fx{...}` capability row;
+             * initialize the pointer explicitly (arena_alloc does not zero) so
+             * readers -- effect_check's CtorField-row resolve, cps_ir's
+             * expr_fn_effect_row -- never dereference uninitialized garbage. */
+            ctor->fields[fi].effect_row = NULL;
             /* TP2: populate full_type when the field references a declared type
              * parameter (e.g. `a` in `(MkBox a : (Box a))`).  The C-level kind
              * stays TY_INT; full_type is elaboration-only. */
@@ -3147,14 +3326,17 @@ Expr *elab_match(Elab *e, const Form *call) {
                     return NULL;
                 }
 
-                /* Optional when-guard */
-                if (guard_raw) {
-                    lit_arms[ai].guard = elab_form(e, guard_raw);
-                    if (!lit_arms[ai].guard) return NULL;
-                }
-
-                /* Elaborate body; for is_var, introduce the binding in a new scope */
+                /* Elaborate the guard and the body in the arm's scope: a var
+                 * pattern's binder must be visible to its own when-guard, not
+                 * just to the body.  The ADT path already does this (it keeps
+                 * the arm scope live across both); the scalar path used to
+                 * elaborate the guard before the binding existed, so
+                 * `(match p x when (> x 2) x _ 0)` failed with "unbound symbol
+                 * 'x'".  Wildcard/literal patterns bind nothing, so for them
+                 * the two orders are equivalent. */
                 Expr *body;
+                Expr *guard = NULL;
+                bool arm_ok = true;
                 bool _s_lit = e->in_match_arm; e->in_match_arm = true;
                 if (pat->is_var && pat->var_sym) {
                     Binding *vb = binding_new(e, pat->var_sym, scrutinee->type,
@@ -3165,14 +3347,30 @@ Expr *elab_match(Elab *e, const Form *call) {
                     Scope *saved_sc = e->scope;
                     e->scope = &arm_sc;
                     scope_add(&arm_sc, vb);
-                    body = elab_form(e, body_form);
+                    if (guard_raw) {
+                        guard = elab_form(e, guard_raw);
+                        if (!guard) arm_ok = false;
+                    }
+                    body = arm_ok ? elab_form(e, body_form) : NULL;
                     e->scope = saved_sc;
                     scope_free(&arm_sc);
                 } else {
-                    body = elab_form(e, body_form);
+                    if (guard_raw) {
+                        guard = elab_form(e, guard_raw);
+                        if (!guard) arm_ok = false;
+                    }
+                    body = arm_ok ? elab_form(e, body_form) : NULL;
                 }
                 e->in_match_arm = _s_lit;
-                if (!body) return NULL;
+                if (!arm_ok || !body) return NULL;
+                /* Parity with the ADT path: a when-guard must be a bool. */
+                if (guard && guard->type.kind != TY_BOOL) {
+                    diag_emit(DIAG_ERROR, guard_raw->span,
+                              "match: when-guard must have type bool, got %s",
+                              typekind_to_string(guard->type.kind));
+                    return NULL;
+                }
+                lit_arms[ai].guard = guard;
                 lit_arms[ai].body = body;
                 if (lit_result.kind == TY_UNKNOWN) lit_result = body->type;
             }

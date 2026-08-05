@@ -1,0 +1,7 @@
+(set-logic QF_LIA)
+(set-info :status sat)
+(define-fun addone ((x Int)) Int (+ x 1))
+(declare-fun x () Int)
+(assert (= x 1))
+(assert (= (addone x) 2))
+(check-sat)

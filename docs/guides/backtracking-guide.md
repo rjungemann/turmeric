@@ -257,7 +257,7 @@ are merely in lexical scope -- not live -- may be falsely rejected.
 ```
 
 Full liveness precision is gated on the post-1.0 CPS pass (tracked in
-[control-flow-completeness-plan.md](../control-flow-completeness-plan.md) CF7.5).
+[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md) CF7.5).
 
 ---
 

@@ -1,0 +1,31 @@
+;; `match` is PURE for the purposes of congruence.
+;;
+;; Congruence -- modelling two occurrences of a call as the same value -- is
+;; only valid when the callee is pure, and the three-valued classifier
+;; deliberately reads UNKNOWN as impure, because a wrong "pure" ELIDES a check.
+;; `match` was UNKNOWN, so a measure written with one could never be congruent,
+;; even though nothing about dispatching on a constructor is observable.
+;;
+;; It is now classified from its scrutinee and its arms. That widens congruence
+;; without widening TUR-E0375 (the impure-predicate error), because moving a
+;; form from UNKNOWN to PURE only ever REMOVES diagnostics -- the two readings
+;; of UNKNOWN are not negations of each other, and this direction is the safe
+;; one for both of them.
+;;
+;; `rank` carries no refinement of its own, so the obligation below cannot be
+;; discharged from a declared result -- congruence is the only thing that can
+;; prove `(- (rank c) (rank c)) >= 0`. Before this change the same program
+;; reported `0 proven, 1 unknown` and kept a runtime check. The sibling fixture
+;; refine-match-impure-arm pins the other side: one impure arm and it stays
+;; unknown.
+(defdata Color :copy (Red) (Green) (Blue))
+
+(defn rank [c : Color] : int
+  (match c (Red) 0 (Green) 1 (Blue) 2))
+
+(defn probe [c : Color] : #refine{ r : int | (>= r 0) }
+  (- (rank c) (rank c)))
+
+(defn main [] : int
+  (println (probe (Green)))
+  0)

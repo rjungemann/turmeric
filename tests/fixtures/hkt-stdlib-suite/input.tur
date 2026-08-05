@@ -36,14 +36,14 @@
 (defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
 (defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return (int64_t)(p->value);
   ```)
 
@@ -51,7 +51,7 @@
 (defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   if (!c || !c->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -66,7 +66,7 @@
 (defn __foldable_option_foldl [ta init fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+      (void *)(intptr_t)ta;
   if (!opt || !opt->is_some) return init;
   return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, opt->value);
   ```)
@@ -74,7 +74,7 @@
 (defn __foldable_option_foldr [ta init fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+      (void *)(intptr_t)ta;
   if (!opt || !opt->is_some) return init;
   return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(opt->value, init);
   ```)
@@ -90,9 +90,9 @@
 (defn __applicative_option_ap [ff fa] : int
   ```c
   struct { bool is_some; int64_t value; } *f_opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ff;
+      (void *)(intptr_t)ff;
   struct { bool is_some; int64_t value; } *a_opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)fa;
+      (void *)(intptr_t)fa;
   if (!f_opt || !f_opt->is_some || !a_opt || !a_opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -108,7 +108,7 @@
 (defn __monad_option_bind [ma fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+      (void *)(intptr_t)ma;
   if (!opt || !opt->is_some) return 0;
   return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
   ```)
@@ -127,7 +127,7 @@
 (defn __vec_push [v val] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   if (vec->len >= vec->cap) {
       size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
       int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
@@ -143,14 +143,14 @@
 (defn __vec_get [v i] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   return vec->data[(size_t)i];
   ```)
 
 (defn __vec_len [v] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   return (int64_t)vec->len;
   ```)
 
@@ -158,7 +158,7 @@
 (defn __fmap_vec [container fn] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   if (!v) return 0;
   struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
   r->len = v->len; r->cap = v->len;
@@ -176,7 +176,7 @@
 (defn __foldable_vec_foldl [ta init fn] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
+      (void *)(intptr_t)ta;
   int64_t acc = init;
   if (!v) return acc;
   for (size_t i = 0; i < v->len; i++) {
@@ -188,7 +188,7 @@
 (defn __foldable_vec_foldr [ta init fn] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
+      (void *)(intptr_t)ta;
   int64_t acc = init;
   if (!v) return acc;
   for (size_t i = v->len; i-- > 0; ) {
@@ -219,14 +219,14 @@
 (defn __monad_vec_bind [ma fn] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
+      (void *)(intptr_t)ma;
   if (!v) return 0;
   /* Collect all sub-vecs */
   size_t total = 0;
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
       struct { int64_t *data; size_t len; size_t cap; } *sv =
-          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+          (void *)(intptr_t)sub;
       if (sv) total += sv->len;
   }
   struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
@@ -236,7 +236,7 @@
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
       struct { int64_t *data; size_t len; size_t cap; } *sv =
-          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+          (void *)(intptr_t)sub;
       if (sv) {
           for (size_t j = 0; j < sv->len; j++) r->data[idx++] = sv->data[j];
       }
@@ -255,7 +255,8 @@
 
 (defn __list_cons [value next] : int
   ```c
-  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell = malloc(sizeof(*cell));
   cell->value = value;
   cell->next = next;
   return (int64_t)(intptr_t)cell;
@@ -263,15 +264,17 @@
 
 (defn __list_head [lst] : int
   ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)lst;
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell =
+      (void *)(intptr_t)lst;
   return cell->value;
   ```)
 
 (defn __list_tail [lst] : int
   ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)lst;
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell =
+      (void *)(intptr_t)lst;
   return cell->next;
   ```)
 
@@ -283,21 +286,22 @@
 ;; List TestFunctor
 (defn __fmap_list [container fn] : int
   ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)container;
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell =
+      (void *)(intptr_t)container;
   if (!cell) return 0;
-  struct { int64_t value; int64_t next; } *rev = NULL;
+  __LCell *rev = NULL;
   while (cell) {
-      struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+      __LCell *n = malloc(sizeof(*n));
       n->value = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
       n->next = (int64_t)(intptr_t)rev;
       rev = n;
-      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+      cell = (void *)(intptr_t)cell->next;
   }
-  struct { int64_t value; int64_t next; } *result = NULL;
+  __LCell *result = NULL;
   while (rev) {
-      struct { int64_t value; int64_t next; } *tmp =
-          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      __LCell *tmp =
+          (void *)(intptr_t)rev->next;
       rev->next = (int64_t)(intptr_t)result;
       result = rev;
       rev = tmp;
@@ -311,29 +315,31 @@
 ;; List Foldable
 (defn __foldable_list_foldl [ta init fn] : int
   ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell =
+      (void *)(intptr_t)ta;
   int64_t acc = init;
   while (cell) {
       acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, cell->value);
-      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+      cell = (void *)(intptr_t)cell->next;
   }
   return acc;
   ```)
 
 (defn __foldable_list_foldr [ta init fn] : int
   ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell =
+      (void *)(intptr_t)ta;
   size_t count = 0;
-  struct { int64_t value; int64_t next; } *tmp = cell;
-  while (tmp) { count++; tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next; }
+  __LCell *tmp = cell;
+  while (tmp) { count++; tmp = (void *)(intptr_t)tmp->next; }
   if (count == 0) return init;
   int64_t *vals = malloc(sizeof(int64_t) * count);
   tmp = cell;
   for (size_t i = 0; i < count; i++) {
       vals[i] = tmp->value;
-      tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next;
+      tmp = (void *)(intptr_t)tmp->next;
   }
   int64_t acc = init;
   for (size_t i = count; i-- > 0; ) {
@@ -358,27 +364,28 @@
 ;; List TestMonad
 (defn __monad_list_bind [ma fn] : int
   ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell =
+      (void *)(intptr_t)ma;
   if (!cell) return 0;
-  struct { int64_t value; int64_t next; } *rev = NULL;
+  __LCell *rev = NULL;
   while (cell) {
       int64_t sub_list = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
-      struct { int64_t value; int64_t next; } *sub =
-          (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
+      __LCell *sub =
+          (void *)(intptr_t)sub_list;
       while (sub) {
-          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          __LCell *n = malloc(sizeof(*n));
           n->value = sub->value;
           n->next = (int64_t)(intptr_t)rev;
           rev = n;
-          sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
+          sub = (void *)(intptr_t)sub->next;
       }
-      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+      cell = (void *)(intptr_t)cell->next;
   }
-  struct { int64_t value; int64_t next; } *result = NULL;
+  __LCell *result = NULL;
   while (rev) {
-      struct { int64_t value; int64_t next; } *tmp =
-          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      __LCell *tmp =
+          (void *)(intptr_t)rev->next;
       rev->next = (int64_t)(intptr_t)result;
       result = rev;
       rev = tmp;
@@ -407,21 +414,21 @@
 (defn __res_ok? [r] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+      (void *)(intptr_t)r;
   return res != NULL && res->is_ok;
   ```)
 
 (defn __res_ok_val [r] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+      (void *)(intptr_t)r;
   return res->ok_val;
   ```)
 
 (defn __res_err_val [r] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+      (void *)(intptr_t)r;
   return res->err_val;
   ```)
 
@@ -429,7 +436,7 @@
 (defn __fmap_result [container fn] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   if (!res || !res->is_ok) return container;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
   out->is_ok = true;
@@ -445,7 +452,7 @@
 (defn __foldable_result_foldl [ta init fn] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ta;
+      (void *)(intptr_t)ta;
   if (!res || !res->is_ok) return init;
   return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, res->ok_val);
   ```)
@@ -453,7 +460,7 @@
 (defn __foldable_result_foldr [ta init fn] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ta;
+      (void *)(intptr_t)ta;
   if (!res || !res->is_ok) return init;
   return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(res->ok_val, init);
   ```)
@@ -474,7 +481,7 @@
 (defn __monad_result_bind [ma fn] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+      (void *)(intptr_t)ma;
   if (!res || !res->is_ok) return ma;
   return ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
   ```)
@@ -486,7 +493,7 @@
 (defn __bimap_result [container fn-left fn-right] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   if (!res) return 0;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
   if (res->is_ok) {
@@ -526,7 +533,7 @@
 (defn __bimap_pair [container fn-left fn-right] : int
   ```c
   struct { int64_t fst; int64_t snd; } *p =
-      (struct { int64_t fst; int64_t snd; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   struct { int64_t fst; int64_t snd; } *r = malloc(sizeof(*r));
   r->fst = ((int64_t(*)(int64_t))(intptr_t)fn_left)(p->fst);
   r->snd = ((int64_t(*)(int64_t))(intptr_t)fn_right)(p->snd);
@@ -545,11 +552,12 @@
 ;; Helper: print all elements of a list
 (defn print-list [lst]
   ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)lst;
+  typedef struct { int64_t value; int64_t next; } __LCell;
+  __LCell *cell =
+      (void *)(intptr_t)lst;
   while (cell) {
       printf("%lld\n", (long long)cell->value);
-      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+      cell = (void *)(intptr_t)cell->next;
   }
   ```)
 
@@ -557,7 +565,7 @@
 (defn print-vec [v]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   for (size_t i = 0; i < vec->len; i++) {
       printf("%lld\n", (long long)vec->data[i]);
   }

@@ -66,6 +66,10 @@
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
 ;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
 (load "stdlib/json.tur")
+;; mw-cors owns its config strings as Drop-typeclass String captures so the
+;; closure drop-glue releases them (Model R); needs the String API.
+
+(load "stdlib/string.tur")
 
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: the httpd server constructors (which bind+listen) and
@@ -84,7 +88,9 @@
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
-  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; } HttpdConn; */
+  /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
+  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; } HttpdConn; */
+  /* __tur_include__: static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
   return 0;
   ```)
 ;;; httpd-register-tls-impl -- install TLS function pointers into the H5 hook table.
@@ -509,6 +515,18 @@
           }
           conn->attr_list = NULL;
       }
+      /* httpd-request-accessor-cstr-leak: free the per-request accessor strings
+       * (httpd-req-cookie / httpd-req-form results) registered on owned_cstrs. */
+      if (conn->owned_cstrs) {
+          HttpdOwnedStr *op = (HttpdOwnedStr *)conn->owned_cstrs;
+          while (op) {
+              HttpdOwnedStr *nx = op->next;
+              if (op->s) free(op->s);
+              free(op);
+              op = nx;
+          }
+          conn->owned_cstrs = NULL;
+      }
   }
   if (tls && httpd_tls_ops.shutdown) {
       ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)((int64_t)tls);
@@ -671,7 +689,7 @@
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return NULL;
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   int opt = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
   int flags = fcntl(fd, F_GETFL, 0);
@@ -684,26 +702,26 @@
    * Firewall prompting "allow this app" for every fixture binary. */
   addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
   addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdBlock *hb = (HttpdBlock *)calloc(1, sizeof(HttpdBlock));
-  if (!hb) { close(fd); return NULL; }
+  if (!hb) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   hb->listen_fd = fd;
   hb->handler   = (int64_t)handler;
   hb->n_workers = (int)workers;
   /* Initialise the shared queue with a small capacity (will grow). */
   hb->fdq_cap = 16;
   hb->fdq     = (int *)malloc((size_t)hb->fdq_cap * sizeof(int));
-  if (!hb->fdq) { close(fd); free(hb); return NULL; }
+  if (!hb->fdq) { close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   pthread_mutex_init(&hb->fdq_mtx, NULL);
   pthread_cond_init(&hb->fdq_cv,  NULL);
   /* Reactor + accept callback (synthetic fat closure { __fn, hb }). */
   hb->reactor = tur_reactor_new();
-  if (!hb->reactor) { free(hb->fdq); close(fd); free(hb); return NULL; }
+  if (!hb->reactor) { free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
   if (!clos) {
       tur_reactor_free(hb->reactor);
-      free(hb->fdq); close(fd); free(hb); return NULL;
+      free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL;
   }
   clos[0] = (int64_t)(intptr_t)httpd_hyaccept_hycb;
   clos[1] = (int64_t)(intptr_t)hb;
@@ -717,7 +735,7 @@
   if (hb->listen_src_id < 0) {
       free(clos);
       tur_reactor_free(hb->reactor);
-      free(hb->fdq); close(fd); free(hb); return NULL;
+      free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL;
   }
   /* Spawn worker threads. */
   hb->workers = (pthread_t *)malloc((size_t)workers * sizeof(pthread_t));
@@ -725,7 +743,7 @@
       tur_reactor_remove(hb->reactor, hb->listen_src_id);
       free(clos);
       tur_reactor_free(hb->reactor);
-      free(hb->fdq); close(fd); free(hb); return NULL;
+      free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL;
   }
   for (int i = 0; i < workers; i++) {
       pthread_create(&hb->workers[i], NULL,
@@ -805,8 +823,13 @@
       volatile int stop_flag;
       void *tls_ctx;
   } HttpdBlock;
+  /* handler is passed ^fat (this fn owns the heap box).  On an early refusal it
+   * is never handed to httpd-new-pool, so release it here or it leaks -- via
+   * TUR_CLOSURE_DROP so a compose-middleware onion is fully reclaimed (flag-off,
+   * a plain free of the outer box). */
   if (ctx == 0) {
       fprintf(stderr, "httpd-new-tls: ctx is 0\n");
+      TUR_CLOSURE_DROP(handler);
       return NULL;
   }
   if (!httpd_tls_ops.wrap_fd || !httpd_tls_ops.handshake ||
@@ -814,6 +837,7 @@
       fprintf(stderr,
           "httpd-new-tls: TLS ops not registered "
           "-- did you forget to import tls/httpd and call tls-httpd-init?\n");
+      TUR_CLOSURE_DROP(handler);
       return NULL;
   }
   HttpdBlock *hb = (HttpdBlock *)httpd_hynew_hypool((int64_t)port,
@@ -940,13 +964,19 @@
       if (hb->listen_src_id >= 0) tur_reactor_remove(hb->reactor, hb->listen_src_id);
       tur_reactor_free(hb->reactor);
   }
+  /* accept_clos is a hand-rolled synthetic { __fn, hb } box (no codegen
+   * drop-glue header), so it is freed with a plain free -- NOT TUR_CLOSURE_DROP,
+   * which would read a header 8 bytes before this un-headered allocation. */
   if (hb->accept_clos) free(hb->accept_clos);
   /* Free the user handler box. It is passed ^fat (always a heap fat-closure
    * box) and nothing else frees it, so this is the sole free -- no double free.
    * For a bare handler this reclaims the whole thing; for a compose-middleware
-   * onion it frees only the outermost layer (the inner captured `next` boxes
-   * still leak, pending closure drop glue -- see the plan). */
-  if (hb->handler) free((void *)(intptr_t)hb->handler);
+   * onion, TUR_CLOSURE_DROP releases the outermost layer AND (under
+   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * env's drop-glue header, so the whole onion is freed.  Flag-off,
+   * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
+   * before). */
+  if (hb->handler) TUR_CLOSURE_DROP(hb->handler);
   if (hb->listen_fd >= 0) close(hb->listen_fd);
   if (hb->fdq) {
       /* Close any pending fds we never got to. */
@@ -1328,7 +1358,11 @@
           if (!out) return "";
           if (vlen > 0) memcpy(out, vstart, vlen);
           out[vlen] = '\0';
-          return out;
+          /* httpd-request-accessor-cstr-leak: register the fresh malloc on the
+           * per-request owned-cstr list so httpd-handle's cleanup frees it at
+           * request end -- the docstring's "per-call ownership; do not free"
+           * contract is now actually implemented. */
+          return httpd_conn_own_cstr((HttpdConn *)conn, out);
       }
   }
   return "";
@@ -1525,7 +1559,9 @@
               }
           }
           out[oi] = '\0';
-          return out;
+          /* httpd-request-accessor-cstr-leak: register on the per-request
+           * owned-cstr list so httpd-handle's cleanup frees it at request end. */
+          return httpd_conn_own_cstr(c, out);
       }
       if (p < end && *p == '&') p++;
   }
@@ -1755,6 +1791,19 @@
 ;;;                   "" 1 60))
 ;;;
 ;;; Since: Phase H8 (M4)
+;;; httpd-cors-own-str -- internal: heap-copy a cstr for a server-lifetime
+;;; capture, preserving NULL.
+;;;
+;;; mw-cors-with stores its origin/methods/headers strings in a middleware
+;;; closure that lives for the whole server run.  Capturing the caller's cstr
+;;; BY BORROW dangles if the caller passed a computed/freed buffer (see
+;;; string-adoption-stdlib-plan.md, items 2/3).  This returns an OWNED String
+;;; (a refcounted copy) the closure keeps for its lifetime.  Under
+;;; --enable=closure-drop-glue the String is a Drop-typeclass capture, so the
+;;; closure's drop-glue releases it when the middleware is torn down (Model R);
+;;; flag-off it lives to process exit, as before.
+
+(defn httpd-cors-own-str [s : cstr] : String (string/from-cstr s))
 
 (defn mw-cors-with [allow-origin : cstr
                     allow-methods : cstr
@@ -1763,17 +1812,32 @@
                     allow-credentials : int
                     max-age : int
                     ^fat next : int] : ptr<void>
-  (let [_ao allow-origin
-        _am allow-methods
-        _ah allow-headers
-        _eh expose-headers
+  ;; Own the captured strings so the server-lifetime closure never holds a
+  ;; borrowed pointer into a caller buffer that may be freed (the dangling
+  ;; hazard when allow-origin/headers are computed rather than literals).  The
+  ;; owned String captures are Drop-released by the closure drop-glue (Model R);
+  ;; the emit helpers take a borrowed `cstr` view via string/to-cstr.
+  (let [_ao (httpd-cors-own-str allow-origin)
+        _am (httpd-cors-own-str allow-methods)
+        _ah (httpd-cors-own-str allow-headers)
+        _eh (httpd-cors-own-str expose-headers)
         _ac allow-credentials
         _ma max-age
         _n  next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-cors-is-preflight c))
-        (httpd-mw-cors-emit-preflight c _ao _am _ah _ac _ma)
-        (do (httpd-call _n c) (httpd-mw-cors-decorate c _ao _eh _ac))))))
+        (httpd-mw-cors-emit-preflight c
+          (string/to-cstr _ao)
+          (string/to-cstr _am)
+          (string/to-cstr _ah)
+          _ac
+          _ma)
+        (do
+          (httpd-call _n c)
+          (httpd-mw-cors-decorate c
+            (string/to-cstr _ao)
+            (string/to-cstr _eh)
+            _ac))))))
 ;;; mw-cors -- CORS middleware with permissive defaults.
 ;;;
 ;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
@@ -1884,12 +1948,9 @@
   size_t blen = strlen(b64);
   if (blen == 0) return 0;
   /* Base64-decode into a per-call heap buffer.  Output size <= input size. */
-  static const signed char b64tab[256] = {
-      /* fill with -1 except for valid base64 chars; we use a runtime init */
-      [0 ... 255] = -1
-  };
-  /* Designated initializers with ranges are a GNU extension; rebuild as
-   * a one-shot runtime table to stay portable. */
+  /* Designated initializers with ranges ([0 ... 255] = -1) are a GNU
+   * extension that c2mir cannot parse, which pushed every httpd program to
+   * the JIT's cc fallback.  Build the table at runtime instead. */
   signed char tab[256];
   for (int i = 0; i < 256; i++) tab[i] = -1;
   for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');
@@ -2587,6 +2648,18 @@
           }
       }
       if (conn->req_json_cache) { json_slfree(conn->req_json_cache); conn->req_json_cache = 0; }
+      /* httpd-request-accessor-cstr-leak: free per-request accessor strings on
+       * the async path too (httpd-req-cookie / httpd-req-form results). */
+      if (conn->owned_cstrs) {
+          HttpdOwnedStr *op = (HttpdOwnedStr *)conn->owned_cstrs;
+          while (op) {
+              HttpdOwnedStr *nx = op->next;
+              if (op->s) free(op->s);
+              free(op);
+              op = nx;
+          }
+          conn->owned_cstrs = NULL;
+      }
   }
   close(fd);
   /* A4: release the in-flight slot. */
@@ -2698,7 +2771,7 @@
       int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return NULL;
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   int opt = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
   int flags = fcntl(fd, F_GETFL, 0);
@@ -2711,26 +2784,26 @@
    * Firewall prompting "allow this app" for every fixture binary. */
   addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
   addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
-  if (!ha) { close(fd); return NULL; }
+  if (!ha) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   ha->listen_fd     = fd;
   ha->handler       = handler;
   ha->max_in_flight = (int)max_in_flight;
   ha->reactor       = tur_reactor_new();
-  if (!ha->reactor) { close(fd); free(ha); return NULL; }
+  if (!ha->reactor) { close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   ha->fiber_group = tur_local_fiber_group_new(ha->reactor);
-  if (!ha->fiber_group) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  if (!ha->fiber_group) { tur_reactor_free(ha->reactor); close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   /* Synthetic fat closure for the accept callback: { __fn, ha }. */
   int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
-  if (!clos) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  if (!clos) { tur_reactor_free(ha->reactor); close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   clos[0] = (int64_t)(intptr_t)httpd_hyasync_hyaccept_hycb;
   clos[1] = (int64_t)(intptr_t)ha;
   ha->accept_clos = (void *)clos;
   /* Synthetic fat closure for the fiber body. */
   int64_t *body_clos = (int64_t *)malloc(2 * sizeof(int64_t));
-  if (!body_clos) { free(clos); tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  if (!body_clos) { free(clos); tur_reactor_free(ha->reactor); close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   body_clos[0] = (int64_t)(intptr_t)httpd_hyasync_hyfiber_hybody;
   body_clos[1] = 0;
   ha->body_closure = (int64_t)(intptr_t)body_clos;
@@ -2742,7 +2815,7 @@
   if (ha->listen_src_id < 0) {
       free(body_clos); free(clos);
       tur_reactor_free(ha->reactor);
-      close(fd); free(ha); return NULL;
+      close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL;
   }
   return (void *)ha;
   ```)
@@ -2844,12 +2917,21 @@
   HttpdAsync *ha = (HttpdAsync *)h;
   if (ha->fiber_group) tur_local_fiber_group_free(ha->fiber_group);
   if (ha->reactor) tur_reactor_free(ha->reactor);
+  /* accept_clos and body_closure are hand-rolled synthetic { __fn, ptr } boxes
+   * (no codegen drop-glue header), so they are freed with a plain free -- NOT
+   * TUR_CLOSURE_DROP, which would read a header 8 bytes before the un-headered
+   * allocation. */
   if (ha->accept_clos) free(ha->accept_clos);
   if (ha->body_closure) free((void *)(intptr_t)ha->body_closure);
-  /* Free the user handler box (passed ^fat, always heap; distinct from
-   * body_closure). Sole free -- no double free. Outer layer only for a
-   * compose-middleware onion; see httpd-free / the plan. */
-  if (ha->handler) free((void *)(intptr_t)ha->handler);
+  /* Free the user handler box (passed ^fat, always a heap fat-closure box;
+   * distinct from body_closure). Sole free -- no double free. For a bare handler
+   * this reclaims the whole thing; for a compose-middleware onion,
+   * TUR_CLOSURE_DROP releases the outermost layer AND (under
+   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * env's drop-glue header, so the whole onion is freed. Flag-off,
+   * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
+   * before). */
+  if (ha->handler) TUR_CLOSURE_DROP(ha->handler);
   if (ha->listen_fd >= 0) close(ha->listen_fd);
   free(ha);
   ```)
@@ -3018,10 +3100,13 @@
   Route *cur = router->routes;
   while (cur) {
       Route *nx = cur->next;
-      /* Each route handler is passed ^fat (heap box) and freed nowhere else;
-       * reclaim the outer box here (inner middleware layers, if any, still
-       * leak pending closure drop glue -- see the plan). */
-      if (cur->handler) free((void *)(intptr_t)cur->handler);
+      /* Each route handler is passed ^fat (heap fat-closure box) and freed
+       * nowhere else. TUR_CLOSURE_DROP releases the outer box AND (under
+       * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+       * env's drop-glue header, so a compose-middleware onion is fully freed.
+       * Flag-off, TUR_CLOSURE_DROP is a plain free of the outer box (inner layers
+       * leak, as before). */
+      if (cur->handler) TUR_CLOSURE_DROP(cur->handler);
       free(cur);
       cur = nx;
   }
@@ -3316,6 +3401,109 @@
   (if (empty? mws)
     base
     (list (first mws) (list compose-middleware base ~@(rest mws)))))
+;;; Handler -- an owned, composed request-handler onion (the result of
+;;; `compose-middleware-of` / a folded middleware chain).
+;;;
+;;; `:affine` (use-at-most-once, move-only) is the key: a bound Handler the owner
+;;; neither MOVES (hands to a server via `httpd-handler-carrier`) nor BORROWS
+;;; (invokes via `(:: h :int)` / `httpd-call`) is AUTO-DROPPED at scope exit
+;;; through its Drop instance -- `TUR_CLOSURE_DROP` walks the captured `next`
+;;; boxes down to the base handler, reclaiming the whole onion.  This retires the
+;;; explicit `httpd-mw-drop` for the runtime-built-chain case: bind the fold
+;;; result as a Handler and the compiler drops it for you.  The carrier is the
+;;; same int64 fat-closure handle every httpd handler rides, so a Handler bridges
+;;; to `:int` / `(fn [int] int)` by ascription.
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+
+(defopaque Handler :int :affine)
+;;; httpd-handler-drop -- internal: reclaim a composed Handler onion.
+;;;
+;;; Routes to `TUR_CLOSURE_DROP`, which recovers the env's drop-glue header and
+;;; walks the owning captures (the wrapped downstream handlers) before freeing --
+;;; the whole onion down to the base, released exactly once.  Consumes its affine
+;;; argument.  This is the Drop instance's method; it is not normally called by
+;;; hand (the scope-exit auto-drop calls it).
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+
+(defn httpd-handler-drop [h : Handler] : void
+  ```c
+  int64_t __h = (int64_t)h;
+  if (__h) TUR_CLOSURE_DROP(__h);
+  ```)
+;;; Drop [Handler] -- reclaim the onion when a bound Handler dies unmoved/unborrowed.
+
+(definstance Drop [Handler] (drop [x] : void (httpd-handler-drop x)))
+;;; httpd-handler-carrier -- CONSUME a Handler, yielding its raw int64 carrier for
+;;; a server constructor (`^fat handler : int`) or any `:int` handler sink that
+;;; TAKES OWNERSHIP.
+;;;
+;;; Because the parameter is the affine Handler itself, passing a bound Handler
+;;; here MOVES it -- which suppresses the scope-exit auto-drop, so the server
+;;; (whose `httpd-free` / `httpd-async-free` already `TUR_CLOSURE_DROP`s its
+;;; handler) becomes the SOLE owner with no double-free.  Use this at a server
+;;; handoff; use `(:: h :int)` (a non-consuming read) only for a BORROW where the
+;;; owner keeps the Handler and lets it auto-drop.
+;;;
+;;; Parameters:
+;;;   h -- the composed Handler onion (consumed).
+;;;
+;;; Returns:
+;;;   The raw int64 fat-closure carrier.
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware-of base mw1 mw2)]
+;;;     (httpd-new-pool 0 1 (httpd-handler-carrier composed)))
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+
+(defn httpd-handler-carrier [h : Handler] : int
+  ```c
+  return (int64_t)h;
+  ```)
+;;; ClosureChain -- an owned runtime-built middleware chain: a cons list whose
+;;; heads are fresh, uniquely-owned factory closures and whose spine cells the
+;;; builder owns.  `httpd-mw-fold` only BORROWS it (applies each head once); once
+;;; the fold has produced its onion the whole chain -- heads and cells -- is dead.
+;;;
+;;; `:affine` (same discipline as `Handler`): a bound ClosureChain the builder
+;;; neither MOVES nor BORROWS (`(:: chain :int)`) is AUTO-DROPPED at scope exit
+;;; via its Drop instance, which walks the spine dropping each head
+;;; (`TUR_CLOSURE_DROP`) and freeing each cell.  This is the automatic-R3a
+;;; replacement for the explicit `httpd-mw-free-chain`.
+;;;
+;;; SOUNDNESS: sound iff each head is a DISTINCT, uniquely-owned closure (a fresh
+;;; `(make-mw)` per cell) -- the same contract `httpd-mw-free-chain` documents.
+;;; Do NOT cons the same closure value into the list twice (double-drop), and do
+;;; NOT wrap a chain whose heads are the borrowed `& mws` of `compose-middleware-of`
+;;; (those heads belong to the variadic caller; use `httpd-mw-free-spine`, which
+;;; frees ONLY the cells).
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+
+(defopaque ClosureChain :int :affine)
+;;; httpd-chain-drop -- internal: reclaim a ClosureChain (drop each head factory
+;;; via TUR_CLOSURE_DROP + free each spine cell).  Consumes its affine argument;
+;;; it is the Drop instance's method, normally invoked by the scope-exit auto-drop.
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+
+(defn httpd-chain-drop [c : ClosureChain] : void
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)(int64_t)c;
+  while (p) {
+      __tur_cons_cell *n = (__tur_cons_cell *)(intptr_t)p->tail;
+      if (p->head) TUR_CLOSURE_DROP(p->head);
+      free(p);
+      p = n;
+  }
+  ```)
+;;; Drop [ClosureChain] -- reclaim a runtime-built chain when its builder binding
+;;; dies unmoved/unborrowed.
+
+(definstance Drop [ClosureChain] (drop [x] : void (httpd-chain-drop x)))
 ;;; httpd-mw-apply -- internal: apply one fat-closure middleware to a handler.
 ;;;
 ;;; The middleware is a fat closure of shape
@@ -3339,6 +3527,94 @@
     (let [inner (httpd-mw-fold base (list-tail mws))
           mw    (list-head mws)]
       (if (= mw 0) inner (httpd-mw-apply mw inner)))))
+;;; httpd-mw-free-spine -- internal: free the cons-cell spine of a variadic
+;;; middleware rest-list, leaving the head VALUES untouched. `compose-middleware-of`
+;;; owns the fresh `& mws` list; `httpd-mw-fold` only walks it (applying each head
+;;; once), so once the fold has built the wrapper chain the spine cells are dead
+;;; and can be reclaimed. The head factories are borrowed (the caller frees them
+;;; at its own scope exit), so this frees ONLY the cells, never the heads.
+
+(defn httpd-mw-free-spine [mws : int] : nil
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
+  while (p) {
+      __tur_cons_cell *n = (__tur_cons_cell *)(intptr_t)p->tail;
+      free(p);
+      p = n;
+  }
+  ```)
+;;; httpd-mw-drop -- SUPERSEDED: reclaim a raw-`:int` composed handler onion.
+;;;
+;;; Retired in favor of the `Handler` auto-drop (automatic R3a): bind the fold
+;;; result as a `Handler` (`(:: (httpd-mw-fold base chain) :Handler)`, or use
+;;; `compose-middleware-of`, which returns `Handler`) and the compiler drops the
+;;; onion for you at scope exit -- no explicit call, and no risk of forgetting
+;;; it.  Kept only for a legacy raw-`:int` onion that was never bound as a
+;;; Handler; new code should not use it.
+;;;
+;;; Releases the outermost wrapper AND walks the captured downstream `next` boxes
+;;; via the env's drop-glue header, so the whole onion (down to the base handler)
+;;; is freed.
+;;;
+;;; Parameters:
+;;;   handler -- the composed handler closure (:int); 0 is a no-op.
+;;;
+;;; Returns: nothing.
+;;;
+;;; Example (legacy -- prefer the Handler auto-drop):
+;;;   (let [composed (:: (httpd-mw-fold base chain) :Handler)]
+;;;     (httpd-call (:: composed :int) conn))   ; composed auto-drops at scope exit
+;;;
+;;; Since: R3a; superseded by Handler auto-drop (automatic R3a).
+
+(defn httpd-mw-drop [handler : int] : nil
+  ```c
+  if (handler) TUR_CLOSURE_DROP(handler);
+  ```)
+;;; httpd-mw-free-chain -- SUPERSEDED: free a runtime-built middleware cons list
+;;; (the INPUT to `httpd-mw-fold`): drop each head factory closure AND free each
+;;; spine cell.
+;;;
+;;; Retired in favor of the `ClosureChain` auto-drop (automatic R3a half 2): bind
+;;; the runtime chain as a `ClosureChain` (`(:: (build-chain n (tnil))
+;;; :ClosureChain)`) and the compiler walks the spine, dropping each head and
+;;; freeing each cell, at scope exit -- no explicit call.  This function's body is
+;;; exactly the `Drop [ClosureChain]` method; kept only for a legacy raw-`:int`
+;;; chain that was never bound as a ClosureChain.
+;;;
+;;; Unlike `httpd-mw-free-spine` (which leaves the heads, because the variadic
+;;; `compose-middleware-of` caller owns and frees them), a hand-built runtime
+;;; chain (e.g. from a `build-chain` loop) is owned entirely by its builder: the
+;;; fold only BORROWS each factory (applies it once, discards it), so once the
+;;; fold has produced the composed onion the whole list -- factories and cells --
+;;; is dead and the builder reclaims it. Sound iff each head is a distinct,
+;;; uniquely-owned closure (a fresh `(make-mw)` per cell); do NOT cons the same
+;;; closure value into the list twice (that would double-drop it).
+;;;
+;;; Parameters:
+;;;   mws -- the middleware cons list (:int); 0 is a no-op.
+;;;
+;;; Returns: nothing.
+;;;
+;;; Example (legacy -- prefer the ClosureChain auto-drop):
+;;;   (let [chain    (:: (build-chain 70 (tnil)) :ClosureChain)
+;;;         composed (:: (httpd-mw-fold base (:: chain :int)) :Handler)]
+;;;     (httpd-call (:: composed :int) conn))  ; composed + chain auto-drop at scope exit
+;;;
+;;; Since: R3a; superseded by ClosureChain auto-drop (automatic R3a half 2).
+
+(defn httpd-mw-free-chain [mws : int] : nil
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
+  while (p) {
+      __tur_cons_cell *n = (__tur_cons_cell *)(intptr_t)p->tail;
+      if (p->head) TUR_CLOSURE_DROP(p->head);
+      free(p);
+      p = n;
+  }
+  ```)
 ;;; compose-middleware-of -- runtime variadic form of compose-middleware.
 ;;;
 ;;; This is a defn, not a macro. Use when the chain is built at runtime
@@ -3368,15 +3644,19 @@
 ;;;           to whatever closure type the call site uses.
 ;;;
 ;;; Returns:
-;;;   The fully-wrapped handler closure (:int).
+;;;   The fully-wrapped handler onion as an owned `Handler` -- bind it and the
+;;;   compiler auto-drops it at scope exit (no explicit `httpd-mw-drop`), or hand
+;;;   it to a server via `httpd-handler-carrier` (which moves it, suppressing the
+;;;   auto-drop so the server owns it).
 ;;;
 ;;; Since: Phase H8 (M8 core); requires the V1 cast fix in
 ;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
+;;;        Returns `Handler` since automatic R3a (closure-drop-glue).
 
-(defn compose-middleware-of [A]
-  [^fat base :int & mws :A]
-  :int
-  (httpd-mw-fold base mws))
+(defn compose-middleware-of [A] [^fat base :int ^borrow & mws :A] :Handler
+  (let [composed (httpd-mw-fold base mws)]
+    (httpd-mw-free-spine mws)
+    (:: composed :Handler)))
 ;; =============================================================================
 ;; MW1: mw-body-size -- Content-Length cap (per docs/upcoming/httpd-middleware-plan.md)
 ;; =============================================================================
@@ -3617,6 +3897,24 @@
       int             window_s;
       int             max_requests;
   } RLState;
+  /* httpd-mw-rate-limit-state-leak: the RLState is captured by the
+   * mw-rate-limit closure as a bare int handle, so neither httpd-free nor the
+   * closure drop-glue reaches it -- it would leak ~24 KB per limiter for the
+   * life of the process.  Track the two heap blocks (the state and its entry
+   * table) on a process-global registry and free them from an atexit hook.
+   * Freeing at process exit -- not at httpd-free -- is deliberate: two servers
+   * can each own a limiter, and an httpd-free of one must not free the other's
+   * still-live counter table.  The registry stores bare `void *` so its
+   * file-scope typedef/globals/cleanup need no pthread_mutex_t (the __tur_include__
+   * block is emitted above the preamble's <pthread.h>); the mutex lives inside
+   * the freed RLState block and needs no separate teardown at process exit.
+   * Registration runs during single-threaded middleware setup, so the registry
+   * list itself needs no lock. */
+  /* __tur_include__: #include <stdlib.h> */
+  /* __tur_include__: typedef struct __RLReg { void *st; void *entries; struct __RLReg *next; } RLReg; */
+  /* __tur_include__: static RLReg *g_rl_registry = 0; */
+  /* __tur_include__: static int g_rl_atexit_registered = 0; */
+  /* __tur_include__: static void httpd_rl_cleanup_all(void) { RLReg *r = g_rl_registry; while (r) { RLReg *nx = r->next; if (r->entries) free(r->entries); if (r->st) free(r->st); free(r); r = nx; } g_rl_registry = 0; } */
   RLState *st = (RLState *)calloc(1, sizeof(RLState));
   if (!st) return 0;
   st->capacity     = 1024;
@@ -3625,6 +3923,15 @@
   st->entries      = (RLEntry *)calloc((size_t)st->capacity, sizeof(RLEntry));
   if (!st->entries) { free(st); return 0; }
   pthread_mutex_init(&st->mtx, NULL);
+  /* Register the two heap blocks for process-exit cleanup. */
+  RLReg *reg = (RLReg *)malloc(sizeof(RLReg));
+  if (reg) {
+      reg->st      = (void *)st;
+      reg->entries = (void *)st->entries;
+      reg->next    = g_rl_registry;
+      g_rl_registry = reg;
+      if (!g_rl_atexit_registered) { atexit(httpd_rl_cleanup_all); g_rl_atexit_registered = 1; }
+  }
   return (int64_t)(intptr_t)st;
   ```)
 ;;; httpd-mw-ratelimit-check -- internal: bump the counter for ip; return

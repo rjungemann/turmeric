@@ -1,0 +1,33 @@
+;; string-adoption-stdlib-plan batch 3: owned String sibling for
+;; schema-error-message. schema-error-message always mallocs its result, so
+;; schema-error-message-string is a plain string/adopt-cstr wrapper -- the owned
+;; String is safe to store / return / key a map with. It ships in the opt-in
+;; stdlib/schema-string.tur (NOT inline in schema.tur, which is prelude-loaded).
+(load "stdlib/json.tur")
+(load "stdlib/schema-string.tur")
+
+(defn user-schema [] : int
+  (schema/field
+    (schema/field (schema/object-new) "name" (schema/str))
+    "address"
+    (schema/field
+      (schema/field (schema/object-new) "city" (schema/str))
+      "zip" (schema/str))))
+
+;; name is an int (should be str) AND address.zip is an int (should be str).
+(defn demo [] : int
+  (let [r    (schema-decode
+               (user-schema)
+               (json/decode
+                 "{\"name\": 42, \"address\": {\"city\": \"NYC\", \"zip\": 10001}}"))
+        s    (schema-error-message-string (schema-decode-errors r))]
+    (do
+      (println (string/to-cstr s))
+      ;; owned result survives as a Map key
+      (let [m (map-assoc (:: (map-new) (Map String int)) s 1)]
+        (do
+          (println (map-get m s))
+          (map-free m)))
+      0)))
+
+(demo)

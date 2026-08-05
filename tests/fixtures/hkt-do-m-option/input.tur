@@ -19,14 +19,14 @@
 (defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return p != NULL && p->is_some;
   ```)
 
 (defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return p->value;
   ```)
 
@@ -38,7 +38,7 @@
 (defn __bind_option [ma fn] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+      (void *)(intptr_t)ma;
   if (!opt || !opt->is_some) return 0;
   /* fn is a closure env struct; first field is the function pointer */
   return TUR_APPLY1(fn, opt->value);

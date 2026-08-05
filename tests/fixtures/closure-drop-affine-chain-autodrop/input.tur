@@ -1,0 +1,70 @@
+;; automatic R3a (closure-drop-glue), half 2: a MOVE-ONLY (:affine, non-Clone)
+;; Drop-instance opaque whose Drop WALKS A SPINE -- the mechanism httpd's
+;; `ClosureChain` uses to retire the explicit `httpd-mw-free-chain`. A bound
+;; runtime-built chain the builder neither moves nor borrows is auto-dropped at
+;; scope exit; its Drop frees every head and every cell.
+;;
+;; Verified DETERMINISTICALLY via alloc/free counters (LSan-independent), with
+;; ASan additionally guarding against a double-free. Expected: 4 head allocs
+;; balanced by exactly 4 head frees, and the borrow (chain-len) sees all 4 cells.
+
+;; cbox -- op 0: alloc a head (counted); op 1: free head `arg` (counted);
+;; op 2: read alloc count; op 3: read free count.
+(defn cbox [op : int arg : int] : int
+  ```c
+  static int64_t g_al = 0, g_fr = 0;
+  if (op == 0) { g_al++; return (int64_t)(intptr_t)malloc(32); }
+  if (op == 1) { g_fr++; free((void *)(intptr_t)arg); return 0; }
+  if (op == 2) return g_al;
+  return g_fr;
+  ```)
+
+(defopaque Chain :int :affine)
+
+(defn cell-cons [head : int tail : int] : int
+  ```c
+  struct C { int64_t head; int64_t tail; };
+  struct C *p = (struct C *)malloc(sizeof(struct C));
+  p->head = head; p->tail = tail;
+  return (int64_t)(intptr_t)p;
+  ```)
+(defn cell-head [c : int] : int
+  ```c struct C { int64_t head; int64_t tail; }; return ((struct C *)(intptr_t)c)->head; ```)
+(defn cell-tail [c : int] : int
+  ```c struct C { int64_t head; int64_t tail; }; return ((struct C *)(intptr_t)c)->tail; ```)
+(defn cell-free [c : int] : void
+  ```c free((void *)(intptr_t)c); ```)
+
+(defn build-chain [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (build-chain (- n 1) (cell-cons (cbox 0 0) acc))))
+
+;; chain-drop-go -- walk the spine in Turmeric, freeing each head (counted via
+;; cbox) and each cell.
+(defn chain-drop-go [c : int] : void
+  (when (not (= c 0))
+    (let [h (cell-head c)
+          t (cell-tail c)]
+      (cbox 1 h)
+      (cell-free c)
+      (chain-drop-go t))))
+
+(defn chain-drop [c : Chain] : void
+  (chain-drop-go (:: c :int)))
+
+(definstance Drop [Chain]
+  (drop [x] : void (chain-drop x)))
+
+(defn chain-len [c : int] : int
+  (if (= c 0)
+    0
+    (+ 1 (chain-len (cell-tail c)))))
+
+(defn main [] : int
+  (let [chain (:: (build-chain 4 (:: 0 int)) :Chain)]
+    ;; borrow the chain (count its cells), then let it auto-drop at scope exit
+    (println (chain-len (:: chain :int))))
+  (println (cbox 2 0))   ;; head allocs
+  (println (cbox 3 0))   ;; head frees
+  0)

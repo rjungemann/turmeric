@@ -15,7 +15,7 @@
 ;; const-pointer arguments round-trip correctly at runtime (the carrier is
 ;; still int64-wide, so dispatch is unchanged -- only the C spelling tightened).
 
-(defn handle [ts : float msg : ptr<const-u8> n : usize ud : ptr<void>] : void
+(defn on-log [ts : float msg : ptr<const-u8> n : usize ud : ptr<void>] : void
   ```c
   /* sum the n bytes of msg and print, ignoring ts/ud */
   (void)ts; (void)ud;
@@ -32,5 +32,5 @@
   ```)
 
 (defn main [] : int
-  (dispatch handle)
+  (dispatch on-log)
   0)

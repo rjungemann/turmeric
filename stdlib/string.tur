@@ -1,0 +1,372 @@
+;;; tur/string -- owned, immutable, refcounted String.
+;;;
+;;; Unlike `cstr` (a borrowed raw `const char*` with no length or ownership) and
+;;; `str` (a borrowed pointer+length view), a `String` OWNS its bytes: it is a
+;;; refcounted immutable heap payload `{ rc; len; bytes[len+1] }`, NUL-terminated
+;;; so a borrowed cstr view is O(1).  Reach for `String` when a string must
+;;; outlive its source -- a value returned past its buffer, a stored field, or a
+;;; Map/Set key.  As a `MapKey` the map copies and owns the key bytes
+;;; (`mk-owned? = 1`), so a `String` key never dangles the way a computed `cstr`
+;;; key does.
+;;;
+;;; `String` is immutable; every transform returns a fresh `String`.  Build one
+;;; incrementally with `StringBuilder` so repeated concatenation stays linear.
+;;;
+;;; Since: v2 (owned-string-type-plan)
+;; ---------------------------------------------------------------------------
+;; NOTE (show-owned-result-plan stage 4): the typeclass loads that instantiate
+;; String against Eq/Ord/Show/Hash/Clone/MapKey moved BELOW the String type +
+;; ops (see the load block just above the instance section at the bottom of the
+;; file).  Show now returns an owned String, so stdlib/typeclass-show.tur loads
+;; THIS file -- the loads must therefore run only after `String` and its ops are
+;; defined, or the reentrant (load "stdlib/string.tur") from typeclass-show.tur
+;; would see an undefined String in `(defclass Show [a] (show [x] : String))`.
+;; ---- Opaque handle newtypes ------------------------------------------------
+;; String lowers to :ptr<void> in the C ABI (a pointer to the refcounted
+;; payload); the newtype keeps it nominally distinct so the checker rejects
+;; passing an unrelated handle where a String is expected.
+(defopaque String :ptr<void>)
+
+(defopaque StringBuilder :ptr<void>)
+;; ---- Runtime primitives (src/runtime/tur_string.c) -------------------------
+;; Declared raw (:ptr / :cstr / :int / :bool); the public ops below wrap them
+;; with the String / StringBuilder newtypes.  The interpreter registers a native
+;; of the same name for each (src/turi/string_native.c), so these resolve under
+;; --interpret exactly as when compiled.
+
+(extern-c tur_string_from_cstr [s :cstr] :ptr)
+
+(extern-c tur_string_from_bytes [src :cstr n :int] :ptr)
+
+(extern-c tur_string_adopt_cstr [s :cstr] :ptr)
+
+(extern-c tur_string_from_int [v :int] :ptr)
+
+(extern-c tur_string_cstr [s :ptr] :cstr)
+
+(extern-c tur_string_retain [s :ptr] :ptr)
+
+(extern-c tur_string_release [s :ptr] :void)
+
+(extern-c tur_string_len [s :ptr] :int)
+
+(extern-c tur_string_empty [s :ptr] :bool)
+
+(extern-c tur_string_byte_at [s :ptr i :int] :int)
+
+(extern-c tur_string_eq [a :ptr b :ptr] :bool)
+
+(extern-c tur_string_cmp [a :ptr b :ptr] :int)
+
+(extern-c tur_string_hash [s :ptr] :int)
+
+(extern-c tur_string_starts_with [s :ptr prefix :ptr] :bool)
+
+(extern-c tur_string_ends_with [s :ptr suffix :ptr] :bool)
+
+(extern-c tur_string_contains [s :ptr needle :ptr] :bool)
+
+(extern-c tur_string_concat [a :ptr b :ptr] :ptr)
+
+(extern-c tur_string_substring [s :ptr start :int len :int] :ptr)
+
+(extern-c tur_string_to_upper [s :ptr] :ptr)
+
+(extern-c tur_string_to_lower [s :ptr] :ptr)
+
+(extern-c tur_string_trim [s :ptr] :ptr)
+
+(extern-c tur_string_box_key [s :ptr] :ptr)
+
+(extern-c tur_string_key_eq_addr [] :int)
+
+(extern-c tur_sb_new [] :ptr)
+
+(extern-c tur_sb_push_cstr [b :ptr s :cstr] :void)
+
+(extern-c tur_sb_push_string [b :ptr s :ptr] :void)
+
+(extern-c tur_sb_push_byte [b :ptr c :int] :void)
+
+(extern-c tur_sb_len [b :ptr] :int)
+
+(extern-c tur_sb_finish [b :ptr] :ptr)
+;; ---- Construction / conversion ---------------------------------------------
+;;; string/from-cstr -- copy a NUL-terminated C string into a fresh owned String.
+;;;
+;;; Parameters:
+;;;   s -- the source cstr (a literal or borrowed buffer); its bytes are copied
+;;;
+;;; Returns:
+;;;   A new String (refcount 1) owning a private copy of s's bytes.
+;;;
+;;; Example:
+;;;   (string/from-cstr "hello")  ; => String "hello"
+;;;
+;;; Since: v2
+
+(defn string/from-cstr [s : cstr] : String (:: (tur_string_from_cstr s) String))
+;;; string/to-cstr -- borrow the String's NUL-terminated bytes (O(1), no copy).
+;;;
+;;; The returned cstr points into the String's payload and stays valid only
+;;; while the String is retained; do not use it after the String is released.
+;;;
+;;; Parameters:
+;;;   s -- the String to borrow from
+;;;
+;;; Returns:
+;;;   A borrowed cstr view of the same bytes.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/from-cstr "hi"))  ; => "hi"
+;;;
+;;; Since: v2
+
+(defn string/to-cstr [s : String] : cstr (tur_string_cstr (:: s ptr<void>)))
+;;; string/adopt-cstr -- take ownership of a freshly-allocated cstr as a String.
+;;;
+;;; Copies the bytes of `s` into a fresh owned String and FREES `s`.  This is the
+;;; owned-adoption bridge for the many stdlib functions that return a malloc'd
+;;; cstr ("caller frees the result") -- wrap such a call in string/adopt-cstr and
+;;; the result is a real owned String, leak-free:
+;;;
+;;;   (string/adopt-cstr (path/join base seg))   ; owned path String
+;;;   (string/adopt-cstr (digest/sha256-hex ...)) ; owned digest String
+;;;
+;;; WARNING: `s` MUST be a heap buffer the caller owns. Never pass a string
+;;; literal or a borrowed cstr (an accessor's return, a struct field) -- freeing
+;;; that is undefined behavior. When in doubt, use string/from-cstr (which copies
+;;; without freeing).
+;;;
+;;; Parameters:
+;;;   s -- a freshly heap-allocated NUL-terminated cstr; consumed (freed)
+;;;
+;;; Returns:
+;;;   A new owned String holding a copy of s's bytes.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 1)
+
+(defn string/adopt-cstr [s : cstr] : String
+  (:: (tur_string_adopt_cstr s) String))
+;;; int->string -- format a signed integer as a fresh owned decimal String.
+;;;
+;;; The owned counterpart of int->str (which returns a caller-frees cstr); builds
+;;; the String directly with no cstr intermediate.
+;;;
+;;; Parameters:
+;;;   v -- the integer to render
+;;;
+;;; Returns:
+;;;   A new owned String, e.g. (int->string -7) => String "-7".
+;;;
+;;; Example:
+;;;   (string/to-cstr (int->string 42))  ; => "42"
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 1)
+
+(defn int->string [v : int] : String (:: (tur_string_from_int v) String))
+;;; string/retain -- increment the refcount, returning a second owning handle.
+;;;
+;;; Since: v2
+
+(defn string/retain [s : String] : String
+  (:: (tur_string_retain (:: s ptr<void>)) String))
+;;; string/release -- decrement the refcount; free the payload at zero.
+;;;
+;;; Since: v2
+
+(defn string/release [s : String] : void (tur_string_release (:: s ptr<void>)))
+;; ---- Queries ---------------------------------------------------------------
+;;; string/len -- byte length of the String (not counting the NUL).
+;;;
+;;; Since: v2
+
+(defn string/len [s : String] : int (tur_string_len (:: s ptr<void>)))
+;;; string/empty? -- true iff the String has length zero.
+;;;
+;;; Since: v2
+
+(defn string/empty? [s : String] : bool (tur_string_empty (:: s ptr<void>)))
+;;; string/byte-at -- the byte (0..255) at index i, or -1 if out of range.
+;;;
+;;; Since: v2
+
+(defn string/byte-at [s : String i : int] : int
+  (tur_string_byte_at (:: s ptr<void>) i))
+;;; string/eq? -- content equality (length then byte compare).
+;;;
+;;; Since: v2
+
+(defn string/eq? [a : String b : String] : bool
+  (tur_string_eq (:: a ptr<void>) (:: b ptr<void>)))
+;;; string/compare -- lexicographic byte compare: -1, 0, or 1.
+;;;
+;;; Since: v2
+
+(defn string/compare [a : String b : String] : int
+  (tur_string_cmp (:: a ptr<void>) (:: b ptr<void>)))
+;;; string/hash -- content hash over the exact byte range (length-aware).
+;;;
+;;; Since: v2
+
+(defn string/hash [s : String] : int (tur_string_hash (:: s ptr<void>)))
+;;; string/starts-with? -- true iff s begins with prefix.
+;;;
+;;; Since: v2
+
+(defn string/starts-with? [s : String prefix : String] : bool
+  (tur_string_starts_with (:: s ptr<void>) (:: prefix ptr<void>)))
+;;; string/ends-with? -- true iff s ends with suffix.
+;;;
+;;; Since: v2
+
+(defn string/ends-with? [s : String suffix : String] : bool
+  (tur_string_ends_with (:: s ptr<void>) (:: suffix ptr<void>)))
+;;; string/contains? -- true iff needle occurs as a substring of s.
+;;;
+;;; Since: v2
+
+(defn string/contains? [s : String needle : String] : bool
+  (tur_string_contains (:: s ptr<void>) (:: needle ptr<void>)))
+;; ---- Transforms (each returns a fresh immutable String) --------------------
+;;; string/concat -- concatenate two Strings into a fresh String.
+;;;
+;;; Since: v2
+
+(defn string/concat [a : String b : String] : String
+  (:: (tur_string_concat (:: a ptr<void>) (:: b ptr<void>)) String))
+;;; string/substring -- fresh String of len bytes starting at start (clamped).
+;;;
+;;; Out-of-range start/len are clamped to the String's bounds rather than
+;;; erroring, so a substring past the end yields the empty String.
+;;;
+;;; Since: v2
+
+(defn string/substring [s : String start : int len : int] : String
+  (:: (tur_string_substring (:: s ptr<void>) start len) String))
+;;; string/to-upper -- ASCII-uppercased copy.
+;;;
+;;; Since: v2
+
+(defn string/to-upper [s : String] : String
+  (:: (tur_string_to_upper (:: s ptr<void>)) String))
+;;; string/to-lower -- ASCII-lowercased copy.
+;;;
+;;; Since: v2
+
+(defn string/to-lower [s : String] : String
+  (:: (tur_string_to_lower (:: s ptr<void>)) String))
+;;; string/trim -- copy with ASCII leading/trailing whitespace removed.
+;;;
+;;; Since: v2
+
+(defn string/trim [s : String] : String
+  (:: (tur_string_trim (:: s ptr<void>)) String))
+;; ---- StringBuilder ---------------------------------------------------------
+;;; builder/new -- a fresh empty StringBuilder (mutable, growable byte buffer).
+;;;
+;;; Since: v2
+
+(defn builder/new [] : StringBuilder (:: (tur_sb_new) StringBuilder))
+;;; builder/push-cstr! -- append a cstr's bytes to the builder.
+;;;
+;;; Since: v2
+
+(defn builder/push-cstr! [b : StringBuilder s : cstr] : void
+  (tur_sb_push_cstr (:: b ptr<void>) s))
+;;; builder/push-string! -- append a String's bytes to the builder.
+;;;
+;;; Since: v2
+
+(defn builder/push-string! [b : StringBuilder s : String] : void
+  (tur_sb_push_string (:: b ptr<void>) (:: s ptr<void>)))
+;;; builder/push-byte! -- append a single byte (0..255) to the builder.
+;;;
+;;; Since: v2
+
+(defn builder/push-byte! [b : StringBuilder c : int] : void
+  (tur_sb_push_byte (:: b ptr<void>) c))
+;;; builder/len -- number of bytes accumulated so far.
+;;;
+;;; Since: v2
+
+(defn builder/len [b : StringBuilder] : int (tur_sb_len (:: b ptr<void>)))
+;;; builder/finish -- freeze the accumulated bytes into an immutable String.
+;;;
+;;; Consumes the builder (frees it); do not use the builder afterward.
+;;;
+;;; Example:
+;;;   (let [b (builder/new)]
+;;;     (do (builder/push-cstr! b "a")
+;;;         (builder/push-cstr! b "b")
+;;;         (builder/finish b)))  ; => String "ab"
+;;;
+;;; Since: v2
+
+(defn builder/finish [b : StringBuilder] : String
+  (:: (tur_sb_finish (:: b ptr<void>)) String))
+;; ---- Typeclass loads (deferred to here so String + its ops exist first) ----
+;; typeclass.tur transitively loads stdlib/typeclass-show.tur, whose owned
+;; `Show` loads this file back -- reentrant, but harmless now that String and
+;; every string/* op above are defined.  Show[String] itself lives in
+;; typeclass-show.tur (Show's own module).
+
+(load "stdlib/typeclass-eq.tur")
+
+(load "stdlib/typeclass.tur")
+
+(load "stdlib/typeclass-hash.tur")
+
+(load "stdlib/typeclass-clone.tur")
+
+(load "stdlib/map.tur")
+;; ---- Typeclass instances ---------------------------------------------------
+;;; Eq [String] -- content equality.
+
+(definstance Eq [String] (eq? [x y] (string/eq? x y)))
+;;; Ord [String] -- lexicographic byte ordering.
+
+(definstance Ord [String]
+  (lt? [x y] (< (string/compare x y) 0))
+  (lte? [x y] (<= (string/compare x y) 0))
+  (gt? [x y] (> (string/compare x y) 0))
+  (gte? [x y] (>= (string/compare x y) 0)))
+;; Show [String] -- lives in stdlib/typeclass-show.tur (Show's own module),
+;; O(1) retain; moved there in stage 4 when Show's result became owned String.
+;;; Hash [String] -- content hash over the byte range.
+
+(definstance Hash [String] (hash [x] (string/hash x)))
+;;; Clone [String] -- O(1) retain (refcount++), returning a second owning handle.
+
+(definstance Clone [String] (clone [x] : int (:: (string/retain x) int)))
+;;; Drop [String] -- release one owning handle (refcount--), freeing at zero.
+;;;
+;;; Paired with Clone [String] (retain), this lets the closure drop-glue treat a
+;;; captured String as a shared refcounted owner: retained when captured, released
+;;; when the capturing env dies -- so an owned String captured into an escaping
+;;; closure (e.g. httpd mw-cors config strings) is reclaimed instead of leaking.
+;;;
+;;; Since: v2 (Model R)
+
+(definstance Drop [String] (drop [x] : void (string/release x)))
+;;; MapKey [String] -- owned key: the map copies the bytes into a boxed key it
+;;; owns and frees (mk-owned? = 1), so a String key never dangles.  mk-cmp is the
+;;; size-aware content comparator over boxed keys.
+
+(definstance MapKey [String]
+  (mk-box [x] : int (:: (tur_string_box_key (:: x ptr<void>)) int))
+  (mk-cmp [x] : int (tur_string_key_eq_addr))
+  (mk-owned? [x] 1))
+;; ---------------------------------------------------------------------------
+;; Autolink hint -- consumed by `tur build` / `tur run` (src/main.c).  The
+;; __tur_autolink__ comment causes src/runtime/tur_string.c to be compiled
+;; alongside the generated code, with -Isrc/runtime so tur_string.h is found.
+;;; string/autolink-hint -- internal marker triggering tur_string.c compilation.
+
+(defn string/autolink-hint []
+  #fx{Unsafe}
+  : int
+  ```c
+  /* __tur_autolink__: src/runtime/tur_string.c -Isrc/runtime */
+  return 0;
+  ```)

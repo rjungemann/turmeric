@@ -1,0 +1,14 @@
+;; A definitely-wrong argument at a typeclass dispatch site fails the build,
+;; and the diagnostic names the method the way the SOURCE does -- `scale-by`,
+;; not the mangled instance symbol `__inst_Scaler_scale_hyby_int` the binding
+;; actually carries.
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+(definstance Scaler [int]
+  (scale-by [self : int, k : #refine{ v : int | (> v 0) }] : int
+    (* self k)))
+
+(defn main [] : int
+  (println (.scale-by 3 0))
+  0)

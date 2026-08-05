@@ -1,0 +1,30 @@
+;; constrained-hkt-abstract-var-requires-last-param-free: a constrained abstract
+;; type constructor filled by a head whose free slot is NOT last.
+;;
+;; `Result` is `(Result ok err)` and its instances are ok-biased, so the mapped
+;; slot is FIRST -- the shape its own instance head spells `(Result _ B)`.
+;; Curried unification can only ever leave the LAST slot free, so `(m int)`
+;; against `(Result int cstr)` used to bind `m := (Result int)` -- fixing the
+;; very slot meant to stay free -- and fail with TUR-E0001.
+;;
+;; The hole now lives in the Type (`Type.as.app.hole_pos_p1`), so `m` binds to
+;; `(Result _ cstr)` and saturating it puts the element at the hole:
+;; `(m int)` -> `(Result int cstr)`, not the transposed `(Result cstr int)`.
+;;
+;; Both arms matter: the `ok` arm proves the element threads through the hole,
+;; and the `err` arm proves the ok-biased instance actually ran (it
+;; short-circuits and preserves the error payload) rather than some other
+;; instance reading the carrier by coincidence.
+
+(defn ok-int [n : int] : (Result int cstr) (ok n))
+(defn bad    []        : (Result int cstr) (err "boom"))
+
+(defn poly-bind [^m] [^Monad m x : (m int)] : (m int)
+  (bind x (fn [v] (ok-int (* v 3)))))
+
+(defn main [] : int
+  (let [a (poly-bind (ok-int 4))]
+    (println (if (ok? a) (ok-val a) -1)))          ; 12
+  (let [b (poly-bind (bad))]
+    (println (if (err? b) (err-val b) "no-err")))  ; boom
+  0)

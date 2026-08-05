@@ -1,0 +1,36 @@
+;; Regression guard: defstruct/defdata FIELD types resolve (a) an
+;; associated-type projection head -- (Storage Pos), the ecs defworld
+;; shape -- and (b) a Size GADT literal in a type-app argument slot --
+;; (SizedDense (Static 8) Pos), the ecs sized-defworld-mono shape.
+;; Both broke when defstruct lowered onto struct_field_type_from_form,
+;; which had neither the assoc-type dispatch (spurious TUR-E0012 "cannot
+;; apply a type of kind '*'") nor the SZ8 argument placeholder
+;; ("unsupported type expression form" on the integer literal).
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defopaque Pos :int)
+(defopaque Dense [A] :int)
+(defopaque SizedDense [n A] :int)
+
+(defclass Component [T]
+  (type Storage : Type))
+
+(definstance Component [Pos]
+  (type Storage = (Dense Pos)))
+
+(defstruct World
+  [pos : (Storage Pos)])
+
+(defstruct SizedWorld
+  [pos : (SizedDense (Static 8) Pos)])
+
+(defn main [] : int
+  (let [w  (World (:: 7 (Dense Pos)))
+        sw (SizedWorld (:: 9 (SizedDense (Static 8) Pos)))]
+    (println (:: (.pos w) :int))
+    (println (:: (.pos sw) :int))
+    0))

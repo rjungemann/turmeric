@@ -1,0 +1,18 @@
+;; closure-drop-glue (Model R): a bare (non-capturing) top-level fn shimmed to a
+;; fat handle is the `__tur_fatshim` representation ({shim, orig_fn}), NOT a
+;; struct __env_N.  Flag-on it too carries the env[-1] drop-glue header (a NULL
+;; glue -> tur_closure_drop frees the base), so TUR_CLOSURE_DROP releases ANY fat
+;; representation uniformly -- the prerequisite for a walk that recurses a
+;; captured handle without knowing which representation it is.
+(defn dbl [n : int] : int (* n 2))
+
+(defn apply-drop [^fat f : (fn [int] int)] : int
+  ```c
+  int64_t r = TUR_APPLY1((int64_t)(intptr_t)f, 21);
+  TUR_CLOSURE_DROP(f);
+  return r;
+  ```)
+
+(defn main [] : int
+  (println (apply-drop dbl))
+  0)

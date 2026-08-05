@@ -67,6 +67,21 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
 }
 
 /* Look up a typeclass by name */
+const TypeClassMethod *typeclass_env_find_method(const TypeClassEnv *env,
+                                                 const Symbol *name,
+                                                 const TypeClass **out_class) {
+    if (!env || !name) return NULL;
+    for (TypeClass *tc = env->typeclasses; tc != NULL; tc = tc->next) {
+        for (uint8_t i = 0; i < tc->n_methods; i++) {
+            if (tc->methods[i].name == name) {
+                if (out_class) *out_class = tc;
+                return &tc->methods[i];
+            }
+        }
+    }
+    return NULL;
+}
+
 TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol *name) {
     for (TypeClass *tc = env->typeclasses; tc != NULL; tc = tc->next) {
         if (tc->name == name) {

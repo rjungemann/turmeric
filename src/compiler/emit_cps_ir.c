@@ -11,6 +11,7 @@
 #include "globals.h"
 #include "arena.h"
 #include "expr.h"
+#include "effect.h"   /* E2 taint: credit indirect fn-value effect rows */
 
 /* The elaborator's complete free-variable walker (backs the closure-capture
  * pass).  Reused here to find every enclosing var a delegated *composite*
@@ -19,6 +20,19 @@
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                             Binding **self_exclude, uint32_t n_self_exclude,
                             uint32_t *n_out);
+
+/* B7 fwd decls (defined after the CE struct). */
+static bool is_byref_mut(const Binding *b);
+static const struct Binding *byref_set_target(const Expr *e);
+
+/* B4 (CT_MATCH emit): the ADT-aggregate field-access helpers.  Declared in
+ * emit_internal.h, which this file does not include; forward-declared here so
+ * emit_match can spell `(tur_adt_<Name> *)->as.<Ctor>._N` field reads exactly as
+ * the direct emitter (emit_expr.c) does. */
+char *mangle_field_name(const char *name);
+char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
+/* S1/findings 16: ground-truth return-type lookup for cps->direct call temps. */
+const char *emit_sig_lookup_ret_ctype(const char *cname);
 
 /* True for a NULL or `{}` (ERK_EMPTY) effect row.  Used to distinguish a
  * provably effect-free `TY_FN` param (safe to delegate an indirect call
@@ -72,6 +86,10 @@ static bool slot_ty(TypeKind k) {
         case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         case TY_CSTR:
         case TY_PTR_VOID:   /* raw pointer: Copy, non-owning -- casts through the slot */
+        case TY_HANDLER:    /* B3: a first-class handler value is a one-word
+                             * tur_handler_table_t* -- crosses the slot like a ptr,
+                             * so a handler-typed param/return is CPS-admissible
+                             * (e.g. run-with taking a handler param). */
         case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:  /* Tier B: bit-reinterpret */
             return true;
         default:
@@ -152,8 +170,18 @@ static bool slot_box_ty(const Type *t) {
  * g_cap_single_shot (a handler CASE body, which runs per-perform, still bails).
  * As a slot value / atom / call-arg it just threads the pointer by move, matching
  * the direct emitter (whose owning ops are delegated via CT_LETRAW either way). */
+/* B8: a session-protocol type is an opaque `void*` channel handle (a
+ * `TurChannel *` / session-pair box), a pointer carrier that crosses the DK slot
+ * by a plain cast exactly like a heap-ADT handle. */
+static bool type_is_session(TypeKind k) {
+    return k == TY_SESSION || k == TY_SESSION_REC || k == TY_SESSION_PAIR
+        || k == TY_SESSION_RECV_PAIR || k == TY_SESSION_OFFER
+        || k == TY_ROLE;   /* B8: a multi-party Role endpoint is a void* carrier too */
+}
+
 static bool carrier_handle_ok(const Type *t) {
     if (!t) return false;
+    if (g_opt_cps_tramp_resume && type_is_session(t->kind)) return true;
     return (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t));
 }
 
@@ -163,10 +191,75 @@ static bool carrier_handle_ok(const Type *t) {
  * the full Type is available (the bare-TypeKind slot_ty stays for scalar-only
  * sites).  It is deliberately WIDER than cap_ty_ok: a value may cross a slot by a
  * single move even when it may not be duplicated into a capture env. */
+/* An ADT/struct application with an UNRESOLVED type-variable argument -- the
+ * erased generic case, e.g. `(none) : (Option A)` where `A` never gets pinned
+ * (both args are the nullary `none`, so nothing constrains the element).  In a
+ * polymorphic/erased context such a value rides the uniform int64 CARRIER ABI:
+ * the direct emitter passes it as a plain `int64_t` (see the generic
+ * `option_hyeq_qu(int64_t, int64_t, int64_t)` carrier signature the erased call
+ * resolves to), so it crosses a DK slot / a cps->direct call arg as one word,
+ * exactly like `carrier_handle_ok`.  It cannot key a concrete monomorph clone
+ * (there is no element type), so a mono-template call with such an arg takes the
+ * emit's no-clone cps->direct fallback (CT_TAILCALL: `mclone == NULL` -> direct
+ * call to the generic carrier callee).  Admitting it here lets the ERASED-generic
+ * caller (`test-option-eq-nones`) CPS-emit instead of evicting. */
+static bool erased_adt_carrier(const Type *t) {
+    if (!t) return false;
+    Type tt = *(Type *)t;
+    if (tt.kind != TY_APP) return false;
+    AdtDef *def = NULL; Type args[16]; uint8_t n_args = 0;
+    if (!type_extract_adt_app(&tt, &def, args, &n_args)) return false;
+    for (uint8_t i = 0; i < n_args; i++)
+        if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return true;
+    return false;
+}
+
+/* True when `t` mentions an UNRESOLVED type variable anywhere -- a bare tyvar, or
+ * an ADT application with a tyvar/unknown argument (recursively).  A carrier param
+ * / return of such a type belongs to a GENERIC TEMPLATE: its `type_c_name` erases
+ * to the uniform `int64_t` carrier, so admitting it into fn_sig_ok would emit a
+ * colored generic `<fn>__cps(int64_t, ...)` whose concrete monomorphic callers
+ * pass real struct args (`tur_adt_Option__int`) -- a `conflicting types` C error.
+ * The template must sig-REJECT (stay a mono_template, per the g_ents.mono_template
+ * design) so callers thread the concrete monomorph clone (`<fn>__spec__..._cps`)
+ * or, for a fully-erased call, cps->direct to the generic int64 carrier.  This is
+ * strictly a TEMPLATE-signature gate; the erased VALUE-crossing path
+ * (erased_adt_carrier via slot_ok_t) is unaffected. */
+static bool type_has_unresolved_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR || t->kind == TY_UNKNOWN) return true;
+    if (t->kind == TY_APP) {
+        Type tt = *(Type *)t;
+        AdtDef *def = NULL; Type args[16]; uint8_t n_args = 0;
+        if (type_extract_adt_app(&tt, &def, args, &n_args)) {
+            for (uint8_t i = 0; i < n_args; i++)
+                if (type_has_unresolved_tyvar(&args[i])) return true;
+        }
+    }
+    return false;
+}
+
+/* B4 (cps-tramp-resume): a BOXED TAGGED-SUM ADT (a `defdata` with >=2 ctors and
+ * a field-bearing ctor, e.g. `Box`) is malloc'd and carried as an int64 POINTER
+ * word -- its `type_c_name` is "int64_t" -- even though `def->is_heap` is false
+ * (is_heap tracks the growable-container ADTs, not every boxed sum).  Like a
+ * heap-ADT handle (`carrier_handle_ok`) it crosses a DK slot by a plain cast, so
+ * admit it as a slot carrier.  A BY-VALUE product ADT keeps its aggregate
+ * `type_c_name` (`tur_adt_<Name>`), so this correctly rejects it -- those ride
+ * the Tier-C box path (`slot_box_ty`) instead.  Gated: flag-off keeps the
+ * historical (is_heap-only) admission byte-identical. */
+static bool adt_int64_carrier(const Type *t) {
+    if (!g_opt_cps_tramp_resume || !t) return false;
+    TypeKind k = t->kind;
+    if (k != TY_ADT && k != TY_APP) return false;
+    return strcmp(type_c_name(*(Type *)t), "int64_t") == 0;
+}
+
 static bool slot_ok_t(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
-    return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r);
+    return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r)
+        || erased_adt_carrier(r) || adt_int64_carrier(r);
 }
 
 /* Signature-position slot gate (a colored function's PARAMS and RETURN).  It is
@@ -272,6 +365,14 @@ static const Type *fn_ret_type(const FnDef *fd) {
         if ((bk == TY_ADT || bk == TY_APP || bk == TY_STRUCT)
             && slot_agg_def(&fd->body->type))
             return &fd->body->type;
+        /* B6: a typeclass INSTANCE METHOD's declared return annotation is left
+         * TY_UNKNOWN by elab_typeclasses (a placeholder never resolved), so an
+         * effectful `:nil`-returning method would fail the sig gate on an
+         * unresolved return.  Defer to the inferred body type (here TY_NIL), which
+         * is what the direct emitter already uses to spell the `void` entry. */
+        if (g_opt_cps_tramp_resume && fd->binding && fd->binding->is_instance_method
+            && fd->return_type.kind == TY_UNKNOWN && bk != TY_UNKNOWN)
+            return &fd->body->type;
     }
     return &fd->return_type;
 }
@@ -279,7 +380,11 @@ static const Type *fn_ret_type(const FnDef *fd) {
 /* The C type used to declare a let-binder of type kind `ty` (TY_NIL binders are
  * unit placeholders stored as int64_t). */
 static const char *binder_ctype(EmitCtx *ctx, TypeKind ty) {
-    if (ty == TY_NIL || ty == TY_UNKNOWN) return "int64_t";
+    /* TY_NEVER (`!`) is the dead placeholder of a diverging computation (a `panic`
+     * handler case): declare it as the int64_t nil-placeholder word, never `void`
+     * (`type_c_name(TY_NEVER)` -> "void", which yields an illegal `void __t;`
+     * local).  atom_ok admits TY_NEVER for the same reason. */
+    if (ty == TY_NIL || ty == TY_UNKNOWN || ty == TY_NEVER) return "int64_t";
     return emit_type_c_name(ctx, emit_type_from_kind(ty));
 }
 
@@ -298,7 +403,14 @@ static const char *binder_ctype_full(EmitCtx *ctx, TypeKind ty, const Type *t) {
     return binder_ctype(ctx, ty);
 }
 
-/* Atom types we can materialize as a slot-representable value. */
+/* Atom types we can materialize as a slot-representable value.
+ * TY_NEVER (`!`, the bottom type) is admitted like TY_NIL: it only arises as the
+ * DEAD result placeholder of a diverging computation -- e.g. a handler case that
+ * ends in `(panic ...)` yields a `!`-typed word that the CPS translation still
+ * threads to the prompt, but the panic aborts before that delivery is reached.
+ * The placeholder rides the slot as the nil word (0), so crossing it is sound;
+ * without this a `(panic ...)`-terminated handler evicts the whole function
+ * (e.g. `with-abort-panic` in effect-abort -> main + safe-divide off CPS). */
 static bool atom_ok(const CAtom *a) {
     switch (a->kind) {
         case CA_INT:  return slot_ty(a->ty) || a->ty == TY_UNKNOWN;  /* any <=64-bit int width */
@@ -314,8 +426,16 @@ static bool atom_ok(const CAtom *a) {
              * so rejecting it here only blocks the unsound slot-crossing use and
              * evicts a function that threads a poly-fn value as a plain value. */
             if (a->var && a->var->is_poly_fn) return false;
-            return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL;
-        case CA_CVAR: return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL;
+            /* E2a-pass (cps-tramp-resume): a CAPTURELESS (non-poly) fn-value is a bare
+             * int64 fn-ptr -- a scalar that rides the slot -- so admit it as an atom
+             * (e.g. passing a lambda into a HOF-call inside a DK handler's delim).
+             * Gated: flag-off keeps the historical rejection byte-identical. */
+            if (g_opt_cps_tramp_resume && a->ty == TY_FN && !(a->var && a->var->is_poly_fn))
+                return true;
+            return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
+        case CA_CVAR:
+            if (g_opt_cps_tramp_resume && a->ty == TY_FN) return true;
+            return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
         default:      return false;  /* CA_OTHER */
     }
 }
@@ -387,6 +507,12 @@ static const CTerm *first_unsupported(const CTerm *t) {
         case CT_IF:
             r = first_unsupported(t->as.if_.then_);
             return r ? r : first_unsupported(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++) {
+                r = first_unsupported(t->as.match.arms[i].body);
+                if (r) return r;
+            }
+            return NULL;
         case CT_RESET:
             r = first_unsupported(t->as.reset.delim);
             return r ? r : first_unsupported(t->as.reset.body);
@@ -403,14 +529,22 @@ static const CTerm *first_unsupported(const CTerm *t) {
         case CT_RESUME:   return first_unsupported(t->as.resume.body);
         case CT_CLONEABLE: return first_unsupported(t->as.cloneable.body);
         case CT_CALLCC:   return first_unsupported(t->as.callcc.body);
-        default: return NULL;   /* CT_APPCONT / CT_TAILCALL: leaves */
+        case CT_LOOP:     return first_unsupported(t->as.loop.body);
+        default: return NULL;   /* CT_APPCONT / CT_TAILCALL / CT_CONTINUE: leaves */
     }
 }
 
 static bool term_core_ok(const CTerm *t);
 static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
+static bool handle_delim_ok(const CTerm *t);  /* top-level handle-body admission (join-to-prompt, no interior control op) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
+static bool letraw_effect_free(const CTerm *t);  /* CT_LETRAW performs no fiber effect */
+static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
+static const Expr *g_prog;   /* fwd (defined below): program the classifier is keyed on */
+static void ptc_walk(const Expr *e, const Binding *p, bool tail,
+                     int *val, int *tailc, int *ntc);  /* fwd: param value/callee-use walk */
 static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
+static bool binding_cps_reachable(const Binding *b);  /* in_s OR mono-template */
 
 /* A poly-fat closure (`tur_poly_fn_t`) is a multi-word aggregate.  When such a
  * value is THREADED as a call argument the CT-IR spills it to an intermediate
@@ -423,10 +557,47 @@ static bool atom_is_fat_fn(const CAtom *a) {
     return a->kind == CA_VAR && a->var && a->var->is_poly_fn;
 }
 
+/* A fn-VALUE atom (a plain `TY_FN` closure/fn-pointer, or a poly-fat closure).
+ * Threading one into a call argument is admitted only when the CALLEE is provably
+ * effect-free (callee_effect_free), so this just recognizes the atom shape. */
+static bool atom_is_fn_value(const CAtom *a) {
+    if (atom_is_fat_fn(a)) return true;
+    return (a->kind == CA_VAR || a->kind == CA_CVAR) && a->ty == TY_FN;
+}
+
+/* Is the statically-known callee provably effect-free -- its DECLARED effect row
+ * is empty (NULL / ERK_EMPTY; a row VARIABLE or any concrete effect reads as
+ * non-empty and is rejected, so this is conservative and fixpoint-independent --
+ * the row is set at elaboration, not by the taint pass)?  An effect-free callee
+ * cannot perform an effect THROUGH a fn-value argument: were the callback
+ * effectful and invoked, that effect would propagate into the callee's own
+ * signature (row polymorphism -- `apply-cb` calling `f : (fn [] #fx{Ask} int)` is
+ * itself `#fx{Ask}`).  So threading ANY fn value into an effect-free callee can
+ * never create the fiber<->DK effect mismatch that keeps an EFFECTFUL callback on
+ * the fiber path (the `unhandled effect` hazard in the handle_delim_ok NOTE).
+ * An indirect / unknown callee (fn == NULL) is conservatively NOT effect-free. */
+static bool callee_effect_free(const Binding *fn) {
+    if (!fn || fn->type.kind != TY_FN) return false;
+    if (effect_row_is_empty(fn->type.as.fn.effect_row)) return true;
+    /* A ROW-VARIABLE declared row (`#fx{e}`) reads as non-empty, but the fn may be
+     * runtime-PURE: its INFERRED row (computed over the body by the P19-2 effect
+     * pass, stable before codegen so still fixpoint-independent) is the sound
+     * summary of what it ACTUALLY performs.  A row-variable fn that invokes no
+     * effectful callback has an EMPTY inferred row -> genuinely effect-free (e.g.
+     * `run-twice [x] #fx{e} = (+ x x)`).  Fall back to it when the declared row is
+     * a non-empty row variable. */
+    const FnDef *fd = g_prog ? fd_for_binding(g_prog, fn) : NULL;
+    if (fd && fd->inferred_effect_row && effect_row_is_empty(fd->inferred_effect_row))
+        return true;
+    return false;
+}
+
 /* Whether an atom may cross into a call ARGUMENT slot.
  *
  *  - A poly-fat closure never can (spilling it to a temp slot miscompiles),
- *    regardless of whether the call is cps->cps or cps->direct.
+ *    regardless of whether the call is cps->cps or cps->direct.  (A fn value
+ *    threaded into an EFFECT-FREE callee is admitted separately at the call site
+ *    via callee_effect_free, before this predicate runs.)
  *  - A Tier C by-value-aggregate atom (slot_box_ty, e.g. `tur_adt_Option__int`)
  *    can cross a cps->cps call (the callee's `__cps` params match the CPS ABI)
  *    but NOT a cps->DIRECT call: there the delegated call emits the arg RAW to
@@ -442,6 +613,28 @@ static bool call_arg_ok(const CAtom *a, bool cps_to_direct) {
     if (cps_to_direct && (a->kind == CA_VAR || a->kind == CA_CVAR)
         && slot_box_ty(a->type))
         return false;
+    return true;
+}
+
+/* Every arg of a call to `fn` admissible as a call arg?  A fn-VALUE arg is
+ * admitted when `fn` is effect-free (callee_effect_free) -- pure higher-order
+ * value threading (option-eq? / hamt map+filter / parser combinators passing a
+ * comparator/mapper); every other arg takes the ordinary call_arg_ok gate. */
+static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
+                         bool cps_to_direct) {
+    bool cef = callee_effect_free(fn);
+    for (uint32_t i = 0; i < n; i++) {
+        /* Pure higher-order value threading into an effect-free callee is admitted
+         * for a SCALAR fn value (a bare fn-ptr / closure carrier that crosses the
+         * arg slot as one word).  A FAT closure (`tur_poly_fn_t`, is_poly_fn) is a
+         * multi-word aggregate that CANNOT cross the one-word arg slot (the CT-IR
+         * spills it to a `void *` temp -- a hard C error), so it is NOT admitted by
+         * this fast path even into an effect-free callee: it falls to call_arg_ok,
+         * whose atom_is_fat_fn reject evicts the caller (E2b keeps a fat-fn param
+         * that is only CALLED/CAPTURED, never re-threaded as an arg). */
+        if (cef && atom_is_fn_value(&args[i]) && !atom_is_fat_fn(&args[i])) continue;
+        if (!call_arg_ok(&args[i], cps_to_direct)) return false;
+    }
     return true;
 }
 
@@ -552,11 +745,32 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             return has_capture_rec(t->as.letcall.body, exclude, bound, nb + 1);
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) CC_ATOM(&t->as.tailcall.args[i]);
+            /* E2c: a `via_registry` tailcall's fn-value callee is a capture when it
+             * is an enclosing (non-local, non-global) param -- mirrors the
+             * collect_caps_rec CT_TAILCALL case. */
+            if (t->as.tailcall.via_registry || t->as.tailcall.via_fncps) {
+                const Binding *fn = t->as.tailcall.fn;
+                if (fn && !fn->is_global && !binding_excluded(fn)) {
+                    uint32_t _id = fn->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) return true;
+                }
+            }
             return false;
         case CT_IF:
             CC_ATOM(&t->as.if_.cond);
             return has_capture_rec(t->as.if_.then_, exclude, bound, nb)
                 || has_capture_rec(t->as.if_.else_, exclude, bound, nb);
+        case CT_MATCH:
+            CC_ATOM(&t->as.match.scrut);
+            for (uint32_t ai = 0; ai < t->as.match.n_arms; ai++) {
+                const CMatchArm *arm = &t->as.match.arms[ai];
+                uint32_t nnb = nb;
+                for (uint32_t bi = 0; bi < arm->n_fields && nnb < CC_MAX_BOUND; bi++)
+                    if (arm->fields[bi]) bound[nnb++] = arm->fields[bi]->id;
+                if (has_capture_rec(arm->body, exclude, bound, nnb)) return true;
+            }
+            return false;
         case CT_LETCONT:
             bound[nb] = t->as.letcont.param.id;
             return has_capture_rec(t->as.letcont.jbody, exclude, bound, nb + 1)
@@ -647,11 +861,25 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.callcc.x.id;
             return has_capture_rec(t->as.callcc.body, exclude, bound, nb + 1);
         }
+        case CT_CONTINUE:   /* cps-while-native: back-edge args are captures like a tailcall's */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++) CC_ATOM(&t->as.cont_.args[i]);
+            return false;
+        case CT_LOOP: {
+            /* cps-while-native: a CT_LOOP in a lifted continuation (e.g. a while
+             * loop in a handle's continuation) captures its init atoms and the
+             * outer vars its body reads; the loop-carried params are bound. */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++) CC_ATOM(&t->as.loop.inits[i]);
+            uint32_t nnb = nb;
+            for (uint32_t i = 0; i < t->as.loop.n_params && nnb < CC_MAX_BOUND; i++)
+                if (t->as.loop.params[i].bind) bound[nnb++] = t->as.loop.params[i].bind->id;
+            return has_capture_rec(t->as.loop.body, exclude, bound, nnb);
+        }
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
 }
 
+__attribute__((unused))
 static bool has_capture(const CTerm *t, uint32_t exclude) {
     uint32_t bound[CC_MAX_BOUND];
     g_excl_n = 0;
@@ -708,6 +936,80 @@ static bool owning_byvalue_aggregate(const Type *t) {
     if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
     const AdtDef *d = slot_agg_def(t);
     return d && d->needs_drop_glue;
+}
+
+/* E3a (owning-cloneable-capture): is this a 2-arg cloneable call frame that
+ * CONSUMES its captured owning env (drops it once per call), rather than
+ * ^borrow it?  A consuming frame gets dk_frame_owning env_clone glue so each
+ * multi-shot resume owns its own copy to drop.  Detected by: a 2-arg call whose
+ * callee param is NOT ^borrow and whose captured operand is a consumable owning
+ * kind.  Two kinds, distinguished by the emitted glue:
+ *   - rc: cloneable_frame_consumes_rc -- env_clone = rc_strong_increment;
+ *   - a FLAT heap carrier: cloneable_frame_consumes_carrier -- env_clone =
+ *     malloc + shallow header copy (a real deep copy so each resume frees its own
+ *     allocation; flat = no owning fields, so a shallow copy shares nothing). */
+static bool cloneable_frame_consume_base(const CloneFrame *fr) {
+    if (!fr || !fr->call_fn || fr->ignore_value) return false;
+    if (fr->call_fn->type.kind != TY_FN || fr->call_fn->type.as.fn.arity != 2)
+        return false;
+    if (!fr->operand.type) return false;
+    int env_idx = fr->hole_left ? 1 : 0;
+    return !FN_ARG_FLAG(fr->call_fn->type.as.fn, env_idx, FA_BORROW);
+}
+static bool cloneable_frame_consumes_rc(const CloneFrame *fr) {
+    return cloneable_frame_consume_base(fr) && fr->operand.type->kind == TY_RC;
+}
+/* The heap ADT of a carrier operand, or NULL. */
+static const AdtDef *cloneable_carrier_def(const Type *t) {
+    if (!t || !(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
+        return NULL;
+    return (t->kind == TY_ADT) ? t->as.adt_.def
+         : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+}
+static bool clone_field_is_scalar(TypeKind k) {
+    return !(k == TY_RC || k == TY_WEAK || k == TY_REF || k == TY_LREF
+             || k == TY_ADT || k == TY_STRUCT || k == TY_APP);
+}
+/* Aggregate clone fields: rc/weak (incref) or plain scalar only -- a by-value
+ * aggregate's ref field cannot be per-copy boxed through the by-value call. */
+static bool adt_incref_cloneable_fields(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!(c->fields[i].kind == TY_RC || c->fields[i].kind == TY_WEAK
+              || clone_field_is_scalar(c->fields[i].kind)))
+            return false;
+    return true;
+}
+/* Heap-handle clone fields: rc/weak (incref), plain scalar, OR `ref<scalar>` /
+ * `lref<scalar>` (deep-copied as a fresh box, mirroring drop_glue's `free`). */
+static bool adt_heap_cloneable_fields(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        TypeKind k = c->fields[i].kind;
+        if (k == TY_RC || k == TY_WEAK || clone_field_is_scalar(k)) continue;
+        if ((k == TY_REF || k == TY_LREF)
+            && clone_field_is_scalar(c->fields[i].inner_kind)) continue;
+        return false;
+    }
+    return true;
+}
+static bool cloneable_frame_consumes_carrier(const CloneFrame *fr) {
+    if (!cloneable_frame_consume_base(fr)) return false;
+    return adt_heap_cloneable_fields(cloneable_carrier_def(fr->operand.type));
+}
+/* A consuming multi-word owning by-value AGGREGATE frame: the aggregate rides the
+ * env by ADDRESS (`&o`), the frame passes it BY VALUE so the callee drops its own
+ * copy; the env_clone increfs the aggregate's owning fields (via `&o`) per resume
+ * to balance that -- no fresh allocation (the env stays `&o`). */
+static bool cloneable_frame_consumes_aggregate(const CloneFrame *fr) {
+    if (!cloneable_frame_consume_base(fr)) return false;
+    const Type *t = fr->operand.type;
+    if (!owning_byvalue_aggregate(t)) return false;
+    const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
+                    : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+    return adt_incref_cloneable_fields(d);
 }
 
 /* An OWNING capture that may ride the env of a genuinely MULTI-SHOT continuation
@@ -772,7 +1074,28 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
  * else its scalar / by-value-aggregate binder type. */
 static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
     if (caps->polyfn[i]) return "tur_poly_fn_t";
+    /* B7: a by-reference mutable rides the env as its cell POINTER. */
+    if (caps->b[i] && is_byref_mut(caps->b[i])) return "int64_t *";
+    /* E2c: a captureless-effectful fn-value param (a via_registry callee carried
+     * by cap_add_fn_scalar) rides the env as a bare int64 direct-entry fn-ptr --
+     * `binder_ctype_full(TY_FN)` would leak a bad spelling. */
+    if (caps->ty[i] == TY_FN) return "int64_t";
     return binder_ctype_full(ctx, caps->ty[i], caps->type[i]);
+}
+
+/* E2c: capture a captureless-effectful fn-value PARAM (a `via_registry` tailcall's
+ * callee) as a bare int64 direct-entry fn-ptr scalar, so a lifted continuation
+ * frame that threads `f` (`__tur_cps_lookup((intptr_t)f)`) reads it from its env
+ * instead of an out-of-scope param.  Only a NON-poly `TY_FN` binding qualifies (a
+ * fat closure `tur_poly_fn_t` is the separate fn_cps channel); everything else
+ * bails the capture set (cs->ok = false) exactly like cap_add. */
+static void cap_add_fn_scalar(CapSet *cs, const Binding *b) {
+    if (!b || b->type.kind != TY_FN || b->is_poly_fn) { cs->ok = false; return; }
+    for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
+    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
+    cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = TY_FN;
+    cs->type[cs->n] = &b->type; cs->polyfn[cs->n] = false;
+    cs->owning[cs->n] = false; cs->n++;
 }
 
 static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty, const Type *type) {
@@ -826,11 +1149,62 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
+            /* E2c: a `via_registry` tailcall threads its fn-value CALLEE through
+             * `__tur_cps_lookup(f)`; when that callee is an enclosing param (not a
+             * local of this lifted body), carry it on the frame env as an int64
+             * fn-ptr scalar so the emitted lookup resolves `f`. */
+            if (t->as.tailcall.via_registry) {
+                const Binding *fn = t->as.tailcall.fn;
+                if (fn && !fn->is_global && !binding_excluded(fn)) {
+                    uint32_t _id = fn->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) cap_add_fn_scalar(cs, fn);
+                }
+            }
+            /* E2 (fat-closure fn-value threading): a `via_fncps` tailcall reads its
+             * fat-closure poly-fn CALLEE `f` (fn_cps / fn / env); when `f` is an
+             * enclosing param, carry it on the frame env as a `tur_poly_fn_t` field
+             * (cap_add detects is_poly_fn) so the lifted body's `f.fn_cps` resolves. */
+            if (t->as.tailcall.via_fncps) {
+                const Binding *fn = t->as.tailcall.fn;
+                if (fn && !fn->is_global && !binding_excluded(fn)) {
+                    uint32_t _id = fn->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) cap_add(cs, fn, fn->type.kind, &fn->type);
+                }
+            }
             return;
+        case CT_CONTINUE:   /* cps-while-native: back-edge args, like a tailcall */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++) COL_ATOM(&t->as.cont_.args[i]);
+            return;
+        case CT_LOOP: {
+            /* cps-while-native: mirror has_capture_rec's CT_LOOP -- collect the
+             * init atoms + the outer vars the loop body reads; bind the carried
+             * params.  Lets a while loop in a handle continuation collect its
+             * captures instead of bailing (cs->ok = false). */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++) COL_ATOM(&t->as.loop.inits[i]);
+            uint32_t nnb = nb;
+            for (uint32_t i = 0; i < t->as.loop.n_params && nnb < CC_MAX_BOUND; i++)
+                if (t->as.loop.params[i].bind) bound[nnb++] = t->as.loop.params[i].bind->id;
+            collect_caps_rec(t->as.loop.body, exclude, bound, nnb, cs); return;
+        }
         case CT_IF:
             COL_ATOM(&t->as.if_.cond);
             collect_caps_rec(t->as.if_.then_, exclude, bound, nb, cs);
             collect_caps_rec(t->as.if_.else_, exclude, bound, nb, cs); return;
+        case CT_MATCH:
+            /* The scrutinee atom may be an enclosing capture; each arm's field
+             * bindings are locally bound (extracted from the scrutinee at emit),
+             * so add them to the bound set before walking the arm body. */
+            COL_ATOM(&t->as.match.scrut);
+            for (uint32_t ai = 0; ai < t->as.match.n_arms && cs->ok; ai++) {
+                const CMatchArm *arm = &t->as.match.arms[ai];
+                uint32_t nnb = nb;
+                for (uint32_t bi = 0; bi < arm->n_fields && nnb < CC_MAX_BOUND; bi++)
+                    if (arm->fields[bi]) bound[nnb++] = arm->fields[bi]->id;
+                collect_caps_rec(arm->body, exclude, bound, nnb, cs);
+            }
+            return;
         case CT_LETCONT:
             bound[nb] = t->as.letcont.param.id;
             collect_caps_rec(t->as.letcont.jbody, exclude, bound, nb + 1, cs);
@@ -922,6 +1296,15 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 if (_f) cap_add(cs, b, b->type.kind, &b->type);
             }
             free(fv);
+            /* B7: `(set! m k)`'s TARGET is a WRITE, not a free-var read, so
+             * collect_free_vars never surfaces it -- but the lifted body writes the
+             * shared cell `*m`, so `m` (the cell pointer) must be captured. */
+            const Binding *bref = g_opt_cps_tramp_resume ? byref_set_target(le) : NULL;
+            if (bref && !bref->is_global && !binding_excluded(bref)) {
+                uint32_t _id = bref->id; bool _f = (_id != exclude);
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                if (_f) cap_add(cs, bref, bref->type.kind, &bref->type);
+            }
             bound[nb] = t->as.letraw.x.id;
             collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
         }
@@ -958,6 +1341,26 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             for (uint32_t i = 0; i < t->as.perform.n; i++) COL_ATOM(&t->as.perform.args[i]);
             bound[nb] = t->as.perform.x.id;
             collect_caps_rec(t->as.perform.body, exclude, bound, nb + 1, cs); return;
+        case CT_HANDLE:
+            /* A nested `handle` in a lifted continuation (two SEQUENTIAL handles:
+             * the second lands in the first's continuation -- effect-abort `main`).
+             * Its delim runs under a separately-lifted prompt, and each handler case
+             * is lifted into its own frame; those frames' envs are BUILT in this
+             * enclosing helper's scope, so their free captures must ride this helper
+             * too (mirrors CT_RESET / CT_AWAIT / CT_PERFORM above).  Each case binds
+             * its effect params + `k`; the continuation (handle.body) binds the
+             * handle result and continues in this same helper. */
+            collect_caps_rec(t->as.handle.delim, exclude, bound, nb, cs);
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases && cs->ok; ci++) {
+                const CHandleCase *hc = &t->as.handle.cases[ci];
+                uint32_t cnb = nb;
+                for (uint32_t pi = 0; pi < hc->n_params && cnb < CC_MAX_BOUND; pi++)
+                    if (hc->params[pi]) bound[cnb++] = hc->params[pi]->id;
+                if (hc->k && cnb < CC_MAX_BOUND) bound[cnb++] = hc->k->id;
+                collect_caps_rec(hc->case_body, exclude, bound, cnb, cs);
+            }
+            if (nb < CC_MAX_BOUND) bound[nb] = t->as.handle.x.id;
+            collect_caps_rec(t->as.handle.body, exclude, bound, nb + 1, cs); return;
         case CT_CALLCC: {
             /* The receiver f may capture enclosing locals (build_callcc admits a
              * capturing closure).  Surface its free vars -- collect_free_vars
@@ -1021,6 +1424,15 @@ static bool expr_is_pure_borrow_of(const Expr *e, uint32_t bid) {
     if (!e) return false;
     const Expr *inner = NULL;
     switch (e->kind) {
+        /* rc/weak ops READ their handle operand without releasing or moving it
+         * (the result is a scalar count, a borrowed inner ptr, or a fresh weak),
+         * so they are a pure borrow of the operand.  The operand may itself be an
+         * OWNING field read `(.r o)` of the captured by-value aggregate: the op
+         * then borrows that owning field, leaving `o` (and its owning fields)
+         * intact, so it is a pure borrow of the root `o`.  The shared peel below
+         * walks the operand's field-read chain to that root -- letting a borrow
+         * THROUGH an owning field read be recognized, not only a bare-var
+         * operand `(rc/strong-count o)`. */
         case EX_RC_COUNT: inner = e->as.rc_count_.expr; break;
         case EX_RC_PTR:   inner = e->as.rc_ptr_.expr;   break;
         case EX_WEAK:     inner = e->as.weak_.expr;     break;
@@ -1028,24 +1440,26 @@ static bool expr_is_pure_borrow_of(const Expr *e, uint32_t bid) {
             /* Reading a NON-owning field `(.f o)` of the captured by-value
              * aggregate is a pure borrow of `o` -- it copies a scalar out, leaving
              * `o` (and its owning fields) intact.  An OWNING field read yields an
-             * alias that could be consumed, so it is not provably borrow-only:
-             * conservatively reject (the capture then evicts / rides E3). */
+             * alias that could be consumed, so a STANDALONE owning field read is
+             * not provably borrow-only: conservatively reject (the capture then
+             * evicts / rides E3).  (An owning field read WRAPPED in an rc/weak op
+             * is handled by those arms above, which borrow rather than move it.) */
             if (e->type.kind == TY_RC || e->type.kind == TY_REF
                 || e->type.kind == TY_WEAK || e->type.kind == TY_LREF)
                 return false;
             inner = e->as.get_field_.struct_expr;
-            /* peel a chain of field reads to the root aggregate */
-            while (inner) {
-                while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
-                if (inner && inner->kind == EX_GET_FIELD) {
-                    inner = inner->as.get_field_.struct_expr; continue;
-                }
-                break;
-            }
             break;
         default: return false;
     }
-    while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    /* Peel a chain of field reads to the root aggregate (shared by the rc/weak
+     * and get-field arms). */
+    while (inner) {
+        while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+        if (inner && inner->kind == EX_GET_FIELD) {
+            inner = inner->as.get_field_.struct_expr; continue;
+        }
+        break;
+    }
     return inner && inner->kind == EX_VAR && inner->as.var.binding
         && inner->as.var.binding->id == bid;
 }
@@ -1171,6 +1585,29 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
              * in its own continuation, so recurse there.  term_core_ok already
              * gates whether the nested perform is emittable (A1). */
             return joins_closed_rec(t->as.perform.body, def, nd);
+        case CT_HANDLE:
+            /* A nested `handle` in a reset/handle CONTINUATION (e.g. two sequential
+             * `handle`s: the first's continuation contains the second -- effect-abort
+             * `main`).  The continuation (handle.body) runs in the SAME join scope, so
+             * recurse with the current def set.  The delim and handler cases are each
+             * lifted into their OWN DK frame (emit_lifted, n_joins reset), so a join
+             * they reference must be defined WITHIN them -- an outer-join reference
+             * there is unemittable; check them with a FRESH (empty) def set so such a
+             * reference is correctly rejected.  term_core_ok already gates the nested
+             * handle's structural emittability (handle_delim_ok / handle_case_ok). */
+            {
+                uint32_t hdef[CC_MAX_BOUND];
+                if (!joins_closed_rec(t->as.handle.delim, hdef, 0)) return false;
+                for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++)
+                    if (!joins_closed_rec(t->as.handle.cases[ci].case_body, hdef, 0))
+                        return false;
+                return joins_closed_rec(t->as.handle.body, def, nd);
+            }
+        /* cps-while-native: a back-edge references the loop helper, not a join; a
+         * CT_LOOP's internal joins are a separate scope (checked when its own body
+         * is admitted).  Neither leaves an outer join open here. */
+        case CT_CONTINUE: return true;
+        case CT_LOOP:     return true;
         default: return false;
     }
 }
@@ -1184,13 +1621,28 @@ static bool reset_body_ok(const CTerm *t) {
 /* A shift body in the C3 subset: straight-line (letval/letprim/letcall) ending
  * in delivery of a scalar atom to the prompt.  No branches, tail calls, joins,
  * or nested delimiters. */
+/* An abortive shift receiver `(fn [k : cont] ...)` that ignores its continuation
+ * is applied to the shift's value operand, binding its `cont`-typed parameter to
+ * a placeholder literal (`let k = 0`, typed TY_CONT).  The binding is dead -- the
+ * receiver never references `k` -- so the placeholder never crosses a slot; it is
+ * only there to keep the receiver's parameter in scope.  The generic atom_ok slot
+ * gate rejects a TY_CONT literal (a continuation is not slot-representable), which
+ * would evict an otherwise-native abortive shift.  Admit the dead cont placeholder
+ * here (scoped to the shift body), where the DK backend materializes it as an
+ * unused local. */
+static bool shift_cont_placeholder(const CAtom *a) {
+    return (a->kind == CA_INT || a->kind == CA_UNIT || a->kind == CA_BOOL)
+        && a->ty == TY_CONT;
+}
+
 static bool shift_body_ok(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
         case CT_APPCONT:
             return t->as.appcont.kont.kind == KK_PROMPT && atom_ok(&t->as.appcont.v);
         case CT_LETVAL:
-            return atom_ok(&t->as.letval.v) && shift_body_ok(t->as.letval.body);
+            return (atom_ok(&t->as.letval.v) || shift_cont_placeholder(&t->as.letval.v))
+                && shift_body_ok(t->as.letval.body);
         case CT_LETPRIM:
             if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
                 return false;
@@ -1233,7 +1685,17 @@ static bool perform_body_ok(const CTerm *t) {
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && perform_body_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* println/print IS emittable in a perform continuation: emit_lifted
+             * emits the frame body through emit_term (the same path a handler case
+             * uses, handle_case_ok, which admits println), so the print statement
+             * lands in the LH_PERFORM_CONT frame.  A multi-shot resume re-runs the
+             * frame and prints again -- the correct semantics (the continuation
+             * genuinely runs more than once), exactly as a re-run handler case does.
+             * Gated on --enable=cps-tramp-resume so the default (shipping) config's
+             * perform-continuation admission stays byte-identical; the historical
+             * exclusion was conservative from before the case-body println path. */
+            if (!shape_supported(t->as.letprim.spec)
+                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -1269,12 +1731,32 @@ static bool perform_cont_reset_ok(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
         case CT_APPCONT:
+            /* E7/C1 (cps-tramp-resume): a jump to a join (KK_VAR) bound by an
+             * enclosing CT_LETCONT in this same continuation -- admitted so a branch
+             * whose merged result feeds a subsequent perform lifts into the frame. */
+            if (t->as.appcont.kont.kind == KK_VAR && g_opt_cps_tramp_resume)
+                return atom_ok(&t->as.appcont.v);
             return (t->as.appcont.kont.kind == KK_RET || t->as.appcont.kont.kind == KK_PROMPT)
                 && atom_ok(&t->as.appcont.v);
+        case CT_LETCONT:
+            /* E7/C1: a JOIN in the perform continuation -- `letcont j(x) = jbody in
+             * body`, where body branches and jumps to j, and jbody (the merged
+             * continuation) may itself perform.  Admit when both sides are reset-ok;
+             * emit_lifted lowers the join as local control flow inside the frame. */
+            if (!g_opt_cps_tramp_resume) return false;
+            return perform_cont_reset_ok(t->as.letcont.jbody)
+                && perform_cont_reset_ok(t->as.letcont.body);
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && perform_cont_reset_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* E7/C1: println/print in a Track-A resume-frame continuation -- same
+             * emit_term path as a handler case (handle_case_ok), so the print lands
+             * in the LH_RESUME_CONT frame body.  Already flag-gated (this predicate
+             * only fires under --enable=cps-tramp-resume), so no extra gate needed --
+             * but keep the historical exclusion for the flag-off path by mirroring
+             * the perform_body_ok guard. */
+            if (!shape_supported(t->as.letprim.spec)
+                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -1297,7 +1779,30 @@ static bool perform_cont_reset_ok(const CTerm *t) {
                 if (!atom_ok(&t->as.perform.args[i])) return false;
             return perform_body_ok(t->as.perform.body)
                 || perform_cont_reset_ok(t->as.perform.body);
-        default: return false;   /* CT_TAILCALL and any other nested control op: evict */
+        case CT_TAILCALL:
+            /* E7 (cps-tramp-resume): admit a TAIL CALL in the perform continuation.
+             * It lifts as a RESUME_FRAME whose rfn threads its run-time `rest` (the
+             * reinstalled-handler tail) as the callee's continuation, and the
+             * trampolined tail-resume runtime keeps the recursion flat instead of
+             * the O(N) dk_invoke stack this predicate otherwise (correctly) rejects.
+             * Gated: default keeps the eviction. Args must be slot atoms. */
+            if (!g_opt_cps_tramp_resume) return false;
+            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                if (!call_arg_ok(&t->as.tailcall.args[i], true)) return false;
+            return true;
+        case CT_CONTINUE:
+            /* cps-while-native: a loop back-edge in a perform continuation -- the
+             * ESCAPING-effect shape (`while` body performs an effect handled by an
+             * OUTER handler; the perform's own continuation carries the back-edge).
+             * Like CT_TAILCALL it re-enters the loop helper threading __kont, so it
+             * must ride an LH_RESUME_CONT resume-frame (which has __kont) -- guaranteed
+             * because perform_body_ok has no CT_CONTINUE case, so emit_perform takes
+             * the resume-frame branch.  Args must be slot atoms. */
+            if (!g_opt_cps_tramp_resume) return false;
+            for (uint32_t i = 0; i < t->as.cont_.n; i++)
+                if (!call_arg_ok(&t->as.cont_.args[i], true)) return false;
+            return true;
+        default: return false;   /* any other nested control op: evict */
     }
 }
 
@@ -1307,7 +1812,9 @@ static bool perform_cont_reset_ok(const CTerm *t) {
  * enclosing k itself, its `next` is dk_done()).  The one thing that is NOT bounded
  * is a TAIL CALL: a cps->cps tail call threads __kont and can recurse, and a
  * ready-future inline resume then recurses through dk_invoke in O(N) C stack
- * (gap 1 -- worse than the direct TCO path).  ALL tail calls are rejected here,
+ * (worse than the direct TCO path -- a recursive await is by design left to the
+ * direct emitter; see docs/archive/cps-async-recursive-await-eviction.md).  ALL
+ * tail calls are rejected here,
  * not just cps->cps ones: whether a callee is CPS-emitted (binding_in_s) is not
  * yet settled while this predicate runs during S-classification (a self-recursive
  * callee reads back as `false` mid-fixpoint), so keying the reject on that flag is
@@ -1356,10 +1863,18 @@ static bool handle_case_ok(const CTerm *t) {
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && handle_case_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* println/print IS emittable in a lifted handler case: emit_term's
+             * CT_LETPRIM path emits the print statement (emit_println) and binds
+             * the nil placeholder, exactly as at top level.  A handler that prints
+             * (`(Write [s] k) (do (println s) (resume k 0))`) is the commonest
+             * effect shape.  Admitting it was gated on two now-fixed soundness
+             * bugs: the taint-via-fn-value-data-flow split (PI-1) and multi-effect
+             * deep-handler re-installation (PI-2). */
+            if (!shape_supported(t->as.letprim.spec))
                 return false;
-            for (uint32_t i = 0; i < t->as.letprim.n; i++)
-                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            if (!is_println_shape(t->as.letprim.spec->shape))
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (!atom_ok(&t->as.letprim.args[i])) return false;
             return handle_case_ok(t->as.letprim.body);
         case CT_LETCALL:
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
@@ -1380,6 +1895,19 @@ static bool handle_case_ok(const CTerm *t) {
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);
+        case CT_PERFORM:
+            /* Effect re-opening (docs/reported/cps-handler-case-effect-reopening-
+             * needs-emission.md): a handler CASE body that itself performs an
+             * effect handled by an ENCLOSING handler.  The interior perform
+             * dispatches against the case's enclosing handler markers -- emit_lifted
+             * declares `__kont = dk_case_enclosing(...)` for a re-opening case and
+             * emit_perform threads it as cur_k (both its straight-line LH_PERFORM_CONT
+             * and Track A LH_RESUME_CONT paths).  Args must be slot atoms; the
+             * continuation stays in the CASE context (it may resume the case's own
+             * `k`), so it is admitted by handle_case_ok, not perform_body_ok. */
+            for (uint32_t i = 0; i < t->as.perform.n; i++)
+                if (!atom_ok(&t->as.perform.args[i])) return false;
+            return handle_case_ok(t->as.perform.body);
         default: return false;
     }
 }
@@ -1440,6 +1968,23 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
                  * back.  A missed capture surfaces as an undeclared C name (compile
                  * error), never a silent leak/double-free. */
                 return true;
+            case CT_CLONEABLE:
+                /* E3a (owning-cloneable-capture): an owning `rc` the fn owns,
+                 * captured ^borrow across a cloneable-reset and dropped AFTER it,
+                 * gets the same "no longer has to precede the control op" pass.
+                 * Soundness: the E3a admission only lets the frame BORROW the rc
+                 * (build_marshal_reset + FA_BORROW), so it is never dropped inside
+                 * the multi-shot continuation -- only once by its owner on the
+                 * straight-line path after the reset, which completes normally
+                 * (the cloneable receiver captures the continuation; it does not
+                 * abort past the drop).  Forgetting the drop cannot silently leak:
+                 * the auto-inserted scope-exit drop is an EX_DEFER, still
+                 * unsupported on the CPS path (it evicts), so an owning capture
+                 * without an explicit end-of-scope drop does not compile here.
+                 * Gated on the experiment; off-gate a cloneable owning capture
+                 * never reaches this walk (it evicts at the grammar). */
+                if (g_opt_owning_cloneable_capture) return true;
+                return false;
             default: return false;   /* shift (abortive) / unexpected: conservative */
         }
     }
@@ -1482,6 +2027,17 @@ static bool ref_dropped_before_control(const CTerm *t, uint32_t bid) {
             case CT_IF:
                 return ref_dropped_before_control(t->as.if_.then_, bid)
                     && ref_dropped_before_control(t->as.if_.else_, bid);
+            case CT_PERFORM:
+            case CT_HANDLE:
+            case CT_RESET:
+            case CT_AWAIT:
+                /* EXPERIMENTAL (cps-tramp-resume): grant a ref the same single-shot
+                 * continuation pass RC already has (owning_dropped_before_control) --
+                 * captured into the single-shot continuation's env, freed there.
+                 * Whether the capture+free substrate exists for a ref is verified by
+                 * ASan on effect-ref; flag-gated so flag-off is unchanged. */
+                if (g_opt_cps_tramp_resume) return true;
+                return false;
             default: return false;   /* control op / delivery / end: not before */
         }
     }
@@ -1530,8 +2086,8 @@ static bool term_core_ok(const CTerm *t) {
              * arg must ride the callee's carrier ABI -- reject it (call_arg_ok
              * cps_to_direct=true) so the function evicts rather than emit a
              * raw-struct-for-int64 arg. */
-            for (uint32_t i = 0; i < t->as.letcall.n; i++)
-                if (!call_arg_ok(&t->as.letcall.args[i], true)) return false;
+            if (!call_args_ok(t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n, true))
+                return false;
             return term_core_ok(t->as.letcall.body);
         }
         case CT_LETRAW:
@@ -1555,11 +2111,9 @@ static bool term_core_ok(const CTerm *t) {
              * it (evict).  A cps->cps tail call threads through `f__cps`, whose
              * params the CPS backend emits with the matching ABI, so the wider
              * atom_ok admits the by-value aggregate there. */
-            bool cps_to_direct = !binding_in_s(t->as.tailcall.fn);
-            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
-                if (!call_arg_ok(&t->as.tailcall.args[i], cps_to_direct))
-                    return false;
-            return true;
+            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
+            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
+                                t->as.tailcall.n, cps_to_direct);
         }
         case CT_LETCONT:
             return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
@@ -1569,6 +2123,17 @@ static bool term_core_ok(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && term_core_ok(t->as.if_.then_)
                 && term_core_ok(t->as.if_.else_);
+        case CT_MATCH:
+            /* B4: an N-way tag dispatch on a heap-ADT carrier scrutinee.  The
+             * scrutinee must be slot-representable (it is read as `->tag` /
+             * `->as.Ctor._N`) and every arm body core-emittable.  The arm field
+             * bindings are extracted inline at emit (no cross-slot check needed --
+             * a binding that DOES cross into a lifted continuation rides that
+             * frame's env via collect_caps, exactly like a `let` binder). */
+            if (!atom_ok(&t->as.match.scrut)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!term_core_ok(t->as.match.arms[i].body)) return false;
+            return true;
         case CT_RESET: {
             /* C3/N6.3: delimited body + a self-contained continuation whose
              * captures (if any) are all scalar source vars (carried in the env). */
@@ -1591,9 +2156,25 @@ static bool term_core_ok(const CTerm *t) {
             /* C4/N6.2/N6.3: N-case handler; each case <=1 effect param + zero-
              * capture straight-line body; the continuation may carry scalar
              * captures in its env. */
+            /* The handled body (handle.delim) runs under the handle's OWN prompt,
+             * which emit_handle threads as cur_k; its normal-completion tail AND any
+             * interior COMPUTATION join deliver to that prompt (KK_PROMPT).  Admit it
+             * via handle_delim_ok -- like term_core_ok but permitting the KK_PROMPT
+             * delivery of a pure-computation join, so a handled expression that
+             * computes its value through a join before the prompt, e.g.
+             * `(+ 10 (inner))` lowering to
+             * `letcont j(t){+10 t; <prompt>} in tailcall inner(j)`, is admitted.  It
+             * does NOT relax interior CONTROL ops (a direct `(perform ...)` /
+             * nested `handle` / `reset` in the handled body) to prompt delivery --
+             * those still take the stricter term_core_ok, which the top-level
+             * emit_handle cannot lower for a delimited-prompt-delivering interior
+             * control op (verified: relaxing them regresses effect-error-codes /
+             * effect-handler-capture-nested / handle-effectful-fn-param-same-fn).
+             * The handle CONTINUATION (handle.body) delivers to the enclosing return
+             * and keeps the reset_body_ok check. */
             CapSet hcs;
             if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
-                || !term_core_ok(t->as.handle.delim)
+                || !handle_delim_ok(t->as.handle.delim)
                 || !reset_body_ok(t->as.handle.body)
                 || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
                 return false;
@@ -1638,10 +2219,17 @@ static bool term_core_ok(const CTerm *t) {
              * emit_perform stores the fn-pointer word as the effect value and the
              * handler case (emit_lifted) bridge-wraps the DK subk before the call,
              * so the receiver resumes the DK chain through __dk_cont_fn. */
-            bool is_shift_perf = is_shift_effect(t->as.perform.effect);
+            /* cps-dk-multishot-user-effects (Phase A): a resumable-payload user
+             * effect carries its boxed-fn payload the same way __Shift carries its
+             * receiver -- a `TY_FN` atom that fails the generic slot gate.  Admit it
+             * at the perform-arg gate (scoped to the boxed payload, never the
+             * generic atom_ok), paired with the handler-case cloneable-wrap
+             * (hcase->multishot).  A non-resumable effect stays on the fiber path. */
+            bool fn_payload_ok = is_shift_effect(t->as.perform.effect)
+                              || t->as.perform.resumable_payload;
             for (uint32_t i = 0; i < t->as.perform.n; i++)
                 if (!atom_ok(&t->as.perform.args[i])
-                    && !(is_shift_perf && shift_recv_atom_ok(&t->as.perform.args[i])))
+                    && !(fn_payload_ok && shift_recv_atom_ok(&t->as.perform.args[i])))
                     return false;
             CapSet cs;
             return collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
@@ -1655,13 +2243,16 @@ static bool term_core_ok(const CTerm *t) {
              * statically-bounded number of suspensions and no cps->cps tail call).
              *
              * A continuation with a cps->cps tail call (a recursive await) is
-             * DELIBERATELY not admitted -- await_cont_reset_ok rejects it, so it
+             * not admitted BY DESIGN -- await_cont_reset_ok rejects it, so it
              * evicts to the direct emitter.  Lifting it would resume via dk_invoke,
              * and a READY-future inline resume recurses through dk_invoke (not a
              * tail call) in O(N) C stack -- SIGSEGV at ~100k under a 256KB stack,
              * strictly worse than the direct TCO path (which the async-rec probe
-             * runs 1,000,000 deep).  See
-             * docs/reported/cps-async-recursive-await-eviction.md. */
+             * runs 1,000,000 deep).  Since (async fn) is synchronous on the
+             * compiled path, a recursive await is always a ready future, so the
+             * direct emitter's O(1) inline-readiness lowering is the correct one.
+             * This is the settled decision, not an open gap.  See
+             * docs/archive/cps-async-recursive-await-eviction.md. */
             if (!atom_ok(&t->as.await.fut)) return false;
             if (!perform_body_ok(t->as.await.body) && !await_cont_reset_ok(t->as.await.body))
                 return false;
@@ -1696,6 +2287,24 @@ static bool term_core_ok(const CTerm *t) {
              * slot-representable call/cc result and a core continuation body. */
             return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
                 && term_core_ok(t->as.callcc.body);
+        case CT_LOOP: {
+            /* cps-while-native: the loop-carried params + entry atoms must be
+             * slot-representable, and the loop body (a CT_IF around the interior
+             * handle + back-edge) admissible. */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!(slot_ok_t(t->as.loop.params[i].type, t->as.loop.params[i].ty)
+                      || t->as.loop.params[i].ty == TY_NIL))
+                    return false;
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!atom_ok(&t->as.loop.inits[i])) return false;
+            return term_core_ok(t->as.loop.body);
+        }
+        case CT_CONTINUE:
+            /* The back-edge args ride the recursive `__cps` call like tail-call
+             * args -- each must be slot-representable. */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++)
+                if (!atom_ok(&t->as.cont_.args[i])) return false;
+            return true;
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -1842,6 +2451,108 @@ static bool delim_ok(const CTerm *t) {
     }
 }
 
+/* cps-dk-multishot-user-effects (Phase B): admission for a TOP-LEVEL `handle`'s
+ * handled body (handle.delim).  emit_handle installs the handle's own prompt as
+ * cur_k and threads the handled body under it, so the body's normal-completion
+ * tail -- and any interior COMPUTATION join -- delivers its value to that prompt
+ * (KK_PROMPT).  This is like term_core_ok but permits that KK_PROMPT delivery for
+ * pure-computation / join / call shapes: a handled expression `(+ 10 (inner))`
+ * lowers to `letcont j(t){+10 t; <prompt>} in tailcall inner(j)`, which term_core_ok
+ * rejects (its CT_APPCONT forbids KK_PROMPT) but emit_handle emits correctly.
+ *
+ * It deliberately does NOT relax an interior CONTROL op (a direct `(perform ...)`,
+ * a nested `handle`/`reset`/`shift`/`await` in the handled body) to prompt
+ * delivery -- those fall to term_core_ok, which the top-level emit_handle cannot
+ * lower when they would deliver through the prompt (relaxing them regresses
+ * effect-error-codes / effect-handler-capture-nested / handle-effectful-fn-param-same-fn).
+ * The nested-in-a-reset handle keeps its own (delim_ok) admission unchanged. */
+static bool handle_delim_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            return atom_ok(&t->as.appcont.v);   /* KK_PROMPT / KK_VAR delivery OK */
+        case CT_LETVAL:
+            return (slot_ok_t(t->as.letval.x.type, t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
+                && atom_ok(&t->as.letval.v)
+                && handle_delim_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec)) return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return handle_delim_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!atom_ok(&t->as.letcall.args[i])) return false;
+            return handle_delim_ok(t->as.letcall.body);
+        case CT_LETRAW:
+            /* A delegated (direct-emitted) call in the handled body performs its
+             * effects on the FIBER runtime, NOT the handle's DK prompt, so a
+             * `(handle (f) ...)` whose body is `let x = f() [direct]; <prompt> x`
+             * must NOT be admitted when `f` is EFFECTFUL (E would be unhandled --
+             * regresses handle-effectful-fn-param-same-fn).  But a PURE delegated
+             * op -- a call to an effect-free callee, or a raw rc/field/struct op --
+             * runs no effect at all, so nothing escapes to the fiber and the
+             * subsequent KK_PROMPT delivery stays the handle's own result: admit it
+             * (letraw_effect_free), recursing via handle_delim_ok so the join-to-
+             * prompt is allowed.  An EFFECTFUL or owning raw op falls to
+             * term_core_ok (identical to the historical no-case fall-through),
+             * which rejects the delivery so the handler evicts to the fiber path.
+             * `(println (add-int 3 4))` inside a handled body is exactly the pure
+             * case this admits. */
+            if (letraw_ok(t) && letraw_effect_free(t))
+                return handle_delim_ok(t->as.letraw.body);
+            return term_core_ok(t);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && handle_delim_ok(t->as.if_.then_)
+                && handle_delim_ok(t->as.if_.else_);
+        case CT_LETCONT:
+            return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
+                && handle_delim_ok(t->as.letcont.jbody)
+                && handle_delim_ok(t->as.letcont.body);
+        case CT_TAILCALL: {
+            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
+            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
+                                t->as.tailcall.n, cps_to_direct);
+        }
+        case CT_HANDLE: {
+            /* A NESTED handle in this handle's handled body (e.g. `(handle (handle
+             * (do-write-read) (Read ..)) (Write ..))`: do-write-read performs Read
+             * -- handled by the inner handle -- and Write, which propagates to the
+             * outer).  The inner handle runs under its OWN prompt, so its delim +
+             * cases take the strict checks (via term_core_ok's own CT_HANDLE gate);
+             * but its normal-completion CONTINUATION delivers the inner result to
+             * THIS (enclosing) handle's prompt (KK_PROMPT), so admit the inner
+             * body via handle_delim_ok -- the same computation-join-to-prompt
+             * relaxation the top-level delim gets.  term_core_ok(CT_HANDLE)'s
+             * `reset_body_ok(body)` rejects that KK_PROMPT delivery, which is why
+             * the default->term_core_ok path below evicts an otherwise-emittable
+             * nested handle. */
+            CapSet hcs;
+            if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                || !handle_delim_ok(t->as.handle.delim)
+                || !handle_delim_ok(t->as.handle.body)
+                || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
+                return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                CapSet ccs;
+                if (c->n_params > 1)
+                    for (uint32_t pi = 0; pi < c->n_params; pi++)
+                        if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
+                            return false;
+                if (!handle_case_ok(c->case_body)) return false;
+                if (!collect_caps_case(c->case_body, c, &ccs)) return false;
+            }
+            return true;
+        }
+        default:
+            /* Interior control op / anything else: stricter core admission (no
+             * KK_PROMPT delivery relaxation). */
+            return term_core_ok(t);
+    }
+}
+
 /* A source parameter's raw C name (used unchanged now that fn_params is set
  * during CPS emission) must not collide with a name the CPS backend synthesizes:
  * the continuation `k`, or any `__`-prefixed internal (`__root`, `__r`, `__cap`,
@@ -1863,6 +2574,96 @@ static bool param_name_clashes_cps(const Binding *b) {
     return false;
 }
 
+/* E1 (cps-dk-sole-effect-lowering): a fn with a SINGLE concrete C signature --
+ * NOT a typeclass instance method (`owner_instance` -- those route an existential-
+ * witness param BY POINTER via exwit_inst_param_by_ptr, and their base name is
+ * reached through the per-method dict ABI), NOT a dict-clone (`n_dict_clone` -- a
+ * rank-2 carrier value), and constraint-free (`n_constraints == 0` -- a
+ * constrained/generic fn whose base name is ALSO specialized as an int64 carrier).
+ * These three are exactly the fns the sig_slot_ok name-collision hazard guards
+ * against: their concrete `__cps` signature would clash with the uniform
+ * carrier/dict spelling of the same base name.  A plain concrete defn has one C
+ * signature the direct emitter also emits, so a non-scalar signature position is
+ * ABI-safe there. */
+static bool fn_single_concrete_sig(const FnDef *fd) {
+    return !fd->owner_instance && !fd->n_dict_clone
+        && !fd->constraints.n_constraints;
+}
+
+/* E1, by-value-aggregate PARAM: admit an owning-free by-value aggregate param
+ * (`slot_box_ty` -- a flat product with no rc/ref/weak field), matching the direct
+ * emitter's by-value spelling (`static int64_t run(tur_adt_Cfg c)`).  Gated on
+ * `--enable=cps-tramp-resume` + a single concrete signature -- the `__cps` entry,
+ * its forward decl, and the direct wrapper all spell it identically through
+ * emit_params. */
+static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
+    /* The direct emitter passes SOME aggregates BY POINTER (`const tur_adt_H *` --
+     * a defdata record ADT, a large by-value product; type_struct_pass_by_ptr),
+     * not by value.  emit_params spells the CPS param BY VALUE (`tur_adt_H`), so
+     * admitting a by-pointer aggregate makes the `__cps` entry / wrapper disagree
+     * with the direct emitter's forward decl -- a `conflicting types` C error
+     * (conv-adt-record-typed-fn-field-call).  Restrict this admission to an
+     * aggregate the direct emitter ALSO passes by value (a defstruct-lowered
+     * `tur_adt_Cfg`), so all three spellings match through emit_params. */
+    return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+        && slot_box_ty(&p->type) && !type_struct_pass_by_ptr(p->type);
+}
+
+/* E2b soundness gate: the fat-closure (is_poly_fn) param `p` is only CALLED (as a
+ * callee, possibly captured into a continuation env and called there), never used
+ * as a VALUE -- passed as a call ARGUMENT, stored, or bare-referenced.  A fat
+ * closure (`tur_poly_fn_t`) is a multi-word aggregate that cannot cross a one-word
+ * slot, so a value-use would spill it to a `void *` temp and miscompile (the
+ * caller/callee is_poly_fn ABI can also diverge); a callee-use goes through a
+ * delegated indirect call (CT_LETRAW) or a captured `tur_poly_fn_t` env field
+ * (cap_add), neither of which crosses a slot.  ptc_walk's `val` counts exactly the
+ * value-uses, so `val == 0` is the sound admission condition. */
+static bool fatparam_only_called(const FnDef *fd, const Binding *p) {
+    int val = 0, tailc = 0, ntc = 0;
+    ptc_walk(fd->body, p, true, &val, &tailc, &ntc);
+    return val == 0;
+}
+
+/* E1, heap-ADT/struct HANDLE return: admit a carrier-handle return (`(Vec int)` ->
+ * `tur_adt_Vec__int *`, an owning int64 carrier that crosses the DK slot by a plain
+ * `(T *)__r` cast, never a box).  The `__cps` entry returns `int64_t` and delivers
+ * the handle THROUGH the slot -- slot_store/slot_load already carry it via
+ * carrier_handle_ok (see slot_ok_t) -- so only the signature gate blocked it.  Same
+ * single-concrete-signature guard + flag.  The dangerous shape (a handle CAPTURED
+ * live across a control op, which would duplicate an owning pointer into a possibly
+ * multi-shot env) is independently rejected by the capture gate (cap_ty_ok excludes
+ * carrier handles), so a fn that captures such a handle still evicts on the capture;
+ * admitting the RETURN move-out is safe. */
+static bool fn_carrier_ret_ok(const FnDef *fd, const Type *rt) {
+    return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+        && !type_has_unresolved_tyvar(rt)
+        && carrier_handle_ok(rt);
+}
+
+/* B4: admit an opaque-carrier ADT PARAM -- a boxed sum-type / non-by-value ADT
+ * (e.g. `Box`) whose C spelling is the `int64_t` carrier.  BOTH the direct
+ * emitter's forward decl AND emit_params (binder_ctype_full -> emit_type_c_name
+ * -> type_c_name) spell such a param `int64_t`, so the `__cps` ABI is consistent
+ * -- the fn_sig_ok param gate was the only thing rejecting it.  A by-value
+ * PRODUCT ADT (adt_byval_c_name, e.g. `tur_adt_Cfg`) is NOT this and is handled
+ * by fn_byval_agg_param_ok instead.  This lets a `perform` reachable only
+ * through such a param -- e.g. `pick [b : Box]`'s match-arm perform under a DK
+ * handler (cps-backend-effect-under-match) -- keep the whole call chain on the
+ * DK.  Same single-concrete-signature + flag guard as the other admissions. */
+static bool fn_carrier_param_ok(const FnDef *fd, const Binding *p) {
+    if (!(g_opt_cps_tramp_resume && fn_single_concrete_sig(fd))) return false;
+    TypeKind k = p->type.kind;
+    /* B8: an opaque session-channel param is a void* carrier -- emit_params spells
+     * it `void*` (matching the direct emitter), so the __cps ABI is consistent. */
+    if (type_is_session(k)) return true;
+    if (k != TY_ADT && k != TY_APP) return false;
+    /* A tyvar-carrying carrier (`(Option a)`) belongs to a generic template and
+     * must sig-REJECT so it stays a mono_template -- admitting it emits a generic
+     * `<fn>__cps(int64_t, ...)` that concrete callers hit with real struct args. */
+    if (type_has_unresolved_tyvar(&p->type)) return false;
+    return strcmp(type_c_name(p->type), "int64_t") == 0;
+}
+
 static bool fn_sig_ok(const FnDef *fd) {
     /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate).  A
      * nil/void return is admitted too: the body still delivers a unit (0) to the
@@ -1876,9 +2677,10 @@ static bool fn_sig_ok(const FnDef *fd) {
      * by-value aggregate PARAM is NOT widened here -- the CPS param ABI would emit
      * it by value while the direct emitter's forward decl passes it by pointer;
      * such a param keeps the function on the fallback (see the param loop below).
-     * See docs/upcoming/v1/cps-tier-c-effect-result-native-plan.md. */
+     * See docs/archive/cps-tier-c-effect-result-native-plan.md. */
     const Type *rt = fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)) return false;
+    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
+        && !fn_carrier_ret_ok(fd, rt)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
@@ -1912,10 +2714,23 @@ static bool fn_sig_ok(const FnDef *fd) {
          * emitter (which owns the fat-closure ABI).  A plain effect-free `TY_FN`
          * param -- a bare function pointer that fits the int64 carrier -- stays
          * admitted below (the delegated indirect call the comment describes). */
-        if (p->is_poly_fn) return false;
-        bool fn_param_ok = p->type.kind == TY_FN;
+        /* E2b (cps-tramp-resume): a rank-2 poly-fat closure param (tur_poly_fn_t)
+         * is a multi-word aggregate the CPS backend cannot thread through a
+         * one-word slot -- but emit_params spells it `tur_poly_fn_t` (matching the
+         * direct emitter) and a fat closure that is only CALLED (a delegated
+         * indirect call, CT_LETRAW) or CAPTURED BY VALUE (cap_add admits an
+         * is_poly_fn env field) never crosses a slot.  Admit it under the flag for a
+         * single-concrete-signature fn; the atom gates (atom_is_fat_fn in
+         * call_arg_ok / atom_ok) still EVICT a fn that threads the fat closure
+         * through a DK/call-arg slot. */
+        if (p->is_poly_fn
+            && !(g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+                 && fatparam_only_called(fd, p))) return false;
+        bool fn_param_ok = p->type.kind == TY_FN || p->is_poly_fn;
         if (!p->is_borrow && !fn_param_ok
-            && !sig_slot_ok(&p->type, p->type.kind)) return false;
+            && !sig_slot_ok(&p->type, p->type.kind)
+            && !fn_byval_agg_param_ok(fd, p)
+            && !fn_carrier_param_ok(fd, p)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
     return true;
@@ -1946,6 +2761,14 @@ typedef struct {
      * fixpoint evicts it (mono_template=false, reverting to tainting) if its
      * effect is tainted by a genuine fiber peer. */
     bool mono_template;
+    /* PERMANENT SIG routing: this fn can NEVER be CPS-admitted -- an exported C
+     * symbol, the `main` entry, or an ABI-incompatible signature (`!fn_sig_ok`:
+     * a poly-fat / by-value-aggregate param the DK ABI cannot spell).  Distinct
+     * from a `!term_core_ok` BODY reason, which IS fixable admission work.  Backs
+     * the SIG-cascade trace category: an effect touched by a sig_perm fn is
+     * PERMANENTLY tainted, so a fn evicted only because it shares such an effect
+     * is itself permanent routing (no BODY-* fix exists), not a fixable BODY root. */
+    bool sig_perm;
 } SEnt;
 
 /* The program entry point `main` (never module-prefixed). */
@@ -1964,9 +2787,55 @@ static bool fn_is_main(const FnDef *fd) {
  * `int main(...)` wrapper trampolines into `main__cps`.  Effect-only mains (no
  * delimited op) stay excluded -- CPS-emitting them is pure overhead and removes
  * no direct-lowering caller. */
+/* E3': does `e` directly contain an effect `handle`?  (partial structural walk over
+ * the forms a `main` body takes: a bare handle, or one wrapped in do/let/if/...).
+ * A miss only leaves `main` on its historical fiber path -- conservative. */
+static bool expr_has_handle(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_HANDLE: return true;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_has_handle(e->as.do_.items[i])) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_has_handle(e->as.let_.bindings[i].init)) return true;
+            return expr_has_handle(e->as.let_.body);
+        case EX_IF:
+            return expr_has_handle(e->as.if_.cond) || expr_has_handle(e->as.if_.then_)
+                || expr_has_handle(e->as.if_.else_or_null);
+        case EX_ASCRIBE: return expr_has_handle(e->as.ascribe_.inner);
+        case EX_RETURN:  return expr_has_handle(e->as.return_.value);
+        /* A `(with-handler hv body)` is a delimited handler install just like
+         * `handle`.  When hv is a `(handler ...)` literal (or a compose of them)
+         * build_with_handler DK-lowers it via build_handle_core; a dynamic
+         * handler value evicts to CT_UNSUPPORTED and falls back gracefully under
+         * the experiment.  Either way main must be a d2b candidate so the literal
+         * form reaches the DK backend instead of the fiber. */
+        case EX_WITH_HANDLER: return true;
+        case EX_COMPOSE_HANDLERS: return true;
+        default: return false;
+    }
+}
+
 static bool fn_is_d2b_main(const FnDef *fd) {
-    return fn_is_main(fd) && fd->n_params == 0
-        && fd->body && cps_expr_contains_shift(fd->body);
+    if (!(fn_is_main(fd) && fd->n_params == 0 && fd->body)) return false;
+    /* E3 (v2 sole-effect-lowering): a zero-arg main gets the int-main -> main__cps
+     * trampoline when it contains delimited control.  An earlier revision made
+     * EVERY main d2b under cps-tramp-resume, which broke a main that transitively
+     * reaches FIBER effect code (SIGSEGV / print-skipped / unhandled-effect).
+     *
+     * E3' (cps-tramp-resume): a main that ITSELF installs a `handle` is now a d2b
+     * CANDIDATE -- NOT unconditionally d2b.  It enters the taint fixpoint like any
+     * candidate; if its handle subtree reaches fiber effect code the fixpoint drops
+     * it from S, and emit_cps_ir_try_fn returns false BEFORE the d2b wrapper (line
+     * ~5863), so a fiber-reaching main falls back to the historical direct/fiber
+     * main -- exactly its current behaviour, with NO forced-d2b regression.  The
+     * gate is thus the fixpoint (the "taint-completeness guard" the note asked for),
+     * unlocked now that E2a threads the effectful fn-values a handle-main performs. */
+    return cps_expr_contains_shift(fd->body)
+        || (g_opt_cps_tramp_resume && expr_has_handle(fd->body));
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */
@@ -1976,7 +2845,31 @@ static Arena       g_arena;     /* owns the cached CTerms (+ coloring) */
 static bool        g_arena_live;
 static SEnt       *g_ents;
 static size_t      g_ents_n;
+/* Permanently-tainted effects: the effect set that stays fiber-tainted even when
+ * every BODY-fixable function is admitted (i.e. only sig_perm fns + base code +
+ * their call-path conduits are fiber).  A colored fn evicted ONLY because it
+ * shares such an effect is permanent SIG-cascade routing -- no BODY-* fix could
+ * admit it -- so the EVICT trace reports it as SIG-TAINT, not BODY-STRUCT-OR-TAINT.
+ * Computed by ensure_S (a fixpoint over sig_perm sources); read by the trace. */
+static uint64_t    g_perm_lo, g_perm_hi;
 static bool        g_fwd_done;  /* __cps forward decls emitted for g_prog */
+
+/* E2/taint-completeness: the set of global fns whose ADDRESS is taken (referenced
+ * as a fn-value, not called directly).  Populated by a pre-pass over the program
+ * (g_addr_collecting) and read in ensure_S to force an effectful address-taken fn
+ * to the fiber (its DK direct-entry would escape a perform when invoked indirectly). */
+static const Binding *g_addr_taken[1024];
+static int            g_addr_taken_n;
+static bool           g_addr_collecting;
+static void addr_taken_add(const Binding *b) {
+    for (int i = 0; i < g_addr_taken_n; i++) if (g_addr_taken[i] == b) return;
+    if (g_addr_taken_n < (int)(sizeof(g_addr_taken)/sizeof(g_addr_taken[0])))
+        g_addr_taken[g_addr_taken_n++] = b;
+}
+static bool addr_taken_has(const Binding *b) {
+    for (int i = 0; i < g_addr_taken_n; i++) if (g_addr_taken[i] == b) return true;
+    return false;
+}
 
 /* Effect -> prompt-tag registry.  Tags start at 2 (reset/shift use 1); the same
  * interned effect Symbol always maps to the same tag, so a handle and a matching
@@ -1985,7 +2878,11 @@ static bool        g_fwd_done;  /* __cps forward decls emitted for g_prog */
 static const Symbol *g_eff_syms[CPS_MAX_EFFECTS];
 static int           g_eff_n;
 
-static int effect_tag(const Symbol *eff) {
+/* Non-static (B3 part 2): the direct-path handler-literal emitter
+ * (emit_effects_handler_lit) calls this to stamp a DK case entry's `dk_tag` with
+ * the SAME per-effect integer the body's `dk_perform(tag, ...)` uses -- the tag
+ * is memoized by symbol, so first-seen order is irrelevant to consistency. */
+int effect_tag(const Symbol *eff) {
     for (int i = 0; i < g_eff_n; i++)
         if (g_eff_syms[i] == eff) return i + 2;
     if (g_eff_n < CPS_MAX_EFFECTS) { g_eff_syms[g_eff_n] = eff; return (g_eff_n++) + 2; }
@@ -1998,6 +2895,12 @@ static bool binding_in_s(const Binding *b) {
         if (g_ents[i].bind == b) return g_ents[i].in_s;
     return false;
 }
+static bool binding_cps_reachable(const Binding *b) {
+    if (!b) return false;
+    for (size_t i = 0; i < g_ents_n; i++)
+        if (g_ents[i].bind == b) return g_ents[i].in_s || g_ents[i].mono_template;
+    return false;
+}
 
 /* True when this CT_LETCONT is a non-tail cps->cps call: its body is directly a
  * tailcall to an emittable colored callee that threads this join as the callee's
@@ -2008,7 +2911,11 @@ static bool letcont_is_heap_join(const CTerm *t) {
     return b && b->kind == CT_TAILCALL
         && b->as.tailcall.kont.kind == KK_VAR
         && b->as.tailcall.kont.id == t->as.letcont.j.id
-        && binding_in_s(b->as.tailcall.fn);
+        /* colored callee threads `<fn>__cps`, (E2a tier-`nontail`) a fn-value
+         * callee threads via the registry, OR (E2) a fat-closure poly-fn param
+         * threads via its fn_cps slot -- all reify this join as a DK frame. */
+        && (binding_in_s(b->as.tailcall.fn) || b->as.tailcall.via_registry
+            || b->as.tailcall.via_fncps);
 }
 
 /* A heap-join jbody is lowered into a value-transform frame fn `(env, value)`
@@ -2026,15 +2933,81 @@ static bool letcont_is_heap_join(const CTerm *t) {
 static bool jbody_has_cps_tailcall(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
-        case CT_TAILCALL: return binding_in_s(t->as.tailcall.fn);
+        /* E2/E2a: a fn-value tail call (via the registry, or a fat-closure fn_cps
+         * slot) also threads the DK continuation, so a jbody containing one needs
+         * a resume-frame (LH_RESUME_CONT) that receives `__kont` at run time. */
+        case CT_TAILCALL: return binding_in_s(t->as.tailcall.fn)
+                              || t->as.tailcall.via_registry
+                              || t->as.tailcall.via_fncps;
         case CT_LETVAL:   return jbody_has_cps_tailcall(t->as.letval.body);
         case CT_LETPRIM:  return jbody_has_cps_tailcall(t->as.letprim.body);
         case CT_LETCALL:  return jbody_has_cps_tailcall(t->as.letcall.body);
         case CT_LETRAW:   return jbody_has_cps_tailcall(t->as.letraw.body);
         case CT_IF:       return jbody_has_cps_tailcall(t->as.if_.then_)
                               || jbody_has_cps_tailcall(t->as.if_.else_);
+        case CT_MATCH:    for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                              if (jbody_has_cps_tailcall(t->as.match.arms[i].body)) return true;
+                          return false;
         case CT_LETCONT:  return jbody_has_cps_tailcall(t->as.letcont.jbody)
                               || jbody_has_cps_tailcall(t->as.letcont.body);
+        default:          return false;
+    }
+}
+
+/* A heap-join jbody that itself PERFORMS an effect also needs `__kont` in scope:
+ * the interior dk_perform threads cur_k (== the frame's runtime downstream chain)
+ * so the effect reaches the enclosing handler.  A value-only LH_PERFORM_CONT
+ * frame fn `(env, value)` has no `__kont`, so a perform lowered inside it emits an
+ * undeclared `__kont` (the compound `effect-reopen` shape:
+ * `perform E; let x = colored(...); perform E2; ...`).  Detecting a perform in the
+ * jbody promotes the frame to an LH_RESUME_CONT resume-frame, which RECEIVES its
+ * downstream chain as the `__kont` param, exactly like the cps->cps-tailcall case.
+ * See docs/archive/cps-perform-cont-heap-join-eviction.md. */
+static bool jbody_has_perform(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_PERFORM:  return true;
+        case CT_LETVAL:   return jbody_has_perform(t->as.letval.body);
+        case CT_LETPRIM:  return jbody_has_perform(t->as.letprim.body);
+        case CT_LETCALL:  return jbody_has_perform(t->as.letcall.body);
+        case CT_LETRAW:   return jbody_has_perform(t->as.letraw.body);
+        case CT_RESUME:   return jbody_has_perform(t->as.resume.body);
+        case CT_IF:       return jbody_has_perform(t->as.if_.then_)
+                              || jbody_has_perform(t->as.if_.else_);
+        case CT_MATCH:    for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                              if (jbody_has_perform(t->as.match.arms[i].body)) return true;
+                          return false;
+        case CT_LETCONT:  return jbody_has_perform(t->as.letcont.jbody)
+                              || jbody_has_perform(t->as.letcont.body);
+        default:          return false;
+    }
+}
+
+/* A heap-join jbody that installs a NESTED delimited-control op in VALUE position
+ * (a `handle`/`reset` whose result feeds an enclosing expression, e.g.
+ * `(+ x (handle ...))`) needs `__kont` in scope: the nested handle's lifted
+ * continuation frame captures the enclosing continuation (`__ce->__k = __kont`),
+ * so the join must ride an LH_RESUME_CONT resume-frame (which RECEIVES its
+ * downstream chain as `__kont`) rather than a value-only LH_PERFORM_CONT frame
+ * (which has no `__kont`).  See docs/reported/cps-toplevel-synthesized-main-
+ * bypasses-dk.md (effect-nested). */
+static bool jbody_has_delim(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_HANDLE:   return true;
+        case CT_RESET:    return true;
+        case CT_LETVAL:   return jbody_has_delim(t->as.letval.body);
+        case CT_LETPRIM:  return jbody_has_delim(t->as.letprim.body);
+        case CT_LETCALL:  return jbody_has_delim(t->as.letcall.body);
+        case CT_LETRAW:   return jbody_has_delim(t->as.letraw.body);
+        case CT_RESUME:   return jbody_has_delim(t->as.resume.body);
+        case CT_IF:       return jbody_has_delim(t->as.if_.then_)
+                              || jbody_has_delim(t->as.if_.else_);
+        case CT_MATCH:    for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                              if (jbody_has_delim(t->as.match.arms[i].body)) return true;
+                          return false;
+        case CT_LETCONT:  return jbody_has_delim(t->as.letcont.jbody)
+                              || jbody_has_delim(t->as.letcont.body);
         default:          return false;
     }
 }
@@ -2061,13 +3034,19 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_LETCONT:
             if (letcont_is_heap_join(t)) {
                 /* The join is lifted into a DK frame; the handled tailcall (body)
-                 * is not walked.  The frame carries only the enclosing
-                 * continuation, so the join body must not capture other locals,
-                 * nor itself contain a cps->cps tail call (the frame fn has no `k`
-                 * to thread -- see jbody_has_cps_tailcall). */
-                if (has_capture(t->as.letcont.jbody, t->as.letcont.param.id))
-                    return true;
-                if (jbody_has_cps_tailcall(t->as.letcont.jbody))
+                 * is not walked.  P6 (cps-runtime-finish, heap-join-over-recursion):
+                 * a jbody that CAPTURES enclosing locals and/or itself makes a
+                 * cps->cps tail call (e.g. `set-eq-loop`/`__cons-fmap`: call a
+                 * colored helper, then recurse) is emittable -- emit_heap_join lifts
+                 * it as an LH_RESUME_CONT resume-frame (dk_frame_resume) whose
+                 * run-time `__kont` parameter is the downstream chain the DK passes
+                 * in, so a KK_RET delivery lowers `dk_run(__kont, v)` and a recursive
+                 * cps->cps tail call threads `__kont` -- delivered exactly once (the
+                 * DKK_RESUME_FRAME rfn consumes its downstream).  The only remaining
+                 * unemittable case is a NON-slot capture (collect_caps fails);
+                 * recurse for deeper joins in the jbody. */
+                CapSet _cs;
+                if (!collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &_cs))
                     return true;
                 return needs_heap_join(t->as.letcont.jbody);
             }
@@ -2076,6 +3055,10 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_IF:
             return needs_heap_join(t->as.if_.then_)
                 || needs_heap_join(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (needs_heap_join(t->as.match.arms[i].body)) return true;
+            return false;
         case CT_RESET:
             return needs_heap_join(t->as.reset.delim)
                 || needs_heap_join(t->as.reset.body);
@@ -2124,7 +3107,61 @@ typedef struct {
     int       *n_callees;
     int        cap_callees;
     bool      *callee_overflow;
+    /* E2 threadability analysis (cps-tramp-resume): when count_target is non-NULL,
+     * every EX_VAR reference to it (a value-USE of that binding, anywhere in the
+     * walked tree including nested lambda bodies) increments *count_out.  A direct
+     * call's callee is carried in fn_binding, not as an EX_VAR node, so it is not
+     * counted -- only genuine fn-VALUE uses are.  Zero-initialized by the positional
+     * initializers that predate these fields (trailing omitted => zero). */
+    const Binding *count_target;
+    int           *count_out;
+    /* E2 threadability (cps-tramp-resume): when thr_ok is non-NULL, every EX_CALL
+     * whose arg[i] peels to count_target and whose global callee's param i is a
+     * THREADING param increments *thr_ok.  Run in the SAME walk as count_out so
+     * total (count_out) and threadable-arg (thr_ok) uses are directly comparable
+     * over one exhaustive traversal (covers handle/reset/match/... uniformly). */
+    const Expr    *thr_program;
+    int           *thr_ok;
+    /* E2 (param_is_threading): when callee_target is non-NULL, every EX_CALL whose
+     * fn_binding IS it increments *callee_out.  A param called as `(p x)` carries p
+     * in fn_binding (no EX_VAR node), so counting fn_binding is how a param's
+     * callee-uses are tallied exhaustively.  NOT set when count_target is a global
+     * fn (a direct call to it is not a fn-value use). */
+    const Binding *callee_target;
+    int           *callee_out;
+    /* E2 tiering: when thr_tier is non-NULL, each in-surface threadable-arg use of
+     * count_target raises *thr_tier to max(*thr_tier, param_thread_class) so the
+     * trace can report the hardest E2 tier a fn-value needs (PT_NOW/NONTAIL/E1). */
+    int           *thr_tier;
+    /* letraw_effect_free: record only CALL-position callees, skipping the
+     * fn-VALUE reference channel below (EX_VAR on a TY_FN binding).  The two
+     * uses of the callee list ask different questions -- the call-path taint
+     * asks "may this fn be called downstream through the value", which a value
+     * reference genuinely answers yes to; a CT_LETRAW admission asks "does this
+     * raw op run an effect right here", which taking a function's ADDRESS never
+     * does.  Only letraw_effect_free sets this. */
+    bool           calls_only;
 } EffAcc;
+
+/* E2 param-threading tiers -- how ready a HOF param is to thread the DK to the
+ * fn-value it binds, in ASCENDING implementation difficulty.  PT_NONE = not a
+ * threading param (the fn-value escapes as a value, is called under the HOF's own
+ * handle, or lives in a form the classifier does not cover -> stays fiber). */
+typedef enum {
+    PT_NONE = 0,   /* not threadable: value-use / handler-body / sink */
+    PT_NOW,        /* tail-only callee, scalar-carrier param -- easiest E2 target */
+    PT_NONTAIL,    /* callee-only but some call is non-tail -- needs a threaded
+                    * CT_LETCALL for the fn-value call (E2 emission work) */
+    PT_E1,         /* callee-only but the param is is_poly_fn (rank-2/capturing) --
+                    * needs E1's carrier-ABI __cps before it can thread */
+} PtClass;
+
+/* Forward decls: the walker's EX_CALL threadability probe uses these, but they
+ * depend on expr_count_all_uses (which drives this walker), so they are defined
+ * after it. */
+static const Expr  *peel_fn_value(const Expr *e);
+static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
+static PtClass      param_thread_class(const FnDef *fd, uint32_t pi);
 
 static void eff_acc_add_callee(EffAcc *acc, const Binding *b) {
     if (!acc->callees) return;
@@ -2163,7 +3200,6 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             }
             return;
         case EX_HANDLE:
-        case EX_HANDLER_LIT:
             if (e->as.handle_.handle) {
                 HandleExpr *h = e->as.handle_.handle;
                 REC(h->body);
@@ -2171,6 +3207,19 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     mark_effect(h->cases[i].effect_name, acc->hlo, acc->hhi);
                     REC(h->cases[i].body);
                 }
+            }
+            return;
+        case EX_HANDLER_LIT:
+            /* B3 part 2: a bare `(handler ...)` VALUE construction does NOT handle
+             * its effects here -- only the with-handler / handle APPLICATION does
+             * (EX_WITH_HANDLER marks the discharge from the handler type row).
+             * Marking the handled effect at the construction site would wrongly
+             * attribute it to the constructing fn (e.g. a `main` that builds a
+             * handler value and passes it on), permanently tainting the effect.
+             * Still recurse into the case bodies for any OTHER effect they perform. */
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                for (uint8_t i = 0; i < h->n_cases; i++) REC(h->cases[i].body);
             }
             return;
         case EX_RESUME:
@@ -2182,7 +3231,23 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 REC(e->as.discontinue_.discontinue->exception);
             }
             return;
-        case EX_WITH_HANDLER:   REC(e->as.with_handler_.handler); REC(e->as.with_handler_.body); return;
+        case EX_WITH_HANDLER: {
+            /* B3 part 2: mark the effects this handler value DISCHARGES (from its
+             * type's handled_row) into the HAND set.  Recursing into a `(handler
+             * ...)` LITERAL already marks its inline cases, but a DYNAMIC handler
+             * value (a parameter / `(.field obj)` read) has no inline cases, so
+             * without this a fn that discharges an effect via a handler parameter
+             * (e.g. run-with) is wrongly seen as leaving the effect unhandled and
+             * co-taints to the fiber.  The type row covers both. */
+            const Type *ht = &e->as.with_handler_.handler->type;
+            if (ht->kind == TY_HANDLER && ht->as.handler_.handled_row) {
+                const Symbol *effs[32]; uint8_t neff = 0;
+                effect_row_collect_names(ht->as.handler_.handled_row, effs, &neff, 32);
+                for (uint8_t i = 0; i < neff; i++)
+                    mark_effect(effs[i], acc->hlo, acc->hhi);
+            }
+            REC(e->as.with_handler_.handler); REC(e->as.with_handler_.body); return;
+        }
         case EX_COMPOSE_HANDLERS: REC(e->as.compose_handlers_.h1); REC(e->as.compose_handlers_.h2); return;
         /* --- structural / binding forms: recurse into every sub-expression --- */
         case EX_LET:
@@ -2200,8 +3265,79 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
              * reach any colored peer).  fn_expr is NULL for a resolved direct
              * call, non-NULL only for the indirect/higher-order case. */
             if (e->as.call_.fn_binding) eff_acc_add_callee(acc, e->as.call_.fn_binding);
-            else if (e->as.call_.fn_expr && acc->callees && acc->callee_overflow)
-                *acc->callee_overflow = true;
+            else if (e->as.call_.fn_expr) {
+                /* Effect subtyping / capability field (docs/reported/
+                 * cps-effect-subtype-capability-pure-fn-in-effectful-field.md):
+                 * a call THROUGH a lowered `.field` capability access (fn_expr is
+                 * an EX_GET_FIELD carrying an adt_ctor) is credited with the
+                 * FIELD's PRECISE effect row -- mirroring effect_check's
+                 * collect_effects_in_expr field path -- rather than the blunt
+                 * "reaches every colored peer" overflow.  So a handled body whose
+                 * only interior call is a capability invocation whose inferred row
+                 * is empty (a pure value stored in an effectful-typed field, which
+                 * the compiler already proves -- it raises TUR-W0033) is NOT
+                 * force-evicted.  A genuinely effectful field VALUE is still caught
+                 * globally: its stored fn is address-taken -> a permanent fiber
+                 * source -> the effect base-taints and the handler co-evicts
+                 * (SIG-TAINT), independent of this local crediting.  Gated on
+                 * cps-tramp-resume so the shipping classifier stays byte-identical
+                 * (flag-off keeps the unconditional overflow). */
+                const struct CtorDef *fac = NULL; uint32_t ffidx = 0;
+                if (g_opt_cps_tramp_resume && e->as.call_.fn_expr->kind == EX_GET_FIELD) {
+                    fac   = e->as.call_.fn_expr->as.get_field_.adt_ctor;
+                    ffidx = e->as.call_.fn_expr->as.get_field_.field_idx;
+                }
+                if (fac) {
+                    const struct EffectRow *fr = (ffidx < fac->n_fields)
+                        ? fac->fields[ffidx].effect_row : NULL;
+                    if (fr && fr->kind == ERK_CONCRETE)
+                        for (uint8_t i = 0; i < fr->as.concrete.n_effects; i++)
+                            if (fr->as.concrete.effects[i])
+                                mark_effect(fr->as.concrete.effects[i]->name, acc->plo, acc->phi);
+                } else if (acc->callees && acc->callee_overflow) {
+                    *acc->callee_overflow = true;
+                }
+            }
+            if (acc->callee_target && e->as.call_.fn_binding == acc->callee_target
+                && acc->callee_out)
+                (*acc->callee_out)++;
+            /* E2/taint-completeness (cps-tramp-resume): a call THROUGH a fn-value
+             * performs the fn-value's DECLARED effect row.  Credit its concrete
+             * effects as performs (whether the callee is a fn-typed param binding or
+             * an fn_expr) so an effect reached ONLY through a fn-value taints -- a
+             * fn evicted for that call then seeds it and its handler co-evicts.
+             * Gated: flag-off keeps the accumulation byte-identical. */
+            if (g_opt_cps_tramp_resume) {
+                const Type *ft = NULL;
+                const Binding *fb = e->as.call_.fn_binding;
+                if (fb && !fb->is_global && fb->type.kind == TY_FN) ft = &fb->type;
+                else if (!fb && e->as.call_.fn_expr && e->as.call_.fn_expr->type.kind == TY_FN)
+                    ft = &e->as.call_.fn_expr->type;
+                const struct EffectRow *row = ft ? ft->as.fn.effect_row : NULL;
+                if (row && row->kind == ERK_CONCRETE)
+                    for (uint8_t i = 0; i < row->as.concrete.n_effects; i++)
+                        if (row->as.concrete.effects[i])
+                            mark_effect(row->as.concrete.effects[i]->name, acc->plo, acc->phi);
+            }
+            /* E2 threadability probe: is count_target passed here as arg[i] to a
+             * THREADING param of a resolvable global callee?  Counted alongside the
+             * total-use walk below, so the caller can test total == threadable. */
+            if (acc->thr_ok && acc->count_target && acc->thr_program) {
+                const FnDef *cfd = e->as.call_.fn_binding
+                    ? fd_for_binding(acc->thr_program, e->as.call_.fn_binding) : NULL;
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    const Expr *a = peel_fn_value(e->as.call_.args[i]);
+                    if (a && a->kind == EX_VAR && a->as.var.binding == acc->count_target
+                        && cfd) {
+                        PtClass cls = param_thread_class(cfd, i);
+                        if (cls != PT_NONE) {
+                            (*acc->thr_ok)++;
+                            if (acc->thr_tier && (int)cls > *acc->thr_tier)
+                                *acc->thr_tier = (int)cls;
+                        }
+                    }
+                }
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) REC(e->as.call_.args[i]);
             REC(e->as.call_.fn_expr); REC(e->as.call_.dict_arg); return;
         case EX_RETURN: REC(e->as.return_.value); return;
@@ -2304,6 +3440,32 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             return;
         case EX_FN_DEF: if (e->as.fn_def_.fn) REC(e->as.fn_def_.fn->body); return;
         case EX_FN:     if (e->as.fn_.fn)     REC(e->as.fn_.fn->body);     return;
+        /* A fn-VALUE USE: referencing a top-level (colored) fn as a value -- to
+         * pass it as a higher-order argument, store it, or return it -- means that
+         * fn may be CALLED downstream through the value.  Record it as a reachable
+         * callee so the call-path taint (ensure_S Rule C) spans the DATA FLOW: a
+         * fiber intermediary that hands a colored performer to a DK conduit (e.g.
+         * `apply-logged` passing a Log-performing lifted closure to `apply`) sits
+         * on the handler->performer path and must taint the effect, or the DK
+         * performer runs with the intermediary having severed the handler's DK
+         * chain (`unhandled effect`).  Precise -- adds only the SPECIFIC fn, not the
+         * `edges_all` over-approximation that evicts every higher-order caller. */
+        case EX_VAR:
+            if (acc->count_target && e->as.var.binding == acc->count_target
+                && acc->count_out)
+                (*acc->count_out)++;
+            if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN) {
+                if (!acc->calls_only) eff_acc_add_callee(acc, e->as.var.binding);
+                /* E2/taint-completeness (cps-tramp-resume): a fn-value reference in
+                 * VALUE position (this EX_VAR is not a direct-call callee -- those
+                 * carry fn_binding with fn_expr=NULL and never reach here) means the
+                 * fn's ADDRESS is taken; its DK direct-entry, invoked indirectly,
+                 * escapes a perform.  Record the global fn as address-taken so an
+                 * effectful one is forced to fiber (see ensure_S). */
+                if (g_addr_collecting && e->as.var.binding->is_global)
+                    addr_taken_add(e->as.var.binding);
+            }
+            return;
         case EX_SELECT:
             for (uint32_t i = 0; i < e->as.select_.n_clauses; i++) {
                 REC(e->as.select_.clauses[i].chan);
@@ -2323,8 +3485,554 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
 /* Combined "performs-or-handles" effect set (no callee collection) -- the shape
  * every existing caller uses.  Perform and handle tags fold into the same set. */
 static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
-    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL };
+    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                   NULL, NULL, NULL, false };
     expr_collect_effects_acc(e, &acc);
+}
+
+/* B5 (cps-tramp-resume): the NET escaping effect set of `e` -- the effects
+ * PERFORMED in `e` that are NOT discharged by a `handle` enclosing the perform
+ * WITHIN `e`.  A self-handling body -- `(fn [] (handle (perform E) (E [x] k)
+ * (resume k ...)))`, the async-closure shape in `effects-async` -- performs E
+ * but handles it in the same body, so E does not escape when the fn is invoked
+ * indirectly (its interior handle installs its own DK prompt).  Structural, so a
+ * perform sitting OUTSIDE a same-effect handle still escapes -- unlike a blunt
+ * performed-minus-handled set-subtract (which would wrongly clear
+ * `(do (perform E) (handle pure (E ...)))`).  A handler CASE body's own performs
+ * DO escape (they run in the handler frame, above this prompt), so they are
+ * counted.  An uncovered form falls back to the raw union (conservative: it
+ * over-counts handled effects as escaping, never under-counts). */
+static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
+    if (!e) return;
+    #define NESC(x) fn_net_escaping_acc((x), lo, hi)
+    switch (e->kind) {
+        case EX_PERFORM:
+            if (e->as.perform_.perform) {
+                mark_effect(e->as.perform_.perform->effect_name, lo, hi);
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    NESC(e->as.perform_.perform->args[i]);
+            }
+            return;
+        case EX_HANDLE:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                /* the body's net-escaping effects, MINUS the effects this handle
+                 * discharges */
+                uint64_t blo = 0, bhi = 0;
+                fn_net_escaping_acc((const Expr *)h->body, &blo, &bhi);
+                uint64_t hlo = 0, hhi = 0;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    mark_effect(h->cases[i].effect_name, &hlo, &hhi);
+                *lo |= (blo & ~hlo);
+                *hi |= (bhi & ~hhi);
+                /* case bodies run in the handler frame -- their performs escape */
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    NESC(h->cases[i].body);
+            }
+            return;
+        case EX_ASCRIBE: NESC(e->as.ascribe_.inner); return;
+        case EX_RETURN:  NESC(e->as.return_.value);  return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) NESC(e->as.do_.items[i]);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) NESC(e->as.let_.bindings[i].init);
+            NESC(e->as.let_.body);
+            return;
+        case EX_IF:
+            NESC(e->as.if_.cond); NESC(e->as.if_.then_); NESC(e->as.if_.else_or_null);
+            return;
+        case EX_MATCH:
+            NESC(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                NESC(e->as.match_.arms[i].guard);
+                NESC(e->as.match_.arms[i].body);
+            }
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) NESC(e->as.builtin.args[i]);
+            return;
+        case EX_CALL:
+            NESC(e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) NESC(e->as.call_.args[i]);
+            NESC(e->as.call_.dict_arg);
+            return;
+        default:
+            /* Uncovered form: fall back to the raw union (perform+handle folded),
+             * which over-counts a nested handled effect as escaping -- sound (it
+             * never clears a genuinely-escaping perform), just conservative. */
+            expr_collect_effects(e, lo, hi);
+            return;
+    }
+    #undef NESC
+}
+
+/* A CT_LETRAW (delegated direct-emitted op) that performs NO fiber effect: its
+ * delegated expr `e` contains no direct perform/handle (even one buried in a
+ * delegated match/do/let, which the raw walk surfaces), and every callee it
+ * invokes is provably effect-free (callee_effect_free -- a declared-empty row is
+ * the sound transitive summary: an effect-free callee performs nothing, directly
+ * or transitively).  An indirect / over-cap callee (callee_overflow -> `ov`) is
+ * conservatively NOT effect-free.  Used by handle_delim_ok to admit a pure
+ * delegated op inside a handled body's delimited position -- it cannot leave an
+ * effect unhandled by the handle's DK prompt, so the subsequent KK_PROMPT
+ * delivery stays the handle's own result. */
+static bool letraw_effect_free(const CTerm *t) {
+    if (!t || t->kind != CT_LETRAW || !t->as.letraw.e) return false;
+    uint64_t lo = 0, hi = 0; bool ov = false;
+    const Binding *callees[64]; int nc = 0;
+    /* calls_only: a raw op that merely REFERENCES an effectful fn -- boxing
+     * `my-eff` into a fat closure to pass it as a `^fat` argument -- runs no
+     * effect; the effect happens at the eventual call, which is a separate
+     * CTerm node with its own admission.  Counting the reference as a callee
+     * here rejected the box construction, which dropped the whole handled body
+     * to term_core_ok, whose CT_APPCONT case refuses the KK_PROMPT delivery a
+     * `(handle (do (f g) 0) ...)` ends with.  That evicted the handler fn,
+     * tainted its effect, co-evicted the performer, and landed its `perform` in
+     * the direct emitter -- an ICE.  See
+     * docs/archive/named-effectful-defn-as-fat-fn-value-ices.md.  A genuine
+     * delegated CALL to an effectful callee is still rejected: that is the case
+     * this gate exists for (its effect would run on the fiber, escaping the
+     * handle's DK prompt). */
+    EffAcc acc = { &lo, &hi, &lo, &hi, callees, &nc, 64, &ov,
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true };
+    expr_collect_effects_acc(t->as.letraw.e, &acc);
+    if (lo || hi || ov) return false;
+    for (int i = 0; i < nc; i++)
+        if (!callee_effect_free(callees[i])) return false;
+    return true;
+}
+
+/* ---- E2 fn-value threadability analysis (cps-tramp-resume) ------------------
+ *
+ * A codegen-NEUTRAL coloring pass that answers: for an effectful fn-value (an
+ * address-taken named fn or an effectful lifted lambda) currently EVICTED to the
+ * fiber, could it instead thread the DK continuation?  Per the plan's coloring
+ * invariant (docs/archive/cps-dk-sole-effect-lowering-plan.md, "the invariant
+ * that makes E2 a COLORING problem"): a fn-value is DK-threadable ONLY IF *every*
+ * one of its value-uses is a DK-threadable site.  If ANY use is un-threadable (an
+ * inline-C fn-ptr cast, a fiber HOF, a non-threading argument position, a stored
+ * dict slot), the fn-value must stay on the fiber -- else its direct entry installs
+ * a fresh root at that site and a perform escapes.
+ *
+ * This pass computes that decision but does NOT yet consume it: g_threadable_fn is
+ * populated and traced ([E2-COLOR]) so the concrete E2 target surface is measured
+ * against the effect corpus BEFORE any ABI change.  Because nothing reads the set,
+ * emission is byte-identical on both configs; the coloring is validated first, the
+ * threading channel (E2a/b/c) lands on top of it.  The seed relation implemented
+ * here: "every value-use is arg[i] to a THREADING param of a colored callee." */
+
+/* Exhaustive count of ALL uses of `b` in `e`: every EX_VAR(b) reference (value
+ * uses AND fn_expr-carried callees) PLUS every EX_CALL whose fn_binding is `b` (a
+ * param called as `(b x)` carries b in fn_binding with no EX_VAR node).  Reuses the
+ * audited effect-walk traversal so no form is missed -- an exhaustive count, which
+ * is what makes the "all uses are tail-callee" test below sound.  A direct call to
+ * a GLOBAL fn also lands in fn_binding, so this must only be used to count PARAM
+ * uses (a param's fn_binding-call is genuinely a use); it is not used for global
+ * fn-values (see fn_value_threadable, which leaves callee_target NULL). */
+static int expr_count_all_uses(const Expr *e, const Binding *b) {
+    if (!e || !b) return 0;
+    int n = 0;
+    uint64_t dl = 0, dh = 0;
+    EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL,
+                   b, &n, NULL, false };
+    expr_collect_effects_acc(e, &acc);
+    return n;
+}
+
+/* Self-recursion context for ptc_walk: the fn whose param is being tiered and the
+ * param's own position.  Set by param_thread_class before each ptc_walk so a
+ * `(fd ... p ...)` recursive call passing `p` back at position `self_pi` is not
+ * miscounted as an escape.  NULL/0 disables the exemption. */
+static const Binding *g_ptc_self_bind;
+static uint32_t       g_ptc_self_pi;
+
+/* Classify how param `p` of a HOF is used, tracking tail position: count its
+ * value-uses (escapes -- passed as an arg, stored, bare ref), its tail-position
+ * callee-calls, and its non-tail callee-calls.  A call to `p` under a `handle`/
+ * `reset` body installed by the HOF itself is counted as a value-use: threading
+ * `__kont` there would route the callee's perform past the HOF's OWN handler, so
+ * it is not a clean thread.  Any occurrence of `p` inside a form this walk does not
+ * structurally cover is absorbed (via the exhaustive counter) into value-uses --
+ * a conservative default that keeps a miss from ever inflating threadability. */
+static void ptc_walk(const Expr *e, const Binding *p, bool tail,
+                     int *val, int *tailc, int *ntc) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_CALL: {
+            bool callee_is_p = e->as.call_.fn_binding == p
+                || (e->as.call_.fn_expr && e->as.call_.fn_expr->kind == EX_VAR
+                    && e->as.call_.fn_expr->as.var.binding == p);
+            if (callee_is_p) { if (tail) (*tailc)++; else (*ntc)++; }
+            else ptc_walk(e->as.call_.fn_expr, p, false, val, tailc, ntc);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = peel_fn_value(e->as.call_.args[i]);
+                if (a && a->kind == EX_VAR && a->as.var.binding == p) {
+                    /* E2 (cps-tramp-resume): a SELF-recursive call passing param `p`
+                     * back at its OWN position is NOT an escape -- it is the same
+                     * row-poly fn-value threading through the recursion, so it does
+                     * not disqualify `p` as a thread-param (effect-poly-map).  Every
+                     * other value-use (stored, passed elsewhere, bare ref) still
+                     * counts. */
+                    if (g_opt_cps_tramp_resume && g_ptc_self_bind
+                        && e->as.call_.fn_binding == g_ptc_self_bind
+                        && i == g_ptc_self_pi)
+                        continue;
+                    (*val)++;
+                }
+                else ptc_walk(e->as.call_.args[i], p, false, val, tailc, ntc);
+            }
+            ptc_walk(e->as.call_.dict_arg, p, false, val, tailc, ntc);
+            return;
+        }
+        case EX_VAR:  if (e->as.var.binding == p) (*val)++; return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                ptc_walk(e->as.do_.items[i], p, tail && (i + 1 == e->as.do_.n),
+                         val, tailc, ntc);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                ptc_walk(e->as.let_.bindings[i].init, p, false, val, tailc, ntc);
+            ptc_walk(e->as.let_.body, p, tail, val, tailc, ntc);
+            return;
+        case EX_IF:
+            ptc_walk(e->as.if_.cond, p, false, val, tailc, ntc);
+            ptc_walk(e->as.if_.then_, p, tail, val, tailc, ntc);
+            ptc_walk(e->as.if_.else_or_null, p, tail, val, tailc, ntc);
+            return;
+        case EX_ASCRIBE: ptc_walk(e->as.ascribe_.inner, p, tail, val, tailc, ntc); return;
+        case EX_RETURN:  ptc_walk(e->as.return_.value, p, false, val, tailc, ntc); return;
+        case EX_BUILTIN:  /* arithmetic / operator args are non-tail */
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                ptc_walk(e->as.builtin.args[i], p, false, val, tailc, ntc);
+            return;
+        case EX_WHILE:
+            ptc_walk(e->as.while_.cond, p, false, val, tailc, ntc);
+            ptc_walk(e->as.while_.body, p, false, val, tailc, ntc);
+            return;
+        case EX_SET:  ptc_walk(e->as.set_.value, p, false, val, tailc, ntc); return;
+        case EX_DEF:  ptc_walk(e->as.def_.init, p, false, val, tailc, ntc); return;
+        case EX_MAKE_STRUCT:  /* a fn-value stored in a field is a value-use (sink) */
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                ptc_walk(e->as.make_struct_.field_values[i], p, false, val, tailc, ntc);
+            return;
+        case EX_MATCH:
+            ptc_walk(e->as.match_.scrutinee, p, false, val, tailc, ntc);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                ptc_walk(e->as.match_.arms[i].guard, p, false, val, tailc, ntc);
+                ptc_walk(e->as.match_.arms[i].body, p, tail, val, tailc, ntc);
+            }
+            return;
+        case EX_HANDLE: {
+            /* E2 (cps-tramp-resume): a call to `p` in the handle BODY threads to
+             * the handle's OWN installed prompt -- the delim's `cur_k`, which
+             * carries this handler at its head -- NOT the bare outer `__kont`.  So
+             * p's perform reaches this handler (matching effect) or walks past it
+             * to an outer handler (non-matching) -- a clean thread either way,
+             * exactly `(handle (f) (E ...) ...)` in `run-with`.  A TAIL-position
+             * body call is therefore a threadable tail call, not a value-use.
+             * Calls to `p` inside the handler CASE bodies run per-perform in the
+             * handler's own frame (a distinct continuation); keep those as
+             * value-uses.  An `unsafe`-marker handle is transparent (body emitted
+             * in place, no real prompt), so threading its body's tail call to the
+             * enclosing `__kont` is equally clean -- the same recursion covers it. */
+            HandleExpr *h = e->as.handle_.handle;
+            if (h) {
+                ptc_walk((const Expr *)h->body, p, tail, val, tailc, ntc);
+                for (uint32_t i = 0; i < h->n_cases; i++)
+                    *val += expr_count_all_uses(h->cases[i].body, p);
+            }
+            return;
+        }
+        default:
+            /* Uncovered form (incl. EX_RESET, where a call to p runs under the
+             * HOF's own prompt): treat every occurrence of p as a value-use so the
+             * param cannot be judged threadable through it. */
+            *val += expr_count_all_uses(e, p);
+            return;
+    }
+}
+
+/* Tier the threadability of param `pi` of colored `fd` (see PtClass).  A param is
+ * a threading candidate iff it NEVER escapes as a value -- every use is a call to
+ * it.  The tier then records how hard that thread is: PT_NOW (tail-only, scalar
+ * carrier), PT_NONTAIL (a non-tail call needs a threaded CT_LETCALL), or PT_E1
+ * (an is_poly_fn / capturing param needs E1's carrier ABI first). */
+static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
+    if (!fd || !fd->cps_colored || !fd->body || !fd->params || pi >= fd->n_params)
+        return PT_NONE;
+    const Binding *p = fd->params[pi];
+    if (!p) return PT_NONE;
+    int val = 0, tc = 0, ntc = 0;
+    g_ptc_self_bind = fd->binding; g_ptc_self_pi = pi;
+    ptc_walk(fd->body, p, true, &val, &tc, &ntc);
+    g_ptc_self_bind = NULL; g_ptc_self_pi = 0;
+    if (val > 0 || (tc + ntc) < 1) return PT_NONE;   /* escapes, or never called */
+    if (!fn_sig_ok(fd)) return PT_E1;                /* is_poly_fn / capturing param */
+    /* E2a registry threading needs a CONCRETE effect row on the param (row-poly
+     * params delegate to a fresh-root direct entry -> escape); tier those PT_E1. */
+    /* E2a registry threading needs a CONCRETE effect row on the param.  A ROW-
+     * VARIABLE param (`#fx{e}`) threads its callback's `__kont` just the same (the
+     * DK thread is effect-agnostic), and the cross-HOF leaf-fiber delegation that
+     * used to make this unsound is now skipped under the flag
+     * (colored_call_wbd_delegatable), so admit row-variable params under
+     * cps-tramp-resume.  Flag-off keeps the concrete-row requirement (codegen
+     * unchanged). */
+    if (!g_opt_cps_tramp_resume && p->type.kind == TY_FN) {
+        const struct EffectRow *pr = p->type.as.fn.effect_row;
+        if (!pr || pr->kind != ERK_CONCRETE) return PT_E1;
+    }
+    if (ntc > 0) {
+        /* E2c: a non-tail fn-value call inside a HOF that ALSO installs a `handle`
+         * sits in the handle's LIFTED continuation frame.  That frame now CAPTURES
+         * the via_registry callee as an int64 fn-ptr scalar (cap_add_fn_scalar +
+         * the collect_caps/has_capture CT_TAILCALL cases), so the threaded
+         * `__tur_cps_lookup(f)` reads `f` from the env instead of an out-of-scope
+         * param.  A FAT (is_poly_fn) `f` fails the capture (cap_add_fn_scalar bails),
+         * so collect_caps fails and needs_heap_join evicts it -- correct until the
+         * fn_cps channel lands.  So a non-tail call always tiers PT_NONTAIL now. */
+        return PT_NONTAIL;                            /* a non-tail fn-value call */
+    }
+    return PT_NOW;                                    /* tail-only, scalar carrier */
+}
+
+
+/* Peel the representation wrappers a fn-value acquires at a call site -- an
+ * ascription, or the fat/poly boxing (EX_FN_TO_FAT / EX_POLY_TO_FAT) that a named
+ * fn or captureless lambda gets when passed where a `(-> ...)` value is expected --
+ * down to the underlying expression (usually the EX_VAR naming the fn). */
+static const Expr *peel_fn_value(const Expr *e) {
+    while (e) {
+        switch (e->kind) {
+            case EX_ASCRIBE:     e = e->as.ascribe_.inner;     break;
+            case EX_FN_TO_FAT:   e = e->as.fn_to_fat_.inner;   break;
+            case EX_POLY_TO_FAT: e = e->as.poly_to_fat_.inner; break;
+            case EX_POLY_WRAP:   e = e->as.poly_wrap_.inner;   break;
+            case EX_CAST:        e = e->as.cast_.expr;         break;
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr;  break;
+            default:             return e;
+        }
+    }
+    return e;
+}
+
+/* Resolve a global fn binding to its FnDef by scanning the program items. */
+static const FnDef *fd_for_binding(const Expr *program, const Binding *b) {
+    if (!program || !b || program->kind != EX_PROGRAM) return NULL;
+    uint32_t np = program->as.program.n;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn
+            && it->as.fn_def_.fn->binding == b)
+            return it->as.fn_def_.fn;
+        /* A module member's FnDef lives in the EX_DEFMODULE body, not as a
+         * top-level item -- descend so a colored module member resolves. */
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            DefModule *m = it->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn
+                    && mb->as.fn_def_.fn->binding == b)
+                    return mb->as.fn_def_.fn;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* The DK-threadable fn-value set: effectful address-taken fns / lifted lambdas
+ * whose every value-use is a threadable argument.  Computed for measurement only
+ * (traced [E2-COLOR]); not yet consumed by classification. */
+static const Binding *g_threadable_fn[1024];
+static int            g_threadable_fn_n;
+static void threadable_add(const Binding *b) {
+    for (int i = 0; i < g_threadable_fn_n; i++) if (g_threadable_fn[i] == b) return;
+    if (g_threadable_fn_n < (int)(sizeof(g_threadable_fn)/sizeof(g_threadable_fn[0])))
+        g_threadable_fn[g_threadable_fn_n++] = b;
+}
+static bool threadable_has(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_threadable_fn_n; i++) if (g_threadable_fn[i] == b) return true;
+    return false;
+}
+
+/* Whole-program threadability for fn-value `fv`: over ONE exhaustive walk of the
+ * program, count every value-use of fv (total) and every use that is a threadable
+ * argument (ok).  Threadable iff there is at least one use and ALL uses are
+ * threadable-args -- the coloring invariant.  The two counts ride the same
+ * traversal (expr_collect_effects_acc with count_out + thr_ok both set), so no
+ * form is missed and the comparison is exact.  Returns the counts via out-params
+ * so the trace can show why a fn-value is or is not threadable. */
+/* E2c: is fn-value `fv` stored as a value in a `make-struct` field anywhere in
+ * `e`?  An effectful fn-value stored in a struct field is called via `(.field
+ * obj)` and threaded via the registry (cps_ir.c), so it must be registered even
+ * though its make-struct store is not a "threadable ARG" use in the param sense.
+ * Recurses the common containers; a miss only forgoes registration (conservative). */
+static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                const Expr *v = peel_fn_value(e->as.make_struct_.field_values[i]);
+                if (v && v->kind == EX_VAR && v->as.var.binding == fv) return true;
+                if (expr_stores_fnval_in_struct(e->as.make_struct_.field_values[i], fv)) return true;
+            }
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, fv)) return true;
+            return expr_stores_fnval_in_struct(e->as.let_.body, fv);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.do_.items[i], fv)) return true;
+            return false;
+        case EX_IF:
+            return expr_stores_fnval_in_struct(e->as.if_.cond, fv)
+                || expr_stores_fnval_in_struct(e->as.if_.then_, fv)
+                || expr_stores_fnval_in_struct(e->as.if_.else_or_null, fv);
+        case EX_CALL: {
+            /* A `(make-struct S ...)` lowers to a CONSTRUCTOR call (e->as.call_.ctor
+             * set), so a fn-value stored in a struct field arrives here, not as
+             * EX_MAKE_STRUCT.  Match a fn-value arg whose ctor field carries an
+             * EFFECTFUL row -- that field is called via `(.field obj)` and threaded. */
+            const CtorDef *ctor = e->as.call_.ctor;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *v = peel_fn_value(e->as.call_.args[i]);
+                if (ctor && v && v->kind == EX_VAR && v->as.var.binding == fv
+                    && i < ctor->n_fields
+                    && !effect_row_is_empty(ctor->fields[i].effect_row))
+                    return true;
+                if (expr_stores_fnval_in_struct(e->as.call_.args[i], fv)) return true;
+            }
+            return expr_stores_fnval_in_struct(e->as.call_.fn_expr, fv);
+        }
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            if (expr_stores_fnval_in_struct(h->body, fv)) return true;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (expr_stores_fnval_in_struct(h->cases[i].body, fv)) return true;
+            return false;
+        }
+        case EX_ASCRIBE: return expr_stores_fnval_in_struct(e->as.ascribe_.inner, fv);
+        case EX_RETURN:  return expr_stores_fnval_in_struct(e->as.return_.value, fv);
+        case EX_SET:     return expr_stores_fnval_in_struct(e->as.set_.value, fv);
+        case EX_DEF:     return expr_stores_fnval_in_struct(e->as.def_.init, fv);
+        case EX_WHILE:   return expr_stores_fnval_in_struct(e->as.while_.cond, fv)
+                             || expr_stores_fnval_in_struct(e->as.while_.body, fv);
+        default:         return false;
+    }
+}
+
+/* E2c: does fn-value `fv` flow into a make-struct field anywhere in the program? */
+static bool fnval_stored_in_struct(const Expr *program, const Binding *fv) {
+    if (!program || program->kind != EX_PROGRAM) return false;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                         ? it->as.fn_def_.fn->body : it;
+        if (expr_stores_fnval_in_struct(body, fv)) return true;
+    }
+    return false;
+}
+
+static bool fn_value_threadable(const Expr *program, const Binding *fv,
+                                int *out_total, int *out_ok, int *out_tier) {
+    int total = 0, ok = 0, tier = 0;
+    uint64_t dl = 0, dh = 0;
+    uint32_t np = program->as.program.n;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                         ? it->as.fn_def_.fn->body : it;
+        EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL,
+                       fv, &total, program, &ok, NULL, NULL, &tier, false };
+        expr_collect_effects_acc(body, &acc);
+    }
+    if (out_total) *out_total = total;
+    if (out_ok)    *out_ok = ok;
+    if (out_tier)  *out_tier = tier;
+    return total >= 1 && total == ok;
+}
+
+/* E2a param->value converse: is EVERY fn-value flowing into param `pi` of `fd` a
+ * REGISTERED (threadable) fn-value?  Walks all direct calls to `fd`. */
+static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t pi) {
+    if (!program || program->kind != EX_PROGRAM || !fd || !fd->binding) return false;
+    uint32_t np = program->as.program.n;
+    int seen = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                         ? it->as.fn_def_.fn->body : it;
+        const Expr *stack[512]; int sp = 0; stack[sp++] = body;
+        while (sp > 0) {
+            const Expr *e = stack[--sp];
+            if (!e) continue;
+            if (e->kind == EX_CALL && e->as.call_.fn_binding == fd->binding) {
+                if (pi >= e->as.call_.n_args) return false;
+                const Expr *a = peel_fn_value(e->as.call_.args[pi]);
+                if (!a || a->kind != EX_VAR) return false;
+                /* E2 (cps-tramp-resume): a SELF-recursive call passing fd's OWN
+                 * param `pi` back at position `pi` threads the same row-poly
+                 * fn-value -- it introduces no new fn-value, so it is trivially
+                 * thread-safe (effect-poly-map).  Any OTHER arg must be a registered
+                 * threadable fn-value. */
+                if (!(g_opt_cps_tramp_resume && fd->params
+                      && a->as.var.binding == fd->params[pi])
+                    && !threadable_has(a->as.var.binding))
+                    return false;
+                seen++;
+            }
+            switch (e->kind) {
+                case EX_CALL:
+                    for (uint32_t k = 0; k < e->as.call_.n_args && sp < 510; k++)
+                        stack[sp++] = e->as.call_.args[k];
+                    if (sp < 511) stack[sp++] = e->as.call_.fn_expr;
+                    break;
+                case EX_DO:
+                    for (uint32_t k = 0; k < e->as.do_.n && sp < 511; k++) stack[sp++] = e->as.do_.items[k];
+                    break;
+                case EX_LET:
+                    for (uint32_t k = 0; k < e->as.let_.n && sp < 511; k++) stack[sp++] = e->as.let_.bindings[k].init;
+                    if (sp < 511) stack[sp++] = e->as.let_.body;
+                    break;
+                case EX_IF:
+                    if (sp < 509) { stack[sp++] = e->as.if_.cond; stack[sp++] = e->as.if_.then_; stack[sp++] = e->as.if_.else_or_null; }
+                    break;
+                case EX_ASCRIBE:
+                    if (sp < 511) stack[sp++] = e->as.ascribe_.inner;
+                    break;
+                case EX_RETURN:
+                    if (sp < 511) stack[sp++] = e->as.return_.value;
+                    break;
+                case EX_MATCH:
+                    if (sp < 511) stack[sp++] = e->as.match_.scrutinee;
+                    for (uint32_t k = 0; k < e->as.match_.n_arms && sp < 511; k++) stack[sp++] = e->as.match_.arms[k].body;
+                    break;
+                case EX_BUILTIN:
+                    for (uint32_t k = 0; k < e->as.builtin.n && sp < 511; k++) stack[sp++] = e->as.builtin.args[k];
+                    break;
+                case EX_HANDLE:
+                    if (e->as.handle_.handle) {
+                        HandleExpr *h = e->as.handle_.handle;
+                        if (sp < 511) stack[sp++] = h->body;
+                        for (uint8_t k = 0; k < h->n_cases && sp < 511; k++) stack[sp++] = h->cases[k].body;
+                    }
+                    break;
+                case EX_FN_DEF:
+                    if (e->as.fn_def_.fn && sp < 511) stack[sp++] = e->as.fn_def_.fn->body;
+                    break;
+                default: break;
+            }
+        }
+    }
+    return seen >= 1;
 }
 
 /* G3b: is `fd` a colored GENERIC whose EVERY monomorph spec is CPS-admissible
@@ -2399,6 +4107,27 @@ static void reach_backward(uint64_t *set, size_t n, size_t nwords) {
     }
 }
 
+/* A colored function whose CT-IR is a WHOLE-BODY delegation: `cps_ir_translate_fn`
+ * emits it as a single `CT_LETRAW` (the entire body, direct-emitted) tailed by an
+ * `appcont` to the function's own return (KK_RET).  Such a function runs its
+ * effects on the FIBER runtime (the direct emitter's global_effect_handler_chain),
+ * not the DK -- so any effect that ESCAPES it (its non-empty net effect) is a
+ * fiber effect and must taint every DK peer sharing it, exactly like a non-in_s
+ * function's effect.  Detected by shape; a control-free single-owning-op body
+ * (e.g. `hamt/new`) also matches but has an empty effect set, so seeding it is a
+ * no-op. */
+static bool term_is_whole_body_delegation(const CTerm *t) {
+    return t && t->kind == CT_LETRAW && t->as.letraw.body
+        && t->as.letraw.body->kind == CT_APPCONT
+        && t->as.letraw.body->as.appcont.kont.kind == KK_RET;
+}
+
+/* Flattens EX_PROGRAM items, expanding EX_DEFMODULE bodies (and top-level do)
+ * into their members -- the same view the main emitter emits.  Declared here
+ * (defined in emit_core.c) so the CPS classifier sees module-member fns as
+ * ordinary top-level defns instead of an opaque effect-bearing module node. */
+const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
+
 static void ensure_S(const Expr *program) {
     /* Cached -- but G3b's mono-template classification needs g_emit_ctx (the
      * spec set).  If a prior run classified under a different ctx (e.g. a NULL
@@ -2426,15 +4155,121 @@ static void ensure_S(const Expr *program) {
      * CPS peer, since the two effect machines (DK vs fiber) do not interoperate.
      * Uncolored functions never contain a control op, so they touch no effect
      * and are skipped entirely. */
-    uint32_t np = program->as.program.n;
+    /* Iterate the FLATTENED program (module members hoisted) so a `(defmodule
+     * ...)` member fn is classified as an ordinary top-level defn.  Without this
+     * the whole EX_DEFMODULE node hit the "non-fn top-level item" catch-all
+     * below, dumping EVERY module effect into base_taint and pinning every
+     * module member to the fiber. */
+    uint32_t np = 0;
+    const Expr **items = flatten_program_items(program, &np);
     g_ents = (SEnt *)calloc(np ? np : 1, sizeof(SEnt));
+
+    /* E2/taint-completeness pre-pass: collect every global fn whose ADDRESS is
+     * taken (referenced as a fn-value anywhere in the program), so classification
+     * below can force an effectful address-taken fn to the fiber.  Must run BEFORE
+     * the classification loop -- a forward reference (a fn passed as a value later
+     * in the file) would otherwise be missed. */
+    g_addr_taken_n = 0;
+    if (g_opt_cps_tramp_resume) {
+        g_addr_collecting = true;
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = (Expr *)items[i];
+            if (!it) continue;
+            uint64_t dlo = 0, dhi = 0;   /* throwaway effect sink */
+            if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->body)
+                expr_collect_effects(it->as.fn_def_.fn->body, &dlo, &dhi);
+            else
+                expr_collect_effects(it, &dlo, &dhi);
+        }
+        g_addr_collecting = false;
+    }
+
+    /* E2 threadability measurement (cps-tramp-resume): decide, for each EFFECTFUL
+     * fn-value that today evicts to the fiber (an address-taken named fn or a
+     * lifted lambda), whether all its value-uses are DK-threadable -- the coloring
+     * that a future E2 threading channel needs.  Codegen-neutral: g_threadable_fn is
+     * populated and traced only; classification below is unchanged.  Runs after the
+     * address-taken pre-pass (it needs the full g_addr_taken set) and before
+     * classification. */
+    g_threadable_fn_n = 0;
+    cps_ir_thread_param_reset();
+    if (g_opt_cps_tramp_resume) {
+        bool trace = getenv("TUR_TRACE_EVICT") != NULL;
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = (Expr *)items[i];
+            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+            FnDef *fd = it->as.fn_def_.fn;
+            if (!fd->binding || !fd->body) continue;
+            bool is_fnval = fd->binding->is_lifted_lambda || addr_taken_has(fd->binding);
+            if (!is_fnval) continue;
+            uint64_t lo = 0, hi = 0;
+            expr_collect_effects(fd->body, &lo, &hi);
+            /* An effectful fn-value keeps the fiber alive.  A PURE fn-value
+             * normally does not -- EXCEPT one the coloring pass force-colored
+             * because it flows into an EFFECTFUL fn-value param (effect-subtype
+             * cluster): the HOF threads that param via the registry, which needs
+             * even a pure callback to be `threadable_add`ed with a `__cps` entry,
+             * else `param_is_thread_safe` fails and the HOF sig_perms "E2 pending".
+             * So a colored pure lambda proceeds to the threadability check. */
+            if (!(lo || hi) && !fd->cps_colored) continue;
+            int total = 0, ok = 0, tier = 0;
+            bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
+            /* E2a: a concrete captureless fn-value is threaded onto the DK -- tier
+             * `now` (tail call) OR tier `nontail` (a non-tail call, reified as a
+             * heap-join frame threaded to its __cps).  Covers BOTH a lifted lambda
+             * (`(fn [] (perform E))`) AND an address-taken NAMED fn (`my-eff`
+             * passed by name): both are carried as a direct-entry function pointer
+             * word, register (that addr -> `<name>__cps`) at startup so a threaded
+             * call site (`__tur_cps_lookup((intptr_t)f)`) recovers the CPS variant
+             * and the fn-value's perform reaches the caller's handler.  The named
+             * case backs the handle-body threading (`run-with(my-eff)`). */
+            if (thr && (tier == (int)PT_NOW || tier == (int)PT_NONTAIL)
+                && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding)))
+                threadable_add(fd->binding);
+            /* E2c: an EFFECTFUL fn-value (lambda or named) stored in a struct
+             * field is called via `(.field obj)` and threaded via the registry;
+             * register it so `__tur_cps_lookup(obj.field)` resolves and its perform
+             * reaches the caller's handler.  The struct-field store is not a
+             * threadable-ARG use, so this is a separate admission from the E2a
+             * param path above. */
+            /* E2c: register a fn-value stored in an EFFECTFUL struct field
+             * (fnval_stored_in_struct already checks the field row is effectful),
+             * so `(.field obj)` threads to its __cps.  Includes a PURE fn stored in
+             * an effectful field (effect subtyping) once the coloring pass has
+             * force-colored it (so it reaches here with a __cps entry). */
+            if (fnval_stored_in_struct(program, fd->binding)
+                && (lo || hi || fd->cps_colored))
+                threadable_add(fd->binding);
+            if (trace) {
+                const char *nm = fd->binding->name ? fd->binding->name->name : "?";
+                const char *tiers[] = { "-", "now", "nontail", "e1" };
+                fprintf(stderr, "[E2-COLOR] %-24s thr=%c tier=%-7s uses=%d ok=%d %s\n",
+                        nm, thr ? 'Y' : 'N',
+                        thr ? tiers[tier >= 0 && tier <= 3 ? tier : 0] : "-",
+                        total, ok, fd->binding->is_lifted_lambda ? "lambda" : "named");
+            }
+        }
+        /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = (Expr *)items[i];
+            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+            FnDef *fd = it->as.fn_def_.fn;
+            for (uint32_t pi = 0; pi < fd->n_params; pi++) {
+                PtClass pc = param_thread_class(fd, pi);
+                if ((pc == PT_NOW || pc == PT_NONTAIL)
+                    && param_is_thread_safe(program, fd, pi))
+                    cps_ir_thread_param_add(fd->params[pi]);
+            }
+        }
+    }
+
     /* base_taint: effects performed/handled by any top-level code that is NEVER
      * CPS-emitted -- an uncolored function (whose sole control op is hidden from
      * coloring but still emits a fiber effect op) or a top-level def initializer.
      * These permanently taint their effects. */
     uint64_t base_lo = 0, base_hi = 0;
     for (uint32_t i = 0; i < np; i++) {
-        Expr *it = program->as.program.items[i];
+        Expr *it = (Expr *)items[i];
         if (!it) continue;
         if (it->kind == EX_FN_DEF && it->as.fn_def_.fn) {
             FnDef *fd = it->as.fn_def_.fn;
@@ -2446,11 +4281,67 @@ static void ensure_S(const Expr *program) {
                  * a fixed-ABI `int main` wrapper (emitted in emit_cps_ir_try_fn).
                  * Either way a `handle`/`perform` in an excluded fn still taints. */
                 bool candidate = true;
-                if (fd->binding->c_export_name) candidate = false;
-                if (fn_is_main(fd) && !fn_is_d2b_main(fd)) candidate = false;
-                if (candidate && !fn_sig_ok(fd)) candidate = false;
+                bool sig_perm = false;
+                /* B6: a typeclass INSTANCE METHOD's c_export_name is an internal
+                 * dict-slot name, not a user ABI export, so the CPS backend may
+                 * own it (emit its exported direct entry AND a `__cps` variant).
+                 * A genuine `^:export-as` export still perm-routes. */
+                if (fd->binding->c_export_name
+                    && !(g_opt_cps_tramp_resume && fd->binding->is_instance_method))
+                    { candidate = false; sig_perm = true; }
+                if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
+                if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
+                /* E2/taint-completeness (cps-tramp-resume): a fn USED AS A FN-VALUE
+                 * -- a lifted lambda (always a value) OR an address-taken named fn
+                 * (referenced as a value in the pre-pass) -- has its DK direct-entry
+                 * invoked indirectly, which installs a fresh root, so a CPS-emitted
+                 * EFFECTFUL such fn's `perform` escapes (no caller handler in scope).
+                 * It must run on the fiber (dynamic handler lookup); mark it a
+                 * permanent fiber source so its effect taints and any DK handler-
+                 * installer co-classifies to fiber.  Cleared once E2 gives fn-values
+                 * a DK-threading (__fn_cps) entry. */
+                if (candidate && g_opt_cps_tramp_resume
+                    && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
+                    && !threadable_has(fd->binding)) {
+                    /* B5: perm-taint only on the NET ESCAPING effect -- a perform
+                     * this fn-value DISCHARGES internally (a self-handling body,
+                     * e.g. the `(fn [] (handle (perform E) (E ...)))` async closure
+                     * in effects-async) does not reach a fresh indirect-call root,
+                     * so it is not a fiber-escape source.  Its interior handle
+                     * installs its own DK prompt and CPS-lowers.  A genuinely
+                     * escaping perform still taints. */
+                    uint64_t lo = 0, hi = 0;
+                    fn_net_escaping_acc(fd->body, &lo, &hi);
+                    if (lo || hi) { candidate = false; sig_perm = true; }
+                }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
-                if (candidate && !term_core_ok(t)) candidate = false;
+                if (candidate && !term_core_ok(t)) {
+                    candidate = false;
+                    /* An un-lowerable inline-C form in a colored body is a
+                     * PERMANENT carve-out, not a fixable BODY root: inline-C
+                     * declares a fixed C signature and cannot thread a DK
+                     * continuation, so no BODY-* admission can ever pull it into
+                     * the CPS set.  Mark it sig_perm (like an ABI-reject
+                     * signature) so it routes as a permanent SIG-* eviction and
+                     * does not count against the BODY-UNSUPPORTED endgame gate;
+                     * the direct emitter owns it unchanged.  Only the genuinely
+                     * un-delegatable inline-C reaches here -- a whole-body-
+                     * delegatable inline-C leaf (unsafe-* mains) translates to a
+                     * CT_LETRAW owning-op, never a residual CT_UNSUPPORTED. */
+                    const CTerm *u = first_unsupported(t);
+                    if (u && u->as.unsupported.why
+                        && strstr(u->as.unsupported.why, "EX_INLINE_C"))
+                        sig_perm = true;
+                    /* E2/taint-completeness (cps-tramp-resume): a fn evicted for an
+                     * effectful fn-value call runs its effect on the fiber (the call
+                     * is not DK-threadable yet).  Mark it a permanent fiber source so
+                     * its effect perm-taints and any DK handler-installer of that
+                     * effect co-classifies to fiber -- else the handler DK-lowers
+                     * while the performer stays fiber and the effect escapes. */
+                    if (u && u->as.unsupported.why
+                        && strstr(u->as.unsupported.why, "effectful fn-value call (E2 pending)"))
+                        sig_perm = true;
+                }
                 /* G3b: a colored generic sig-rejects (candidate=false) but if all
                  * its monomorphs are CPS-admissible it is a mono-template -- it
                  * stands in for its DK monomorphs and must NOT taint its effects.
@@ -2462,14 +4353,28 @@ static void ensure_S(const Expr *program) {
                 g_ents[g_ents_n].term = t;
                 g_ents[g_ents_n].in_s = candidate;
                 g_ents[g_ents_n].mono_template = mono_tmpl;
+                g_ents[g_ents_n].sig_perm = sig_perm;
                 SEnt *en = &g_ents[g_ents_n];
                 en->perf_lo = en->perf_hi = en->hand_lo = en->hand_hi = 0;
                 en->edges = NULL; en->edges_all = false;
                 EffAcc acc = { &en->perf_lo, &en->perf_hi,
-                               &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL };
+                               &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
+                               NULL, NULL, NULL, NULL, NULL, NULL, NULL, false };
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi;
+                /* A whole-body-delegated colored fn runs its effects on the FIBER
+                 * runtime (direct emitter), so its effects are fiber -- seed them
+                 * into the base taint like a non-in_s fn.  This keeps an effect
+                 * that a delegated HANDLER-INSTALLER discharges (e.g. `run`'s Ask)
+                 * OR a delegated performer raises (e.g. `apply-cb`'s Ask via an
+                 * indirect call) classified as fiber, so its evicted performers /
+                 * DK peers never split across the two machines.  A control-free
+                 * single-op body matches the shape but has empty effects (no-op). */
+                if (candidate && term_is_whole_body_delegation(t)) {
+                    base_lo |= en->eff_lo;
+                    base_hi |= en->eff_hi;
+                }
                 g_ents_n++;
                 continue;
             }
@@ -2480,6 +4385,7 @@ static void ensure_S(const Expr *program) {
         /* non-fn top-level item (e.g. a def whose init performs). */
         expr_collect_effects(it, &base_lo, &base_hi);
     }
+    free((void *)items);   /* flattened view is only needed for the loops above */
 
     /* Build the colored call graph backing the call-path taint.  Each entry's
      * `edges` bitset names the directly-called colored peers; `edges_all` marks
@@ -2497,7 +4403,8 @@ static void ensure_S(const Expr *program) {
         int ncb = 0; bool overflow = false;
         uint64_t scratch_lo = 0, scratch_hi = 0;
         EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
-                       cbuf, &ncb, CALLEE_CAP, &overflow };
+                       cbuf, &ncb, CALLEE_CAP, &overflow, NULL, NULL, NULL, NULL,
+                       NULL, NULL, NULL, false };
         expr_collect_effects_acc(g_ents[i].fd->body, &acc);
         g_ents[i].edges_all = overflow;
         for (int k = 0; k < ncb; k++)
@@ -2595,6 +4502,46 @@ static void ensure_S(const Expr *program) {
             }
         }
     }
+
+    /* PERMANENT taint (trace categorization only -- does NOT affect in_s/admission).
+     * The taint that survives in a world where every BODY-fixable function is
+     * admitted: only sig_perm fns (+ base code + their call-path conduits) are
+     * fiber.  A fixpoint mirroring the main one, but seeded ONLY from sig_perm
+     * sources: a non-sig_perm fn tainted here is FORCED fiber by a permanent
+     * source and can never be admitted by BODY-* work, so it cascades into
+     * perm_fiber too.  At convergence, g_perm_lo/hi holds the permanently-tainted
+     * effects; the EVICT trace reports a fn evicted only via these as SIG-TAINT. */
+    {
+        bool *pf = (bool *)calloc(g_ents_n ? g_ents_n : 1, sizeof(bool));
+        for (size_t i = 0; i < g_ents_n; i++) pf[i] = g_ents[i].sig_perm;
+        uint64_t plo = base_lo, phi = base_hi;
+        bool pch = true;
+        while (pch) {
+            pch = false;
+            plo = base_lo; phi = base_hi;
+            for (size_t i = 0; i < g_ents_n; i++)
+                if (pf[i] && !g_ents[i].mono_template) { plo |= g_ents[i].eff_lo; phi |= g_ents[i].eff_hi; }
+            for (int b = 0; b < CPS_MAX_EFFECTS; b++) {
+                if (!path_nodes[b]) continue;
+                bool already = (b < 64) ? ((plo >> b) & 1) : ((phi >> (b - 64)) & 1);
+                if (already) continue;
+                for (size_t i = 0; i < g_ents_n; i++) {
+                    if (!ent_bit(path_nodes[b], i)) continue;
+                    if (pf[i] && !g_ents[i].mono_template) {
+                        if (b < 64) plo |= (uint64_t)1 << b; else phi |= (uint64_t)1 << (b - 64);
+                        break;
+                    }
+                }
+            }
+            for (size_t i = 0; i < g_ents_n; i++) {
+                bool tainted = (g_ents[i].eff_lo & plo) || (g_ents[i].eff_hi & phi);
+                if (!pf[i] && !g_ents[i].mono_template && tainted) { pf[i] = true; pch = true; }
+            }
+        }
+        g_perm_lo = plo; g_perm_hi = phi;
+        free(pf);
+    }
+
     g_ents_ctx = g_emit_ctx;   /* G3b: record the ctx this classification used */
 }
 
@@ -2627,13 +4574,62 @@ static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
         bool ok = true;
         for (uint32_t j = 0; j < n && ok; j++) {
             if (!args[j].type) continue;   /* untyped scalar atom: not discriminating */
+            if (args[j].ty != TY_APP && args[j].ty != TY_ADT && args[j].ty != TY_STRUCT) continue;
             const char *ac = emit_type_c_name(ctx, *(Type *)args[j].type);
             const char *sc = emit_type_c_name(ctx, spec->arg_types[j]);
             if (!ac || !sc || strcmp(ac, sc) != 0) ok = false;
         }
         if (ok) { hit = spec->clone_name; n_hit++; }
     }
-    return (n_hit == 1) ? hit : NULL;
+    if (n_hit == 1) return hit;
+    /* RC2/2b.3 (generic-show-wrapper-cps-monomorphization-plan): the pass above
+     * SKIPS scalar args (they usually ride the int64 carrier and don't
+     * discriminate).  But a `^Show a` wrapper monomorphized per SCALAR element
+     * (`show_line__spec__void_bool` vs `..._const_char` vs `..._int64_t`) is
+     * distinguished ONLY by its scalar arg, so when several such specs coexist the
+     * skip makes them all match (n_hit > 1) and the call falls to the carrier-rep
+     * base clone -- misrendering (e.g. `(show-line true)` prints `1`).  Break the
+     * tie with a STRICTER pass that compares scalar args too, by concrete C type.
+     * Additive: only runs when the primary pass was ambiguous, and it disqualifies
+     * a spec whose arg has no concrete atom type, so a genuinely carrier-erased
+     * scalar arg (atom typed as the int64 carrier) still yields no unique match
+     * (returns NULL exactly as before -- no regression to non-wrapper generics). */
+    if (n_hit > 1) {
+        const char *hit2 = NULL; int n_hit2 = 0;
+        for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+            const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+            if (spec->binding != fn || !spec->clone_name || spec->n_args != n) continue;
+            bool ok = true;
+            for (uint32_t j = 0; j < n && ok; j++) {
+                if (!args[j].type) { ok = false; break; }  /* can't discriminate */
+                const char *ac = emit_type_c_name(ctx, *(Type *)args[j].type);
+                const char *sc = emit_type_c_name(ctx, spec->arg_types[j]);
+                if (!ac || !sc || strcmp(ac, sc) != 0) ok = false;
+            }
+            if (ok) { hit2 = spec->clone_name; n_hit2++; }
+        }
+        if (n_hit2 == 1) return hit2;
+    }
+    return NULL;
+}
+
+/* gcc14-int-conversion (cps->direct arg to a resolved spec-clone param): a
+ * cps->direct call whose callee resolved to a monomorph/spec clone
+ * (`show_line__spec__void_tur_adt_Vec__int__`) is emitted by NAME, but
+ * cps_call_param_ctype reads the GENERIC binding's carrier param types (int64),
+ * so a concrete-pointer clone param (`tur_adt_Vec__int *`, `const char *`) gets a
+ * `(int64_t)(intptr_t)` arg cast -- a -Wint-conversion straddle on macOS clang.
+ * Recover the clone's ACTUAL param C types from the ABI-spec table keyed on the
+ * emitted clone name.  Returns NULL when no spec owns that name (an ordinary
+ * callee -- cps_call_param_ctype's generic answer is then correct). */
+static const EmitAbiSpecialization *find_spec_by_clone_name(EmitCtx *ctx,
+                                                            const char *name) {
+    if (!ctx || !name) return NULL;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        const EmitAbiSpecialization *s = &ctx->abi_specializations[i];
+        if (s->clone_name && strcmp(s->clone_name, name) == 0) return s;
+    }
+    return NULL;
 }
 
 /* True when `fn` names a COLORED top-level function (g_ents holds exactly the
@@ -2706,6 +4702,8 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
              * it is transparent to effect co-classification -- recurse the body
              * (matching the prior CT_LETRAW-delegated behavior). */
             return is_cps_island(t->as.callcc.body, handled, nh);
+        case CT_LOOP:     return is_cps_island(t->as.loop.body, handled, nh);
+        case CT_CONTINUE: return true;
         case CT_RESET:
         case CT_SHIFT:
         default:
@@ -2717,19 +4715,114 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
 
 #define MAX_JOINS 64
 
+/* ---- B7: escaping-continuation mutables as by-reference heap cells --------
+ * A `^mut` that a handler case STORES its continuation into (`(set! m k)`, `k` a
+ * continuation) and the program later `resume`s outlives the handler's dynamic
+ * extent: `dk_perform` frees the captured chain when the case returns, so the
+ * stored `k` must be cloned (copy-on-store, `dk_copy`) and the mutable must be a
+ * SHARED heap cell captured BY REFERENCE into every lifted body that touches it
+ * (the case that writes it, the continuation / later code that resumes it).  A
+ * by-value capture would snapshot the value and lose the write.  `g_byref_muts`
+ * is the set of such bindings for the function currently being emitted; the
+ * mutable's C name binds the CELL POINTER (`int64_t *`), reads/writes deref it,
+ * and the pointer (a scalar) rides the existing scalar-capture machinery.  Whole
+ * feature gated on g_opt_cps_tramp_resume. */
+static const Binding *g_byref_muts[64];
+static int            g_byref_muts_n;
+
+static bool is_byref_mut(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_byref_muts_n; i++) if (g_byref_muts[i] == b) return true;
+    return false;
+}
+
+/* If Expr `e` (ascribe-peeled) is `(set! <mut> <cont>)` -- a store of a
+ * continuation value into a mutable -- return the mutable target, else NULL. */
+static const Binding *byref_set_target(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_SET || !e->as.set_.target || !e->as.set_.target->is_mut)
+        return NULL;
+    const Expr *v = e->as.set_.value;
+    while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
+    if (v && v->kind == EX_VAR && v->as.var.binding && v->as.var.binding->is_continuation)
+        return e->as.set_.target;
+    return NULL;
+}
+
+/* Populate g_byref_muts by scanning the whole function term for a delegated
+ * `(set! m k)` continuation store. */
+static void byref_scan(const CTerm *t) {
+    if (!t) return;
+    switch (t->kind) {
+        case CT_LETRAW: {
+            const Binding *tgt = byref_set_target(t->as.letraw.e);
+            if (tgt && !is_byref_mut(tgt) && g_byref_muts_n < 64)
+                g_byref_muts[g_byref_muts_n++] = tgt;
+            byref_scan(t->as.letraw.body); return;
+        }
+        case CT_LETVAL:  byref_scan(t->as.letval.body); return;
+        case CT_LETPRIM: byref_scan(t->as.letprim.body); return;
+        case CT_LETCALL: byref_scan(t->as.letcall.body); return;
+        case CT_LETCONT: byref_scan(t->as.letcont.jbody); byref_scan(t->as.letcont.body); return;
+        case CT_IF:      byref_scan(t->as.if_.then_); byref_scan(t->as.if_.else_); return;
+        case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                             byref_scan(t->as.match.arms[i].body);
+                         return;
+        case CT_RESET:   byref_scan(t->as.reset.delim); byref_scan(t->as.reset.body); return;
+        case CT_SHIFT:   byref_scan(t->as.shift.body); return;
+        case CT_HANDLE:
+            byref_scan(t->as.handle.delim); byref_scan(t->as.handle.body);
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                byref_scan(t->as.handle.cases[i].case_body);
+            return;
+        case CT_PERFORM: byref_scan(t->as.perform.body); return;
+        case CT_AWAIT:   byref_scan(t->as.await.body); return;
+        case CT_RESUME:  byref_scan(t->as.resume.body); return;
+        case CT_CLONEABLE: byref_scan(t->as.cloneable.body); return;
+        case CT_CALLCC:  byref_scan(t->as.callcc.body); return;
+        case CT_LOOP:    byref_scan(t->as.loop.body); return;
+        default: return;
+    }
+}
+
 typedef struct {
     EmitCtx    *ctx;
     Buf        *out;         /* current function/helper body buffer */
     Buf        *helpers;     /* file-scope accumulator for lifted reset/shift helpers */
     int         indent;
-    /* active inline joins: KK_VAR id -> join-parameter C name */
-    struct { uint32_t id; const char *param; } joins[MAX_JOINS];
+    /* active inline joins: KK_VAR id -> join-parameter C name + the C type the
+     * join local is DECLARED with (so a delivery can tell whether the slot is a
+     * one-word carrier or the by-value aggregate itself -- see
+     * deliver_slot_cty / the cps->direct aggregate bridge). */
+    struct { uint32_t id; const char *param; const char *cty; } joins[MAX_JOINS];
     int         n_joins;
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
+    const char *cur_loop_name; /* cps-while-native: enclosing CT_LOOP helper `<name>__cps`
+                                * so a CT_CONTINUE back-edge (possibly inside a lifted
+                                * handle continuation) re-enters it. */
+    const char *cur_loop_inv;  /* cps-while-native: CSV of the enclosing loop's
+                                * loop-INVARIANT extra args (free vars the loop body
+                                * reads that are not carried params -- e.g. a fn param
+                                * or handle result read by a loop in a handle
+                                * continuation).  Appended, unchanged, after the
+                                * carried args at each back-edge.  NULL if none. */
     const char *fn_cn;       /* enclosing function's mangled name (helper naming) */
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
     bool        ret_mode;    /* true inside a perform-continuation frame: KK_RET -> return value */
+    bool        handler_case_mode;  /* E7: true directly inside a LH_HANDLER_CASE body -- a
+                                     * terminal tail `resume` here emits dk_tail_resume (yield) */
+    bool        case_tail_resume;   /* E7: this case was installed with dk_handler_tail (DEEP +
+                                     * tail-resume); a SHALLOW case keeps the inline dk_invoke */
+    bool        borrowed_kont;      /* cur_k (`__kont`) is a RESUME_FRAME's BORROWED downstream
+                                     * chain (driver-owned, dk_free'd after the frame yields), not
+                                     * an owned param.  A reset/handle continuation env that
+                                     * captures it OUTLIVES the frame (it is read when the nested
+                                     * continuation is delivered, after the yield), so the capture
+                                     * must COPY the chain (reaped), never alias it -- else a
+                                     * value-position nested handle use-after-frees the enclosing
+                                     * continuation.  See docs/reported/cps-toplevel-synthesized-
+                                     * main-bypasses-dk.md (effect-nested). */
     /* Full Type a value has when it crosses the slot at each continuation target,
      * so Tier C by-value aggregates box/unbox with their real (monomorphized) C
      * type.  ret_ty = the function's return type (KK_RET); cur_ty = the innermost
@@ -2752,6 +4845,13 @@ static const char *join_param(CE *ce, uint32_t id) {
     return "0";  /* unreachable when the term is well-formed */
 }
 
+/* The C type the join local for `id` was declared with, or NULL if unknown. */
+static const char *join_param_cty(CE *ce, uint32_t id) {
+    for (int i = ce->n_joins - 1; i >= 0; i--)
+        if (ce->joins[i].id == id) return ce->joins[i].cty;
+    return NULL;
+}
+
 /* Materialize an atom as a malloc'd C expression string. */
 static char *atom_str(CE *ce, const CAtom *a) {
     switch (a->kind) {
@@ -2760,7 +4860,17 @@ static char *atom_str(CE *ce, const CAtom *a) {
         case CA_UNIT: return strdup("0");
         case CA_STR:  return atom_cstr(a->str);
         case CA_FLOAT: return a->ty == TY_FLOAT32 ? atom_float32(a->f) : atom_float(a->f);
-        case CA_VAR:  return atom_var(ce->ctx, a->var);
+        case CA_VAR:
+            /* B7: a by-reference mutable's C name binds the cell POINTER; a read
+             * of its value derefs it. */
+            if (is_byref_mut(a->var)) {
+                char *nm = atom_var(ce->ctx, a->var);
+                char *r = malloc(strlen(nm) + 5);
+                sprintf(r, "(*%s)", nm);
+                free(nm);
+                return r;
+            }
+            return atom_var(ce->ctx, a->var);
         case CA_CVAR: return strdup(a->cvar_name ? a->cvar_name : "0");
         default:      return strdup("0");
     }
@@ -2805,10 +4915,22 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
         case BS_FUNC_CALL: {
             /* A plain C runtime call `c_op(args)` -- e.g. cons, the continuation
              * resume/clone/drop/serialize primitives.  Args are slot carriers. */
+            /* The `cons` builtin takes any 64-bit-sized head/tail (int, cstr,
+             * opaque, pointer) into its `int64_t` params -- cast through intptr_t
+             * so a non-int arg (e.g. a `cstr` pattern literal in
+             * `(cons "[0-9]+" ...)`) does not trip C's "incompatible pointer to
+             * integer conversion" (a hard -Wint-conversion error under macOS
+             * clang).  Mirrors the non-CPS emit path (emit_core.c BS_FUNC_CALL),
+             * keyed on the same c_op identity. */
+            bool cast_args = (sp->c_op && strcmp(sp->c_op, "cons") == 0);
             buf_printf(&b, "%s(", sp->c_op);
             for (uint32_t i = 0; i < n; i++) {
                 if (i) buf_puts(&b, ", ");
-                buf_printf(&b, "(%s)", as[i]);
+                if (cast_args) {
+                    buf_printf(&b, "(int64_t)(intptr_t)(%s)", as[i]);
+                } else {
+                    buf_printf(&b, "(%s)", as[i]);
+                }
             }
             buf_putc(&b, ')');
             break;
@@ -2827,6 +4949,29 @@ static char *callee_name(const Binding *fn) {
     return raw_name_for_binding(fn);   /* malloc'd */
 }
 
+/* E2a lookup key for a `via_registry` callee.
+ *
+ * The registry is keyed on a function's DIRECT ENTRY address
+ * (`__tur_cps_register((intptr_t)f, f__cps)`), so the key has to be that
+ * address.  A plain fn-value param holds it directly.  A `^fat` param does
+ * NOT: its calling convention guarantees an already-boxed
+ * `{ shim, direct-entry }` fat record (the arg loop auto-shims a thin fn into
+ * one), carried as the int64 pointer carrier -- so the param's own value is a
+ * heap address that was never registered.  Keying on it missed every time,
+ * and the miss was called unguarded: a NULL call, i.e. SIGSEGV, for every
+ * `^fat` parameter carrying a non-empty effect row.  Read slot 1 instead,
+ * which is exactly what `__tur_fatshim_*` dispatches through.
+ *
+ * Writes into `out`; returns `out` for use in a format argument. */
+static const char *e2a_lookup_key(char *out, size_t cap,
+                                  const Binding *fn, const char *callee) {
+    if (fn && fn->is_fat)
+        snprintf(out, cap, "((int64_t *)(intptr_t)(%s))[1]", callee);
+    else
+        snprintf(out, cap, "(intptr_t)%s", callee);
+    return out;
+}
+
 /* Join a term's atom arguments into a malloc'd "a0, a1, ..." string. */
 static char *atoms_csv(CE *ce, const CAtom *args, uint32_t n) {
     Buf b; buf_init(&b);
@@ -2834,6 +4979,206 @@ static char *atoms_csv(CE *ce, const CAtom *args, uint32_t n) {
         if (i) buf_puts(&b, ", ");
         char *a = atom_str(ce, &args[i]);
         buf_puts(&b, a);
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
+/* Like atoms_csv, but for CALL-argument positions where a bare `TY_FN`
+ * fn-value flows into an HOF whose fn-value param is declared `int64_t` (the
+ * threading ABI carries fn-values as int64).  The lifted lambda is emitted as a
+ * plain C function pointer (`void (*)(...)`), so passing it raw is an
+ * int-from-pointer warning; cast it through intptr_t.  A FAT closure
+ * (`tur_poly_fn_t`) is a struct value, not a bare pointer, so it is left
+ * untouched.  Non-fn atoms are emitted exactly as atoms_csv would, so any call
+ * with no fn-value arg is byte-identical. */
+static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        if (!atom_is_fat_fn(&args[i]) &&
+            (args[i].kind == CA_VAR || args[i].kind == CA_CVAR) &&
+            args[i].ty == TY_FN)
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else
+            buf_puts(&b, a);
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
+/* gcc14-int-conversion: the E2a threaded-fn-value dispatch calls through a
+ * synthesized `int64_t (*)(int64_t..., DK *)` pointer, so EVERY argument slot is
+ * the int64 carrier.  Unlike the ordinary call CSV (which passes each arg in its
+ * natural C type to a real callee), here a pointer-like arg -- a cstr literal, a
+ * `ptr<void>`, an rc/weak/ref handle, a fn value, a continuation -- must be cast
+ * to `(int64_t)(intptr_t)`, else it "makes integer from pointer" at the call, a
+ * hard error under GCC >= 14.  int/bool pass through as int64 already; float args
+ * do not occur on this carrier path. */
+static bool atom_ty_is_ptr_carrier(TypeKind k) {
+    return k == TY_FN || k == TY_PTR_VOID || k == TY_CSTR || k == TY_RC ||
+           k == TY_WEAK || k == TY_REF || k == TY_REF_IMMUT || k == TY_REF_MUT ||
+           k == TY_CONT || k == TY_CLONEABLE_CONT || k == TY_FORALL;
+}
+static char *atoms_csv_call_cps(CE *ce, const CAtom *args, uint32_t n) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        if (!atom_is_fat_fn(&args[i]) && atom_ty_is_ptr_carrier(args[i].ty))
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else
+            buf_puts(&b, a);
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
+/* gcc14-int-conversion (carrier-to-typed-param, CPS path): the C type the callee
+ * declares for parameter `i`, matching emit_params (the `__cps`/direct signature
+ * emitter) EXACTLY so the argument cast agrees with the declared param.  A `__cps`
+ * callee's params are NOT uniformly int64 -- some are `void *`, some concrete
+ * `tur_adt_X *` -- so a blanket int64 cast is wrong (it makes int64->void* at a
+ * void* param).  Returns NULL for a param whose C type is an aggregate/poly-fn
+ * struct (not intptr_t-castable) or when the callee's param types are unknown. */
+/* effectful-fnvalue-param-miscompile (E2): true when the callee declares
+ * parameter `i` as a rank-2 poly fn -- its C type is the multi-word
+ * `tur_poly_fn_t` aggregate, taken BY VALUE.  A `tur_poly_fn_t` argument must
+ * pass bare (not `(int64_t)(intptr_t)arg`, which is "aggregate used where an
+ * integer was expected"). */
+static bool cps_call_param_is_poly_fn(CE *ce, const Binding *fn, uint32_t i) {
+    (void)ce;
+    if (!fn || fn->type.kind != TY_FN || i >= fn->type.as.fn.arity) return false;
+    SEnt *fe = ent_of_binding(fn);
+    const FnDef *fd = fe ? fe->fd : NULL;
+    return fd && i < fd->n_params && fd->params[i]->is_poly_fn;
+}
+
+static const char *cps_call_param_ctype(CE *ce, const Binding *fn, uint32_t i) {
+    if (!fn || fn->type.kind != TY_FN || i >= fn->type.as.fn.arity) return NULL;
+    SEnt *fe = ent_of_binding(fn);
+    const FnDef *fd = fe ? fe->fd : NULL;
+    if (fd && i < fd->n_params) {
+        if (fd->params[i]->is_poly_fn) return NULL;           /* tur_poly_fn_t */
+        if (fd->params[i]->type.kind == TY_FN) return "int64_t";
+        return binder_ctype_full(ce->ctx, fd->params[i]->type.kind,
+                                 &fd->params[i]->type);
+    }
+    if (fn->type.as.fn.arg_full_types && fn->type.as.fn.arg_full_types[i]) {
+        const Type *pt = fn->type.as.fn.arg_full_types[i];
+        if (pt->kind == TY_FN) return "int64_t";
+        return binder_ctype_full(ce->ctx, pt->kind, pt);
+    }
+    return NULL;
+}
+
+/* CSV of call args, each cast to its DECLARED param C type (via intptr_t) for a
+ * cps->cps call whose `__cps` callee has known param types.  Only casts a param
+ * whose C type is the int64 carrier or a pointer (`... *`); an aggregate/poly-fn
+ * param is left to the plain-atom emission (never intptr_t-cast).  Falls back to
+ * the plain atom for a param we cannot type. */
+static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
+                                  const Binding *fn,
+                                  const EmitAbiSpecialization *spec) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        const char *pty = cps_call_param_ctype(ce, fn, i);
+        /* When the callee resolved to a monomorph/spec clone, cps_call_param_ctype
+         * still reports the GENERIC binding's carrier param (int64/void*); prefer
+         * the clone's CONCRETE param type from the spec when it is a pointer, so a
+         * concrete-pointer param (`tur_adt_Vec__int *`, `const char *`) gets the
+         * matching `(T *)(intptr_t)` bridge instead of an int64 straddle. */
+        if (spec && i < spec->n_args) {
+            const char *sty = emit_type_c_name(ce->ctx, spec->arg_types[i]);
+            size_t sL = sty ? strlen(sty) : 0;
+            if (sty && sL >= 1 && sty[sL - 1] == '*')
+                pty = sty;
+        }
+        size_t L = pty ? strlen(pty) : 0;
+        bool param_is_ptr = pty && L >= 1 && pty[L - 1] == '*';
+        bool param_is_i64 = pty && strcmp(pty, "int64_t") == 0;
+        bool param_is_voidp = pty && strcmp(pty, "void *") == 0;
+        bool arg_is_ptr = atom_ty_is_ptr_carrier(args[i].ty);
+        /* An arg whose C representation is provably a plain integer (not a pointer
+         * carried on the int64 slot): a plain int/bool literal or scalar.  Such an
+         * arg into an int64 param needs no cast; a heap/pointer arg (TY_APP/ADT,
+         * cstr, ...) into an int64 param does. */
+        bool arg_is_plain_int = (args[i].ty == TY_INT || args[i].ty == TY_BOOL ||
+            args[i].ty == TY_INT8 || args[i].ty == TY_INT16 ||
+            args[i].ty == TY_INT32 || args[i].ty == TY_INT64 ||
+            args[i].ty == TY_UINT8 || args[i].ty == TY_UINT16 ||
+            args[i].ty == TY_UINT32 || args[i].ty == TY_UINT64 ||
+            args[i].ty == TY_NIL);
+        /* Cast each arg to the callee's declared param C type -- EXCEPT the two
+         * provably-valid no-cast cases, so matching args stay bare (minimal
+         * snapshot churn): (1) a pointer-like arg into a `void *` param (any object
+         * pointer implicitly converts to void*), and (2) an int64-ish arg into an
+         * int64 param handled by falling through.  Everything else that is a
+         * mismatch -- a heap/pointer arg into an int64 slot, an int64-carried arg
+         * into a `void *` / concrete pointer param -- is bridged through intptr_t
+         * (value-preserving). */
+        /* A by-value aggregate arg (a `tur_adt_Option__int` struct value) is NOT a
+         * scalar -- `(int64_t)(intptr_t)(agg)` is "aggregate used where integer
+         * expected".  Its concrete->carrier crossing is a spill+address bridge, not
+         * this cast, so leave it to the existing atom emission.  An arg is such an
+         * aggregate iff its own C type is neither `int64_t` nor a pointer; a TY_FN
+         * value is a scalar (int64/fn-ptr carrier) and stays castable. */
+        bool arg_is_byval_agg = false;
+        if (args[i].ty != TY_FN && args[i].type) {
+            const char *acty = binder_ctype_full(ce->ctx, args[i].ty, args[i].type);
+            size_t aL = acty ? strlen(acty) : 0;
+            arg_is_byval_agg = acty && strcmp(acty, "int64_t") != 0 &&
+                               !(aL >= 1 && acty[aL - 1] == '*');
+        }
+        /* Whether the arg's ACTUAL C expression type is a pointer.  arg_is_ptr
+         * above is a SEMANTIC "this Turmeric value is heap/pointer-like" check;
+         * it stays true for a value carried on the int64 slot (a fn carrier, a
+         * boxed handle spilled to `int64_t __t4`).  For a `void *` param the bare
+         * "object ptr -> void*" pass is only valid when the C expression is really
+         * a pointer -- passing an `int64_t`-typed carrier bare into a `void *`
+         * param is a -Wint-conversion straddle (macOS clang hard error).  When the
+         * arg's C type is knowable and is NOT a pointer, force the bridge below. */
+        const char *arg_cty = args[i].type
+            ? binder_ctype_full(ce->ctx, args[i].ty, args[i].type) : NULL;
+        size_t arg_cty_L = arg_cty ? strlen(arg_cty) : 0;
+        bool arg_c_ptr_known = arg_cty != NULL;
+        bool arg_is_c_ptr = arg_cty && arg_cty_L >= 1 &&
+                            arg_cty[arg_cty_L - 1] == '*';
+        /* gcc14-int-conversion (carrier-to-typed-param): a fat-fn arg (a `void *`
+         * fat-closure carrier) passed into a callee slot the signature declares
+         * as the int64 fn-carrier (`int64_t cmp_fn`, e.g. `option-eq?`'s
+         * comparator) is a void*->int64 -Wint-conversion -- a hard error under
+         * GCC >= 14.  Bridge it to the carrier; the fat carrier's bits are
+         * preserved.  A fat-fn into a genuine fn-value slot (`void *` /
+         * tur_poly_fn_t param) is left bare below. */
+        if (atom_is_fat_fn(&args[i]) && param_is_i64)
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else if (cps_call_param_is_poly_fn(ce, fn, i))
+            buf_puts(&b, a);                 /* E2: tur_poly_fn_t param -- pass the fat struct by value */
+        else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
+            buf_puts(&b, a);
+        else if (param_is_voidp && arg_is_ptr && (!arg_c_ptr_known || arg_is_c_ptr))
+            buf_puts(&b, a);                 /* real object ptr -> void*: already valid */
+        else if (param_is_voidp)
+            buf_printf(&b, "(void *)(intptr_t)%s", a);  /* int64 carrier -> void*: bridge */
+        else if (param_is_ptr)
+            buf_printf(&b, "(%s)(intptr_t)%s", pty, a);
+        else if ((param_is_i64 || !pty) && !arg_is_plain_int)
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else
+            buf_puts(&b, a);
         free(a);
     }
     buf_putc(&b, '\0');
@@ -2854,6 +5199,10 @@ static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
+static void emit_loop(CE *ce, const CTerm *t);       /* cps-while-native */
+static void emit_continue(CE *ce, const CTerm *t);   /* cps-while-native */
+static void emit_match(CE *ce, const CTerm *t);      /* B4 */
+static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr);
 static char *cvar_cname(CE *ce, CVar x);
 
 /* The full Type a value has when delivered to continuation `kont` (the target's
@@ -2863,6 +5212,30 @@ static const Type *deliver_ty(CE *ce, const CKont *kont) {
     if (kont->kind == KK_RET)    return ce->ret_ty;
     if (kont->kind == KK_PROMPT) return ce->cur_ty;
     return NULL;   /* KK_VAR: inline join, a plain C-local assignment */
+}
+
+/* True when C type spelling `cty` names a BY-VALUE AGGREGATE -- an ADT/struct
+ * record passed and returned as a C struct (`tur_adt_Result__int__int`), as
+ * opposed to a scalar, a pointer, or the uniform int64 carrier.  Keyed on the
+ * spelling rather than a Type because the sig side table (the source of truth
+ * for what a monomorph/spec clone actually returns) carries only the string.
+ * Positive-list on purpose: everything not recognizably an aggregate is treated
+ * as a word, which is the historical behavior. */
+static bool cty_is_byval_agg(const char *cty) {
+    if (!cty || !*cty) return false;
+    size_t L = strlen(cty);
+    if (cty[L - 1] == '*') return false;              /* a handle, not a value */
+    return strncmp(cty, "tur_adt_", 8) == 0;
+}
+
+/* The C type of the SLOT that a delivery to `kont` lands in: the join local's
+ * declared type (KK_VAR), or -- for the one-word DK slot -- the type the
+ * crossing value is expected to have there, which is what slot_store_reap keys
+ * its Tier-C boxing on.  NULL when not knowable (treated as a word). */
+static const char *deliver_slot_cty(CE *ce, const CKont *kont) {
+    if (kont->kind == KK_VAR) return join_param_cty(ce, kont->id);
+    const Type *vty = deliver_ty(ce, kont);
+    return vty ? binder_ctype_full(ce->ctx, vty->kind, vty) : NULL;
 }
 
 /* Deliver value-string `v` to continuation `kont`.  A Tier C by-value aggregate
@@ -2941,7 +5314,16 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_LETVAL: {
             char *v = atom_str(ce, &t->as.letval.v);
             char *bn = cvar_cname(ce, t->as.letval.x);
-            ce_line(ce, "%s = %s;", bn, v);
+            if (is_byref_mut(t->as.letval.x.bind)) {
+                /* B7: allocate the shared heap cell and store the initial value.
+                 * The cell is leaked with the DK nodes (reaped at the outermost
+                 * entry boundary) -- a stored continuation may still be resumed
+                 * after this fn's dynamic extent, so it cannot be freed here. */
+                ce_line(ce, "%s = (int64_t *)malloc(sizeof(int64_t)); *%s = %s;", bn, bn, v);
+                ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
+            } else {
+                ce_line(ce, "%s = %s;", bn, v);
+            }
             free(bn); free(v);
             emit_term(ce, t->as.letval.body);
             break;
@@ -2952,7 +5334,13 @@ static void emit_term(CE *ce, const CTerm *t) {
             for (uint32_t i = 0; i < n; i++) as[i] = atom_str(ce, &t->as.letprim.args[i]);
             const BuiltinSpec *sp = t->as.letprim.spec;
             char *bn = cvar_cname(ce, t->as.letprim.x);
-            if (is_println_shape(sp->shape)) {
+            if (sp->c_op && strcmp(sp->c_op, "TUR_DK_CONT_PRED") == 0) {
+                /* (cont? k): the DK handler-case continuation is unconsumed until
+                 * a user `resume` sets its `consumed` flag (emit_resume).  The k
+                 * atom is `int64_t` or `DK *` depending on the case; `(DK *)(intptr_t)`
+                 * normalizes both. */
+                ce_line(ce, "%s = !((DK *)(intptr_t)(%s))->consumed;", bn, n ? as[0] : "0");
+            } else if (is_println_shape(sp->shape)) {
                 emit_println(ce, sp->shape, n ? as[0] : "0");
                 ce_line(ce, "%s = 0;", bn);  /* nil result */
             } else {
@@ -2968,27 +5356,181 @@ static void emit_term(CE *ce, const CTerm *t) {
         }
         case CT_LETCALL: {
             /* cps->direct: an uncolored callee runs to completion and returns an
-             * ordinary value; no continuation is threaded in. */
-            char *fn = callee_name(t->as.letcall.fn);
-            char *argv = atoms_csv(ce, t->as.letcall.args, t->as.letcall.n);
+             * ordinary value; no continuation is threaded in.  Resolve a
+             * monomorph-clone name the same way the CT_TAILCALL cps->direct arm
+             * does: a generic constructor/callee (e.g. the `tcons` built inside a
+             * generated `_un_uncons_hyfmap` hylo helper) is emitted as the DEFINED
+             * `<name>__spec__...` clone, not the unmangled generic symbol -- which
+             * would otherwise be an undefined reference surviving only by -O2 DCE
+             * of the dead helper.  find_mono_clone_for_call returns NULL for an
+             * ordinary callee with no registered ABI specialization, so this is a
+             * no-op for every non-templated call. */
+            /* RC2 (generic-show-wrapper-cps-monomorphization-plan): re-resolve a
+             * carrier-erased typeclass-method dispatch to the concrete per-spec
+             * instance (same as the CT_TAILCALL arm); self-gating, so no-op for an
+             * ordinary call. */
+            char *rr_lc = t->as.letcall.call_expr
+                ? emit_reresolve_method_call(ce->ctx, t->as.letcall.call_expr) : NULL;
+            const char *mclone_lc = rr_lc ? NULL : find_mono_clone_for_call(
+                ce->ctx, t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n);
+            char *fn = rr_lc ? rr_lc
+                     : (mclone_lc ? strdup(mclone_lc) : callee_name(t->as.letcall.fn));
+            /* Cast each arg to the (direct) callee's declared param C type --
+             * gcc14-int-conversion, carrier-to-typed-param: a cps->direct call to
+             * e.g. `option_hyeq_qu(int64_t,int64_t,int64_t)` with a void* closure
+             * arg 3 must carrier-cast it.  Skipped for a mono-clone (its args are
+             * already the clone's concrete param types). */
+            /* rr_lc/mclone_lc callees take the concrete element type by its own C
+             * repr (the spec-clone param already has that repr), so pass raw --
+             * casting to the ORIGINAL carrier-rep callee's int64 param would
+             * mismatch the re-resolved `const char *` / concrete param. */
+            const EmitAbiSpecialization *lc_spec =
+                find_spec_by_clone_name(ce->ctx, fn);
+            char *argv = (rr_lc || mclone_lc)
+                ? atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n)
+                : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
+                                       t->as.letcall.fn, lc_spec);
             char *bn = cvar_cname(ce, t->as.letcall.x);
-            ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
+            /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
+             * no value: emit the call as a bare statement and bind the unit
+             * placeholder, never `x = void_fn(...)` (a C "void value not ignored"
+             * error).  Mirrors emit_letraw's nil handling; needed once a nil
+             * cps->direct call rides a lifted join/frame body (P6). */
+            if (t->as.letcall.x.ty == TY_NIL) {
+                ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv);
+                ce_line(ce, "%s = 0;", bn);
+            } else if (mclone_lc) {
+                /* A resolved mono-clone returns its real type -- for a constructor
+                 * clone (`tcons__spec__...`) that is a boxed-ADT pointer -- while
+                 * the binder slot's C type may be int64_t OR a concrete pointer
+                 * (`tur_adt_Map__String__int *`, when the letcall's own Type is a
+                 * nominal parametric-struct).  Bridge to the BINDER's declared C
+                 * type, not a hardcoded int64_t: casting a pointer-returning clone
+                 * to int64_t and assigning into a pointer binder is a
+                 * -Wint-conversion straddle (macOS clang treats it as a hard error).
+                 * (int64_t)(intptr_t) / (P *)(intptr_t) both round-trip the word,
+                 * so this is value-preserving in either direction. An aggregate
+                 * binder (neither pointer nor int64) cannot ride an intptr_t cast --
+                 * fall back to a raw assignment there. */
+                const char *bct = binder_ctype_full(ce->ctx, t->as.letcall.x.ty,
+                                                    t->as.letcall.x.type);
+                size_t bL = bct ? strlen(bct) : 0;
+                bool bct_bridgeable = bct && (strcmp(bct, "int64_t") == 0 ||
+                                              (bL >= 1 && bct[bL - 1] == '*'));
+                if (bct_bridgeable)
+                    ce_line(ce, "%s = (%s)(intptr_t)%s(%s); /* cps->direct */", bn, bct, fn, argv);
+                else
+                    ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
+            } else {
+                ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
+            }
             free(bn); free(fn); free(argv);
             emit_term(ce, t->as.letcall.body);
             break;
         }
         case CT_TAILCALL: {
+            if (t->as.tailcall.via_fncps) {
+                /* E2 (fat-closure fn-value threading): the callee is a poly-fn
+                 * PARAM whose value is a `tur_poly_fn_t` fat closure.  When the
+                 * passed fn-value is EFFECTFUL its `fn_cps` DK-threading slot is
+                 * populated -- tail-dispatch through it, threading the current
+                 * continuation so the callback's `perform` reaches the caller's
+                 * handler.  When the slot is NULL (a pure fn-value) fall to the
+                 * direct `f.fn` call, delivering its result to the continuation
+                 * exactly as the delegated CT_LETRAW path did. */
+                char *pf = name_for_binding(ce->ctx, t->as.tailcall.fn);
+                char *arg = atom_str(ce, &t->as.tailcall.args[0]);
+                const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
+                    ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
+                ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value */",
+                        pf, pf, pf, arg, thread);
+                /* Pure fallback: call the direct entry and deliver the result. */
+                Buf pv; buf_init(&pv);
+                buf_printf(&pv, "((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s))",
+                           pf, pf, arg);
+                buf_putc(&pv, '\0');
+                emit_deliver(ce, &t->as.tailcall.kont, pv.data);
+                buf_free(&pv);
+                free(pf); free(arg);
+                break;
+            }
+            if (t->as.tailcall.via_registry) {
+                /* E2a: callee is a fn-value PARAM; recover its CPS entry from the
+                 * registry and thread __kont so its perform reaches the caller's
+                 * handler.  __cps ABI: int64_t (*)(int64_t args..., DK*).  E2c: when
+                 * fn == NULL the callee is a struct-field fn-value LOAD carried in
+                 * fn_atom -- use its atom expression as the lookup key. */
+                char *pf = t->as.tailcall.fn ? callee_name(t->as.tailcall.fn)
+                                             : atom_str(ce, &t->as.tailcall.fn_atom);
+                /* E2a carrier ABI: every arg slot is int64_t, so pointer-like args
+                 * must be carrier-cast (gcc14-int-conversion). */
+                char *argv = atoms_csv_call_cps(ce, t->as.tailcall.args, t->as.tailcall.n);
+                const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
+                    ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
+                /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
+                char cast[512]; int off = snprintf(cast, sizeof cast, "int64_t (*)(");
+                for (uint32_t i = 0; i < t->as.tailcall.n && off < 400; i++)
+                    off += snprintf(cast + off, sizeof cast - (size_t)off, "int64_t, ");
+                snprintf(cast + off, sizeof cast - (size_t)off, "DK *)");
+                char key[640];
+                e2a_lookup_key(key, sizeof key, t->as.tailcall.fn, pf);
+                if (t->as.tailcall.n)
+                    ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s, %s); /* E2a threaded fn-value */",
+                            cast, key, pf, argv, thread);
+                else
+                    ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s); /* E2a threaded fn-value */",
+                            cast, key, pf, thread);
+                free(pf); free(argv);
+                break;
+            }
             /* G3b: a colored-generic mono-template callee -- resolve this call
              * site to the monomorph clone so we thread `<clone>__cps` (the DK
-             * monomorph), not the unresolved generic name. */
-            const char *mclone = NULL;
+             * monomorph), not the unresolved generic name.
+             *
+             * RC1 (generic-show-wrapper-cps-monomorphization-plan): an UNCOLORED
+             * generic callee -- e.g. the `^Show a` wrapper `show-line`/`print-show`
+             * -- is not a colored mono_template, so the base gate leaves the clone
+             * unresolved and the call falls to the generic BASE clone, whose body
+             * bakes the int carrier representative (`__inst_Show_show_int`) and
+             * misrenders every non-int element type. Its per-element DIRECT clone IS
+             * registered as an ABI spec; resolve it and route the call through the
+             * cps->direct path. The clone is direct-only (no `<clone>__cps` variant
+             * is emitted for an uncolored callee), so it must NOT take the cps->cps
+             * branch (which would be an undefined reference).
+             *
+             * For a NOMINAL element type (String/Vec/Set/Map) the resolved direct
+             * clone's body dispatches correctly. A carrier-SCALAR element
+             * (cstr/bool/...) resolves to a clone whose body is itself COLORED, so
+             * its inner `(show x)` is emitted here (not by the direct emitter) with
+             * the baked carrier rep -- RC2 below re-resolves that. */
+            /* RC2 (generic-show-wrapper-cps-monomorphization-plan): a carrier-erased
+             * typeclass-method dispatch (`(show x)` baked to `__inst_Show_show_int`)
+             * inside a COLORED ABI-spec clone body reaches the CPS emitter, which
+             * would otherwise call the int carrier rep verbatim.  Run the same
+             * per-spec re-resolution the direct emitter uses (emit_reresolve_method_call)
+             * so the body dispatches to `__inst_Show_show_<T>` for the spec's concrete
+             * element T.  It self-gates: NULL unless the call is a genuine tyvar
+             * dispatch inside an active spec, so an ordinary int dispatch is
+             * untouched.  The re-resolved instance method is a DIRECT (uncolored)
+             * callee, so force the cps->direct path. */
+            char *rr = t->as.tailcall.call_expr
+                ? emit_reresolve_method_call(ce->ctx, t->as.tailcall.call_expr) : NULL;
+            const char *clone = NULL;
+            bool clone_is_cps = false;   /* true only when <clone>__cps is emitted */
             SEnt *fe = ent_of_binding(t->as.tailcall.fn);
-            if (fe && fe->mono_template)
-                mclone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
-                                                  t->as.tailcall.args, t->as.tailcall.n);
-            char *fn = mclone ? strdup(mclone) : callee_name(t->as.tailcall.fn);
-            char *argv = atoms_csv(ce, t->as.tailcall.args, t->as.tailcall.n);
-            if (binding_in_s(t->as.tailcall.fn) || mclone) {
+            bool callee_colored = binding_in_s(t->as.tailcall.fn);
+            if (!rr && fe && fe->mono_template) {
+                clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
+                                                 t->as.tailcall.args, t->as.tailcall.n);
+                clone_is_cps = (clone != NULL);  /* colored mono-template -> <clone>__cps */
+            } else if (!rr && fe && !callee_colored) {
+                clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
+                                                 t->as.tailcall.args, t->as.tailcall.n);
+                /* uncolored generic clone is direct-only: clone_is_cps stays false */
+            }
+            char *fn = rr ? rr : (clone ? strdup(clone) : callee_name(t->as.tailcall.fn));
+            char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
+            if (!rr && (callee_colored || clone_is_cps)) {
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
                  * the function's own k (KK_RET) or, inside a reset's delimited
@@ -2996,19 +5538,90 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * would need a heap join, which excludes the caller. */
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? ce->cur_k : "__kont";
+                /* Cast each arg to the callee's DECLARED param C type (int64, a
+                 * void pointer, or a concrete pointer) -- gcc14-int-conversion,
+                 * carrier-to-typed-param. */
+                char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
+                                                    t->as.tailcall.n, t->as.tailcall.fn,
+                                                    find_spec_by_clone_name(ce->ctx, fn));
                 if (t->as.tailcall.n)
-                    ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv, thread);
+                    ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv_t, thread);
                 else
                     ce_line(ce, "return %s__cps(%s); /* cps->cps */", fn, thread);
+                free(argv_t);
             } else {
                 /* cps->direct: the callee is uncolored or a colored function that
                  * fell back to direct-style; call it synchronously and deliver
                  * the ordinary result value to the continuation. */
                 char *tmp = fresh_tmp(ce->ctx);
-                /* __auto_type keeps the callee's real return type (int, cstr,
-                 * ...); the slot cast at delivery narrows it to the word. */
-                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv);
-                emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                /* Cast each arg to the callee's DECLARED param C type, exactly as
+                 * the cps->cps branch does -- a pointer/fat-fn arg into an int64
+                 * carrier param (or vice versa) is a -Wint-conversion hard error
+                 * under GCC >= 14 (gcc14-int-conversion, carrier-to-typed-param).
+                 * A re-resolved (rr) instance-method callee takes the concrete
+                 * element by its own C repr (the spec-clone arg already has it), so
+                 * pass raw -- casting to the original int carrier-rep param would
+                 * mismatch. */
+                char *argv_t = rr
+                    ? atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n)
+                    : atoms_csv_call_typed(ce, t->as.tailcall.args,
+                                           t->as.tailcall.n, t->as.tailcall.fn,
+                                           find_spec_by_clone_name(ce->ctx, fn));
+                /* Edge 2a (generic-show-wrapper-cps-monomorphization-plan): a
+                 * `:nil`/`:void`-returning callee (a `^Show a` wrapper like
+                 * `show-line`/`print-show`, `tur_contract_check`, ...) emits as C
+                 * `void`, so it yields no value: `__auto_type t = void_fn(...)` is a
+                 * "variable declared void" hard error.  Emit a bare call and deliver
+                 * the unit placeholder `0` -- mirrors the CT_LETCALL nil arm and
+                 * emit_value's TY_NIL/TY_NEVER skip in the direct emitter.  Lands
+                 * together with RC1 (direct-clone routing) + RC2 (colored-clone
+                 * dispatch re-resolution) so no wrapper call silently misrenders. */
+                const FnDef *cfd = g_prog
+                    ? fd_for_binding(g_prog, t->as.tailcall.fn) : NULL;
+                const Type *crt = cfd ? fn_ret_type(cfd) : NULL;
+                if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
+                    ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
+                    emit_deliver(ce, &t->as.tailcall.kont, "0");
+                } else {
+                    /* S1/findings 16: name the callee's real return type from the
+                     * signature side table (the forward declaration as actually
+                     * emitted) so the temp is c2mir-clean; __auto_type only when
+                     * the record is missing.  The slot cast at delivery narrows
+                     * it to the word either way. */
+                    const char *drt = emit_sig_lookup_ret_ctype(fn);
+                    if (drt && *drt && strcmp(drt, "void") != 0)
+                        ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
+                    else
+                        ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    /* findings 28 (typed/result-basic): the callee resolved to a
+                     * MONOMORPH/spec clone that returns its ADT BY VALUE
+                     * (`tur_adt_Result__int__int`), while the IR types the call at
+                     * the ERASED int64 carrier -- so the delivery slot is a word.
+                     * Assigning the struct straight into it is "incompatible types
+                     * when assigning" (gcc) / "incompatible types in assignment to
+                     * an arithmetic type lvalue" (c2mir): a hard error on every
+                     * COMPILING engine.  Bridge concrete->carrier the way the
+                     * direct emitter does (spill, deliver the ADDRESS), heap-copied
+                     * so the pointer outlives the delivering block and
+                     * reap-registered so it is freed at the entry boundary.  The
+                     * read side needs no change: every carrier consumer of an ADT
+                     * word already derefs it (`tur_is_ok`, and the spec clone's own
+                     * `(tur_adt_Result *)(intptr_t)r` parameter cast). */
+                    const char *slot_cty = deliver_slot_cty(ce, &t->as.tailcall.kont);
+                    if (cty_is_byval_agg(drt) && !cty_is_byval_agg(slot_cty)) {
+                        Buf bx; buf_init(&bx);
+                        buf_printf(&bx,
+                            "(int64_t)__dk_reap_ptr((intptr_t)({ %s *__bx = "
+                            "(%s *)malloc(sizeof(%s)); *__bx = %s; __bx; }))",
+                            drt, drt, drt, tmp);
+                        buf_putc(&bx, '\0');
+                        emit_deliver(ce, &t->as.tailcall.kont, bx.data);
+                        buf_free(&bx);
+                    } else {
+                        emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                    }
+                }
+                free(argv_t);
                 free(tmp);
             }
             free(fn); free(argv);
@@ -3028,6 +5641,11 @@ static void emit_term(CE *ce, const CTerm *t) {
             if (pushed) {
                 ce->joins[ce->n_joins].id = t->as.letcont.j.id;
                 ce->joins[ce->n_joins].param = pn;
+                /* Same spelling emit_binder_decls declares the local with, so a
+                 * delivery can compare the slot's C type against the delivered
+                 * value's (the cps->direct aggregate bridge). */
+                ce->joins[ce->n_joins].cty =
+                    binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type);
                 ce->n_joins++;
             }
             emit_term(ce, t->as.letcont.body);
@@ -3053,6 +5671,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             ce_line(ce, "}");
             break;
         }
+        case CT_MATCH:   emit_match(ce, t); break;
         case CT_RESET:   emit_reset(ce, t); break;
         case CT_SHIFT:   emit_shift(ce, t); break;
         case CT_HANDLE:  emit_handle(ce, t); break;
@@ -3062,10 +5681,67 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_LETRAW:  emit_letraw(ce, t); break;
         case CT_CLONEABLE: emit_cloneable(ce, t); break;
         case CT_CALLCC:  emit_callcc(ce, t); break;
+        case CT_LOOP:    emit_loop(ce, t); break;
+        case CT_CONTINUE: emit_continue(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
     }
+}
+
+/* B4: emit a restricted `match` on a heap-ADT carrier scrutinee (match_dk_ok).
+ * The scrutinee is bound ONCE as a typed carrier pointer; each ctor arm tests
+ * `->tag` in an if/else-if chain and reads its pattern fields inline via
+ * adt_field_member_path (exactly as the direct emitter, emit_expr.c, does); the
+ * arm body is emitted in the arm's block scope so its own captures (a perform
+ * continuation, a nested join) ride the enclosing frame the same way a `let`
+ * binder does.  A trailing catch-all (ctor == NULL) becomes the final `else`;
+ * with no catch-all the (exhaustive, elaborator-guaranteed) fallthrough aborts. */
+static void emit_match(CE *ce, const CTerm *t) {
+    const AdtDef *adt = t->as.match.adt;
+    char *scrut = atom_str(ce, &t->as.match.scrut);
+    char *mn = mangle_field_name(adt->name);
+    char *sv = fresh_tmp(ce->ctx);
+    ce_line(ce, "tur_adt_%s *%s = (tur_adt_%s *)(intptr_t)(%s);", mn, sv, mn, scrut);
+    free(scrut);
+
+    uint32_t n = t->as.match.n_arms;
+    bool chain_open = false;
+    for (uint32_t i = 0; i < n; i++) {
+        const CMatchArm *arm = &t->as.match.arms[i];
+        if (arm->ctor) {
+            if (!chain_open) { ce_line(ce, "if (%s->tag == %u) {", sv, arm->ctor->tag); chain_open = true; }
+            else               ce_line(ce, "} else if (%s->tag == %u) {", sv, arm->ctor->tag);
+        } else {
+            /* catch-all: trailing `else`, or an unconditional block if it stands alone */
+            if (chain_open) ce_line(ce, "} else {");
+            else            ce_line(ce, "{");
+        }
+        ce->indent += 4;
+        /* bind the pattern's field vars from the carrier struct */
+        for (uint32_t bi = 0; bi < arm->n_fields; bi++) {
+            const Binding *fb = arm->fields[bi];
+            if (!fb) continue;
+            const char *ctype = type_c_name(fb->type);
+            char *bname = name_for_binding(ce->ctx, fb);
+            char *mp = adt_field_member_path(arm->ctor->adt, arm->ctor, bi);
+            ce_line(ce, "%s %s = (%s)%s->%s;", ctype, bname, ctype, sv, mp);
+            free(mp); free(bname);
+        }
+        emit_term(ce, arm->body);
+        ce->indent -= 4;
+    }
+    /* Close the chain.  With no trailing catch-all the match is exhaustive by
+     * elaboration, so the fallthrough is unreachable (abort keeps -Wreturn quiet). */
+    bool trailing_catchall = (n > 0 && t->as.match.arms[n - 1].ctor == NULL);
+    if (chain_open && !trailing_catchall) {
+        ce_line(ce, "} else {");
+        ce->indent += 4;
+        ce_line(ce, "abort(); /* exhaustive match: unreachable */");
+        ce->indent -= 4;
+    }
+    ce_line(ce, "}");
+    free(mn); free(sv);
 }
 
 /* Emit an owning-value op (rc/of, rc/drop, ...) by delegating to the direct
@@ -3083,7 +5759,49 @@ static char *letraw_binder_name(CE *ce, const CTerm *t) {
     return cvar_cname(ce, t->as.letraw.x);
 }
 
+/* effectful-fnvalue-param-miscompile (E2): true when a CT_LETRAW value is an
+ * EX_POLY_WRAP that emits a `tur_poly_fn_t` fat-closure struct literal (the
+ * closure path or the wrapper-thunk path in emit_expr's EX_POLY_WRAP).  The
+ * poly-wrap NODE is typed `ptr<void>` (the legacy thin carrier), so the CT-IR
+ * binder derived from its type is `void *` -- but the emitted VALUE is the
+ * multi-word `tur_poly_fn_t`, so `void *b = (tur_poly_fn_t){...}` is a hard C
+ * error.  Declare the binder `tur_poly_fn_t` and pass it by value so the fat
+ * closure (incl. its fn_cps channel) reaches the callee's `tur_poly_fn_t`
+ * parameter intact. */
+static bool letraw_emits_poly_fn(const CTerm *t) {
+    if (!t || t->kind != CT_LETRAW) return false;
+    const Expr *e = t->as.letraw.e;
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_POLY_WRAP) return false;
+    return e->as.poly_wrap_.is_closure || e->as.poly_wrap_.wrapper_binding != NULL;
+}
+
 static void emit_letraw(CE *ce, const CTerm *t) {
+    /* B7: a `(set! m k)` that stores a continuation into a by-reference mutable is
+     * emitted natively as a copy-on-store into the shared cell.  dk_perform frees
+     * the captured chain when the handler case returns, so the stored continuation
+     * is deep-copied (dk_copy_range) into an independent chain that outlives the
+     * handler and can be resumed later.  Bypasses the direct-emitter delegation
+     * (which would write the cell POINTER name without a deref). */
+    const Binding *bref = g_opt_cps_tramp_resume ? byref_set_target(t->as.letraw.e) : NULL;
+    if (bref && is_byref_mut(bref)) {
+        const Expr *se = t->as.letraw.e;
+        while (se && se->kind == EX_ASCRIBE) se = se->as.ascribe_.inner;
+        int si = ce->ctx->indent; ce->ctx->indent = ce->indent;
+        char *val = emit_value(ce->ctx, ce->out, se->as.set_.value);
+        ce->ctx->indent = si;
+        char *cell = name_for_binding(ce->ctx, bref);
+        /* __dk_reap_keep registers the cloned chain for a boundary dk_free (chain
+         * walk) -- the stored continuation is resumed before the outermost entry
+         * returns, then reaped, so it neither dangles nor leaks. */
+        ce_line(ce, "*%s = (int64_t)(intptr_t)__dk_reap_keep(dk_copy_range((DK *)(intptr_t)(%s), NULL));",
+                cell, val ? val : "0");
+        char *bn2 = letraw_binder_name(ce, t);
+        ce_line(ce, "%s = 0;", bn2);
+        free(bn2); free(cell); free(val);
+        emit_term(ce, t->as.letraw.body);
+        return;
+    }
     int saved = ce->ctx->indent;
     ce->ctx->indent = ce->indent;           /* line the delegated statements up */
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
@@ -3096,10 +5814,18 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * only realized if we emit it as a statement here.  Other nil ops (rc/drop,
      * set!, while, ...) already emitted their statements and return a unit
      * placeholder, so they must NOT be re-emitted (that would double the effect). */
-    if (t->as.letraw.x.ty == TY_NIL) {
+    if (t->as.letraw.x.ty == TY_NIL || t->as.letraw.x.ty == TY_NEVER) {
+        /* TY_NEVER: a diverging op (a `panic`), whose emit_value already emitted
+         * the abort statement and returned a void placeholder -- bind the nil word
+         * (0), never `x = ((void)0)`.  Same shape as the nil case. */
         const Expr *le = t->as.letraw.e;
         while (le && le->kind == EX_ASCRIBE) le = le->as.ascribe_.inner;
-        if (le && le->kind == EX_CALL && rhs && rhs[0])
+        /* B8: a nil-returning inline-C op (e.g. a session `close`, whose value is
+         * `:nil`) is returned by emit_value as an un-emitted expression exactly
+         * like a void EX_CALL -- so its side effect must be realized here, or the
+         * op is silently dropped (a delegated `(close ch)` never runs, leaking the
+         * channel).  Emit it as a statement, same as the EX_CALL case. */
+        if (le && (le->kind == EX_CALL || le->kind == EX_INLINE_C) && rhs && rhs[0])
             ce_line(ce, "%s;", rhs);
         ce_line(ce, "%s = 0;", bn);
     } else if (t->as.letraw.x.ty == TY_FN) {
@@ -3111,6 +5837,21 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs ? rhs : "0");
     } else
         ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
+    /* reap_env (cps_closure_env_freeable): a leaf-admitted, provably non-escaping
+     * capturing closure whose heap fat-env the direct emitter did NOT free at
+     * this leaf position (only emit_value(EX_LET) applies the scoped free).  The
+     * bound value is the malloc'd env pointer; register it for a single-node free
+     * at the outermost DK entry boundary (dead after its lifted body; boundary
+     * reap never double-frees, and never walks -- __dk_reap_ptr is a bare free).
+     * A scalar-captured closure frees cleanly; the freeable gate already excluded
+     * a non-scalar-returning closure (result could alias the env). */
+    if (t->as.letraw.reap_env) {
+        /* closure-drop-glue: flag-on this env is headered (env[-1] drop-glue),
+         * so reap it as a headered closure (kind 2 -> TUR_CLOSURE_DROP: recovers
+         * the header, walks owning captures, frees the base) rather than a bare
+         * interior free. */
+        ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
+    }
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);
@@ -3126,7 +5867,11 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_APPCONT: break;
         case CT_LETVAL: {
             char *bn = cvar_cname(ce, t->as.letval.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
+            /* B7: a by-reference mutable's binder is the cell POINTER. */
+            if (is_byref_mut(t->as.letval.x.bind))
+                ce_line(ce, "int64_t *%s;", bn);
+            else
+                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.letval.body);
             break;
@@ -3149,7 +5894,12 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             char *bn = t->as.letraw.x.bind
                 ? name_for_binding(ce->ctx, t->as.letraw.x.bind)
                 : strdup(t->as.letraw.x.name);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
+            /* E2: a poly-wrap value is the fat `tur_poly_fn_t`, not the void*
+             * carrier its ptr<void> node type would spell. */
+            if (letraw_emits_poly_fn(t))
+                ce_line(ce, "tur_poly_fn_t %s;", bn);
+            else
+                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.letraw.body);
             break;
@@ -3171,6 +5921,14 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_IF:
             emit_binder_decls(ce, t->as.if_.then_);
             emit_binder_decls(ce, t->as.if_.else_);
+            break;
+        case CT_MATCH:
+            /* The scrutinee temp + pattern field bindings are declared INLINE at
+             * the emit site (block-scoped inside each arm); only the arm bodies'
+             * CPS binders (CT_LETVAL/LETPRIM/... assigned, not declared, in
+             * emit_term) need the function-scope forward declaration. */
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                emit_binder_decls(ce, t->as.match.arms[i].body);
             break;
         case CT_RESET:
             /* Only the delimited body lives in this function; reset.body is
@@ -3206,6 +5964,8 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             emit_binder_decls(ce, t->as.callcc.body);
             break;
         }
+        case CT_LOOP:     break;   /* cps-while-native: loop body decls live in the helper fn */
+        case CT_CONTINUE: break;   /* terminal back-edge -- no binders */
         default: break;
     }
 }
@@ -3229,6 +5989,30 @@ typedef enum {
                        * downstream chain `__kont` and threads it (KK_RET -> dk_run(__kont,..),
                        * a nested perform/shift threads __kont).  Caps ride env (no __k). */
 } LHMode;
+
+/* Effect re-opening: does this handler CASE body itself perform an effect (which,
+ * being unhandled by its own handle, reaches an ENCLOSING handler)?  A re-opening
+ * case needs `__kont` -- the enclosing handler markers -- declared at entry so
+ * emit_perform's cur_k resolves.  Scans the case's own straight-line/branch
+ * structure (handle_case_ok admits no nested handle in a case body, so there is
+ * no inner effect scope to descend past). */
+static bool case_reopens(const CTerm *t) {
+    while (t) {
+        switch (t->kind) {
+            case CT_PERFORM: return true;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_RESUME:  t = t->as.resume.body;  break;
+            case CT_LETRAW:  t = t->as.letraw.body;  break;
+            case CT_CALLCC:  t = t->as.callcc.body;  break;
+            case CT_IF:
+                return case_reopens(t->as.if_.then_) || case_reopens(t->as.if_.else_);
+            default: return false;
+        }
+    }
+    return false;
+}
 
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
  * parameter name (reset/perform continuation result var); `xt` its full Type
@@ -3254,6 +6038,12 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * or KK_PROMPT), so it sets both return modes. */
     hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
+    hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
+    hc.case_tail_resume  = (mode == LH_HANDLER_CASE) ? ce->case_tail_resume : false;
+    /* A RESUME_FRAME's `__kont` is the driver-owned downstream chain, freed after
+     * the frame yields; a reset/handle continuation captured inside it must COPY
+     * `__kont`, not alias it (see emit_cont_env / CE.borrowed_kont). */
+    hc.borrowed_kont     = (mode == LH_RESUME_CONT);
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding).  A reset/handle
@@ -3328,7 +6118,12 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         if (hcase->k) {
             char *kn = name_for_binding(ce->ctx, hcase->k);
             indent_buf(&tmp, 4);
-            if (is_shift_effect(hcase->effect)) {
+            /* cps-dk-multishot-user-effects (Phase A): a __Shift receiver OR a
+             * resumable-payload user handler binds `k` as a DK-backed cloneable
+             * cont so the payload's `(k v)` / `resume` resumes the DK chain through
+             * tur_cloneable_cont_resume.  Both take the same wrap + boundary reaps
+             * (the `arg` reap is safe because `arg` is a boxed fn payload here). */
+            if (is_shift_effect(hcase->effect) || hcase->resumable_payload) {
                 /* Cross-function `shift` bridge crux: the __Shift receiver
                  * (`recv`) is a direct-emitted `(fn [k : cont] ...)` that resumes
                  * its continuation via `tur_cloneable_cont_resume(
@@ -3339,14 +6134,72 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * is a cloneable cont whose env is an OWNED copy of the DK chain;
                  * each `(k v)` snapshots (clones the chain via __dk_env_clone =
                  * dk_copy_range) before resuming, so a multi-shot receiver
-                 * (`(+ (k 1) (k 2))`) resumes an independent chain per call. */
+                 * (`(+ (k 1) (k 2))`) resumes an independent chain per call.
+                 *
+                 * The bound `k` (the cont struct + its owned DK-chain env) is only
+                 * ever cloned per resume -- never itself resumed -- so it is dead
+                 * once the receiver returns.  Hoist the env so both halves can be
+                 * reclaimed at the outermost entry boundary (by then every resume
+                 * has settled): the chain env via __dk_reap_keep (dk_free -- it is
+                 * a self-contained dk_copy_range copy), the struct via __dk_reap_ptr
+                 * (plain free -- tur_cloneable_cont_alloc malloc'd it).  Together
+                 * these are tur_cloneable_cont_drop deferred to the boundary, so
+                 * the per-receiver cont no longer leaks
+                 * (docs/archive/cps-runtime-finish-plan.md, P3.c). */
+                buf_printf(&tmp, "DK *%s_kenv = dk_copy_range(subk, NULL);\n", kn);
+                indent_buf(&tmp, 4);
                 buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)tur_cloneable_cont_alloc("
-                                 "__dk_cont_fn, dk_copy_range(subk, NULL), __dk_env_clone, __dk_env_drop);\n", kn);
+                                 "__dk_cont_fn, %s_kenv, __dk_env_clone, __dk_env_drop);\n", kn, kn);
+                indent_buf(&tmp, 4);
+                buf_printf(&tmp, "__dk_reap_keep(%s_kenv);\n", kn);
+                indent_buf(&tmp, 4);
+                buf_printf(&tmp, "__dk_reap_ptr((intptr_t)%s);\n", kn);
+                /* P3.d (escaping-fat-closure-env free, scoped to __Shift): the
+                 * receiver -- the effect argument `arg` -- is the shift's
+                 * `(fn [k] ...)`, which the __Shift desugar ALWAYS boxes into a
+                 * fresh heap value: a capturing-closure env, or an EX_FN_TO_FAT
+                 * fatshim (`malloc(2*int64)`) for a bare / capture-free fn (never a
+                 * raw code pointer).  It is consumed exactly once here (`recv(k)`)
+                 * and is not reclaimed at the perform site, so reap its env at the
+                 * outermost entry boundary (plain free -- it is a bare malloc).
+                 * A scalar-captured receiver frees cleanly; an owning capture
+                 * leaks its captured value (no closure drop glue yet) but never
+                 * double-frees -- the conservative interim of
+                 * docs/reported/escaping-fat-closure-env-leak.md, applied to the
+                 * one non-escaping closure the CPS backend itself constructs.
+                 *
+                 * closure-drop-glue: flag-on this receiver box is headered
+                 * (env[-1] drop-glue; fat pointer PAST it), so a bare free is an
+                 * interior free.  Reap it as a headered closure (kind 2 ->
+                 * TUR_CLOSURE_DROP: recovers the header, walks owning captures --
+                 * also closing the "owning capture leaks" caveat above -- frees
+                 * the base). */
+                indent_buf(&tmp, 4);
+                buf_puts(&tmp, "__dk_reap_closure((intptr_t)arg);\n");
+            } else if (case_reopens(body)) {
+                /* Effect re-opening: `k` is captured into a perform-continuation
+                 * env whose field is the int64_t word (k is typed TY_INT).  Bind
+                 * it as that word -- not `DK *` -- so the env store matches its
+                 * field type with no int-from-pointer warning; emit_resume casts
+                 * `(DK *)k` at each use. */
+                buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)subk;\n", kn);
             } else {
                 buf_printf(&tmp, "DK *%s = subk;\n", kn);
             }
             free(kn);
         }
+    }
+    /* Effect re-opening: a case body that performs an outer-handled effect needs
+     * the ENCLOSING handler markers as `__kont`.  dk_perform set
+     * g_dk_case_reopen_hnode to this case's handler node just before calling us;
+     * read it (into a local, at entry, before any interior perform can overwrite
+     * the global) and derive the transparent enclosing chain.  emit_perform threads
+     * `__kont` as cur_k so the interior effect reaches the enclosing handler while
+     * this case's own value returns to the H->next boundary.  __dk_reap_keep frees
+     * the fresh copy at the outermost entry boundary. */
+    if (mode == LH_HANDLER_CASE && case_reopens(body)) {
+        indent_buf(&tmp, 4);
+        buf_puts(&tmp, "DK *__kont = __dk_reap_keep(dk_case_enclosing(g_dk_case_reopen_hnode));\n");
     }
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);
@@ -3413,22 +6266,217 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     char jname[256];
     snprintf(jname, sizeof(jname), "%s_j%d", ce->fn_cn, id);
     char *xn = cvar_cname(ce, t->as.letcont.param);
-    emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
-                t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
-    free(xn);
 
-    char *fn = callee_name(call->as.tailcall.fn);
-    char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
+    /* P6 (heap-join-over-recursion): a jbody that captures enclosing locals or
+     * makes a cps->cps tail call (the recursion in `set-eq-loop`/`__cons-fmap`,
+     * or a chain of colored calls each capturing the growing live set) cannot
+     * ride the value-only LH_PERFORM_CONT frame (which has no `k` and no captures,
+     * and whose return would be re-delivered down `next`).  Lift it as an
+     * LH_RESUME_CONT resume-frame instead: the DKK_RESUME_FRAME rfn RECEIVES its
+     * run-time downstream chain as the `__kont` parameter (dk_run_impl passes
+     * `k->next`) and CONSUMES it (returns rfn's result, never re-processing
+     * `next`), so a KK_RET delivery lowers `dk_run(__kont, v)` and a recursive
+     * `f__cps(args, __kont)` threads it -- delivered exactly once.  Captures ride
+     * the env; `__kont` is the runtime param, not the env, so no `__k` field.  The
+     * leaner value-only case (no caps, no cps->cps tail) keeps LH_PERFORM_CONT. */
+    CapSet cs;
+    bool caps_ok = collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &cs);
+    const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
+    bool needs_kont = (g_opt_cps_tramp_resume && jbody_has_delim(t->as.letcont.jbody))
+                   || jbody_has_cps_tailcall(t->as.letcont.jbody)
+                   || jbody_has_perform(t->as.letcont.jbody);
+
+    char *fn = call->as.tailcall.fn ? callee_name(call->as.tailcall.fn)
+                                    : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
+    char *argv = atoms_csv_call(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry
      * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
-    char frame[560];
-    snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame(%s, 0, %s))", jname, ce->cur_k);
-    if (call->as.tailcall.n)
-        ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
+    char frame[720];
+    if (caps || needs_kont) {
+        emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
+                    t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
+        char *envexpr = emit_cont_env(ce, jname, caps, NULL);   /* caps-only env */
+        snprintf(frame, sizeof frame,
+                 "__dk_reap_node(dk_frame_resume(%s, %s, %s))", jname, envexpr, ce->cur_k);
+        free(envexpr);
+    } else {
+        emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
+                    t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
+        snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame(%s, 0, %s))", jname, ce->cur_k);
+    }
+    free(xn);
+
+    if (call->as.tailcall.via_fncps) {
+        /* E2 (fat-closure fn-value threading), heap join: thread the reified join
+         * `frame` to the closure's `fn_cps` slot (an effectful fn-value), or the
+         * direct `f.fn` call delivered to `frame` (a pure one). */
+        char *pf = name_for_binding(ce->ctx, call->as.tailcall.fn);
+        char *a0 = atom_str(ce, &call->as.tailcall.args[0]);
+        ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value heap join */",
+                pf, pf, pf, a0, frame);
+        ce_line(ce, "return dk_run(%s, (intptr_t)((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)));",
+                frame, pf, pf, a0);
+        free(pf); free(a0);
+    } else if (call->as.tailcall.via_registry) {
+        /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified
+         * join `frame` to its CPS entry recovered from the registry. */
+        char cast[512]; int coff = snprintf(cast, sizeof cast, "int64_t (*)(");
+        for (uint32_t i = 0; i < call->as.tailcall.n && coff < 400; i++)
+            coff += snprintf(cast + coff, sizeof cast - (size_t)coff, "int64_t, ");
+        snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
+        /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
+        char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
+        char key[640];
+        e2a_lookup_key(key, sizeof key, call->as.tailcall.fn, fn);
+        if (call->as.tailcall.n)
+            ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s, %s); /* E2a threaded fn-value heap join */",
+                    cast, key, fn, argv_cps, frame);
+        else
+            ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s); /* E2a threaded fn-value heap join */",
+                    cast, key, fn, frame);
+        free(argv_cps);
+    } else if (call->as.tailcall.n)
+    {
+        /* Param-type-aware carrier casts (gcc14-int-conversion). */
+        char *argv_t = atoms_csv_call_typed(ce, call->as.tailcall.args,
+                                            call->as.tailcall.n, call->as.tailcall.fn,
+                                            find_spec_by_clone_name(ce->ctx, fn));
+        ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv_t, frame);
+        free(argv_t);
+    }
     else
         ce_line(ce, "return %s__cps(%s); /* cps->cps heap join */", fn, frame);
     free(fn); free(argv);
+}
+
+/* ---- cps-while-native: CT_LOOP / CT_CONTINUE ------------------------------ *
+ * A CT_LOOP emits a synthesized tail-recursive colored helper
+ * `<fn>_loop<id>__cps(<params>, DK *__kont)` at file scope (into ce->helpers,
+ * like emit_lifted's helpers) whose body is the loop's CT_IF; a CT_CONTINUE
+ * back-edge re-enters it.  The helper is FORWARD-declared first so both its own
+ * self-recursion and the interior handle's lifted continuation (which carries the
+ * back-edge) can call it before its definition appears in the buffer.  At the loop
+ * site, the caller emits `return <helper>__cps(<inits>, <thread>)`. */
+static void emit_loop(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char lname[256];
+    snprintf(lname, sizeof(lname), "%s_loop%d", ce->fn_cn, id);
+    uint32_t np = t->as.loop.n_params;
+
+    /* cps-while-native: collect the loop body's loop-INVARIANT free vars -- source
+     * vars/CVars it reads that are NOT loop-carried params (e.g. a fn param or a
+     * handle result a loop in a handle continuation reads).  They thread as extra
+     * helper params, passed unchanged on every back-edge.  A collect bail
+     * (cs->ok=false) falls back to no-extras (prior behaviour). */
+    CapSet inv; inv.n = 0; inv.ok = true;
+    {
+        uint32_t bnd[CC_MAX_BOUND]; uint32_t nbnd = 0;
+        for (uint32_t i = 0; i < np && nbnd < CC_MAX_BOUND; i++)
+            if (t->as.loop.params[i].bind) bnd[nbnd++] = t->as.loop.params[i].bind->id;
+        collect_caps_rec(t->as.loop.body, UINT32_MAX, bnd, nbnd, &inv);
+        if (!inv.ok) inv.n = 0;
+    }
+    /* Shared name CSV: helper params, entry-call args, and back-edge args all name
+     * the invariants identically (name_for_binding / cvname), since each is in
+     * scope at the entry site and a param inside the helper. */
+    char *inv_names = NULL;
+    if (inv.n > 0) {
+        Buf nbuf; buf_init(&nbuf);
+        for (int i = 0; i < inv.n; i++) {
+            char *cn = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i]) : strdup(inv.cvname[i]);
+            buf_printf(&nbuf, "%s%s", i ? ", " : "", cn);
+            free(cn);
+        }
+        buf_putc(&nbuf, '\0');
+        inv_names = strdup(nbuf.data);
+        buf_free(&nbuf);
+    }
+
+    /* 1. Forward declaration (before nested helpers reference it). */
+    buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
+    for (uint32_t i = 0; i < np; i++)
+        buf_printf(ce->helpers, "%s, ",
+                   binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type));
+    for (int i = 0; i < inv.n; i++)
+        buf_printf(ce->helpers, "%s, ", cap_ctype(ce->ctx, &inv, i));
+    buf_puts(ce->helpers, "DK *);\n");
+
+    /* 2. Emit the loop body into a temp buffer; nested handle/reset helpers
+     * accumulate into ce->helpers ahead of the loop helper definition. */
+    Buf tmp; buf_init(&tmp);
+    CE hc = *ce;
+    hc.out = &tmp;
+    hc.indent = 4;
+    hc.n_joins = 0;
+    hc.cur_k = "__kont";
+    hc.cur_loop_name = lname;
+    hc.cur_loop_inv = inv_names;
+    hc.shift_mode = false;
+    hc.ret_mode = false;
+    hc.handler_case_mode = false;
+    hc.case_tail_resume = false;
+    /* The exit arm delivers the live-after var to the helper's KK_RET; its
+     * crossing type matches what the caller's continuation expects. */
+    hc.ret_ty = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_ty : ce->ret_ty;
+    emit_binder_decls(&hc, t->as.loop.body);
+    emit_term(&hc, t->as.loop.body);
+    buf_putc(&tmp, '\0');
+
+    /* 3. Emit the helper definition. */
+    buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
+    for (uint32_t i = 0; i < np; i++) {
+        char *pn = t->as.loop.params[i].bind
+            ? name_for_binding(ce->ctx, t->as.loop.params[i].bind)
+            : strdup(t->as.loop.params[i].name);
+        buf_printf(ce->helpers, "%s %s, ",
+                   binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type), pn);
+        free(pn);
+    }
+    for (int i = 0; i < inv.n; i++) {
+        char *cn = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i]) : strdup(inv.cvname[i]);
+        buf_printf(ce->helpers, "%s %s, ", cap_ctype(ce->ctx, &inv, i), cn);
+        free(cn);
+    }
+    buf_puts(ce->helpers, "DK *__kont) {\n");
+    buf_puts(ce->helpers, tmp.data);
+    buf_puts(ce->helpers, "}\n");
+    buf_free(&tmp);
+
+    /* 4. The loop entry: tail-call the helper with the entry values (+ invariants),
+     * threading the enclosing continuation (KK_RET -> this fn's __kont, KK_PROMPT
+     * -> cur_k). */
+    char *argv = atoms_csv(ce, t->as.loop.inits, np);
+    const char *thread = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
+    if (np && inv_names)
+        ce_line(ce, "return %s__cps(%s, %s, %s); /* cps-while-native loop entry */", lname, argv, inv_names, thread);
+    else if (np)
+        ce_line(ce, "return %s__cps(%s, %s); /* cps-while-native loop entry */", lname, argv, thread);
+    else if (inv_names)
+        ce_line(ce, "return %s__cps(%s, %s); /* cps-while-native loop entry */", lname, inv_names, thread);
+    else
+        ce_line(ce, "return %s__cps(%s); /* cps-while-native loop entry */", lname, thread);
+    free(inv_names);
+    free(argv);
+}
+
+/* The loop back-edge: re-enter the enclosing loop helper with the next-iteration
+ * values (the $next CVars a set! bound), threading this frame's own continuation
+ * (__kont -- the loop helper's k, reachable inside a lifted handle continuation
+ * as env->__k). */
+static void emit_continue(CE *ce, const CTerm *t) {
+    char *argv = atoms_csv(ce, t->as.cont_.args, t->as.cont_.n);
+    const char *inv = ce->cur_loop_inv;   /* loop-invariant extra args, unchanged */
+    const char *lname = ce->cur_loop_name ? ce->cur_loop_name : "0";
+    if (t->as.cont_.n && inv)
+        ce_line(ce, "return %s__cps(%s, %s, __kont); /* cps-while-native back-edge */", lname, argv, inv);
+    else if (t->as.cont_.n)
+        ce_line(ce, "return %s__cps(%s, __kont); /* cps-while-native back-edge */", lname, argv);
+    else if (inv)
+        ce_line(ce, "return %s__cps(%s, __kont); /* cps-while-native back-edge */", lname, inv);
+    else
+        ce_line(ce, "return %s__cps(__kont); /* cps-while-native back-edge */", lname);
+    free(argv);
 }
 
 /* N6.3: emit the alloc+populate of a lifted continuation's env (the body's
@@ -3438,16 +6486,28 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
  * expr for the DK frame env: the env struct pointer when there are captures, else
  * plain (intptr_t)k (or 0 when k-less).  The struct is leaked with the DK nodes. */
 static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr) {
+    /* A reset/handle continuation env captured inside a RESUME_FRAME must COPY the
+     * frame's borrowed (driver-owned) `__kont`, not alias it: the env is read when
+     * the nested continuation is delivered, AFTER the resume frame has yielded and
+     * the driver has dk_free'd its downstream chain.  The copy is reaped at the
+     * outermost entry boundary (like every other delimited DK chain). */
+    char k_capture[256];
+    const char *k_store = k_expr;
+    if (k_expr && ce->borrowed_kont && strcmp(k_expr, "__kont") == 0) {
+        snprintf(k_capture, sizeof k_capture,
+                 "__dk_reap_keep(dk_copy_range((const DK *)%s, NULL))", k_expr);
+        k_store = k_capture;
+    }
     if (!caps || caps->n == 0) {
         Buf b; buf_init(&b);
-        if (k_expr) buf_printf(&b, "(intptr_t)%s", k_expr); else buf_puts(&b, "0");
+        if (k_store) buf_printf(&b, "(intptr_t)%s", k_store); else buf_puts(&b, "0");
         buf_putc(&b, '\0');
         char *s = strdup(b.data); buf_free(&b); return s;
     }
     char envv[300];
     snprintf(envv, sizeof envv, "__ce_%s", hname);
     ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", hname, envv, hname, hname);
-    if (k_expr) ce_line(ce, "%s->__k = %s;", envv, k_expr);
+    if (k_store) ce_line(ce, "%s->__k = %s;", envv, k_store);
     for (int i = 0; i < caps->n; i++) {
         char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
         ce_line(ce, "%s->f%d = %s;", envv, i, cn);
@@ -3510,11 +6570,62 @@ static void emit_reset(CE *ce, const CTerm *t) {
 /* The C body expression of a single arithmetic context frame `(<op> <operand>
  * [])` -- `env` is the captured operand, `value` the resumed value.  Mirrors
  * emit_cps.c's frame_c_expr byte-for-byte (the proven generator). */
-/* The C cast applied to an intptr-carried frame env/value handed to a call
- * target, keyed by the target's param kind.  A cstr rides the carrier like an
- * int (CC4 value-typed cont<cstr>); mirrors emit_cps.c's c_cast_for_kind. */
+/* The C cast a cloneable/serial continuation thunk applies when forwarding its
+ * intptr-carried `env`/`value` slot into a top-level callee's parameter, keyed
+ * by the target's param kind.  Mirrors emit_cps.c's c_cast_for_kind.  A callee
+ * param that lowers to a POINTER type (rc/weak -> RcControlBlock *, ref/lref/
+ * ptr -> void *, cstr -> const char *) must be cast to that pointer type, not
+ * to (int64_t): passing an int where a pointer is expected is a
+ * -Wint-conversion (benign on LP64, but not -Werror-clean).  A (void *) cast
+ * covers every object-pointer param -- void * converts to any object pointer
+ * implicitly in C -- so a typed `ptr<T>` param (`T *`) is satisfied too.
+ * Everything else keeps the int64_t carrier cast (a cstr rides the carrier like
+ * an int in the CC4 value-typed cont<cstr> path).  See
+ * docs/archive/cloneable-cont-thunk-borrow-rc-int-conversion.md. */
 static const char *cc_cast_for_kind(TypeKind k) {
-    return (k == TY_CSTR) ? "(const char *)" : "(int64_t)";
+    switch (k) {
+        case TY_CSTR:           return "(const char *)";
+        case TY_RC:
+        case TY_WEAK:           return "(RcControlBlock *)";
+        case TY_REF:
+        case TY_LREF:
+        case TY_REF_MUT:
+        case TY_PTR_VOID:       return "(void *)";
+        case TY_REF_IMMUT:      return "(const void *)";
+        case TY_CLONEABLE_CONT: return "(tur_cloneable_cont *)";
+        default:                return "(int64_t)";
+    }
+}
+
+/* gcc14-int-conversion (cloneable-frame call arg -> concrete-pointer param): a
+ * resumed cloneable-frame arg rides the `intptr_t` slot and is cast to the
+ * callee's param C type before the call.  cc_cast_for_kind maps every nominal
+ * ADT/opaque kind to the generic `(int64_t)` carrier cast, but the callee's
+ * ACTUAL emitted param can be a concrete pointer (`tur_adt_H *`) -- and
+ * `(int64_t)` into a pointer param is a -Wint-conversion straddle (a hard error
+ * under macOS clang / GCC >= 14).  When the callee's full param type resolves to
+ * a pointer C type, cast to THAT (an int->ptr cast from the intptr_t slot is
+ * value-preserving); otherwise keep the kind-based carrier cast (which already
+ * handles the cstr, void-pointer and rc cases correctly).  Writes the cast
+ * (e.g. "(tur_adt_H *)") into `out`. */
+static void cc_cast_for_param(CE *ce, const Binding *cfn, uint32_t i,
+                              char *out, size_t outsz) {
+    TypeKind k = (cfn && cfn->type.kind == TY_FN && i < cfn->type.as.fn.arity)
+        ? cfn->type.as.fn.arg_kinds[i] : TY_INT;
+    const char *kc = cc_cast_for_kind(k);
+    /* Only the default int64 carrier cast can straddle a concrete-pointer param;
+     * the explicit pointer casts (cstr, void-pointer, rc) are already correct. */
+    if (strcmp(kc, "(int64_t)") == 0 && cfn && cfn->type.kind == TY_FN &&
+        i < cfn->type.as.fn.arity && cfn->type.as.fn.arg_full_types) {
+        const Type *ft = cfn->type.as.fn.arg_full_types[i];
+        const char *ct = ft ? binder_ctype_full(ce->ctx, ft->kind, ft) : NULL;
+        size_t L = ct ? strlen(ct) : 0;
+        if (ct && L >= 1 && ct[L - 1] == '*') {
+            snprintf(out, outsz, "(%s)", ct);
+            return;
+        }
+    }
+    snprintf(out, outsz, "%s", kc);
 }
 
 static const char *cloneable_frame_expr(const char *op, bool hole_left) {
@@ -3689,10 +6800,22 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
             bodyfn, cont_setup, thunk_name, kty, cont_arg);
         free(thunk_name);
     } else {
+        /* Named-fn receiver: cast the receiver fn ptr (threaded through `env`)
+         * to its ACTUAL param signature, not a blanket `int64_t (*)(int64_t)`.
+         * A serial receiver's continuation param `k` is `ptr<void>` -- its real C
+         * signature is `int64_t rt(void *)` -- so a uniform int64_t cast invokes
+         * it through an incompatible function-pointer type.  That is UB a
+         * `-fsanitize=function` / CFI build trips on, even though it works on every
+         * supported ABI (`void *` and `int64_t` are passed identically in an
+         * integer register).  Key the callee pointer type AND its argument cast on
+         * the same `serial` bit the closure branch uses two cases up for the
+         * continuation-arg cast; the non-serial (cloneable) case keeps int64_t, so
+         * its emitted C is byte-identical to before. */
+        const char *kty = t->as.cloneable.serial ? "void *" : "int64_t";
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)%s);\n}\n",
-            bodyfn, cont_setup, cont_arg);
+            "    return (intptr_t)((int64_t (*)(%s))(intptr_t)env)((%s)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, kty, kty, cont_arg);
     }
 }
 
@@ -3839,19 +6962,22 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ce->fn_cn, id, i, cfn, ecast);
                 side = "$E";
             } else if (two_arg) {
-                TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
-                TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
                 const char *a0 = fr->hole_left ? "value" : "env";
                 const char *a1 = fr->hole_left ? "env" : "value";
+                char sc0[192], sc1[192];
+                cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
+                cc_cast_for_param(ce, fr->call_fn, 1, sc1, sizeof sc1);
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
                     ce->fn_cn, id, i, cfn,
-                    cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
+                    sc0, a0, sc1, a1);
                 side = fr->hole_left ? "$2L" : "$2R";
             } else {
+                char sc0[192];
+                cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
-                    ce->fn_cn, id, i, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
+                    ce->fn_cn, id, i, cfn, sc0);
                 side = "$L";
             }
             if (ekc == 2) {
@@ -3859,16 +6985,21 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d,"
                     " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
-                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
                     ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, eser, edeser,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             } else {
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d, 0, 0, 0 };\n"
-                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
                     ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             }
+            /* S1b: the session-kind registry must be populated before any
+             * effectful call dispatches through it. */
+            char skinit[320];
+            snprintf(skinit, sizeof(skinit), "%s_skreginit%d_%u", ce->fn_cn, id, i);
+            static_init_register(skinit, STATIC_INIT_REGISTRY);
             free(eser); free(edeser);
             free(cfn);
         }
@@ -3937,18 +7068,135 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 else if (two_arg) {
                     /* 2-arg call: apply f to (value, env) in source order (env =
                      * the captured non-hole arg), casting each to its param kind. */
-                    TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
-                    TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
                     const char *a0 = fr->hole_left ? "value" : "env";
                     const char *a1 = fr->hole_left ? "env" : "value";
+                    /* E3a widening: an owning by-value AGGREGATE env rides the
+                     * one-word slot by ADDRESS (the push emits `&o`).  Its arg cast
+                     * is not a scalar cast: deref the pointer for a by-value param
+                     * (<=16B), or pass the pointer for a pass-by-ptr param (>16B).
+                     * The hole arg stays a scalar cast (the resumed value).  The
+                     * scalar side uses cc_cast_for_param so a concrete-pointer param
+                     * (`tur_adt_H *`) is bridged, not straddled by an int64 cast. */
+                    char c0[192], c1[192];
+                    if (fr->operand.type
+                        && owning_byvalue_aggregate(fr->operand.type)) {
+                        const char *cn = emit_type_c_name(ce->ctx, *fr->operand.type);
+                        bool pbp = type_struct_pass_by_ptr(*fr->operand.type);
+                        const char *ec = pbp ? "(const %s *)" : "*(%s *)";
+                        /* env arg is a0 when the hole is on the right, else a1. */
+                        if (fr->hole_left) {
+                            cc_cast_for_param(ce, fr->call_fn, 0, c0, sizeof c0);
+                            snprintf(c1, sizeof c1, ec, cn);
+                        } else {
+                            snprintf(c0, sizeof c0, ec, cn);
+                            cc_cast_for_param(ce, fr->call_fn, 1, c1, sizeof c1);
+                        }
+                    } else {
+                        cc_cast_for_param(ce, fr->call_fn, 0, c0, sizeof c0);
+                        cc_cast_for_param(ce, fr->call_fn, 1, c1, sizeof c1);
+                    }
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
-                        ctxfn, cfn, cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
-                } else
+                        ctxfn, cfn, c0, a0, c1, a1);
+                    /* E3a: a CONSUMING rc frame drops its rc arg once per call, so
+                     * a multi-shot resume needs its own +1.  Emit the env_clone glue
+                     * (rc incref) that dk_copy_node runs on each resume copy; the
+                     * frame's own drop balances it (no env_drop -- the base +1 is
+                     * released once by the owner's scope-exit drop). */
+                    if (cloneable_frame_consumes_rc(fr))
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "rc_strong_increment((RcControlBlock *)(intptr_t)e); return e; }\n",
+                            ctxfn);
+                    else if (cloneable_frame_consumes_carrier(fr)) {
+                        /* A heap carrier: deep-copy the pointed-to header (malloc a
+                         * fresh header + shallow field copy) so each resume frees
+                         * its OWN allocation, then INCREF each owning (rc/weak)
+                         * field so the copy owns its own +1 (its drop_glue decref
+                         * on free balances it) -- the shallow copy shares the owning
+                         * field's control block with the original, exactly as the
+                         * owner's own drop expects.  A flat handle (no owning fields)
+                         * gets an empty incref list.  The handle's C type is
+                         * `<hdr> *`; strip the trailing ` *` for the header name. */
+                        char hdr[192];
+                        snprintf(hdr, sizeof hdr, "%s",
+                                 emit_type_c_name(ce->ctx, *fr->operand.type));
+                        size_t L = strlen(hdr);
+                        while (L > 0 && (hdr[L-1] == '*' || hdr[L-1] == ' '))
+                            hdr[--L] = 0;
+                        Buf incs; buf_init(&incs);
+                        const AdtDef *d = cloneable_carrier_def(fr->operand.type);
+                        const CtorDef *c = d ? d->ctors[0] : NULL;
+                        for (uint32_t fi = 0; c && fi < c->n_fields; fi++) {
+                            TypeKind fk = c->fields[fi].kind;
+                            char *mp = adt_field_member_path(d, c, fi);
+                            if (fk == TY_RC || fk == TY_WEAK) {
+                                buf_printf(&incs, "if (__c->%s) %s(__c->%s); ",
+                                           mp, fk == TY_RC ? "rc_strong_increment"
+                                                           : "rc_weak_increment", mp);
+                            } else if (fk == TY_REF || fk == TY_LREF) {
+                                /* deep-copy the ref<scalar> box: a fresh malloc +
+                                 * scalar copy, so each resume frees its own box
+                                 * (mirrors drop_glue's `free(s->f)`). */
+                                Type it; memset(&it, 0, sizeof it);
+                                it.kind = c->fields[fi].inner_kind;
+                                const char *innerc = type_c_name(it);
+                                /* the field is stored `void *`; cast to the inner
+                                 * pointer type to deref, and store the fresh box
+                                 * back as `void *`. */
+                                buf_printf(&incs,
+                                    "if (__c->%s) { %s *__rb = (%s *)malloc(sizeof(%s)); "
+                                    "*__rb = *(%s *)(__c->%s); __c->%s = (void *)__rb; } ",
+                                    mp, innerc, innerc, innerc, innerc, mp, mp);
+                            }
+                            free(mp);
+                        }
+                        buf_putc(&incs, '\0');
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "%s *__c = (%s *)malloc(sizeof(%s)); "
+                            "*__c = *(%s *)(intptr_t)e; %sreturn (intptr_t)__c; }\n",
+                            ctxfn, hdr, hdr, hdr, hdr, incs.data ? incs.data : "");
+                        buf_free(&incs);
+                    }
+                    else if (cloneable_frame_consumes_aggregate(fr)) {
+                        /* The aggregate rides the env by ADDRESS (`&o`) and is
+                         * passed BY VALUE to the callee, which drops its own copy.
+                         * Incref each owning (rc/weak) field via `&o` so the copy's
+                         * drop is balanced -- return the SAME `&o` (no allocation;
+                         * `o` is the owner's stable local, freed once by its own
+                         * scope-exit drop). */
+                        const char *cn = emit_type_c_name(ce->ctx, *fr->operand.type);
+                        Buf incs; buf_init(&incs);
+                        const Type *t = fr->operand.type;
+                        const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
+                                        : (t->kind == TY_APP) ? type_adt_app_def((Type *)t)
+                                        : NULL;
+                        const CtorDef *c = d ? d->ctors[0] : NULL;
+                        for (uint32_t fi = 0; c && fi < c->n_fields; fi++) {
+                            TypeKind fk = c->fields[fi].kind;
+                            if (fk != TY_RC && fk != TY_WEAK) continue;
+                            char *mp = adt_field_member_path(d, c, fi);
+                            buf_printf(&incs,
+                                "if (((%s *)(intptr_t)e)->%s) %s(((%s *)(intptr_t)e)->%s); ",
+                                cn, mp, fk == TY_RC ? "rc_strong_increment"
+                                                    : "rc_weak_increment", cn, mp);
+                            free(mp);
+                        }
+                        buf_putc(&incs, '\0');
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { %sreturn e; }\n",
+                            ctxfn, incs.data ? incs.data : "");
+                        buf_free(&incs);
+                    }
+                } else {
                     /* 1-arg hole call: apply f to the resumed value. */
+                    char sc0[192];
+                    cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
-                        ctxfn, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
+                        ctxfn, cfn, sc0);
+                }
                 free(cfn);
             } else {
                 buf_printf(ce->helpers,
@@ -3978,7 +7226,28 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             char *opv = (fr->call_fn && !two_arg) ? strdup("0")
                       : fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
                       : atom_str(ce, &fr->operand);
-            ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
+            /* E3a widening: an owning by-value AGGREGATE operand is captured by
+             * ADDRESS -- carry `&(o)` (o is the owner's stable by-value local; the
+             * reset runs synchronously in its frame, so the pointer outlives every
+             * resume, and a ^borrow frame never drops it).  Only the atomic
+             * (bare-lvalue) operand path is admitted for an aggregate, so `opv` is
+             * a plain lvalue name here and `&(...)` is well-formed. */
+            if (fr->operand.type && owning_byvalue_aggregate(fr->operand.type)
+                && !fr->env_expr) {
+                char *addr = malloc(strlen(opv) + 8);
+                snprintf(addr, strlen(opv) + 8, "&(%s)", opv);
+                free(opv); opv = addr;
+            }
+            /* E3a: a CONSUMING rc frame rides dk_frame_owning with the env_clone
+             * glue emitted above (incref per resume copy) and NO env_drop (the
+             * frame's own drop balances each copy; the base +1 is the owner's).
+             * A borrow / scalar / aggregate frame stays a plain dk_frame. */
+            if (cloneable_frame_consumes_rc(fr) || cloneable_frame_consumes_carrier(fr)
+                || cloneable_frame_consumes_aggregate(fr))
+                ce_line(ce, "%s = dk_frame_owning(%s, (intptr_t)(%s), %s_envclone, 0, %s);",
+                        dv, ctxfn, opv, ctxfn, dv);
+            else
+                ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);
@@ -4037,6 +7306,36 @@ static void emit_shift(CE *ce, const CTerm *t) {
     free(env);
 }
 
+/* E7: is this resume a TAIL resume -- the resumed value is delivered straight to
+ * the handler case's return (KK_RET/KK_PROMPT), with nothing after?  Then the
+ * handler does no post-resume work and dk_perform can trampoline it. */
+static bool resume_is_tail(const CTerm *t) {
+    const CTerm *b = t->as.resume.body;
+    return b && b->kind == CT_APPCONT
+        && (b->as.appcont.kont.kind == KK_RET || b->as.appcont.kont.kind == KK_PROMPT)
+        && b->as.appcont.v.kind == CA_CVAR
+        && b->as.appcont.v.cvar_id == t->as.resume.x.id;
+}
+
+/* E7: does a handler CASE body reduce (down its straight-line tail) to a single
+ * TAIL resume?  Such a case is installed with dk_handler_tail and its resume
+ * emits dk_tail_resume (yield to the entry driver), keeping deep recursion flat.
+ * A branching or post-resume-working case is NOT a tail-resume -- it keeps the
+ * inline dk_handler / dk_invoke path (correct, just not trampolined). */
+static bool case_body_tail_resumes(const CTerm *t) {
+    while (t) {
+        switch (t->kind) {
+            case CT_RESUME:  return resume_is_tail(t);
+            case CT_LETVAL:  t = t->as.letval.body; break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_LETRAW:  t = t->as.letraw.body; break;
+            default: return false;
+        }
+    }
+    return false;
+}
+
 /* ---- C4: algebraic effects (handle / perform / resume) --------------- *
  * handle mirrors reset: lift the handle continuation to a DKFrame, install a
  * dk_handler (carrying the case as a DKHandler), and run the handled body
@@ -4058,6 +7357,32 @@ static void emit_handle(CE *ce, const CTerm *t) {
     free(hxn);
     char *hkenv = emit_cont_env(ce, kname, caps, ce->cur_k);
 
+    /* B3 part 2: a DYNAMIC with-handler installs the handler group from the
+     * runtime handler table (dk_hgroup_from_table) instead of a static per-case
+     * chain -- no case fns are emitted here (they were emitted at the handler
+     * literal's creation site).  The base frame carries the enclosing handlers
+     * (an effect the table does not handle propagates outward) exactly like the
+     * static path. */
+    if (t->as.handle.dyn) {
+        char hchain_d[64];
+        snprintf(hchain_d, sizeof(hchain_d), "__h%d", id);
+        char *tblv = atom_str(ce, &t->as.handle.dyn_table);
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup_from_table("
+                    "(const tur_handler_table_t *)(intptr_t)%s, "
+                    "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))));",
+                hchain_d, tblv, kname, hkenv, ce->cur_k);
+        free(tblv);
+        free(hkenv);
+        const char *save_d = ce->cur_k;
+        const Type *save_ty_d = ce->cur_ty;
+        ce->cur_k = arena_strdup(&g_arena, hchain_d, strlen(hchain_d));
+        ce->cur_ty = t->as.handle.x.type;
+        emit_term(ce, t->as.handle.delim);
+        ce->cur_k = save_d;
+        ce->cur_ty = save_ty_d;
+        return;
+    }
+
     /* Lift each handler case as its own DKHandler and chain a dk_handler per case
      * onto the continuation.  dk_perform searches the chain by effect tag, so N
      * chained handlers dispatch N effects; the innermost `next` is the handle
@@ -4073,8 +7398,16 @@ static void emit_handle(CE *ce, const CTerm *t) {
         CapSet ccs;
         bool cok = collect_caps_case(t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], &ccs);
         const CapSet *ccaps = (cok && ccs.n > 0) ? &ccs : NULL;
+        /* E7: emit_resume yields (dk_tail_resume) ONLY for a case installed with
+         * dk_handler_tail -- a DEEP tail-resume.  A SHALLOW case keeps the inline
+         * dk_invoke (its dk_perform never queues an H->next delivery to trampoline).
+         * Must agree with the per-case ctor decision below. */
+        bool save_ctr = ce->case_tail_resume;
+        ce->case_tail_resume = g_opt_cps_tramp_resume && !t->as.handle.shallow
+            && case_body_tail_resumes(t->as.handle.cases[ci].case_body);
         emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
                     t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], ccaps);
+        ce->case_tail_resume = save_ctr;
         cenvs[ci] = emit_cont_env(ce, cnames[ci], ccaps, NULL);   /* k-less env */
     }
 
@@ -4086,24 +7419,29 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * resume does not re-install it (the effect-side analogue of shift0). */
     const char *hctor = t->as.handle.shallow ? "dk_handler_shallow" : "dk_handler";
     Buf chain; buf_init(&chain);
-    /* The base is the handle continuation frame.  For a DEEP handler its `next` is
-     * dk_done() (a resume re-installs the handler, so re-performs are handled
-     * locally).  For a SHALLOW handler (Track A: reachable now that a multi-
-     * suspension body can re-perform after a resume) the enclosing handler markers
-     * must stay reachable so an unhandled re-perform propagates outward: the frame
-     * buries the enclosing continuation in its env (`__k`), so splice a copy of
-     * cur_k's enclosing handler markers as the frame's `next`.  They are
-     * transparent to a returning value (so the normal-completion result is
-     * unchanged -- the frame already delivers via dk_run(__k, v)), and dk_perform's
-     * shallow tail (dk_copy_enclosing_handlers(H->next)) then finds them. */
-    if (t->as.handle.shallow)
-        buf_printf(&chain, "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))", kname, hkenv, ce->cur_k);
-    else
-        buf_printf(&chain, "dk_frame(%s, %s, dk_done())", kname, hkenv);
+    /* The base is the handle continuation frame.  Its `next` must carry the
+     * ENCLOSING handler markers (a copy of cur_k's handlers, past this handle's
+     * frame) for BOTH deep and shallow handlers: an effect this handle does NOT
+     * handle, performed in its body, must propagate outward to the enclosing
+     * handler (e.g. `inner` handles Write but its body also performs Log, which
+     * must reach the enclosing Log handler in `main`).  The frame buries the
+     * enclosing CONTINUATION in its env (`__k`) and delivers a returning value via
+     * dk_run(__k, v), so the copied handler markers are transparent to the normal-
+     * completion result; they only matter to dk_perform's chain walk.  Using
+     * dk_done() here (the old deep default) severed that propagation ->
+     * `unhandled effect` for an effect that escapes an inner handle. */
+    buf_printf(&chain, "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))", kname, hkenv, ce->cur_k);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
+        /* E7: a deep case that reduces to a TAIL resume installs with
+         * dk_handler_tail so dk_perform yields it to the entry driver (flat).
+         * emit_resume for that case emits the matching dk_tail_resume. */
+        const char *ctor = hctor;
+        if (g_opt_cps_tramp_resume && !t->as.handle.shallow
+            && case_body_tail_resumes(t->as.handle.cases[ci].case_body))
+            ctor = "dk_handler_tail";
         Buf nxt; buf_init(&nxt);
-        buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", hctor, tag, cnames[ci], cenvs[ci],
+        buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", ctor, tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
         buf_free(&chain);
         chain = nxt;
@@ -4111,8 +7449,15 @@ static void emit_handle(CE *ce, const CTerm *t) {
     buf_putc(&chain, '\0');
     /* Installed as cur_k and threaded in tail position (like reset); register the
      * self-contained chain for reaping at the outermost entry boundary
-     * (docs/archive/cps-delimited-dk-node-leak.md). */
-    ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
+     * (docs/archive/cps-delimited-dk-node-leak.md).  Under the re-opening path,
+     * stamp this handle's sibling case-handlers with a shared group id (dk_hgroup)
+     * so dk_case_enclosing / dk_perform can tell them apart from an enclosing
+     * handle's handlers once a re-install flattens the chain (else a re-opened
+     * outer effect in a multi-suspension continuation escapes). */
+    if (g_opt_cps_tramp_resume)
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup(%s));", hchain, chain.data);
+    else
+        ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
     buf_free(&chain);
     free(hkenv);
     for (uint32_t ci = 0; ci < nc; ci++) { free(cnames[ci]); free(cenvs[ci]); }
@@ -4210,18 +7555,20 @@ static void emit_perform(CE *ce, const CTerm *t) {
              * entry boundary (docs/archive/cps-delimited-dk-node-leak.md). */
             ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
             /* The perform continuation frame is spliced onto cur_k; dk_perform
-             * copies the captured range and never frees the node we hand it, so
-             * reclaim it single-node after dk_perform settles (dk_free would walk
-             * into cur_k).  See docs/archive/cps-delimited-dk-node-leak.md. */
-            ce_line(ce, "DK *__pfd%d = dk_frame(%s, (intptr_t)%s, %s);", id, pname, envv, ce->cur_k);
-            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
-            ce_line(ce, "dk_free_node(__pfd%d);", id);
-            ce_line(ce, "return __pfr%d;", id);
+             * copies the captured range and never frees the node we hand it, so it
+             * must be reclaimed single-node (dk_free would walk into cur_k).  A
+             * post-dk_perform `dk_free_node` is SKIPPED when the handler tail-
+             * resumes (E7: dk_perform yields via longjmp and never returns here),
+             * leaking the frame (104 bytes, cps-perform-cont-frame-leak-on-tail-
+             * resume.md).  Register it for a single-node free at the outermost entry
+             * boundary (__dk_reap_node: kind=0, a bare free that does not walk into
+             * cur_k) -- reached on both the normal-return and the tail-resume-yield
+             * paths -- exactly like the Track-B resume-frame sibling below. */
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame(%s, (intptr_t)%s, %s)));",
+                    tag, sa, pname, envv, ce->cur_k);
         } else {
-            ce_line(ce, "DK *__pfd%d = dk_frame(%s, 0, %s);", id, pname, ce->cur_k);
-            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
-            ce_line(ce, "dk_free_node(__pfd%d);", id);
-            ce_line(ce, "return __pfr%d;", id);
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame(%s, 0, %s)));",
+                    tag, sa, pname, ce->cur_k);
         }
     } else {
         /* Track A: the continuation contains a NESTED control op (a further
@@ -4243,7 +7590,17 @@ static void emit_perform(CE *ce, const CTerm *t) {
                     t->as.perform.body, NULL, caps);
         free(pxn);
         char *envexpr = emit_cont_env(ce, pname, caps, NULL);   /* caps-only env */
-        ce_line(ce, "return dk_perform(%d, %s, dk_frame_resume(%s, %s, %s));",
+        /* The dk_frame_resume node's ->next is ce->cur_k (an enclosing chain), so
+         * it is a single spliced node dk_perform never frees.  Unlike the
+         * straight-line perform-cont sibling above -- which dk_free_node's its
+         * dk_frame node right after dk_perform settles -- the value here is
+         * returned inline, and under a MULTI-SHOT resume the node may still be
+         * needed after this dk_perform returns.  Register it for a single-node
+         * free at the outermost entry boundary (__dk_reap_node: kind=0, a bare
+         * free that does not walk into cur_k), matching the reset/handle
+         * structural-node reaping discipline (docs/reported/cps-resume-frame-node-leak.md,
+         * docs/archive/cps-delimited-dk-node-leak.md). */
+        ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));",
                 tag, sa, pname, envexpr, ce->cur_k);
         free(envexpr);
     }
@@ -4335,6 +7692,23 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
+    /* E7: a TAIL resume directly inside a handler case yields to the entry driver
+     * (dk_tail_resume) instead of resuming inline (dk_invoke) -- the trampoline
+     * keeps deep effectful recursion flat.  dk_perform installed this case with
+     * dk_handler_tail (case_body_tail_resumes agrees), so it queued the H->next
+     * delivery and this yield hands off the resumed chain; the value is delivered
+     * by the driver, so nothing follows here. */
+    /* (cont? k) support: mark k consumed at the user resume site so a later
+     * `cont?` on the same k reads false (matches the fiber path).  Flag-gated --
+     * the DK `consumed` field only exists under cps-tramp-resume. */
+    if (g_opt_cps_tramp_resume)
+        ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
+    if (g_opt_cps_tramp_resume && ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
+        char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
+        ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);
+        free(sv); free(kk); free(vv);
+        return;
+    }
     /* resume value -> slot; a Tier C box is registered for reap (the resumed
      * continuation may be re-run, so it is read consume=false and cannot be freed
      * at the load -- the reap list owns it). */
@@ -4409,38 +7783,77 @@ static void emit_callcc(CE *ce, const CTerm *t) {
 
 /* ---- signatures ------------------------------------------------------ */
 
+/* The by-value C type spelling for param `i` of `fd` -- the __cps ABI spelling.
+ * Extracted so the direct->cps entry wrapper can reuse it for the params it does
+ * NOT rewrite to const-pointer (see cps_entry_param_by_ptr). */
+static const char *emit_param_ctype(EmitCtx *ctx, const FnDef *fd, uint32_t i) {
+    /* A rank-2 poly fn value crosses as a fat closure (`tur_poly_fn_t`),
+     * matching the direct emitter's signature -- not the `void *` its scalar-
+     * pointer type kind would otherwise pick.  A delegated indirect call
+     * (`fnv.fn` / `fnv.env`) reads the struct's fields, so the parameter must
+     * be declared as the fat closure, not an opaque pointer. */
+    if (fd->params[i]->is_poly_fn)
+        return "tur_poly_fn_t";
+    if (fd->params[i]->type.kind == TY_FN) {
+        /* A plain (non-rank-2) fn param crosses as the direct emitter's
+         * function-pointer spelling: a typed C-ABI pointer becomes its
+         * registered `R (*)(A...)` typedef, an ordinary closure carrier the
+         * opaque `int64_t`.  type_c_name(TY_FN) leaks a bad spelling, so this
+         * mirrors emit_module.c's signature emission exactly -- otherwise a
+         * delegated call through the param (which the direct emitter emits)
+         * and the __cps declaration would disagree. */
+        const char *td = fd->params[i]->type.as.fn.cfnptr
+            ? register_fn_ptr_typedef(&fd->params[i]->type) : NULL;
+        return td ? td : "int64_t";
+    }
+    /* A by-value aggregate param needs its real (monomorphized) C type,
+     * which emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full
+     * Type. */
+    return binder_ctype_full(ctx, fd->params[i]->type.kind, &fd->params[i]->type);
+}
+
 static void emit_params(EmitCtx *ctx, Buf *file, const FnDef *fd) {
     for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
-        const char *pty;
-        /* A rank-2 poly fn value crosses as a fat closure (`tur_poly_fn_t`),
-         * matching the direct emitter's signature -- not the `void *` its scalar-
-         * pointer type kind would otherwise pick.  A delegated indirect call
-         * (`fnv.fn` / `fnv.env`) reads the struct's fields, so the parameter must
-         * be declared as the fat closure, not an opaque pointer. */
-        if (fd->params[i]->is_poly_fn)
-            pty = "tur_poly_fn_t";
-        else if (fd->params[i]->type.kind == TY_FN) {
-            /* A plain (non-rank-2) fn param crosses as the direct emitter's
-             * function-pointer spelling: a typed C-ABI pointer becomes its
-             * registered `R (*)(A...)` typedef, an ordinary closure carrier the
-             * opaque `int64_t`.  type_c_name(TY_FN) leaks a bad spelling, so this
-             * mirrors emit_module.c's signature emission exactly -- otherwise a
-             * delegated call through the param (which the direct emitter emits)
-             * and the __cps declaration would disagree. */
-            const char *td = fd->params[i]->type.as.fn.cfnptr
-                ? register_fn_ptr_typedef(&fd->params[i]->type) : NULL;
-            pty = td ? td : "int64_t";
-        }
-        else
-            /* A by-value aggregate param needs its real (monomorphized) C type,
-             * which emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full
-             * Type. */
-            pty = binder_ctype_full(ctx, fd->params[i]->type.kind, &fd->params[i]->type);
+        const char *pty = emit_param_ctype(ctx, fd, i);
         char *pn = name_for_binding(ctx, fd->params[i]);
         buf_printf(file, "%s %s", pty, pn);
         free(pn);
     }
+}
+
+/* True iff the direct emitter / forward decl passes param `i` of `fd` by const
+ * pointer (a large by-value product / record ADT -- type_struct_pass_by_ptr).
+ * The direct->cps entry wrapper is the plain-name boundary symbol that direct
+ * (uncolored) callers reach, so its C signature must mirror the direct forward
+ * decl (emit_module.c emit_fn_forward_decls, `const <type_c_name> *`).  Its
+ * `__cps` body keeps the by-value spelling (emit_param_ctype), so the wrapper
+ * dereferences the pointer when threading the arg into the `__cps` call.  Spell
+ * such a param by value in the wrapper and it clashes with the const-pointer
+ * forward decl ("conflicting types for '<fn>'").  Mirrors emit_module.c:
+ * emit_fn_forward_decls and emit_fns.c's direct param emission exactly. */
+static bool cps_entry_param_by_ptr(const Expr *e, const FnDef *fd, uint32_t i) {
+    if (fd->params[i]->is_poly_fn) return false;
+    if (fd->params[i]->type.kind == TY_FN) return false;
+    if (fd->params[i]->is_fat && fd->body && fd->body->kind == EX_INLINE_C)
+        return false;
+    Type pty = (!fd->params[i]->is_fat && e->type.as.fn.arg_full_types
+                && e->type.as.fn.arg_full_types[i])
+        ? *e->type.as.fn.arg_full_types[i]
+        : fd->param_types[i];
+    bool inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+    return !fd->closure && !inline_c && type_struct_pass_by_ptr(pty);
+}
+
+/* The `type_c_name` spelling used inside the `const %s *` for a by-ptr wrapper
+ * param -- must match emit_fn_forward_decls' `type_c_name(_fwd_pty)`. */
+static const char *cps_entry_param_byptr_ctype(const Expr *e, const FnDef *fd,
+                                               uint32_t i) {
+    Type pty = (!fd->params[i]->is_fat && e->type.as.fn.arg_full_types
+                && e->type.as.fn.arg_full_types[i])
+        ? *e->type.as.fn.arg_full_types[i]
+        : fd->param_types[i];
+    return type_c_name(pty);
 }
 
 /* Emit forward declarations for every emittable __cps function, once per
@@ -4517,16 +7930,40 @@ bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b) {
 static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
     const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
                    ? &spec->result_type : fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
+    /* A CONCRETE monomorph of an ORDINARY defn has a single concrete C signature
+     * (its clone name is unique to this specialization), so a by-value-aggregate
+     * param / return -- which the scalar-only `sig_slot_ok` rejects for the shared
+     * generic base name -- IS spellable: admit it via the wider `slot_ok_t` gate.
+     * This makes a by-value-ADT-signature defn (`option-eq? : (Option A) params`)
+     * a mono-template so its callers thread the mono `__cps` (cps->cps, which
+     * crosses the by-value arg) instead of a cps->direct call that cannot.
+     *
+     * A TYPECLASS-INSTANCE method (`spec->typeclass_inst != NULL`) is the ONE
+     * exception: its clone is ALSO emitted with the uniform CARRIER ABI
+     * (`_Bool(int64_t, int64_t)`) for the dict-dispatch path, so a concrete
+     * by-value CPS re-emission (`_Bool(tur_adt_Map__X *, ...)`) collides
+     * (`conflicting types for <clone>`).  Keep the strict scalar-only gate for
+     * instance methods so they stay SIG-REJECT (no CPS clone, no collision). */
+    bool is_inst = spec && spec->typeclass_inst != NULL;
+    /* Widen ONLY to a by-value FLAT PRODUCT (`slot_box_ty`: an owning-free Tier-C
+     * aggregate boxed into the slot, e.g. `tur_adt_Option__int`), NOT to a
+     * heap-ADT/struct HANDLE (`carrier_handle_ok`).  A heap handle threaded
+     * through the concrete mono `__cps` mishandles its interior carrier fields
+     * (show-collections: a Map with cstr keys printed the key POINTERS), so those
+     * stay on the strict scalar gate.  A scalar always passes `sig_slot_ok`. */
+    #define MONO_SLOT_OK(t, k) (is_inst ? sig_slot_ok((t), (k)) \
+                                        : (sig_slot_ok((t), (k)) || slot_box_ty(t)))
+    if (rt->kind != TY_NIL && !MONO_SLOT_OK(rt, rt->kind)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         const Type *pt = (i < spec->n_args) ? &spec->arg_types[i] : &p->type;
-        if (p->is_poly_fn) return false;   /* poly-fat param -- evict (see fn_sig_ok) */
-        bool fn_param_ok = pt->kind == TY_FN;   /* effectful admitted -- see fn_sig_ok */
+        if (p->is_poly_fn) return false;
+        bool fn_param_ok = pt->kind == TY_FN;
         if (!p->is_borrow && !fn_param_ok
-            && !sig_slot_ok(pt, pt->kind)) return false;
+            && !MONO_SLOT_OK(pt, pt->kind)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
+    #undef MONO_SLOT_OK
     return true;
 }
 
@@ -4598,29 +8035,72 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     if (!mono_emit && (!se || !se->in_s)) {
-        /* N6.5 readiness measurement (TUR_TRACE_EVICT): for every COLORED function
-         * that falls back to the direct emitter, report WHY it was not admitted to
-         * the CPS set S, in a category that says whether the general whole-function
-         * fallback is being exercised (BODY-*) or the function is on a permanent,
-         * non-fallback routing (SIG-*: exported symbol / program entry / ABI-
-         * incompatible signature the direct emitter owns).  Deleting the general
-         * fallback (gate item 7) is only safe once BODY-* is empty modulo the
-         * delimited-control carve-out; this trace is how that gate is checked.
-         * Off by default (one getenv per evicted colored fn); no codegen effect. */
-        if (getenv("TUR_TRACE_EVICT") && fd->cps_colored) {
-            const char *nm = (fd->binding && fd->binding->name) ? fd->binding->name->name : "?";
-            const char *cat; const char *why = "";
-            if (fd->binding->c_export_name)                cat = "SIG-EXPORT";
-            else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) cat = "SIG-MAIN";
-            else if (!fn_sig_ok(fd))                        cat = "SIG-REJECT";
+        /* N6.5 gate: a COLORED function that falls back to the direct emitter must
+         * be doing so for a PERMANENT signature reason (SIG-*) -- exported symbol,
+         * program entry, ABI-incompatible signature, permanent taint, or an opaque
+         * inline-C body the CPS backend can never own.  The fixable BODY-* eviction
+         * surface has been driven to zero (docs/archive/cps-runtime-finish-plan.md),
+         * so a BODY-* fallback now means a regression reintroduced a root the CPS
+         * backend must own.  Categorize every colored fallback; a BODY-* one is a
+         * HARD ERROR naming the residual, caught at build time instead of silently
+         * routing to the (being-retired) fiber path.  The TUR_TRACE_EVICT trace
+         * (readiness measurement) rides the same categorization. */
+        if (fd->cps_colored && fd->binding) {
+            const char *nm = fd->binding->name ? fd->binding->name->name : "?";
+            const char *cat; const char *why = ""; bool sig_perm_route = false;
+            if (fd->binding->c_export_name
+                && !(g_opt_cps_tramp_resume && fd->binding->is_instance_method))
+                                                           { cat = "SIG-EXPORT"; sig_perm_route = true; }
+            else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { cat = "SIG-MAIN";   sig_perm_route = true; }
+            else if (!fn_sig_ok(fd))                        { cat = "SIG-REJECT"; sig_perm_route = true; }
             else {
                 const CTerm *u = se ? first_unsupported(se->term) : NULL;
-                if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
+                /* SIG-TAINT: evicted ONLY because it shares an effect with a
+                 * PERMANENT sig_perm fn (exported / main / ABI-reject) -- no
+                 * BODY-* fix could admit it, so it is permanent routing, not a
+                 * fixable BODY root.  A genuine BODY-UNSUPPORTED form still reports
+                 * as such (the form is the real blocker even if also perm-tainted);
+                 * only the taint-only (STRUCT-OR-TAINT) case reclassifies. */
+                bool perm_tainted = se && ((se->eff_lo & g_perm_lo) || (se->eff_hi & g_perm_hi));
+                bool inline_c = u && u->as.unsupported.why
+                             && strstr(u->as.unsupported.why, "EX_INLINE_C");
+                if (inline_c)          { cat = "SIG-INLINE-C"; sig_perm_route = true; }  /* permanent: inline-C can't thread a DK cont */
+                else if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
+                else if (perm_tainted) { cat = "SIG-TAINT"; sig_perm_route = true; }
                 else   cat = "BODY-STRUCT-OR-TAINT";
             }
-            fprintf(stderr, "[EVICT] %-22s %s %s\n", cat, nm, why);
+            if (getenv("TUR_TRACE_EVICT")) {
+                /* Stage F (v2): an `eff=1` column marks a fn that performs or
+                 * handles an effect -- the ONLY evictions that keep the fiber
+                 * effect runtime alive.  A pure SIG-REJECT/SIG-EXPORT (eff=0) is
+                 * out of scope for the deletion (plan Sec 4). */
+                int eff = (se && (se->eff_lo || se->eff_hi)) ? 1 : 0;
+                fprintf(stderr, "[EVICT] %-22s eff=%d %s %s\n", cat, eff, nm, why);
+            }
+            /* The N6.5 gate governs the SHIPPING backend.  The now-graduated CPS
+             * surface -- `cps-async` (CPS-lowers `async`/`await`) and
+             * `cps-tramp-resume` (trampolined effect tail-resume) -- deliberately
+             * routes some bodies to the direct emitter by design: e.g. a recursive
+             * `await` is a ready future the direct emitter handles in O(1) via its
+             * inline readiness check + `goto __tur_tailcall` loop, so it evicts
+             * rather than recurse through dk_invoke on the heap path.  (An `await`
+             * inside a handler case instead delegates a fiber region without
+             * evicting the whole function -- see b->in_handler_case in cps_ir.c.)
+             * Exempt this surface from the hard error.  g_opt_cps_tramp_resume
+             * defaults on, so this is unconditionally true in the shipping build;
+             * the guard is retained for the diagnostic path. */
+            bool experimental_surface = g_opt_cps_tramp_resume;
+            if (!sig_perm_route && !experimental_surface)
+                diag_emit(DIAG_ERROR, fd->binding->span,
+                          "cps-backend: colored function '%s' fell back to the direct "
+                          "emitter for a non-signature reason (%s%s%s) -- the CPS/DK "
+                          "backend must own it, but its body left the admissible subset. "
+                          "The direct/fiber whole-function fallback for colored code has "
+                          "been retired (N6.5); admit the form natively in the CT-IR/DK "
+                          "backend or route the function through a permanent SIG-* case.",
+                          nm, cat, why[0] ? ": " : "", why);
         }
-        return false;   /* fall back */
+        return false;   /* fall back (SIG-* colored, or uncolored) */
     }
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
@@ -4671,6 +8151,10 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
     ce.cur_k = "__kont"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
     ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
+    /* B7: pre-scan this function's term for escaping-continuation mutables, which
+     * emit as by-reference heap cells (see g_byref_muts). */
+    g_byref_muts_n = 0;
+    if (g_opt_cps_tramp_resume) byref_scan(se->term);
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
     buf_putc(&body_buf, '\0');
@@ -4711,6 +8195,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         const Type *mrt = mono_ret ? mono_ret : fn_ret_type(fd);
         bool mvoid = (mrt->kind == TY_NIL);
         buf_puts(file, "int main(int argc, char **argv) {\n");
+        buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
         if (g_emit_panic_trace)
             buf_puts(file, "    g_panic_trace = 1;\n");
@@ -4725,7 +8210,18 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    }\n");
         buf_puts(file, "    __dk_entry_depth++;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-        buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        if (g_opt_cps_tramp_resume) {
+            /* E7: install the trampoline driver.  A tail-resume longjmps here; the
+             * else-branch runs the meta-stack trampoline to completion. */
+            if (!mvoid) buf_puts(file, "    int64_t __r;\n");
+            buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+            buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(__root); }\n",
+                       mvoid ? "(void)" : "__r = ", cn);
+            buf_printf(file, "    else { %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
+            buf_puts(file, "    g_dk_driver = __dksave;\n");
+        } else {
+            buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        }
         /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
          * heap box owned by the reap list (consume=false, never freed at a load),
          * so the reap frees it -- copy the value into a local first, then reap. */
@@ -4771,20 +8267,65 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * rather than returning an int64. */
     bool void_ret = (rt->kind == TY_NIL);
     const char *rety = void_ret ? "void" : binder_ctype_full(ctx, rt->kind, rt);
-    buf_printf(file, "__attribute__((unused)) static %s %s(", rety, cn);
-    emit_params(ctx, file, fd);
-    buf_puts(file, ") {\n");
-    buf_puts(file, "    __dk_entry_depth++;\n");
-    buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-    buf_printf(file, "    %s%s__cps(", void_ret ? "(void)" : "int64_t __r = ", cn);
+    /* Linkage must mirror the direct emitter's `needs_static` (emit_fns.c) and
+     * the forward decl (emit_fn_forward_decls): in separate compilation an
+     * exported (or retain_c_linkage) non-stdlib defn keeps external linkage so
+     * the plain-mangled entry wrapper is reachable from its forward declaration
+     * and from other TUs / the FFI export shim.  A bare `static` here on an
+     * exported CPS defn contradicts its non-static prototype -- "static
+     * declaration follows non-static declaration". */
+    bool entry_static = !(ctx->separate_compilation
+        && fd->binding
+        && (fd->binding->is_exported || fd->binding->retain_c_linkage)
+        && !fd->binding->is_from_stdlib);
+    buf_printf(file, "__attribute__((unused)) %s%s %s(",
+               entry_static ? "static " : "", rety, cn);
+    /* Params: the __cps ABI spelling (emit_params) EXCEPT a pass-by-ptr
+     * aggregate, which is spelled `const T *` to agree with the direct forward
+     * decl (the wrapper is the plain-name symbol direct callers link against). */
     for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
-        buf_puts(file, pn);
+        if (cps_entry_param_by_ptr(e, fd, i)) {
+            buf_printf(file, "const %s *%s",
+                       cps_entry_param_byptr_ctype(e, fd, i), pn);
+        } else {
+            buf_printf(file, "%s %s", emit_param_ctype(ctx, fd, i), pn);
+        }
         free(pn);
     }
-    if (fd->n_params) buf_puts(file, ", ");
-    buf_puts(file, "__root);\n");
+    buf_puts(file, ") {\n");
+    buf_puts(file, "    __dk_entry_depth++;\n");
+    buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
+    /* Build the argument list "<params>, __root" once.  A const-pointer param
+     * (cps_entry_param_by_ptr) is dereferenced back to the by-value `__cps`
+     * signature. */
+    Buf __args; buf_init(&__args);
+    for (uint32_t i = 0; i < fd->n_params; i++) {
+        if (i) buf_puts(&__args, ", ");
+        char *pn = name_for_binding(ctx, fd->params[i]);
+        if (cps_entry_param_by_ptr(e, fd, i)) buf_putc(&__args, '*');
+        buf_puts(&__args, pn);
+        free(pn);
+    }
+    if (fd->n_params) buf_puts(&__args, ", ");
+    buf_puts(&__args, "__root");
+    buf_putc(&__args, '\0');
+    if (g_opt_cps_tramp_resume) {
+        /* E7: install the trampoline driver at this direct->cps entry too (not only
+         * the d2b main), so a colored body reached from a non-d2b caller (`run`
+         * called by a plain main) still trampolines a deep tail-resume flat. */
+        if (!void_ret) buf_puts(file, "    int64_t __r;\n");
+        buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+        buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(%s); }\n",
+                   void_ret ? "(void)" : "__r = ", cn, __args.data);
+        buf_printf(file, "    else { %s__dk_drive_after(); }\n", void_ret ? "(void)" : "__r = ");
+        buf_puts(file, "    g_dk_driver = __dksave;\n");
+    } else {
+        buf_printf(file, "    %s%s__cps(%s);\n",
+                   void_ret ? "(void)" : "int64_t __r = ", cn, __args.data);
+    }
+    buf_free(&__args);
     /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
      * box owned by the reap list (consume=false, never freed at a load), so the
      * reap frees it -- copy the value into a local first, then reap. */
@@ -4807,6 +8348,21 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    return;\n}\n");
     } else {
         buf_puts(file, "    return __ret;\n}\n");
+    }
+
+    /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
+     * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
+    if (g_opt_cps_tramp_resume && threadable_has(fd->binding)) {
+        buf_printf(file,
+            "static void __tur_e2reg_%s(void) {\n"
+            "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s__cps);\n"
+            "}\n", cn, cn, cn);
+        /* S1b: the direct->CPS registry must be populated before a threaded
+         * call site looks up its CPS variant.  A dropped constructor here was
+         * the SIGSEGV in findings 3.1. */
+        char e2init[320];
+        snprintf(e2init, sizeof(e2init), "__tur_e2reg_%s", cn);
+        static_init_register(e2init, STATIC_INIT_REGISTRY);
     }
 
     ctx->fn_params   = saved_fn_params;

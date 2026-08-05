@@ -1,0 +1,33 @@
+;; owned-string-type-plan: core String construction, queries, and transforms.
+(load "stdlib/string.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+(defn demo [] : int
+  (let [a (string/from-cstr "Hello")
+        b (string/from-cstr ", World")
+        c (string/concat a b)]
+    (do
+      ;; content + length
+      (println (string/to-cstr c))
+      (println (string/len c))
+      (show-line c)
+      ;; Eq via typeclass + helper (independently-constructed equal Strings)
+      (println (yn (eq? a (string/from-cstr "Hello"))))
+      (println (yn (string/eq? a b)))
+      ;; substring / case / trim
+      (println (string/to-cstr (string/substring c 0 5)))
+      (println (string/to-cstr (string/to-upper a)))
+      (println (string/to-cstr (string/to-lower a)))
+      (println (string/to-cstr (string/trim (string/from-cstr "  padded  "))))
+      ;; predicates
+      (println (yn (string/starts-with? c (string/from-cstr "Hello"))))
+      (println (yn (string/ends-with? c (string/from-cstr "World"))))
+      (println (yn (string/contains? c (string/from-cstr "lo, W"))))
+      (println (yn (string/empty? (string/from-cstr ""))))
+      ;; byte-at (ASCII 'H' = 72; out of range = -1)
+      (println (string/byte-at a 0))
+      (println (string/byte-at a 99))
+      0)))
+
+(demo)

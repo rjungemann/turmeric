@@ -18,7 +18,7 @@
 (defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   if (!c || !c->is_some) return container;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;

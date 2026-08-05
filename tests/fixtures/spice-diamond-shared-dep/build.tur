@@ -1,0 +1,10 @@
+;;; spice-cycle-include-path-blowup, the other direction: a diamond, where
+;;; `leaf` is reached twice (app -> mid1 -> leaf and app -> mid2 -> leaf).
+;;; The visited set that stops cycles must NOT prune this -- `leaf`'s src/ is
+;;; still required on the include path, it just does not need re-walking. The
+;;; distinction is that the dir is pushed before the visited check gates the
+;;; recursion; this fixture is what notices if those two ever get reordered.
+(defpackage spice-diamond-shared-dep
+  :name    "spice-diamond-shared-dep"
+  :version "0.1.0"
+  :members ["app" "mid1" "mid2" "leaf"])

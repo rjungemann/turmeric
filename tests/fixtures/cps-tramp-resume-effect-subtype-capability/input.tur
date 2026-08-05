@@ -1,0 +1,20 @@
+;; cps-tramp-resume regression (docs/reported/
+;; cps-effect-subtype-capability-pure-fn-in-effectful-field.md):
+;; a PURE fn stored in a capability field DECLARED effectful (`fn #fx{Write}`)
+;; must CPS/DK-admit -- the interior `.run` call's inferred row is empty (the
+;; compiler proves this: it raises TUR-W0033 for the unreachable Write clause),
+;; so the handled body is pure and `main` emits `main__cps` instead of evicting
+;; to the fiber.  Output is path-independent; this locks the correct behavior
+;; under the flag (admission is verified out-of-band via TUR_TRACE_EVICT).
+
+(defeffect Write [s :cstr] :nil)
+(defstruct Action :copy [run : fn #fx{Write}])
+
+(defn pure-greet [msg : cstr]
+  (println msg))
+
+(defn main [] : int
+  (let [act (make-struct Action pure-greet)]
+    (handle
+      (do (.run act "hello from pure") 0)
+      (Write [s] k) (do (println s) (resume k nil)))))

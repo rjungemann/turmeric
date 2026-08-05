@@ -149,16 +149,21 @@
 ;;;   (show (Unbounded))    ; => "unbounded"
 ;;;
 ;;; Since: range-gadt-typeclass-migration-plan B2
+;;; Show [Bound] -- render a lone endpoint as an owned String: "[v" (Inclusive),
+;;; "(v" (Exclusive), or "unbounded".  Mixed borrow/malloc: the bracket arms
+;;; adopt the bound-show-fmt malloc (leak-free), the Unbounded arm copies the
+;;; borrowed literal via from-cstr.
+
 
 (definstance Show [Bound]
   (show [x]
     (match x
       (Inclusive v)
-      (bound-show-fmt 1 v)
+      (string/adopt-cstr (bound-show-fmt 1 v))
       (Exclusive v)
-      (bound-show-fmt 2 v)
+      (string/adopt-cstr (bound-show-fmt 2 v))
       (Unbounded)
-      "unbounded")))
+      (string/from-cstr "unbounded"))))
 ;;; bound-lt? -- strict total order on Bound endpoints, backing Ord [Bound].
 ;;;
 ;;; Orders endpoints by position on the number line: Unbounded is the least

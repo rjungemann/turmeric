@@ -32,6 +32,17 @@
 (extern-c tur_hamt_has_eq [m :ptr hash :int key :ptr eq :ptr] :bool)
 
 (extern-c tur_hamt_get_eq [m :ptr hash :int key :ptr eq :ptr] :ptr)
+; Content-keyed cstr convenience entry points: hash by content, compare by
+; content on collision.  The P3 ^persistent lowering routes :cstr keys here
+; (hash-ptr + identity compare only "worked" via unspecified literal merging).
+
+(extern-c tur_hamt_set_cstr [m :ptr key :cstr val :ptr] :ptr)
+
+(extern-c tur_hamt_del_cstr [m :ptr key :cstr] :ptr)
+
+(extern-c tur_hamt_has_cstr [m :ptr key :cstr] :bool)
+
+(extern-c tur_hamt_get_cstr [m :ptr key :cstr] :ptr)
 ; WKC2/WKC3: boxed-key carrier + ownership-aware operations.  tur_hamt_box_key
 ; heap-copies `n` key bytes behind a refcount header and returns the payload
 ; pointer; the *_eq_o variants take an `owned` flag selecting the standard
@@ -39,10 +50,10 @@
 ; sharing) for multi-word struct/ADT keys.
 
 (extern-c tur_hamt_box_key [src :ptr n :int] :ptr)
-
 ; Generic size-aware content comparator for two boxed-key payloads (reads each
 ; length from its box header).  One comparator serves every multi-word by-value
 ; key type -- a MapKey `mk-cmp` for a struct/ADT key returns its address.
+
 (extern-c tur_hamt_box_key_eq [a :int b :int] :bool)
 
 (extern-c tur_hamt_set_eq_o
@@ -50,6 +61,53 @@
   :ptr)
 
 (extern-c tur_hamt_del_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
+; collections-cannot-hold-rc-values (map side, step c): the _vo variants take
+; the value retain/release ops explicitly instead of hardcoding the boxed-value
+; refcount, so a map can own rc<T> values.  The ops must be EMITTED functions
+; (see __tur_rc_val_retain / __tur_rc_val_release in the preamble) -- hamt.c is
+; precompiled into the runtime archive and could only ever call the archive's
+; rc.c, which is the wrong collector in a build carrying its own replica.
+;
+; owned bit 2 selects them; bits 0/1 keep their meanings (boxed key / boxed
+; wide value).  Bits 1 and 2 are mutually exclusive: a value is either a
+; by-value box or an rc handle, never both.
+
+
+(extern-c tur_hamt_set_eq_vo
+  [m
+   :ptr
+   hash
+   :int
+   key
+   :ptr
+   val
+   :ptr
+   eq
+   :ptr
+   owned
+   :int
+   val_retain
+   :ptr
+   val_release
+   :ptr]
+  :ptr)
+
+(extern-c tur_hamt_del_eq_vo
+  [m
+   :ptr
+   hash
+   :int
+   key
+   :ptr
+   eq
+   :ptr
+   owned
+   :int
+   val_retain
+   :ptr
+   val_release
+   :ptr]
+  :ptr)
 
 (extern-c tur_hamt_has_eq_o
   [m :ptr hash :int key :ptr eq :ptr owned :int]
@@ -201,6 +259,84 @@
   #fx{}
   : bool
   (tur_hamt_has m hash key))
+;;; hamt/set-cstr -- insert or update a string-keyed entry, compared by content.
+;;;
+;;; The key is hashed by content (xxHash64 of the bytes) and compared by
+;;; content on hash collision, so equal text at distinct addresses is one
+;;; key.  The map stores the key pointer (no copy); the caller owns its
+;;; lifetime.  Prefer this over hamt/set + hamt/hash-ptr for :cstr keys.
+;;;
+;;; Parameters:
+;;;   m   -- source HAMT pointer
+;;;   key -- NUL-terminated string key
+;;;   val -- value pointer
+;;;
+;;; Returns:
+;;;   A new HAMT containing the inserted/updated entry. The original is unchanged.
+;;;
+;;; Example:
+;;;   (hamt/set-cstr m "name" v)  ; => <new hamt ptr>
+;;;
+;;; Since: Phase P3
+
+(defn hamt/set-cstr [m : ptr<void> key : cstr val : ptr<void>]
+  #fx{}
+  : ptr<void>
+  (tur_hamt_set_cstr m key val))
+;;; hamt/del-cstr -- delete a string key, compared by content; returns a new HAMT.
+;;;
+;;; Parameters:
+;;;   m   -- source HAMT pointer
+;;;   key -- NUL-terminated string key
+;;;
+;;; Returns:
+;;;   A new HAMT with the key removed. The original is unchanged.
+;;;
+;;; Example:
+;;;   (hamt/del-cstr m "name")  ; => <new hamt ptr>
+;;;
+;;; Since: Phase P3
+
+(defn hamt/del-cstr [m : ptr<void> key : cstr]
+  #fx{}
+  : ptr<void>
+  (tur_hamt_del_cstr m key))
+;;; hamt/get-cstr -- look up a string key by content; NULL if absent.
+;;;
+;;; Parameters:
+;;;   m   -- HAMT pointer
+;;;   key -- NUL-terminated string key
+;;;
+;;; Returns:
+;;;   The value pointer associated with key, or NULL if not found.
+;;;
+;;; Example:
+;;;   (hamt/get-cstr m "name")  ; => <value ptr or NULL>
+;;;
+;;; Since: Phase P3
+
+(defn hamt/get-cstr [m : ptr<void> key : cstr]
+  #fx{}
+  : ptr<void>
+  (tur_hamt_get_cstr m key))
+;;; hamt/has-cstr? -- check whether a string key exists, compared by content.
+;;;
+;;; Parameters:
+;;;   m   -- HAMT pointer
+;;;   key -- NUL-terminated string key
+;;;
+;;; Returns:
+;;;   true if the key is present, false otherwise.
+;;;
+;;; Example:
+;;;   (hamt/has-cstr? m "name")  ; => true
+;;;
+;;; Since: Phase P3
+
+(defn hamt/has-cstr? [m : ptr<void> key : cstr]
+  #fx{}
+  : bool
+  (tur_hamt_has_cstr m key))
 ;;; hamt/count -- return the number of key/value pairs in the HAMT.
 ;;;
 ;;; Parameters:

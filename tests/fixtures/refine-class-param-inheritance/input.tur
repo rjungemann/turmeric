@@ -1,0 +1,60 @@
+;; Class parameter refinements: inheritance, and what a caller owes.
+;;
+;; TWO rules, decided together.
+;;
+;; 1. SYMMETRY. An instance parameter with no annotation INHERITS the class's
+;;    refinement, exactly as an unannotated result inherits the class's promise.
+;;    Before this, omitting a parameter annotation inherited nothing, so a class
+;;    demand was enforced only by an instance that happened to restate it --
+;;    and `(.scale-by 3 0)` against an unannotated instance compiled, ran, and
+;;    printed 0 with no check anywhere.
+;;
+;;    Writing an explicit annotation -- including a bare `: int`, which carries
+;;    no predicate -- is how an instance opts OUT and demands less. That is
+;;    still legal; TUR-E0374 only forbids demanding MORE.
+;;
+;; 2. WHAT A CALLER OWES: the resolved instance's demand, not the class's.
+;;    A statically-resolved dispatch knows which implementation runs, so it is
+;;    checked against that implementation's contract -- the more precise of the
+;;    two. Passing 0 to an instance that explicitly demands nothing is correct
+;;    and stays legal.
+;;
+;;    But it is linted (TUR-W0377), because the leniency is not part of the
+;;    interface: the same argument fails the moment dispatch goes dynamic or a
+;;    stricter instance appears. The warning marks the dependency without
+;;    rejecting a working program.
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+;; INHERITS the class demand -- no annotations written.
+(definstance Scaler [int]
+  (scale-by [self k] (* self k)))
+
+;; Opts OUT explicitly: demands nothing of k.
+(definstance Scaler [float]
+  (scale-by [self : float, k : int] : int k))
+
+;; Satisfies the inherited demand.
+(defn inherited-ok [] : int
+  (.scale-by 3 7))
+
+;; Satisfies it through a hypothesis rather than a literal.
+(defn inherited-hyp [k : #refine{ v : int | (> v 2) }] : int
+  (.scale-by 3 k))
+
+;; The float instance demands nothing, so this is allowed -- and linted,
+;; because the CLASS rejects 0. Reading B: the call is correct for the
+;; instance that runs, so it compiles.
+(defn leniency-relied-on [] : int
+  (.scale-by 1.5 0))
+
+;; Same weak instance, argument the class also admits: no lint.
+(defn leniency-not-relied-on [] : int
+  (.scale-by 1.5 9))
+
+(defn main [] : int
+  (println (inherited-ok))
+  (println (inherited-hyp 5))
+  (println (leniency-relied-on))
+  (println (leniency-not-relied-on))
+  0)

@@ -1,0 +1,20 @@
+;; RT3 (refinement-types-plan): the return refinement is PROVED statically.
+;;
+;; Hypothesis (from the parameter refinement): x > 0.
+;; Goal (from the return refinement):          2*x > 0.
+;; S2's linear arithmetic discharges it, so NO runtime check is emitted for
+;; the return value.  The `--strict-refine` flag in `flags` is what makes this
+;; fixture an assertion rather than a hope: under it, an obligation the chain
+;; cannot prove is a hard compile error, so the fixture only builds if the
+;; proof actually happened.
+(defn double-pos [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
+  (* x 2))
+
+(defn add-one-nonneg [x : #refine{ v : int | (>= v 0) }] : #refine{ r : int | (> r 0) }
+  (+ x 1))
+
+(defn main [] : int
+  (println (double-pos 5))
+  (println (add-one-nonneg 0))
+  (println "refine-proved")
+  0)

@@ -1,5 +1,6 @@
 #include "reader.h"
 #include "reader_macros.h"
+#include "lang_layers.h" /* L0: #lang layer registry */
 #include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
 #include "globals.h" /* DL0: g_data_literals_enabled */
 #include "buf.h"     /* sweet-exp preprocessor */
@@ -947,6 +948,75 @@ static Form *read_fx_row(Reader *r) {
     return m;
 }
 
+/* C2 / #reads: `#reads <sym>` names a ^borrow parameter whose mutable state a
+ * measure reads.  It sits at the effect-row position of a defn signature and is
+ * consumed by elab_defn.  Returns `(reads <sym>)` stamped PROV_READS so the
+ * signature walk distinguishes it from a body expression.  A read-frame is not
+ * an effect row; see docs/guides/stateful-refinements-guide.md. */
+static Form *read_reads_annot(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col  = r->col;
+    size_t   start_off  = r->pos;
+    advance(r); advance(r); advance(r);   /* '#' 'r' 'e' */
+    advance(r); advance(r); advance(r);   /* 'a' 'd' 's' */
+    skip_ws_and_comments(r);
+    Form *param = read_symbol_or_minus(r);   /* the parameter name */
+    if (!param) return NULL;                 /* error already emitted */
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    Form *head = form_sym(r->arena, span, symtab_intern(r->st, strslice("reads", 5)));
+    Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    items[0] = head;
+    items[1] = param;
+    Form *lst = form_list(r->arena, span, items, 2);
+    lst->fx_prov = (uint8_t)PROV_READS;
+    return lst;
+}
+
+/* WF1 / #writes: `#writes <sym>` or `#writes [<sym> ...]` names the parameters
+ * whose mutable state this function's body may write.  Sits at the same
+ * signature position as `#reads` (after `#fx{...}`, either order relative to
+ * `#reads`) and is consumed by elab_defn.  Returns `(writes <sym>...)` stamped
+ * PROV_WRITES.
+ *
+ * Why a bracketed list and not a greedy symbol run: the annotation is followed
+ * by the return-type marker `:`, which reads as a symbol, so a greedy scan
+ * could not tell where the frame ends.  The vector form is unambiguous, and it
+ * gives `#writes []` -- "this body writes nothing" -- a spelling, which is the
+ * frame WF2 most wants to check and which a single-symbol-only syntax could
+ * not express.  See docs/upcoming/checked-write-frames-plan.md (WF1). */
+static Form *read_writes_annot(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col  = r->col;
+    size_t   start_off  = r->pos;
+    advance(r); advance(r); advance(r);   /* '#' 'w' 'r' */
+    advance(r); advance(r); advance(r);   /* 'i' 't' 'e' */
+    advance(r);                           /* 's' */
+    skip_ws_and_comments(r);
+    Form  *vec = NULL;
+    Form  *one = NULL;
+    if (peek(r) == '[') {
+        vec = read_seq(r, '[', ']', F_VEC,
+                       "unterminated #writes frame (missing ']')");
+        if (!vec) return NULL;            /* error already emitted */
+    } else {
+        one = read_symbol_or_minus(r);    /* the single parameter name */
+        if (!one) return NULL;            /* error already emitted */
+    }
+    uint32_t n = vec ? vec->as.list.len : 1;
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    Form *head = form_sym(r->arena, span, symtab_intern(r->st, strslice("writes", 6)));
+    Form **items = (Form **)arena_alloc(r->arena, (n + 1) * sizeof(Form *));
+    items[0] = head;
+    if (vec) {
+        for (uint32_t i = 0; i < n; i++) items[i + 1] = vec->as.list.items[i];
+    } else {
+        items[1] = one;
+    }
+    Form *lst = form_list(r->arena, span, items, n + 1);
+    lst->fx_prov = (uint8_t)PROV_WRITES;
+    return lst;
+}
+
 static Form *read_set(Reader *r) {
     advance(r); /* consume '#' */
     advance(r); /* consume 's' */
@@ -1097,6 +1167,178 @@ static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor)
     return form_list(r->arena, sp, asc_items, 3);
 }
 
+/* N1 (numeric-tower-rational-complex-plan §5.1): parse a decimal int64 out of
+ * the raw `#rat{...}` body, starting at *i and stopping at the first byte that
+ * is not part of the number.  Returns false on a missing digit run or on
+ * int64 overflow, so the caller can report a read-time error instead of
+ * silently wrapping a literal.  Accepts a leading '+' or '-'. */
+static char *read_raw_body(Reader *r, int open, int close, uint32_t *out_len);
+
+static bool rat_parse_int(const char *body, uint32_t len, uint32_t *i,
+                          int64_t *out) {
+    uint32_t k = *i;
+    bool neg = false;
+    if (k < len && (body[k] == '-' || body[k] == '+')) {
+        neg = (body[k] == '-');
+        k++;
+    }
+    if (k >= len || body[k] < '0' || body[k] > '9') return false;
+    /* Accumulate the magnitude in uint64 so the int64 minimum -- whose
+     * magnitude is one past the positive range -- parses without overflowing
+     * the accumulator it is being range-checked against. */
+    uint64_t mag = 0;
+    const uint64_t limit = neg ? 9223372036854775808ULL : 9223372036854775807ULL;
+    while (k < len && body[k] >= '0' && body[k] <= '9') {
+        uint64_t digit = (uint64_t)(body[k] - '0');
+        if (mag > (limit - digit) / 10) return false;   /* would overflow */
+        mag = mag * 10 + digit;
+        k++;
+    }
+    *i = k;
+    *out = neg ? (int64_t)(~mag + 1ULL) : (int64_t)mag;
+    return true;
+}
+
+/* N1: gcd of two non-negative values, for read-time normalization. */
+static uint64_t rat_gcd_u64(uint64_t a, uint64_t b) {
+    while (b != 0) { uint64_t t = a % b; a = b; b = t; }
+    return a;
+}
+
+/* N1: read a `#rat{n/d}` rational literal -> `(rat/of! n d)`, normalized at
+ * read time (`#rat{6/8}` emits `(rat/of! 3 4)`).
+ *
+ * Bare `3/4` is not available as rational syntax: read_number stops at '/', so
+ * `3/4` already reads as `3` followed by the symbol `/4`, and making it a
+ * rational would collide with '/' as division and with module-qualified names
+ * (`tur/list`).  Hence a '#'-dispatch alongside #map / #set / #json.
+ *
+ * The body is read RAW rather than as forms, because curly-infix is enabled in
+ * every dialect: an ordinarily-read `{3 / 4}` would be infix division, not a
+ * literal.  A missing denominator (`#rat{5}`) is the whole number 5/1.
+ *
+ *   TUR-E0284 -- malformed body, zero denominator, or out-of-int64-range part */
+static Form *read_rat_literal(Reader *r) {
+    uint32_t s_line = r->line, s_col = r->col;
+    size_t   s_off  = r->pos;
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'r' */
+    advance(r); /* consume 'a' */
+    advance(r); /* consume 't' */
+    /* peek == '{' guaranteed by caller */
+    uint32_t body_len = 0;
+    char *body = read_raw_body(r, '{', '}', &body_len);
+    if (!body || r->error) return NULL;
+    Span sp = span_from_to(r, s_line, s_col, s_off, r->pos);
+
+    uint32_t i = 0;
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+    int64_t n = 0, d = 1;
+    if (!rat_parse_int(body, body_len, &i, &n)) {
+        diag_emit(DIAG_ERROR, sp,
+                  "malformed rational literal '#rat{%.*s}'; expected "
+                  "'#rat{n/d}' with int64 parts (TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+    if (i < body_len && body[i] == '/') {
+        i++;
+        while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+        if (!rat_parse_int(body, body_len, &i, &d)) {
+            diag_emit(DIAG_ERROR, sp,
+                      "malformed rational literal '#rat{%.*s}'; expected an "
+                      "int64 denominator after '/' (TUR-E0284)",
+                      (int)body_len, body);
+            r->error = true;
+            return NULL;
+        }
+    }
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+    if (i != body_len) {
+        diag_emit(DIAG_ERROR, sp,
+                  "trailing junk in rational literal '#rat{%.*s}'; expected "
+                  "'#rat{n/d}' (TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+    if (d == 0) {
+        diag_emit(DIAG_ERROR, sp,
+                  "rational literal '#rat{%.*s}' has a zero denominator "
+                  "(TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+
+    /* Normalize at read time so `#rat{6/8}` and `#rat{3/4}` are the same
+     * literal, and so structural equality on the emitted value is
+     * mathematical equality.  Magnitudes go through uint64 so the int64
+     * minimum normalizes without a negation that would overflow. */
+    bool neg  = ((n < 0) != (d < 0));
+    uint64_t un = (n < 0) ? (~(uint64_t)n + 1ULL) : (uint64_t)n;
+    uint64_t ud = (d < 0) ? (~(uint64_t)d + 1ULL) : (uint64_t)d;
+    uint64_t g  = rat_gcd_u64(un, ud);
+    if (g != 0) { un /= g; ud /= g; }
+    if (ud > 9223372036854775807ULL ||
+        un > (neg ? 9223372036854775808ULL : 9223372036854775807ULL)) {
+        diag_emit(DIAG_ERROR, sp,
+                  "normalized rational literal '#rat{%.*s}' does not fit in "
+                  "int64 (TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+    int64_t nn = neg ? (int64_t)(~un + 1ULL) : (int64_t)un;
+    int64_t nd = (int64_t)ud;
+
+    const Symbol *ctor = symtab_intern(r->st, strslice("rat/of!", 7));
+    Form **items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    items[0] = form_sym(r->arena, sp, ctor);
+    items[1] = form_int(r->arena, sp, nn);
+    items[2] = form_int(r->arena, sp, nd);
+    return form_list(r->arena, sp, items, 3);
+}
+
+/* N2 (numeric-tower-rational-complex-plan §5.2): read a `#cx{re im}` complex
+ * literal -> `(complex/of re im)`.
+ *
+ * `#cx` rather than `#c`: a single-letter dispatch is too scarce a name to
+ * spend, and `#c` reads as "C" in a codebase full of inline-C blocks.  Unlike
+ * `#rat{...}`, the two slots are read as ordinary FORMS, so a computed
+ * component composes -- `#cx{3.25 {1.0 + 0.5}}` works, and the curly-infix
+ * inner expression is exactly what it looks like.
+ *
+ *   TUR-E0285 -- wrong number of slot forms */
+static Form *read_cx_literal(Reader *r) {
+    uint32_t s_line = r->line, s_col = r->col;
+    size_t   s_off  = r->pos;
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'c' */
+    advance(r); /* consume 'x' */
+    /* peek == '{' guaranteed by caller */
+    Form *seq = read_seq(r, '{', '}', F_LIST,
+                         "unterminated complex literal (missing '}') "
+                         "(TUR-E0285)");
+    if (!seq || r->error) return NULL;
+    Span sp = span_from_to(r, s_line, s_col, s_off, r->pos);
+    if (seq->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, sp,
+                  "#cx{...} requires exactly two slot forms (real and "
+                  "imaginary part); got %u (TUR-E0285)", seq->as.list.len);
+        r->error = true;
+        return NULL;
+    }
+    const Symbol *ctor = symtab_intern(r->st, strslice("complex/of", 10));
+    Form **items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    items[0] = form_sym(r->arena, sp, ctor);
+    items[1] = seq->as.list.items[0];
+    items[2] = seq->as.list.items[1];
+    return form_list(r->arena, sp, items, 3);
+}
+
 /* DL0: Try to read a #<tag>{...} data literal.  Returns NULL (without
  * consuming) when the input is not a data literal so the caller can fall
  * through to other '#'-dispatches.  Only invoked when -Xdata-literals is on.
@@ -1123,6 +1365,15 @@ static Form *try_read_data_literal(Reader *r) {
         peek_at(r, 7) == '{') {
         return read_refine_literal(r);
     }
+    /* N1/N2: the numeric-tower literals.  Always on, not a #lang layer -- a
+     * core data-literal dispatch belongs here with #map / #set. */
+    if (peek_at(r, 1) == 'r' && peek_at(r, 2) == 'a' &&
+        peek_at(r, 3) == 't' && peek_at(r, 4) == '{') {
+        return read_rat_literal(r);
+    }
+    if (peek_at(r, 1) == 'c' && peek_at(r, 2) == 'x' && peek_at(r, 3) == '{') {
+        return read_cx_literal(r);
+    }
     /* Detect a #<ident>{ shape with an unrecognized tag -> TUR-E0283.
      * Scan a run of identifier characters after '#'; if it is followed by
      * '{' and the run is non-empty, it looked like a data-literal dispatch. */
@@ -1136,7 +1387,8 @@ static Form *try_read_data_literal(Reader *r) {
         tag[tlen] = '\0';
         diag_emit(DIAG_ERROR, s,
                   "unknown data-literal dispatch tag '#%s{...}'; "
-                  "expected '#map{...}', '#set{...}', or '#row{...}' (TUR-E0283)", tag);
+                  "expected '#map{...}', '#set{...}', '#row{...}', "
+                  "'#rat{...}', or '#cx{...}' (TUR-E0283)", tag);
         r->error = true;
         return NULL;
     }
@@ -2946,6 +3198,25 @@ static Form *read_form(Reader *r) {
     if (c == '#' && peek2(r) == 'f' && peek3(r) == 'x' && peek_at(r, 3) == '{') {
         return read_fx_row(r);
     }
+    /* C2 / #reads: `#reads <sym>` read-frame annotation.  Checked here, before
+     * try_read_data_literal (which claims `#<ident>{` shapes), and unambiguous:
+     * `#reads` is followed by whitespace/a symbol, not `{`, and no other reader
+     * literal spells `#reads`.  is_sym_cont(peek_at(6)) guards against a longer
+     * identifier like `#readsx`. */
+    if (c == '#' && peek2(r) == 'r' && peek3(r) == 'e' && peek_at(r, 3) == 'a' &&
+        peek_at(r, 4) == 'd' && peek_at(r, 5) == 's' && !is_sym_cont(peek_at(r, 6))) {
+        return read_reads_annot(r);
+    }
+    /* WF1 / #writes: `#writes <sym>` / `#writes [<sym> ...]` write-frame
+     * annotation.  Same window and same reasoning as `#reads` above -- it must
+     * precede try_read_data_literal, and no other reader literal spells
+     * `#writes` (the `#w` prefix is otherwise unclaimed).  is_sym_cont at 7
+     * guards a longer identifier like `#writesx`. */
+    if (c == '#' && peek2(r) == 'w' && peek3(r) == 'r' && peek_at(r, 3) == 'i' &&
+        peek_at(r, 4) == 't' && peek_at(r, 5) == 'e' && peek_at(r, 6) == 's' &&
+        !is_sym_cont(peek_at(r, 7))) {
+        return read_writes_annot(r);
+    }
     if (c == '#' && peek2(r) == '{') {
         return read_map(r);
     }
@@ -3158,16 +3429,39 @@ static int try_consume_use_directive(Reader *r,
         return 1;
     }
 
+    const char *rel = path_form->as.s.p;
     char abs_path[4096];
-    if (path_form->as.s.p[0] != '/' && r->file && r->file->base_dir) {
+    if (rel[0] != '/' && r->file && r->file->base_dir) {
         /* The reading file's path has no usable dirname (e.g. the synthetic
          * "<eval>" blob under --interpret); resolve the relative path against
          * the script's base_dir instead. */
-        snprintf(abs_path, sizeof(abs_path), "%s/%s",
-                 r->file->base_dir, path_form->as.s.p);
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", r->file->base_dir, rel);
     } else {
-        rm_resolve_relative(r->file->path, path_form->as.s.p,
-                            abs_path, sizeof(abs_path));
+        rm_resolve_relative(r->file->path, rel, abs_path, sizeof(abs_path));
+    }
+
+    /* Stdlib-path fallback (mirrors (load)'s "stdlib/<rest>" retry, see
+     * elab_toplevel.c): a "stdlib/..." path that does not resolve against the
+     * reading file's directory is retried against TUR_STDLIB_DIR (default
+     * "stdlib" relative to cwd).  This lets a stdlib-shipped reader-macro file
+     * be referenced by a stable path from anywhere -- e.g.
+     * `#use-reader-macros "stdlib/string-reader.tur"` -- exactly like
+     * `(load "stdlib/...")`, instead of only resolving next to the caller. */
+    if (rel[0] != '/' && strncmp(rel, "stdlib/", 7) == 0) {
+        FILE *probe = fopen(abs_path, "rb");
+        if (probe) {
+            fclose(probe);
+        } else {
+            const char *sdir = getenv("TUR_STDLIB_DIR");
+            if (!sdir || !*sdir) sdir = "stdlib";
+            char alt[4096];
+            snprintf(alt, sizeof(alt), "%s/%s", sdir, rel + 7);
+            FILE *ap = fopen(alt, "rb");
+            if (ap) {
+                fclose(ap);
+                snprintf(abs_path, sizeof(abs_path), "%s", alt);
+            }
+        }
     }
 
     if (reader_macros_load_file(r->arena, r->st, abs_path, reg) != 0) {
@@ -3218,7 +3512,10 @@ static int try_consume_use_directive(Reader *r,
  *   5. `$` rest-of-line: a `$` token at top level (not inside
  *      brackets/string/comment) wraps the rest of the line in `(` `)`,
  *      i.e. `f $ g x` becomes `f (g x)`.  Counts as a single element
- *      for wrap decisions.
+ *      for wrap decisions.  The wrap is suppressed when the rest is
+ *      already one complete delimited expression -- `f $ g(x)` emits
+ *      `f g(x)`, not `f ((g x))`.  See
+ *      sweet_dollar_rest_is_delimited().
  *
  * Unsupported (yet): `\\` group operator, explicit `\` line
  * continuation.  Block-comment lines are treated as regular
@@ -3633,6 +3930,65 @@ static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
     }
 }
 
+/* True when [start, end) is *already* exactly one complete, delimited
+ * expression: an optional prefix run (an identifier for a neoteric call,
+ * or reader/quote sigils like `#map`, `'`, `` ` ``) glued directly to one
+ * balanced `(`/`[`/`{` group that closes at the end of the range.
+ *
+ * `$` means "wrap the rest of the line in one pair of parens", which is
+ * right for a bare token sequence (`f $ g 1 2` => `(f (g 1 2))`) but adds a
+ * second application layer when the rest is already one expression --
+ * `f $ g(1)` would become `(f ((g 1)))`.  The `$` rewrite consults this to
+ * suppress the redundant wrap.  A bare atom (`f $ g`) is deliberately NOT
+ * covered: SRFI-110 specifies `(f (g))` there, and that is a call, not a
+ * double application. */
+static bool sweet_dollar_rest_is_delimited(const char *src,
+                                            size_t start, size_t end) {
+    while (start < end && (src[start] == ' ' || src[start] == '\t')) start++;
+    while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\t' ||
+                           src[end - 1] == '\r' || src[end - 1] == '\n'))
+        end--;
+    if (start >= end) return false;
+
+    /* Prefix: everything before the first opening delimiter.  Any
+     * whitespace, string quote, stray closer, continuation or second `$`
+     * in it means the rest is a sequence, not a single expression. */
+    size_t p = start;
+    while (p < end) {
+        char c = src[p];
+        if (c == '(' || c == '[' || c == '{') break;
+        if (c == ' ' || c == '\t' || c == '"' || c == '\\' || c == '$' ||
+            c == ')' || c == ']' || c == '}')
+            return false;
+        p++;
+    }
+    if (p >= end) return false;  /* no delimited group at all */
+
+    /* The group must be balanced and must close exactly at `end`. */
+    int bd = 0;
+    bool in_str = false;
+    size_t q = p;
+    while (q < end) {
+        char c = src[q];
+        if (in_str) {
+            if (c == '\\' && q + 1 < end) { q += 2; continue; }
+            if (c == '"') in_str = false;
+            q++; continue;
+        }
+        if (c == '"') { in_str = true; q++; continue; }
+        if (c == '(' || c == '[' || c == '{') { bd++; q++; continue; }
+        if (c == ')' || c == ']' || c == '}') {
+            bd--; q++;
+            if (bd == 0) break;
+            if (bd < 0) return false;
+            continue;
+        }
+        q++;
+    }
+    if (in_str || bd != 0) return false;
+    return q == end;
+}
+
 /* Emit the line content with `$` rewritten to `(<rest-of-line>)`.
  * Records xform→original byte runs in e->map (when non-NULL) so
  * diagnostic snippets can be rendered from the user's original source. */
@@ -3714,7 +4070,6 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
         if (bd == 0 && c == '$' &&
             (i + 1 >= end || src[i + 1] == ' ' || src[i + 1] == '\t')) {
             /* Replace `$ <rest>` with `(<rest>)`. */
-            emit_insert_char_(e, '(');
             i++;
             /* Skip the whitespace immediately after `$`. */
             while (i < end && (src[i] == ' ' || src[i] == '\t')) i++;
@@ -3734,8 +4089,14 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
                 rs++;
             }
             rest_end = rs;
+            /* ... but when the rest is already one complete expression --
+             * a neoteric call `g(7)`, a parenthesised form `(g 7)`, a
+             * curly-infix group, a data literal -- wrapping it again would
+             * apply the result as a function.  Emit it as-is. */
+            bool wrap = !sweet_dollar_rest_is_delimited(src, i, rest_end);
+            if (wrap) emit_insert_char_(e, '(');
             sweet_emit_content(e, src, i, rest_end);
-            emit_insert_char_(e, ')');
+            if (wrap) emit_insert_char_(e, ')');
             i = rest_end;
             continue;
         }
@@ -3858,10 +4219,24 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
     return result;
 }
 
-Form **read_all_with_registry(Arena *arena, SymbolTable *st,
-                              const SourceFile *file,
-                              struct ReaderMacroRegistry *external_reg,
-                              uint32_t *out_count) {
+/* TR2 (turi-incremental-elaboration-design): offset-aware core.
+ *
+ * `start_offset` / `start_line` let the interpreter re-read ONLY the newly
+ * appended tail of a long-lived eval session's accumulated source while still
+ * passing the FULL accumulated blob as `file` -- so the Forms it produces carry
+ * absolute spans into that blob and diagnostics render correctly, without
+ * re-parsing the prefix every turn (the O(N^2) re-parse).
+ *
+ * `read_all_with_registry` is exactly this with (0, 1), so the compiler path is
+ * byte-identical. Callers must not use a non-zero offset with READER_SWEET: the
+ * t-expression preprocessor rewrites the whole buffer, so an offset expressed in
+ * original coordinates is meaningless in transformed ones. The interpreter
+ * guards on reader_type before opting in. */
+Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
+                                   const SourceFile *file,
+                                   struct ReaderMacroRegistry *external_reg,
+                                   uint32_t start_offset, uint32_t start_line,
+                                   uint32_t *out_count) {
     /* For READER_SWEET, run the t-expression preprocessor first.  The
      * transformed source replaces the SourceFile in the diag registry so
      * that span offsets recorded in Forms (which index into r.src) match
@@ -3896,8 +4271,10 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
     r.st = st;
     r.src = eff_file->src;
     r.len = eff_file->len;
-    r.pos = 0;
-    r.line = 1;
+    /* TR2: resume at the caller's offset (0 for every non-interpreter caller).
+     * Clamped so a stale offset can never read past the buffer. */
+    r.pos = (start_offset <= eff_file->len) ? start_offset : (uint32_t)eff_file->len;
+    r.line = start_line ? start_line : 1;
     r.col = 1;
     r.error = false;
     /* Phase S1: Set syntax feature flags based on reader type from SourceFile.
@@ -3915,6 +4292,20 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
         reg = &local_reg;
     }
     r.user_macros = reg;
+
+    /* L2: activate every `#lang` reader layer before the first form.  Each
+     * hook registers its `#`-dispatch into `reg` (idempotently, so a
+     * persistent REPL/interp registry is safe).  `file->lang_layers` (not
+     * eff_file's) carries the set: the sweet-exp xform copies it via `*xfile
+     * = *file`, and layers are orthogonal to the base reader. */
+    lang_layers_apply_readers(file->lang_layers, reg, arena, st);
+
+    /* L4: a SEMANTIC layer turns on its backing experiment for this file --
+     * `#lang turmeric refined` is exactly `--enable=refined`, scoped here.
+     * A manifest that scoped :experiments without it is a hard error; the
+     * diagnostic is already emitted, and the caller sees it via
+     * diag_had_error(). */
+    (void)lang_layers_apply_semantic(file->lang_layers, file->path);
 
     switch (file->reader_type) {
         case READER_TURMERIC:
@@ -3939,7 +4330,7 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
      * etc.).  The shebang is recognized only at byte 0 and must look like
      * `#!` followed by `/`, whitespace, or EOL — leaving `#!fold-case`-style
      * future reader directives unaffected. */
-    if (r.len >= 2 && r.src[0] == '#' && r.src[1] == '!' &&
+    if (r.pos == 0 && r.len >= 2 && r.src[0] == '#' && r.src[1] == '!' &&
         (r.len < 3 || r.src[2] == '/' || r.src[2] == ' ' || r.src[2] == '\t' ||
          r.src[2] == '\n' || r.src[2] == '\r')) {
         while (r.pos < r.len && r.src[r.pos] != '\n') r.pos++;
@@ -3981,7 +4372,12 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
                 free(forms);
                 return NULL;
             }
-            continue;
+            /* Normally the directive is a pure read-time side effect and is
+             * stripped from the output.  The formatter opts to keep it (via
+             * reg->keep_define_forms) so `tur fmt` round-trips the source
+             * instead of silently deleting the definition. */
+            if (!reg || !reg->keep_define_forms)
+                continue;
         }
 
         if (n == cap) {
@@ -4001,6 +4397,17 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
     return out;
 }
 
+/* Whole-file read: the offset-aware core starting at the top. Every compiler
+ * path goes through here, so its behavior is unchanged by TR2. */
+Form **read_all_with_registry(Arena *arena, SymbolTable *st,
+                              const SourceFile *file,
+                              struct ReaderMacroRegistry *external_reg,
+                              uint32_t *out_count) {
+    return read_all_with_registry_from(arena, st, file, external_reg,
+                                       /*start_offset=*/0, /*start_line=*/1,
+                                       out_count);
+}
+
 Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
                 uint32_t *out_count) {
     return read_all_with_registry(arena, st, file, NULL, out_count);
@@ -4008,11 +4415,37 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
 
 /* #lang directive detection and reader type utilities */
 
-/* Parse #lang directive from the first line of source */
-ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
-                       size_t *out_rest_len) {
+/* Resolve a `#lang` base name (the first, possibly slash-namespaced, token)
+ * to a ReaderType.  Returns (ReaderType)-1 for an unknown base. */
+static ReaderType lang_base_from_name(const char *name, size_t len) {
+    if (len == 8 && memcmp(name, "turmeric", 8) == 0)
+        return READER_TURMERIC;
+    if (len == 20 && memcmp(name, "turmeric/curly-infix", 20) == 0)
+        return READER_CURLY_INFIX;
+    if (len == 17 && memcmp(name, "turmeric/neoteric", 17) == 0)
+        return READER_NEOTERIC;
+    /* L3: `turmeric/sweet` is the slash-namespaced spelling; `sweet-exp` is
+     * the legacy alias, accepted silently through v1. */
+    if (len == 14 && memcmp(name, "turmeric/sweet", 14) == 0)
+        return READER_SWEET;
+    if (len == 9 && memcmp(name, "sweet-exp", 9) == 0)
+        return READER_SWEET;
+    return (ReaderType)-1;
+}
+
+/* Parse #lang directive, reporting the base reader plus the additive layer
+ * set (lang-layers-plan L0).  See the declaration in diag.h for the
+ * out-param contract. */
+ReaderType detect_lang_layered(const char *src, size_t len,
+                               const char **out_rest, size_t *out_rest_len,
+                               LangLayerSet *out_layers,
+                               const char **out_bad, size_t *out_bad_len) {
     const char *p = src;
     size_t remaining = len;
+
+    if (out_layers)  *out_layers  = 0;
+    if (out_bad)     *out_bad     = NULL;
+    if (out_bad_len) *out_bad_len = 0;
 
     /* Racket-style shebang: if the file starts with `#!` (followed by `/` or
      * whitespace, to disambiguate from any future `#!`-dispatched form),
@@ -4032,7 +4465,7 @@ ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
     }
 
     /* Check for #lang */
-    if (remaining >= 5 && p[0] == '#' && p[1] == 'l' && p[2] == 'a' && 
+    if (remaining >= 5 && p[0] == '#' && p[1] == 'l' && p[2] == 'a' &&
         p[3] == 'n' && p[4] == 'g') {
         p += 5;
         remaining -= 5;
@@ -4043,48 +4476,77 @@ ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
             remaining--;
         }
 
-        /* Extract the language name (can contain slashes) */
+        /* Extract the base name (the first token; it can contain slashes). */
         const char *lang_start = p;
         size_t lang_len = 0;
-        while (remaining > 0 && p[0] != ' ' && p[0] != '\t' && 
+        while (remaining > 0 && p[0] != ' ' && p[0] != '\t' &&
                p[0] != '\n' && p[0] != '\r') {
             p++;
             lang_len++;
             remaining--;
         }
 
-        /* Determine reader type from language name */
-        if (lang_len == 8 && memcmp(lang_start, "turmeric", 8) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_TURMERIC;
-        } else if (lang_len == 20 && memcmp(lang_start, "turmeric/curly-infix", 20) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_CURLY_INFIX;
-        } else if (lang_len == 17 && memcmp(lang_start, "turmeric/neoteric", 17) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_NEOTERIC;
-        } else if (lang_len == 9 && memcmp(lang_start, "sweet-exp", 9) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_SWEET;
+        ReaderType base = lang_base_from_name(lang_start, lang_len);
+
+        /* Collect the space-separated trailing tokens as the layer set, then
+         * consume to end-of-line so no token ever leaks into the body handed
+         * to the reader.  `p` stops AT the newline (matching the
+         * no-trailing-token path, where the base-name loop already halts on
+         * `\n`/`\r`), leaving the terminator in place so the body keeps its
+         * original line numbering -- the empty line 1 the reader sees stands
+         * in for the stripped `#lang` line. */
+        for (;;) {
+            while (remaining > 0 && (p[0] == ' ' || p[0] == '\t')) {
+                p++;
+                remaining--;
+            }
+            if (remaining == 0 || p[0] == '\n' || p[0] == '\r') break;
+
+            const char *tok = p;
+            size_t tok_len = 0;
+            while (remaining > 0 && p[0] != ' ' && p[0] != '\t' &&
+                   p[0] != '\n' && p[0] != '\r') {
+                p++;
+                tok_len++;
+                remaining--;
+            }
+
+            /* Only classify tokens when the caller wants the layer set; the
+             * base-only detect_lang wrapper just consumes them. */
+            if (out_layers) {
+                long idx = lang_layer_index(tok, tok_len);
+                if (idx >= 0) {
+                    *out_layers = lang_layer_add(*out_layers, idx);
+                } else if (lang_layer_is_graduated(tok, tok_len)) {
+                    /* Accepted and ignored: the layer's behaviour is now
+                     * unconditional, so the token asks for something already
+                     * true.  Reporting it as unknown would break every file
+                     * that opted in per-file at the moment the feature stopped
+                     * being optional.  Warns once, inside the lookup. */
+                } else if (out_bad && *out_bad == NULL) {
+                    *out_bad = tok;              /* first unknown token */
+                    if (out_bad_len) *out_bad_len = tok_len;
+                }
+            }
         }
 
-        /* Unknown #lang - return a special value to indicate error */
-        /* We'll use READER_TURMERIC + 1 as a sentinel, but better to add a new type */
-        /* For now, just return TURMERIC and let the caller check */
         if (out_rest) *out_rest = p;
         if (out_rest_len) *out_rest_len = remaining;
-        /* Return a special "unknown" type - we'll add this to the enum */
-        return (ReaderType)-1; /* Unknown/invalid */
+        return base;   /* (ReaderType)-1 when the base name is unknown */
     }
 
     /* No #lang directive found */
     if (out_rest) *out_rest = src;
     if (out_rest_len) *out_rest_len = len;
     return READER_TURMERIC;
+}
+
+/* Base-reader-only wrapper: parses (and EOL-consumes) any layer tokens but
+ * discards them.  Existing callers that don't thread the layer set use this. */
+ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
+                       size_t *out_rest_len) {
+    return detect_lang_layered(src, len, out_rest, out_rest_len,
+                               NULL, NULL, NULL);
 }
 
 /* Get reader type from file extension */

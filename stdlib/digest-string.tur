@@ -1,0 +1,49 @@
+;;; tur/digest-string -- owned String siblings for the tur/digest hex digests.
+;;;
+;;; digest/sha256-hex and digest/md5-hex return a freshly-allocated cstr the
+;;; caller must free. Hex digests are canonically retained -- as cache keys,
+;;; content IDs, or long-lived Map/Set keys -- which is exactly where a
+;;; borrowed-typed owned buffer becomes a lifetime hazard (see
+;;; string-adoption-stdlib-plan.md, item 4). This opt-in module returns them as
+;;; owned Strings, safe to store and to use as a MapKey[String].
+;;;
+;;; Separate module so the lean tur/digest stays free of the map/typeclass
+;;; dependency; only programs wanting owned digest Strings load this.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 2)
+(load "stdlib/digest.tur")
+
+(load "stdlib/string.tur")
+;;; digest/sha256-string -- SHA-256 of a byte buffer as a lowercase-hex String.
+;;;
+;;; Parameters:
+;;;   data -- pointer (as :int) to the byte data
+;;;   len  -- number of bytes to hash
+;;;
+;;; Returns:
+;;;   An owned String of 64 lowercase hex characters, safe to store or key a map.
+;;;
+;;; Example:
+;;;   (string/to-cstr (digest/sha256-string 0 0))
+;;;   ; => "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+;;;
+;;; Since: v2
+
+(defn digest/sha256-string [data : int len : int] : String
+  (string/adopt-cstr (digest/sha256-hex data len)))
+;;; digest/md5-string -- MD5 of a byte buffer as a lowercase-hex String.
+;;;
+;;; Parameters:
+;;;   data -- pointer (as :int) to the byte data
+;;;   len  -- number of bytes to hash
+;;;
+;;; Returns:
+;;;   An owned String of 32 lowercase hex characters, safe to store or key a map.
+;;;
+;;; Example:
+;;;   (string/to-cstr (digest/md5-string 0 0))  ; => "d41d8cd98f00b204e9800998ecf8427e"
+;;;
+;;; Since: v2
+
+(defn digest/md5-string [data : int len : int] : String
+  (string/adopt-cstr (digest/md5-hex data len)))

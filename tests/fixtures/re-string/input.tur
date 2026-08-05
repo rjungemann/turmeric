@@ -1,0 +1,17 @@
+;; string-adoption-stdlib-plan batch 3: owned String siblings for tur/re.
+;; re/replace-string, re/replace-all-string, re/union-patterns-string adopt the
+;; freshly-built cstr from the re builders into an owned String (via
+;; string/adopt-cstr), safe to store / return.
+(load "stdlib/re-string.tur")
+
+(defn demo [] : int
+  (do
+    (println (string/to-cstr (re/replace-string (re/compile "[0-9]") "a1b2" "X")))
+    (println (string/to-cstr (re/replace-all-string (re/compile "[0-9]") "a1b2c3" "X")))
+    (println (string/to-cstr
+               (re/union-patterns-string (cons "[A-Za-z]+" (cons "[0-9]+" 0)))))
+    ;; empty pattern list -> underlying builder returns 0 -> adopt gives ""
+    (println (string/len (re/union-patterns-string 0)))
+    0))
+
+(demo)

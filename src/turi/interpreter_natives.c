@@ -29,6 +29,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include "../runtime/tur_string.h"
 #if defined(_WIN32)
 /* Windows has no fork/exec.  The CRT's _spawnvp/_cwait are the direct
  * equivalents (spawn-and-return-a-handle, then reap it), so process/spawn and
@@ -2538,6 +2539,57 @@ static TuriValue native_math_floor(TuriEnv *env, TuriValue *a, uint32_t n, void 
     double x = (n > 0) ? a[0].as_float : 0.0;
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = floor(x); return rv;
 }
+/* N2 (numeric-tower-rational-complex-plan): the transcendental libm wrappers
+ * stdlib/complex.tur builds `complex/exp` and `complex/arg` on.  They are
+ * inline-C in math.tur, which the tree-walker cannot run, so each needs the
+ * same native override sqrt/floor already carry -- otherwise a Complex program
+ * would diverge between the compiled and interpreted engines. */
+static TuriValue native_math_exp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = exp(x); return rv;
+}
+static TuriValue native_math_log(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = log(x); return rv;
+}
+static TuriValue native_math_sin(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = sin(x); return rv;
+}
+static TuriValue native_math_cos(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = cos(x); return rv;
+}
+static TuriValue native_math_atan2(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double y = (n > 0) ? a[0].as_float : 0.0;
+    double x = (n > 1) ? a[1].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = atan2(y, x); return rv;
+}
+/* fabs / ceil / pow: math.tur's remaining libm wrappers, which had no native
+ * override.  stdlib/complex.tur reaches `fabs` from complex/div and complex/abs,
+ * so without these an interpreted Complex program dies on "inline-C not
+ * supported in interpreter mode" the moment it divides. */
+static TuriValue native_math_fabs(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = fabs(x); return rv;
+}
+static TuriValue native_math_ceil(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = ceil(x); return rv;
+}
+static TuriValue native_math_pow(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    double y = (n > 1) ? a[1].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = pow(x, y); return rv;
+}
 
 /* -------------------------------------------------------------------------
  * I/O benchmark native helpers (file_read.tur, file_write.tur).
@@ -3072,6 +3124,14 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "float->int",        native_float_to_int,    NULL);
     turi_env_register_native(env, "sqrt",              native_math_sqrt,       NULL);
     turi_env_register_native(env, "floor",             native_math_floor,      NULL);
+    turi_env_register_native(env, "exp",               native_math_exp,        NULL);
+    turi_env_register_native(env, "log",               native_math_log,        NULL);
+    turi_env_register_native(env, "sin",               native_math_sin,        NULL);
+    turi_env_register_native(env, "cos",               native_math_cos,        NULL);
+    turi_env_register_native(env, "atan2",             native_math_atan2,      NULL);
+    turi_env_register_native(env, "fabs",              native_math_fabs,       NULL);
+    turi_env_register_native(env, "ceil",              native_math_ceil,       NULL);
+    turi_env_register_native(env, "pow",               native_math_pow,        NULL);
     /* I/O benchmark helpers */
     turi_env_register_native(env, "write-temp-file",   native_write_temp_file, NULL);
     turi_env_register_native(env, "io-fopen-read",     native_io_fopen_read,   NULL);
@@ -3946,8 +4006,8 @@ static TuriValue native_show_int(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_cstr(buf);
 }
 
-/* Show [float].show / Show [bool].show / Show [cstr].show */
-static TuriValue native_show_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+/* show-float: standalone show function for floats (used in show-float fixture) */
+static TuriValue native_show_float_fn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     double v = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : 0.0;
     char *buf = (char *)malloc(64);
@@ -3955,40 +4015,87 @@ static TuriValue native_show_float(TuriEnv *env, TuriValue *a, uint32_t n, void 
     snprintf(buf, 64, "%g", v);
     return turi_cstr(buf);
 }
-static TuriValue native_show_bool(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+
+/* ---- Show instance-method fallbacks: return an OWNED String -----------------
+ * show-owned-result-plan stage 4/5: the stdlib `Show` renders to an owned
+ * `String`, and its numeric/float instance bodies are inline-C the tree-walker
+ * cannot execute.  These fallbacks build a real String (via tur_string_from_*)
+ * and box the handle as turi_int -- the same representation string_native.c
+ * uses -- so `(show x)` under `--interpret` returns a releasable String, not a
+ * bare cstr (which string/to-cstr / string/release would then misread). */
+static TuriValue show_str_of_cstr(const char *s) {
+    return turi_int((int64_t)(intptr_t)tur_string_from_cstr(s));
+}
+static TuriValue native_show_int_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_string_from_int((n > 0) ? a[0].as_int : 0));
+}
+static TuriValue native_show_uint_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char buf[24];
+    snprintf(buf, sizeof buf, "%llu",
+             (unsigned long long)((n > 0) ? (uint64_t)a[0].as_int : 0));
+    return show_str_of_cstr(buf);
+}
+static TuriValue native_show_float_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : 0.0;
+    char buf[32];
+    snprintf(buf, sizeof buf, "%g", v);
+    return show_str_of_cstr(buf);
+}
+static TuriValue native_show_bool_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     bool v = (n > 0 && a[0].tag == TURI_BOOL) ? a[0].as_bool : false;
-    return turi_cstr(v ? "true" : "false");
+    return show_str_of_cstr(v ? "true" : "false");
 }
-static TuriValue native_show_cstr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+static TuriValue native_show_cstr_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    return (n > 0 && a[0].tag == TURI_CSTR) ? a[0] : turi_nil();
+    return show_str_of_cstr((n > 0 && a[0].tag == TURI_CSTR) ? json_arg_cstr(a[0]) : "");
 }
 
-/* show-float: standalone show function for floats (used in show-float fixture) */
-static TuriValue native_show_float_fn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    return native_show_float(env, a, n, ud);
+/* show-string-fputs: write a cstr to stdout with no trailing newline.
+ *
+ * stdlib/typeclass-show.tur spells this as an inline-C `fputs`, which the
+ * tree-walker cannot execute -- so `print-show` (the only caller) aborted the
+ * whole program under `--interpret` even though `show` / `show-line` interpret
+ * fine.  Overriding it natively keeps `print-show` on the interpreted path. */
+static TuriValue native_show_string_fputs(TuriEnv *env, TuriValue *a,
+                                          uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = (n > 0) ? json_arg_cstr(a[0]) : NULL;
+    if (s) fputs(s, stdout);
+    return turi_nil();
 }
 
 void wk_register_typeclass_natives(TuriEnv *env) {
-    /* Show typeclass instances */
-    turi_env_register_native(env, "__inst_Show_show_int",   native_show_int,   NULL);
-    turi_env_register_native(env, "__inst_Show_show_float", native_show_float, NULL);
+    /* Show typeclass instances -- return owned String (stage 4/5).  Signed
+     * fixed-width types carry as int64 in the interpreter, so they share the
+     * int fallback; unsigned share the %llu fallback. */
+    turi_env_register_native(env, "__inst_Show_show_int",     native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_int8",    native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_int16",   native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_int32",   native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint8",   native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint16",  native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint32",  native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint64",  native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_float",   native_show_float_str, NULL);
+    turi_env_register_native(env, "__inst_Show_show_float32", native_show_float_str, NULL);
     /* NOTE: do NOT register the carrier-fallback `__inst_Show_show_T` here.
-     * The `_T` suffix is the ABSTRACT/carrier mangling, not float-specific
-     * (TY_FLOAT now mangles to the concrete `_float` suffix above).  Any
-     * user-defined `Show` instance over a carrier-typed receiver -- an
-     * opaque handle, an `rc<T>`, etc. -- emits its method as
-     * `__inst_Show_show_T`, so pre-binding that name to native_show_float
-     * silently HIJACKS the user's instance and returns "0" for every
-     * non-float receiver (turi-carrier-fallback-instance-method-silent-
-     * miscompile / exg5-rc-in-exists).  Leaving it unbound lets the user's
-     * own instance method resolve. */
-    turi_env_register_native(env, "__inst_Show_show_bool",  native_show_bool,  NULL);
-    turi_env_register_native(env, "__inst_Show_show_cstr",  native_show_cstr,  NULL);
-    /* Standalone show helpers used in some fixtures */
+     * The `_T` suffix is the ABSTRACT/carrier mangling; pre-binding it would
+     * silently HIJACK any user Show instance over a carrier-typed receiver
+     * (opaque handle, rc<T>, ...) and mis-render it.  Leaving it unbound lets
+     * the user's own instance method resolve. */
+    turi_env_register_native(env, "__inst_Show_show_bool",  native_show_bool_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_cstr",  native_show_cstr_str,  NULL);
+    /* Standalone cstr show helpers (NOT the Show class): used by fixtures that
+     * call bare show-int/show-float and expect a cstr. */
     turi_env_register_native(env, "show-float", native_show_float_fn, NULL);
     turi_env_register_native(env, "show-int",   native_show_int,      NULL);
+    /* print-show's output helper -- inline-C in the stdlib, native here. */
+    turi_env_register_native(env, "show-string-fputs",
+                             native_show_string_fputs, NULL);
 }
 
 /* Native implementation of tur-contract-check (bool * cstr -> void).

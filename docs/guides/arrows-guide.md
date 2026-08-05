@@ -37,7 +37,7 @@ one, and falls back to the bare combinator otherwise -- so a single `(load
 "stdlib/arrow.tur")` gives you both. (This unification became possible once a
 free `defn` and a typeclass method of the same name were allowed to coexist;
 see
-[`docs/reported/typeclass-methods-share-value-namespace-with-defns.md`](../reported/typeclass-methods-share-value-namespace-with-defns.md).)
+[`docs/reported/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-methods-share-value-namespace-with-defns.md).)
 
 For the function arrow, `arr` lifts a function (the identity up to eta), and
 `>>>` is left-to-right composition; both surfaces compute identical values --
@@ -207,7 +207,7 @@ name from `Arrow`'s `>>>`, so the two coexist without an operator collision.
 
 `ident` is **nullary** -- there is no argument to dispatch on, so it resolves by
 return-type / unique-instance dispatch (the mechanism from
-[`return-type-dispatch-nullary-arrow-methods-plan`](../archive/history/return-type-dispatch-nullary-arrow-methods-plan.md)).
+[`return-type-dispatch-nullary-arrow-methods-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/return-type-dispatch-nullary-arrow-methods-plan.md)).
 With only the `(->)` instance in scope, a bare `(ident)` resolves uniquely:
 
 ```turmeric
@@ -265,7 +265,7 @@ unrestricted values and may be reused freely.
 
 `ArrowChoice` routes an arrow over one arm of a binary sum. It builds on the
 `Either` sum type (`stdlib/either.tur`, from
-[`docs/archive/history/sum-types-either-plan.md`](../archive/history/sum-types-either-plan.md));
+[`docs/archive/history/sum-types-either-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md));
 `left` acts on `Left` and passes `Right` through, `+++` fans two arrows over the
 two arms, and `|||` collapses both arms to a common result:
 
@@ -588,16 +588,16 @@ let [dummy  constant(())
 ## Extended Arrow Typeclasses
 
 An earlier scaleback
-([`docs/archive/history/stdlib-arrow-scaleback-plan.md`](../archive/history/stdlib-arrow-scaleback-plan.md))
+([`docs/archive/history/stdlib-arrow-scaleback-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-arrow-scaleback-plan.md))
 removed `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`, and `ArrowApply`
 because no instances backed them (closure-returning instance methods tripped a
 codegen bug, and several stubs needed `Either`/`Left`/`Right` sum types). Both
 gaps have since closed, so the hierarchy was **reintroduced**
-([`docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md`](../archive/history/stdlib-arrow-typeclass-reintroduction-plan.md))
+([`docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md))
 and is now live in `stdlib/arrow.tur` -- see the **Typeclass dispatch** section
 above for the full table and per-class examples. `Category` and the honest
 `Kleisli` `ArrowZero` were added on top
-([`docs/archive/history/category-arrowzero-implementation-plan.md`](../archive/history/category-arrowzero-implementation-plan.md)).
+([`docs/archive/history/category-arrowzero-implementation-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/category-arrowzero-implementation-plan.md)).
 `ArrowZero`/`ArrowPlus` remain uninstantiated at `(->)` by design (no zero for a
 total function); `Kleisli` is where `zero-arrow` honestly lives.
 
@@ -643,5 +643,5 @@ stdlib/signal/dsp.tur     -- sine, square, sawtooth, triangle,
 - **[polymorphism-guide.md](polymorphism-guide.md)** -- overview of all polymorphism mechanisms; the typeclasses section covers `Category`, `Arrow`, and `Kleisli` in context with the broader stdlib
 - **[typeclass-internals-guide.md](typeclass-internals-guide.md)** -- how `definstance` lowers to a C dictionary, the closure-handle convention, and `definstance` idempotence
 - **[hkt-guide.md](hkt-guide.md)** -- higher-kinded types; the `^arr` kind used by the Arrow typeclass
-- **[effects-vs-monads.md](effects-vs-monads.md)** -- design rationale: why Turmeric uses effects rather than monad transformers for sequencing
+- **[effects-vs-monads.md](effects-vs-monads.md)** -- why sequencing usually goes through effect handlers rather than a monad transformer stack
 - **[generators-guide.md](generators-guide.md)** -- lazy sequences; a complementary pull-based abstraction

@@ -1,0 +1,40 @@
+;; lens-composition-codegen-blockers (Blocker 2b + 2c): a generic `compose-lens`
+;; over a plain `:copy` struct-of-closures `Lens`, instantiated at WIDE by-value
+;; structs (Company/Person are >8 bytes), then run end to end.
+;;
+;; Two facets had to be fixed for this to compile AND run correctly:
+;;   2b -- the intermediate `((. l1 get) s) : A` (A the middle type param) has
+;;         its call result collapsed to the int64 carrier at elaboration; emit
+;;         now recovers the by-value aggregate result of a fat-dispatched
+;;         fn-value call per-spec (fn_body_tail_byvalue_carrier_type + the
+;;         fat-dispatch thunk-cast return), so the intermediate flows by value.
+;;   2c -- a closure stored into a typed `(fn ...)` struct field is invoked
+;;         through the field's by-value typed thunk, so its wide by-value ADT
+;;         params must NOT be B4-boxed (emit marks such closures and suppresses
+;;         b4box), matching the typed thunk + call site.
+(defstruct Person :copy [name : cstr age : int])
+(defstruct Company :copy [ceo : Person])
+(defstruct Lens :copy [S A] (get (fn [S] A)) (put (fn [S A] S)))
+
+(defn compose-lens [S A B] [l1 : (Lens S A) l2 : (Lens A B)] : (Lens S B)
+  (make-struct Lens
+    (fn [s : S] : B ((. l2 get) ((. l1 get) s)))
+    (fn [s : S b : B] : S ((. l1 put) s ((. l2 put) ((. l1 get) s) b)))))
+
+(defn main [] : int
+  (let [ceo-lens (make-struct Lens
+                   (fn [c : Company] : Person (. c ceo))
+                   (fn [c : Company p : Person] : Company (make-struct Company p)))
+        name-lens (make-struct Lens
+                    (fn [p : Person] : cstr (. p name))
+                    (fn [p : Person n : cstr] : Person (make-struct Person n (. p age))))
+        composed  (compose-lens ceo-lens name-lens)
+        acme      (make-struct Company (make-struct Person "Ann" 42))]
+    ;; get: read the CEO's name through the composed lens
+    (println ((. composed get) acme))
+    ;; put: set the CEO's name through the composed lens, then read it back
+    (let [acme2 ((. composed put) acme "Bob")]
+      (println ((. composed get) acme2))
+      ;; the untouched age survives the put (structural sharing correctness)
+      (println (. (. acme2 ceo) age)))
+    0))

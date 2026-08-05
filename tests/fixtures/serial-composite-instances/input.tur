@@ -21,15 +21,15 @@
   (let [p  (pair 7 35)
         b  (.serialize p)
         c2 (__inst_Serializable_deserialize_Pair b)]
-    (printf "pair=%lld\n" (rd-pair c2)))           ; 7035
+    (printf "pair=%ld\n" (rd-pair c2)))           ; 7035
   ;; Option[int] some round-trip
   (let [o  (:: (some 99) (Option int))
         b  (.serialize o)
         c2 (__inst_Serializable_deserialize_Option b)]
-    (printf "opt-some=%lld\n" (rd-opt c2)))         ; 99
+    (printf "opt-some=%ld\n" (rd-opt c2)))         ; 99
   ;; Option[int] none round-trip
   (let [o  (:: (none) (Option int))
         b  (.serialize o)
         c2 (__inst_Serializable_deserialize_Option b)]
-    (printf "opt-none=%lld\n" (rd-opt c2)))         ; -1
+    (printf "opt-none=%ld\n" (rd-opt c2)))         ; -1
   0)

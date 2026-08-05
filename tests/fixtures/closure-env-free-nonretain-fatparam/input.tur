@@ -1,0 +1,27 @@
+;; closure-drop-glue S1c (inferred non-retaining fn-param): a capturing closure
+;; passed inline to a ^fat / fn-typed parameter that the callee only CALLS (never
+;; stores, returns, or captures) does not escape the callee, so its heap env is
+;; freed at the call scope's exit -- previously it leaked one malloc'd env per
+;; construction.  Non-retention is INFERRED from the callee body via the closure
+;; escape analysis; a body containing inline-C is conservatively excluded (C text
+;; can store a param invisibly to the AST -- see schema-transform-closure, which
+;; DOES retain its ^fat param through inline-C and must stay leak-safe).
+;;
+;; This fixture drives the freed path for correctness (a wrong free would be a
+;; use-after-free corrupting output under plain cc); verified ASan/LSan-clean
+;; (0 leaked) out of band.  The retaining-callee guard is covered by the
+;; inline-C stdlib fixtures (schema-transform-closure, the httpd middleware set).
+(defn apply-twice [^fat h : (fn [int] #fx{} int)] : int
+  (+ (h 10) (h 20)))                       ;; h only called -> non-retaining
+
+(defn run-scaled [^fat op : (fn [int] #fx{} int) n : int] : int
+  (op n))                                  ;; op only called -> non-retaining
+
+(defn main [] : int
+  (let [base  7
+        scale 3
+        bias  100]
+    (println (apply-twice (fn [x : int] : int (+ x base))))     ;; 17+27 = 44
+    (println (run-scaled (fn [x : int] : int (* x scale)) 14))  ;; 42
+    (println (run-scaled (fn [x : int] : int (+ x bias)) 5))    ;; 105
+    0))

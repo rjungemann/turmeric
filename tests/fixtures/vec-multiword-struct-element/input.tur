@@ -20,17 +20,22 @@
 
 (definstance Show [Point]
   (show [p]
-    (show-concat "("
-      (show-concat (show (.x p))
-        (show-concat "," (show-concat (show (.y p)) ")"))))))
+    (let [b (builder/new)]
+      (do
+        (builder/push-cstr! b "(")
+        (let [sx (show (.x p))] (do (builder/push-string! b sx) (string/release sx)))
+        (builder/push-cstr! b ",")
+        (let [sy (show (.y p))] (do (builder/push-string! b sy) (string/release sy)))
+        (builder/push-cstr! b ")")
+        (builder/finish b)))))
 
 (defn main [] : int
   (let [v (vec-of (Point 1 2) (Point 3 4))]
     ;; field projection through the boxed carrier
-    (println (show (.x (vec-get v 0))))            ;; 1
-    (println (show (.y (vec-get v 1))))            ;; 4
+    (show-line (.x (vec-get v 0)))            ;; 1
+    (show-line (.y (vec-get v 1)))            ;; 4
     ;; Show[Vec] dispatches Show[Point] on each element read
-    (println (show v))                              ;; [(1,2) (3,4)]
+    (show-line v)                              ;; [(1,2) (3,4)]
     ;; free the vec: each element box is a wide by-value Point, so vec-free
     ;; threads boxed=1 (via the emit-time tur-vec-elem-wide? query) and
     ;; vec-free-o releases each data[i] box before the buffer.  Exercises the

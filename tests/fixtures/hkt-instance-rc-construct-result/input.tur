@@ -1,0 +1,70 @@
+; An HKT instance body that CONSTRUCTS a pointer-family handle must not have it
+; heap-boxed on the way out.
+;
+; The dict's uniform `int64_t (*)(...)` slot means an instance method returning a
+; by-value aggregate has to spill it to the heap and pass the pointer. That spill
+; used to fire for ANY carrier-ABI result -- including one that is already
+; carrier-width. A `Functor [rc]` body ended up emitting
+;
+;   { RcControlBlock * *__tur_ret_p = malloc(sizeof(RcControlBlock *));
+;     *__tur_ret_p = cb; return (int64_t)(intptr_t)__tur_ret_p; }
+;
+; while the consumer cast that straight back to `RcControlBlock *`. So every
+; read went one indirection too deep: `rc/strong-count` returned a malloc header
+; interpreted as a refcount, the payload was unreachable, and the real block
+; leaked because `rc/drop` decremented the box.
+;
+; The same double-box had already been found and fixed for an int64 carrier
+; result (the `(Result _ E)` fmap returning 0 for 42); a pointer is
+; carrier-width for exactly the same reason.
+;
+; Assertions are values and counts, not "it compiles" -- the broken form
+; compiled clean, with no warning.
+(load "stdlib/rc.tur")
+
+(defn dbl [x : int] : int (* x 2))
+(defn add [a : int b : int] : int (+ a b))
+
+; The no-growth assertion reads the CG6 collector counter, not a malloc probe.
+; Every value this fixture leaks-or-frees is an rc<T> control block, and each
+; one is registered at rc_cb_alloc_kinded and unregistered when it is freed --
+; by the collector OR by plain refcounting -- so (gc-live-blocks) is an exact,
+; program-scoped count of what has not been reclaimed.
+;
+; It replaced a malloc probe (mallinfo2 / malloc_zone_statistics) reading the
+; PROCESS heap, which was blind or wrong four different ways: vacuous under
+; ASan on glibc, quarantine-inflated under ASan on Darwin, reading the
+; COMPILER's heap under one-process `tur jit`, and hardcoded to 0 on any other
+; libc.  See the full table in tests/fixtures/gc-collects-strong-cycle/input.tur
+; and docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md.
+
+(defn fmap-and-drop [] : int
+  (let [r (rc/of 21)]
+    (let [m (fmap r dbl)]
+      (rc/drop m)))
+  0)
+
+(defn run [n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (fmap-and-drop)
+      (set! i (+ i 1))))
+  0)
+
+(defn main [] : int
+  (let [r (rc/of 21)]
+    (let [m (fmap r dbl)]
+      ;; Read through the returned handle. Boxed, this was a malloc header.
+      (println (rc/strong-count m))          ; 1
+      ;; And the payload really is g applied to the original's.
+      (println (:: (foldl m 0 add) int))     ; 42
+      (rc/drop m))
+    (println (rc/strong-count r)))           ; 1 -- container was borrowed
+
+  ;; The box also leaked the block it wrapped: rc/drop decremented the cell.
+  (run 500)                                  ; reach steady state before sampling
+  (let [before (gc-live-blocks)]
+    (run 5000)
+    (let [after (gc-live-blocks)]
+      (println (if (= (- after before) 0) 0 (- after before)))))
+  0)

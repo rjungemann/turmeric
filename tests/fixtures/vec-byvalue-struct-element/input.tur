@@ -1,0 +1,52 @@
+;; vec-byvalue-struct-element (increment 3, container element protocol): a
+;; `(Vec T)` whose element T is a plain NARROW (<= 8 byte) non-:heap defstruct.
+;; Before the fix (docs/archive/vec-byvalue-struct-element-invalid-c.md) the
+;; push side stack-spilled the element (`&tmp`, dangling once the frame
+;; returns) and the read side initialized the aggregate straight off the int64
+;; carrier (`tur_adt_FzB b = __ps;` -- invalid C).  The protocol now boxes
+;; any-width by-value products into container slots (malloc + copy on push,
+;; deref-unbox on read), same as the wide (> 8 byte) elements always were.
+;;
+;; Rows:
+;;   - narrow int-field element, same-frame push/get        (31)
+;;   - narrow FLOAT-field element (bit preservation)        (7.25)
+;;   - ESCAPING vec: built in a child frame, read after a
+;;     deep call clobbers the reclaimed stack               (207, 41, 42)
+;;   - DIRECT field projection on the ascribed vec-get, no
+;;     intervening let, in a reader defn (the fuzz-corpus
+;;     shape: the EX_GET_FIELD receiver recovery)           (33)
+
+(defstruct FzB [a : int])
+(defstruct FzF [a : float])
+
+(defn build [] : (Vec FzB)
+  (let [v (:: (vec-new) (Vec FzB))]
+    (vec-push! v (FzB 41))
+    (vec-push! v (FzB 42))
+    v))
+
+(defn read-direct [v : (Vec FzB)] : int
+  (.a (:: (vec-get v 0) FzB)))
+
+(defn clobber [n : int] : int
+  (if (= n 0) 7 (+ 1 (clobber (- n 1)))))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec FzB))]
+    (vec-push! v (FzB 31))
+    (let [b (:: (vec-get v 0) FzB)]
+      (println (.a b))))
+  (let [vf (:: (vec-new) (Vec FzF))]
+    (vec-push! vf (FzF 7.25))
+    (let [f (:: (vec-get vf 0) FzF)]
+      (println (.a f))))
+  (let [ve (build)]
+    (println (clobber 200))
+    (let [x (:: (vec-get ve 0) FzB)
+          y (:: (vec-get ve 1) FzB)]
+      (println (.a x))
+      (println (.a y))))
+  (let [vd (:: (vec-new) (Vec FzB))]
+    (vec-push! vd (FzB 33))
+    (println (read-direct vd)))
+  0)

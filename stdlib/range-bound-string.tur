@@ -1,0 +1,49 @@
+;;; tur/range-bound-string -- owned-String rendering for a single Bound endpoint.
+;;;
+;;; `bound->str` (stdlib/range-bound) returns a `cstr` that is a fresh malloc for
+;;; the Inclusive/Exclusive branches (via `bound-fmt` -> `str-concat`) but a
+;;; static `"unbounded"` literal for the Unbounded branch.  That sentinel mixing
+;;; makes a blind `string/adopt-cstr` wrapper unsafe: adopting the Unbounded
+;;; literal would `free()` static storage (undefined behavior).
+;;;
+;;; Unlike the httpd accessors, absence is NOT semantically meaningful here --
+;;; `Unbounded` has a perfectly good rendering (`"unbounded"`), it is simply not
+;;; heap-allocated.  So the honest type is a total `String`, not `option<String>`.
+;;; The fix is PER-BRANCH: `adopt` the malloc'd inclusive/exclusive branches,
+;;; `from-cstr` (copy, do not free) the static Unbounded literal.
+;;;
+;;; It is a SEPARATE module so the lean stdlib/range-bound (str-build only, no
+;;; typeclass/map) keeps its narrow load graph -- loading stdlib/string here would
+;;; perturb `Eq [Bound]` resolution the way the module warns against.
+;;;
+;;; Since: v2 (string-owned-builders-and-optional-accessors-plan, Part 2)
+(load "stdlib/range-bound.tur")
+
+(load "stdlib/string.tur")
+;;; bound->str-string -- render a single Bound endpoint as a fresh owned String.
+;;;
+;;; The owned sibling of `bound->str`.  Renders "[v" for Inclusive, "(v" for
+;;; Exclusive, or "unbounded" for Unbounded -- always a valid owned String, and
+;;; Unbounded never crashes (the per-branch adopt/from-cstr rule, not a blind
+;;; adopt, is what keeps the static literal from being freed).
+;;;
+;;; Parameters:
+;;;   b -- a (Bound int)
+;;;
+;;; Returns:
+;;;   A fresh owned String (rc 1); release it or hand it to a container.
+;;;
+;;; Example:
+;;;   (string/to-cstr (bound->str-string (bound-inclusive 3)))  ; => "[3"
+;;;   (string/to-cstr (bound->str-string (bound-unbounded)))    ; => "unbounded"
+;;;
+;;; Since: v2
+
+(defn bound->str-string [b : Bound] : String
+  (match b
+    (Inclusive v)
+    (string/adopt-cstr (bound-fmt 1 v))
+    (Exclusive v)
+    (string/adopt-cstr (bound-fmt 2 v))
+    (Unbounded)
+    (string/from-cstr "unbounded")))

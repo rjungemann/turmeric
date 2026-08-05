@@ -1,0 +1,20 @@
+;; Regression fixture for
+;; docs/reported/compiled-string-return-int-conversion.md (secondary blocker).
+;;
+;; This module pulls the owned stdlib String into its exported signature via
+;; `(load "stdlib/string.tur")`, then is IMPORTED by input.tur.  The load
+;; splices string.tur -> typeclass.tur -> typeclass-show.tur into this file's
+;; top level, including the self-recursive `vec-show-loop`.  Before the fix the
+;; imported-module elaboration loop ran no forward-declaration pass over those
+;; spliced top-level defns, so vec-show-loop's own recursive call resolved to
+;; "unknown function or operator 'vec-show-loop'".  With the forward-decl
+;; pre-pass in elab_load_module it resolves and the compiled binary runs.
+(load "stdlib/string.tur")
+(defmodule greeter
+  (export greet-int greet-vec)
+  ;; Show [int] -- exercises the int->string builder across the module boundary.
+  (defn greet-int [x : int] : String
+    (show x))
+  ;; Show [Vec] -- exercises the self-recursive vec-show-loop across the boundary.
+  (defn greet-vec [] : String
+    (show (vec-of 10 20 30))))

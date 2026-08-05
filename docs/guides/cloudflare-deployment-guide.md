@@ -124,6 +124,14 @@ defn main [] :int
   0
 ```
 
+> **Owned-return note.** `http-ok` assembles a fresh response with nested
+> `str-concat` and returns it as `cstr`; `handle-client` sends it and drops it
+> immediately, so the buffer is a "caller frees" result that leaks each request.
+> For a handler that builds and holds response strings, an owned `String`
+> (adopt the `str-concat` buffer, or accumulate with a `StringBuilder`) frees
+> exactly once and borrows to `cstr` for `async-socket-send`. See
+> [strings-guide.md](strings-guide.md).
+
 Test locally before containerizing:
 
 ```sh
@@ -327,6 +335,13 @@ defn handle-request [body:cstr] :cstr
 The Worker loads these definitions at startup (cold) and calls `handle-request` on
 each incoming request.
 
+> **Owned-return note.** `handle-request` returns `cstr` because
+> `turi_wasm_eval` marshals the result back to the JS host as a C string -- that
+> host boundary is a legitimate keep-`cstr` seam. If the handler grows internal
+> string-building steps beyond this one `str-concat`, build those as owned
+> `String` and convert to `cstr` only at the return. See
+> [strings-guide.md](strings-guide.md).
+
 ### Step 4 -- write the Worker
 
 ```javascript
@@ -447,6 +462,15 @@ defn greet [name :cstr] :cstr
 defn tur-handle [method :cstr path :cstr body :cstr] :cstr
   greet(if(=(cstr-length(body) 0) "world" body))
 ```
+
+> **`cstr` at the seam, `String` inside.** `tur_handle`'s signature is the
+> WASM/host C ABI (`char *tur_handle(...)`), so its return type genuinely must be
+> `cstr` -- that boundary is a legitimate keep-`cstr` site. The internal builders
+> are the owned-`String` cases: `greet` assembles a fresh `"Hello, name!"` with
+> `str-concat` (a "caller frees" buffer that leaks here). Build such internal
+> results as `String` and lower to `cstr` only at the exported seam
+> (`(string/to-cstr (greet ...))`, or `string/adopt-cstr` the `str-concat`
+> buffer). See [strings-guide.md](strings-guide.md).
 
 ### Step 2 -- compile to C
 

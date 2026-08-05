@@ -1,0 +1,30 @@
+;; E3a (owning-cloneable-capture): the CONSUMING case for a multi-word owning
+;; BY-VALUE AGGREGATE.  `Own {r: rc, tag}` is captured non-^borrow (consumed): the
+;; callee takes it BY VALUE, so it drops its own copy's owning field each call.
+;;
+;; The aggregate rides the env by ADDRESS (`&o`); a multi-shot resume would have
+;; each by-value copy drop the SHARED rc field -> over-drop.  So the env_clone
+;; increfs the aggregate's owning (rc/weak) fields via `&o` per resume -- balancing
+;; the callee-copy's drop -- and returns the SAME `&o` (no allocation: o is the
+;; owner's stable local, and the by-value copy the C call makes IS the per-resume
+;; copy).  The owner's o.r is freed once by its P5b-threaded scope-exit drop.  The
+;; rc control block is incref'd per resume, decref'd per callee-copy-drop plus once
+;; by the base -> freed exactly once.  LeakSanitizer-clean.
+
+(defstruct Own [r : rc<int> tag : int])
+
+(defn k-identity [k] : int k)
+
+(defn consume-own [v : int o : Own] : int
+  (+ v (.tag o)))
+
+(defn run [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 5)]
+    (let [k (cloneable-reset (consume-own (cloneable-shift k-identity 0) o))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))          ; (10 + 5) + (20 + 5) = 40
+
+(defn main [] : int
+  (println (run))
+  0)

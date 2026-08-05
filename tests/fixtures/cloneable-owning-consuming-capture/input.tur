@@ -1,0 +1,29 @@
+;; E3a (owning-cloneable-capture): the CONSUMING case -- a cloneable continuation
+;; frame that DROPS its captured rc once per call (not ^borrow).  This is the
+;; shape the dk_frame_owning clone-per-copy substrate was built for.
+;;
+;; A multi-shot resume would over-drop a shared handle, so the frame rides
+;; dk_frame_owning with env_clone glue: each dk_copy_node resume copy increfs its
+;; own +1 (rc_strong_increment), which the frame's own drop balances -- no
+;; env_drop.  The owner's base +1 (r = rc/of) is released once by its scope-exit
+;; drop, threaded across the reset by the P5b trailing-defer path.
+;;
+;; consume-combine drops r each call; the continuation is resumed twice (clone +
+;; original), so r is incref'd twice and dropped twice by the frame, plus the
+;; owner's one base drop.  Net: freed exactly once.  LeakSanitizer-clean.
+
+(defn k-identity [k] : int k)
+
+(defn consume-combine [v : int r : rc] : int
+  (do (rc/drop r) (+ v 1)))
+
+(defn run [] : int
+  (let [r (rc/of 99)]
+    (let [k (cloneable-reset (consume-combine (cloneable-shift k-identity 0) r))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))         ; (10 + 1) + (20 + 1) = 32
+
+(defn main [] : int
+  (println (run))
+  0)

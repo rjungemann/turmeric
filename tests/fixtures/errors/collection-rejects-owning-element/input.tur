@@ -1,0 +1,19 @@
+;; collections-cannot-hold-rc-values: storing an owning value in a collection is
+;; rejected at CHECK time with a span, not by an abort() deep in codegen.
+;;
+;; It used to fail as a bare `tur: emit: invalid EX_REINTERPRET rc -> int` with
+;; no source location -- an internal-sounding compiler message for an ordinary
+;; program.  The rejection now happens where the span still exists, at the point
+;; elaboration would build the carrier reinterpret.
+;;
+;; Vec now ACCEPTS an rc<T> element (it takes a strong reference on push and
+;; releases it on free/overwrite/removal -- see rc-of-vec-element-ownership).
+;; The map/hamt side has no such accounting, so it still rejects: an unconverted
+;; rc would put a control-block pointer in a slot the collection does not own,
+;; which is a leak or a double-free depending on which side drops it.
+(defstruct S :move [tag : int])
+
+(defn main [] : int
+  (let [a (rc/of (make-struct S 1))
+        m (hamt-of 1 (rc/clone a))]
+    0))

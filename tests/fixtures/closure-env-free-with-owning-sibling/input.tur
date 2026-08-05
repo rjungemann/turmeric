@@ -1,0 +1,25 @@
+;; fat-closure-env-leak-with-owning-sibling: a non-escaping capturing closure's
+;; heap env was leaked whenever the enclosing `let` also bound an owning value
+;; (rc/ref).  Root cause: the owning binding's auto-drop is injected as a
+;; `(defer (drop r))`, and the sibling init `(rc/of ...)` is an EX_RC_OF node;
+;; neither was modeled by the closure escape analysis (binding_escapes_impl),
+;; so both hit the conservative `default: escape` and falsely flagged EVERY
+;; sibling closure as escaping -- suppressing the scope-exit env free.
+;;
+;; The harness compiles without ASan so it cannot see the leak directly, but a
+;; WRONG free (freeing a still-live env) would crash/double-free here under
+;; plain cc; a correct one reads the values back and exits cleanly.  Verified
+;; ASan/LSan-clean out of band.
+(defn compute [] : int
+  (let [r (rc/of 100)                              ;; owning sibling binding
+        k 5
+        scale (fn [x : int] : int (+ x k))         ;; non-escaping closure, scalar capture
+        via-rc (fn [x : int] : int                 ;; non-escaping closure capturing the rc
+                 (+ x (rc/strong-count r)))
+        a (scale 10)                               ;; 15
+        b (via-rc 20)]                             ;; 20 + 1 = 21
+    (+ a (+ b (rc/strong-count r)))))              ;; 15 + 21 + 1 = 37
+
+(defn main [] : int
+  (println (compute))
+  0)

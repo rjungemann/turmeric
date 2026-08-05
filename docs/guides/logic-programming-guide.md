@@ -96,47 +96,111 @@ instance Clone (Vector a) [Clone a]
 
 Multi-shot continuations are modeled as the **backtracking monad**:
 
+A `Backtrack` computation is a **thunk that yields a cons-list of result
+thunks**: forcing the outer thunk runs the search one level, and each element
+is itself a suspended result.
+
+`defalias` names both halves of that shape, so the signatures below read as the
+monad rather than as its representation:
+
 ```turmeric
-;; A computation that yields zero or more results
-(defalias Backtrack<a> (-> ((list (-> a)))))
+;; Backtrack -- a suspended search: forcing it yields a cons-list of results
+(defalias Backtrack (fn [] int))
+;; Goal -- a step: one result in, a list of results out
+(defalias Goal (fn [int] int))
 
-;; Monadic operations
-(defn mzero [] : (Backtrack a)
-  [])
+;; mzero -- the empty computation (no results)
+(defn mzero [] : Backtrack
+  (fn [] (tnil)))
 
-(defn mplus [fs gs : (Backtrack a)] : (Backtrack a)
-  (fn [] (append (fs) (gs))))
+;; mplus -- choice: all of fs's results, then all of gs's
+(defn mplus [^fat fs : Backtrack ^fat gs : Backtrack] : Backtrack
+  (fn [] (list-concat (fs) (gs))))
 
-(defn bind [f : (-> a (Backtrack b)) xs : (Backtrack a)] : (Backtrack b)
-  (fn []
-    (flat-map (fn [k] ((f (k)) ())) (xs ()))))
+;; pure -- a computation with exactly one result
+(defn pure [x : int] : Backtrack
+  (fn [] (cons x (tnil))))
 
-(defn return [x : a] : (Backtrack a)
-  (fn [] [(fn [] x)]))
+;; flat-map over an int-carried cons list; f returns a list per element
+(defn list-flat-map [xs : int ^fat f : Goal] : int
+  (if (tnil? xs)
+    (tnil)
+    (list-concat (f (list-head xs))
+                 (list-flat-map (list-tail xs) f))))
+
+;; bind -- sequence: run xs, then f on each result, concatenating
+(defn bind [^fat xs : Backtrack ^fat f : Goal] : Backtrack
+  (fn [] (list-flat-map (xs) f)))
 ```
 
 ```sweet-exp
-;; A computation that yields zero or more results
-defalias Backtrack<a> (-> ((list (-> a))))
+;; Backtrack -- a suspended search: forcing it yields a cons-list of results
+defalias Backtrack (fn [] int)
+;; Goal -- a step: one result in, a list of results out
+defalias Goal (fn [int] int)
 
-;; Monadic operations
-defn mzero [] : (Backtrack a)
-  []
+;; mzero -- the empty computation (no results)
+defn mzero [] : Backtrack
+  fn [] tnil()
 
-defn mplus [fs gs : (Backtrack a)] : (Backtrack a)
+;; mplus -- choice: all of fs's results, then all of gs's
+defn mplus [^fat fs : Backtrack ^fat gs : Backtrack] : Backtrack
   fn []
-    append(fs() gs())
+    list-concat(fs() gs())
 
-defn bind [f : (-> a (Backtrack b)) xs : (Backtrack a)] : (Backtrack b)
+;; pure -- a computation with exactly one result
+defn pure [x : int] : Backtrack
   fn []
-    flat-map
-      fn [k] ((f (k)) ())
-      (xs ())
+    cons(x tnil())
 
-defn return [x : a] : (Backtrack a)
+;; flat-map over an int-carried cons list; f returns a list per element
+defn list-flat-map [xs : int ^fat f : Goal] : int
+  if tnil?(xs)
+    tnil()
+    list-concat
+      f(list-head(xs))
+      list-flat-map(list-tail(xs) f)
+
+;; bind -- sequence: run xs, then f on each result, concatenating
+defn bind [^fat xs : Backtrack ^fat f : Goal] : Backtrack
   fn []
-    [(fn [] x)]
+    list-flat-map(xs() f)
 ```
+
+`defalias` is *transparent*: `Backtrack` and `(fn [] int)` are the same type at
+every use site, so `(fs)` applies exactly as it would without the alias. That
+is why `deftype` is the wrong tool here -- it binds a recursive `TY_REC`, which
+is a distinct nominal type and makes `(fs)` fail with `'fs' is not a function
+or continuation`.
+
+Driving it -- `mplus` offers both branches, `bind` maps over every result:
+
+```turmeric
+;; Force every suspended result and print it
+(defn print-all [xs : int] : void
+  (if (tnil? xs)
+    nil
+    (do (println (list-head xs))
+        (print-all (list-tail xs)))))
+
+(print-all ((mplus (pure 1) (pure 2))))
+;; => 1
+;; => 2
+
+(print-all ((bind (mplus (pure 1) (pure 2))
+                  (fn [x] (cons (* x 10) (tnil))))))
+;; => 10
+;; => 20
+```
+
+> **One constraint shapes the code above, a current-compiler fact.**
+>
+> - **Cons cells are int-carried**, so the element thunks ride as `int` handles
+>   and the closures are `^fat`. A parametric version over `(Cons A)` is blocked
+>   by two separate defects -- a generic closure return type erases its type
+>   application, and a struct constructor used inside a closure in a generic
+>   function is never emitted (link error). See
+>   [docs/reported/generic-closure-return-type-app.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md).
 
 ## Example: Parsing with Backtracking
 

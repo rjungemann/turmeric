@@ -1,0 +1,35 @@
+;; RT4 through a typeclass dispatch: the CLASS's result refinement propagates
+;; to the caller, even though which instance runs is not known at the site.
+;;
+;; That is sound because of result VARIANCE, not in spite of it. The class
+;; promise is the one thing true of every instance: an instance either inherits
+;; the class predicate (and is checked against it) or restates one, and then
+;; either its own is PROVED to imply the class's or the class's is checked
+;; alongside it. Reporting E0374 only on a refutation is right for the
+;; diagnostic and not enough on its own -- an undecidable pair emits no error,
+;; so `errors/refine-typeclass-result-unproved` pins the case where the extra
+;; check is the only thing standing between a caller and a wrong answer.
+;;
+;; Both halves matter. Without propagation `(.unbox 3 4)` is opaque and the
+;; caller's own refinement falls back to a runtime check; with it, the caller
+;; discharges statically.
+(defclass Boxed [a]
+  (unbox [self : a, k : int] : #refine{ r : int | (>= r 0) }))
+
+;; inherits the class promise
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : int
+    (* self k)))
+
+;; discharged from the class promise alone -- no instance was consulted
+(defn use-dotted [] : #refine{ r : int | (>= r 0) }
+  (.unbox 3 4))
+
+(defn use-bare [] : #refine{ r : int | (>= r 0) }
+  (unbox 5 2))
+
+(defn main [] : int
+  (println (use-dotted))
+  (println (use-bare))
+  (println "refine-typeclass-result-propagation")
+  0)

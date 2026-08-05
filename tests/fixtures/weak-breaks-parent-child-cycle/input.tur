@@ -1,0 +1,83 @@
+; stdlib-weak-ref-audit WR4: Rust's parent/child cycle break, in Turmeric.
+;
+;   parent --.child--> child        (strong: the parent owns the child)
+;   child  --.parent-> parent       (WEAK:   the back-edge owns nothing)
+;
+; Two rc<Node> pointing at each other is the textbook leak: each keeps the
+; other's strong count above zero, so neither is ever reclaimed. Give the
+; back-edge to a weak<Node> and the forward edge alone decides the lifetime --
+; the whole structure goes at the moment the last strong handle does.
+;
+; The contrast worth pinning is with tests/fixtures/gc-collects-strong-cycle,
+; which builds the same shape with a STRONG back-edge and needs `(gc-enable!)`
+; plus an explicit `(gc!)` per iteration to reclaim it. This fixture never
+; touches the collector: there is no garbage for it to find, because the
+; refcounts alone are correct. That is the property that makes weak<T> the
+; escape hatch rather than the collector -- prompt, deterministic, GC-off.
+;
+; It also pins the zombie-transition fix this API depends on. A block whose
+; strong count reaches 0 while a weak still observes it must drop its VALUE
+; right then, keeping only the control block alive for the observer. Deferring
+; that teardown to the last weak-decrement deadlocks exactly here: the
+; surviving weak lives INSIDE the parent's own value, so the value's drop glue
+; is the only thing that can release it, and it would be waiting on itself.
+; Measured at 217 bytes per pair before the fix.
+(load "stdlib/weak.tur")
+
+(defstruct Node :move [tag : int child : rc<Node> parent : weak<Node>])
+
+(defn null-child [] : rc<Node>
+  ```c
+  return 0;
+  ```)
+
+(defn null-parent [] : weak<Node>
+  ```c
+  return 0;
+  ```)
+
+; The no-growth assertion reads the CG6 collector counter, not a malloc probe.
+; Every value this fixture leaks-or-frees is an rc<T> control block, and each
+; one is registered at rc_cb_alloc_kinded and unregistered when it is freed --
+; by the collector OR by plain refcounting -- so (gc-live-blocks) is an exact,
+; program-scoped count of what has not been reclaimed.
+;
+; It replaced a malloc probe (mallinfo2 / malloc_zone_statistics) reading the
+; PROCESS heap, which was blind or wrong four different ways: vacuous under
+; ASan on glibc, quarantine-inflated under ASan on Darwin, reading the
+; COMPILER's heap under one-process `tur jit`, and hardcoded to 0 on any other
+; libc.  See the full table in tests/fixtures/gc-collects-strong-cycle/input.tur
+; and docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md.
+
+;; Build one parent/child pair, wire the weak back-edge, and let the scope end.
+;; The weak field needs no matching weak/drop: a weak stored in a struct field
+;; is weak-decremented by the owning value's drop glue.
+(defn build-pair [] : int
+  (let [child  (rc/of (make-struct Node 2 (null-child) (null-parent)))
+        parent (rc/of (make-struct Node 1 (rc/clone child) (null-parent)))]
+    (set! (.parent child) (rc/downgrade parent))
+    0))
+
+(defn run [n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (build-pair)
+      (set! i (+ i 1))))
+  0)
+
+(defn main [] : int
+  ;; The counts, once, on a pair that is still standing.
+  (let [child  (rc/of (make-struct Node 2 (null-child) (null-parent)))
+        parent (rc/of (make-struct Node 1 (rc/clone child) (null-parent)))]
+    (set! (.parent child) (rc/downgrade parent))
+    (println (rc/strong-count child))       ; 2 -- our binding + the parent's
+    (println (rc/strong-count parent)))     ; 1 -- the back-edge added none
+
+  ;; And the leak check: no collector, no growth.
+  (run 500)                                 ; reach steady state before sampling
+  (let [before (gc-live-blocks)]
+    (run 5000)
+    (let [after (gc-live-blocks)]
+      ;; 0 == every pair reclaimed by refcounting alone.
+      (println (if (= (- after before) 0) 0 (- after before)))))
+  0)

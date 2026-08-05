@@ -1,0 +1,6 @@
+(defeffect Log [] :int)
+(defn loop [n : int] : int
+  (if (= n 0) 0 (do (perform (Log)) (loop (- n 1)))))
+(defn run [] : int
+  (handle (loop 3) (Log [] k) (do (println "log") (resume k 0))))
+(defn main [] : int (println (run)) 0)

@@ -1,0 +1,10 @@
+; Same chain without the closing edge: x=0,y=1,z=2 is a model.
+(set-logic QF_LIA)
+(set-info :status sat)
+(declare-fun x () Int)
+(declare-fun y () Int)
+(declare-fun z () Int)
+(assert (< x y))
+(assert (< y z))
+(check-sat)
+(exit)

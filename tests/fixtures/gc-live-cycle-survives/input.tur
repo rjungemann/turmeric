@@ -1,0 +1,62 @@
+; CG7: the dangerous direction -- a cycle that is STILL REACHABLE from a live
+; external root must NOT be collected.
+;
+; This is the failure mode trial deletion can get wrong in a way that is far
+; worse than a leak: MarkGray subtracts the in-cycle edges, and if an external
+; reference is not correctly accounted for, the cycle falls to a zero trial
+; count and gets freed while the program still holds it -- a use-after-free on
+; live data. The pre-existing gc-no-false-positives fixture only covers a plain
+; live rc with no cycle, so this direction was untested.
+;
+; Asserts both halves of the correctness statement:
+;   - roots live  -> cycle survives collection AND stays usable afterwards
+;   - roots gone  -> the same shape is reclaimed
+(defstruct S :move [next : rc<S> tag : int])
+
+(defn nullp [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+; The no-growth assertion reads the CG6 collector counter, not a malloc probe.
+; Every value this fixture leaks-or-frees is an rc<T> control block, and each
+; one is registered at rc_cb_alloc_kinded and unregistered when it is freed --
+; by the collector OR by plain refcounting -- so (gc-live-blocks) is an exact,
+; program-scoped count of what has not been reclaimed.
+;
+; It replaced a malloc probe (mallinfo2 / malloc_zone_statistics) reading the
+; PROCESS heap, which was blind or wrong four different ways: vacuous under
+; ASan on glibc, quarantine-inflated under ASan on Darwin, reading the
+; COMPILER's heap under one-process `tur jit`, and hardcoded to 0 on any other
+; libc.  See the full table in tests/fixtures/gc-collects-strong-cycle/input.tur
+; and docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md.
+
+; Build a cycle, collect WHILE still holding it, then keep using it.
+(defn live-cycle-survives [] : int
+  (let [s1 (rc/of (make-struct S (nullp) 11))
+        s2 (rc/of (make-struct S (rc/clone s1) 22))]
+    (set! (.next s1) (rc/clone s2))
+    (gc!)                              ; s1/s2 are live roots -- must not collect
+    ; Reading through the cycle after collection: garbage or a crash here means
+    ; the collector freed live data.
+    (+ (.tag s1) (.tag s2))))          ; 33
+
+; Same shape, but the roots die before collection -- this one must be reclaimed.
+(defn dead_cycle [] : int
+  (let [d1 (rc/of (make-struct S (nullp) 1))
+        d2 (rc/of (make-struct S (rc/clone d1) 2))]
+    (set! (.next d1) (rc/clone d2))
+    0))
+
+(defn run-dead [n : int] : int
+  (let [^mut i 0] (while (< i n) (do (dead_cycle) (gc!) (set! i (+ i 1))))) 0)
+
+(defn main [] : int
+  (gc-enable!)
+  (println (live-cycle-survives))       ; 33 -- survived and still readable
+  (println (live-cycle-survives))       ; 33 -- and again, repeatedly
+  (run-dead 500)
+  (let [h0 (gc-live-blocks)]
+    (run-dead 5000)
+    (println (- (gc-live-blocks) h0)))      ; 0 -- unreachable cycles still collected
+  0)

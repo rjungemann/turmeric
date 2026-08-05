@@ -146,6 +146,107 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
     return tur_stdlib_load_hint(name->name);
 }
 
+/* docs/archive/defn-shadows-return-special-form.md: head-position dispatch in
+ * elab_call (below) matches special forms by symbol identity *before* any
+ * binding, macro, or typeclass-method lookup.  A user `(defn return ...)` is
+ * therefore accepted, bound, and then never consulted: every bare
+ * `(return ...)` elaborates as the early-return form, and the resulting
+ * diagnostic lands on the CALLER's argument type with no mention of the
+ * shadowing.  `return` is a natural name for a monadic unit, so this is easy
+ * to hit and very hard to read.
+ *
+ * This table drives the TUR-W0042 warning emitted at the DEFINITION site, which
+ * is where the mistake actually is.  Membership rule -- a name belongs here
+ * only if elab_call dispatches it UNCONDITIONALLY:
+ *
+ *   - Names gated on `!scope_lookup(e->scope, name)` are deliberately
+ *     shadowable (`handler`, `with`, `default-of`, and the session ops
+ *     `send`/`recv`/`close`/...).  A user defn of those wins, so they are NOT
+ *     reserved and must stay out of this table.
+ *   - Names dispatched only at one arity or one argument shape (`async`,
+ *     `await`, `select`, `atomically`, `check`, `or-else`, the `tvar-*` ops,
+ *     `thread-spawn`) are omitted too: a defn at another arity is genuinely
+ *     callable, and this check runs before the parameter list is parsed.
+ *   - The map surface (`assoc`, `get`, `count`, `merge`, ...) routes through
+ *     elab_lower_map_call, which falls back to ordinary call resolution for a
+ *     non-persistent receiver.  Not reserved.
+ *
+ * Inside a `defmodule`, a shadowing definition is still reachable through its
+ * QUALIFIED name (`mod/return`) -- the qualified head symbol is a different
+ * symbol and never matches a special form -- which is why the warning speaks
+ * about the bare name specifically. */
+static const char *const reserved_special_forms_[] = {
+    /* core binding / control forms */
+    "def", "define", "let", "let*", "letrec", "if", "do", "unsafe", "set!",
+    "while", "case", "defer", "return", "match", "quote", "gensym",
+    /* definition forms */
+    "defn", "fn", "\xce\xbb", "extern-c", "defmacro", "defmodule", "import",
+    "export", "load", "defstruct", "make-struct", "defopaque", "defdata",
+    "defgadt", "defclass", "definstance", "defkind", "defrec", "deftype",
+    "defalias", "defdynamic", "defeffect", "defprotocol",
+    /* generators */
+    "gen", "yield", "gen-next", "gen-done?",
+    /* references, rc, weak */
+    "ref", "deref", "drop!", "lref/new", "rc/of", "rc/clone", "rc/drop",
+    "rc->ptr", "rc/strong-count", "rc/from-ref", "ref/from-rc", "weak",
+    "upgrade", "weak?", "ref?",
+    /* delimited continuations */
+    "reset", "shift", "shift0", "call/cc", "call/cc*", "escape",
+    "cloneable-reset", "cloneable-shift", "serial-reset", "serial-shift",
+    "cont?",
+    /* algebraic effects */
+    "binding", "perform", "handle", "handle-shallow", "try-with",
+    "with-handler", "resume", "discontinue", "compose-handlers",
+    /* types, casts, ascription */
+    "as", "type-of", "cast", "is?", "coerce", "&", "&mut",
+    "forall", "exists", "type-app", "::", "pack", "open",
+    /* sessions -- the definition/constructor forms only; the value-level ops
+     * are shadowable and deliberately absent */
+    "make-protocol", "make-session",
+    /* panic / unwinding */
+    "panic", "panic-with", "catch-unwind", "catch-panic-of",
+    "panic-payload-type", "panic-payload-value", "panic-payload-file",
+    "panic-payload-line", "panic-payload-downcast",
+    /* unsafe primitives */
+    "ptr-deref", "ptr-write", "ptr-add", "ptr-sub", "ptr-null?", "ptr-of",
+    "unsafe-cast", "reinterpret", "transmute", "array-get-unchecked",
+    "array-set-unchecked", "raw-malloc", "raw-free", "raw-realloc",
+    "raw-memcpy", "raw-memset", "c-call", "dlopen", "dlsym", "dlclose",
+    /* STM */
+    "stm", "retry",
+    /* GC */
+    "gc!", "gc-enable!", "gc-disable!", "gc-auto!", "gc-collections",
+    "gc-objects-freed", "gc-live-blocks", "gc-candidate-high-water",
+    /* misc operators */
+    "?", "->", "->>",
+};
+
+bool tur_name_is_reserved_special_form(const char *name) {
+    if (!name) return false;
+    /* `(.method obj ...)` is dispatched on the leading dot, so any name that
+     * starts with `.` is equally unreachable as a bare call head. */
+    if (name[0] == '.' && name[1] != '\0') return true;
+    for (size_t i = 0;
+         i < sizeof(reserved_special_forms_) / sizeof(reserved_special_forms_[0]);
+         i++) {
+        if (strcmp(name, reserved_special_forms_[i]) == 0) return true;
+    }
+    return false;
+}
+
+/* Emit TUR-W0042 when `name` (a defn/defmacro name being defined at `span`)
+ * collides with a reserved special form.  Callers suppress it for stdlib
+ * auto-load and for re-elaborated specialization clones. */
+void tur_warn_if_shadows_special_form(const Symbol *name, Span span,
+                                      const char *form_kind) {
+    if (!name || !tur_name_is_reserved_special_form(name->name)) return;
+    diag_emit_with_code(DIAG_WARNING, span, TUR_W0042_SHADOWS_SPECIAL_FORM,
+        "%s '%s' shadows the special form '%s'; a bare (%s ...) call always "
+        "elaborates as the special form, so this definition is unreachable by "
+        "its bare name -- rename it",
+        form_kind, name->name, name->name, name->name);
+}
+
 /* Migration aid for legacy C-backed spice code.  A handful of forms that older
  * "store a pointer as :int and hand-roll allocation + field access" code reaches
  * for were never Turmeric language operators -- they only ever existed inside an
@@ -444,10 +545,68 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                 }
                 return false;
             }
-            return call_collect_type_bindings(expected->as.app.fn, *actual.as.app.fn,
-                                              bindings, n_bindings) &&
-                   call_collect_type_bindings(expected->as.app.arg, *actual.as.app.arg,
-                                              bindings, n_bindings);
+            {
+                /* Ordinary curried match first, on a SCRATCH binding set so a
+                 * failed attempt leaves no half-bound tyvars behind.  This is
+                 * the existing behaviour and stays exact. */
+                CallTypeBinding scratch[16];
+                uint8_t n_scratch = *n_bindings;
+                for (uint8_t s = 0; s < n_scratch; s++) scratch[s] = bindings[s];
+                if (call_collect_type_bindings(expected->as.app.fn, *actual.as.app.fn,
+                                               scratch, &n_scratch) &&
+                    call_collect_type_bindings(expected->as.app.arg, *actual.as.app.arg,
+                                               scratch, &n_scratch)) {
+                    for (uint8_t s = 0; s < n_scratch; s++) bindings[s] = scratch[s];
+                    *n_bindings = n_scratch;
+                    return true;
+                }
+            }
+            /* constrained-hkt-abstract-var-requires-last-param-free: currying
+             * can only leave the LAST constructor slot free, so `(m elem)`
+             * against `(Result int cstr)` binds `m := (Result int)` -- fixing
+             * the very slot meant to stay free -- and then mismatches.  When the
+             * expected head is an unbound type VARIABLE, retry with the element
+             * at an earlier slot and bind `m` to the hole-headed partial
+             * application `(Result _ cstr)`, which saturates back to
+             * `(Result elem cstr)` (type_app_fill_hole).
+             *
+             * Only reached after the curried attempt fails, so every program
+             * that type-checked before is unaffected, and the LAST slot keeps
+             * priority when more than one could match. */
+            if (expected->as.app.fn->kind == TY_TYVAR &&
+                expected->as.app.fn->as.tyvar_.name &&
+                actual.as.app.fn->kind == TY_APP &&
+                actual.as.app.fn->as.app.fn && actual.as.app.fn->as.app.arg &&
+                !type_app_has_hole(&actual)) {
+                uint8_t ex_idx = 0;
+                bool already_bound = call_find_type_binding(
+                    bindings, *n_bindings, expected->as.app.fn->as.tyvar_.name, &ex_idx);
+                /* slot 0 of a binary application `((C t0) t1)` */
+                const Type *t0 = actual.as.app.fn->as.app.arg;
+                const Type *ctor = actual.as.app.fn->as.app.fn;
+                CallTypeBinding scratch[16];
+                uint8_t n_scratch = *n_bindings;
+                for (uint8_t s = 0; s < n_scratch; s++) scratch[s] = bindings[s];
+                if (call_collect_type_bindings(expected->as.app.arg, *t0,
+                                               scratch, &n_scratch)) {
+                    Type hole = type_app_hole(tur_type_arena(), *ctor,
+                                              *actual.as.app.arg, 0,
+                                              (Span){0});
+                    if (already_bound) {
+                        if (!type_eq(bindings[ex_idx].type, hole)) return false;
+                    } else if (n_scratch >= 16) {
+                        return false;
+                    } else {
+                        scratch[n_scratch].name = expected->as.app.fn->as.tyvar_.name;
+                        scratch[n_scratch].type = hole;
+                        n_scratch++;
+                    }
+                    for (uint8_t s = 0; s < n_scratch; s++) bindings[s] = scratch[s];
+                    *n_bindings = n_scratch;
+                    return true;
+                }
+            }
+            return false;
         case TY_FN: {
             /* poly-closure-result-specialization (Stage A1): bind the named
              * tyvars in a function-typed parameter (e.g. `:(fn [A] B)`) from a
@@ -620,6 +779,14 @@ static Type call_instantiate_type(Elab *e, const Type *t,
         case TY_APP: {
             Type fn = call_instantiate_type(e, t->as.app.fn, bindings, n_bindings);
             Type arg = call_instantiate_type(e, t->as.app.arg, bindings, n_bindings);
+            /* constrained-hkt-abstract-var-requires-last-param-free: when the
+             * head substituted to a HOLE-headed partial application -- the
+             * binding `m := (Result _ cstr)` the call site produced -- applying
+             * it must place `arg` at the hole, not curry it onto the end.  So
+             * `(m b)` instantiates to `(Result b cstr)`, which is what makes a
+             * combinator returning `(m b)` type-check at an ok-biased head. */
+            if (type_app_has_hole(&fn))
+                return type_app_fill_hole(e->arena, fn, arg, (Span){0});
             return type_app(e->arena, fn, arg, (Span){0});
         }
         case TY_FN: {
@@ -707,10 +874,128 @@ static bool call_reinterpret_kind_is_integral(TypeKind k) {
     }
 }
 
+/* collections-cannot-hold-rc-values item 2: an owning value (rc/weak/ref) has
+ * no bit-preserving reinterpretation to the int64 element carrier *as a value*
+ * -- but it does as a REFERENCE, provided somebody accounts for the count.  So
+ * the carrier crossing is allowed only at sinks that do account for it, and
+ * each such sink says which of the two accountings applies:
+ *
+ *   OWN_CARRY_RETAIN -- crossing mints a new strong reference.  Storing into a
+ *     collection (the collection now owns a count it will release on
+ *     free/overwrite/removal), or reading one back out (the caller gets its own
+ *     count to drop, leaving the collection's intact).
+ *   OWN_CARRY_BORROW -- crossing moves the existing reference and mints
+ *     nothing.  A compile-time witness the callee discards, or a removal that
+ *     transfers the slot's own count out to the caller.
+ *   OWN_CARRY_REJECT -- everything else.  Passing the pointer through
+ *     unaccounted would leak or double-free depending on which side drops it,
+ *     so this stays a diagnostic rather than a silent bit-cast.
+ */
+typedef enum {
+    OWN_CARRY_REJECT = 0,
+    OWN_CARRY_BORROW,
+    OWN_CARRY_RETAIN,
+} OwnCarry;
+
+static OwnCarry own_carry_for_arg(const char *fn, uint32_t idx) {
+    if (!fn) return OWN_CARRY_REJECT;
+    /* Stores: the slot keeps a strong reference the Vec releases later
+     * (stdlib/vec.tur threads bit 1 of the `owned` flag to do it). */
+    if (strcmp(fn, "vec-push!") == 0  && idx == 1) return OWN_CARRY_RETAIN;
+    if (strcmp(fn, "vec-set-o!") == 0 && idx == 2) return OWN_CARRY_RETAIN;
+    /* Type witnesses: the bodies discard the value, so no count changes.
+     * `(vec-of x y)` routes every element through tur-vec-homog__ before it
+     * ever reaches a push, so rejecting here would reject the literal form. */
+    if (strcmp(fn, "tur-vec-homog__") == 0)   return OWN_CARRY_BORROW;
+    if (strcmp(fn, "vec-empty-like__") == 0)  return OWN_CARRY_BORROW;
+    /* Map inserts, same contract as the Vec stores: the entry keeps a strong
+     * reference the map releases when it dies (stdlib/map.tur threads bit 2 of
+     * the `owned` flag, which routes the insert through tur_hamt_set_eq_vo with
+     * the emitted rc ops). */
+    if (strcmp(fn, "map-assoc-eq-o") == 0 && idx == 3) return OWN_CARRY_RETAIN;
+    return OWN_CARRY_REJECT;
+}
+
+/* An argument that MINTS its own reference hands that reference to the sink;
+ * retaining on top of it would leave the collection holding two counts and
+ * releasing one.  `(rc/of ...)` and `(rc/clone ...)` are the two forms that
+ * provably do this, and neither result is tracked by the caller (there is no
+ * binding to drop it), so the sink takes the fresh reference as-is.
+ *
+ * Everything else is treated as a BORROW and retained.  That is the safe
+ * default of the two: an unnecessary retain leaks, a missing one double-frees,
+ * and a bare `(vec-push! v a)` -- where `a` keeps its own count and drops it at
+ * scope exit -- is by far the common shape. */
+static bool own_arg_mints_reference(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    return a && (a->kind == EX_RC_OF || a->kind == EX_RC_CLONE);
+}
+
+static OwnCarry own_carry_for_result(const char *fn) {
+    if (!fn) return OWN_CARRY_REJECT;
+    if (strcmp(fn, "vec-get") == 0)  return OWN_CARRY_RETAIN;
+    if (strcmp(fn, "vec-pop!") == 0) return OWN_CARRY_BORROW;
+    /* A map read hands the caller its own reference, like vec-get: the entry
+     * keeps the map's, so the value read out must be counted separately. */
+    if (strcmp(fn, "map-get-eq-o") == 0) return OWN_CARRY_RETAIN;
+    return OWN_CARRY_REJECT;
+}
+
+static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_kind,
+                                          Span span, OwnCarry carry);
+
 static Expr *call_wrap_reinterpret(Elab *e, Expr *inner, TypeKind target_kind, Span span) {
+    return call_wrap_reinterpret_owning(e, inner, target_kind, span, OWN_CARRY_REJECT);
+}
+
+static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_kind,
+                                          Span span, OwnCarry carry) {
     if (!inner) return NULL;
     TypeKind source_kind = inner->type.kind;
     if (source_kind == target_kind) return inner;
+    /* Owning kinds are handled by the OwnCarry rules above, ahead of the
+     * size-based scalar reinterpretation (an rc is a control-block pointer, so
+     * the bits carry fine -- it is the count that needs a decision). */
+    bool owning_src = source_kind == TY_RC || source_kind == TY_WEAK ||
+                      source_kind == TY_REF || source_kind == TY_LREF;
+    bool owning_dst = target_kind == TY_RC || target_kind == TY_WEAK ||
+                      target_kind == TY_REF || target_kind == TY_LREF;
+    if (owning_src || owning_dst) {
+        if (carry == OWN_CARRY_REJECT) {
+            /* Historically this was a bare `tur: emit: invalid EX_REINTERPRET
+             * rc -> int` abort with no span, from deep in codegen, for an
+             * ordinary program like `(vec-of (rc/clone a))`.  This is the last
+             * point that still has a span, so the rejection belongs here.
+             * (The variadic rest-arg check is NOT the hook: `vec-of` is a macro
+             * expanding to `vec-push!` calls, so it never reaches that path.) */
+            diag_emit(DIAG_ERROR, span,
+                      "cannot store an owning value (%s) in a collection: elements "
+                      "go through an int64 carrier that cannot hold a reference the "
+                      "collection would have to own. Store a plain handle, or keep "
+                      "the value outside the collection",
+                      typekind_to_string(owning_src ? source_kind : target_kind));
+            return NULL;
+        }
+        /* Only rc<T> is refcount-accounted today.  A weak/ref crossing has no
+         * count to take, so it would be a bare pointer in a slot nobody owns --
+         * still the leak/double-free the diagnostic above describes. */
+        if ((owning_src && source_kind != TY_RC) ||
+            (owning_dst && target_kind != TY_RC)) {
+            diag_emit(DIAG_ERROR, span,
+                      "cannot store an owning value (%s) in a collection: only "
+                      "rc<T> elements are reference-counted through the int64 "
+                      "carrier. Store an rc<T>, a plain handle, or keep the "
+                      "value outside the collection",
+                      typekind_to_string(owning_src ? source_kind : target_kind));
+            return NULL;
+        }
+        Expr *own = expr_new(e->arena, EX_REINTERPRET, type_from_kind(target_kind), span);
+        own->as.reinterpret_.expr = inner;
+        own->as.reinterpret_.source_kind = source_kind;
+        own->as.reinterpret_.target_kind = target_kind;
+        own->as.reinterpret_.retain = (carry == OWN_CARRY_RETAIN);
+        return own;
+    }
     int src_size = type_size_bytes(source_kind);
     int dst_size = type_size_bytes(target_kind);
     if (src_size <= 0 || dst_size <= 0) return inner;
@@ -760,6 +1045,77 @@ static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32
     out->as.call_.n_args = n_args;
     out->as.call_.fn_expr = NULL;
     return out;
+}
+
+/* closure-drop-glue S1: hoist an INLINE capturing closure passed to a `^borrow`
+ * (FA_BORROW) fn-param into a fresh let-binding, so the direct emitter's
+ * scoped-env free (let_binding_env_freeable + the FA_BORROW non-escape relaxation
+ * in binding_escapes_impl) reclaims its heap env at scope exit -- a borrowed
+ * closure is invoked but not retained by the callee, so it dies at this call.
+ * Without a let binding the inline env has no name for the scope-exit free to
+ * target and leaks.  Returns the (possibly let-wrapped) expression; a no-op when
+ * `call` is not an EX_CALL to a fn with a FA_BORROW inline-closure arg. */
+/* closure-drop-glue S1: is argument `a` (ascribe-peeled) to parameter `i` of
+ * `fb` a fresh, uniquely-owned closure env whose heap allocation can be freed at
+ * the call scope's exit?  True when the parameter does not retain it (a `^borrow`
+ * param, or an inferred non-retaining fn-param) AND the argument is either an
+ * inline capturing EX_CLOSURE literal (S1.2) or a call to a fresh-closure-
+ * returning fn (S1c -- the make-scaler shape).  Both produce a fresh env the
+ * caller uniquely owns; the non-retention guarantees the callee will not keep it
+ * past the call. */
+static bool arg_is_freeable_closure_source(const Binding *fb, uint32_t i,
+                                           const Expr *a) {
+    if (!a) return false;
+    bool nonretain = FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)
+                     || (i < 32 && (fb->nonretain_param_mask & (1u << i)));
+    if (!nonretain) return false;
+    if (a->kind == EX_CLOSURE && a->as.closure_.closure
+        && a->as.closure_.closure->n_captures > 0)
+        return true;
+    if (a->kind == EX_CALL && a->as.call_.fn_binding
+        && a->as.call_.fn_binding->returns_fresh_closure)
+        return true;
+    return false;
+}
+
+static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
+    if (!call || call->kind != EX_CALL) return call;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.arg_flags) return call;
+    Expr **args = call->as.call_.args;
+    uint32_t n_args = call->as.call_.n_args;
+    uint32_t n_hoist = 0;
+    for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
+        Expr *a = args[i];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (arg_is_freeable_closure_source(fb, i, a))
+            n_hoist++;
+    }
+    if (n_hoist == 0) return call;
+    LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
+    uint32_t h = 0;
+    for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
+        Expr *a = args[i];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (!arg_is_freeable_closure_source(fb, i, a))
+            continue;
+        char nm[48];
+        snprintf(nm, sizeof nm, "__borrowc_%u", e->next_id++);
+        const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+        Binding *cb = binding_new(e, sym, a->type, false, false, span);
+        lbs[h].binding = cb;
+        lbs[h].init = a;                 /* ascribe-peeled EX_CLOSURE literal or a
+                                          * fresh-closure-returning call */
+        h++;
+        Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
+        v->as.var.binding = cb;
+        args[i] = v;                     /* the call now references the binding */
+    }
+    Expr *let = expr_new(e->arena, EX_LET, call->type, span);
+    let->as.let_.bindings = lbs;
+    let->as.let_.n = n_hoist;
+    let->as.let_.body = call;
+    return let;
 }
 
 /* Phase P3: HAMT lowering - lower map function calls when first arg is persistent */
@@ -850,6 +1206,13 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "assoc takes 3 arguments: (assoc map key value)");
             return NULL;
         }
+        /* :cstr keys hash and compare by CONTENT (hamt/set-cstr), never by
+         * pointer -- identity hash/compare of string keys only "worked" when
+         * the C compiler merged identical literals (unspecified, C11
+         * 6.4.5p7), and never for runtime-built keys.  args is already
+         * {m, k, v}, the wrapper's exact signature. */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_set_cstr, 3, args);
         /* assoc m k v -> (hamt/set m (hamt_hash_ptr k) k v) */
         /* First, compute the hash: (hamt_hash_ptr k) */
         bool hash_qual_err = false;
@@ -882,6 +1245,9 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "dissoc takes 2 arguments: (dissoc map key)");
             return NULL;
         }
+        /* :cstr keys: content hash + content compare (see the assoc arm). */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_del_cstr, 2, args);
         /* dissoc m k -> (hamt/del m (hamt_hash_ptr k) k) */
         bool hash_qual_err2 = false;
         Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err2);
@@ -910,6 +1276,9 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "get takes 2 arguments: (get map key)");
             return NULL;
         }
+        /* :cstr keys: content hash + content compare (see the assoc arm). */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_get_cstr, 2, args);
         /* get m k -> (hamt/get m (hamt_hash_ptr k) k) */
         bool hash_qual_err4 = false;
         Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err4);
@@ -938,6 +1307,9 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "has? takes 2 arguments: (has? map key)");
             return NULL;
         }
+        /* :cstr keys: content hash + content compare (see the assoc arm). */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_has_cstr, 2, args);
         /* has? m k -> (hamt/has? m (hamt_hash_ptr k) k) */
         bool hash_qual_err3 = false;
         Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err3);
@@ -1460,6 +1832,90 @@ static bool elab_name_is_typeclass_method(Elab *e, const Symbol *name) {
     return false;
 }
 
+/* N0 (numeric-tower-rational-complex-plan §3): map an arithmetic operator
+ * symbol onto the `Num` method that implements it.  `n_args` picks between the
+ * binary reading of `-` (sub) and the unary one (neg); the other operators are
+ * binary/variadic only.  Returns NULL when `name` is not an arithmetic
+ * operator, so every other builtin miss keeps its existing diagnostic. */
+static const char *num_method_for_operator(const Symbol *name, uint32_t n_args) {
+    if (!name || name->len != 1) return NULL;
+    switch (name->name[0]) {
+        case '+': return n_args >= 2 ? "add" : NULL;
+        case '-': return n_args >= 2 ? "sub" : (n_args == 1 ? "neg" : NULL);
+        case '*': return n_args >= 2 ? "mul" : NULL;
+        case '/': return n_args >= 2 ? "div" : NULL;
+        default:  return NULL;
+    }
+}
+
+/* N0: true when some registered `Num` instance dispatches on exactly `t`.
+ * Matched by full structural equality rather than by TypeKind, so a `Num`
+ * instance for one by-value product never captures an unrelated one. */
+static bool elab_num_instance_matches(Elab *e, const TypeClass *num,
+                                      const Type *t) {
+    if (!num || !t || t->kind == TY_UNKNOWN) return false;
+    for (TypeClassInstance *inst = e->typeclass_env.instances; inst;
+         inst = inst->next) {
+        if (inst->typeclass != num || inst->n_type_args != 1) continue;
+        if (type_eq(inst->type_args[0], *t)) return true;
+    }
+    return false;
+}
+
+/* N0: fall back from a builtin-operator miss to `Num` typeclass dispatch.
+ *
+ * `+`/`-`/`*`/`/` are BuiltinSpec rows keyed by TypeKind that emit a C infix
+ * operator (src/compiler/builtins.c), a shape that cannot express arithmetic
+ * over a struct and has no way to name a specific ADT anyway.  Rather than
+ * bolting Rational/Complex rows onto that table, a miss re-reads the call as
+ * the corresponding `Num` method, which gives operator overloading to every
+ * user numeric type.  Primitive arithmetic is untouched: the builtin row still
+ * wins whenever it matches, so there is no codegen drift on existing programs
+ * and no dictionary in the hot path.
+ *
+ * Variadic calls left-fold into nested binary method calls, matching
+ * BS_VARIADIC_FOLD: `(+ a b c)` becomes `(.add (.add a b) c)`.
+ *
+ * Returns NULL (having consumed nothing) when the call is not arithmetic, no
+ * `Num` class is in scope, or no instance dispatches on the receiver -- the
+ * caller then proceeds to its usual operator-lookup-failed diagnostic. */
+static Expr *elab_try_num_operator_dispatch(Elab *e, const Form *call,
+                                            const Form *head,
+                                            const Symbol *name,
+                                            const Type *first_t,
+                                            uint32_t n_args) {
+    const char *method = num_method_for_operator(name, n_args);
+    if (!method) return NULL;
+
+    TypeClass *num = typeclass_env_lookup_typeclass(
+        &e->typeclass_env, symtab_intern(e->st, strslice("Num", 3)));
+    if (!num) return NULL;
+    if (!elab_num_instance_matches(e, num, first_t)) return NULL;
+
+    char dotbuf[8];
+    int dotlen = snprintf(dotbuf, sizeof(dotbuf), ".%s", method);
+    if (dotlen <= 0 || (size_t)dotlen >= sizeof(dotbuf)) return NULL;
+    const Symbol *dot_sym =
+        symtab_intern(e->st, strslice(dotbuf, (uint32_t)dotlen));
+
+    if (n_args == 1) {
+        Form **items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+        items[0] = form_sym(e->arena, head->span, dot_sym);
+        items[1] = call->as.list.items[1];
+        return elab_method_call(e, form_list(e->arena, call->span, items, 2));
+    }
+
+    Form *acc = call->as.list.items[1];
+    for (uint32_t i = 2; i <= n_args; i++) {
+        Form **items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        items[0] = form_sym(e->arena, head->span, dot_sym);
+        items[1] = acc;
+        items[2] = call->as.list.items[i];
+        acc = form_list(e->arena, call->span, items, 3);
+    }
+    return elab_method_call(e, acc);
+}
+
 /* True when a TY_FN receiver carries a float-class value in any argument or in
  * its result.  Used to keep float-carrier function composition (e.g. a float
  * `>>>` pipeline) on the register-class-correct free defn instead of the
@@ -1782,6 +2238,11 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
+    if (name == e->sym_gc_auto)     return elab_gc_auto(e, call);
+    if (name == e->sym_gc_collections)   return elab_gc_collections(e, call);
+    if (name == e->sym_gc_objects_freed) return elab_gc_objects_freed(e, call);
+    if (name == e->sym_gc_live_blocks)   return elab_gc_live_blocks(e, call);
+    if (name == e->sym_gc_cand_hw)       return elab_gc_candidate_high_water(e, call);
     /* Phase M0: Module system */
     if (name == e->sym_load)      return elab_load(e, call);
     if (name == e->sym_defmodule) return elab_defmodule(e, call);
@@ -2081,6 +2542,11 @@ Expr *elab_call(Elab *e, Form *call) {
             diag_emit(DIAG_ERROR, call->span, "maximum macro expansion depth exceeded");
             return NULL;
         }
+        /* ambiguous-dispatch-error-quality: record the OUTERMOST macro call site
+         * so a diagnostic raised inside the expansion (e.g. a derive-emitted
+         * `.method` call with no matching instance) can point the user at where
+         * they wrote the macro call rather than at stdlib/macros.tur. */
+        if (e->macro_expand_depth == 0) e->macro_call_site_span = call->span;
         e->macro_expand_depth++;
         /* Expand the macro with arguments */
         /* Extract arguments (rest of list) */
@@ -2094,6 +2560,26 @@ Expr *elab_call(Elab *e, Form *call) {
         if (!expanded) {
             e->macro_expand_depth--;
             return NULL;
+        }
+
+        /* Re-attribute a macro-emitted top-level `definstance` to the macro
+         * CALL SITE rather than the macro-definition file.  The orphan-instance
+         * check (TUR-E0013) and inst->origin_file_id key off the definstance
+         * form's own span.file_id; a macro that constructs the instance (e.g.
+         * derive-show / derive-show-string in stdlib/macros.tur) would otherwise
+         * carry the macros.tur file id, so the user's own struct type -- whose
+         * origin is the call-site file -- is not credited and a legitimate
+         * `derive-show-string MyStruct ...` trips the orphan check.  Re-spanning
+         * only the outermost definstance form makes ownership follow the call
+         * site (where the user wrote the derive); inner subforms keep their
+         * macro-body spans so diagnostics inside the expansion still point at
+         * the macro.  Restricted to definstance so no other macro's diagnostics
+         * move.  The expansion output is freshly arena-allocated, so mutating
+         * its span is safe. */
+        if (expanded->tag == F_LIST && expanded->as.list.len > 0 &&
+            expanded->as.list.items[0]->tag == F_SYM &&
+            strcmp(expanded->as.list.items[0]->as.sym->name, "definstance") == 0) {
+            expanded->span = call->span;
         }
 
         /* Phase M4: Keep the expansion-module context active while elaborating
@@ -2111,6 +2597,10 @@ Expr *elab_call(Elab *e, Form *call) {
         }
         e->macro_expansion_stack[e->n_macro_expansion_stack++] =
             macro->defining_module_name;
+        /* refine: link the call form to the expansion elaboration is about to
+         * walk, so the crossing path walk can traverse macro-GENERATED
+         * guards/crossings (see rt_macro_expansion in elab_fns.c). */
+        refine_note_macro_expansion(e, call, expanded);
         Expr *out = elab_form(e, expanded);
         e->macro_expansion_module = saved_expansion;
         if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--;
@@ -2142,6 +2632,15 @@ Expr *elab_call(Elab *e, Form *call) {
         fn_binding->source_binding->type.kind == TY_FN) {
         fn_binding = fn_binding->source_binding;
     }
+
+    /* RT1 (refinement-types-plan): a direct call to a user function is a
+     * crossing into whatever refinements its parameters declare.  Record it
+     * here -- one place, keyed on the source form, before any of the dozen
+     * downstream call-construction paths -- and resolve it after the whole
+     * unit is elaborated, when every callee's predicates are known regardless
+     * of definition order.  A no-op for a callee with no refined parameters. */
+    if (fn_binding && fn_binding->type.kind == TY_FN)
+        (void)refine_note_call_site(e, fn_binding, call, 1);
 
     /* Phase RT: return-type-directed dispatch for a typeclass method whose
      * dispatch variable appears only in its return type (e.g. (default-of),
@@ -2463,9 +2962,32 @@ Expr *elab_call(Elab *e, Form *call) {
                  * left untouched.  Mirrors the ^fat auto-shim arity bound (<=5). */
                 for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
                     const Type *ft = ctor->fields[fi].full_type;
-                    if (!ft || ft->kind != TY_TYVAR) continue;
+                    /* A parametric (TY_TYVAR) field, or -- capturing-closure-in-
+                     * struct-field-segv -- a concrete boxed `(fn ...)` field, both
+                     * carry the fat representation, so a bare/thin fn argument must
+                     * be shimmed into a fat `{thunk, env}` handle (EX_FN_TO_FAT).
+                     * A capturing-closure value (TY_PTR_VOID) and an already-boxed
+                     * TY_FN are left untouched -- already fat. */
+                    bool fat_field = ft && (ft->kind == TY_TYVAR ||
+                                            (ft->kind == TY_FN && ft->as.fn.boxed));
+                    if (!fat_field) continue;
                     Expr *fa = call_expr->as.call_.args[fi];
                     if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
+                        continue;
+                    /* fn-value-fat-normalization increment 2: a NORMALIZED fn
+                     * param already holds a fat handle even though its declared
+                     * type is not marked `boxed` (normalization is a property of
+                     * the type, not a flag on it).  Storing it into a fat field
+                     * must pass through -- the `boxed` test above cannot see it,
+                     * and re-boxing makes the field's slot 0 the outer shim, so
+                     * the field call runs the handle as code.  This is the
+                     * struct-store twin of the A#1 forwarding guard; it is what
+                     * `stdlib/lens.tur`'s `(lens get put)` hits once `get`/`put`
+                     * (tyvar signatures) are normalized. */
+                    if (fa->kind == EX_VAR && fa->as.var.binding &&
+                        fa->as.var.binding->is_param &&
+                        (fa->as.var.binding->is_fat ||
+                         fn_param_type_is_fat_normalized(&fa->as.var.binding->type)))
                         continue;
                     uint32_t inner_arity = fa->type.as.fn.arity;
                     if (inner_arity < 1 || inner_arity > 5) continue;
@@ -2475,6 +2997,26 @@ Expr *elab_call(Elab *e, Form *call) {
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, fa->span);
                     shim->as.fn_to_fat_.inner = fa;
                     call_expr->as.call_.args[fi] = shim;
+                }
+
+                /* closure-drop-glue S2 (Model U): storing a CAPTURING closure
+                 * VARIABLE into an owning (boxed) fn-field MOVES it -- the
+                 * struct's drop glue frees that heap env, so a second use (another
+                 * store, or a call) must be a use-after-consume error rather than
+                 * a silent double-free (confirmed with valgrind).  A thin fn is
+                 * re-shimmed to a FRESH box per store, and an inline closure has no
+                 * source binding, so both are already uniquely owned and NOT
+                 * consumed here -- only a variable holding a live capturing-closure
+                 * handle (TY_PTR_VOID, or an already-boxed TY_FN) is moved. */
+                for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+                    const Type *ft = ctor->fields[fi].full_type;
+                    if (!ft || ft->kind != TY_FN || !ft->as.fn.boxed) continue;
+                    Expr *fa = call_expr->as.call_.args[fi];
+                    while (fa && fa->kind == EX_ASCRIBE) fa = fa->as.ascribe_.inner;
+                    if (fa && fa->kind == EX_VAR && fa->as.var.binding &&
+                        (fa->type.kind == TY_PTR_VOID ||
+                         (fa->type.kind == TY_FN && fa->type.as.fn.boxed)))
+                        binding_mark_moved(fa->as.var.binding, fa->span);
                 }
 
                 /* TS4P1 / nested-carrier-match: Build TY_APP result type for
@@ -2637,10 +3179,35 @@ Expr *elab_call(Elab *e, Form *call) {
 
     /* Builtin operator. Evaluate args first, then look up. */
     uint32_t n_args = call->as.list.len - 1;
+
+    /* N0 (numeric-tower-rational-complex-plan §3): the builtin operator rows
+     * are keyed by TypeKind and emit a C infix operator, so they can never
+     * express `Rational + Rational`.  Peek at the first argument's type BEFORE
+     * committing to the builtin path: when no builtin row matches but a `Num`
+     * instance does, the call is `Num` typeclass dispatch, not an error.
+     *
+     * The peek happens before the move-tracking loop below on purpose -- the
+     * Num path re-elaborates the argument forms inside elab_method_call, and a
+     * move already poisoned here would surface as a bogus use-after-move.  On
+     * the builtin path the peeked expression is reused verbatim, so an ordinary
+     * `(+ a b)` still elaborates each argument exactly once. */
+    Expr *arg0_peek = NULL;
+    if (n_args > 0) {
+        arg0_peek = elab_form(e, call->as.list.items[1]);
+        if (!arg0_peek) return NULL;
+    }
+    Type first_t = (n_args > 0) ? arg0_peek->type : TYPE_NIL;
+    const BuiltinSpec *spec = builtin_lookup(name, first_t, n_args);
+    if (!spec) {
+        Expr *num_disp = elab_try_num_operator_dispatch(e, call, head, name,
+                                                        &first_t, n_args);
+        if (num_disp) return num_disp;
+    }
+
     Expr **args = (n_args == 0) ? NULL :
         (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {
-        args[i] = elab_form(e, call->as.list.items[1 + i]);
+        args[i] = (i == 0) ? arg0_peek : elab_form(e, call->as.list.items[1 + i]);
         if (!args[i]) return NULL;
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.
          * UT2 exception: ^unique ^mut bindings represent exclusive mutable access;
@@ -2653,8 +3220,6 @@ Expr *elab_call(Elab *e, Form *call) {
             }
         }
     }
-    Type first_t = (n_args > 0) ? args[0]->type : TYPE_NIL;
-    const BuiltinSpec *spec = builtin_lookup(name, first_t, n_args);
     if (!spec) {
         const BuiltinSpec *any = builtin_first_with_name(name);
         if (any) {
@@ -3147,6 +3712,9 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     pap_closure->n_captures = (uint8_t)n_pap_captures;
     pap_closure->env_name = pap_env_sym;
     pap_closure->is_shift_receiver = false;   /* arena mem is not zeroed */
+    pap_closure->is_effect_payload = false;
+    pap_closure->capture_drop_insts = NULL;   /* Model R #1b: no Drop resolution here */
+    pap_closure->capture_clone_insts = NULL;
 
     /* Wire closure into FnDef (required for emit_fn_def to emit the env struct) */
     pap_fd->closure = pap_closure;
@@ -3418,7 +3986,7 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
 }
 
 /* Phase 2: Elaborate a function call (f a b c) */
-static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
+static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
     /* defstruct-as-defadt (exg5-exists-cycle): read-and-clear the make-struct
@@ -4619,7 +5187,17 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if ((expected_arg_kind == TY_TYVAR ||
                  (expected_full && expected_full->kind == TY_TYVAR)) &&
                 args[i]->type.kind != TY_INT) {
-                args[i] = call_wrap_reinterpret(e, args[i], TY_INT, args[i]->span);
+                OwnCarry carry = own_carry_for_arg(
+                    fn_binding->name ? fn_binding->name->name : NULL, fn_arg_idx_cast);
+                if (carry == OWN_CARRY_RETAIN && own_arg_mints_reference(args[i]))
+                    carry = OWN_CARRY_BORROW;
+                args[i] = call_wrap_reinterpret_owning(
+                    e, args[i], TY_INT, args[i]->span, carry);
+                /* The owning-carrier rules can reject (diagnostic already
+                 * emitted).  The rest of this loop dereferences args[i]
+                 * unconditionally, so bail rather than segfault on the way to
+                 * reporting an error we have already reported. */
+                if (!args[i]) return NULL;
             }
         }
 
@@ -4885,8 +5463,26 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * same arg-emission casts that already feed closures to :fn/:int/:ptr. */
         if (!is_rank2_param && fn_type.kind == TY_FN) {
             uint32_t fn_arg_idx_fat = fn_binding->closure_fn_binding ? i + 1 : i;
-            if (fn_arg_idx_fat < fn_type.as.fn.arity &&
-                FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fat, FA_FAT)) {
+            bool slot_fat_decl = fn_arg_idx_fat < fn_type.as.fn.arity &&
+                FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fat, FA_FAT);
+            /* fn-value-fat-normalization stage 1: a NOMINAL thin TY_FN param
+             * slot gets the same treatment as a ^fat one -- every fn value
+             * flowing in is normalized to a fat handle, because the callee's
+             * invoke now dispatches fat (emit_expr.c ER2, keyed on the SAME
+             * fn_param_type_is_fat_normalized predicate).  Carrier-eligible
+             * params never appear here (their arg_kind is TY_PTR_VOID by
+             * elab-defn time); cfnptr/variadic/arity>5 stay thin by the
+             * predicate.  The diagnostic else-branch below stays ^fat-only:
+             * shapes the checker already accepts at a nominal param must not
+             * become new errors. */
+            bool slot_nominal = false;
+            if (!slot_fat_decl && fn_arg_idx_fat < fn_type.as.fn.arity &&
+                fn_type.as.fn.arg_kinds[fn_arg_idx_fat] == TY_FN &&
+                fn_type.as.fn.arg_full_types) {
+                const Type *aft_nom = fn_type.as.fn.arg_full_types[fn_arg_idx_fat];
+                slot_nominal = aft_nom && fn_param_type_is_fat_normalized(aft_nom);
+            }
+            if (slot_fat_decl || slot_nominal) {
                 /* fat-closure-ascription: an *already-fat* closure value that is
                  * carried as a one-word :int/:ptr<void> (e.g. a list-head result,
                  * or a handler threaded around as :int) and ascribed to a (fn ...)
@@ -4937,7 +5533,14 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                  * pass-through branch -- identical to a bare `^fat` parameter
                  * (which carries TY_PTR_VOID and works). */
                 if (args[i]->kind == EX_VAR && args[i]->as.var.binding &&
-                    args[i]->as.var.binding->is_fat &&
+                    (args[i]->as.var.binding->is_fat ||
+                     /* fn-value-fat-normalization stage 1: a NORMALIZED nominal
+                      * param already holds a fat handle -- forwarding it into
+                      * another fat/normalized slot must pass through, not
+                      * re-shim (the double-box reads the handle as code and
+                      * SEGVs -- the s1c forwarding probe). */
+                     (args[i]->as.var.binding->is_param &&
+                      fn_param_type_is_fat_normalized(&args[i]->as.var.binding->type))) &&
                     args[i]->type.kind == TY_FN &&
                     !args[i]->type.as.fn.boxed) {
                     args[i]->type = TYPE_PTR_VOID;
@@ -4991,6 +5594,12 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
+                    /* A normalized NOMINAL param never drops its argument --
+                     * which is precisely why this shim leaked a box per call --
+                     * so its box may be the shared file-scope one.  A ^fat sink
+                     * (slot_fat_decl) may drop, so it keeps the heap box.  See
+                     * the static_ok comment in expr.h. */
+                    shim->as.fn_to_fat_.static_ok = slot_nominal && !slot_fat_decl;
                     args[i] = shim;
                 } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
                            ak == TY_NIL ||
@@ -5005,7 +5614,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                      * same plumbing that threads composed handlers as :int without
                      * re-boxing them; a bare non-capturing fn still arrives as
                      * TY_FN at its first boundary and is shimmed above. */
-                } else {
+                } else if (slot_fat_decl) {
                     Buf gb; buf_init(&gb);
                     type_print(&gb, args[i]->type);
                     buf_putc(&gb, '\0');
@@ -5016,6 +5625,12 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     buf_free(&gb);
                     return NULL;
                 }
+                /* slot_nominal with an unrecognized arg kind: leave the
+                 * argument untouched -- the checker already accepted this
+                 * shape under the thin convention, and stage 1 must not turn
+                 * accepted programs into errors.  (If such a value is invoked
+                 * fat it was already broken; the fuzzer's known probes track
+                 * those shapes.) */
             }
         }
 
@@ -5577,7 +6192,97 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
-    Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
+    /* Route B (constrained-hkt-lifted-lambda-keeps-representative-instance):
+     * a DIRECT call to a constrained HIGHER-KINDED poly fn at a concrete type
+     * constructor -- `(bind-then-pure (some 41))` from an unconstrained caller.
+     * Monomorphizing this left every class-method call in the body resolved
+     * against the representative instance the elaborator baked; emit-side
+     * re-resolution repairs the body's own calls but cannot reach a lifted
+     * continuation, whose `pure` kept the representative for good.
+     *
+     * Route the call through the callee's DICT CLONE instead, passing the
+     * concrete instances' dict singletons.  Every method call in the body --
+     * receiver- or return-directed, inline or in a lifted continuation (which
+     * captures the dict in its closure env via the nested-mapper lowering) --
+     * then loads its target out of a dictionary, correct by construction with
+     * no dependence on specialization.  This is the same lowering the rank-2
+     * forall path uses.
+     *
+     * Gated to HIGHER-KINDED constraints only: kind-`*` constrained defns (the
+     * Dec/Enc/Tag family) keep monomorphization, which their by-value element
+     * specialization depends on.  Fires only when the ambient forwarding above
+     * did not already claim the call and every constraint grounds to a concrete
+     * instance; otherwise the call falls through to the existing paths. */
+    bool dict_clone_byvalue_result = false;
+    if (fwd_bound == bound_fn && fn_binding && bound_fn == fn_binding &&
+        fn_binding->fn_constraints &&
+        fn_binding->fn_constraints->n_constraints >= 1 &&
+        fn_binding->fn_constraints->n_constraints <= MAX_FN_CONSTRAINTS &&
+        fn_binding->source_fn_def && n_type_bindings > 0) {
+        const ConstraintSet *cs = fn_binding->fn_constraints;
+        TypeClassInstance *insts[MAX_FN_CONSTRAINTS];
+        uint8_t nc = cs->n_constraints;
+        bool all_hkt_concrete = true;
+        for (uint8_t ci = 0; ci < nc && all_hkt_concrete; ci++) {
+            const TypeConstraint *con = &cs->constraints[ci];
+            insts[ci] = NULL;
+            if (!con->typeclass || !con->tyvar || !con->tyvar->name) {
+                all_hkt_concrete = false; break;
+            }
+            bool is_hkt = false;
+            if (con->typeclass->type_param_kinds)
+                for (uint8_t k = 0; k < con->typeclass->n_type_params; k++)
+                    if (con->typeclass->type_param_kinds[k] != KIND_STAR) {
+                        is_hkt = true; break;
+                    }
+            if (!is_hkt) { all_hkt_concrete = false; break; }
+            uint8_t bidx = 0;
+            if (!call_find_type_binding(type_bindings, n_type_bindings,
+                                        con->tyvar->name, &bidx)) {
+                all_hkt_concrete = false; break;
+            }
+            /* The binding is the APPLIED type `(Option int)`; the instance head
+             * is the bare constructor, so walk the spine to it. */
+            Type bt = type_bindings[bidx].type;
+            while (bt.kind == TY_APP && bt.as.app.fn) bt = *bt.as.app.fn;
+            if (bt.kind == TY_TYVAR || bt.kind == TY_UNKNOWN) {
+                all_hkt_concrete = false; break;
+            }
+            insts[ci] = typeclass_env_lookup_instance(&e->typeclass_env,
+                                                      con->typeclass, &bt, 1);
+            if (!insts[ci]) { all_hkt_concrete = false; break; }
+        }
+        if (all_hkt_concrete) {
+            Binding *clone = make_dict_clone(e, fn_binding, call->span);
+            if (clone) {
+                Expr **na = (Expr **)arena_alloc(e->arena,
+                                                 (n_args + nc) * sizeof(Expr *));
+                for (uint8_t ci = 0; ci < nc; ci++) {
+                    Expr *d = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
+                    d->as.dict_.instance = insts[ci];
+                    d->as.dict_.method_name[0] = '\0';
+                    d->as.dict_.is_ambient = false;
+                    na[ci] = d;
+                }
+                for (uint32_t k = 0; k < n_args; k++) na[nc + k] = args[k];
+                fwd_bound = clone;
+                fwd_args  = na;
+                fwd_nargs = n_args + nc;
+                /* A dict clone returns the int64 CARRIER for every result
+                 * (emit_fns.c forces that off n_dict_clone).  A by-value
+                 * aggregate result -- `(Option int)` -- must be bridged back:
+                 * type the call as the carrier and ascribe it to the aggregate
+                 * so the existing carrier->concrete ascription bridge derefs. */
+                if (call_result_type.kind == TY_APP)
+                    dict_clone_byvalue_result = true;
+            }
+        }
+    }
+
+    Expr *out = expr_new(e->arena, EX_CALL,
+                         dict_clone_byvalue_result ? type_from_kind(TY_INT)
+                                                   : call_result_type,
+                         call->span);
     out->as.call_.fn_binding = fwd_bound;
     out->as.call_.args = fwd_args;
     out->as.call_.n_args = fwd_nargs;
@@ -5591,10 +6296,70 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         out->as.call_.abi_bindings = saved;
         out->as.call_.n_abi_bindings = n_type_bindings;
     }
+    if (dict_clone_byvalue_result) {
+        /* Bridge the dict clone's int64 carrier result back to the by-value
+         * aggregate the call site expects (see the Route B block above). */
+        Expr *asc = expr_new(e->arena, EX_ASCRIBE, call_result_type, call->span);
+        asc->as.ascribe_.inner = out;
+        return asc;
+    }
     if (wrap_generic_result) {
-        return call_wrap_reinterpret(e, out, result_type.kind, call->span);
+        return call_wrap_reinterpret_owning(
+            e, out, result_type.kind, call->span,
+            own_carry_for_result(fn_binding && fn_binding->name
+                                     ? fn_binding->name->name : NULL));
     }
     return out;
+}
+
+/* Phase 2 wrapper: elaborate the call, then apply the closure-drop-glue S1
+ * borrowed-closure hoist to the result (a no-op unless the call passes an inline
+ * capturing closure to a `^borrow` fn-param). */
+/* closure-capture-escapes-linearity: invoking a linear callable CONSUMES it.
+ *
+ * A call in head position does not go through the general var-use path in
+ * elab_toplevel.c, which is what marks a linear binding consumed and rejects the
+ * second use.  Without this, a closure that inherited linearity from a consumed
+ * capture was reported as *dropped* (TUR-E0100) even when it was called -- the
+ * mark reached the binding but nothing ever discharged it.
+ *
+ * Continuations are excluded: `(k v)` on a TY_CONT / is_continuation binding is
+ * application sugar with its own consume-and-check in elab_call_fn_inner, and
+ * running both would consume here and then report a spurious use-after-consume
+ * there. */
+static bool call_consume_linear_callable(Binding *fn_binding, const Form *call) {
+    if (!fn_binding) return true;
+    if (fn_binding->is_continuation || fn_binding->type.kind == TY_CONT) return true;
+    if (fn_binding->is_unique) {
+        /* The unique half: a second invocation is a second use of a
+         * use-at-most-once value, which is E0201 (same code the general var-use
+         * path raises for `(f)` in non-head position). */
+        if (fn_binding->is_moved) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                                TUR_E0201_UNIQUE_COPY,
+                                "cannot copy unique value '%s' -- "
+                                "unique values may be used at most once",
+                                fn_binding->name->name);
+            return false;
+        }
+        fn_binding->is_moved = true;
+    }
+    if (!fn_binding->is_linear) return true;
+    if (fn_binding->is_linear_consumed) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                            "linear value '%s' used after being consumed",
+                            fn_binding->name->name);
+        return false;
+    }
+    fn_binding->is_linear_consumed = true;
+    return true;
+}
+
+static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
+    if (!call_consume_linear_callable(fn_binding, call)) return NULL;
+    Expr *r = elab_call_fn_inner(e, call, fn_binding);
+    return r ? hoist_borrowed_closure_args(e, r, call->span) : r;
 }
 
 /* forall-dict-pass-multi-constraint-hkt-plan (Task 3.1 residual guard): a
@@ -5614,6 +6379,9 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
  * lambda (`is_lifted_lambda`), which is how a mapper argument reaches the body.
  * `depth` bounds the lifted-lambda chain so a self/mutually-recursive lifted
  * lambda cannot loop the walk. */
+static const TypeClass *call_dispatched_constraint_class(const Expr *e,
+                                                         const ConstraintSet *cs);
+
 static bool dict_clone_nested_dispatch_rec(const Expr *e,
                                            const ConstraintSet *cs,
                                            bool inside_lambda, int depth) {
@@ -5626,18 +6394,8 @@ static bool dict_clone_nested_dispatch_rec(const Expr *e,
              * bare type variable (the constraint's own var, resolved to the
              * carrier representative).  A concrete-typed receiver re-resolves
              * correctly inside a lifted lambda and must NOT be rejected. */
-            if (inside_lambda && e->as.call_.dict_arg &&
-                e->as.call_.dict_arg->kind == EX_DICT &&
-                e->as.call_.dict_arg->as.dict_.instance &&
-                e->as.call_.dict_arg->as.dict_.instance->typeclass &&
-                e->as.call_.n_args >= 1 && e->as.call_.args &&
-                e->as.call_.args[0] &&
-                e->as.call_.args[0]->type.kind == TY_TYVAR) {
-                const TypeClass *mtc =
-                    e->as.call_.dict_arg->as.dict_.instance->typeclass;
-                for (uint8_t c = 0; c < cs->n_constraints; c++)
-                    if (cs->constraints[c].typeclass == mtc) return true;
-            }
+            if (inside_lambda && call_dispatched_constraint_class(e, cs))
+                return true;
             if (e->as.call_.fn_expr && REC(e->as.call_.fn_expr)) return true;
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 if (REC(e->as.call_.args[i])) return true;
@@ -5714,31 +6472,52 @@ static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
  * hoisted here.  A dispatch reached through a lambda boundary this scan cannot
  * cross (a direct-call lifted lambda) simply is not found here and falls through
  * to the TUR-E0311 guard. */
+/* Route B (constrained-hkt-lifted-lambda-keeps-representative-instance): does
+ * this call dispatch a typeclass method on the clone's constrained type
+ * variable?  Two shapes qualify:
+ *   - receiver-directed: arg 0's type is a bare TY_TYVAR (`bind`, `fmap`);
+ *   - return-directed: the method has no receiver to key on and carries the
+ *     constraint var in its RESULT -- a bare TY_TYVAR, or the head of a
+ *     `(m b)` TY_APP spine (`pure`, `empty`).
+ * Returns the dispatched class when it is one of `cs`'s constraints, else NULL.
+ * Shared by the mapper scanner, the E0311 guard, and (mirrored) the emit-side
+ * env-dict index so the three never disagree. */
+static const TypeClass *call_dispatched_constraint_class(const Expr *e,
+                                                         const ConstraintSet *cs) {
+    if (!e || e->kind != EX_CALL || !cs) return NULL;
+    if (!(e->as.call_.dict_arg && e->as.call_.dict_arg->kind == EX_DICT &&
+          e->as.call_.dict_arg->as.dict_.instance &&
+          e->as.call_.dict_arg->as.dict_.instance->typeclass))
+        return NULL;
+    bool recv_is_tyvar =
+        e->as.call_.n_args >= 1 && e->as.call_.args && e->as.call_.args[0] &&
+        e->as.call_.args[0]->type.kind == TY_TYVAR;
+    bool result_is_tyvar_headed = false;
+    {
+        const Type *h = &e->type;
+        while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+        result_is_tyvar_headed = (h->kind == TY_TYVAR);
+    }
+    if (!recv_is_tyvar && !result_is_tyvar_headed) return NULL;
+    const TypeClass *mtc = e->as.call_.dict_arg->as.dict_.instance->typeclass;
+    for (uint8_t c = 0; c < cs->n_constraints; c++)
+        if (cs->constraints[c].typeclass == mtc) return mtc;
+    return NULL;
+}
+
 static void mapper_scan_dispatch(const Expr *e, const ConstraintSet *cs,
                                  const TypeClass **out_classes, uint8_t *n_out) {
     if (!e) return;
 #define MS(x) mapper_scan_dispatch((x), cs, out_classes, n_out)
     switch (e->kind) {
         case EX_CALL: {
-            if (e->as.call_.dict_arg &&
-                e->as.call_.dict_arg->kind == EX_DICT &&
-                e->as.call_.dict_arg->as.dict_.instance &&
-                e->as.call_.dict_arg->as.dict_.instance->typeclass &&
-                e->as.call_.n_args >= 1 && e->as.call_.args &&
-                e->as.call_.args[0] &&
-                e->as.call_.args[0]->type.kind == TY_TYVAR) {
-                const TypeClass *mtc =
-                    e->as.call_.dict_arg->as.dict_.instance->typeclass;
-                bool is_constraint = false;
-                for (uint8_t c = 0; c < cs->n_constraints; c++)
-                    if (cs->constraints[c].typeclass == mtc) { is_constraint = true; break; }
-                if (is_constraint) {
-                    bool seen = false;
-                    for (uint8_t k = 0; k < *n_out; k++)
-                        if (out_classes[k] == mtc) { seen = true; break; }
-                    if (!seen && *n_out < MAX_FN_CONSTRAINTS)
-                        out_classes[(*n_out)++] = mtc;
-                }
+            const TypeClass *mtc = call_dispatched_constraint_class(e, cs);
+            if (mtc) {
+                bool seen = false;
+                for (uint8_t k = 0; k < *n_out; k++)
+                    if (out_classes[k] == mtc) { seen = true; break; }
+                if (!seen && *n_out < MAX_FN_CONSTRAINTS)
+                    out_classes[(*n_out)++] = mtc;
             }
             if (e->as.call_.fn_expr) MS(e->as.call_.fn_expr);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) MS(e->as.call_.args[i]);
@@ -5903,6 +6682,9 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     snprintf(en, sizeof(en), "__env_%u", e->next_id++);
     clo->env_name = symtab_intern(e->st, strslice(en, (uint32_t)strlen(en)));
     clo->is_shift_receiver = false;   /* arena mem is not zeroed */
+    clo->is_effect_payload = false;
+    clo->capture_drop_insts = NULL;   /* Model R #1b: no Drop resolution here */
+    clo->capture_clone_insts = NULL;
     M->closure = clo;
     for (uint8_t k = 0; k < n_disp; k++) {
         M->dict_env_classes[k] = (TypeClass *)disp_classes[k];
@@ -6719,6 +7501,31 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     }
                     args[i] = wrap;
                     poly_arg_mask |= ARG_IDX_BIT(i);
+                    continue;
+                }
+                /* fn-value-fat-normalization increment 2: a fn-typed slot in
+                 * the forall body is fat-normalized like any other nominal fn
+                 * param, so a bare/thin fn argument must be shimmed HERE too.
+                 * This call goes through the carrier (`l.fn(l.env, arg)`), so
+                 * the A#1 call-site shim never sees it -- that gap is what made
+                 * the tyvar rows of the poly-result crash table survive stage 1
+                 * ("a tyvar-sig param's arguments arrive through the
+                 * generic/carrier machinery as thin pointers the call-site shim
+                 * cannot see").  Every function reachable through this forall
+                 * declares the same slot type, so both ends agree by type.
+                 * Already-fat values (boxed TY_FN, TY_PTR_VOID) pass through. */
+                if (aft && aft->kind == TY_FN &&
+                    fn_param_type_is_fat_normalized(aft) &&
+                    args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed &&
+                    args[i]->type.as.fn.arity >= 1 &&
+                    args[i]->type.as.fn.arity <= 5) {
+                    Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *bt = args[i]->type;
+                    bt->as.fn.boxed = true;
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt,
+                                          args[i]->span);
+                    shim->as.fn_to_fat_.inner = args[i];
+                    args[i] = shim;
                 }
             }
         }

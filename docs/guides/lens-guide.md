@@ -1,7 +1,7 @@
 ---
 title: Lens Guide
 category: Standard Library
-description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding shipped by default, and the van Laarhoven form -- now always-on, no experiment flags required.
+description: First-class functional lenses (view / set / over) via stdlib/lens.tur, which ships the profunctor-by-record encoding. The classic van Laarhoven form is also expressible by hand.
 ---
 
 # Lens Guide
@@ -9,7 +9,7 @@ description: First-class functional lenses (view / set / over) via stdlib/lens.t
 A **lens** is a first-class getter/setter for a part `A` of a whole `S`. It lets
 you read, replace, and transform a nested field without hand-writing the
 rebuild-the-whole boilerplate at every use site. Turmeric ships lenses in
-[`stdlib/lens.tur`](../../stdlib/lens.tur).
+[`stdlib/lens.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/lens.tur).
 
 ```turmeric
 (load "stdlib/lens.tur")
@@ -50,38 +50,49 @@ can be reused across calls; if the setter rebuilds the record (the common case),
 make it `:copy :heap` so it is pointer-carried and cheap to thread. A move-only
 `S` can still be used, but only linearly (each whole consumed once).
 
-## The two encodings
+## Which encoding does the stdlib use?
 
-Turmeric supports two lens encodings. The **profunctor-by-record** form ships as
-the default in `stdlib/lens.tur` and needs no experiment flags. The **van
-Laarhoven** form -- the classic Haskell optic
+**`stdlib/lens.tur` uses the profunctor-by-record encoding.** A `Lens S A` is a
+plain record holding two functions -- a getter `(fn [S] A)` and a setter
+`(fn [A S] S)`:
+
+```turmeric
+(defstruct Lens :copy [S A] (lget (fn [S] A)) (lput (fn [A S] S)))
+```
+
+`view`, `set`, and `over` just project those two fields and call them. There is
+no functor, no `forall`, and no runtime dictionary involved. This is the form
+you get from `(load "stdlib/lens.tur")` and the form every example above uses.
+
+The stdlib does **not** use the van Laarhoven encoding (below). If you only want
+to read and update nested fields, you never need to think about van Laarhoven at
+all -- the record form is the whole story.
+
+## The van Laarhoven form (optional, hand-written)
+
+The classic Haskell optic encodes a lens as a single polymorphic function:
 
 ```
 type Lens s a = forall f. Functor f => (a -> f a) -> (s -> f s)
 ```
 
--- now works out of the box: the kind/constraint/higher-rank machinery it needs
-(the `forall-kinds`, `forall-constraints`, `hkt-hrt`, and `hrt-curried-result`
-experiments) and the runtime dictionary passing it relies on (the
-`forall-dict-pass` experiment) have all graduated to always-on, so no experiment
-flags are required. It supports `view`/`set`/`over`, generic focus
-inference, and composition with ordinary function composition. It carries the
-caller's
-`Functor` dictionary through the poly carrier at runtime, so the lens body
-dispatches `fmap` on whichever instance the caller picks (`Const` for `view`,
-`Identity` for `set`/`over`).
+Turmeric can express this form -- the kind, constraint, and higher-rank
+machinery it needs, plus the runtime typeclass-dictionary passing it relies on,
+are all part of the language. A van Laarhoven lens carries the caller's
+`Functor` dictionary through the poly carrier at runtime, so its body dispatches
+`fmap` on whichever instance the caller picks (`Const` for `view`, `Identity`
+for `set`/`over`).
 
-The record encoding stays the default because it needs no experiments to run
-and it works with **any** `Functor`-like use, not just those whose `(f a)` fits
-the poly carrier. See [Functor width](#functor-width) below.
+It is **not** what `stdlib/lens.tur` ships, and you write it by hand when you
+want it. The one thing it buys you over the record form is composition (below).
 
-### Composition -- the one tradeoff of the record form
+## Composition
 
-The record encoding gives up composing optics with ordinary function
-composition. A generic `lens-compose` would need its setter to read the whole
-`s` (to view the intermediate part) *and* write it back -- using `s` twice --
-which the linearity checker rejects for an abstract move-only `S`. Compose by
-hand at concrete, copyable whole types:
+The record form gives up composing optics with ordinary function composition. A
+generic `lens-compose` would need its setter to read the whole `s` (to view the
+intermediate part) *and* write it back -- using `s` twice -- which the linearity
+checker rejects for an abstract move-only `S`. Compose by hand at concrete,
+copyable whole types:
 
 ```turmeric
 ;; Line -> start:Point -> x:int
@@ -97,65 +108,60 @@ hand at concrete, copyable whole types:
 where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more
 than once.
 
-The van Laarhoven form composes freely (`l1 . l2` is just function
-composition); reach for it when you need optic composition.
+The van Laarhoven form composes freely (`l1 . l2` is just function composition);
+reach for it when you need optic composition and don't want to hand-write the
+combined getter/setter.
 
-## Functor width
+## Functor width (van Laarhoven internals)
 
-The van Laarhoven form threads `(f a)` through a one-int64 poly carrier. Two
-shapes of functor work through that carrier:
+This section only matters if you write van Laarhoven lenses. The record form
+does not thread a functor and can ignore it.
+
+A van Laarhoven lens threads `(f a)` through a one-int64 poly carrier. Two shapes
+of functor work through that carrier:
 
 - **Carrier-compatible functors** -- an opaque or `:heap` type whose `(f a)`
   fits in one int64 word (e.g. `(defopaque Const [r a] :int)`,
   `(defopaque Identity [a] :int)`). These ride the carrier directly at no
   runtime cost beyond the dict dispatch.
 - **Wide by-value functors** -- a `:copy` struct or flat-product ADT whose
-  `(f a)` is wider than one word. These work with **no flag** (graduated
-  2026-07-04): codegen boxes the aggregate into the carrier at each lens
-  crossing and unboxes it back on the other side. `view`/`set`/`over`, generic
-  focus inference, and composition all thread through unchanged. The box pays
-  one heap alloc + copy + free per crossing.
+  `(f a)` is wider than one word. Codegen boxes the aggregate into the carrier at
+  each lens crossing and unboxes it on the other side. `view`/`set`/`over`,
+  generic focus inference, and composition all thread through unchanged; the box
+  pays one heap alloc + copy + free per crossing.
 
-The **zero-overhead by-value path (Path B)** graduated 2026-07-05 and is now
-**always on -- no flag**. Every lens call site whose lens **statically and
-uniquely resolves** to a *simple* lens is redirected to a by-value monomorphized
-body that spells `(f a)` by value with **no heap box** on either the `(f S)`
-result or the `(f A)` functor-wrapping result. A consumer lens param that
-resolves to *several* distinct simple lenses gets one box-free clone per lens
-(consumer monomorphization). Two shapes still ride the boxed Path A carrier
-bridge as a correctness fallback:
+Where the compiler can prove a lens call site **statically and uniquely**
+resolves to a *simple* lens (one with a single `fmap` dispatch at its body tail),
+it redirects the call to a monomorphized by-value body with **no heap box** on
+either the `(f S)` or `(f A)` result. A consumer lens param that resolves to
+several distinct simple lenses gets one box-free clone per lens. Two shapes still
+ride the boxed carrier bridge as a correctness fallback:
 
 - **Runtime-selected lenses** -- a lens chosen at run time (not a named-function
   argument) has no static resolution, so there is nothing to redirect.
 - **Composed lenses** -- a lens whose body tails into *another lens* rather than
-  a direct `fmap` dispatch (e.g. `line-a-x` = `line-a . point-x`). The nested
-  lens is carrier-lowered while the outer functor is by value, and the two ABIs
-  do not yet meet; such a lens (and any consumer ever passed one) falls fully
-  back to Path A. A *simple* lens, by contrast, has a single `fmap` dispatch at
-  its body tail. The remaining by-value-propagation fix that lets composed
-  lenses join Path B is tracked in
-  [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
-
-See
-[../upcoming/van-laarhoven-monomorphization-plan.md](../upcoming/van-laarhoven-monomorphization-plan.md)
-and
-[../upcoming/van-laarhoven-consumer-mono-plan.md](../upcoming/van-laarhoven-consumer-mono-plan.md)
-(Path B).
+  a direct `fmap` dispatch (e.g. `line-a-x = line-a . point-x`). The nested lens
+  is carrier-lowered while the outer functor is by value, and the two ABIs do not
+  yet meet, so such a lens (and any consumer ever passed one) falls back to the
+  boxed path. The fix that lets composed lenses join the by-value path is tracked
+  in
+  [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
 
 ## Related
 
-- [`stdlib/lens.tur`](../../stdlib/lens.tur) -- the module
-- [constrained-hkt-forall plan](../upcoming/constrained-hkt-forall-plan.md) --
+- [`stdlib/lens.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/lens.tur) -- the module (record encoding)
+- [constrained-hkt-forall plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/constrained-hkt-forall-plan.md) --
   the van Laarhoven roadmap and the mode-A/mode-B decision
-- [constrained-hkt-forall mode-B plan](../upcoming/constrained-hkt-forall-mode-b-plan.md) --
+- [constrained-hkt-forall mode-B plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/constrained-hkt-forall-mode-b-plan.md) --
   the dictionary passing + dispatch the van Laarhoven form runs on
-- [van-laarhoven-wide-functor-carrier-plan](../upcoming/van-laarhoven-wide-functor-carrier-plan.md) --
-  the wide-by-value functor carrier bridge (Path A, now always-on)
-- [van-laarhoven-monomorphization-plan](../upcoming/van-laarhoven-monomorphization-plan.md) --
-  the zero-overhead by-value monomorphization (Path B, graduated 2026-07-05)
-- [van-laarhoven-consumer-mono-plan](../upcoming/van-laarhoven-consumer-mono-plan.md) --
+- [van-laarhoven-wide-functor-carrier-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/van-laarhoven-wide-functor-carrier-plan.md) --
+  the wide-by-value functor carrier bridge
+- [van-laarhoven-monomorphization-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/van-laarhoven-monomorphization-plan.md) --
+  the zero-overhead by-value monomorphization
+- [van-laarhoven-consumer-mono-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/van-laarhoven-consumer-mono-plan.md) --
   consumer monomorphization: box-free clones for a lens param resolving to
-  several simple lenses (Path B, graduated 2026-07-05)
-- [van-laarhoven-composed-byvalue-plan](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md) --
-  the remaining by-value-propagation fix that brings COMPOSED lenses onto Path B
+  several simple lenses
+- [van-laarhoven-composed-byvalue-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md) --
+  the remaining fix that brings composed lenses onto the by-value path
 - [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses use
+```

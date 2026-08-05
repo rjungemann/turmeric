@@ -206,7 +206,14 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
                 for (uint32_t i = 0; i < n_out; i++) wrapped[i + 1] = items[i];
                 return form_list(env->elab->arena, f->span, wrapped, n_out + 1);
             }
-            return form_list(env->elab->arena, f->span, items, n_out);
+            Form *out = form_list(env->elab->arena, f->span, items, n_out);
+            /* Preserve annotation provenance through the template copy: a
+             * `#reads w` in a macro template reads as `(reads w)` stamped
+             * PROV_READS, and elab_defn's signature walk keys on the stamp
+             * -- without it the reconstructed annotation elaborates as a
+             * body call ("unknown function or operator 'reads'"). */
+            out->fx_prov = f->fx_prov;
+            return out;
         }
         case F_VEC:
         case F_MAP:
@@ -221,7 +228,11 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
             uint32_t n_out = 0;
             Form **items = ct_qq_eval_seq_items(env, f, &n_out);
             if (!items) return form_nil(env->elab->arena, f->span);
-            if (f->tag == F_MAP) return form_map(env->elab->arena, f->span, items, n_out);
+            if (f->tag == F_MAP) {
+                Form *m = form_map(env->elab->arena, f->span, items, n_out);
+                m->fx_prov = f->fx_prov;   /* keep #fx{...} explicit-row provenance */
+                return m;
+            }
             if (f->tag == F_SET) return form_set(env->elab->arena, f->span, items, n_out);
             if (f->tag == F_MAP_LITERAL) return form_map_literal(env->elab->arena, f->span, items, n_out);
             if (f->tag == F_SET_LITERAL) return form_set_literal(env->elab->arena, f->span, items, n_out);
@@ -230,6 +241,18 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
         }
         case F_QUASIQUOTE:
             return ct_eval_quasiquote(env, f->as.list.items[0]);
+        case F_CONTRACT_TYPE: {
+            /* `#refine{ x : T | (~pred w x) }` in a template: the contract
+             * type's predicate slot may hold computed unquotes (e.g. a
+             * str->sym-built measure name).  Returning the form as-is left
+             * the F_UNQUOTE node in the predicate, which elaborates as an
+             * unbound symbol.  Recurse per item and rebuild. */
+            uint32_t n = f->as.list.len;
+            Form **items = (Form **)arena_alloc(env->elab->arena, n * sizeof(Form *));
+            for (uint32_t i = 0; i < n; i++)
+                items[i] = ct_eval_quasiquote(env, f->as.list.items[i]);
+            return form_contract_type(env->elab->arena, f->span, items, n);
+        }
         case F_TYPE_ANN: {
             /* docs/reported/macro-template-type-position-rejects-unquoted-compound.md:
              * recurse into the type-annotation payload so unquoted compound
@@ -1088,14 +1111,23 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_KEYWORD:
         case F_CBLOCK:
         case F_QUOTE:
-        /* CT0: Contract type annotations are returned as-is in macro substitution */
-        case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals are returned as-is in macro substitution */
         case F_READER_COND:
         /* RR3: Range literal variable annotation is returned as-is in macro substitution */
         case F_RANGE_VAR:
             /* Literals, quote forms, and type annotations are returned as-is */
             return f;
+        case F_CONTRACT_TYPE: {
+            /* CT0 originally returned contract types as-is, which left
+             * `~param` markers inside a template's `#refine{...}` predicate
+             * unsubstituted (unbound-symbol at the call site).  Recurse per
+             * item, mirroring the F_TYPE_ANN Gap-G fix below. */
+            uint32_t n = f->as.list.len;
+            Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+            for (uint32_t i = 0; i < n; i++)
+                items[i] = substitute_params(e, f->as.list.items[i], macro, args);
+            return form_contract_type(e->arena, f->span, items, n);
+        }
         case F_TYPE_ANN: {
             /* Gap G: the reader wraps `: type-expr` into an F_TYPE_ANN whose
              * items[0] holds the type-expression sub-form. Returning the
@@ -1230,13 +1262,21 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                         }
                     }
                 }
-                return form_list(e->arena, f->span, items, n_out);
+                Form *spliced = form_list(e->arena, f->span, items, n_out);
+                spliced->fx_prov = f->fx_prov;   /* keep #reads/#fx provenance */
+                return spliced;
             }
             Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 items[i] = substitute_params(e, f->as.list.items[i], macro, args);
             }
-            return form_list(e->arena, f->span, items, f->as.list.len);
+            /* Preserve annotation provenance through the template rebuild: a
+             * `#reads w` reads as `(reads w)` stamped PROV_READS, and
+             * elab_defn's signature walk keys on the stamp -- without it the
+             * annotation elaborates as a body call. */
+            Form *rebuilt = form_list(e->arena, f->span, items, f->as.list.len);
+            rebuilt->fx_prov = f->fx_prov;
+            return rebuilt;
         }
         case F_SYM: {
             /* Check if this symbol is a fixed parameter - if so, replace with corresponding arg */
@@ -1270,7 +1310,11 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 items[i] = substitute_params(e, f->as.list.items[i], macro, args);
             }
-            if (f->tag == F_MAP) return form_map(e->arena, f->span, items, f->as.list.len);
+            if (f->tag == F_MAP) {
+                Form *m = form_map(e->arena, f->span, items, f->as.list.len);
+                m->fx_prov = f->fx_prov;   /* keep #fx{...} explicit-row provenance */
+                return m;
+            }
             if (f->tag == F_SET) return form_set(e->arena, f->span, items, f->as.list.len);
             if (f->tag == F_MAP_LITERAL) return form_map_literal(e->arena, f->span, items, f->as.list.len);
             if (f->tag == F_SET_LITERAL) return form_set_literal(e->arena, f->span, items, f->as.list.len);
@@ -1367,6 +1411,13 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, name_f->span, "defmacro name must be a symbol");
         return NULL;
     }
+
+    /* TUR-W0042: macro dispatch happens AFTER special-form dispatch in
+     * elab_call, so a macro named after a reserved special form is never
+     * expanded at a bare call site.  Same warning, same reasoning as the defn
+     * path (docs/archive/defn-shadows-return-special-form.md). */
+    if (!e->in_stdlib_load)
+        tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro");
 
     /* Check if macro already exists */
     if (elab_lookup_macro(e, name_f->as.sym)) {

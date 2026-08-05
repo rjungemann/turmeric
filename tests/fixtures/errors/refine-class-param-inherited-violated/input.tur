@@ -1,0 +1,20 @@
+;; The teeth of the inheritance rule: an instance that writes NO parameter
+;; annotation inherits the class's refinement, so a caller owes it.
+;;
+;; Before, this compiled, ran, and printed 0 -- the class demand was enforced
+;; nowhere, neither statically nor by an entry check. Now the inherited
+;; predicate reaches the instance method's binding, which is what both the
+;; call-site crossing and the entry-check injection read.
+;;
+;; Note this is an ERROR, not the TUR-W0377 lint: the instance did not opt out,
+;; so there is no leniency to rely on -- the argument is simply wrong.
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+(definstance Scaler [int]
+  (scale-by [self k] (* self k)))
+
+(defn f [] : int
+  (.scale-by 3 0))
+
+(defn main [] : int (println (f)) 0)

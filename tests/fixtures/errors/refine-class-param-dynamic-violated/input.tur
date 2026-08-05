@@ -1,0 +1,30 @@
+;; A dynamic dispatch passing an argument the CLASS forbids.
+;;
+;; Before the class-signature crossing existed this was reported NOWHERE, even
+;; under --strict-refine: no instance is selected on an abstract receiver, so
+;; no obligation was built. The violation is real and reachable -- calling
+;; use-dynamic with a float selects the strong instance, whose entry check
+;; fires and aborts.
+;;
+;; Pinned by INVERSION: if the crossing is ever lost, this fixture stops
+;; failing to compile.
+;;
+;; It surfaces by DEFAULT, with no --strict-refine. That took a second fix:
+;; a runtime-guarded obligation reports a counterexample only when the model is
+;; CLOSED, and closedness used to be measured by the VC's variable count rather
+;; than the goal's -- so the caller's own parameters (here, the abstract
+;; receiver) made every such model look open. See
+;; docs/archive/runtime-guarded-refutation-needs-closed-model.md.
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+(definstance Scaler [int]
+  (scale-by [self : int, k : int] : int (* self k)))
+
+(definstance Scaler [float]
+  (scale-by [self : float, k : #refine{ v : int | (> v 0) }] : int k))
+
+(defn use-dynamic [^Scaler a x : a] : int
+  (.scale-by x 0))
+
+(defn main [] : int (println (use-dynamic 3.5)) 0)

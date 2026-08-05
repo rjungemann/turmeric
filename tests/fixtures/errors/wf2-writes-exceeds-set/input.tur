@@ -1,0 +1,26 @@
+;; WF2 negative, write channel 1 of 3: a DIRECT assignment outside the frame.
+;;
+;; `bump2!` declares it writes `a` and then writes `b` as well.  A declared
+;; frame the body exceeds is an error, not a silent widening -- the same rule
+;; `#reads` follows -- because the checked tier only means something if the
+;; declaration can be falsified.
+;;
+;; Note what is deliberately NOT flagged: `(set! local 5)` in the same body.
+;; A bare-symbol assignment rebinds this function's own slot, which turmeric's
+;; by-value passing makes unobservable to the caller.  That is the same
+;; argument WF3's "a plain symbol target cannot alias" rule rests on, so the
+;; two must agree.
+(defstruct Ctr [n : int])
+
+(defn bump2! [^mut a : Ctr ^mut b : Ctr] #writes [a] : int
+  (let [^mut local 0]
+    (set! local 5)
+    (set! (.n a) 1)
+    (set! (.n b) 2)
+    local))
+
+(defn main [] : int
+  (let [^mut x (Ctr 0)]
+    (let [^mut y (Ctr 0)]
+      (bump2! x y)))
+  0)

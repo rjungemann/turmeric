@@ -1,0 +1,30 @@
+;; C2 (#reads) negative -- the MISCOMPILE guard. An inner binding that SHADOWS
+;; the frozen `w` with a same-named mutable world is NOT frozen; despawning it
+;; between the guard and the read must NOT let the crossing prove (else the
+;; elided check would be a use-after-despawn). The frozen-name capture excludes
+;; a shadowed binding, so `alive? w` stays impure here. Under --strict-refine
+;; the unproven crossing is a hard error, which is exactly the point.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn despawn! [^unique ^mut w : World] : nil
+  ```c
+  (void)w;
+  ```)
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int 0)
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [__frz (& w)]                 ;; OUTER w frozen
+      (let [^mut w (World 8)]          ;; INNER w shadows -- NOT frozen
+        (if (alive? w 0)
+          (do (despawn! w)             ;; despawn the (unfrozen) inner w
+              (get-Pos! w 0))          ;; MUST NOT prove
+          -1)))))
+
+(defn main [] : int
+  (println (run))
+  0)

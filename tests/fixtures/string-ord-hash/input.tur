@@ -1,0 +1,25 @@
+;; owned-string-type-plan: Ord (lexicographic) + Hash (content) over String.
+(load "stdlib/string.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+(defn demo [] : int
+  (let [a (string/from-cstr "apple")
+        b (string/from-cstr "banana")
+        a2 (string/from-cstr "apple")]
+    (do
+      ;; Ord typeclass
+      (println (yn (lt? a b)))     ;; apple < banana
+      (println (yn (gt? a b)))
+      (println (yn (lte? a a2)))   ;; equal -> lte true, lt false
+      (println (yn (lt? a a2)))
+      ;; compare helper: -1 / 0 / 1
+      (println (string/compare a b))
+      (println (string/compare b a))
+      (println (string/compare a a2))
+      ;; Hash: equal content hashes equally regardless of identity
+      (println (yn (= (hash a) (hash a2))))
+      (println (yn (= (hash a) (hash b))))
+      0)))
+
+(demo)

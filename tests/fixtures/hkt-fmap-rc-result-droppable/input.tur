@@ -1,0 +1,71 @@
+; hkt-fmap-result-is-not-droppable: (fmap r f) over an rc<T> allocates a fresh
+; rc -- that is what `fmap :: (a -> b) -> rc a -> rc b` means -- but the call's
+; result type used to come back as the def-less `(type-app ? ?)`, so there was
+; no way to release it:
+;
+;   error: rc/drop requires rc<T> or a constrained existential,
+;          got (type-app ? ?)
+;
+; The value was usable (foldable, passable), just not droppable, so every fmap
+; over an rc leaked a control block plus a payload slot.
+;
+; The substitution was never the problem -- it produced `(type-app rc<?> int)`
+; correctly. Nothing consumed that shape: `rc/drop` and friends test for TY_RC,
+; and rc<T> is not spelled as a TY_APP anywhere else in the compiler. So the two
+; representations are reconciled at the dispatch site, collapsing an applied HKT
+; result over a pointer-family head to the concrete handle type.
+;
+; Sound without minting a by-value spec because an rc IS the int64 carrier -- an
+; RcControlBlock *, 8 bytes, same bits -- so the uniform carrier dispatch stays
+; the right ABI and there is no aggregate layout for a consumer to misread.
+;
+; The leak arm matters more than the type arm: a fix that made rc/drop merely
+; type-check while dropping the wrong pointer would pass a check-only fixture.
+(load "stdlib/rc.tur")
+
+(defn dbl [x : int] : int (* x 2))
+(defn add [a : int b : int] : int (+ a b))
+
+; The no-growth assertion reads the CG6 collector counter, not a malloc probe.
+; Every value this fixture leaks-or-frees is an rc<T> control block, and each
+; one is registered at rc_cb_alloc_kinded and unregistered when it is freed --
+; by the collector OR by plain refcounting -- so (gc-live-blocks) is an exact,
+; program-scoped count of what has not been reclaimed.
+;
+; It replaced a malloc probe (mallinfo2 / malloc_zone_statistics) reading the
+; PROCESS heap, which was blind or wrong four different ways: vacuous under
+; ASan on glibc, quarantine-inflated under ASan on Darwin, reading the
+; COMPILER's heap under one-process `tur jit`, and hardcoded to 0 on any other
+; libc.  See the full table in tests/fixtures/gc-collects-strong-cycle/input.tur
+; and docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md.
+
+(defn fmap-and-drop [] : int
+  (let [r (rc/of 21)]
+    (let [m (fmap r dbl)]
+      (rc/drop m)))
+  0)
+
+(defn run [n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (fmap-and-drop)
+      (set! i (+ i 1))))
+  0)
+
+(defn main [] : int
+  (let [r (rc/of 21)]
+    (let [m (fmap r dbl)]
+      ;; A fresh, independent allocation -- not a second handle on r.
+      (println (rc/strong-count m))          ; 1
+      (println (:: (foldl m 0 add) int))     ; 42 -- fn really was applied
+      (rc/drop m))
+    ;; fmap borrows its container, so r is untouched by all of the above.
+    (println (rc/strong-count r)))           ; 1
+
+  ;; And the leak arm: 5000 fmap/drop pairs must not grow the heap.
+  (run 500)                                  ; reach steady state before sampling
+  (let [before (gc-live-blocks)]
+    (run 5000)
+    (let [after (gc-live-blocks)]
+      (println (if (= (- after before) 0) 0 (- after before)))))
+  0)

@@ -1,0 +1,31 @@
+;; WF3 negative: the assignment target is a plain symbol the hypothesis does
+;; not mention -- the shape refine-wf3-disjoint-set rescues -- but here `acc`
+;; is also BORROWED in the body. A borrow is the one channel by which a callee
+;; could write this frame's slot, so the frame is no longer provably disjoint
+;; and the whole-body decline must return: TUR-W0372, a hard error under
+;; --strict-refine.
+;;
+;; Delete the `(& acc)` binding and this same program proves, which is what
+;; makes this a test of the borrow guard specifically and not of the frame
+;; analysis in general.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [^mut acc 0]
+      (let [__b (& acc)]
+        (let [__f (& w)]
+          (if (alive? w 0)
+            (do (set! acc (+ acc (get! w 0))) acc)
+            -1))))))
+
+(defn main [] : int
+  (println (run))
+  0)

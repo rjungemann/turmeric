@@ -113,6 +113,71 @@ make test-tsan
 The `make test-tsan` target rebuilds `tur` itself with `-fsanitize=thread` and
 then sets `TUR_TSAN=1` for the test runner.
 
+## Failures That Are Not Product Bugs
+
+Three failure shapes in this tree look exactly like product regressions and
+are not. Recognize them before you start bisecting. See
+[test-suite-portability-guide.md](test-suite-portability-guide.md) for the
+platform-divergence counterparts (vacuous enumerations, heap probes under
+ASan, harness env parity, unspecified string-literal merging).
+
+### Sanitizers launder crashes into passes
+
+ASan and UBSan abort with **exit code 1** on a deadly signal. Any
+fork-and-classify harness whose outcome enum uses small exit codes will
+therefore tally a sanitizer-killed child as whatever category owns code
+`1` -- the crash disappears into a legitimate-looking bucket and the
+summary stays green.
+
+Two requirements for any such harness:
+
+- Use **distinctive** exit codes for the outcome enum. The SMT-LIB corpus
+  runner moved its enum to `40..46` for exactly this reason.
+- Classify any *unexpected* exit status as a **crash**, never as a
+  category. A default arm that maps unknown codes onto a real outcome is
+  the bug.
+
+### Overlapping runs produce failures that read as product bugs
+
+Two distinct causes, both observed:
+
+- **`ctest -jN` oversubscribes.** `tests/run.sh` and `tests/run-turi.sh`
+  each already fan out across `nproc` internally, so `-j4` is `4 x nproc`
+  processes on the box, and the per-fixture timeouts (10s compiled, 15s
+  interpreted) expire on work that would otherwise finish comfortably.
+  Both targets are marked `RUN_SERIAL` in `CMakeLists.txt` so ctest gives
+  them the machine, which is what they already assumed.
+- **A concurrent `cmake --build` relinks the compiler mid-run.** Fixtures
+  exec `./build/tur` straight out of the build tree. During the link
+  window the file exists but is not yet executable, so everything
+  dispatched in that window dies with `Permission denied`, which the
+  harness reports as `build failed`. A batch of those reads as a compiler
+  regression.
+
+`tests/run.sh` stamps the binary at startup, re-checks at the end, and
+exits `2` with a `WARNING: ... changed while this run was in progress` if
+it moved. Other harnesses do not, so learn the shape instead:
+**an assertion that passes when you run it by hand was probably never
+really run.** Re-run alone before believing a failure, and never launch a
+build and a suite concurrently.
+
+### Contract fixtures must pin `--keep-contracts` themselves
+
+A fixture that asserts contract or refinement **runtime** behavior must
+put `--keep-contracts` in its own `flags` file. It must never inherit that
+behavior from how `tur` happened to be built: a Debug `tur` checks
+contracts, a Release `tur` strips them under `NDEBUG`.
+
+Nine `refine-*` fixtures inherited Debug-ness, passed under
+`tests/run.sh`, and failed under the Release-built `tests/run-jit.sh`,
+where the check never fired. The same applies to diagnostics that depend
+on CT1 obligation injection, such as `TUR-E0375` -- with contracts
+stripped the obligation is never injected and the diagnostic is never
+reported.
+
+If the fixture asserts a runtime abort, `--keep-contracts` is part of what
+it is testing. Declare it.
+
 ## Follow-up Work Hooks
 
 - Integrate this contract with `stdlib/test.tur` implementation work.

@@ -24,8 +24,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some [A]
-  [x : A]
+(defn some [A] [x : A]
   #fx{Construct}
   : (Option A)
   (make-struct Option :is-some true :value x))
@@ -88,9 +87,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn unwrap-or [A]
-  [o : (Option A) dflt : A]
-  : A
+(defn unwrap-or [A] [o : (Option A) dflt : A] : A
   ;; Option none-as-NULL retirement (Track A, step 1.3): by-value `(Option A)`
   ;; receiver.  Pure-Turmeric body reads `.is-some`/`.value` directly; A is
   ;; inferred from `o` or from `dflt`.  The interpreter keeps its
@@ -155,9 +152,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-map [A B]
-  [o : (Option A) ^fat f : (fn [A] B)]
-  : (Option B)
+(defn option-map [A B] [o : (Option A) ^fat f : (fn [A] B)] : (Option B)
   (if (.is-some o) (some (f (.value o))) (none)))
 ;; Option none-as-NULL retirement (Track A): by-value `(Option A)` receivers.
 ;; Pure-Turmeric body reads `.is-some`/`.value` directly; none (`{is_some=false}`)
@@ -177,9 +172,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-eq? [A]
-  [o1 : (Option A) o2 : (Option A) ^fat cmp-fn : (fn [A A] bool)]
-  : bool
+(defn option-eq? [A] [o1 : (Option A)
+                      o2 : (Option A)
+                      ^fat cmp-fn : (fn [A A] bool)] : bool
   (if (.is-some o1)
     (if (.is-some o2) (cmp-fn (.value o1) (.value o2)) false)
     (not (.is-some o2))))

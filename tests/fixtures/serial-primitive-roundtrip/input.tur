@@ -12,10 +12,10 @@
     (let [got (__inst_Serializable_deserialize_int b)]
       (if (= got expected)
         (do
-          (printf "int ok: %lld\n" expected)
+          (printf "int ok: %ld\n" expected)
           1)
         (do
-          (printf "int FAIL: expected %lld got %lld\n" expected)
+          (printf "int FAIL: got %ld\n" got)
           0)))))
 
 ;; Helper: check bool round-trip
@@ -24,7 +24,7 @@
     (let [got (__inst_Serializable_deserialize_bool b)]
       (if (= got expected)
         (do
-          (printf "bool ok: %lld\n" (if expected 1 0))
+          (printf "bool ok: %ld\n" (if expected 1 0))
           1)
         (do
           (printf "bool FAIL\n")

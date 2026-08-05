@@ -36,7 +36,7 @@
 (defn __opt_bind [m f] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)m;
+      (void *)(intptr_t)m;
   if (!p || !p->is_some) return 0;
   return ((int64_t(*)(int64_t))(intptr_t)f)(p->value);
   ```)
@@ -46,21 +46,21 @@
 (defn __opt_alt_or [a b] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)a;
+      (void *)(intptr_t)a;
   return (p && p->is_some) ? a : b;
   ```)
 
 (defn __opt_is_some [m] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)m;
+      (void *)(intptr_t)m;
   return (p && p->is_some) ? 1 : 0;
   ```)
 
 (defn __opt_val [m] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)m;
+      (void *)(intptr_t)m;
   return p->value;
   ```)
 

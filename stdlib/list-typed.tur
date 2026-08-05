@@ -96,7 +96,5 @@
 ;;;
 ;;; Since: Phase G4 (carrier<->concrete ABI crossing audit)
 
-(defn list-count [A]
-  [xs : (List A)]
-  : int
+(defn list-count [A] [xs : (List A)] : int
   (if (list-empty? xs) 0 (tlength (:: (:: xs :int) (Cons A)))))

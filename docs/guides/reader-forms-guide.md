@@ -259,6 +259,27 @@ A set literal.
 #s(:red :green :blue)
 ```
 
+### Owned-String literal -- `#s"..."` (layer `stringed`)
+
+`#s"text"` reads as `(string/from-cstr "text")` -- a fresh owned `String`,
+where a bare `"text"` stays a borrowed `cstr`. It is dispatched by the
+delimiter, so it does not collide with the `#s(...)` set literal above (`"` vs
+`(`).
+
+Unlike the always-on forms in this guide, `#s"..."` is **opt-in** via the
+`stringed` `#lang` layer (or, equivalently, `#use-reader-macros
+"stdlib/string-reader.tur"`). Declare it on line 1:
+
+```turmeric no-check
+#lang turmeric stringed
+#s"hello"            ; => (string/from-cstr "hello"), an owned String
+```
+
+The layer is read-time only; `(load "stdlib/string.tur")` still brings in the
+`String` code it expands to. See the [Syntax
+Guide](syntax-guide.md#part-25----lang-base-dialects-and-layers) for the full
+`#lang` layer model and `tur lang-layers` for the registered set.
+
 ### Contract type -- `#refine{ var : T | pred }`
 
 A refinement type annotation. Introduces a binding `var` of type `T` with
@@ -467,7 +488,7 @@ These spellings are still accepted during the grace window but produce a
 deprecation warning at every use. The migration script
 `tools/migrate-fx-rows.py` rewrites a tree mechanically. The plan that
 drives the rename lives at
-[`docs/upcoming/fx-row-syntax-rename-plan.md`](../upcoming/fx-row-syntax-rename-plan.md).
+[`docs/upcoming/fx-row-syntax-rename-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/fx-row-syntax-rename-plan.md).
 
 ### `#{...}` effect row -- TUR-D0002
 

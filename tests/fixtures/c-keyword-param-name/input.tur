@@ -1,0 +1,24 @@
+;; Parameters and locals named after C keywords go through the LEGACY fold
+;; (they are referenced by inline-C under their source spelling), which also
+;; passed a pure-alnum name straight through -- so `(defn f [double : int] ...)`
+;; emitted `static int64_t f(int64_t double)`.
+;; Regression for docs/archive/c-keyword-function-names-not-mangled.md.
+
+(defn scale [double : int register : int] : int
+  (* double register))
+
+(defn offset [static : int] : int
+  (let [volatile 10
+        extern   (+ static volatile)]
+    (* extern 2)))
+
+(defn shadow [union : int] : int
+  (let [union (+ union 1)]
+    union))
+
+(defn main [] : int
+  (do
+    (println (scale 6 7))
+    (println (offset 11))
+    (println (shadow 41))
+    0))

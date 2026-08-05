@@ -409,6 +409,10 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
                         ls[lsp++] = cur->as.set_lit_.items[i-1];
                     break;
+                case EX_CONS_LIST:
+                    for (uint32_t i = cur->as.cons_list_.n; i > 0; i--)
+                        ls[lsp++] = cur->as.cons_list_.items[i-1];
+                    break;
                 /* (:: expr T) is type-erased; descend into the inner expr so any
                  * `let` bindings under an ascription are still collected. */
                 case EX_ASCRIBE:
@@ -520,6 +524,34 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 case EX_EXISTS_DISPATCH:
                     for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
                         ls[lsp++] = cur->as.exists_dispatch_.args[i-1];
+                    break;
+                /* Delimited control: descend so a `let` nested under a
+                 * shift/reset body is registered as locally defined (matches the
+                 * main traversal below). */
+                case EX_RESET:
+                    if (cur->as.reset_.body) ls[lsp++] = cur->as.reset_.body;
+                    break;
+                case EX_SHIFT:
+                    if (cur->as.shift_.k_fn) ls[lsp++] = cur->as.shift_.k_fn;
+                    if (cur->as.shift_.body) ls[lsp++] = cur->as.shift_.body;
+                    break;
+                case EX_SHIFT0:
+                    if (cur->as.shift0_.k_fn) ls[lsp++] = cur->as.shift0_.k_fn;
+                    if (cur->as.shift0_.body) ls[lsp++] = cur->as.shift0_.body;
+                    break;
+                case EX_CLONEABLE_RESET:
+                    if (cur->as.cloneable_reset_.body) ls[lsp++] = cur->as.cloneable_reset_.body;
+                    break;
+                case EX_CLONEABLE_SHIFT:
+                    if (cur->as.cloneable_shift_.k_fn) ls[lsp++] = cur->as.cloneable_shift_.k_fn;
+                    if (cur->as.cloneable_shift_.body) ls[lsp++] = cur->as.cloneable_shift_.body;
+                    break;
+                case EX_SERIAL_RESET:
+                    if (cur->as.serial_reset_.body) ls[lsp++] = cur->as.serial_reset_.body;
+                    break;
+                case EX_SERIAL_SHIFT:
+                    if (cur->as.serial_shift_.k_fn) ls[lsp++] = cur->as.serial_shift_.k_fn;
+                    if (cur->as.serial_shift_.body) ls[lsp++] = cur->as.serial_shift_.body;
                     break;
                 default: break;
             }
@@ -828,6 +860,15 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     stack[sp++] = cur->as.set_lit_.items[i-1];
                 }
                 break;
+            case EX_CONS_LIST:
+                /* A `& rest` variadic cons-list build -- its items are ordinary
+                 * expressions that may reference enclosing locals; descend so a
+                 * captured item is surfaced (a delegated cons-list riding a lifted
+                 * CPS continuation env would otherwise miss the capture). */
+                for (uint32_t i = cur->as.cons_list_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.cons_list_.items[i-1];
+                }
+                break;
             case EX_GET_FIELD:
                 stack[sp++] = cur->as.get_field_.struct_expr;
                 break;
@@ -989,6 +1030,37 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_EXISTS_DISPATCH:
                 for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
                     stack[sp++] = cur->as.exists_dispatch_.args[i-1];
+                break;
+            /* Delimited control (reset/shift/shift0, cloneable variants): descend
+             * into the delimited body and receiver so a local referenced only
+             * inside a shift/reset body surfaces as a free variable of the
+             * enclosing scope.  Without this the constructs hit `default` and
+             * their subtrees were invisible -- e.g. a value captured as a
+             * cloneable-shift body was never seen by the E4 Clone-capture check. */
+            case EX_RESET:
+                if (cur->as.reset_.body) stack[sp++] = cur->as.reset_.body;
+                break;
+            case EX_SHIFT:
+                if (cur->as.shift_.k_fn) stack[sp++] = cur->as.shift_.k_fn;
+                if (cur->as.shift_.body) stack[sp++] = cur->as.shift_.body;
+                break;
+            case EX_SHIFT0:
+                if (cur->as.shift0_.k_fn) stack[sp++] = cur->as.shift0_.k_fn;
+                if (cur->as.shift0_.body) stack[sp++] = cur->as.shift0_.body;
+                break;
+            case EX_CLONEABLE_RESET:
+                if (cur->as.cloneable_reset_.body) stack[sp++] = cur->as.cloneable_reset_.body;
+                break;
+            case EX_CLONEABLE_SHIFT:
+                if (cur->as.cloneable_shift_.k_fn) stack[sp++] = cur->as.cloneable_shift_.k_fn;
+                if (cur->as.cloneable_shift_.body) stack[sp++] = cur->as.cloneable_shift_.body;
+                break;
+            case EX_SERIAL_RESET:
+                if (cur->as.serial_reset_.body) stack[sp++] = cur->as.serial_reset_.body;
+                break;
+            case EX_SERIAL_SHIFT:
+                if (cur->as.serial_shift_.k_fn) stack[sp++] = cur->as.serial_shift_.k_fn;
+                if (cur->as.serial_shift_.body) stack[sp++] = cur->as.serial_shift_.body;
                 break;
             default:
                 break;
@@ -1316,6 +1388,158 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
     return false;
 }
 
+/* set-bang-rc-release (docs/reported/set-bang-does-not-release-old-rc-value.md).
+ *
+ * An rc-managed `^mut` binding owns exactly ONE strong reference for its whole
+ * lifetime: its init takes the +1 and the scope-exit auto-drop releases it.
+ * `(set! b v)` overwrote the binding without releasing what was there, so every
+ * assignment past the first leaked a block -- and the auto-drop only ever saw
+ * the FINAL value (its defer snapshots the variable where it is pushed, at the
+ * end of the do-block). Measured: 4000 rounds x 4 assignments leaked exactly
+ * 16000 blocks, none of them reclaimable by the cycle collector either, since
+ * they are acyclic with a positive strong count.
+ *
+ * Two things have to happen for the release to be sound, and this pass does the
+ * first while emit_set_stmt does the second:
+ *
+ *  1. `v` must genuinely carry a +1, because the release drops the binding's.
+ *     A fresh `(rc/of ...)` does, an explicit `(rc/clone x)` does, and a bare
+ *     `(set! b other)` does because the elaborator treats it as a MOVE (the
+ *     source binding's own auto-drop is suppressed).  A bare rc FIELD read does
+ *     NOT: `(set! h (.next h))` copies the word with no increment, so the
+ *     binding would release a reference it never acquired.  Those are wrapped
+ *     in EX_RC_CLONE here -- exactly the clone-on-read normalization the
+ *     let-binding init path already performs for the same borrow shape.
+ *
+ *  2. `v` must be fully evaluated BEFORE the old value is released, since it may
+ *     read the very binding being overwritten (`(set! h (.next h))` lowers to an
+ *     inline `h->value->next`, not a temp).  emit_set_stmt spills to a temp.
+ *
+ * Only ever called for a binding that qualifies for the scope-exit auto-drop.
+ * A binding whose ownership is hand-managed -- moved, or explicitly dropped via
+ * `(rc/drop b)` / `(drop! b)` / `ref/from-rc` -- gets no auto-drop, and must get
+ * no release here either, or the explicit disposal and this one double-free.
+ * Self-assignment `(set! b b)` marks the binding moved and so is excluded by
+ * that same gate, which matters: it lowers to `b = b` with no auto-drop at all,
+ * and a release would leave the binding dangling. */
+void elab_set_rc_release(Arena *arena, Expr *body, Binding *binding) {
+    if (!body || !binding) return;
+
+    const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+    if (!stack) { fprintf(stderr, "tur: oom\n"); abort(); }
+    uint32_t cap = 256;
+    int sp = 0;
+    stack[sp++] = body;
+
+    while (sp > 0) {
+        Expr *cur = (Expr *)stack[--sp];
+        if (!cur) continue;
+
+        /* `release_old` doubles as the already-processed marker, so a second
+         * pass over the same node (a re-elaborated body) cannot wrap the value
+         * in a SECOND EX_RC_CLONE -- which would take an increment nothing
+         * balances and turn this fix into a leak of its own. */
+        if (cur->kind == EX_SET && cur->as.set_.target == binding &&
+            !cur->as.set_.release_old) {
+            /* (1) normalize a borrow-shaped value to a real +1. */
+            Expr *v = cur->as.set_.value;
+            Expr *inner = v;
+            while (inner && inner->kind == EX_ASCRIBE)
+                inner = inner->as.ascribe_.inner;
+            if (inner && inner->kind == EX_GET_FIELD && inner->type.kind == TY_RC) {
+                Expr *clone = expr_new(arena, EX_RC_CLONE, v->type, v->span);
+                clone->as.rc_clone_.expr = v;
+                clone->as.rc_clone_.elide = false;
+                cur->as.set_.value = clone;
+            }
+            /* (2) tell codegen to release what is being overwritten. */
+            cur->as.set_.release_old = true;
+        }
+
+        /* Reserve for the widest child count this node can push -- a `do` block,
+         * call, builtin, struct literal or binding group is n-ary, so a fixed
+         * headroom would overflow the stack on a long body. */
+        uint32_t need = 4;
+        switch (cur->kind) {
+            case EX_DO:          need = cur->as.do_.n + 1u;             break;
+            case EX_CALL:        need = cur->as.call_.n_args + 1u;      break;
+            case EX_BUILTIN:     need = cur->as.builtin.n + 1u;         break;
+            case EX_MAKE_STRUCT: need = cur->as.make_struct_.n_fields + 1u; break;
+            case EX_LET:
+            case EX_LETREC:      need = cur->as.let_.n + 2u;            break;
+            default:                                                     break;
+        }
+        if ((uint32_t)sp + need > cap) {
+            while (cap < (uint32_t)sp + need) cap *= 2u;
+            const Expr **grown =
+                (const Expr **)realloc(stack, (size_t)cap * sizeof(const Expr *));
+            if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+            stack = grown;
+        }
+
+        switch (cur->kind) {
+            case EX_LET:
+            case EX_LETREC:
+                for (uint32_t i = cur->as.let_.n; i > 0; i--)
+                    stack[sp++] = cur->as.let_.bindings[i-1].init;
+                stack[sp++] = cur->as.let_.body;
+                break;
+            case EX_IF:
+                if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
+                stack[sp++] = cur->as.if_.then_;
+                stack[sp++] = cur->as.if_.cond;
+                break;
+            case EX_DO:
+                for (uint32_t i = cur->as.do_.n; i > 0; i--)
+                    stack[sp++] = cur->as.do_.items[i-1];
+                break;
+            case EX_WHILE:
+                stack[sp++] = cur->as.while_.body;
+                stack[sp++] = cur->as.while_.cond;
+                break;
+            case EX_SET:       stack[sp++] = cur->as.set_.value;   break;
+            case EX_SET_DEREF:
+                stack[sp++] = cur->as.set_deref_.ref;
+                stack[sp++] = cur->as.set_deref_.value;
+                break;
+            case EX_SET_FIELD:
+                stack[sp++] = cur->as.set_field_.receiver;
+                stack[sp++] = cur->as.set_field_.value;
+                break;
+            case EX_GET_FIELD: stack[sp++] = cur->as.get_field_.struct_expr; break;
+            case EX_CALL:
+                for (uint32_t i = cur->as.call_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.call_.args[i-1];
+                break;
+            case EX_BUILTIN:
+                for (uint32_t i = cur->as.builtin.n; i > 0; i--)
+                    stack[sp++] = cur->as.builtin.args[i-1];
+                break;
+            case EX_MAKE_STRUCT:
+                for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
+                    stack[sp++] = cur->as.make_struct_.field_values[i-1];
+                break;
+            case EX_DEFER:     stack[sp++] = cur->as.defer_.body;    break;
+            case EX_PANIC:     stack[sp++] = cur->as.panic_.payload; break;
+            case EX_RC_OF:     stack[sp++] = cur->as.rc_of_.expr;    break;
+            case EX_RC_DROP:   stack[sp++] = cur->as.rc_drop_.expr;  break;
+            case EX_RC_CLONE:  stack[sp++] = cur->as.rc_clone_.expr; break;
+            case EX_ASCRIBE:   stack[sp++] = cur->as.ascribe_.inner; break;
+            case EX_RETURN:
+                if (cur->as.return_.value) stack[sp++] = cur->as.return_.value;
+                break;
+            /* Deliberately NOT descending into EX_CLOSURE / EX_FN_DEF: a nested
+             * function body has its own frame and its own binding lifetimes, and
+             * a captured rc is reached through the closure env rather than this
+             * binding's slot. */
+            default:
+                break;
+        }
+    }
+
+    free(stack);
+}
+
 /* Field-level analog of is_binding_consumed: returns true when the body
  * explicitly drops a SPECIFIC owning field of a by-value struct/record local --
  * `(rc/drop (.f o))` for an rc field, `(drop! (.f o))` for a ref field, matched
@@ -1543,6 +1767,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->scope = &e->global;
     e->next_id = 0;
     e->next_gensym_id = 0;  /* Phase 6 */
+    /* RT1: refinement obligation vector (empty unless `refined` is on). */
+    refine_obligations_init(&e->refine_obs, arena);
     /* Transitive-RM: driver overrides this via elaborate_program's
      * user_macros param when there's a shared registry to thread into
      * module loaders. */
@@ -1608,6 +1834,10 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_hamt_count = intern_cstr(st, "hamt/count");
     e->sym_hamt_merge = intern_cstr(st, "hamt/merge");
     e->sym_hamt_hash_ptr = intern_cstr(st, "hamt/hash-ptr");
+    e->sym_hamt_set_cstr = intern_cstr(st, "hamt/set-cstr");
+    e->sym_hamt_del_cstr = intern_cstr(st, "hamt/del-cstr");
+    e->sym_hamt_get_cstr = intern_cstr(st, "hamt/get-cstr");
+    e->sym_hamt_has_cstr = intern_cstr(st, "hamt/has-cstr?");
     e->sym_defer     = intern_cstr(st, "defer");
     e->sym_return    = intern_cstr(st, "return");
     /* Phase 5 */
@@ -1704,6 +1934,12 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_gc_force = intern_cstr(st, "gc!");
     e->sym_gc_enable = intern_cstr(st, "gc-enable!");
     e->sym_gc_disable = intern_cstr(st, "gc-disable!");
+    e->sym_gc_auto = intern_cstr(st, "gc-auto!");   /* CG5 */
+    /* CG6 */
+    e->sym_gc_collections   = intern_cstr(st, "gc-collections");
+    e->sym_gc_objects_freed = intern_cstr(st, "gc-objects-freed");
+    e->sym_gc_live_blocks   = intern_cstr(st, "gc-live-blocks");
+    e->sym_gc_cand_hw       = intern_cstr(st, "gc-candidate-high-water");
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
     e->sym_quote = intern_cstr(st, "quote");
@@ -1725,6 +1961,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_move = intern_cstr(st, "move");
     e->kw_linear = intern_cstr(st, "linear"); /* LT4 */
     e->kw_affine = intern_cstr(st, "affine");
+    e->kw_sealed = intern_cstr(st, "sealed");   /* sealed-opaque experiment */
     e->kw_heap = intern_cstr(st, "heap");
     e->kw_no_auto_ctor = intern_cstr(st, "no-auto-ctor"); /* CTOR-V0 opt-out */
     /* Phase G0: ADT registry */
@@ -1765,6 +2002,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defalias      = intern_cstr(st, "defalias");
     e->type_alias_names  = NULL;
     e->type_alias_kinds  = NULL;
+    e->type_alias_types  = NULL;
     e->n_type_aliases    = 0;
     e->cap_type_aliases  = 0;
     /* Phase HKT-P1: type-app */
@@ -1979,6 +2217,24 @@ MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
         if (m->is_referred) return m;
         if (m->defining_module_name == NULL) return m;
         if (m->defining_module_name == e->current_module_name) return m;
+        /* The `tur/` namespace is implicitly imported everywhere (see the
+         * stdlib/macros.tur header: "Macros here are globally visible without
+         * an explicit import because the tur/ namespace is implicitly
+         * imported").  The end-of-stdlib M7 promotion sweep (elab_toplevel.c)
+         * eventually rewrites every `tur/`-module macro's defining_module_name
+         * to NULL, but that sweep fires only once, at the stdlib/user boundary.
+         * On the interpreter's incremental re-elaboration a stdlib file that
+         * uses a tur/macros macro (e.g. typeclass-show.tur's `when`) can sit
+         * *inside* the accumulated stdlib prefix while a later turn's user form
+         * is the new tail -- so the boundary, and thus the promotion, lands
+         * after the using file, and the macro is invisible during its
+         * elaboration (it then falls back to a runtime-dispatch call, spamming
+         * TUR-W0040).  Honour the implicit tur/ import directly at lookup time
+         * so visibility no longer depends on the sweep having already run.
+         * See docs/archive/tur-macros-invisible-across-stdlib-reelab.md. */
+        if (m->defining_module_name->len >= 4 &&
+            memcmp(m->defining_module_name->name, "tur/", 4) == 0)
+            return m;
         for (uint32_t k = 0; k < e->n_macro_expansion_stack; k++) {
             if (m->defining_module_name == e->macro_expansion_stack[k]) return m;
         }
@@ -2499,7 +2755,9 @@ char *elab_mangle_binding_name(const Binding *b) {
         mod_prefix_len  = j;
     }
 
-    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len);
+    /* +8 slack mirrors raw_name_for_binding: room for the `tur_u_` libc-
+     * collision guard prefix (6 bytes) plus the NUL. */
+    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len) + 8;
     char *p = (char *)malloc(total);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
@@ -2512,8 +2770,30 @@ char *elab_mangle_binding_name(const Binding *b) {
         memcpy(p + k, b->name->name, b->name->len);
         k += b->name->len;
     } else if (b->is_global) {
+        /* codegen-user-defn-collides-with-libc-pipe2: mirror raw_name_for_binding
+         * -- a bare (non-module) global whose spelling is a libc symbol gets the
+         * `tur_u_` guard prefix so def, use, and inline-C `__TUR_CNAME_` all
+         * resolve to the same collision-free C name. */
+        if (mod_prefix_len == 0 && !is_main_binding &&
+            tur_name_collides_libc(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
+        /* c-keyword-function-names-not-mangled: mirror raw_name_for_binding --
+         * a bare global whose spelling is a C reserved word gets the same guard
+         * prefix so def, use, and inline-C `__TUR_CNAME_` all agree. */
+        else if (mod_prefix_len == 0 &&
+                 tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
         tur_mangle_append(p, &k, b->name->name, b->name->len);
     } else {
+        /* Mirror raw_name_for_binding's local/parameter branch. */
+        if (tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
         tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);
     }
     p[k] = '\0';

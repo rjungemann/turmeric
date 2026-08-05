@@ -1,0 +1,23 @@
+;; constrained-hkt-byvalue-carriers: a constrained poly fn instantiated at a
+;; BY-VALUE carrier (the stdlib Option, a real 2-word struct) rather than an
+;; int-carrier defopaque.
+;;
+;; The caller side already boxed the aggregate across the rank-2 crossing, but
+;; the continuation handed to the dict-dispatched method was a struct-returning
+;; thunk cast to an int64-returning function pointer -- an x86-64 return-ABI
+;; mismatch (RAX:RDX vs RAX).  The instance read garbage and the caller then
+;; dereferenced it, so this segfaulted.
+;;
+;; Now the poly-wrap requests the carrier-spill shim when the receiver is the
+;; abstract constructor, so the thunk boxes its aggregate return and both sides
+;; agree on the carrier ABI.
+
+(defn poly-bind [^m] [^Monad m x : (m int)] : (m int)
+  (bind x (fn [v] (some (* v 2)))))
+
+(defn at-opt [g (forall [(m :: * -> *)] [(Monad m)] (-> (m int) (m int)))] : int
+  (unwrap-or (g (some 5)) -1))
+
+(defn main [] : int
+  (println (at-opt poly-bind))   ; 10
+  0)

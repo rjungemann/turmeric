@@ -1,7 +1,7 @@
 ---
 title: Advanced Type System -- Design Rationale
 category: Advanced Types
-description: Why Turmeric chose the type system features it did, and why dependent and refinement types were correctly deferred
+description: Why Turmeric chose the type system features it did, why dependent types remain deferred, and how refinement types went from deferred to shipped
 ---
 
 # Advanced Type System -- Design Rationale
@@ -9,8 +9,10 @@ description: Why Turmeric chose the type system features it did, and why depende
 Turmeric's type system evolved through a deliberate process of evaluating a large
 set of candidate features against a small set of fixed constraints. This guide
 explains what those constraints are, why each shipped feature clears them, and
-why two well-known features -- dependent types and refinement types -- were
-correctly deferred for v1.0.0.
+what happened to the two well-known features that were deferred for v1.0.0:
+dependent types, which remain deferred, and refinement types, which shipped in
+0.31.0 and graduated to always-on in 0.33.0 once it became clear the deferral
+had rested on an assumption that did not hold.
 
 ## The constraints
 
@@ -227,9 +229,9 @@ as type-level compile-time integers.
 > across parameters, through `defstruct`/`defopaque` wrappers, and through
 > polymorphic helpers. Sizes only known at run time fall back to runtime
 > assertions. See the archived
-> [sized-types-completion-plan.md](../archive/history/sized-types-completion-plan.md)
+> [sized-types-completion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-completion-plan.md)
 > (SZ6–SZ9) and
-> [sized-types-cross-param-unification-plan.md](../archive/history/sized-types-cross-param-unification-plan.md).
+> [sized-types-cross-param-unification-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-cross-param-unification-plan.md).
 
 ```turmeric
 ;; Matrix multiplication: dimensions must be compatible.
@@ -299,9 +301,17 @@ defn sqrt [x : #refine{ y :double | (>= y 0) }] :double
 
 The key insight is that "contract types" and "refinement types" are not the same
 thing. Refinement types require predicate entailment -- the type checker must
-prove at compile time that one predicate implies another, which in general
-requires an SMT solver. Contract types make a simpler promise: check the
-predicate at runtime and fail fast if it is violated.
+prove at compile time that one predicate implies another. Contract types make a
+simpler promise: check the predicate at runtime and fail fast if it is
+violated.
+
+Turmeric ships both, layered: the contract type is the annotation and the
+runtime check, and refinement discharge is the pass that tries to prove each
+one and drops the check where it succeeds. Reading them as two layers rather
+than two competing features is what later made the proving half tractable
+without an external solver -- see
+["Refinement types: deferred, then built"](#refinement-types-deferred-then-built)
+below.
 
 This distinction maps cleanly onto Turmeric's build model:
 
@@ -425,41 +435,79 @@ The cost is Very High; the remaining demand is Low. Deferral is correct.
 
 ---
 
-## Why refinement types were correctly deferred for v1.0.0
+## Refinement types: deferred, then built
 
-Refinement types attach compile-time-checked predicates to types
-(using the same `#refine{...}` reader form contract types use today):
+Refinement types attach compile-time-checked predicates to types, using the
+same `#refine{...}` reader form contract types use:
 
 ```
 #refine{ x : int | (>= x 0) }  -- an int proven non-negative
 ```
 
-The key word is "proven". Unlike contract types, refinement types require the
-type checker to establish predicate entailment: if `(>= x 0)` is in scope,
-can it prove that `(>= (+ x 1) 0)` holds? In the general case this requires an
-SMT solver (Z3 or equivalent) integrated into the elaborator.
+**They shipped in 0.31.0 and graduated to always-on in 0.33.0.** See
+[refinement-types-guide.md](refinement-types-guide.md). This section is kept
+because the reasoning that deferred them, and the one insight that later made
+them shippable, are both worth having written down -- and because the other
+deferred feature, dependent types, is still deferred on grounds that have not
+changed.
 
-The v4 infrastructure substantially reduced the remaining work:
+### Why they were deferred
+
+The key word is "proven". Unlike contract types, refinement types require the
+type checker to establish predicate entailment: if `(>= x 0)` is in scope, can
+it prove that `(>= (+ x 1) 0)` holds? The assumption at the time was that this
+means an SMT solver -- Z3 or equivalent -- integrated into the elaborator, and
+so a hard external dependency on the compiler's critical path.
+
+The v4 infrastructure had already reduced the surrounding work:
 
 | Phase | Status after v4 |
 |---|---|
-| Syntax (<code>{ x : T &vert; p }</code>) | Done -- Contract Types use the same syntax |
+| Syntax (`#refine{ x : T \| p }`) | Done -- Contract Types use the same syntax |
 | Subtyping (`T { p }` is a subtype of `T`) | Structural part done via union/intersection; entailment layer still needed |
 | Runtime check insertion | Done -- Contract Types already do this |
 | FFI boundary annotation | Done -- Contract Types CT4 covers this |
-| Predicate propagation + SMT | Still needed |
+| Predicate propagation + SMT | The gap |
 
-Refinement types are the better-positioned of the two deferred features. The
-remaining gap is well-defined (an SMT integration layer, not a full elaborator
-redesign), and the implementation surface is separable from the rest of the type
-system. They are a realistic candidate for a future release once the v1.0.0
-feature set is stable and there is clear user demand from verification-focused
-projects.
+So the gap was well-defined and separable from the rest of the type system.
+What made it look expensive was the solver.
 
-For v1.0.0, the contract types + `assert!`/`require!`/`ensure!` combination
-covers the practical defensive programming cases, and Sized Types plus GADTs
-cover the bounds-checking cases that refinement types are most often cited for.
-The SMT dependency was a risk that was correctly not worth taking on.
+### What changed: the runtime fallback makes a partial solver shippable
+
+The deferral treated entailment as all-or-nothing -- either you have a complete
+solver or you have nothing. That is true for a language where the refinement is
+the *only* check. It is false here, and this is the whole insight:
+
+**every refinement already has a runtime meaning.** The predicate is a contract
+type first. So the static discharger is allowed to answer "I don't know" on any
+obligation and remain sound -- that obligation simply falls back to the runtime
+check it would have had anyway. Incompleteness costs performance, never
+correctness.
+
+That inverts the economics. A hand-rolled, incrementally-built solver is a real
+feature rather than a broken one, because the failure mode of every gap in it
+is a check you were already paying for. Turmeric's chain was built in stages --
+normalization and syntactic entailment, congruence closure, Fourier-Motzkin
+over exact rationals, Nelson-Oppen equality exchange, bounded cube expansion --
+each stage useful on its own and each free to decline.
+
+The consequence for the deferral argument: **there is no *external* SMT
+dependency.** The solver itself is real and it ships -- the staged chain above
+is `src/compiler/refine_solver*.c`, compiled into `tur`, and since 0.33.0 it
+runs on every compile. What no shipped artifact links is a *third-party* prover:
+there is no `libz3` to find at configure time, no solver subprocess, and
+nothing on the compiler's critical path that a user has to install. A Z3 backend
+existed for a while as a development-only oracle, cross-checking the in-house
+chain's verdicts; once it had agreed on every VC a real program generated, it
+was retired and deleted in 0.32.5. The risk that was correctly identified --
+an external dependency, not entailment as such -- turned out to be avoidable
+rather than merely worth postponing.
+
+Contract types plus `assert!`/`require!`/`ensure!` still cover the practical
+defensive-programming cases, and Sized Types plus GADTs still cover many
+bounds-checking cases without any proving at all. Refinement types are the
+layer that turns those runtime checks into compile-time ones where the
+predicate can be discharged -- and leaves them alone where it cannot.
 
 ---
 
@@ -489,17 +537,26 @@ HKT (default-on) -- forall, Rank-2
   └── Existential Types (default-on) -- exists, pack/open
 ```
 
-Each feature in the graph uses the one above it without requiring anything from
-the two deferred features. Dependent types and refinement types would not slot
-naturally into this graph -- they would require elaborator changes that cut
-across multiple existing features, creating exactly the kind of cross-cutting
+Each feature in the graph uses the one above it. Dependent types would not slot
+naturally into it -- they would require elaborator changes that cut across
+multiple existing features, creating exactly the kind of cross-cutting
 complexity that makes a type system hard to reason about.
+
+Refinement types were expected to have the same problem and did not. They
+attached as a layer *on top of* contract types rather than as a change running
+through the graph, which is a direct consequence of the runtime fallback
+described above: because a refinement is a contract type first, the static
+discharger reads the existing annotations and either proves an obligation or
+declines it. Nothing below it in the graph had to change to accommodate that.
 
 The result is a type system that is powerful enough for systems programming
 (linear resource management, session-typed protocols, stack-allocated sized
 arrays), expressive enough for functional programming (effect rows, union types,
-GADTs), and safe enough for API boundaries (contracts) -- without the research
-risk of dependent unification or SMT integration.
+GADTs), and safe enough for API boundaries (contracts, and refinements proved
+where they can be) -- without the research risk of dependent unification, and
+without an *external* SMT dependency: the solver that discharges refinements is
+in-house and compiled into `tur`, so there is no third-party prover to install
+or link.
 
 ---
 
@@ -514,5 +571,7 @@ risk of dependent unification or SMT integration.
 - [gadts-guide.md](gadts-guide.md) -- GADTs
 - [sized-types-guide.md](sized-types-guide.md) -- Sized types
 - [contract-types-guide.md](contract-types-guide.md) -- Contract types
+- [refinement-types-guide.md](refinement-types-guide.md) -- Refinement types: static discharge of `#refine{...}`
+- [refinement-solver-internals-guide.md](refinement-solver-internals-guide.md) -- How the in-house solver chain works
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) -- Union and intersection types
-- [effects-vs-monads.md](effects-vs-monads.md) -- Why effects instead of monads
+- [effects-vs-monads.md](effects-vs-monads.md) -- Effect handlers vs. monad values

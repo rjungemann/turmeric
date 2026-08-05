@@ -1,0 +1,17 @@
+;; cps-while-native: a `while` whose interior `perform` ESCAPES to an OUTER handler
+;; (the handle wraps the loop, not per-iteration).  This now DK-lowers natively:
+;; the loop helper threads its __kont (the enclosing handle's prompt chain), so the
+;; interior perform reaches the outer Ask handler, and the perform continuation --
+;; which carries the loop back-edge -- rides an LH_RESUME_CONT resume-frame.  `run`
+;; emits run__cps (zero eff=1).  Result is 5*10 = 50.
+(defeffect Ask [] :int)
+(defn run [] : int
+  (handle
+    (let [^mut i     0
+          ^mut total 0]
+      (while (< i 5)
+        (set! total (+ total (perform (Ask))))
+        (set! i (+ i 1)))
+      total)
+    (Ask [] k) (resume k 10)))
+(println (run))

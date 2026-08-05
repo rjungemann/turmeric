@@ -110,6 +110,82 @@ PAGE_HEADER = '''\
     </nav>
   </header>'''
 
+INDEX_PAGE_HEADER = '''\
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+    <div class="search-wrap">
+      <input class="search-input" type="search" placeholder="Filter... (/)" aria-label="Filter guides">
+    </div>
+  </header>
+  <p class="search-no-results">No matching guides.</p>'''
+
+INDEX_FILTER_JS = '''\
+  <script>
+  document.addEventListener('DOMContentLoaded', function(){
+    var input = document.querySelector('.search-input');
+    if (!input) return;
+
+    function filter() {
+      var q = input.value.trim().toLowerCase();
+      var visibleItems = 0;
+
+      document.querySelectorAll('.index-card').forEach(function(card) {
+        var items = card.querySelectorAll('ul li');
+        var shown = 0;
+        items.forEach(function(li) {
+          var match = !q || li.textContent.toLowerCase().includes(q);
+          li.style.display = match ? '' : 'none';
+          if (match) shown++;
+        });
+        // A card with no matching guides drops out entirely.
+        card.style.display = (!q || shown > 0) ? 'block' : 'none';
+        visibleItems += shown;
+      });
+
+      // Sync sidebar category links with card visibility.
+      document.querySelectorAll('.sidebar a[href^="#"]').forEach(function(link) {
+        var target = document.getElementById(link.getAttribute('href').slice(1));
+        link.parentElement.style.display =
+          (!target || target.style.display !== 'none') ? '' : 'none';
+      });
+
+      var noResults = document.querySelector('.search-no-results');
+      if (noResults) {
+        noResults.style.display = (q && visibleItems === 0) ? 'block' : 'none';
+      }
+    }
+
+    input.addEventListener('input', filter);
+
+    // Clear on Escape
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { input.value = ''; filter(); input.blur(); }
+    });
+
+    // Focus the filter with '/' (when not already typing somewhere)
+    document.addEventListener('keydown', function(e) {
+      if (e.key === '/' && document.activeElement !== input &&
+          document.activeElement.tagName !== 'INPUT' &&
+          document.activeElement.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        input.focus();
+      }
+    });
+  });
+  </script>'''
+
 SIDEBAR_TOGGLE_JS = '''\
   <div class="sidebar-overlay"></div>
   <script>
@@ -249,6 +325,13 @@ GUIDE_CSS = '''\
     .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
     .guide-content a { color:var(--gold-bright); }
     .guide-content strong { color:var(--text-primary); }
+    .guide-toc { border:1px solid var(--border); border-radius:6px; background:var(--bg-panel); padding:0.85rem 1.15rem 0.95rem; margin:0 0 2rem; }
+    .guide-toc-title { font-family:system-ui; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.09em; color:var(--text-sec); margin-bottom:0.5rem; }
+    .guide-toc ul { margin:0 0 0 1.15rem; padding:0; }
+    .guide-toc ul ul { margin-top:0.15rem; margin-bottom:0.15rem; }
+    .guide-toc li { margin:0.2rem 0; font-size:0.875rem; }
+    .guide-toc a { color:var(--gold-bright); }
+    .guide-toc a:hover { color:var(--gold); }
     .hl-comment { color:#48433D; font-style:italic; }
     .hl-string  { color:#D9735A; }
     .hl-number  { color:#A8C98A; }
@@ -298,6 +381,58 @@ def inject_syntax_toggles(body_html: str) -> str:
     return pattern.sub(wrap_pair, body_html)
 
 
+# A hand-written "## Table of Contents" (or "## Contents") heading plus the
+# list that follows it, up to the next heading (or end of file). We strip these
+# from the source before rendering so the auto-generated in-body Contents box is
+# the single source of truth -- no stale, hand-maintained duplicate.
+_MANUAL_TOC_RE = re.compile(
+    r'^#{1,6}[ \t]+(?:table of contents|contents)[ \t]*\n'  # the TOC heading
+    r'(?:(?!^#{1,6}[ \t]).*\n?)*',                          # non-heading lines
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def strip_manual_toc(text: str) -> str:
+    """Remove a hand-written Table of Contents section from guide markdown."""
+    return _MANUAL_TOC_RE.sub('', text, count=1)
+
+
+def _count_toc_entries(tokens: list) -> int:
+    return sum(1 + _count_toc_entries(t.get('children', [])) for t in tokens)
+
+
+def toc_tokens_to_inline(tokens: list) -> str:
+    """Render toc_tokens into a nested <ul> for the in-body Contents box."""
+    items = []
+    for tok in tokens:
+        anchor = tok.get('id', '')
+        name = tok.get('name', '')
+        children = tok.get('children', [])
+        sub = toc_tokens_to_inline(children) if children else ''
+        items.append(f'<li><a href="#{anchor}">{name}</a>{sub}</li>')
+    return '<ul>' + ''.join(items) + '</ul>'
+
+
+def build_inline_toc(toc_tokens: list) -> str:
+    """Build the in-body "Contents" navigation box from a doc's toc_tokens.
+
+    The single top-level H1 (the page title) is elided -- its subsections
+    become the roots. Returns '' when there are fewer than 3 entries, so short
+    guides don't get a redundant one- or two-line box.
+    """
+    roots = toc_tokens
+    if len(roots) == 1 and roots[0].get('level') == 1:
+        roots = roots[0].get('children', [])
+    if _count_toc_entries(roots) < 3:
+        return ''
+    return (
+        '<nav class="guide-toc" aria-label="Table of contents">'
+        '<div class="guide-toc-title">Contents</div>'
+        f'{toc_tokens_to_inline(roots)}'
+        '</nav>'
+    )
+
+
 def toc_tokens_to_sidebar(tokens: list) -> str:
     """Recursively render toc_tokens into sidebar <li> elements."""
     items = []
@@ -324,6 +459,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
 
     text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
                   flags=re.MULTILINE)
+    text = strip_manual_toc(text)
 
     conv = md_lib.Markdown(extensions=['fenced_code', 'tables', 'toc'],
                             extension_configs={'toc': {'permalink': False}})
@@ -341,6 +477,17 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
 
     body_html = re.sub(r'href="([^"]+\.md)"', rewrite_md_link, body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
+
+    # In-body "Contents" box, inserted right after the page title (first <h1>),
+    # or at the top of the content when the guide has no <h1>.
+    inline_toc = build_inline_toc(toc_tokens)
+    if inline_toc:
+        h1_end = re.search(r'</h1>', body_html)
+        if h1_end:
+            i = h1_end.end()
+            body_html = body_html[:i] + '\n' + inline_toc + body_html[i:]
+        else:
+            body_html = inline_toc + body_html
 
     fm_title = meta.get('title', '').strip() if meta else ''
     if fm_title:
@@ -506,7 +653,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
   </style>
 </head>
 <body>
-{PAGE_HEADER}
+{INDEX_PAGE_HEADER}
 {SIDEBAR_TOGGLE_JS}
   <div class="page-layout">
     <div class="sidebar">
@@ -531,6 +678,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     Auto-generated by <code>tools/genguides.py</code>
   </footer>
 {TURMERIC_HIGHLIGHT_JS}
+{INDEX_FILTER_JS}
 </body>
 </html>
 '''

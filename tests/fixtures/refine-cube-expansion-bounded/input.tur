@@ -1,0 +1,54 @@
+;; Cube expansion stays BOUNDED, and the bound is what keeps a refinement from
+;; hanging the compiler.
+;;
+;; Each disequality in a hypothesis doubles the DNF cube count, so a predicate
+;; like this one is where an unbounded expansion would show up -- 2^30 cubes is
+;; not a thing you wait for. REFINE_MAX_CUBES and REFINE_MAX_CUBE_LITS cap the
+;; growth and degrade to Unknown, which is always a safe answer.
+;;
+;; The goal follows from `(> v 0)` alone, so this PROVES and stays quiet; the
+;; disequalities are there purely as expansion fuel. If a future change removes
+;; the cap, this fixture stops finishing and the suite's own per-fixture timeout
+;; reports it -- no timing assertion needed, which is what keeps the guard from
+;; being flaky.
+;;
+;; Measured when written: the whole file checks in well under a second, and the
+;; same shape at 400 disequalities took 196ms. The external SMT-LIB corpus does
+;; time out on real benchmarks, but the smallest of those is 63KB -- the cost is
+;; driven by input SIZE, not by a blowup a small predicate can trigger.
+(defn stress [x : #refine{ v : int | (and (> v 0)
+                                   (not= v 2)
+                                   (not= v 3)
+                                   (not= v 4)
+                                   (not= v 5)
+                                   (not= v 6)
+                                   (not= v 7)
+                                   (not= v 8)
+                                   (not= v 9)
+                                   (not= v 10)
+                                   (not= v 11)
+                                   (not= v 12)
+                                   (not= v 13)
+                                   (not= v 14)
+                                   (not= v 15)
+                                   (not= v 16)
+                                   (not= v 17)
+                                   (not= v 18)
+                                   (not= v 19)
+                                   (not= v 20)
+                                   (not= v 21)
+                                   (not= v 22)
+                                   (not= v 23)
+                                   (not= v 24)
+                                   (not= v 25)
+                                   (not= v 26)
+                                   (not= v 27)
+                                   (not= v 28)
+                                   (not= v 29)
+                                   (not= v 30)
+                                   (not= v 31)) }] : #refine{ r : int | (> r 0) }
+  x)
+
+(defn main [] : int
+  (println (stress 1))
+  0)

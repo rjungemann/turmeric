@@ -513,7 +513,7 @@ breaks the round-trips that rely on tag preservation (it would corrupt a
 `Cons[float]`'s `.head` to its integer bit pattern).  Fully value-preserving is
 the only self-consistent choice for the tagged model; closing the gap would
 require a typed-carrier value representation.  See
-[docs/reported/turi-map-nonint-value-carrier-ascription.md](../reported/turi-map-nonint-value-carrier-ascription.md).
+[docs/reported/turi-map-nonint-value-carrier-ascription.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-map-nonint-value-carrier-ascription.md).
 
 **Practical guidance.** Code that uses `::` for its bit pattern (bit-level float
 hashing, representation-exact serialization, manual IEEE/NaN-boxing) must run on
@@ -535,7 +535,7 @@ expression kind" default.  Check for them with `turi_is_error` as usual.
 | Feature | Interpreter behaviour | Why |
 | --- | --- | --- |
 | **User inline-C** (` ```c ... ``` ` bodies) | `inline-C not supported in interpreter mode` | The interpreter has no C compiler.  Stdlib inline-C is covered by registered **natives** (see `turi_env_register_native`) and the simple-shape evaluator; arbitrary user inline-C is not. |
-| **Channels / `select`** | `select is not supported in interpreter mode (channels require native primitives; use the compiled path)` | Turmeric channels are inline-C `pthread` mutex/condvar ring buffers with no native representation in `turi`, so `select` has nothing to select over.  Tracked in [docs/archive/history/turi-select-needs-channel-primitives.md](../archive/history/turi-select-needs-channel-primitives.md). |
+| **Channels / `select`** | `select is not supported in interpreter mode (channels require native primitives; use the compiled path)` | Turmeric channels are inline-C `pthread` mutex/condvar ring buffers with no native representation in `turi`, so `select` has nothing to select over.  Tracked in [docs/archive/history/turi-select-needs-channel-primitives.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/turi-select-needs-channel-primitives.md). |
 | **WASM async** | scheduler-dependent error | The WASM build drives async through the host event loop; the standalone interpreter's cooperative scheduler does not cover the WASM async path.  See `src/turi/fiber.c`. |
 | **`call/cc`, context-capturing `serial-shift` / `cloneable-shift`** | clean error | Need genuine continuation capture; deferred to the CPS-transform work.  See `docs/turi-carve-out.txt`. |
 

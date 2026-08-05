@@ -52,8 +52,7 @@
 ;; because the handle is a shared pointer, never a by-value header copy.
 
 
-(defn vec-new [A]
-  []
+(defn vec-new [A] []
   #fx{}
   : (Vec A)
   ```c
@@ -76,8 +75,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-len [A]
-  [v : (Vec A)]
+(defn vec-len [A] [v : (Vec A)]
   #fx{}
   : int
   ```c
@@ -98,8 +96,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-get [A]
-  [v : (Vec A) i :int]
+(defn vec-get [A] [v : (Vec A) i :int]
   #fx{}
   :A
   ```c
@@ -120,8 +117,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-push! [A]
-  [v : (Vec A) val :A]
+(defn vec-push! [A] [v : (Vec A) val :A]
   #fx{}
   :nil
   ```c
@@ -159,8 +155,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-pop! [A]
-  [v : (Vec A)]
+(defn vec-pop! [A] [v : (Vec A)]
   #fx{}
   :A
   ```c
@@ -171,28 +166,33 @@
 ;;; vec-drop-last-o! -- remove the last element and (when `boxed`) free its box.
 ;;;
 ;;; The removal twin of vec-pop! that keeps NOTHING: it shrinks len and, when
-;;; `boxed` is 1 (a wide by-value element whose slot is an owned heap box),
-;;; frees that box so it does not leak.  Unlike vec-pop! it returns no value, so
+;;; bit 0 of `owned` is set (a wide by-value element whose slot is an owned
+;;; heap box), frees that box so it does not leak; when bit 1 is set (an rc<T>
+;;; element) it releases the slot's strong reference.  Unlike vec-pop! it returns no value, so
 ;;; there is no ownership-transfer hazard.  Internal helper for the vec-drop-last!
 ;;; macro; not called directly.
 ;;;
 ;;; Parameters:
 ;;;   v     -- Vec[A] pointer
-;;;   boxed -- 1 if the last slot is an owned element box, else 0
+;;;   owned -- bit 0: the last slot is an owned element box; bit 1: the
+;;;            last slot holds a strong rc<T> reference the Vec owns
 ;;;
 ;;; Since: multiword-element-box-lifecycle
 
-(defn vec-drop-last-o! [A]
-  [v : (Vec A) boxed : int]
+(defn vec-drop-last-o! [A] [v : (Vec A) owned : int]
   #fx{}
   :void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len == 0) return;
   vec->len--;
-  if (boxed) {
+  if (owned & 1) {
     void *box = (void*)(intptr_t)vec->data[vec->len];
     if (box) free(box);
+  }
+  if (owned & 2) {
+    RcControlBlock *__e = (RcControlBlock *)(intptr_t)vec->data[vec->len];
+    if (__e) { rc_strong_decrement(__e); rc_free_queue_drain(); }
   }
   ```)
 ;;; vec-drop-last! -- remove the last element of a Vec[A], freeing its box.
@@ -214,15 +214,18 @@
 
 (defmacro vec-drop-last! [v]
   `(let [__tur_dl__ ~v]
-     (vec-drop-last-o! __tur_dl__ (tur-vec-elem-wide? __tur_dl__))))
+     (vec-drop-last-o! __tur_dl__
+       (+ (tur-vec-elem-wide? __tur_dl__) (* 2 (tur-vec-elem-rc? __tur_dl__))))))
 ;;; vec-set-o! -- overwrite the element at index i, freeing the old box when
 ;;; `boxed`.
 ;;;
 ;;; Internal helper for the vec-set! macro.  A multi-word by-value element rides
 ;;; its data slot as an owned heap box; overwriting the slot orphans the old box,
-;;; so when `boxed` is 1 the old `data[i]` box is freed before the new value is
-;;; stored.  When `boxed` is 0 (single-word A) the slot is an inline value /
-;;; shared pointer the Vec does not own, so it is overwritten directly.
+;;; so when bit 0 of `owned` is set the old `data[i]` box is freed before the new
+;;; value is stored.  When bit 1 is set (an rc<T> element) the old slot's strong
+;;; reference is released instead.  When `owned` is 0 (single-word, non-rc A) the
+;;; slot is an inline value / shared pointer the Vec does not own, so it is
+;;; overwritten directly.
 ;;;
 ;;; Aliasing caveat: freeing the old box invalidates any raw carrier a caller
 ;;; captured from an earlier `(vec-get v i)`.  The normal read pattern
@@ -234,20 +237,24 @@
 ;;;   v     -- Vec[A] pointer
 ;;;   i     -- zero-based index
 ;;;   val   -- new element value of type A
-;;;   boxed -- 1 if the slot is an owned element box, else 0
+;;;   owned -- bit 0: the slot is an owned element box; bit 1: the slot holds
+;;;            a strong rc<T> reference the Vec owns
 ;;;
 ;;; Since: multiword-element-box-lifecycle
 
-(defn vec-set-o! [A]
-  [v : (Vec A) i :int val :A boxed :int]
+(defn vec-set-o! [A] [v : (Vec A) i :int val :A owned :int]
   #fx{}
   :void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < (size_t)vec->len) {
-    if (boxed) {
+    if (owned & 1) {
       void *old = (void*)(intptr_t)vec->data[i];
       if (old) free(old);
+    }
+    if (owned & 2) {
+      RcControlBlock *__o = (RcControlBlock *)(intptr_t)vec->data[i];
+      if (__o) { rc_strong_decrement(__o); rc_free_queue_drain(); }
     }
     vec->data[i] = (int64_t)val;
     return;
@@ -277,7 +284,10 @@
   `(let [__tur_sv__ ~v
          __tur_si__ ~i
          __tur_sx__ ~val]
-     (vec-set-o! __tur_sv__ __tur_si__ __tur_sx__ (tur-vec-elem-wide? __tur_sv__))))
+     (vec-set-o! __tur_sv__
+       __tur_si__
+       __tur_sx__
+       (+ (tur-vec-elem-wide? __tur_sv__) (* 2 (tur-vec-elem-rc? __tur_sv__))))))
 ;;; tur-vec-elem-wide? -- 1 if the Vec's element type A is a multi-word (> 8
 ;;; byte) by-value struct/ADT that rides its data slot as an int64 heap-box
 ;;; pointer, else 0.  Compiler-intercepted (src/compiler/emit_expr.c) as an
@@ -291,37 +301,65 @@
 ;;; Since: multiword-element-box-lifecycle
 
 (defn tur-vec-elem-wide? [A] [v : (Vec A)] : int 0)
+;;; tur-vec-elem-rc? -- 1 if the Vec's element type A is an `rc<T>`, whose data
+;;; slots hold a strong reference the Vec owns, else 0.  Compiler-intercepted
+;;; (src/compiler/emit_expr.c) as an EMIT-TIME type query, exactly like its
+;;; sibling tur-vec-elem-wide?; this pure-Turmeric fallback body returns 0 for
+;;; the interpreter (where an rc rides as a first-class value, never a
+;;; carrier-erased control-block pointer) and for any call the backend does not
+;;; intercept.
+;;;
+;;; vec-free / vec-set! / vec-drop-last! thread it as BIT 1 of the `owned` flag
+;;; (bit 0 being tur-vec-elem-wide?), so a Vec[rc<T>] releases each element's
+;;; strong reference at the same points a Vec[Point] frees each element box.
+;;; The matching increment is stamped at the push site by elab
+;;; (own_carry_for_arg in src/compiler/elab_call.c).
+;;;
+;;; Since: collections-cannot-hold-rc-values
+
+(defn tur-vec-elem-rc? [A] [v : (Vec A)] : int 0)
 ;;; vec-free-o -- free a Vec[A], its data buffer, and (when `boxed`) each
 ;;; per-element heap box.
 ;;;
 ;;; A multi-word by-value element A cannot ride the int64 data slot inline, so
 ;;; the concrete->carrier escaping bridge boxes it (malloc + copy) at the push
 ;;; site and stores the box pointer in `data[i]`.  Vec is mutable and NOT
-;;; structurally shared, so the Vec owns those boxes outright: when `boxed` is
-;;; 1 (threaded by vec-free via the emit-time `tur-vec-elem-wide?` query) each
-;;; `data[i]` box is freed before the data buffer.  When `boxed` is 0 (any
-;;; single-word A -- :int, :cstr, :float, an opaque handle, a :heap pointer)
-;;; the slot holds an inline value / shared pointer that the Vec does not own,
-;;; so only the data buffer and header are freed.
+;;; structurally shared, so the Vec owns those boxes outright: when bit 0 of
+;;; `owned` is set (threaded by vec-free via the emit-time `tur-vec-elem-wide?`
+;;; query) each `data[i]` box is freed before the data buffer.
+;;;
+;;; Bit 1 (threaded from `tur-vec-elem-rc?`) is the refcount twin: for a
+;;; Vec[rc<T>] each slot holds a strong reference taken at the push site, so
+;;; every one is released before the buffer goes.  When `owned` is 0 (any
+;;; single-word, non-rc A -- :int, :cstr, :float, an opaque handle, a :heap
+;;; pointer) the slot holds an inline value / shared pointer that the Vec does
+;;; not own, so only the data buffer and header are freed.
 ;;;
 ;;; Parameters:
 ;;;   v     -- Vec[A] pointer to free
-;;;   boxed -- 1 if each data slot is an owned element box, else 0
+;;;   owned -- bit 0: each data slot is an owned element box; bit 1: each
+;;;            data slot holds a strong rc<T> reference the Vec owns
 ;;;
 ;;; Since: multiword-element-box-lifecycle
 
-(defn vec-free-o [A]
-  [v : (Vec A) boxed : int]
+(defn vec-free-o [A] [v : (Vec A) owned : int]
   #fx{}
   : void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->data) {
-    if (boxed) {
+    if (owned & 1) {
       for (int64_t i = 0; i < vec->len; i++) {
         void *box = (void*)(intptr_t)vec->data[i];
         if (box) free(box);
       }
+    }
+    if (owned & 2) {
+      for (int64_t i = 0; i < vec->len; i++) {
+        RcControlBlock *__e = (RcControlBlock *)(intptr_t)vec->data[i];
+        if (__e) rc_strong_decrement(__e);
+      }
+      rc_free_queue_drain();
     }
     free(vec->data);
   }
@@ -347,7 +385,8 @@
 
 (defmacro vec-free [v]
   `(let [__tur_fv__ ~v]
-     (vec-free-o __tur_fv__ (tur-vec-elem-wide? __tur_fv__))))
+     (vec-free-o __tur_fv__
+       (+ (tur-vec-elem-wide? __tur_fv__) (* 2 (tur-vec-elem-rc? __tur_fv__))))))
 ;;; vec-push-each__ -- internal helper for the vec-of macro.
 ;;;
 ;;; Expands a sequence of pushes onto `v` followed by `v` itself as the
@@ -511,9 +550,7 @@
 ;; and derefs through the carrier in the (element-agnostic) base.
 
 
-(defn vec-get-byval [A]
-  [v : (Vec A) i : int]
-  : A
+(defn vec-get-byval [A] [v : (Vec A) i : int] : A
   (:: (vec-data-get-checked__ (.data v) i (.len v)) A))
 ;;; vec-eq-loop -- pure-Turmeric element-wise Vec[A] comparison (TCO'd index loop).
 ;;;
@@ -549,9 +586,7 @@
 ;;;
 ;;; Since: Phase M4c (TCO-in-ABI-specs)
 
-(defn vec-eq-loop [^Eq A]
-  [x : (Vec A) y : (Vec A) i : int len : int]
-  : bool
+(defn vec-eq-loop [^Eq A] [x : (Vec A) y : (Vec A) i : int len : int] : bool
   (if (= i len)
     true
     (if (eq? (:: (vec-get x i) A) (:: (vec-get y i) A))

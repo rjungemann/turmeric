@@ -1,0 +1,14 @@
+;; A `when` guard must be a bool on the scalar match path, the same as it
+;; already was on the ADT path.
+;;
+;; The scalar path used to elaborate the guard outside the arm scope and never
+;; checked its type. Moving the guard into the arm scope (so a var pattern's
+;; binder is visible to it) made the type check reachable, so it was added for
+;; parity -- otherwise an int-valued guard would silently be used as a
+;; condition here but rejected one path over.
+(defn f [p : int] : int
+  (match p
+    x when (+ x 1) x
+    _              0))
+
+(defn main [] : int (println (f 7)) 0)

@@ -1,0 +1,39 @@
+;; SOUNDNESS FIXTURE, inverted -- these two must stay UNPROVEN.
+;;
+;; Under --strict-refine an obligation the solver cannot discharge is a hard
+;; error, which is what makes "must not be proved" pinnable: if a future change
+;; to the match hypotheses made either of these provable, this fixture would
+;; start COMPILING and fail. A positive fixture cannot catch that direction.
+;;
+;; Both are the near-miss of a hypothesis source that does work elsewhere:
+;;
+;;   `too-weak` -- the guard is asserted, but `(> n 100)` is not the predicate
+;;   `(>= r 0)`, and the SECOND arm has no guard at all. A guard is a necessary
+;;   condition for its own arm and says nothing about any other.
+;;
+;;   `other-scrutinee` -- the outer arm fixes the tag of `s`, and the inner
+;;   match is on `t`. The dead-arm reasoning that discharges the sibling
+;;   fixture's `nested` depends entirely on both matches naming the SAME value;
+;;   a tag fact about `s` must not travel to `t`.
+(defdata Sign (Pos :int) (Neg :int) (Zero))
+
+(defn too-weak [s : Sign] : #refine{ r : int | (>= r 0) }
+  (match s
+    (Pos n) when (> n 100) n
+    (Pos n)                n
+    (Neg n)                0
+    (Zero)                 0))
+
+(defn other-scrutinee [s : Sign t : Sign] : #refine{ r : int | (>= r 0) }
+  (match s
+    (Pos n) (match t
+              (Pos m) 0
+              (Neg m) -1
+              (Zero)  -1)
+    (Neg n) 0
+    (Zero)  0))
+
+(defn main [] : int
+  (println (too-weak (Pos 5)))
+  (println (other-scrutinee (Pos 5) (Neg 2)))
+  0)

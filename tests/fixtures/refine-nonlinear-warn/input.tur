@@ -1,0 +1,14 @@
+;; RT2/RT3: `(* x y)` with BOTH sides variable is outside the linear fragment.
+;; It is abstracted to an opaque function symbol (congruence closure still
+;; relates two occurrences of the same product; the arithmetic facts are lost),
+;; TUR-W0373 says so, and the obligation falls back to the runtime check.
+;;
+;; We do not climb the nonlinear wall -- that is the design, not a gap.
+(defn mul-pos [x : #refine{ v : int | (> v 0) }, y : #refine{ w : int | (> w 0) }]
+             : #refine{ r : int | (> r 0) }
+  (* x y))
+
+(defn main [] : int
+  (println (mul-pos 3 4))
+  (println "refine-nonlinear-warn")
+  0)

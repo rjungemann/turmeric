@@ -5,8 +5,16 @@
 //   - Runtime: cache-first for same-origin static assets (with background
 //     revalidation), network-first for HTML navigations and /docs/*.
 //
-// Bump CACHE_VERSION on each release so old caches are evicted in activate.
-const CACHE_VERSION = 'tur-try-v1-0.27.2';
+// CACHE_VERSION must change on every release so `activate` evicts the old
+// caches AND the changed sw.js bytes make the browser re-install the worker --
+// otherwise a cache-first asset (turmeric.js / turmeric.wasm) is served from a
+// stale precache forever, no matter how much newer the deploy is.
+//
+// The version token below is rewritten to the real VERSION at build time by the
+// `injectSwVersion` plugin in vite.config.js (it regex-replaces the
+// `tur-try-v1-<x.y.z>` token in dist/sw.js). The literal here is the dev/no-build
+// fallback; keep it in sync with VERSION so an un-built serve is still correct.
+const CACHE_VERSION = 'tur-try-v1-0.33.2';
 const PRECACHE = `${CACHE_VERSION}-precache`;
 const RUNTIME  = `${CACHE_VERSION}-runtime`;
 

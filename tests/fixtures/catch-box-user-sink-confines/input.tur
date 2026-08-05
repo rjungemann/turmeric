@@ -1,0 +1,56 @@
+;;; Phase R2: catch-unwind returns err(panic) for a panicking thunk, and the
+;;; panic message round-trips through the boxed payload.
+(defn panic-msg [r : int] : cstr
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res || res->is_ok) return "(ok)";
+  tur_panic_payload *p = (tur_panic_payload*)(intptr_t)res->err_val;
+  return p ? (const char*)tur_panic_payload_value(p) : "(null)";
+  ```)
+
+;; catch-box-reader-confinement-whitelist: a caught-Result box is deep-freed at
+;; scope exit when the box-owned message it hands out is provably not retained.
+;; That used to be decided by a hardcoded print-family NAME LIST, which was
+;; wrong in both directions: adding a retaining name to it would silently turn
+;; the check into a use-after-free generator, and a user-defined logger that is
+;; every bit as safe leaked conservatively.
+;;
+;; It is inferred from the callee's body now.  The three sinks below are the
+;; cases that matter, and the reason this fixture asserts on OUTPUT rather than
+;; on the free: whether the box is freed is invisible at runtime (freeing it is
+;; correct, not freeing it is a bounded leak), so what is pinned here is that
+;; all three shapes still compile and print correctly under whichever decision
+;; the analysis makes.  The free/no-free decision itself is asserted at the
+;; codegen level -- see expected.c.
+;;
+;;   my-log  -- only prints its arg          -> non-retaining, box freed
+;;   stash   -- stores its arg in a struct   -> retaining,     box kept
+;;              (it prints nothing, hence only three output lines: what the
+;;              retaining case has to demonstrate is that it still COMPILES and
+;;              runs, not that the caller observes the stash)
+;;   c-log   -- inline-C body                -> opaque,        box kept
+;;
+;; The inline-C case is not conservatism for its own sake: a C body can stash
+;; the pointer where no AST walk can see it, so it must never be inferred
+;; non-retaining.
+(defstruct Slot :move [held : cstr])
+
+(defn my-log [s : cstr] : nil (println s))
+(defn stash [s : cstr ^mut slot : Slot] : nil (set! (.held slot) s))
+(defn c-log [s : cstr] : nil
+  ```c
+  printf("%s\n", s);
+  ```)
+
+(defn boom [] : int (panic "boom happened"))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (boom)))]
+    (if (err? r) (my-log (panic-msg r)) (println "no panic")))
+  (let [r2 (catch-unwind (fn [] : int (boom)))
+        ^mut slot (make-struct Slot "")]
+    (if (err? r2) (stash (panic-msg r2) slot) (println "no panic")))
+  (let [r3 (catch-unwind (fn [] : int (boom)))]
+    (if (err? r3) (c-log (panic-msg r3)) (println "no panic")))
+  (println "survived")
+  0)

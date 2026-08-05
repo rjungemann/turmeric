@@ -1,0 +1,59 @@
+;;; tur/path-string -- owned String siblings for stdlib/path.
+;;;
+;;; The tur/path functions return a freshly-allocated cstr the caller must free
+;;; (a borrowed-typed owned buffer -- the exact hazard the owned String type
+;;; fixes; see string-adoption-stdlib-plan.md). This opt-in module layers an
+;;; owned-String surface on top: each `path/*-string` wraps the corresponding
+;;; `path/*` in `string/adopt-cstr`, so the malloc'd path is adopted into an
+;;; owned String with no leak and no free obligation.
+;;;
+;;; It is a SEPARATE module so the lean tur/path (no map/typeclass dependency)
+;;; stays lean: only programs that want owned path Strings load this and pull in
+;;; stdlib/string.
+;;;
+;;; Note: these compose inline-C path/* helpers, so like tur/path itself they run
+;;; on the compiled path; use the underlying `path/*` cstr forms under
+;;; --interpret.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 1)
+(load "stdlib/path.tur")
+
+(load "stdlib/string.tur")
+;;; path/join-string -- join two path segments, returning an owned String.
+;;;
+;;; Example:
+;;;   (string/to-cstr (path/join-string "/usr" "local"))  ; => "/usr/local"
+;;;
+;;; Since: v2
+
+(defn path/join-string [base : cstr segment : cstr] : String
+  (string/adopt-cstr (path/join base segment)))
+;;; path/basename-string -- final path component, as an owned String.
+;;;
+;;; Since: v2
+
+(defn path/basename-string [p : cstr] : String
+  (string/adopt-cstr (path/basename p)))
+;;; path/dirname-string -- parent directory, as an owned String.
+;;;
+;;; Since: v2
+
+(defn path/dirname-string [p : cstr] : String
+  (string/adopt-cstr (path/dirname p)))
+;;; path/extension-string -- file extension, as an owned String.
+;;;
+;;; Since: v2
+
+(defn path/extension-string [p : cstr] : String
+  (string/adopt-cstr (path/extension p)))
+;;; path/stem-string -- basename without its extension, as an owned String.
+;;;
+;;; Since: v2
+
+(defn path/stem-string [p : cstr] : String (string/adopt-cstr (path/stem p)))
+;;; path/normalize-string -- normalized path, as an owned String.
+;;;
+;;; Since: v2
+
+(defn path/normalize-string [p : cstr] : String
+  (string/adopt-cstr (path/normalize p)))

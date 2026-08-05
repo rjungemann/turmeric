@@ -91,12 +91,24 @@ void turi_wasm_free(void *p) {
 static void wasm_preload_stdlib(TuriEnv *env) {
     if (!env) return;
     turi_env_preload_macros(env, WASM_STDLIB_ROOT);
+    /* Typed native-function stubs (nil-value/cons/head/tail + benchmark helpers)
+     * in the same after-macros/before-collections slot as --interpret and the
+     * native REPL, so `(list-head (cons 65 (cons 66 0)))` evaluates to 65 at the
+     * browser prompt instead of nil (cons would otherwise be an elaborator
+     * builtin the tree-walker cannot execute). */
+    turi_env_preload_native_stubs(env);
     turi_env_preload_collections(env, WASM_STDLIB_ROOT);
     /* Preload the REPL-only Show slice (Show [Vec] / [Set] / [Map]) so a
      * collection result renders through its Show instance via
      * turi_try_show_by_tag below, matching the native `tur repl`
      * (src/turi/repl.c, right after turi_env_preload_collections). */
     turi_env_preload_typeclasses(env, WASM_STDLIB_ROOT);
+    /* Pin the preloaded prefix: the browser REPL is the long-lived env this
+     * matters most for -- running an editor program that opens with
+     * `#lang turmeric/sweet` used to wipe src_acc, so the next `#map{}` at the
+     * prompt failed as "unknown function or operator 'hamt-of'"
+     * (web-repl-lang-switch-drops-stdlib). */
+    turi_env_pin_prelude(env);
     /* Register the interpreter native overrides (sym/:Sym, contracts, seq,
      * json/schema, safe box/unbox, comonad/mutex/future/chan/...) so the WASM
      * REPL can evaluate ops whose stdlib body is inline-C -- e.g. `#map{:a 1}`
@@ -399,10 +411,13 @@ int turi_wasm_set_lang(const char *name) {
     if (rest == buf || rt == READER_UNKNOWN || rt == (ReaderType)-1) return 1;
 
     if (rt != g_env->reader_type) {
-        g_env->reader_type      = rt;
-        g_env->src_acc.len      = 0;
-        g_env->prior_toplevel   = 0;
-        g_env->prior_prog_items = 0;
+        /* Keep the pinned stdlib preload across an explicit UI language switch,
+         * for the same reason the inline `#lang` path does
+         * (web-repl-lang-switch-drops-stdlib).  This site used to reset only the
+         * source and the two counters, leaving n_acc_forms / acc_next_line / the
+         * elaboration session describing forms read under the OLD reader. */
+        turi_env_reset_to_prelude(g_env);
+        g_env->reader_type = rt;
     }
     return 0;
 }

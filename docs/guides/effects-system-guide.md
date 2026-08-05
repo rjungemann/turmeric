@@ -144,7 +144,7 @@ with-handler
 
 Semantics (precedence, the disjoint-effect rule, answer-type agreement, and
 per-case continuation discipline) are specified in
-[first-class-handlers-semantics.md](../first-class-handlers-semantics.md).
+[first-class-handlers-semantics.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/first-class-handlers-semantics.md).
 
 - **Overlap is rejected.** Composing two handlers for the *same* effect is a
   compile error (`TUR-E0251`); composition is defined only for disjoint effect
@@ -159,7 +159,7 @@ per-case continuation discipline) are specified in
 > *History:* `compose-handlers` was briefly gated (`TUR-E0704`) while handler
 > values had no runtime representation. That gate has been removed; handler
 > values are now first-class. See
-> [first-class-handlers-plan.md](../first-class-handlers-plan.md).
+> [first-class-handlers-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/first-class-handlers-plan.md).
 
 ## Common Use Cases
 
@@ -363,7 +363,7 @@ A capability effect is a coarse *authority* tag rather than something you
   built-in `#fx{Unsafe}`.
 
 The standard library ships five capability tags in
-[`stdlib/effects.tur`](../../stdlib/effects.tur), used to annotate the
+[`stdlib/effects.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/effects.tur), used to annotate the
 I/O-touching modules:
 
 | Tag       | Used by                                     |
@@ -397,7 +397,7 @@ enforce that it has the capabilities of everything it calls.
 
 ### Benefits
 
-- **Polymorphism** -- row variables let higher-order functions propagate caller effects.
+- **Polymorphism** -- row variables let higher-order functions propagate caller effects. This holds through `^fat` callback parameters as well: a parameter typed `(fn [T] #fx{E} R)` with a non-empty row is callable, and a named effectful `defn` can be passed as its value (see [Fat Closure Annotation Guide](fat-closure-annotation-guide.md#interaction-with-other-annotations)).
 - **Compile-time checking** -- the compiler verifies that annotated functions do not perform unlisted effects (`TUR-E0009`).
 - **Capability discipline** -- `^capability` tags put inline-C side effects (FS, Net, Proc, Rand) under the same row checking, opt-in per caller.
 - **Auditing** -- `--dump-effects` shows the full effect signature of every function.
@@ -413,7 +413,7 @@ Effects interact with Turmeric's `defer` mechanism:
 
 Delimited control in Turmeric is moving onto a single **multi-prompt** substrate
 (the Dybvig--Peyton-Jones--Sabry model), built by
-[`cps-transform-plan.md`](../archive/history/cps-transform-plan.md). The operators you
+[`cps-transform-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md). The operators you
 already use map onto prompts and sub-continuations:
 
 | Operator | Prompt action |
@@ -508,10 +508,10 @@ For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead
 
 ## See Also
 
-- [Whole-Program CPS Transform Plan](../archive/history/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
+- [Whole-Program CPS Transform Plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- a heap-reified sub-continuation is a flat chain, directly serializable
 - [Async/Await Guide](async-await-guide.md) -- Effects-based async/await syntax
 - [Logic Programming Guide](logic-programming-guide.md) -- Backtracking via cloneable continuations
 - [STM Tutorial](stm-tutorial.md) -- Composable transactions with effects
 - [Custom Effects Tutorial](custom-effects-tutorial.md) -- Step-by-step walkthrough of all effect patterns
-- [Effects vs. Monads](effects-vs-monads.md) -- Why effects replace monadic chaining in Turmeric
+- [Effects vs. Monads](effects-vs-monads.md) -- Choosing between an effect handler and a monad value

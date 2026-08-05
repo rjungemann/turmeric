@@ -1,0 +1,32 @@
+;; A `(fn ...)` type cannot carry refinements, and says so.
+;;
+;; Before this, the annotation was ACCEPTED by the reader and never peeled, so
+;; the contract type survived into the signature and every use of the value
+;; failed with `expected { _ : ? | ... }, got int` -- naming a type the
+;; programmer never wrote, at a line they did not annotate.
+;;
+;; This is the fourth site to hit the unpeeled-contract defect; CT0's note on
+;; `rt_peel_contract` lists the first three (defn return types, fn parameters,
+;; typeclass instance-method parameters). It is not a missing peel, though:
+;; there is nowhere for the predicate to ride, because a function type has no
+;; slot for it. So it is REJECTED rather than peeled-and-discarded -- silently
+;; dropping the predicate would be worse, since the annotation would then read
+;; like a guarantee that is being checked and is not.
+;;
+;; Rejected with the gate OFF too: the `#refine{...}` syntax is the contract
+;; layer, which is always on.
+;;
+;; The underlying limit is higher-order checking. A function value with refined
+;; parameters may be passed and called freely -- its own entry checks still run,
+;; so nothing unsound follows -- but the refinement is invisible through the
+;; function type, so neither the body that calls it nor the caller that supplies
+;; it is checked statically.
+(defn safe-div [a : int b : int] : int (/ a b))
+
+(defn apply-param [f : (fn [int #refine{ v : int | (not= v 0) }] int) x : int] : int
+  (f 10 x))
+
+(defn apply-result [f : (fn [int int] #refine{ r : int | (> r 0) })] : int
+  (f 1 2))
+
+(defn main [] : int (println (apply-param safe-div 2)) 0)

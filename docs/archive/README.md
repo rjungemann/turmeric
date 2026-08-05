@@ -424,6 +424,118 @@ Post-v0.24.x / v0.25.x sweep (2026-06-26):
 - **[mise-plugin-plan.md](history/mise-plugin-plan.md)** -- Mise plugin shipped (v0.25.2); see [mise-asdf-guide.md](../guides/mise-asdf-guide.md)
 - **[end-to-end-monomorphization-plan.md](history/end-to-end-monomorphization-plan.md)** -- Track A complete (archived 2026-06-19); successor track at `end-to-end-monomorphization-plan-2.md`
 
+Post-v0.32.6 sweep (2026-07-31):
+
+Sixty-five reports and plans resolved between 2026-07-26 and 2026-07-31. Nine
+same-vintage reports stayed in [../archive/](.) because each still carries a
+named open finding -- see "Held back from the v0.32.6 sweep" below.
+
+*Representation consolidation (fn values, carriers, container elements).* The
+campaign's live scoreboard is the missing-cells table in
+[value-representations-guide.md](../guides/value-representations-guide.md):
+
+- **[fn-typed-value-return-ascribe-miscompiles.md](history/fn-typed-value-return-ascribe-miscompiles.md)** -- fn-value-as-data matrix; fat-normalization stage 2
+- **[fn-value-carrier-fat-seam-residuals.md](history/fn-value-carrier-fat-seam-residuals.md)** -- let-alias and `if`-join seams after stage 2
+- **[fn-payload-in-container-undeclared-temp.md](history/fn-payload-in-container-undeclared-temp.md)** -- fn read out of a container payload, then called
+- **[fn-element-tyvars-not-substituted-in-spec-types.md](history/fn-element-tyvars-not-substituted-in-spec-types.md)** -- `TY_FN` arm missing from the spec-type instantiator
+- **[vec-byvalue-struct-element-invalid-c.md](history/vec-byvalue-struct-element-invalid-c.md)** -- width-independent container element protocol (increment 3)
+- **[class-method-result-into-generic-invalid-c.md](history/class-method-result-into-generic-invalid-c.md)** -- method result into a generic call argument (increment 2)
+- **[result-monad-bind-typed-boundary-miscompiles.md](history/result-monad-bind-typed-boundary-miscompiles.md)** -- `do-m` over `Result` across a typed boundary (increment 2)
+- **[concrete-codegen-layout-kind-enumerations-drift.md](history/concrete-codegen-layout-kind-enumerations-drift.md)** -- three `TypeKind` switches must agree; now `default`-less + two CI guards
+- **[typed-slots-nested-specialization-float-garbage.md](history/typed-slots-nested-specialization-float-garbage.md)**, **[typed-result-map-cps-clone-struct-assign.md](history/typed-result-map-cps-clone-struct-assign.md)** -- two nested-fixture miscompiles the compiling harnesses never saw
+
+*Higher-kinded and constrained-polymorphic dispatch:*
+
+- **[constrained-hkt-lifted-lambda-keeps-representative-instance.md](history/constrained-hkt-lifted-lambda-keeps-representative-instance.md)** -- Route B dict-passing; a lifted continuation no longer keeps the representative instance
+- **[constrained-hkt-abstract-var-requires-last-param-free.md](history/constrained-hkt-abstract-var-requires-last-param-free.md)** -- the partial-application hole moved into the `Type`; `(Result _ cstr)` now abstracts
+- **[constrained-hkt-byvalue-carriers.md](history/constrained-hkt-byvalue-carriers.md)** -- by-value carrier ABI for constrained kind-polymorphic fns
+- **[hkt-inline-c-instance-body-loses-result-type.md](history/hkt-inline-c-instance-body-loses-result-type.md)** -- one authority for "inline-C returns by value?"; the hkt-guide limitation is gone
+- **[hkt-rc-construct-body-boxes-handle.md](history/hkt-rc-construct-body-boxes-handle.md)** -- stop heap-boxing a carrier-width instance result
+
+*Refinement types and the solver:*
+
+- **[macro-generated-refined-crossings-do-not-discharge.md](history/macro-generated-refined-crossings-do-not-discharge.md)** -- crossing collection walks *into* macro expansions
+- **[frozen-macro-breaks-refinement-guard-discharge.md](history/frozen-macro-breaks-refinement-guard-discharge.md)** -- Span+head+arity crossing identity survives macro copying
+- **[refine-callsite-path-conds-lost-multi-form-body.md](history/refine-callsite-path-conds-lost-multi-form-body.md)** -- call-site path conditions span the caller's whole body
+- **[refine-float-measure-missort.md](history/refine-float-measure-missort.md)** -- float measures were Int-sorted, producing a false proof (soundness)
+- **[reads-nonstrict-silent-trust.md](history/reads-nonstrict-silent-trust.md)** -- an unproven `#reads` crossing no longer passes silently; TUR-W0372 text corrected
+- **[refined-multi-compile-memory-corruption.md](history/refined-multi-compile-memory-corruption.md)** -- uninitialized arena-allocated memo field, not a use-after-free
+- **[refined-obligations-silently-pass-in-release.md](history/refined-obligations-silently-pass-in-release.md)** -- **retracted**; NDEBUG contract stripping is deliberate, `--keep-contracts` opts back in
+- **[refine-fuzzer-subprocess-stdlib-double-load.md](history/refine-fuzzer-subprocess-stdlib-double-load.md)** -- `load_path_key` canonicalized before resolving `stdlib_dir`
+- **[arena-debug-poisoning-plan.md](history/arena-debug-poisoning-plan.md)** -- `TUR_DEBUG_ARENA_POISON` / `TUR_DEBUG_ARENA_GUARD` (AP1/AP2/AP4)
+- **[corpus-reader-tail-plan.md](history/corpus-reader-tail-plan.md)**, **[corpus-child-crashes-silent-under-asan.md](history/corpus-child-crashes-silent-under-asan.md)** -- last 7 SMT-LIB corpus skips closed; ASan-killed children no longer tally as passes
+
+*Reference counting, GC, and ownership:*
+
+- **[gc-strong-cycles-not-collected.md](history/gc-strong-cycles-not-collected.md)** -- CG0-CG2 + CG4; live strong `rc<T>` cycles are reclaimed
+- **[collections-cannot-hold-rc-values.md](history/collections-cannot-hold-rc-values.md)** -- `stdlib/rcvec.tur`, the flat-buffer-but-traced container; see [gc-guide.md](../guides/gc-guide.md)
+- **[stdlib-weak-ref-audit-plan.md](history/stdlib-weak-ref-audit-plan.md)** -- WR0-WR4; `stdlib/weak.tur` + [ownership-guide.md](../guides/ownership-guide.md)
+- **[two-collectors-dlopen-boundary.md](history/two-collectors-dlopen-boundary.md)** -- two GC copies in one process are safe, for a better reason than assumed
+- **[set-bang-does-not-release-old-rc-value.md](history/set-bang-does-not-release-old-rc-value.md)** -- `set!` releases the rc value it overwrites
+- **[rc-scalar-default-glue-invalid-free.md](history/rc-scalar-default-glue-invalid-free.md)** -- scalar payloads default to no-op glue; use `rc_set_value`
+- **[rc-free-queue-drain-is-quadratic.md](history/rc-free-queue-drain-is-quadratic.md)** -- linear drain; a free must not re-enter the freer
+- **[rc-tur-legacy-instances-do-not-compile.md](history/rc-tur-legacy-instances-do-not-compile.md)** -- `stdlib/rc.tur` compiles again
+- **[closure-capture-escapes-linearity.md](history/closure-capture-escapes-linearity.md)** -- a closure that *consumes* a captured linear/unique value is itself linear/unique
+- **[gc-heap-struct-rc-nonzero-on-darwin.md](history/gc-heap-struct-rc-nonzero-on-darwin.md)**, **[gc-leak-gate-darwin-sanitized-probe-drift.md](history/gc-leak-gate-darwin-sanitized-probe-drift.md)** -- Darwin zone-probe noise; a malloc probe means nothing under ASan
+
+*JIT / MIR (`tur jit`)* -- permanent constraints extracted to [jit-guide.md](../guides/jit-guide.md):
+
+- **[jit-macos-apple-sdk-headers-force-cc-fallback.md](history/jit-macos-apple-sdk-headers-force-cc-fallback.md)** -- seven Apple SDK blockers; corpus fallbacks 31 -> 17
+- **[jit-macos-full-corpus-extension-and-atexit.md](history/jit-macos-full-corpus-extension-and-atexit.md)** -- `__extension__`, `atexit`, and the packed-struct split-out
+- **[jit-arm64-uint128-align-struct-layout-skew.md](history/jit-arm64-uint128-align-struct-layout-skew.md)** -- `__uint128_t` alignment skewed `ucontext_t`; fixed in the MIR fork
+- **[mir-two-word-struct-return-goto-loop-miscompile.md](history/mir-two-word-struct-return-goto-loop-miscompile.md)** -- `make_one_ret` aliasing both slots across a goto backedge
+- **[jit-tur-apply-casts-to-aggregate-param-type.md](history/jit-tur-apply-casts-to-aggregate-param-type.md)** -- `TUR_APPLY<N>_T` casting to an aggregate type is not legal C
+- **[hoisted-inline-c-precedes-includes.md](history/hoisted-inline-c-precedes-includes.md)** -- hoisted `#include`s now precede all hoisted code
+- **[httpd-new-pool-fail-drops-handler-fails-under-jit.md](history/httpd-new-pool-fail-drops-handler-fails-under-jit.md)** -- harness env drift (`TUR_BIND_LOOPBACK`), not a JIT defect
+- **[libturi-symbols-basename-collision.md](history/libturi-symbols-basename-collision.md)** -- `runtime/symbols.c` joins `TUR_CORE_SOURCES`; title disavowed
+- **[named-let-self-tail-not-tco.md](history/named-let-self-tail-not-tco.md)**, **[cps-colored-noncapture-named-let-recurses-through-entry.md](history/cps-colored-noncapture-named-let-recurses-through-entry.md)** -- named-let self-TCO, both the capturing and non-capturing forms
+
+*Interpreter and REPL:*
+
+- **[turi-repl-quadratic-reparse.md](history/turi-repl-quadratic-reparse.md)** -- O(N^2) reparse on a long-lived env; fixed by TR2 incremental elaboration
+- **[tvar-cell-dangled-across-promotion-rewind.md](history/tvar-cell-dangled-across-promotion-rewind.md)** -- `EX_TVAR_NEW` cell dangling across a scratch-promotion rewind
+- **[web-repl-lang-switch-drops-stdlib.md](history/web-repl-lang-switch-drops-stdlib.md)** -- a `#lang` switch resets the session but the pinned prelude survives
+- **[wasm32-promo-hash-shift-ub.md](history/wasm32-promo-hash-shift-ub.md)** -- 64-bit finalizer on a 32-bit `uintptr_t` in the shipped web bundle
+
+*Language surface and tooling:*
+
+- **[composite-type-alias-gap.md](history/composite-type-alias-gap.md)** -- `defalias` accepts any type expression (Phase TA2); see [syntax-guide.md](../guides/syntax-guide.md)
+- **[row-ops-drop-field-names.md](history/row-ops-drop-field-names.md)** -- labels survive the row algebra; see [row-types-guide.md](../guides/row-types-guide.md)
+- **[c-keyword-function-names-not-mangled.md](history/c-keyword-function-names-not-mangled.md)** -- the `tur_u_` guard prefix; see [name-mangling-guide.md](../guides/name-mangling-guide.md)
+- **[defn-shadows-return-special-form.md](history/defn-shadows-return-special-form.md)** -- TUR-W0042 at the definition; reserved-names rule in [syntax-guide.md](../guides/syntax-guide.md)
+- **[named-effectful-defn-as-fat-fn-value-ices.md](history/named-effectful-defn-as-fat-fn-value-ices.md)** -- taking an effectful fn's address is not performing its effect
+- **[effectful-fn-typed-param-call-segfaults.md](history/effectful-fn-typed-param-call-segfaults.md)** -- `^fat` param with a non-empty effect row
+- **[persistent-map-cstr-keys-identity-compared.md](history/persistent-map-cstr-keys-identity-compared.md)** -- `^persistent` maps compare `:cstr` keys by content
+- **[no-compiler-version-constraint-in-manifest.md](history/no-compiler-version-constraint-in-manifest.md)** -- `:tur-version`; see [developing-spices-guide.md](../guides/developing-spices-guide.md)
+- **[spice-cycle-include-path-blowup.md](history/spice-cycle-include-path-blowup.md)** -- a mutual `:spices` cycle is supported, terminated by a visited set
+- **[lsp-symbol-retention-never-primes.md](history/lsp-symbol-retention-never-primes.md)** -- stdlib-only completion fallback for a never-parsed buffer
+- **[fmt-bootstrap-stdlib-rcvec-not-self-formatted.md](history/fmt-bootstrap-stdlib-rcvec-not-self-formatted.md)** -- `tur fmt` learned type-parameter vectors on `defn`
+- **[fmt-idempotence-head-z-silently-skips-on-bsd.md](history/fmt-idempotence-head-z-silently-skips-on-bsd.md)**, **[ctest-parallel-contention-false-failures.md](history/ctest-parallel-contention-false-failures.md)** -- two harness checks that passed without testing anything
+- **[wasm-artifact-requires-second-deploy-commit.md](history/wasm-artifact-requires-second-deploy-commit.md)** -- `web/public/turmeric.{js,wasm}` untracked; `sw.js` `CACHE_VERSION` auto-bumped
+
+### Resolved since the v0.32.6 sweep
+
+Closed reports that arrived after the sweep, still in [../archive/](.) rather
+than `history/` because they have not been swept yet:
+
+- **[sweet-dollar-double-applies-single-call.md](sweet-dollar-double-applies-single-call.md)** -- sweet-exp `$` no longer wraps a rest-of-line that is already one complete expression, so it composes with neoteric / curly-infix / data literals; see [syntax-guide.md](../guides/syntax-guide.md)
+- **[ci-cps-tramp-turi-timeouts-under-load.md](ci-cps-tramp-turi-timeouts-under-load.md)** -- the turi flake was ~3.5 GiB RSS per fixture, not CPU contention; full depth moved to compiled-only siblings, and both harnesses now report a timeout as a timeout instead of a "stdout mismatch"
+
+### Held back from the v0.32.6 sweep
+
+Same vintage, still in [../archive/](.) because each carries a named open
+finding rather than a closed one:
+
+- **[defalias-plan.md](defalias-plan.md)** -- TA1/TA2 shipped, but export semantics (an alias does not cross `(import ...)`) and gendocs rendering are unanswered
+- **[emitted-taskgroupblock-layout-mismatch.md](emitted-taskgroupblock-layout-mismatch.md)** -- narrow fix landed; the structural one is plan item S2, and the macOS repro was never re-confirmed
+- **[jit-c2mir-ignores-pragma-pack.md](jit-c2mir-ignores-pragma-pack.md)** -- `#pragma pack` fixed; `__attribute__((packed))` is still silently ignored
+- **[jit-xxh64-missing-prototype.md](jit-xxh64-missing-prototype.md)** -- crash fixed; dropping `-Wno-error=implicit-function-declaration` is a scheduled breaking change
+- **[jit-reactor-fixtures-abort-under-mir.md](jit-reactor-fixtures-abort-under-mir.md)** -- six weak `tur_scheduler_*_st` *functions* carry the same hazard and cannot be value-copied
+- **[map-show-keyword-key-raw-int.md](map-show-keyword-key-raw-int.md)** -- `Show [Sym]` shipped; six `TypeKind` arms remain unaudited
+- **[hkt-fmap-result-is-not-droppable.md](hkt-fmap-result-is-not-droppable.md)** -- "Still open" list needs reconciling against its two resolved siblings
+- **[spice-guides-bare-brace-manifest-syntax.md](spice-guides-bare-brace-manifest-syntax.md)** -- guides corrected; spice-README coverage and `tur add-cmake` comment-dropping are not
+- **[turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)** -- TR1 carrier relocation shelved as demand-driven
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

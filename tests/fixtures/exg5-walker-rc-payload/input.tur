@@ -5,6 +5,23 @@
 ; existential, both alive, then gc! forces a full collect.  The
 ; walker must scan through the existential's `value` slot without
 ; tripping or corrupting the inner rc.
+;
+; PT2 (gc-cycle-collection-followup-plan): the collection below has to
+; actually REACH gc_mark_phase for that assertion to mean anything.
+; gc_collect now skips the zombie sweep -- gc_mark_phase and
+; gc_trial_deletion_phase -- when no zombie is left in the candidate buffer
+; after the cycle phase has drained it, because that sweep is then a no-op
+; that still costs a full walk of gc_all_blocks.
+;
+; As originally written this program buffered nothing at all: an rc<int> is
+; scalar, so gc_add_suspect filters it out, and the existential is never
+; dropped.  The walker therefore never ran and inner-color read WHITE -- which
+; says nothing about the walker, only about the skip.  `make-zombie` below
+; restores the precondition the assertion was always assuming, by leaving one
+; weak-observed block (strong_count 0, weak_count 1) in the buffer.  That is
+; what a zombie IS, and reclaiming it is the only thing the sweep exists for.
+(defstruct Holder :move [inner : rc<int>])
+
 (defclass Show [a]
   (show [x] : cstr))
 
@@ -25,10 +42,21 @@
   return (int64_t)inner->color;
   ```)
 
+; Leave one zombie in the candidate buffer, so gc_collect runs the sweep.
+; The Holder is RCK_STRUCT with an rc field, so may_contain_cycles holds and
+; gc_add_suspect does not filter it; the weak reference is what keeps the
+; control block buffered once the strong reference goes out of scope.
+(defn make-zombie [] : int
+  (let [h (rc/of (make-struct Holder (rc/of 7)))]
+    (let [w (weak h)]
+      (weak? w)))
+  0)
+
 (defn main [] : int
   (gc-enable!)
   (let [r (rc/of 7)
         e (pack r (exists [a] [(Show a)] a))]
+    (make-zombie)
     (gc!)
     (println (inner-color e)))
   0)

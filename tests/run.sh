@@ -40,6 +40,21 @@ export XDG_CONFIG_HOME="$_TUR_EMPTY_XDG"
 TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
+# Identity of the binary under test, re-checked at the end of the run.
+#
+# Fixtures exec $TUR directly out of the build tree, so a rebuild that lands
+# mid-run swaps the compiler underneath the suite. During the link window the
+# file exists but is not yet executable, and every fixture dispatched in that
+# window dies with `Permission denied` -- which this harness reports as
+# "build failed". A batch of those reads as a compiler regression and costs a
+# full investigation before the cause (a concurrent `cmake --build`) turns up.
+#
+# `ls -ln` rather than stat(1): the -c/-f format flags are GNU/BSD-specific,
+# while the size and mtime columns of `ls -ln` are portable enough to compare
+# as an opaque string. A relink that somehow preserved both would slip through;
+# that is not a case worth more machinery.
+TUR_STAMP_START="$(ls -ln "$TUR" 2>/dev/null)"
+
 # A handful of fixtures write to a literal "/tmp/..." from inline-C fopen. On
 # POSIX that always exists; a compiled Windows binary resolves "/tmp" against the
 # current drive (C:\tmp), which is not present by default. Create it so those
@@ -48,6 +63,18 @@ TUR="${TUR:-./build/tur}"
 case "${MSYSTEM:-}" in
   UCRT64|MINGW64|CLANG64|MINGW32) mkdir -p /c/tmp 2>/dev/null || true ;;
 esac
+
+# Are we producing Windows binaries?  Used by the requires.posix-apis skip
+# below.  Keyed on MSYSTEM rather than uname so it stays false under WSL, which
+# runs the Linux build and has every POSIX API.
+# Exported because the fixture workers run as separate bash processes under
+# xargs (see the `export -f` block below), so a plain shell variable would not
+# reach them and every skip would silently no-op.
+TUR_HOST_WINDOWS=0
+case "${MSYSTEM:-}" in
+  UCRT64|MINGW64|CLANG64|MINGW32) TUR_HOST_WINDOWS=1 ;;
+esac
+export TUR_HOST_WINDOWS
 
 # Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY. On Windows this
 # stops the Defender Firewall "allow this app" dialog from popping for every
@@ -115,26 +142,6 @@ fi
 # emit, and every one of them fails to link.
 _tur_build_dir=$(dirname "$TUR")
 export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -L${_tur_build_dir}/src}"
-
-# Can this host's reactor poll a pipe file descriptor?
-#
-# On Windows, no -- and twice over.  The generated C calls POSIX pipe(), which
-# MinGW does not provide at all (it spells it _pipe, with a different
-# signature), so those fixtures fail to link.  Shimming that in does not rescue
-# them: Windows select() is SOCKET-only, so once the pipe exists select()
-# rejects the CRT file descriptors with WSAENOTSOCK and the fixture prints
-# `poll-count=-1` instead of its expected count.  Measured, not assumed -- see
-# docs/upcoming/v1/windows-remaining-plan.md.
-#
-# Fixtures that register pipe fds with the reactor therefore carry a
-# `requires.pollable-pipes` marker and PASS-skip here.  Routing pipe() through
-# a loopback socketpair is the only way to make them run, and it is not worth
-# it unless a real turmeric-godot use case needs pipe-style async.
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) TUR_HOST_POLLABLE_PIPES=0 ;;
-    *)                    TUR_HOST_POLLABLE_PIPES=1 ;;
-esac
-export TUR_HOST_POLLABLE_PIPES
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.
@@ -433,14 +440,6 @@ run_happy() {
         return
     fi
 
-    # Skip fixtures that register pipe fds with the reactor on a host whose
-    # select() cannot poll them (Windows).  See TUR_HOST_POLLABLE_PIPES above.
-    if [ -f "$dir/requires.pollable-pipes" ] \
-       && [ "$TUR_HOST_POLLABLE_PIPES" != "1" ]; then
-        write_result "PASS" "$name" "(pollable-pipes-skipped)" ""
-        return
-    fi
-
     # Skip fixtures owned by a dedicated ctest target (e.g. eval-import
     # has its own tur_eval_import test with custom -I/-L flags).
     if [ -f "$dir/requires.dedicated-runner" ]; then
@@ -453,6 +452,19 @@ run_happy() {
     # dependencies" for how to enable.
     if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
         write_result "PASS" "$name" "(spices-skipped)" ""
+        return
+    fi
+
+    # Skip fixtures whose inline-C calls a POSIX API that Windows does not have
+    # and that is not worth emulating.  The marker file's contents name the API
+    # and say why, per fixture -- read it before assuming a fixture is skipped
+    # for a reason that still applies.  Currently: pipe() (MinGW ships _pipe,
+    # and Windows select() is socket-only so the reactor could not poll a pipe
+    # fd even if it compiled) and fork()/getppid().  See
+    # docs/reported/windows-pipe-reactor-fixtures-do-not-build.md and
+    # docs/reported/windows-posix-inline-c-gaps.md.
+    if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
+        write_result "PASS" "$name" "(posix-apis-skipped)" ""
         return
     fi
 
@@ -609,6 +621,20 @@ run_happy() {
         expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
     fi
 
+    # Report a run-phase timeout AS a timeout.  The emit-c and build phases
+    # above already special-case rc 124; the run phase did not, so a killed
+    # binary's partial stdout fell through to the diff below and was reported
+    # as "stdout mismatch" -- pointing whoever reads the log at a wrong answer
+    # that does not exist.  This check must stay ahead of the stdout diff.  See
+    # docs/archive/ci-cps-tramp-turi-timeouts-under-load.md.
+    if [ "$rc" -eq 124 ] && [ "$expected_exit" != "124" ]; then
+        {
+            echo "FAIL $name — timed out (>${fixture_timeout}s)"
+        } > "$log_file"
+        write_result "FAIL" "$name" "timed out (>${fixture_timeout}s)" "$log_file"
+        return
+    fi
+
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null; then
             {
@@ -691,6 +717,12 @@ run_negative() {
         return
     fi
 
+    # POSIX-API skip (mirrors the happy-path guard above).
+    if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
+        write_result "PASS" "$name" "(posix-apis-skipped)" ""
+        return
+    fi
+
     # Per-fixture timeout (default 10s) -- negative fixtures only emit-c, but an
     # untimed front-end hang stalled the suite just like the happy path did.
     local fixture_timeout=10
@@ -770,14 +802,65 @@ export TUR_TSAN _tur_timeout_bin TUR_MTIME
 export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
-# Happy fixtures: tests/fixtures/* except tests/fixtures/errors
+# Happy fixtures: tests/fixtures/* except tests/fixtures/errors, PLUS the
+# fixtures one level down inside a GROUP directory.
+#
+# A group dir (typed/, typed-slots/, recursive-types/, ...) holds fixtures
+# rather than being one -- it has no input.tur of its own, so the top-level
+# scan skipped both it and its children, and those children were compiled by
+# NO harness (run-turi.sh scans this deep, but only interprets).  That is
+# exactly where two latent miscompiles sat undisturbed until the J3 jit
+# harness compiled them: docs/archive/typed-result-map-cps-clone-struct-assign.md
+# and docs/archive/typed-slots-nested-specialization-float-garbage.md.  Both
+# are fixed, so this scan now covers them and the class cannot re-hide.
+#
+# Detection is structural, not a hard-coded list, and deliberately STRICT: a
+# dir is a group only when it holds NOTHING BUT subdirectories (no regular
+# file of its own -- no input.tur, expected.*, build.tur, hook.sh, marker, or
+# loose *.tur) AND at least one of those subdirectories carries an input.tur.
+#
+# Both halves are load-bearing.  A project fixture driven by build.tur/hook.sh
+# rather than input.tur (workspace-ls2/, spice-resolver-ok/, reader-macros-*)
+# has regular files, so the first half keeps it a fixture.  A project fixture
+# whose only entry is a source dir (module-transitive-imports/src/) passes the
+# first half but fails the second, because src/ has no input.tur.  A looser
+# rule silently DROPPED ~34 such fixtures from the suite while still reporting
+# 0 failed -- the same invisible-coverage-loss this whole change exists to
+# close, so the set inclusion is asserted below rather than assumed.
 shopt -s nullglob
-HAPPY_DIRS=()
-fixture_ordinal=0
+FIXTURE_DIRS=()
 for d in tests/fixtures/*/; do
     d="${d%/}"
     [ "$d" = "tests/fixtures/errors" ] && continue
     [ -d "$d" ] || continue
+    # "holds no regular file of its own" via a plain glob -- BSD/macOS find has
+    # no portable `-print -quit`, and this file is otherwise careful to stay
+    # macOS-clean (stat -f first, sysctl for core count, gtimeout fallback).
+    _is_group=0
+    _has_own_file=0
+    for _f in "$d"/*; do
+        [ -f "$_f" ] && { _has_own_file=1; break; }
+    done
+    if [ "$_has_own_file" = 0 ]; then
+        for sub in "$d"/*/; do
+            [ -f "${sub}input.tur" ] && { _is_group=1; break; }
+        done
+    fi
+    if [ "$_is_group" = 0 ]; then
+        FIXTURE_DIRS+=("$d")            # a fixture in its own right
+    else
+        for sub in "$d"/*/; do          # a group dir: take its children
+            sub="${sub%/}"
+            [ -d "$sub" ] || continue
+            [ -f "$sub/input.tur" ] || [ -f "$sub/$(basename "$sub").tur" ] || continue
+            FIXTURE_DIRS+=("$sub")
+        done
+    fi
+done
+
+HAPPY_DIRS=()
+fixture_ordinal=0
+for d in "${FIXTURE_DIRS[@]}"; do
     name="${d#tests/fixtures/}"
     if suite_admits happy "$d" && matches_filter "$name" && matches_shard "$fixture_ordinal"; then
         HAPPY_DIRS+=("$d")
@@ -847,6 +930,26 @@ RESULT_COUNT=$(find "$RESULTS_DIR" -maxdepth 1 -name '*.result' 2>/dev/null | wc
 : "${RESULT_COUNT:=0}"
 
 echo
+
+# Did the compiler change underneath us? See TUR_STAMP_START above. Reported
+# before the tallies so it is the first thing read, since it invalidates them.
+TUR_STAMP_END="$(ls -ln "$TUR" 2>/dev/null)"
+if [ "$TUR_STAMP_START" != "$TUR_STAMP_END" ]; then
+    echo "WARNING: $TUR changed while this run was in progress."
+    echo "  before: $TUR_STAMP_START"
+    echo "  after:  $TUR_STAMP_END"
+    echo "  Something rebuilt the compiler mid-run (a concurrent 'cmake --build',"
+    echo "  most likely). Fixtures exec this binary directly, so any failure"
+    echo "  above -- especially a batch of 'build failed' -- is an artifact of"
+    echo "  the swap, not a result. Re-run with nothing else building."
+    if [ $FAIL -ne 0 ]; then
+        # Same principle as the completeness guard: a run that cannot be
+        # trusted is not a pass and not an ordinary failure.
+        echo "  $FAIL failure(s) recorded -- THIS IS NOT A VALID RUN."
+        exit 2
+    fi
+fi
+
 if [ "$_INTERRUPTED" -ne 0 ] \
    || [ "$HAPPY_XARGS_RC" -ne 0 ] \
    || [ "$ERROR_XARGS_RC" -ne 0 ] \

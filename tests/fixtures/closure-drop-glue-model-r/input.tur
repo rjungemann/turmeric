@@ -1,0 +1,23 @@
+;; closure-drop-glue (Model R) foundation: an escaping fat-closure env is
+;; allocated with an 8-byte drop-glue header at env[-1] holding its
+;; drop_glue_<env> pointer.  Releasing the handle from opaque C via
+;; TUR_CLOSURE_DROP recovers that header and frees the BASE allocation
+;; (env - sizeof(void*)) -- header-aware, leak-clean, no double-free.
+;;
+;; Built with --enable=closure-drop-glue (see the sibling `flags` file).
+;; Verifies the ABI plumbing: construction prepends the header, dispatch
+;; through fat[0] is unaffected, and the generic drop frees the right pointer.
+
+(defn make-adder [k : int] : ptr<void>
+  (fn [n : int] : int (+ n k)))
+
+(defn call-then-drop [f : ptr<void>] : int
+  ```c
+  int64_t r = TUR_APPLY1((int64_t)(intptr_t)f, 5);
+  TUR_CLOSURE_DROP(f);
+  return r;
+  ```)
+
+(defn main [] : int
+  (println (call-then-drop (make-adder 100)))
+  0)

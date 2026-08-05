@@ -206,14 +206,59 @@ extern bool g_dump_cps_mono;
 /* g_opt_cps_effects RETIRED 2026-07-12 -- the `cps-effects` experiment graduated
  * and `handle-shallow` is now unconditionally accepted (see experiments.c). */
 
-/* F3 (docs/archive/compiled-async-heap-continuations-plan.md): enable the
- * in-flight heap-continuation representation for `async`/`await`.  When set, a
- * function containing `await` is CPS-colored and a tail-position `await` lowers
- * to a `dk_shift` against the entry prompt (capturing the rest of the async body
- * as a heap continuation) instead of the fiber `tur_await_future`/swapcontext.
- * Read by the coloring pass (`src/passes/cps.c`) and the CPS-IR builder
- * (`src/passes/cps_ir.c`).  Gated by the `cps-async` experiment. */
-extern bool g_opt_cps_async;
+/* E7: trampolined tail-resume (cps-tramp-resume experiment). See globals.c. */
+extern bool g_opt_cps_tramp_resume;
+/* E3a: admit an OWNING value captured into a genuinely multi-shot (cloneable /
+ * serializable) continuation, giving each captured frame's env clone/drop glue
+ * so resumes are memory-safe (cps-backend-owning-env-teardown-e3-plan.md). Read
+ * by the cloneable/serial capture checks (elab_effects.c) and the cloneable
+ * codegen (emit_cps_ir.c). Gated by the `owning-cloneable-capture` experiment. */
+extern bool g_opt_owning_cloneable_capture;
+
+/* CG5: `(gc-auto!)` -- automatic allocation-driven cycle collection. Gated by
+ * the `cycle-gc` experiment; read by elab_gc_auto (elab_memory.c). */
+extern bool g_opt_cycle_gc;
+/* J1: `tur jit` experiment enable bit (jit-engine-plan). */
+extern bool g_opt_jit;
+
+/* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI
+ * (env[-1] -> drop_glue_env_N, released via TUR_CLOSURE_DROP) is now
+ * unconditional; the g_opt_closure_drop_glue enable bit and its codegen gates are
+ * gone.  See docs/upcoming/closure-drop-glue-plan.md. */
+
+/* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
+ * predicates is unconditional; the g_opt_refined enable bit and its
+ * elaboration gates are gone.  See
+ * docs/upcoming/v1/refined-graduation-plan.md. */
+
+/* sealed-opaque: gates the `:sealed` defopaque attribute's ENFORCEMENT.  When
+ * off, `:sealed` parses and is recorded but the `::` check never fires, so
+ * adopting it downstream is not a breaking change for consumers who have not
+ * enabled the experiment.  See docs/upcoming/sealed-opaque-plan.md. */
+extern bool g_opt_sealed_opaque;
+
+/* write-frames (WF1/WF2, docs/upcoming/checked-write-frames-plan.md): gates the
+ * `#writes` write-frame annotation -- its CHECKING (WF2's TUR-E0382) and every
+ * consumer that acts on a checked frame (WF3's callee-frame widening, WF4's
+ * entry-check elision).  The annotation itself always PARSES so that adding one
+ * is not a breaking change for a consumer who has not enabled the experiment;
+ * what the gate withholds is the checking and the acting.
+ *
+ * `#reads` lived under the `refined` experiment, but that graduated 2026-08-01,
+ * so this feature needs its own lifecycle home rather than a retired one. */
+extern bool g_opt_write_frames;
+
+/* lang-layers L4: true once a project manifest declared an `:experiments`
+ * key (even the empty list), i.e. the project owner scoped the experiment set.
+ * A `#lang <base> <semantic-layer>` file whose backing experiment is absent
+ * from that scoped set is then a hard error instead of a silent ignore. */
+extern bool g_manifest_experiments_scoped;
+
+/* --strict-refine: a diagnostic-strictness knob (NOT an experiment).  Upgrades
+ * TUR-E0371 / TUR-W0372 from "keep the runtime check" to a hard compile error,
+ * for users who want a fully-discharged build with no silent runtime
+ * fallbacks. */
+extern bool g_strict_refine;
 
 
 /* ---------------------------------------------------------------------------

@@ -737,8 +737,12 @@ elif command -v nm >/dev/null 2>&1; then
     # must resolve to exactly one owning definition (the owner TU), not one per
     # module .c -- proving single shared GC state across the separately-compiled
     # translation units.
-    has_export=$(nm -D "$WORK/rcbox.so" 2>/dev/null | grep -cE 'widget__box__alloc_hybox')
-    gc_owners=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' [A-Za-z] gc_all_blocks$')
+    # Portable across GNU nm (Linux) and Apple nm (macOS): macOS has no `nm -D`
+    # (Mach-O has no dynamic symbol table -- the flag errors) and prefixes every
+    # symbol with an underscore, so read plain `nm` and allow an optional leading
+    # `_`.  The exported rc-using function is the external (uppercase T) def.
+    has_export=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' T _?widget__box__alloc_hybox$')
+    gc_owners=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' [A-Za-z] _?gc_all_blocks$')
     if [ "$has_export" -ge 1 ] && [ "$gc_owners" -eq 1 ]; then
         pass "build-shared-rc-runtime"
     else
@@ -929,6 +933,107 @@ if [ $mapform_rc -eq 0 ] && [ -x "$WORK/mapformbin" ]; then
 else
     fail "build-project-exports-map-form-accepted" "rc=$mapform_rc out=$mapform_out"
 fi
+
+# exports-map-syntax-tighten-plan follow-up audit: the same effect-row trap
+# applies to every OTHER map-shaped manifest slot, not just `:exports`.  Those
+# slots checked only the F_MAP tag, so `:cmake-deps #fx{...}` parsed cleanly
+# and CMake generation proceeded off an effect-row literal.  parse_* now routes
+# through expect_map(), so each slot rejects an effect row with TUR-E0620.
+for slot_case in \
+    'spices|:spices #fx{ "dep" #fx{:url "https://example.invalid/d" :ref "v1"} }' \
+    'spices-entry|:spices #map{ "dep" #fx{:url "https://example.invalid/d" :ref "v1"} }' \
+    'cmake-deps|:cmake-deps #fx{ "nng" #map{:url "https://example.invalid/n" :ref "v1"} }' \
+    'cmake-deps-entry|:cmake-deps #map{ "nng" #fx{:url "https://example.invalid/n" :ref "v1"} }' \
+    'cmake-options|:cmake-deps #map{ "nng" #map{:url "https://example.invalid/n" :ref "v1" :options #fx{:BUILD_SHARED_LIBS "OFF"}} }' \
+    'build-opts|:build-opts #fx{ :c-flags ["-DFOO=1"] }' \
+    'bin|:bin #fx{ "tur-fxt" "src/app/main.tur" }' \
+; do
+    slot_name=${slot_case%%|*}
+    slot_body=${slot_case#*|}
+    SLOTDIR="$WORK/manifest-fx-row-$slot_name"
+    mkdir -p "$SLOTDIR/src/app"
+    cat > "$SLOTDIR/build.tur" <<EOF
+(defpackage tur-fx-row-$slot_name
+  :name    "tur-fx-row-$slot_name"
+  :version "0.1.0"
+  $slot_body
+  :exports #map{ "app/main" ["main"] })
+EOF
+    cat > "$SLOTDIR/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+    slot_out=$(cd "$WORK" && "$TUR" build "$SLOTDIR" -o "$WORK/fxslotbin" 2>&1)
+    slot_rc=$?
+    if [ $slot_rc -ne 0 ] && echo "$slot_out" | grep -q "TUR-E0620"; then
+        pass "build-project-manifest-fx-row-rejected-$slot_name"
+    else
+        fail "build-project-manifest-fx-row-rejected-$slot_name" \
+             "rc=$slot_rc out=$slot_out"
+    fi
+done
+
+# ...and the positive half of the same audit: `#map{...}` is now accepted at
+# those slots too (they previously took only the bare `#{...}` spelling, so
+# the diagnostic's suggested rewrite would itself have been an error).
+MAPSLOT="$WORK/manifest-map-slots"
+mkdir -p "$MAPSLOT/src/app"
+cat > "$MAPSLOT/build.tur" <<'EOF'
+(defpackage tur-map-slots
+  :name    "tur-map-slots"
+  :version "0.1.0"
+  :build-opts #map{ :c-flags ["-DTUR_MAP_SLOT_TEST=1"] }
+  :exports #map{ "app/main" ["main"] })
+EOF
+cat > "$MAPSLOT/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+mapslot_out=$(cd "$WORK" && "$TUR" build "$MAPSLOT" -o "$WORK/mapslotbin" 2>&1)
+mapslot_rc=$?
+if [ $mapslot_rc -eq 0 ] && [ -x "$WORK/mapslotbin" ]; then
+    pass "build-project-manifest-map-slots-accepted"
+else
+    fail "build-project-manifest-map-slots-accepted" "rc=$mapslot_rc out=$mapslot_out"
+fi
+
+# docs/archive/spice-guides-bare-brace-manifest-syntax.md: a bare `{...}` in a
+# map-shaped slot is the single most common manifest mistake -- it is what every
+# stale copy of the guides spells -- and the hint that would teach the fix had
+# gone dead.  It was gated on `got->tag == F_CONTRACT_TYPE`, from when a bare
+# `{...}` read as a contract-type annotation; contract types moved to
+# `#refine{...}` and bare `{` is now unconditionally curly-infix, so the tag
+# never appeared and the user got a bare ":spices must be a map".  The hint is
+# unconditional now, with an extra clause naming curly-infix when that is what
+# the reader actually saw.
+for brace_case in \
+    'spices|:spices {"dep" {:url "https://example.invalid/d" :ref "v1"}}' \
+    'cmake-deps|:cmake-deps {"nng" {:url "https://example.invalid/n" :ref "v1"}}' \
+    'build-opts|:build-opts {:c-flags ["-DFOO=1"]}' \
+; do
+    brace_name=${brace_case%%|*}
+    brace_body=${brace_case#*|}
+    BRACEDIR="$WORK/manifest-bare-brace-$brace_name"
+    mkdir -p "$BRACEDIR/src/app"
+    cat > "$BRACEDIR/build.tur" <<EOF
+(defpackage tur-bare-brace-$brace_name
+  :name    "tur-bare-brace-$brace_name"
+  :version "0.1.0"
+  $brace_body
+  :exports #map{ "app/main" ["main"] })
+EOF
+    cat > "$BRACEDIR/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+    brace_out=$(cd "$WORK" && "$TUR" build "$BRACEDIR" -o "$WORK/bracebin" 2>&1)
+    brace_rc=$?
+    if [ $brace_rc -ne 0 ] &&
+       echo "$brace_out" | grep -q 'use `#map{\.\.\.}`' &&
+       echo "$brace_out" | grep -q 'curly-infix'; then
+        pass "build-project-manifest-bare-brace-hint-$brace_name"
+    else
+        fail "build-project-manifest-bare-brace-hint-$brace_name" \
+             "rc=$brace_rc out=$brace_out"
+    fi
+done
 
 echo
 echo "summary: $PASS passed, $FAIL failed"

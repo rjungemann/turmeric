@@ -13,7 +13,7 @@ spice. This guide shows how to wire the two together so a one-line
 change converts an `httpd-new` server into an `httpd-new-tls` server.
 
 The integration was designed under the constraints in
-[`docs/archive/history/tur-tls-plan.md`](../archive/history/tur-tls-plan.md):
+[`docs/archive/history/tur-tls-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-tls-plan.md):
 
 - Zero TLS dependency in a default `tur` install. Programs that do not
   import the spice still link cleanly.
@@ -87,7 +87,7 @@ The v0.1.0 line does **not** implement:
 - mTLS / client certificate verification.
 
 These are explicitly punted to follow-ups in the
-[plan's non-goals section](../tur-tls-plan.md#non-goals).
+[plan's non-goals section](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-tls-plan.md#non-goals).
 
 ---
 
@@ -168,7 +168,7 @@ The three new lines:
   TLS functions and forwards them to `httpd-register-tls-impl`. Call it
   once before any `httpd-new-tls`. Idempotent.
 - **(b)** Build a TLS context, load cert + key. Bytes-for-bytes the
-  shape sketched in the [Quick start](../../turmeric-spices/spices/tls/README.md#quick-start-preview)
+  shape sketched in the [Quick start](https://github.com/rjungemann/turmeric-spices/blob/main/spices/tls/README.md#quick-start-preview)
   section of the spice README.
 - **(c)** `httpd-new-tls` is the TLS-aware constructor. Compared to
   `httpd-new-pool` it adds one trailing arg (the ctx) and validates
@@ -242,8 +242,8 @@ Two fixtures cover the integration:
 
 ## See also
 
-- [tur-tls plan](../tur-tls-plan.md) -- design rationale + roadmap.
-- [tur-httpd plan](../tur-httpd-plan.md) -- the H1-H7 milestones that
+- [tur-tls plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-tls-plan.md) -- design rationale + roadmap.
+- [tur-httpd plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-httpd-plan.md) -- the H1-H7 milestones that
   this guide composes with.
 - [tur-tls spice README](https://github.com/rjungemann/turmeric-spices/blob/main/spices/tls/README.md).
 - [mbedTLS API docs](https://mbed-tls.readthedocs.io/).

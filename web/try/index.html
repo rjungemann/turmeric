@@ -36,61 +36,66 @@
                              until the editor initialises. -->
                         <div class="editor-tabs"></div>
                         <div class="editor-actions">
-                            <button class="btn btn-icon" id="run-btn" title="Run (Ctrl/Cmd + Enter)">
+                            <button class="btn btn-icon" id="run-btn" title="Run (Ctrl/Cmd + Enter)" aria-label="Run">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M8 5v14l11-7z"/>
                                 </svg>
-                                Run
                             </button>
-                            <button class="btn btn-icon" id="solve-btn" title="Fill in the answer for this step" style="display: none;">
+                            <button class="btn btn-icon" id="solve-btn" title="Fill in the answer for this step" aria-label="Solve this" style="display: none;">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
                                 </svg>
-                                Solve this
                             </button>
-                            <button class="btn btn-icon" id="clear-btn" title="Clear (Shift+Click resets the whole workspace)">
+                            <button class="btn btn-icon" id="clear-btn" title="Clear (Shift+Click resets the whole workspace)" aria-label="Clear">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                                 </svg>
-                                Clear
                             </button>
-                            <button class="btn btn-icon" id="format-btn" title="Format (Alt+Shift+F)">
+                            <button class="btn btn-icon" id="format-btn" title="Format (Alt+Shift+F)" aria-label="Format">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M3 6h18v2H3zm0 5h12v2H3zm0 5h18v2H3z"/>
                                 </svg>
-                                Format
                             </button>
-                            <button class="btn btn-icon" id="share-btn" title="Share">
+                            <button class="btn btn-icon" id="share-btn" title="Share" aria-label="Share">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
                                 </svg>
-                                Share
                             </button>
-                            <button class="btn btn-icon" id="download-btn" title="Download project as zip">
+                            <button class="btn btn-icon" id="download-btn" title="Download project as zip" aria-label="Download project as zip">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
                                 </svg>
-                                Download
                             </button>
-                            <button class="btn btn-icon" id="open-btn" title="Open project zip">
+                            <button class="btn btn-icon" id="open-btn" title="Open project zip" aria-label="Open project zip">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M9 3L7 5H3v14h18V5H11l-2-2zm10 14H5V7h14v10z"/>
                                 </svg>
-                                Open
                             </button>
                             <input type="file" id="open-project-input" accept=".zip,application/zip"
                                    style="position:absolute; left:-9999px; width:1px; height:1px;"
                                    aria-hidden="true" tabindex="-1">
-                            <select class="btn select" id="examples-select" title="Load Example">
-                                <option value="">Examples</option>
-                                <option value="hello">Hello World</option>
-                                <option value="math">Basic Math</option>
-                                <option value="factorial">Factorial</option>
-                                <option value="fibonacci">Fibonacci</option>
-                                <option value="closure">Closures</option>
-                                <option value="effects">Effects</option>
-                                <option value="sweet">Sweet-exp Syntax</option>
-                            </select>
+                            <!-- Examples: a hamburger button that opens a popover of
+                                 example programs (wired in main.js). Replaces the old
+                                 <select>; reuses the .more-menu popover styling. -->
+                            <div class="examples-wrap">
+                                <button class="btn btn-icon" id="examples-btn"
+                                        aria-haspopup="true" aria-expanded="false"
+                                        aria-controls="examples-menu" title="Examples" aria-label="Examples">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                        <path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/>
+                                    </svg>
+                                </button>
+                                <div class="more-menu examples-menu" id="examples-menu" role="menu" hidden>
+                                    <div class="more-label">Examples</div>
+                                    <button class="more-item" role="menuitem" data-example="hello">Hello World</button>
+                                    <button class="more-item" role="menuitem" data-example="math">Basic Math</button>
+                                    <button class="more-item" role="menuitem" data-example="factorial">Factorial</button>
+                                    <button class="more-item" role="menuitem" data-example="fibonacci">Fibonacci</button>
+                                    <button class="more-item" role="menuitem" data-example="closure">Closures</button>
+                                    <button class="more-item" role="menuitem" data-example="effects">Effects</button>
+                                    <button class="more-item" role="menuitem" data-example="sweet">Sweet-exp Syntax</button>
+                                </div>
+                            </div>
                             <!-- Mobile overflow: collapses Solve/Clear/Format/Share/Examples
                                  into a single popover so the tab bar has room. Run stays
                                  visible as the primary action. -->
@@ -109,6 +114,8 @@
                                     <button class="more-item" role="menuitem" data-cmd="share-btn">Share</button>
                                     <button class="more-item" role="menuitem" data-cmd="download-btn">Download project</button>
                                     <button class="more-item" role="menuitem" data-cmd="open-btn">Open project...</button>
+                                    <div class="more-sep" role="separator"></div>
+                                    <button class="more-item" role="menuitem" data-action="force-update" title="Clear cached assets and reload the latest version">Force update</button>
                                     <div class="more-sep" role="separator"></div>
                                     <div class="more-label">Examples</div>
                                     <button class="more-item" role="menuitem" data-example="hello">Hello World</button>
@@ -149,6 +156,14 @@
                         <span class="status-indicator" id="wasm-status">
                             <span class="dot offline"></span>
                             <span id="wasm-status-text">Initializing WASM...</span>
+                        </span>
+                        <!-- Analysis indicator. Hidden until the language
+                             server boots (lazily, on first editor focus), and
+                             it stays hidden if the server never comes up --
+                             an absent analysis is not something to nag about. -->
+                        <span class="status-indicator lsp-status" id="lsp-status" hidden>
+                            <span class="dot" id="lsp-status-dot"></span>
+                            <span id="lsp-status-text">Analysis ready</span>
                         </span>
                         <span class="cursor-position" id="cursor-pos">Line 1, Column 1</span>
                     </div>

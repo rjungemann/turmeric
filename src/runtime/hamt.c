@@ -170,6 +170,8 @@ static Hamt *hamt_alloc_empty(void) {
     m->key_ops.release = NULL;
     m->key_ops.eq = NULL;  /* GDE3: no stamped comparator initially */
     m->val_owned = false;  /* multi-word-value boxing: off by default */
+    m->val_ops.retain = NULL;
+    m->val_ops.release = NULL;
     return m;
 }
 
@@ -925,7 +927,7 @@ void tur_hamt_free(Hamt *m) {
         g_hamt_key_release = m->key_ops.release;
         /* Multi-word-value boxing: an owned value is always a tur_hamt_box_key
          * box, so its release op is the box refcount release. */
-        g_hamt_val_release = m->val_owned ? tur_hamt_box_release : NULL;
+        g_hamt_val_release = m->val_ops.release;
         tur_hamt_node_release(m->root);
         g_hamt_key_release = save_release;
         g_hamt_val_release = save_val_release;
@@ -946,14 +948,33 @@ uint32_t tur_hamt_count(Hamt *m) {
 }
 
 Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
+    /* A NULL base means "the empty map".  We need a real one to read count /
+     * key_ops / val_ops off, but it is OURS, not the caller's -- so it has to
+     * be freed again before returning the derived map, or every insert into a
+     * NULL base leaks a 64-byte root.  (Freeing it is safe: it is a fresh
+     * ref_count=1 allocation with a NULL root, so tur_hamt_free just frees the
+     * struct.)  The one exception is the `return m` path below, where the temp
+     * IS the returned map and ownership passes to the caller. */
+    bool m_is_temp = false;
     if (!m) {
         m = hamt_alloc_empty();
+        m_is_temp = true;
     }
 
     bool key_exists = tur_hamt_has(m, hash, key);
     HamtNode *new_root = node_insert(m->root, hash, key, val, 0);
 
     if (new_root == m->root) {
+        /* Structurally unchanged, so the result IS the input map.  Hand back an
+         * OWNED reference: the documented contract is "returns a new HAMT; the
+         * original is unchanged", and callers free the result and the original
+         * independently.  Returning a bare alias made both handles free the one
+         * allocation -- the second tur_hamt_free then decremented ref_count
+         * through freed memory and, when the garbage landed on zero, freed it
+         * again.  (Our own temp base needs no retain: it is already a fresh
+         * ref_count=1 allocation and m_is_temp suppresses the free below, so
+         * ownership simply passes through.) */
+        if (!m_is_temp) tur_hamt_retain(m);
         return m;
     }
 
@@ -962,6 +983,7 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
     new_map->root = new_root;
     new_map->key_ops = m->key_ops;  /* WKC2: inherit boxed-key ownership */
     new_map->val_owned = m->val_owned;  /* inherit value-box ownership */
+    new_map->val_ops   = m->val_ops;    /* ... and its caller-supplied ops */
 
     if (key_exists) {
         new_map->count = m->count;
@@ -969,6 +991,7 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
         new_map->count = m->count + 1;
     }
 
+    if (m_is_temp) tur_hamt_free(m);  /* our own empty base, not the caller's */
     return new_map;
 }
 
@@ -977,14 +1000,20 @@ Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key) {
         return m;
     }
 
+    /* Both no-op paths below return the input map, so they must hand back an
+     * OWNED reference for the same reason tur_hamt_set's identity path does:
+     * the caller frees the result and the original independently, and a bare
+     * alias makes both frees land on one allocation.  This is what broke
+     * tests/fixtures/hamt-delete on macOS -- deleting an absent key produced
+     * m3 == m2, and freeing both double-freed the map. */
     if (!tur_hamt_has(m, hash, key)) {
-        return m;
+        return tur_hamt_retain(m);
     }
 
     HamtNode *new_root = node_delete(m->root, hash, key, 0);
 
     if (new_root == m->root) {
-        return m;
+        return tur_hamt_retain(m);
     }
 
     Hamt *new_map = hamt_alloc_empty();
@@ -994,6 +1023,7 @@ Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key) {
     new_map->root = new_root;
     new_map->key_ops = m->key_ops;  /* WKC2: inherit boxed-key ownership */
     new_map->val_owned = m->val_owned;  /* inherit value-box ownership */
+    new_map->val_ops   = m->val_ops;    /* ... and its caller-supplied ops */
     new_map->count = m->count - 1;
 
     return new_map;
@@ -1052,6 +1082,47 @@ void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
     void *r = tur_hamt_get(m, hash, key);
     hamt_restore_eq_hooks(save);
     return r;
+}
+
+/* ----------------------------------------------------------------------------
+ * Content-keyed cstr convenience entry points
+ *
+ * One-call set/del/has/get for NUL-terminated string keys: hash by content
+ * (xxHash64 of the bytes) and compare by content on collision, mirroring the
+ * MapKey[cstr] comparator of the typed-Map path.  These exist so the P3
+ * `^persistent` lowering never routes a cstr key through hash-ptr + identity
+ * compare -- a scheme that only ever "worked" when the C compiler merged
+ * identical string literals, which C11 6.4.5p7 leaves unspecified (gcc/clang
+ * merge, c2mir does not).  Keys built at runtime (concatenation, parsed
+ * input) were silently lost.
+ * --------------------------------------------------------------------------*/
+
+static bool hamt_cstr_key_eq(int64_t a, int64_t b) {
+    const char *p = (const char *)(intptr_t)a;
+    const char *q = (const char *)(intptr_t)b;
+    if (p == q) return true;
+    if (!p || !q) return false;
+    return strcmp(p, q) == 0;
+}
+
+Hamt *tur_hamt_set_cstr(Hamt *m, const char *key, void *val) {
+    return tur_hamt_set_eq(m, tur_hamt_hash_str(key), (void *)key, val,
+                           hamt_cstr_key_eq);
+}
+
+Hamt *tur_hamt_del_cstr(Hamt *m, const char *key) {
+    return tur_hamt_del_eq(m, tur_hamt_hash_str(key), (void *)key,
+                           hamt_cstr_key_eq);
+}
+
+bool tur_hamt_has_cstr(Hamt *m, const char *key) {
+    return tur_hamt_has_eq(m, tur_hamt_hash_str(key), (void *)key,
+                           hamt_cstr_key_eq);
+}
+
+void *tur_hamt_get_cstr(Hamt *m, const char *key) {
+    return tur_hamt_get_eq(m, tur_hamt_hash_str(key), (void *)key,
+                           hamt_cstr_key_eq);
 }
 
 /* ----------------------------------------------------------------------------
@@ -1186,39 +1257,73 @@ void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key,
     return r;
 }
 
-/* Flag-driven convenience wrappers (WKC3 + multi-word-value boxing).  `owned` is
- * a BITMASK: bit 0 selects boxed-KEY ownership (the standard tur_hamt_box_key
- * ops), bit 1 selects boxed-VALUE ownership.  A plain `owned == 0` is the
- * un-owned _eq path, and a legacy `owned == 1` (key only) is unchanged, so this
- * is backward-compatible.  Value ownership installs the box refcount as the
- * thread-local value hooks for the duration of the mutating op (set/del) so
- * structural copies retain and dropped entries release the value box; the flag
- * is stamped on the resulting map for tur_hamt_free.  get/has are read-only (no
- * node copy/free), so they never touch value lifetime. */
-Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val,
-                        tur_hamt_keyeq_fn eq, int64_t owned) {
+/* Flag-driven wrappers (WKC3 + multi-word-value boxing + rc<T> values).
+ * `owned` is a BITMASK:
+ *
+ *   bit 0 -- boxed-KEY ownership (the standard tur_hamt_box_key ops).
+ *   bit 1 -- the value is a heap BOX the map owns.
+ *   bit 2 -- the value is an rc<T> handle the map owns.
+ *
+ * Bits 1 and 2 both mean "the map owns its values" and differ only in which
+ * ops do the owning; they are mutually exclusive (a value is either a by-value
+ * box or an rc handle, never both).  `owned == 0` is the un-owned _eq path and
+ * a legacy `owned == 1` (key only) is unchanged, so this stays
+ * backward-compatible.
+ *
+ * Value ownership installs the caller's ops as the thread-local value hooks for
+ * the duration of the mutating op (set/del) so structural copies retain and
+ * dropped entries release, and stamps them on the resulting map for a later
+ * tur_hamt_free.  get/has are read-only (no node copy/free), so they never
+ * touch value lifetime.
+ *
+ * The _eq_o wrappers hardcode the box refcount and so must only ever be handed
+ * bit 1; a bit-2 caller goes through _vo with its own ops. */
+Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val,
+                         tur_hamt_keyeq_fn eq, int64_t owned,
+                         void (*val_retain)(void *), void (*val_release)(void *)) {
+    tur_hamt_val_ops vops = { val_retain, val_release };
     void (*svr)(void *) = g_hamt_val_retain, (*svl)(void *) = g_hamt_val_release;
-    if (owned & 2) { g_hamt_val_retain = tur_hamt_box_retain;
-                     g_hamt_val_release = tur_hamt_box_release; }
+    if (owned & 6) { g_hamt_val_retain = vops.retain;
+                     g_hamt_val_release = vops.release; }
     Hamt *r = (owned & 1)
         ? tur_hamt_set_eq_owned(m, hash, key, val, eq, tur_hamt_box_key_ops())
         : tur_hamt_set_eq(m, hash, key, val, eq);
-    if (r && (owned & 2)) r->val_owned = true;
+    if (r && (owned & 6)) {
+        r->val_owned = true;
+        r->val_ops   = vops;
+    }
+    g_hamt_val_retain = svr; g_hamt_val_release = svl;
+    return r;
+}
+
+Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val,
+                        tur_hamt_keyeq_fn eq, int64_t owned) {
+    return tur_hamt_set_eq_vo(m, hash, key, val, eq, owned,
+                              tur_hamt_box_retain, tur_hamt_box_release);
+}
+
+Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key,
+                         tur_hamt_keyeq_fn eq, int64_t owned,
+                         void (*val_retain)(void *), void (*val_release)(void *)) {
+    tur_hamt_val_ops vops = { val_retain, val_release };
+    void (*svr)(void *) = g_hamt_val_retain, (*svl)(void *) = g_hamt_val_release;
+    if (owned & 6) { g_hamt_val_retain = vops.retain;
+                     g_hamt_val_release = vops.release; }
+    Hamt *r = (owned & 1)
+        ? tur_hamt_del_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops())
+        : tur_hamt_del_eq(m, hash, key, eq);
+    if (r && (owned & 6)) {
+        r->val_owned = true;
+        r->val_ops   = vops;
+    }
     g_hamt_val_retain = svr; g_hamt_val_release = svl;
     return r;
 }
 
 Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
-    void (*svr)(void *) = g_hamt_val_retain, (*svl)(void *) = g_hamt_val_release;
-    if (owned & 2) { g_hamt_val_retain = tur_hamt_box_retain;
-                     g_hamt_val_release = tur_hamt_box_release; }
-    Hamt *r = (owned & 1)
-        ? tur_hamt_del_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops())
-        : tur_hamt_del_eq(m, hash, key, eq);
-    if (r && (owned & 2)) r->val_owned = true;
-    g_hamt_val_retain = svr; g_hamt_val_release = svl;
-    return r;
+    return tur_hamt_del_eq_vo(m, hash, key, eq, owned,
+                              tur_hamt_box_retain, tur_hamt_box_release);
 }
 
 bool tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key,

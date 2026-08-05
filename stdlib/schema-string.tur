@@ -1,0 +1,41 @@
+;;; tur/schema-string -- owned String sibling for schema-error-message.
+;;;
+;;; schema-error-message returns a freshly-malloc'd cstr the caller must free (a
+;;; sprintf of all error lines typed as a borrowed cstr -- the exact
+;;; ownership/leak hazard the owned String type fixes; see
+;;; string-adoption-stdlib-plan.md). It always allocates, so this is a plain
+;;; string/adopt-cstr wrapper: the owned String is safe to store, return, or key
+;;; a map with.
+;;;
+;;; This lives in a SEPARATE module (not inline in stdlib/schema.tur) on purpose:
+;;; schema.tur is auto-loaded into every compiled program (src/main.c prelude,
+;;; for the #json(...) reader macro), so a `(load "stdlib/string.tur")` inside
+;;; schema.tur would pull the String type -- and its typeclass instances -- into
+;;; every program's global namespace, churning ~187 codegen snapshots and
+;;; colliding with typeclass fixtures. Keeping it opt-in here means only programs
+;;; that want owned schema-error Strings pay for the String dependency.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 3)
+(load "stdlib/schema.tur")
+
+(load "stdlib/string.tur")
+;;; schema-error-message-string -- format an error Vec into one owned String.
+;;;
+;;; The owned counterpart of schema-error-message (which returns a caller-frees
+;;; cstr). schema-error-message always mallocs its result, so this is a plain
+;;; string/adopt-cstr wrapper.
+;;;
+;;; Parameters:
+;;;   errs -- a Vec of SchemaError
+;;;
+;;; Returns:
+;;;   An owned String, one "path: message" line per error (newline-separated).
+;;;
+;;; Example:
+;;;   (string/to-cstr (schema-error-message-string errs))
+;;;   ; => "user.age: expected :int, got :cstr"
+;;;
+;;; Since: v2
+
+(defn schema-error-message-string [errs : int] : String
+  (string/adopt-cstr (schema-error-message errs)))

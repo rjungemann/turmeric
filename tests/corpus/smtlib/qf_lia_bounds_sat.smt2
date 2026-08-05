@@ -1,0 +1,10 @@
+; 0 <= i < n with n = 4: i = 0 is a model.
+(set-logic QF_LIA)
+(set-info :status sat)
+(declare-fun i () Int)
+(declare-fun n () Int)
+(assert (<= 0 i))
+(assert (< i n))
+(assert (= n 4))
+(check-sat)
+(exit)

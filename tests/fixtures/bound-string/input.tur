@@ -1,0 +1,18 @@
+;; string-owned-builders-and-optional-accessors-plan Part 2: bound->str-string
+;; renders a single Bound endpoint as a TOTAL owned String (every branch has a
+;; valid rendering, so option<String> is not the right type here).  Per-branch:
+;; adopt the malloc'd Inclusive/Exclusive results, from-cstr the static
+;; "unbounded" literal.  The Unbounded case is the regression this guards -- a
+;; blind adopt would free the static literal and crash.
+(load "stdlib/range-bound-string.tur")
+
+(defn demo [] : int
+  (do
+    (println (string/to-cstr (bound->str-string (bound-inclusive 3))))
+    (println (string/to-cstr (bound->str-string (bound-exclusive 7))))
+    (println (string/to-cstr (bound->str-string (bound-inclusive -5))))
+    ;; Unbounded must not crash: from-cstr copies the literal, never frees it.
+    (println (string/to-cstr (bound->str-string (bound-unbounded))))
+    0))
+
+(demo)

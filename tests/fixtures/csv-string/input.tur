@@ -1,0 +1,17 @@
+;; string-adoption-stdlib-plan batch 3: owned String siblings for tur/csv.
+;; Each csv/emit*-string adopts the malloc/realloc'd cstr the emitter builds
+;; into an owned String (via string/adopt-cstr) -- one linear copy of the
+;; already-accumulated buffer, safe to store / return.
+(load "stdlib/csv-string.tur")
+
+(defn demo [] : int
+  (let [rows (csv/parse "a,b\n1,2\n")
+        row  (csv/parse-row "x,y")]
+    (do
+      (println (string/to-cstr (csv/emit-string rows)))
+      (println (string/to-cstr (csv/emit-with-delim-string rows 59)))
+      (println (string/to-cstr (csv/emit-row-string row)))
+      (println (string/to-cstr (csv/emit-row-with-delim-string row 59)))
+      0)))
+
+(demo)

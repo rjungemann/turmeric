@@ -75,13 +75,13 @@ value being checked, not to any name in the surrounding scope.
 
 ```turmeric
 (defn divide [x : int, y : int] : int
-  :pre  (!= y 0)
+  :pre  (not= y 0)
   :post (= (* result y) x)
   (/ x y))
 ```
 
 ```sweet-exp
-defn divide [x : int, y : int] : int :pre (!= y 0) :post (= (* result y) x)
+defn divide [x : int, y : int] : int :pre (not= y 0) :post (= (* result y) x)
   (/ x y)
 ```
 
@@ -123,12 +123,12 @@ The predicate for a struct field may reference other fields in scope at elaborat
 
 ```turmeric
 (extern-c sqlite3_column_int [stmt : ptr, col : int] : int
-  :pre  (and (!= stmt null) (>= col 0))
+  :pre  (and (not= stmt null) (>= col 0))
   :post (>= result 0))
 ```
 
 ```sweet-exp
-extern-c sqlite3_column_int [stmt : ptr, col : int] : int :pre (and (!= stmt null) (>= col 0)) :post (>= result 0)
+extern-c sqlite3_column_int [stmt : ptr, col : int] : int :pre (and (not= stmt null) (>= col 0)) :post (>= result 0)
 ```
 
 ---
@@ -190,12 +190,12 @@ Contracts are checked before the C call and on return:
 
 ```turmeric
 (extern-c sqlite3_column_int [stmt : ptr, col : int] : int
-  :pre  (and (!= stmt null) (>= col 0))
+  :pre  (and (not= stmt null) (>= col 0))
   :post (>= result 0))
 ```
 
 ```sweet-exp
-extern-c sqlite3_column_int [stmt : ptr, col : int] : int :pre (and (!= stmt null) (>= col 0)) :post (>= result 0)
+extern-c sqlite3_column_int [stmt : ptr, col : int] : int :pre (and (not= stmt null) (>= col 0)) :post (>= result 0)
 ```
 
 ### Pre- and Post-Conditions

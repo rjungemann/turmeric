@@ -5,6 +5,103 @@
 static bool module_name_valid(const char *name, uint32_t len);
 static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span);
 static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out);
+static void elab_forward_declare_defns(Elab *e, Form *const *items,
+                                       uint32_t start, uint32_t end);
+
+/* Pass 1: forward-declare every top-level `defn` in items[start..end) into the
+ * global scope, so mutually- and self-recursive functions in the range can see
+ * each other before their bodies elaborate.  Mirrors the pre-pass the entry
+ * unit runs in elaborate_program (elab_toplevel.c) -- extracted here so both
+ * the defmodule body (elab_defmodule) and the top-level forms of an imported
+ * module (elab_load_module, where a spliced `(load ...)` can drop a
+ * self-recursive defn like typeclass-show.tur's `vec-show-loop`) get the same
+ * forward declarations.  Without it, a self-recursive spliced defn's own
+ * recursive call resolved to "unknown function or operator"; see
+ * docs/reported/compiled-string-return-int-conversion.md (secondary blocker). */
+static void elab_forward_declare_defns(Elab *e, Form *const *items,
+                                       uint32_t start, uint32_t end) {
+    for (uint32_t j = start; j < end; j++) {
+        Form *f = items[j];
+        if (f->tag != F_LIST || f->as.list.len == 0) continue;
+        Form *h = f->as.list.items[0];
+        if (h->tag != F_SYM || h->as.sym != e->sym_defn) continue;
+        if (f->as.list.len < 3) continue;
+        /* Skip optional #[no-unwind] / #[used] bare attribute symbols
+         * (either order) before the name. */
+        uint32_t name_idx = 1;
+        while ((uint32_t)f->as.list.len > name_idx &&
+               f->as.list.items[name_idx]->tag == F_SYM &&
+               (f->as.list.items[name_idx]->as.sym == e->sym_no_unwind_attr ||
+                f->as.list.items[name_idx]->as.sym == e->sym_used_attr)) {
+            name_idx++;
+        }
+        if ((uint32_t)f->as.list.len <= name_idx) continue;
+        Form *fn_name_f = f->as.list.items[name_idx];
+        if (fn_name_f->tag != F_SYM) continue;
+        /* Check not already defined */
+        if (scope_lookup(&e->global, fn_name_f->as.sym)) continue;
+        /* SS3a / general: scan for return-type annotation in the defn
+         * form to get the real result_kind for the forward declaration.
+         * Without this, recursive functions declared :nil infer TY_INT
+         * (the placeholder) and emit as int64_t.
+         * params vector is at name_idx+1; return type annotation is
+         * at name_idx+2 if it is F_KEYWORD or F_TYPE_ANN. */
+        TypeKind fwd_result_kind = TY_INT; /* placeholder */
+        uint32_t ret_idx = name_idx + 2;
+        /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
+        if (ret_idx < (uint32_t)f->as.list.len && f->as.list.items[ret_idx]->tag == F_MAP) {
+            ret_idx++;
+        }
+        if (ret_idx < (uint32_t)f->as.list.len) {
+            Form *ret_f = f->as.list.items[ret_idx];
+            /* Accept spaced `: T` (an F_TYPE_ANN wrapping a single
+             * symbol/keyword) by unwrapping to the inner form -- mirrors the
+             * top-level pre-pass in elab_toplevel.c.  Without this, a
+             * recursive defn whose return type is written `: ptr<void>` (or
+             * any spaced scalar) falls through to the TY_INT placeholder, so
+             * the recursive call site is typed `int` and the if-branch
+             * unifier rejects the body.  See
+             * docs/reported/recursion-return-type-widens-to-int-inside-defmodule.md */
+            if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                (ret_f->as.list.items[0]->tag == F_SYM ||
+                 ret_f->as.list.items[0]->tag == F_KEYWORD)) {
+                ret_f = ret_f->as.list.items[0];
+            }
+            if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
+                const char *kn = ret_f->as.sym->name;
+                if (strcmp(kn, "int") == 0) fwd_result_kind = TY_INT;
+                else if (strcmp(kn, "bool") == 0) fwd_result_kind = TY_BOOL;
+                else if (strcmp(kn, "float") == 0) fwd_result_kind = TY_FLOAT;
+                else if (strcmp(kn, "cstr") == 0) fwd_result_kind = TY_CSTR;
+                else if (strcmp(kn, "nil") == 0
+                      || strcmp(kn, "void") == 0) fwd_result_kind = TY_NIL;
+                else if (strcmp(kn, "ptr") == 0
+                      || strcmp(kn, "ptr<void>") == 0) fwd_result_kind = TY_PTR_VOID;
+            } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
+                /* Compound return type: peek at the head symbol */
+                Form *head_f = ret_f->as.list.items[0];
+                if (head_f->tag == F_SYM &&
+                        strcmp(head_f->as.sym->name, "Session") == 0) {
+                    fwd_result_kind = TY_SESSION;
+                }
+                /* Other compound types keep TY_INT placeholder */
+            }
+        }
+        /* Count actual arity + scalar arg kinds from the params vector.
+         * fwd_decl_scan_params skips `^`-prefixed markers (^fat/^mut/...) so
+         * the arity is not over-stated -- counting `^fat` as a slot made a
+         * sibling forward-reference call look under-saturated and synthesised
+         * a bogus extra-arg PAP wrapper.  See
+         * docs/reported/pap-defmodule-fat-fn-too-many-args.md */
+        TypeKind *arg_kinds = NULL;
+        uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
+            ? fwd_decl_scan_params(e->arena, f->as.list.items[name_idx + 1], &arg_kinds)
+            : 0;
+        Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
+        Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
+        scope_add(&e->global, b);
+    }
+}
 
 /* Phase M0: Module system */
 
@@ -303,6 +400,18 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
 
     /* Phase M4: capture the DefModule so we can check its export list for macros. */
     const DefModule *loaded_defmod = NULL;
+
+    /* Pass 1: forward-declare the imported module's *top-level* defns before
+     * elaborating any body.  A `(load ...)` spliced into this file (e.g.
+     * `(load "stdlib/string.tur")`, which transitively splices
+     * typeclass-show.tur) can drop a self- or mutually-recursive top-level
+     * defn like `vec-show-loop`; without this pre-pass its own recursive call
+     * resolves to "unknown function or operator".  The defmodule form itself is
+     * elaborated with its own inner Pass 1 (elab_defmodule), so this only
+     * matters for the bare top-level defns that live alongside it.  See
+     * docs/archive/compiled-string-return-int-conversion.md (secondary
+     * blocker). */
+    elab_forward_declare_defns(e, forms, 0, nforms);
 
     for (uint32_t i = 0; i < nforms; i++) {
         Expr *ex = elab_form(e, forms[i]);
@@ -765,96 +874,8 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     }
 
     /* Pass 1: forward-declare all defn bodies (for mutual recursion) */
-    for (uint32_t j = body_start; j < call->as.list.len; j++) {
-        Form *f = call->as.list.items[j];
-        if (f->tag == F_LIST && f->as.list.len > 0) {
-            Form *h = f->as.list.items[0];
-            if (h->tag == F_SYM && h->as.sym == e->sym_defn) {
-                if (f->as.list.len >= 3) {
-                    /* Skip optional #[no-unwind] / #[used] bare attribute
-                     * symbols (either order) before the name. */
-                    uint32_t name_idx = 1;
-                    while ((uint32_t)f->as.list.len > name_idx &&
-                           f->as.list.items[name_idx]->tag == F_SYM &&
-                           (f->as.list.items[name_idx]->as.sym == e->sym_no_unwind_attr ||
-                            f->as.list.items[name_idx]->as.sym == e->sym_used_attr)) {
-                        name_idx++;
-                    }
-                    if ((uint32_t)f->as.list.len <= name_idx) continue;
-                    Form *fn_name_f = f->as.list.items[name_idx];
-                    if (fn_name_f->tag == F_SYM) {
-                        /* Check not already defined */
-                        if (!scope_lookup(&e->global, fn_name_f->as.sym)) {
-                            /* SS3a / general: scan for return-type annotation in the defn
-                             * form to get the real result_kind for the forward declaration.
-                             * Without this, recursive functions declared :nil infer TY_INT
-                             * (the placeholder) and emit as int64_t.
-                             * params vector is at name_idx+1; return type annotation is
-                             * at name_idx+2 if it is F_KEYWORD or F_TYPE_ANN. */
-                            TypeKind fwd_result_kind = TY_INT; /* placeholder */
-                            uint32_t ret_idx = name_idx + 2;
-                            /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
-                            if (ret_idx < (uint32_t)f->as.list.len && f->as.list.items[ret_idx]->tag == F_MAP) {
-                                ret_idx++;
-                            }
-                            if (ret_idx < (uint32_t)f->as.list.len) {
-                                Form *ret_f = f->as.list.items[ret_idx];
-                                /* Accept spaced `: T` (an F_TYPE_ANN wrapping a
-                                 * single symbol/keyword) by unwrapping to the
-                                 * inner form -- mirrors the top-level pre-pass in
-                                 * elab_toplevel.c.  Without this, a recursive defn
-                                 * inside a (defmodule ...) whose return type is
-                                 * written `: ptr<void>` (or any spaced scalar)
-                                 * falls through to the TY_INT placeholder, so the
-                                 * recursive call site is typed `int` and the
-                                 * if-branch unifier rejects the body.  See
-                                 * docs/reported/recursion-return-type-widens-to-int-inside-defmodule.md */
-                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
-                                    (ret_f->as.list.items[0]->tag == F_SYM ||
-                                     ret_f->as.list.items[0]->tag == F_KEYWORD)) {
-                                    ret_f = ret_f->as.list.items[0];
-                                }
-                                if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
-                                    const char *kn = ret_f->as.sym->name;
-                                    if (strcmp(kn, "int") == 0) fwd_result_kind = TY_INT;
-                                    else if (strcmp(kn, "bool") == 0) fwd_result_kind = TY_BOOL;
-                                    else if (strcmp(kn, "float") == 0) fwd_result_kind = TY_FLOAT;
-                                    else if (strcmp(kn, "cstr") == 0) fwd_result_kind = TY_CSTR;
-                                    else if (strcmp(kn, "nil") == 0
-                                          || strcmp(kn, "void") == 0) fwd_result_kind = TY_NIL;
-                                    else if (strcmp(kn, "ptr") == 0
-                                          || strcmp(kn, "ptr<void>") == 0) fwd_result_kind = TY_PTR_VOID;
-                                } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
-                                    /* Compound return type: peek at the head symbol */
-                                    Form *head_f = ret_f->as.list.items[0];
-                                    if (head_f->tag == F_SYM &&
-                                            strcmp(head_f->as.sym->name, "Session") == 0) {
-                                        fwd_result_kind = TY_SESSION;
-                                    }
-                                    /* Other compound types keep TY_INT placeholder */
-                                }
-                            }
-                            /* Count actual arity + scalar arg kinds from the
-                             * params vector.  fwd_decl_scan_params skips
-                             * `^`-prefixed markers (^fat/^mut/...) so the arity
-                             * is not over-stated -- counting `^fat` as a slot
-                             * made a sibling forward-reference call look
-                             * under-saturated and synthesised a bogus extra-arg
-                             * PAP wrapper.  See
-                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md */
-                            TypeKind *arg_kinds = NULL;
-                            uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
-                                ? fwd_decl_scan_params(e->arena, f->as.list.items[name_idx + 1], &arg_kinds)
-                                : 0;
-                            Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
-                            Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
-                            scope_add(&e->global, b);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    elab_forward_declare_defns(e, call->as.list.items, body_start,
+                               call->as.list.len);
 
     /* Pass 2: elaborate body forms.
      *
@@ -988,6 +1009,30 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
     /* Direct scope lookup */
     Binding *b = scope_lookup(e->scope, sym);
     if (b) {
+        /* The `tur/` namespace is implicitly imported everywhere, so a binding
+         * defined in a `tur/` module is globally visible regardless of its
+         * (export ...) list.  The M7 promotion sweep (elab_toplevel.c) normally
+         * establishes that by rewriting every `tur/`-module binding's
+         * defining_module_name to NULL -- but that sweep fires exactly once, at
+         * the stdlib/user boundary.  On the interpreter's incremental
+         * re-elaboration (TR2, now the default) the accumulated stdlib prefix
+         * grows across evals, so the boundary -- and thus the promotion -- can
+         * land after a form that already needed the binding.  The visible
+         * symptom is a macro-expanded call to a module-private stdlib helper:
+         * `(assert! ...)` expands to `tur-contract-check`, which is private to
+         * tur/contract, and every contract/sized/existential fixture failed
+         * with "symbol 'tur-contract-check' is private to module 'tur/contract'"
+         * under --interpret while passing on the whole-program path.
+         *
+         * Honour the implicit `tur/` import directly at lookup time so
+         * visibility no longer depends on the sweep having already run.  This
+         * is the binding-side counterpart of the identical rule in
+         * elab_lookup_macro (elab_core.c), added for the same reason. */
+        if (b->defining_module_name != NULL
+            && b->defining_module_name->len >= 4
+            && memcmp(b->defining_module_name->name, "tur/", 4) == 0) {
+            /* visible: implicitly-imported stdlib namespace */
+        } else
         /* Visibility: private symbol accessed from outside its module */
         if (b->defining_module_name != NULL
             && e->current_module_name != b->defining_module_name

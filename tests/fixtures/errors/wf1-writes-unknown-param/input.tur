@@ -1,0 +1,16 @@
+;; WF1 negative: a `#writes` frame naming something that is not a parameter.
+;;
+;; TUR-E0381 rather than a silently ignored decoration.  A frame that does not
+;; resolve cannot be checked against the body, so accepting it would publish a
+;; declaration that looks checkable, is not, and that downstream code (WF3's
+;; callee-frame widening, WF4's elision) is entitled to believe.
+;;
+;; `zz` here is a plausible typo for `z`, which is exactly the shape that would
+;; otherwise compile into a frame quietly weaker than the author wrote.
+(defstruct Ctr [n : int])
+
+(defn f [^mut a : Ctr ^mut z : Ctr] #writes [a zz] : int
+  (set! (.n a) 1)
+  0)
+
+(defn main [] : int 0)

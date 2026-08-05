@@ -1,0 +1,20 @@
+;; C2 (#reads) negative: with NO frozen region, `alive? w` is impure (fresh
+;; symbol per occurrence), so the guard cannot discharge the crossing. Under
+;; --strict-refine the unproven crossing is a hard error.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int 0)
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (if (alive? w 0)                   ;; no `(& w)` in scope -> not frozen
+      (get-Pos! w 0)
+      -1)))
+
+(defn main [] : int
+  (println (run))
+  0)

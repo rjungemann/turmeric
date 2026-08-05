@@ -12,6 +12,6 @@
 (defn main [] : int
   (println (if (.eq? (Inclusive 4) (Inclusive 4)) "eq-ok" "BAD"))
   (println (if (.eq? (Inclusive 4) (Exclusive 4)) "BAD" "ne-ok"))
-  (println (show (Inclusive 4)))
+  (show-line (Inclusive 4))
   (println (if (.lt? (Inclusive 3) (Inclusive 5)) "lt-ok" "BAD"))
   0)

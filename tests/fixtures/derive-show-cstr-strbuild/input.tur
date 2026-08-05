@@ -1,0 +1,25 @@
+;; derive-show-cstr for a program with its own local (cstr) Show class, built on
+;; stdlib/str-build.tur -- the dependency-free leaf providing str-concat and
+;; int->str with interpreter natives.  No inline-C, so it renders identically on
+;; the compiled and --interpret paths.  This is the recommended shape for a
+;; minimal local-Show program (the stdlib Show returns an owned String and uses
+;; plain derive-show; this path is for programs that stay in cstr).
+(load "stdlib/str-build.tur")
+
+(defclass Show [a] (show [x] : cstr))
+
+(definstance Show [int] (show [x] : cstr (int->str x)))
+
+(defstruct Inner :copy [n : int])
+(derive-show-cstr Inner n)
+
+(defstruct Outer :copy [a : int inner : Inner])
+(derive-show-cstr Outer a inner)
+
+(defn main [] : int
+  (let [i (make-struct Inner 7)
+        o (make-struct Outer 1 (make-struct Inner 9))]
+    (do
+      (println (.show i))
+      (println (.show o))
+      0)))

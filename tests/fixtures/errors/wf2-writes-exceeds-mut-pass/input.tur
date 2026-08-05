@@ -1,0 +1,24 @@
+;; WF2 negative, write channel 2 of 3: a `^mut` ARGUMENT PASS outside the frame.
+;;
+;; `helper` carries no `#writes` frame at all, so there is nothing to consult
+;; about what it does -- but its parameter is `^mut`, and that IS a declaration.
+;; The language grants mutable access through a `^mut` slot, so handing `a` to
+;; one writes `a` whether or not the callee happens to use it.  `outer!`
+;; declares the empty frame, so this exceeds it.
+;;
+;; Treating a `^mut` pass as merely-possible would let a frame be silently
+;; exceeded through the one write channel the language spells out, which is
+;; why this is TUR-E0382 rather than a quiet downgrade to unverified.
+(defstruct Ctr [n : int])
+
+(defn helper [^mut b : Ctr] : int
+  (set! (.n b) 1)
+  0)
+
+(defn outer! [^mut a : Ctr] #writes [] : int
+  (helper a))
+
+(defn main [] : int
+  (let [^mut x (Ctr 0)]
+    (outer! x))
+  0)

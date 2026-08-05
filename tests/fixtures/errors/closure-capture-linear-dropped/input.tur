@@ -1,0 +1,9 @@
+;; closure-capture-escapes-linearity: dropping the closure unused is TUR-E0100,
+;; and that is the correct reading -- the captured resource would never be
+;; released, because the only thing that frees it is the closure body.
+(load "stdlib/serial.tur")
+(defn main [] : int
+  (let [b (bytes-alloc 8)]
+    (let [f (fn [] : void (bytes-free b))]
+      0))
+  0)

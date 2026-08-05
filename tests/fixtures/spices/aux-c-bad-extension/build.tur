@@ -2,6 +2,6 @@
 ;; is not .c/.cc/.cpp. Must produce a parse-time DIAG_ERROR.
 (defpackage aux-c-bad-extension
   :name "aux-c-bad-extension"
-  :build-opts #fx{
+  :build-opts #map{
     :c-sources ["c/notes.txt"]
   })

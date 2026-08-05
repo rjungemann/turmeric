@@ -79,6 +79,51 @@ The compiler enforces that a `:copy` struct's fields are all themselves
 copy-compatible types. Using a non-copy field (such as `:ref<int>`) in a
 `:copy` struct is a compile error.
 
+### Structs are passed by value
+
+A struct argument is **copied into the callee**, at every copy kind. A callee
+therefore mutates its own copy, and the caller's value is unchanged:
+
+```turmeric
+(defstruct Ctr [n : int])
+
+(defn set-it! [^mut a : Ctr] : int
+  (set! (.n a) 3)     ; mutates the CALLEE's copy
+  0)
+
+(defn main [] : int
+  (let [^mut c (Ctr 0)]
+    (set-it! c)
+    (println (.n c)))  ; => 0, not 3
+  0)
+```
+
+**`^mut` on a parameter is not an out-parameter.** It means "this binding is
+mutable inside this body" -- useful for treating a parameter as a mutable local
+seeded from the argument, which *is* observable within the function:
+
+```turmeric
+(defn bump-and-read [^mut a : Ctr] : int
+  (set! (.n a) 3)
+  (.n a))             ; => 3; the write is visible HERE, just not to the caller
+```
+
+Nesting does not change this: an `Outer` holding an `Inner` by value is one
+flat value, so copying the outer copies the inner and
+`(set! (.n (.inner o)) v)` is equally invisible to the caller.
+
+To let a callee mutate something the caller can observe, reach for a type whose
+sharing is part of its meaning:
+
+| you want | use |
+|---|---|
+| shared, reference-counted mutation | `rc<T>` -- see [Reference-counted structs](#reference-counted-structs) |
+| interior mutability by declaration | a `:heap` struct |
+| to return the new value instead | an ordinary return, which is usually clearest |
+
+A `&Struct` receiver is rejected outright -- `set! (.field s)` requires a struct
+or an `rc<Struct>` -- so the reference route is not available by accident.
+
 ---
 
 ## Supported field types
@@ -200,6 +245,12 @@ Keyword construction is checked strictly: every field must be supplied
 (`TUR-E0292`), an unknown field (`TUR-E0294`) or a duplicate field
 (`TUR-E0293`) is an error, and positional and keyword forms cannot be mixed in
 one call (`TUR-E0299`). Use one form or the other.
+
+> **`name : cstr` here is fine** -- it holds a string *literal*, whose bytes are
+> static. But a struct field that must own a *computed* or *stored* string (form
+> input, a decoded value, anything that outlives its source) should be `String`,
+> not `cstr`, so the struct owns its bytes instead of borrowing a pointer that
+> can dangle. See [strings-guide.md](strings-guide.md).
 
 ### Functional update with `with`
 
@@ -448,24 +499,36 @@ definstance Eq [Pair]
 
 ### `Show`
 
+The stdlib `Show` renders to an OWNED `String` (`(show x) : String`): the caller
+`string/release`s the result. Build a struct instance directly with a
+`StringBuilder` over each field's own `show`, releasing every intermediate. Most
+of the time you do not write this by hand -- `derive-show` (below)
+generates exactly this.
+
 ```turmeric
+(load "stdlib/typeclass.tur")
+
 (defstruct Point :copy [x : int y : int])
 
 (definstance Show [Point]
-  (show [__p] : cstr
-    ```c
-    int nx = snprintf(NULL, 0, "%lld", (long long)__p.x);
-    int ny = snprintf(NULL, 0, "%lld", (long long)__p.y);
-    size_t len = 13 + (size_t)nx + 6 + (size_t)ny + 3 + 1;
-    char *buf = (char *)malloc(len);
-    snprintf(buf, len, "Point { x = %lld, y = %lld }",
-             (long long)__p.x, (long long)__p.y);
-    return (const char *)(intptr_t)buf;
-    ```))
+  (show [__p]
+    (let [b (builder/new)]
+      (do
+        (builder/push-cstr! b "Point { x = ")
+        (let [sx (show (.x __p))] (do (builder/push-string! b sx) (string/release sx)))
+        (builder/push-cstr! b ", y = ")
+        (let [sy (show (.y __p))] (do (builder/push-string! b sy) (string/release sy)))
+        (builder/push-cstr! b " }")
+        (builder/finish b)))))
 
 (let [p (make-struct Point 3 4)]
-  (println (.show p)))   ; Point { x = 3, y = 4 }
+  (show-line p))   ; Point { x = 3, y = 4 }  (show + println + release)
 ```
+
+`show-line` (and `print-show`) wrap show + print + release so a
+render-and-print call site stays a one-liner despite the owned result. To keep
+the `String`, hold it and release when done:
+`(let [s (show p)] (do ... (string/to-cstr s) ... (string/release s)))`.
 
 ```sweet-exp
 defstruct Point :copy [x :int y :int]
@@ -538,6 +601,57 @@ To alias a field name or access through a non-standard reader, use the
 (derive-show MyStruct name [display-name .internal-label] count)
 ;; => "MyStruct { name = ..., display-name = ..., count = ... }"
 ```
+
+### `derive-show` (owned) and `derive-show-cstr` (local class)
+
+**`derive-show` is the deriver for the stdlib `Show`.** Since the stdlib `Show`
+returns an owned `String`, `derive-show` generates the `Show [T]` instance shown
+above -- a `StringBuilder` over each field's `show`, releasing every
+intermediate, one owned `String` result, no per-field concat leak. It needs
+`String` / `StringBuilder` in scope, i.e. a program that loaded
+`stdlib/typeclass.tur` (or `stdlib/string.tur`). Field descriptors -- bare
+symbols and the `[label .accessor]` alias form -- are the same for both derivers.
+
+```turmeric
+(load "stdlib/typeclass.tur")
+
+(defstruct Point :copy [x : int y : int])
+(derive-show Point x y)
+
+(let [p (make-struct Point 3 4)]
+  (show-line p))              ; Point { x = 3, y = 4 }
+```
+
+The sibling **`derive-show-cstr`** emits a `cstr`-bodied `Show` instance joined
+with `str-concat`. It is for programs that define their own **minimal local
+`Show` class** and never load the String stack. The emitted body needs three
+things in scope at the call site:
+
+1. a `Show` class `(defclass Show [a] (show [x] : cstr))`;
+2. a `str-concat : (cstr cstr) -> cstr`;
+3. a `Show` instance for each field's type.
+
+`stdlib/str-build.tur` is the intended source of `str-concat` (and `int->str`):
+a dependency-free leaf that pulls in no typeclass instances and carries
+interpreter natives, so a program built on it runs on both the compiled and
+`--interpret` paths with **no inline-C**.
+
+```turmeric
+(load "stdlib/str-build.tur")            ; str-concat + int->str (both paths)
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int] (show [x] : cstr (int->str x)))
+
+(defstruct Point :copy [x : int y : int])
+(derive-show-cstr Point x y)
+
+(let [p (make-struct Point 3 4)]
+  (println (.show p)))                   ; Point { x = 3, y = 4 }
+```
+
+A missing `str-concat` or field `Show` instance is a compile error attributed to
+the macro, not the call site. Using `derive-show-cstr` against the owned stdlib
+`Show` (or `derive-show` against a local `cstr` `Show`) is a type error -- match
+the deriver to the `Show` class in scope.
 
 ### REPL auto-show
 
@@ -669,7 +783,7 @@ Follow the `;;;` convention immediately above the `defstruct` form:
 defstruct Point :copy [x :int y :int]
 ```
 
-See the [docstring standard in CLAUDE.md](../../CLAUDE.md) for the full
+See the [docstring standard in CLAUDE.md](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md) for the full
 required-fields table.
 
 ---

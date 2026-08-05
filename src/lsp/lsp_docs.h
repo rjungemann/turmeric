@@ -44,6 +44,27 @@ typedef struct LspDoc {
     LspSymbol *symbols;
     int        symbol_count;
     int        symbol_cap;
+    /* The symbol index is from an earlier revision of the text because the
+     * current one did not get far enough to yield any. Not parsing is the
+     * normal state while typing -- the moment the user types `(` the buffer is
+     * unbalanced -- so serving a slightly stale index beats serving nothing,
+     * which is what completion did before. */
+    int        symbols_stale;
+    /* Some revision of this text has produced a real symbol index, so there is
+     * something worth retaining when a later one does not.
+     *
+     * Distinct from `symbols != NULL`, which is what the retention check used
+     * to test and which cannot tell "analyzed, and genuinely has no symbols"
+     * from "never successfully analyzed". The first analysis of a file that
+     * does not parse adopted its own empty result under that test, and every
+     * later failure then faithfully retained the emptiness -- so a file opened
+     * with a syntax error already in it had completion dead until the error
+     * was fixed unaided. */
+    int        ever_analyzed;
+    /* Text changed since the last analysis. Analysis is deferred until the
+     * client stops typing (or asks a question that needs symbols) so a burst
+     * of keystrokes costs one compile, not one per character. */
+    int        dirty;
 } LspDoc;
 
 void    lsp_docs_init(void);
@@ -62,6 +83,13 @@ LspDoc *lsp_doc_get(const char *uri, size_t uri_len);
 
 /* Iterate every open document (read-only callback). */
 void    lsp_docs_iterate(void (*cb)(const LspDoc *doc, void *ctx), void *ctx);
+
+/* Same, but the callback may mutate the document — used to run deferred
+ * analysis over whatever is dirty. */
+void    lsp_docs_iterate_mut(void (*cb)(LspDoc *doc, void *ctx), void *ctx);
+
+/* True if any open document is awaiting analysis. */
+int     lsp_docs_any_dirty(void);
 
 /* Free and zero the symbol array on doc. */
 void    lsp_doc_free_symbols(LspDoc *doc);

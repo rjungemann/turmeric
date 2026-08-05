@@ -23,6 +23,12 @@ void *turi_val_calloc(TuriEnv *env, size_t n) {
     return p;
 }
 
+void *turi_val_calloc_aligned(TuriEnv *env, size_t n, size_t align) {
+    void *p = arena_alloc_aligned(&env->value_scratch, n, align);
+    if (n) memset(p, 0, n);
+    return p;
+}
+
 char *turi_val_strdup(TuriEnv *env, const char *s) {
     if (!s) return NULL;
     return arena_strdup(&env->value_scratch, s, strlen(s));

@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Language Tour -- Turmeric</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="A hands-on tour of Turmeric's ten most interesting features -- from algebraic effects to the Spice package manager.">
+<meta name="description" content="A hands-on tour of Turmeric's most interesting features -- from algebraic effects to refinement types, the Spice package manager, and the Trowel editor.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://turmeric-lang.com/tour">
 <meta property="og:title" content="Language Tour -- Turmeric">
-<meta property="og:description" content="A hands-on tour of Turmeric's ten most interesting features.">
+<meta property="og:description" content="A hands-on tour of Turmeric's most interesting features.">
 <meta property="og:image" content="https://turmeric-lang.com/og-image.png">
 
 <link rel="stylesheet" href="/site.css">
@@ -167,11 +167,12 @@ h1 em { font-style: italic; color: var(--gold-bright); }
       <span class="eyebrow-dot"></span>
       Language Tour
     </div>
-    <h1>Eleven things about <em>turmeric</em>.</h1>
+    <h1>Fourteen things about <em>turmeric</em>.</h1>
     <p class="hero-subtitle">A walkthrough of what makes Turmeric tick.</p>
     <p class="hero-desc">
-      From algebraic effects to structural union types, each stop in this
-      tour shows you real language features with real code.
+      From algebraic effects to refinement types, each stop in this tour
+      shows you real language features with real code -- and the last one
+      shows you the editor to write it in.
     </p>
     <div class="hero-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span style="font-size:16px;">→</span></a>
@@ -186,57 +187,72 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     <a href="#effects" class="tour-index-card">
       <span class="tour-stop-num">01</span>
       <span class="tour-card-label">Algebraic Effects</span>
-      <span class="tour-card-icon">✦</span>
+      <span class="tour-card-icon"><t-icon name="sparkles"></t-icon></span>
     </a>
     <a href="#typeclasses" class="tour-index-card">
       <span class="tour-stop-num">02</span>
       <span class="tour-card-label">Typeclasses</span>
-      <span class="tour-card-icon">🎯</span>
+      <span class="tour-card-icon"><t-icon name="target"></t-icon></span>
     </a>
     <a href="#adts" class="tour-index-card">
       <span class="tour-stop-num">03</span>
       <span class="tour-card-label">ADTs &amp; Pattern Matching</span>
-      <span class="tour-card-icon">◇</span>
+      <span class="tour-card-icon"><t-icon name="git-branch"></t-icon></span>
     </a>
     <a href="#continuations" class="tour-index-card">
       <span class="tour-stop-num">04</span>
       <span class="tour-card-label">Delimited Continuations</span>
-      <span class="tour-card-icon">∿</span>
+      <span class="tour-card-icon"><t-icon name="waypoints"></t-icon></span>
     </a>
     <a href="#macros" class="tour-index-card">
       <span class="tour-stop-num">05</span>
       <span class="tour-card-label">Macro System</span>
-      <span class="tour-card-icon">⊕</span>
+      <span class="tour-card-icon"><t-icon name="braces"></t-icon></span>
     </a>
     <a href="#rc" class="tour-index-card">
       <span class="tour-stop-num">06</span>
       <span class="tour-card-label">Reference Counting</span>
-      <span class="tour-card-icon">◈</span>
+      <span class="tour-card-icon"><t-icon name="recycle"></t-icon></span>
+    </a>
+    <a href="#gc" class="tour-index-card">
+      <span class="tour-stop-num">07</span>
+      <span class="tour-card-label">Optional GC</span>
+      <span class="tour-card-icon"><t-icon name="trash-2"></t-icon></span>
     </a>
     <a href="#hof" class="tour-index-card">
-      <span class="tour-stop-num">07</span>
+      <span class="tour-stop-num">08</span>
       <span class="tour-card-label">Higher-Order Functions</span>
-      <span class="tour-card-icon">λ</span>
+      <span class="tour-card-icon"><t-icon name="function-square"></t-icon></span>
     </a>
     <a href="#neoteric" class="tour-index-card">
-      <span class="tour-stop-num">08</span>
+      <span class="tour-stop-num">09</span>
       <span class="tour-card-label">Sweet-Exp Syntax</span>
-      <span class="tour-card-icon">≋</span>
+      <span class="tour-card-icon"><t-icon name="align-left"></t-icon></span>
     </a>
     <a href="#contracts" class="tour-index-card">
-      <span class="tour-stop-num">09</span>
+      <span class="tour-stop-num">10</span>
       <span class="tour-card-label">Contract Types</span>
-      <span class="tour-card-icon">⊛</span>
+      <span class="tour-card-icon"><t-icon name="shield-check"></t-icon></span>
+    </a>
+    <a href="#refinements" class="tour-index-card">
+      <span class="tour-stop-num">11</span>
+      <span class="tour-card-label">Refinement Types</span>
+      <span class="tour-card-icon"><t-icon name="sigma"></t-icon></span>
     </a>
     <a href="#spice" class="tour-index-card">
-      <span class="tour-stop-num">10</span>
+      <span class="tour-stop-num">12</span>
       <span class="tour-card-label">Spice -- Package Manager</span>
-      <span class="tour-card-icon">✶</span>
+      <span class="tour-card-icon"><t-icon name="package"></t-icon></span>
     </a>
     <a href="#structural" class="tour-index-card">
-      <span class="tour-stop-num">11</span>
+      <span class="tour-stop-num">13</span>
       <span class="tour-card-label">Structural Typing</span>
-      <span class="tour-card-icon">∪</span>
+      <span class="tour-card-icon"><t-icon name="shapes"></t-icon></span>
+    </a>
+    <a href="#trowel" class="tour-index-card">
+      <span class="tour-stop-num">14</span>
+      <span class="tour-card-label">Trowel -- The Editor</span>
+      <span class="tour-card-icon"><t-icon name="hammer"></t-icon></span>
     </a>
   </div>
 </div>
@@ -250,7 +266,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     <h2 class="section-title">Effects declared.<br>Handlers <em>swapped.</em></h2>
     <p class="section-desc">Your functions declare what side effects they may perform. Their callers decide how to handle them -- in production, in tests, or as mocks.</p>
     <p class="section-desc">The type system ensures no effect goes unhandled. Swap between handlers at the call site without touching the core logic.</p>
-    <span class="feat-badge">defeffect · perform · handle · resume</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -290,7 +305,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     <h2 class="section-title">Compile-time dispatch.<br>Zero <em>overhead.</em></h2>
     <p class="section-desc">Typeclass dispatch resolves to a concrete instance at compile time -- no virtual tables, no runtime cost. Define a typeclass once and the compiler verifies every call site has a valid instance.</p>
     <p class="section-desc">The <code>^Show</code> constraint syntax expresses type requirements without sacrificing precision or performance.</p>
-    <span class="feat-badge">defclass · definstance · ^Constraint</span>
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar">
@@ -329,7 +343,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     <h2 class="section-title">A missing case<br>is a <em>compile error.</em></h2>
     <p class="section-desc"><code>defdata</code> declares sum types; <code>defgadt</code> lets each constructor specialize its own type parameters. Every <code>match</code> arm refines what the checker knows -- no casts, no runtime tags.</p>
     <p class="section-desc">Missing branches are compile errors, not runtime surprises. Every case is statically verified before your program runs.</p>
-    <span class="feat-badge">defdata · defgadt · match · -Xgadt</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -369,7 +382,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     <h2 class="section-title">Coroutines are<br>plain <em>library code.</em></h2>
     <p class="section-desc">Turmeric reifies a slice of the call stack as an ordinary value. <code>reset</code> delimits the region; <code>shift</code> captures it.</p>
     <p class="section-desc">Generators, async/await, and backtracking are all built on those two primitives -- no special syntax, no compiler magic.</p>
-    <span class="feat-badge">reset · shift · delimited</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -408,7 +420,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     <h2 class="section-title">Compile-time transforms.<br>Zero runtime <em>cost.</em></h2>
     <p class="section-desc">Macros in Turmeric operate directly on the syntax tree at compile time. New control flow, DSLs, and syntactic sugar are defined with <code>defmacro</code> -- the output is indistinguishable from hand-written code.</p>
     <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make code templates readable. No runtime overhead, ever.</p>
-    <span class="feat-badge">defmacro · quasiquote · unquote · splice</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -446,7 +457,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
     <h2 class="section-title">Freed immediately<br>when count <em>hits zero.</em></h2>
     <p class="section-desc">Turmeric uses reference counting with compiler-assisted elision. <code>rc/clone</code> increments; <code>rc/drop</code> decrements. Cleanup is deterministic -- no GC pauses, no dangling pointers.</p>
     <p class="section-desc">When the count hits zero, the value is freed right there, at that line. You can see exactly where memory is released.</p>
-    <span class="feat-badge">rc/of · rc/clone · rc/drop · rc/strong-count</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -472,14 +482,54 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 
 <hr class="divider">
 
-<!-- ── 07 HIGHER-ORDER FUNCTIONS ─────── -->
-<div class="split-section reveal" id="hof">
+<!-- ── 07 OPTIONAL GC ─────────────────── -->
+<div class="split-section reveal" id="gc">
   <div>
-    <p class="section-label">07 -- Higher-Order Functions</p>
+    <p class="section-label">07 -- Optional GC</p>
+    <h2 class="section-title">A collector you<br>turn <em>on.</em></h2>
+    <p class="section-desc">Reference counting leaks cycles -- every RC language has this problem. Turmeric's answer is a Bacon-Rajan trial-deletion collector layered <em>on top</em> of RC, and it is <strong>off by default</strong>. Nothing traces, nothing pauses, until you ask.</p>
+    <p class="section-desc">Turn it on and you choose the trigger: <code>(gc!)</code> to collect right here, a suspect-count threshold, or fully automatic at allocation checkpoints. Only <code>rc&lt;T&gt;</code> values participate -- stack values, arenas, and by-value structs are never involved.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">cycles.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; Two nodes pointing at each other: RC alone</span>
+<span class="cmt">;; can never free this -- both counts stay at 1.</span>
+<span class="pnc">(</span><span class="kw">defstruct</span> <span class="tp">Node</span> <span class="pnc">[</span>next <span class="tp">: rc&lt;Node&gt;</span><span class="pnc">])</span>
+
+<span class="cmt">;; Default: GC_DISABLED. RC does all the work,</span>
+<span class="cmt">;; cycles simply accumulate. Zero overhead.</span>
+<span class="pnc">(</span>make-cycle!<span class="pnc">)</span>
+<span class="pnc">(</span>println <span class="pnc">(</span>gc-live-blocks<span class="pnc">))</span>      <span class="cmt">;; => 2</span>
+
+<span class="cmt">;; Opt in, then collect on demand</span>
+<span class="pnc">(</span>gc-enable!<span class="pnc">)</span>
+<span class="pnc">(</span>gc!<span class="pnc">)</span>
+<span class="pnc">(</span>println <span class="pnc">(</span>gc-objects-freed<span class="pnc">))</span>    <span class="cmt">;; => 2</span>
+<span class="pnc">(</span>println <span class="pnc">(</span>gc-live-blocks<span class="pnc">))</span>      <span class="cmt">;; => 0</span>
+
+<span class="cmt">;; ...or hand the timing over entirely.</span>
+<span class="cmt">;; Requires: --enable=cycle-gc</span>
+<span class="pnc">(</span>gc-auto!<span class="pnc">)</span>
+
+<span class="cmt">;; Back to no collector at all, any time</span>
+<span class="pnc">(</span>gc-disable!<span class="pnc">)</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 08 HIGHER-ORDER FUNCTIONS ─────── -->
+<div class="split-section reverse reveal" id="hof">
+  <div>
+    <p class="section-label">08 -- Higher-Order Functions</p>
     <h2 class="section-title">Closures capture<br>their <em>environment.</em></h2>
     <p class="section-desc">Functions are first-class values in Turmeric -- pass them, return them, store them, compose them. Closures capture their lexical environment with full type inference.</p>
     <p class="section-desc">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure, not just lists.</p>
-    <span class="feat-badge">fn · closure · map · filter · reduce</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -510,13 +560,12 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <hr class="divider">
 
 <!-- ── 08 NEOTERIC SYNTAX ─────────────── -->
-<div class="split-section reverse reveal" id="neoteric">
+<div class="split-section reveal" id="neoteric">
   <div>
-    <p class="section-label">08 -- Sweet-Exp Syntax</p>
+    <p class="section-label">09 -- Sweet-Exp Syntax</p>
     <h2 class="section-title">Two syntaxes,<br>one <em>AST.</em></h2>
     <p class="section-desc">A single <code>#lang</code> declaration switches from Lisp-style parentheses to Sweet-Exp notation -- indentation-sensitive, with <code>f(args)</code> for inline calls and <code>$</code> to avoid extra nesting.</p>
     <p class="section-desc">Both syntaxes compile to the same AST. Sweet-Exp code and classic Turmeric code share libraries freely and can coexist in the same project.</p>
-    <span class="feat-badge">#lang turmeric/neoteric · f(args)</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -557,13 +606,12 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 <hr class="divider">
 
 <!-- ── 09 RUNTIME CONTRACTS ──────────── -->
-<div class="split-section reveal" id="contracts">
+<div class="split-section reverse reveal" id="contracts">
   <div>
-    <p class="section-label">09 -- Contract Types</p>
+    <p class="section-label">10 -- Contract Types</p>
     <h2 class="section-title">Predicates live<br>in the <em>type.</em></h2>
-    <p class="section-desc"><code>{ x : T | p }</code> is a contract type -- a value of type <code>T</code> that satisfies predicate <code>p</code>, checked automatically at every call site. Name them with <code>deftype</code> or write them inline in any parameter or return position.</p>
+    <p class="section-desc"><code>#refine{ x : T | p }</code> is a contract type -- a value of type <code>T</code> that satisfies predicate <code>p</code>, checked automatically at every call site. Name them with <code>deftype</code> or write them inline in any parameter or return position.</p>
     <p class="section-desc">Declare invariants once in the signature with <code>:pre</code> and <code>:post</code>. The compiler inserts the checks -- you don't have to remember to. Strip them from release builds with no code changes.</p>
-    <span class="feat-badge">{ x : T | p } · deftype · :pre · :post · -Xcontracts</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -573,16 +621,16 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
       <span class="code-card-filename">contracts.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Named contract types -- predicates as types</span>
-<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">Nat</span>     <span class="pnc">{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">&gt;=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
-<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">NonZero</span> <span class="pnc">{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">!=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
+<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">Nat</span>     <span class="pnc">#refine{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">&gt;=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
+<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">NonZero</span> <span class="pnc">#refine{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">!=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
 
 <span class="cmt">;; Predicates live in the signature, not the body</span>
 <span class="pnc">(</span><span class="kw">defn</span> <span class="fn">safe-div</span> <span class="pnc">[</span>x <span class="tp">: Nat</span>  y <span class="tp">: NonZero</span><span class="pnc">]</span> <span class="tp">: Nat</span>
   <span class="tp">:post</span> <span class="pnc">(</span><span class="op">=</span> <span class="pnc">(</span><span class="op">*</span> result y<span class="pnc">)</span> x<span class="pnc">)</span>
   <span class="pnc">(</span><span class="op">/</span> x y<span class="pnc">))</span>
 
-<span class="cmt">;; Compiler inserts checks at every call site</span>
-<span class="cmt">;; Requires: -Xcontracts</span>
+<span class="cmt">;; Compiler inserts the checks -- always on, no flag.</span>
+<span class="cmt">;; Strip them from a release with --no-contracts.</span>
 <span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">2</span><span class="pnc">)</span>  <span class="cmt">;; => 5</span>
 <span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">0</span><span class="pnc">)</span>  <span class="cmt">;; contract violated: y != 0</span></div>
   </div>
@@ -590,14 +638,52 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 
 <hr class="divider">
 
-<!-- ── 10 SPICE PACKAGE MANAGER ───────── -->
+<!-- ── 11 REFINEMENT TYPES ────────────── -->
+<div class="split-section reveal" id="refinements">
+  <div>
+    <p class="section-label">11 -- Refinement Types</p>
+    <h2 class="section-title">The check that<br><em>never runs.</em></h2>
+    <p class="section-desc">The same <code>#refine{...}</code> predicate, one step further: with <code>--enable=refined</code> the compiler tries to <em>prove</em> it, and emits a runtime check only where the proof fails. A parameter's predicate becomes a hypothesis; a return type becomes a goal.</p>
+    <p class="section-desc">Because every refinement already has a runtime meaning, the prover is free to give up on any obligation and stay sound -- it just falls back to the check the value would have had anyway. Turning it on can never make a correct program wrong. There is no Z3 to install: the solver is a small staged decision procedure built into the compiler, so it works in the browser playground too.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">refined.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; Requires: --enable=refined (or #lang turmeric refined)</span>
+
+<span class="cmt">;; Proved: x &gt; 0 entails 2x &gt; 0.</span>
+<span class="cmt">;; No runtime check is emitted for the return.</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">double-pos</span> <span class="pnc">[</span>x <span class="tp">: #refine{ v : int | (&gt; v 0) }</span><span class="pnc">]</span>
+                <span class="tp">: #refine{ r : int | (&gt; r 0) }</span>
+  <span class="pnc">(</span><span class="op">*</span> x <span class="num">2</span><span class="pnc">))</span>
+
+<span class="cmt">;; Results carry their refinements, so proofs compose</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">twice</span> <span class="pnc">[</span>y <span class="tp">: Pos</span><span class="pnc">]</span> <span class="tp">: int</span> <span class="pnc">(</span><span class="op">*</span> y <span class="num">2</span><span class="pnc">))</span>
+<span class="pnc">(</span><span class="fn">twice</span> <span class="pnc">(</span><span class="fn">double-pos</span> p<span class="pnc">))</span>   <span class="cmt">;; proved</span>
+
+<span class="cmt">;; A bad argument is a COMPILE error, not a panic</span>
+<span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">0</span><span class="pnc">)</span>
+<span class="cmt">;; error[TUR-E0371]: refinement on argument 2</span>
+<span class="cmt">;; note: (not= x 0) is false for the value given here</span>
+
+<span class="cmt">;; Can't prove it? You get the check, and a hint.</span>
+<span class="cmt">;; help: (&lt; i n) would discharge it</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 12 SPICE PACKAGE MANAGER ───────── -->
 <div class="split-section reverse reveal" id="spice">
   <div>
-    <p class="section-label">10 -- Spice -- Package Manager</p>
+    <p class="section-label">12 -- Spice -- Package Manager</p>
     <h2 class="section-title">One file.<br>Every dependency <em>resolved.</em></h2>
     <p class="section-desc">One <code>build.tur</code> file describes your package and all its spices -- Turmeric fetches, builds, and links them automatically. Git URLs and version refs are all you need.</p>
     <p class="section-desc">C and CMake dependencies go under <code>:cmake-deps</code> and are wired in via CPM -- no manual CMake configuration required.</p>
-    <span class="feat-badge">defpackage · :spices · :cmake-deps</span>
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar">
@@ -631,14 +717,13 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 
 <hr class="divider">
 
-<!-- ── 11 STRUCTURAL TYPING ──────────── -->
+<!-- ── 13 STRUCTURAL TYPING ──────────── -->
 <div class="split-section reveal" id="structural">
   <div>
-    <p class="section-label">11 -- Structural Typing</p>
+    <p class="section-label">13 -- Structural Typing</p>
     <h2 class="section-title">Union types are structural.<br>Every branch <em>checked.</em></h2>
     <p class="section-desc"><code>(int | bool)</code> is a structural union -- the compiler generates exhaustiveness-checked dispatch for every member with no boxing or runtime overhead. Every union member must be handled.</p>
-    <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Enable both with <code>-Xunion-types</code>.</p>
-    <span class="feat-badge">(A | B) · any · type-of · -Xunion-types</span>
+    <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Both are standard -- no flag required.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -648,7 +733,6 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
       <span class="code-card-filename">structural.tur</span>
     </div>
     <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="cmt">;; Union types -- structural dispatch, not nominal</span>
-<span class="cmt">;; Requires: -Xunion-types</span>
 <span class="pnc">(</span><span class="kw">defn</span> <span class="fn">describe</span> <span class="pnc">[</span>x <span class="tp">: (int | bool)</span><span class="pnc">]</span> <span class="tp">:int</span>
   <span class="pnc">(</span><span class="kw">match</span> x
     <span class="pnc">(</span>n <span class="tp">: int</span><span class="pnc">)</span>   <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>println n<span class="pnc">)</span>  <span class="num">0</span><span class="pnc">)</span>
@@ -671,13 +755,54 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   </div>
 </div>
 
+<hr class="divider">
+
+<!-- ── 14 TROWEL ─────────────────────── -->
+<div class="split-section reverse reveal" id="trowel">
+  <div>
+    <p class="section-label">14 -- Trowel -- The Editor</p>
+    <h2 class="section-title">One download.<br>Nothing else to <em>install.</em></h2>
+    <p class="section-desc">Trowel is a fast, native desktop editor for Turmeric -- not Electron -- with the compiler shipped inside the bundle. Open a file, press Run, see the output in the pane below. A live REPL sits in the split underneath your code.</p>
+    <p class="section-desc">Docstrings and completion for stdlib and buffer-local names come from the bundled compiler's own doc index, so they always match the compiler you are building with. Toggle between classic s-expressions and sweet-exp from the toolbar, and scaffold a new binary, sweet-exp, or library project without touching a terminal.</p>
+    <div class="hero-actions" style="justify-content:flex-start;margin-top:28px;">
+      <a href="/trowel" class="btn-hero btn-hero-primary">Get Trowel <span style="font-size:16px;">→</span></a>
+      <a href="https://github.com/rjungemann/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
+    </div>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">macOS &amp; Linux</span>
+    </div>
+    <div class="code-card-body"><span class="cmt"># Install the editor and the compiler in one step</span>
+<span class="fn">brew</span> install --cask rjungemann/trowel/trowel
+
+<span class="cmt"># ...or grab a build straight from Releases:</span>
+<span class="cmt">#   github.com/rjungemann/trowel/releases/latest</span>
+
+<span class="cmt"># Then: File -&gt; New Project, pick a template,</span>
+<span class="cmt"># and press Run. That is the whole setup.</span>
+
+<span class="cmt">;; hello.tur</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">main</span> <span class="pnc">[]</span> <span class="tp">: int</span>
+  <span class="pnc">(</span>println <span class="str">"Hello from Trowel"</span><span class="pnc">)</span>
+  <span class="num">0</span><span class="pnc">)</span>
+
+<span class="cmt">;; Run  -> Hello from Trowel</span>
+<span class="cmt">;; REPL -&gt; (+ 1 1)  =&gt; 2</span></div>
+  </div>
+</div>
+
 <!-- ── CTA ───────────────────────────── -->
 <div class="cta-section reveal">
   <div class="cta-box">
     <h2 class="cta-title">Ready to try<br><em>Turmeric?</em></h2>
-    <p class="cta-desc">Open the playground and try any of these features right in your browser.</p>
+    <p class="cta-desc">Open the playground and try any of these features right in your browser -- or download Trowel and build them locally.</p>
     <div class="cta-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Open Playground →</a>
+      <a href="/trowel" class="btn-hero btn-hero-secondary">Download Trowel</a>
       <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
     </div>
   </div>

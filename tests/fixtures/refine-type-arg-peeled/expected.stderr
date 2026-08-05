@@ -1,0 +1,4 @@
+TUR-W0380
+refinement in type-argument position is not enforced; the payload is treated as 'int'
+refinement in type-argument position is not enforced; the payload is treated as 'float'
+refine a parameter, a return type, or a `let` binding instead

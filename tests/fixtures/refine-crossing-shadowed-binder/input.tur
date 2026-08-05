@@ -1,0 +1,29 @@
+;; A crossing under a SHADOWING binder is abandoned, not answered.
+;;
+;; The encoder has one flat namespace, so the argument form's `x` is encoded as
+;; the same variable as the parameter `x` and silently inherits its hypotheses.
+;; Here the inner `x` is zero and the outer one is positive, and the crossing
+;; therefore "proved" `x != 0` of a value that is zero.
+;;
+;; That predates path conditions -- the environment always carried the
+;; parameter refinements -- and it was never a miscompile: a crossing is a
+;; diagnostic layer and never elides the callee's own entry check. What it was
+;; is a WRONG ANSWER, and --strict-refine accepted a program that panics.
+;; Crossings under a shadowing `let` binding or pattern binder are now skipped
+;; outright; dropping just the equation is not enough, because the collision is
+;; in the NAME, not in the fact.
+;;
+;; WHAT THIS FIXTURE PINS, precisely: that the callee's entry check survives and
+;; fires. It does NOT distinguish the false proof from the skip -- both abort
+;; here, because the check was never the thing at risk. The regression it would
+;; catch is the check going away.
+(defn sdiv [n : int d : #refine{ d : int | (not= d 0) }] : int
+  (/ n d))
+
+(defn f [x : #refine{ x : int | (> x 0) }] : int
+  (let [x (- x x)]
+    (sdiv 10 x)))
+
+(defn main [] : int
+  (println (f 3))
+  0)

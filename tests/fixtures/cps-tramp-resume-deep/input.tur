@@ -1,0 +1,26 @@
+;; E7 (cps-tramp-resume): a deep tail-recursive effectful loop under a resuming
+;; handler must run FLAT on the DK path -- the trampolined tail-resume keeps the
+;; C stack constant instead of the O(N) inline-resume stack that would SIGSEGV.
+;; The accumulator threads the resumed value, so a wrong resume also shows up:
+;; result = 3 * 100000 = 300000.
+;;
+;; 1e5 is the every-path depth. The full 1e6 lives in the compiled-only sibling
+;; `cps-tramp-resume-deep-1m`, because the tree-walking interpreter retains
+;; roughly 4 KiB per resumed step and 1e6 steps peak at ~3.5 GiB RSS under
+;; `--interpret` -- two such fixtures in one parallel batch exhaust a 16 GiB CI
+;; runner. At 1e5 the interpreter peaks at ~0.5 GiB and finishes in ~1s.
+;; See docs/archive/ci-cps-tramp-turi-timeouts-under-load.md.
+(defeffect Ask [] :int)
+
+(defn loop [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (loop (- n 1) (+ acc (perform (Ask))))))
+
+(defn run [] : int
+  (handle (loop 100000 0)
+    (Ask [] k) (resume k 3)))
+
+(defn main [] : int
+  (println (run))
+  0)

@@ -115,20 +115,38 @@ to debug.
 
 ## Expiry policy
 
-No flag can sit at "experimental" indefinitely. Every entry carries an
-`expires_at` version, and that is a **hard contract**: the release-cut
-process (`/cut-minor-release`, `/cut-major-release`) scans the registry
-before bumping `VERSION` and refuses to proceed if any entry's `expires_at`
-is at or before the version being cut. At that point the release author, in
-a separate reviewed PR, either:
+No flag should sit at "experimental" indefinitely. Every entry carries an
+`expires_at` version. At a cut where some entry's `expires_at` is at or before
+the version being cut, the release author reviews that entry and either:
 
 - **graduates** the feature -- deletes the row from the registry; the feature
   becomes always-on (its enable bit stays `true`, mirroring how the retired
   `-X<name>` flags became accept-and-warn no-ops), or
-- **shelves** it -- removes the row and the feature.
+- **shelves** it -- removes the row and the feature, or
+- **bumps `expires_at`** with a one-line rationale in the row's plan doc. This
+  is a normal, precedented move (see the `cps-async` contingency), not a
+  failure.
 
-This structural forcing function is the answer to the `-X` regime's drift:
-no experiment lives in the table for more than ~2 minor releases.
+`expires_at` is a **deadline, not an earliest date** -- graduating early is
+routine (`closure-drop-glue` graduated at 0.30.2 carrying `expires_at 0.34.0`).
+
+### `expires_at` is ADVISORY -- it never blocks a release
+
+**An expiring entry is surfaced at the cut. It does not refuse the cut.** The
+release-cut skills report expiring rows and proceed; the author decides what to
+do about them, in that release or a later one.
+
+Earlier revisions of this guide called `expires_at` a "hard contract" that the
+release-cut process "refuses to proceed" past. **That tooling never existed** --
+`cut-minor-release.md` and friends contain no registry scan of any kind -- and
+the prose alone was enough to strand two releases, because a reader would
+honour a gate that was not there. Releasing is never blocked on an experiment's
+expiry.
+
+The forcing function is the review prompt, not a refusal. It still answers the
+`-X` regime's drift: an expiry repeatedly bumped with no rationale is a signal
+to shelve, and that is a judgement the author makes -- not a gate the tooling
+imposes.
 
 ## If you see `TUR-W006x` in your build -- runbook
 
@@ -188,5 +206,5 @@ from the table.
 
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- diagnostic/debug
   flags and the retired `-X<name>` set.
-- [docs/upcoming/v1/experimental-flag-mechanism-plan.md](../upcoming/v1/experimental-flag-mechanism-plan.md)
+- [docs/upcoming/v1/experimental-flag-mechanism-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/experimental-flag-mechanism-plan.md)
   -- the design plan (XF0--XF6).

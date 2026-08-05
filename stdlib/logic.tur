@@ -26,69 +26,63 @@
 ;;   TNil        -- the empty term
 ;; :copy -- a Term handle is an immutable tagged value with no owned resources,
 ;; so it is freely copyable (like Option/Either).
-(defdata Term :copy
-  (TInt  :int)
-  (TVar  :int)
-  (TPair :Term :Term)
-  (TNil))
+(defdata Term :copy (TInt :int) (TVar :int) (TPair :Term :Term) (TNil))
 ;; Substitution / search state: a persistent association list from var-id to
 ;; Term, whose base node carries the next unused fresh-variable id.
 ;;   SNil next              -- the empty substitution; next = fresh-var counter
 ;;   SBind var-id term rest -- var-id is bound to term, over rest
 ;; Prepending bindings preserves the base SNil, so the fresh counter rides along
 ;; through unification for free.
-(defdata Subst :copy
-  (SNil  :int)
-  (SBind :int :Term :Subst))
+
+(defdata Subst :copy (SNil :int) (SBind :int :Term :Subst))
 ;; UnifyResult: the tagged outcome of unification -- UFail on mismatch, or
 ;; UOk carrying the extended substitution. Replaces the old -1 sentinel.
-(defdata UnifyResult :copy
-  (UFail)
-  (UOk :Subst))
+
+(defdata UnifyResult :copy (UFail) (UOk :Subst))
 ;; Lookup: the tagged outcome of a substitution lookup -- LMissing when the
 ;; variable is unbound, or LFound carrying the bound term.
-(defdata Lookup :copy
-  (LMissing)
-  (LFound :Term))
+
+(defdata Lookup :copy (LMissing) (LFound :Term))
 ;; Stream: the solution stream (list / backtracking monad) of search states.
 ;;   StNil             -- no solutions
 ;;   StCons subst rest -- one solution substitution, followed by the rest
-(defdata Stream :copy
-  (StNil)
-  (StCons :Subst :Stream))
+
+(defdata Stream :copy (StNil) (StCons :Subst :Stream))
 ;;; Goal -- a kind-(* -> *) handle over a miniKanren goal `Subst -> Stream`;
 ;;; carrier is the fat-closure pointer.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (defopaque Goal [A] :ptr<void>)
 ;;; -- Solution stream (list / backtracking monad) ─────────────────────────────
 ;;; st-append -- concatenate two solution streams.
+
 (defn st-append [xs : Stream ys : Stream] : Stream
-  (match xs
-    (StNil)         ys
-    (StCons v rest) (StCons v (st-append rest ys))))
+  (match xs (StNil) ys (StCons v rest) (StCons v (st-append rest ys))))
 ;;; st-bind -- concatMap: apply f to each state and concatenate the streams.
 ;;; f is a `Subst -> Stream` callback (arrives as a first-class `:fn` value).
+
 (defn st-bind [xs : Stream f : fn] : Stream
   (match xs
-    (StNil)         (StNil)
-    (StCons v rest) (st-append (:: (f v) :Stream) (st-bind rest f))))
+    (StNil)
+    (StNil)
+    (StCons v rest)
+    (st-append (:: (f v) :Stream) (st-bind rest f))))
 ;;; st-length -- count the states in a solution stream.
+
 (defn st-length [xs : Stream] : int
-  (match xs
-    (StNil)         0
-    (StCons v rest) (+ 1 (st-length rest))))
+  (match xs (StNil) 0 (StCons v rest) (+ 1 (st-length rest))))
 ;;; st-take -- keep at most n states from the front of a solution stream.
+
 (defn st-take [n : int xs : Stream] : Stream
   (if (<= n 0)
     (StNil)
-    (match xs
-      (StNil)         (StNil)
-      (StCons v rest) (StCons v (st-take (- n 1) rest)))))
+    (match xs (StNil) (StNil) (StCons v rest) (StCons v (st-take (- n 1) rest)))))
 ;;; mzero -- the empty solution stream (no solutions).
 ;;;
 ;;; Returns:
 ;;;   An empty Stream.
+
 (defn mzero [] : Stream (StNil))
 ;;; mreturn -- wrap a single substitution as a one-solution stream.
 ;;;
@@ -97,6 +91,7 @@
 ;;;
 ;;; Returns:
 ;;;   A singleton Stream containing s.
+
 (defn mreturn [s : Subst] : Stream (StCons s (StNil)))
 ;;; mplus -- concatenate (union) two solution streams.
 ;;;
@@ -106,6 +101,7 @@
 ;;;
 ;;; Returns:
 ;;;   A Stream with all of xs's solutions followed by all of ys's.
+
 (defn mplus [xs : Stream ys : Stream] : Stream (st-append xs ys))
 ;;; mbind -- apply a `Subst -> Stream` continuation to each solution and
 ;;; concatenate the results.
@@ -116,6 +112,7 @@
 ;;;
 ;;; Returns:
 ;;;   The concatenated solution stream.
+
 (defn mbind [ma : Stream fn : fn] : Stream (st-bind ma fn))
 ;;; bt-length -- count the number of solutions in a solution stream.
 ;;;
@@ -124,6 +121,7 @@
 ;;;
 ;;; Returns:
 ;;;   Number of solutions.
+
 (defn bt-length [xs : Stream] : int (st-length xs))
 ;;; -- Term constructors ────────────────────────────────────────────────────────
 ;;; term-int -- construct a logic term representing an integer value.
@@ -136,6 +134,7 @@
 ;;;
 ;;; Example:
 ;;;   (term-int 42)  ; => integer term 42
+
 (defn term-int [n : int] : Term (TInt n))
 ;;; term-var -- construct a logic variable term with the given id.
 ;;;
@@ -147,6 +146,7 @@
 ;;;
 ;;; Example:
 ;;;   (term-var 0)  ; => logic variable 0
+
 (defn term-var [id : int] : Term (TVar id))
 ;;; term-pair -- construct a logic pair term from two sub-terms.
 ;;;
@@ -159,6 +159,7 @@
 ;;;
 ;;; Example:
 ;;;   (term-pair (term-int 1) (term-int 2))  ; => pair term (1 . 2)
+
 (defn term-pair [a : Term b : Term] : Term (TPair a b))
 ;;; term-nil -- construct the nil/empty logic term.
 ;;;
@@ -167,6 +168,7 @@
 ;;;
 ;;; Example:
 ;;;   (term-nil)  ; => nil term
+
 (defn term-nil [] : Term (TNil))
 ;;; -- Term accessors ───────────────────────────────────────────────────────────
 ;;; term-int-val -- read the integer value from an INT term (0 otherwise).
@@ -176,10 +178,8 @@
 ;;;
 ;;; Returns:
 ;;;   The integer payload of a TInt, or 0 for any other term.
-(defn term-int-val [t : Term] : int
-  (match t
-    (TInt n) n
-    _        0))
+
+(defn term-int-val [t : Term] : int (match t (TInt n) n _ 0))
 ;;; term-var-id -- read the variable id from a VAR term (0 otherwise).
 ;;;
 ;;; Parameters:
@@ -187,10 +187,8 @@
 ;;;
 ;;; Returns:
 ;;;   The id of a TVar, or 0 for any other term.
-(defn term-var-id [t : Term] : int
-  (match t
-    (TVar id) id
-    _         0))
+
+(defn term-var-id [t : Term] : int (match t (TVar id) id _ 0))
 ;;; term-pair-fst -- read the first sub-term of a PAIR term (TNil otherwise).
 ;;;
 ;;; Parameters:
@@ -198,10 +196,8 @@
 ;;;
 ;;; Returns:
 ;;;   The first component of a TPair, or TNil for any other term.
-(defn term-pair-fst [t : Term] : Term
-  (match t
-    (TPair a b) a
-    _           (TNil)))
+
+(defn term-pair-fst [t : Term] : Term (match t (TPair a b) a _ (TNil)))
 ;;; term-pair-snd -- read the second sub-term of a PAIR term (TNil otherwise).
 ;;;
 ;;; Parameters:
@@ -209,34 +205,38 @@
 ;;;
 ;;; Returns:
 ;;;   The second component of a TPair, or TNil for any other term.
-(defn term-pair-snd [t : Term] : Term
-  (match t
-    (TPair a b) b
-    _           (TNil)))
+
+(defn term-pair-snd [t : Term] : Term (match t (TPair a b) b _ (TNil)))
 ;;; -- Substitution operations ──────────────────────────────────────────────────
 ;;; subs-empty -- return the empty substitution (fresh counter at 0).
 ;;;
 ;;; Returns:
 ;;;   An empty Subst with next fresh-var id 0.
+
 (defn subs-empty [] : Subst (SNil 0))
 ;;; subst-next -- read the next unused fresh-variable id from the base of a
 ;;; substitution.
+
 (defn subst-next [s : Subst] : int
-  (match s
-    (SNil n)            n
-    (SBind v term rest) (subst-next rest)))
+  (match s (SNil n) n (SBind v term rest) (subst-next rest)))
 ;;; subst-set-next -- set the fresh-variable counter at the base of a
 ;;; substitution, preserving all bindings.
+
 (defn subst-set-next [s : Subst n : int] : Subst
   (match s
-    (SNil m)            (SNil n)
-    (SBind v term rest) (SBind v term (subst-set-next rest n))))
+    (SNil m)
+    (SNil n)
+    (SBind v term rest)
+    (SBind v term (subst-set-next rest n))))
 ;;; subst-lookup -- find the term bound to var-id in a substitution.
 ;;; Returns (LFound term) when var-id is bound, (LMissing) otherwise.
+
 (defn subst-lookup [vid : int subs : Subst] : Lookup
   (match subs
-    (SNil n)            (LMissing)
-    (SBind v term rest) (if (= v vid) (LFound term) (subst-lookup vid rest))))
+    (SNil n)
+    (LMissing)
+    (SBind v term rest)
+    (if (= v vid) (LFound term) (subst-lookup vid rest))))
 ;;; logic-walk -- follow variable bindings in a substitution until ground.
 ;;;
 ;;; Parameters:
@@ -248,39 +248,50 @@
 ;;;
 ;;; Example:
 ;;;   (logic-walk (term-var 0) subs)  ; => bound term or the variable itself
+
 (defn logic-walk [t : Term subs : Subst] : Term
   (match t
     (TVar vid)
-      (match (subst-lookup vid subs)
-        (LMissing)     t
-        (LFound bound) (logic-walk bound subs))
-    _ t))
+    (match (subst-lookup vid subs)
+      (LMissing)
+      t
+      (LFound bound)
+      (logic-walk bound subs))
+    _
+    t))
 ;;; unify-walked -- structural unification of two already-walked terms.
 ;;; No occurs check (matching standard miniKanren).
+
 (defn unify-walked [a : Term b : Term subs : Subst] : UnifyResult
   (match a
     (TVar v1)
-      (match b
-        (TVar v2)   (if (= v1 v2) (UOk subs) (UOk (SBind v1 b subs)))
-        _           (UOk (SBind v1 b subs)))
+    (match b
+      (TVar v2)
+      (if (= v1 v2) (UOk subs) (UOk (SBind v1 b subs)))
+      _
+      (UOk (SBind v1 b subs)))
     (TInt n1)
-      (match b
-        (TInt n2)   (if (= n1 n2) (UOk subs) (UFail))
-        (TVar v2)   (UOk (SBind v2 a subs))
-        _           (UFail))
+    (match b
+      (TInt n2)
+      (if (= n1 n2) (UOk subs) (UFail))
+      (TVar v2)
+      (UOk (SBind v2 a subs))
+      _
+      (UFail))
     (TNil)
-      (match b
-        (TNil)      (UOk subs)
-        (TVar v2)   (UOk (SBind v2 a subs))
-        _           (UFail))
+    (match b (TNil) (UOk subs) (TVar v2) (UOk (SBind v2 a subs)) _ (UFail))
     (TPair a1 a2)
-      (match b
-        (TPair b1 b2)
-          (match (unify-walked (logic-walk a1 subs) (logic-walk b1 subs) subs)
-            (UFail)   (UFail)
-            (UOk s2)  (unify-walked (logic-walk a2 s2) (logic-walk b2 s2) s2))
-        (TVar v2)   (UOk (SBind v2 a subs))
-        _           (UFail))))
+    (match b
+      (TPair b1 b2)
+      (match (unify-walked (logic-walk a1 subs) (logic-walk b1 subs) subs)
+        (UFail)
+        (UFail)
+        (UOk s2)
+        (unify-walked (logic-walk a2 s2) (logic-walk b2 s2) s2))
+      (TVar v2)
+      (UOk (SBind v2 a subs))
+      _
+      (UFail))))
 ;;; logic-unify -- structurally unify two terms, extending the substitution.
 ;;;
 ;;; No occurs check is performed.  Returns a tagged UnifyResult.
@@ -295,6 +306,7 @@
 ;;;
 ;;; Example:
 ;;;   (logic-unify (term-var 0) (term-int 5) (subs-empty))  ; => (UOk {x0=5})
+
 (defn logic-unify [t1 : Term t2 : Term subs : Subst] : UnifyResult
   (unify-walked (logic-walk t1 subs) (logic-walk t2 subs) subs))
 ;;; -- Goal application ─────────────────────────────────────────────────────────
@@ -306,14 +318,14 @@
 ;;;
 ;;; Returns:
 ;;;   The solution Stream.
+
 (defn apply-goal [g : (Goal int) state : Subst] : Stream
   ((:: g (fn [Subst] Stream)) state))
 ;;; -- Goal constructors ────────────────────────────────────────────────────────
 ;;; unify-goal-impl -- implementation helper: unify two terms against a state.
+
 (defn unify-goal-impl [lt1 : Term lt2 : Term state : Subst] : Stream
-  (match (logic-unify lt1 lt2 state)
-    (UFail)  (mzero)
-    (UOk s2) (mreturn s2)))
+  (match (logic-unify lt1 lt2 state) (UFail) (mzero) (UOk s2) (mreturn s2)))
 ;;; lequal -- goal that unifies two terms (miniKanren ==).
 ;;;
 ;;; Parameters:
@@ -325,6 +337,7 @@
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (lequal (term-int 5) (term-int 5)))  ; => one solution
+
 (defn lequal [t1 : Term t2 : Term] : (Goal int)
   (:: (let [lt1 t1
             lt2 t2]
@@ -337,8 +350,8 @@
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (succeed))  ; => one solution
-(defn succeed [] : (Goal int)
-  (:: (fn [state : Subst] (mreturn state)) :Goal))
+
+(defn succeed [] : (Goal int) (:: (fn [state : Subst] (mreturn state)) :Goal))
 ;;; fail -- goal that always fails, producing no solutions.
 ;;;
 ;;; Returns:
@@ -346,14 +359,16 @@
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (fail))  ; => empty stream
-(defn fail [] : (Goal int)
-  (:: (fn [state : Subst] (mzero)) :Goal))
+
+(defn fail [] : (Goal int) (:: (fn [state : Subst] (mzero)) :Goal))
 ;;; conjoined-impl -- implementation helper for conjunction.
+
 (defn conjoined-impl [lg1 : (Goal int) lg2 : (Goal int) state : Subst] : Stream
   (let [lg22 lg2]
     (mbind (apply-goal lg1 state)
       (fn [s : Subst] (let [_ lg22] (apply-goal lg22 s))))))
 ;;; conjoined-raw -- worker behind conjoined / Monad bind sequencing.
+
 (defn conjoined-raw [g1 : (Goal int) g2 : (Goal int)] : (Goal int)
   (let [lg1 g1
         lg2 g2]
@@ -374,14 +389,15 @@
 ;;;   (run-logic 1 (conjoined (lequal x (term-int 1)) (succeed)))  ; => [x=1]
 ;;;
 ;;; Since: Phase B1
-(defn conjoined [A B]
-  [g1 : (Goal A) g2 : (Goal B)]
-  : (Goal B)
+
+(defn conjoined [A B] [g1 : (Goal A) g2 : (Goal B)] : (Goal B)
   (:: (conjoined-raw (:: g1 (Goal int)) (:: g2 (Goal int))) (Goal B)))
 ;;; disjoined-impl -- implementation helper for disjunction.
+
 (defn disjoined-impl [lg1 : (Goal int) lg2 : (Goal int) state : Subst] : Stream
   (mplus (apply-goal lg1 state) (apply-goal lg2 state)))
 ;;; disjoined-raw -- worker behind disjoined / Alternative alt-or.
+
 (defn disjoined-raw [g1 : (Goal int) g2 : (Goal int)] : (Goal int)
   (let [lg1 g1
         lg2 g2]
@@ -402,13 +418,13 @@
 ;;;   ; => [x=1, x=2]
 ;;;
 ;;; Since: Phase B1
-(defn disjoined [A]
-  [g1 : (Goal A) g2 : (Goal A)]
-  : (Goal A)
+
+(defn disjoined [A] [g1 : (Goal A) g2 : (Goal A)] : (Goal A)
   (:: (disjoined-raw (:: g1 (Goal int)) (:: g2 (Goal int))) (Goal A)))
 ;;; fresh-impl -- implementation helper for fresh variable introduction.
 ;; lf is passed ^fat: it is a `(Term -> Goal)` callback that may capture, so the
 ;; callee fat-dispatches it through slot 0.
+
 (defn fresh-impl [^fat lf : (fn [Term] (Goal int)) state : Subst] : Stream
   (let [n   (subst-next state)
         nv  (TVar n)
@@ -429,8 +445,10 @@
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 7)))))  ; => [x=7]
+
 (defn fresh [^fat f : (fn [Term] (Goal int))] : (Goal int)
-  (:: (let [lf f] (fn [state : Subst] (let [_ lf] (fresh-impl lf state)))) :Goal))
+  (:: (let [lf f] (fn [state : Subst] (let [_ lf] (fresh-impl lf state))))
+    :Goal))
 ;;; -- Runner ───────────────────────────────────────────────────────────────────
 ;;; run-logic -- run a goal with an empty state and return up to n solutions.
 ;;;
@@ -443,17 +461,13 @@
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 3)))))  ; => one solution
-(defn run-logic [A]
-  [n : int g : (Goal A)]
-  : Stream
-  (let [init (subs-empty)]
-    (st-take n (apply-goal (:: g (Goal int)) init))))
+
+(defn run-logic [A] [n : int g : (Goal A)] : Stream
+  (let [init (subs-empty)] (st-take n (apply-goal (:: g (Goal int)) init))))
 ;;; -- Result helpers ───────────────────────────────────────────────────────────
 ;;; stream-empty? -- is a solution stream empty?
-(defn stream-empty? [xs : Stream] : bool
-  (match xs
-    (StNil) true
-    _       false))
+
+(defn stream-empty? [xs : Stream] : bool (match xs (StNil) true _ false))
 ;;; first-state -- extract the first solution substitution from a run-logic
 ;;; stream.
 ;;;
@@ -462,10 +476,9 @@
 ;;;
 ;;; Returns:
 ;;;   The first Subst, or the empty substitution if the stream is empty.
+
 (defn first-state [results : Stream] : Subst
-  (match results
-    (StNil)         (subs-empty)
-    (StCons v rest) v))
+  (match results (StNil) (subs-empty) (StCons v rest) v))
 ;;; reify-walk -- walk a term through the first solution's substitution.
 ;;;
 ;;; Parameters:
@@ -478,10 +491,9 @@
 ;;;
 ;;; Example:
 ;;;   (reify-walk my-var (run-logic 1 my-goal))  ; => ground term or variable
+
 (defn reify-walk [t : Term results : Stream] : Term
-  (if (stream-empty? results)
-    t
-    (logic-walk t (first-state results))))
+  (if (stream-empty? results) t (logic-walk t (first-state results))))
 ;;; -- HKT typeclass instances (stdlib-hkt-consolidation T3) ────────────────────
 ;;
 ;; Goal is a kind-(* -> *) handle (carrier: the goal fat-closure pointer). The
@@ -491,6 +503,7 @@
 ;; callback `:fn` and applies it directly.
 ;;; bind-goal-raw -- worker: conjunction that threads the state into the `:fn`
 ;;; continuation, which returns the next goal.
+
 (defn bind-goal-raw [g : (Goal int) k : fn] : (Goal int)
   (let [lg g]
     (:: (fn [state : Subst]
@@ -499,6 +512,7 @@
               (fn [s : Subst] (apply-goal (:: (k s) (Goal int)) s)))))
       :Goal)))
 ;;; fmap-goal-raw -- worker: map a `:fn` callback over each solution state.
+
 (defn fmap-goal-raw [g : (Goal int) f : fn] : (Goal int)
   (let [lg g]
     (:: (fn [state : Subst]
@@ -509,12 +523,14 @@
 ;;; Functor [Goal] -- map a function over each solution state.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Functor [Goal]
   (fmap [container fn] (:: (fmap-goal-raw (:: container (Goal int)) fn) :Goal)))
 ;;; Applicative [Goal] -- pure is the always-succeeding goal (state preserved);
 ;;; ap sequences the two goals (conjunction) keeping the second's states.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Applicative [Goal]
   (pure [x] (succeed))
   (ap [ff fa] (:: (conjoined-raw (:: ff (Goal int)) (:: fa (Goal int))) :Goal)))
@@ -526,6 +542,7 @@
 ;;;   (do-m _ (lequal x (term-int 1)) (lequal y (term-int 2)))
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Monad [Goal]
   (bind [ma fn] (:: (bind-goal-raw (:: ma (Goal int)) fn) :Goal)))
 ;;; Alternative [Goal] -- empty is the failing goal; alt-or is disjunction (the
@@ -535,6 +552,7 @@
 ;;;   (alt-or (lequal x (term-int 1)) (lequal x (term-int 2)))
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
+
 (definstance Alternative [Goal]
   (empty [a] (fail))
   (alt-or [a b] (:: (disjoined-raw (:: a (Goal int)) (:: b (Goal int))) :Goal)))

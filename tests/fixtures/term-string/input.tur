@@ -1,0 +1,18 @@
+;; string-adoption-stdlib-plan batch 3: owned String siblings for tur/term.
+;; Each term/*-string adopts the strdup/malloc'd cstr from the colorizer into an
+;; owned String (via string/adopt-cstr). The fixture runs off a tty, so the
+;; colorizers take their strdup(s) path and the output is the plain text.
+(load "stdlib/term-string.tur")
+
+(defn demo [] : int
+  (do
+    (println (string/to-cstr (term/bold-string "bold")))
+    (println (string/to-cstr (term/dim-string "dim")))
+    (println (string/to-cstr (term/red-string "red")))
+    (println (string/to-cstr (term/green-string "green")))
+    (println (string/to-cstr (term/yellow-string "yellow")))
+    (println (string/to-cstr (term/blue-string "blue")))
+    (println (string/to-cstr (term/cyan-string "cyan")))
+    0))
+
+(demo)

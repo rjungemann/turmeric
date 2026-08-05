@@ -1,0 +1,33 @@
+;; E3a (owning-cloneable-capture): the CONSUMING case for a heap carrier handle
+;; WITH an owning field -- the recursive deep clone.  H2 is a `:heap` struct with
+;; an rc field, captured non-^borrow (consumed: freed once per call, which drops
+;; h.r and frees the header).
+;;
+;; A multi-shot resume needs each copy to own its rc field independently, else
+;; freeing the shared handle double-drops the rc.  So the env_clone deep-copies
+;; the header (malloc + shallow copy) AND increfs each owning (rc/weak) field --
+;; the mirror of drop_glue's decref.  Each resume's free (drop_glue) decrefs its
+;; own +1; the owner's original is freed once by its P5b-threaded scope-exit drop.
+;; The rc field's control block is incref'd per resume and decref'd per free plus
+;; once by the base, netting to freed exactly once.  LeakSanitizer-clean.
+;;
+;; (Restricted to rc/weak owning fields -- a ref/lref or nested aggregate field
+;; would need a genuinely recursive value clone, not an incref, and is rejected.)
+
+(defstruct H2 :heap [r : rc<int> tag : int])
+
+(defn k-identity [k] : int k)
+
+(defn consume-h2 [v : int h : H2] : int
+  (+ v (.tag h)))
+
+(defn run [] : int
+  (let [h (make-struct H2 :r (rc/of 7) :tag 5)]
+    (let [k (cloneable-reset (consume-h2 (cloneable-shift k-identity 0) h))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))          ; (10 + 5) + (20 + 5) = 40
+
+(defn main [] : int
+  (println (run))
+  0)

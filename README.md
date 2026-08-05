@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.28.2` -- CPS backend temporaries are now `__`-prefixed so generated code can no longer collide with user-code identifiers.
+**Latest release:** `v0.33.2` -- `#writes` write frames land behind `--enable=write-frames`, giving a checked per-argument write declaration that refinement hypotheses widen against; and the interpreter now copies by-value struct arguments, so a struct write no longer diverges between backends.
 
 ## What
 
@@ -109,14 +109,14 @@ file at the project root declares the package identity and its dependencies
   :version "0.1.0"
 
   ;; Turmeric dependencies -- declared as git URLs
-  :spices {
-    "geom" {:url "https://github.com/alice/tur-geom" :ref "v0.2.1"}
-    "math" {:url "https://github.com/bob/tur-math"   :ref "v1.5.0"}
+  :spices #map{
+    "geom" #map{:url "https://github.com/alice/tur-geom" :ref "v0.2.1"}
+    "math" #map{:url "https://github.com/bob/tur-math"   :ref "v1.5.0"}
   }
 
   ;; C/CMake libraries (CPM-compatible) -- fetched and linked automatically
-  :cmake-deps {
-    "raylib" {:url "https://github.com/raysan5/raylib" :ref "5.0"}
+  :cmake-deps #map{
+    "raylib" #map{:url "https://github.com/raysan5/raylib" :ref "5.0"}
   })
 ```
 

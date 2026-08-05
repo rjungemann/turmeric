@@ -1,0 +1,19 @@
+;; An rc-capturing closure that ESCAPES its constructor. Flag-off it borrows,
+;; so the constructor's auto-drop frees the rc out from under the escaped
+;; closure (dangling) and the env leaks. Flag-on (closure-drop-glue) the capture
+;; is retained and released by the env's drop-glue -> alive when called, freed
+;; exactly once.
+(defn make-counter [] : ptr<void>
+  (let [x (rc/of 7)]
+    (fn [] : int (rc/strong-count x))))
+
+(defn use-and-drop [f : ptr<void>] : int
+  ```c
+  int64_t r = TUR_APPLY0((int64_t)(intptr_t)f);
+  TUR_CLOSURE_DROP(f);
+  return r;
+  ```)
+
+(defn main [] : int
+  (println (use-and-drop (make-counter)))
+  0)

@@ -1,0 +1,73 @@
+;; automatic R3a (closure-drop-glue): a MOVE-ONLY (:affine, non-Clone)
+;; Drop-instance opaque let-binding is auto-dropped at scope exit via its Drop
+;; instance -- the general mechanism httpd's `Handler` uses to retire the
+;; explicit `httpd-mw-drop`. This fixture proves the three ownership shapes
+;; DETERMINISTICALLY via alloc/free counters (so it does not depend on LSan,
+;; which -O2 elision + stack-leftover false-negatives make unreliable for small
+;; closures), and ASan additionally guards against a double-free.
+;;
+;;   unused binding -> auto-dropped once
+;;   ^borrow use    -> not consumed, still auto-dropped once
+;;   consuming move -> NOT auto-dropped (the consumer frees it once; no double-free)
+;;
+;; Expected: 3 allocs balanced by exactly 3 frees.
+
+;; wctr -- shared alloc/free counters (op 0 bump alloc, 1 bump free, 2 read
+;; alloc, 3 read free).
+(defn wctr [op : int] : int
+  ```c
+  static int64_t a = 0, f = 0;
+  if (op == 0) return ++a;
+  if (op == 1) return ++f;
+  if (op == 2) return a;
+  return f;
+  ```)
+
+(defopaque Widget :int :affine)
+
+(defn widget-alloc [] : int
+  ```c
+  void *p = malloc(64);
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn widget-free-raw [w : int] : void
+  ```c
+  free((void *)(intptr_t)w);
+  ```)
+
+;; make-widget -- bump the alloc counter and hand back a fresh owned Widget.
+(defn make-widget [] : Widget
+  (wctr 0)
+  (:: (widget-alloc) :Widget))
+
+;; widget-free -- the Drop method: bump the free counter and release the box.
+(defn widget-free [w : Widget] : void
+  (wctr 1)
+  (widget-free-raw (:: w :int)))
+
+(definstance Drop [Widget]
+  (drop [x] : void (widget-free x)))
+
+;; eat -- CONSUME a Widget (plain by-value affine param moves the caller's binding).
+(defn eat [w : Widget] : void
+  (widget-free w))
+
+;; peek -- BORROW a Widget (does not consume the caller's binding).
+(defn peek [^borrow w : Widget] : int
+  ```c
+  return (int)((intptr_t)w != 0);
+  ```)
+
+(defn main [] : int
+  (let [a (make-widget)]
+    (println "a"))
+  (let [b (make-widget)]
+    (peek b)
+    (println "b"))
+  (let [c (make-widget)]
+    (eat c)
+    (println "c"))
+  (println (wctr 2))
+  (println (wctr 3))
+  0)

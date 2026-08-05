@@ -41,11 +41,23 @@ struct TurSpiceImage {
     char           *root;       /* absolute path to dir containing build.tur */
     char           *build_dir;  /* `<root>/src` if present, else == root */
     char           *lib_path;   /* path to the loaded .so (under .tur-repl-cache) */
-    void           *handle;     /* dlopen result */
+    void           *handle;     /* dlopen result (NULL on the J2 jit path) */
+    /* J2: in-process image from the jit hook (NULL on the dlopen path).
+     * Symbols resolve through g_jit_hook->sym instead of dlsym, and
+     * freshness is source mtime vs build_stamp_ns (there is no .so). */
+    void           *jit_image;
+    int64_t         build_stamp_ns;
     TurSpiceExport *exports;
     uint32_t        n_exports;
     uint32_t        cap_exports;
 };
+
+/* J2: the installed in-process JIT hook, or NULL for the subprocess path. */
+static const TurSpiceJitHook *g_jit_hook = NULL;
+
+void tur_spice_set_jit_hook(const TurSpiceJitHook *hook) {
+    g_jit_hook = hook;
+}
 
 static void spice_export_free(TurSpiceExport *e) {
     free(e->module);
@@ -61,6 +73,8 @@ void tur_spice_image_free(TurSpiceImage *img) {
     }
     free(img->exports);
     if (img->handle) dlclose(img->handle);
+    if (img->jit_image && g_jit_hook && g_jit_hook->free_image)
+        g_jit_hook->free_image(img->jit_image);
     free(img->lib_path);
     free(img->build_dir);
     free(img->root);
@@ -94,11 +108,17 @@ const TurSpiceExport *tur_spice_image_find(const TurSpiceImage *img,
     return NULL;
 }
 
-/* Forward decl: defined below alongside needs_rebuild. */
+/* Forward decls: defined below alongside needs_rebuild. */
 static bool needs_rebuild(const char *root, const char *lib_path);
+static int64_t newest_tur_mtime(const char *dir, int64_t acc);
 
 bool tur_spice_image_is_fresh(const TurSpiceImage *img) {
     if (!img) return false;
+    /* J2: no .so on the in-process path -- compare sources against the
+     * image's build timestamp instead of a library mtime. */
+    if (img->jit_image) {
+        return newest_tur_mtime(img->build_dir, 0) <= img->build_stamp_ns;
+    }
     return !needs_rebuild(img->build_dir, img->lib_path);
 }
 
@@ -348,7 +368,8 @@ static char *skip_ws(char *p) {
 static int append_export(TurSpiceImage *img, char *module, char *name,
                          char *mangled, char ret_class,
                          char *arg_classes, uint32_t n_args,
-                         bool is_variadic, void *fn_ptr) {
+                         bool is_variadic, void *fn_ptr,
+                         TurFfiShimFn ffi_shim) {
     if (img->n_exports == img->cap_exports) {
         uint32_t nc = img->cap_exports ? img->cap_exports * 2 : 8;
         TurSpiceExport *na = realloc(img->exports, nc * sizeof(*na));
@@ -367,6 +388,7 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
     e->n_args = n_args;
     e->is_variadic = is_variadic;
     e->fn_ptr = fn_ptr;
+    e->ffi_shim = ffi_shim;
     e->arg_classes = arg_classes;  /* owned; freed in spice_export_free */
     return 0;
 }
@@ -457,29 +479,93 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
            && *ret_end != '\n' && *ret_end != '\r') ret_end++;
     *ret_end = '\0';
     char ret_class = class_for_tag(p, /*is_return=*/true);
-    /* dlsym -- if not found, treat as hard error: the manifest and
-     * the library have drifted out of sync. RP7: the message names
-     * the .so so the user knows which artifact to discard, and
-     * points at the two fixes (one keeps the session alive, the
-     * other forces a full clean rebuild). */
-    dlerror();
-    void *fn_ptr = dlsym(img->handle, mangled);
-    const char *derr = dlerror();
+    /* Resolve the symbol -- J2 in-process images resolve through the jit
+     * hook's MIR item lookup; the dlopen path keeps dlsym.  Either way a
+     * miss is a hard error: the manifest and the image have drifted out of
+     * sync. RP7: the message names the artifact so the user knows what to
+     * discard, and points at the two fixes (one keeps the session alive,
+     * the other forces a full clean rebuild). */
+    void *fn_ptr = NULL;
+    const char *derr = NULL;
+    if (img->jit_image && g_jit_hook && g_jit_hook->sym) {
+        fn_ptr = g_jit_hook->sym(img->jit_image, mangled);
+    } else {
+        dlerror();
+        fn_ptr = dlsym(img->handle, mangled);
+        derr = dlerror();
+    }
     if (!fn_ptr || derr) {
         fprintf(stderr,
                 "tur repl: stale exports.manifest -- it lists symbol '%s'\n"
                 "          but it is not present in %s\n"
-                "          (dlsym: %s)\n"
+                "          (%s)\n"
                 "          Fix: type (reload) at the prompt, or run\n"
                 "               `rm -rf .tur-repl-cache` and restart the REPL.\n",
-                mangled, img->lib_path,
+                mangled,
+                img->jit_image ? "the in-process jit image" : img->lib_path,
                 derr ? derr : "symbol not found");
         free(module); free(name); free(mangled); free(arg_classes);
         return -2;  /* RP7: caller skips the generic "malformed" message */
     }
+    /* interpreter-arbitrary-arity-ffi (Phase 2): probe for the per-export
+     * `<mangled>__ffi` shim.  Its absence is expected and benign -- a spice
+     * built before shim emission has no such symbol -- so a NULL result is
+     * not an error; the call path falls back to the generated shape table. */
+    TurFfiShimFn ffi_shim = NULL;
+    {
+        size_t shim_len = strlen(mangled) + 5 + 1;  /* "__ffi" + NUL */
+        char  *shim_sym = (char *)malloc(shim_len);
+        if (shim_sym) {
+            snprintf(shim_sym, shim_len, "%s__ffi", mangled);
+            void *sym = NULL;
+            if (img->jit_image && g_jit_hook && g_jit_hook->sym) {
+                sym = g_jit_hook->sym(img->jit_image, shim_sym);
+            } else {
+                dlerror();
+                sym = dlsym(img->handle, shim_sym);
+                (void)dlerror();  /* clear; a missing shim is not reported */
+            }
+            /* The shim is `void(*)(const int64_t*, const double*, int64_t*,
+             * double*)`; the lookup hands back a `void *`, which is not
+             * portably convertible to a function pointer by a direct cast
+             * (ISO C), so round-trip through memcpy. */
+            memcpy(&ffi_shim, &sym, sizeof ffi_shim);
+            free(shim_sym);
+        }
+    }
     /* Ownership of arg_classes transfers to the export. */
     return append_export(img, module, name, mangled, ret_class,
-                          arg_classes, n_args, is_variadic, fn_ptr);
+                          arg_classes, n_args, is_variadic, fn_ptr, ffi_shim);
+}
+
+/* J2: parse manifest TEXT (the jit hook returns it in memory; there is no
+ * exports.manifest file on the in-process path).  Same per-line semantics
+ * as load_manifest below. */
+static int load_manifest_text(TurSpiceImage *img, const char *text) {
+    int rc = 0;
+    const char *p = text;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        size_t ll = nl ? (size_t)(nl - p) : strlen(p);
+        char *line = (char *)malloc(ll + 1);
+        if (!line) return -1;
+        memcpy(line, p, ll);
+        line[ll] = '\0';
+        char *snapshot = strdup(line);
+        int prc = parse_manifest_line(img, line);
+        if (prc == -1) {
+            fprintf(stderr, "tur repl: malformed manifest line: %s\n",
+                    snapshot ? snapshot : "(out of memory)");
+            rc = -1;
+        }
+        if (prc == -2) rc = -1;  /* detailed diagnostic already printed */
+        free(line);
+        free(snapshot);
+        if (rc != 0) return rc;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return rc;
 }
 
 static int load_manifest(TurSpiceImage *img, const char *manifest_path) {
@@ -570,6 +656,40 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
     const char *build_dir = root;
     if (stat(src_dir, &src_st) == 0 && S_ISDIR(src_st.st_mode)) {
         build_dir = src_dir;
+    }
+
+    /* J2 (jit-engine-plan 3.3): with the in-process hook installed, skip
+     * the subprocess + .so + dlopen entirely.  Every load compiles fresh
+     * in memory -- that IS the point; there is no cached artifact to be
+     * stale.  Freshness for (reload)/--watch is the image's build stamp
+     * (tur_spice_image_is_fresh). */
+    if (g_jit_hook && g_jit_hook->build) {
+        void *jimg = NULL;
+        char *manifest = NULL;
+        int64_t stamp = newest_tur_mtime(build_dir, 0);
+        if (g_jit_hook->build(build_dir, &jimg, &manifest) != 0) {
+            free(root);
+            return -1;
+        }
+        TurSpiceImage *img = calloc(1, sizeof(*img));
+        if (!img) {
+            if (g_jit_hook->free_image) g_jit_hook->free_image(jimg);
+            free(manifest); free(root);
+            return -1;
+        }
+        img->root           = root;
+        img->build_dir      = strdup(build_dir);
+        img->lib_path       = strdup("<in-process jit image>");
+        img->jit_image      = jimg;
+        img->build_stamp_ns = stamp;
+        int mrc = manifest ? load_manifest_text(img, manifest) : -1;
+        free(manifest);
+        if (mrc != 0) {
+            tur_spice_image_free(img);
+            return -1;
+        }
+        *out_image = img;
+        return 0;
     }
 
     if (needs_rebuild(build_dir, lib_path)) {

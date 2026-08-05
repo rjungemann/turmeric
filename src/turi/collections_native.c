@@ -90,6 +90,51 @@ static TuriValue native_tur_hamt_get(TuriEnv *e, TuriValue *a, uint32_t n, void 
     void *r = tur_hamt_get(m, h, key);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
+/* Content-keyed cstr entry points backing hamt/set-cstr et al. -- the P3
+ * ^persistent lowering routes :cstr keys here so runtime-built keys (equal
+ * text, distinct pointers) behave like literals.  Same retain-on-no-change
+ * quirk as native_tur_hamt_set/del: each persistent binding is freed
+ * separately by the interpreter. */
+static TuriValue native_tur_hamt_set_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 3) return turi_nil();
+    Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
+    const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
+                                              : (const char *)(intptr_t)a[1].as_int;
+    void *val       = (a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr
+                                              : (void *)(intptr_t)a[2].as_int;
+    Hamt *r = tur_hamt_set_cstr(m, key, val);
+    if (r == m) tur_hamt_retain(r);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_tur_hamt_del_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
+    const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
+                                              : (const char *)(intptr_t)a[1].as_int;
+    Hamt *r = tur_hamt_del_cstr(m, key);
+    if (r == m) tur_hamt_retain(r);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_tur_hamt_has_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) { TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = false; return v; }
+    Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
+    const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
+                                              : (const char *)(intptr_t)a[1].as_int;
+    bool r = tur_hamt_has_cstr(m, key);
+    TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = r; return v;
+}
+static TuriValue native_tur_hamt_get_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
+    const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
+                                              : (const char *)(intptr_t)a[1].as_int;
+    void *r = tur_hamt_get_cstr(m, key);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
 static TuriValue native_tur_hamt_merge(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 2) return turi_nil();
@@ -240,11 +285,33 @@ static void set_buf_destroy(void *box) {
     tur_hamt_free((Hamt *)s[0]);
     free(s);
 }
+/* TR3: enumerate a Set/Map's entries for the eval-boundary sweep.  Keys and
+ * values are pointer-encoded int64 carriers with no per-entry tag, so each is
+ * visited as a bare candidate int -- that catches a directly-stored handle
+ * (a map of vecs), but CANNOT rule out a struct-valued entry holding a handle
+ * in a field.  A non-empty map therefore reports its enumeration incomplete
+ * (return false), which makes the sweep mark-only for that cycle: nothing is
+ * freed on the strength of a scan that might have missed a reference. */
+static bool set_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
+    void **s = (void **)box;
+    Hamt *h = (Hamt *)s[0];
+    if (!h || tur_hamt_count(h) == 0) return true;
+    HamtIter it;
+    tur_hamt_iter_init(&it, h);
+    uint64_t hash;
+    void *k, *val;
+    while (tur_hamt_iter_next(&it, &hash, &k, &val)) {
+        mark(turi_int((int64_t)(intptr_t)k), ctx);
+        mark(turi_int((int64_t)(intptr_t)val), ctx);
+    }
+    tur_hamt_iter_free(&it);
+    return false;
+}
 static TuriValue set_wrap_tracked(TuriEnv *env, Hamt *h) {
     void **s = (void **)malloc(2 * sizeof(void *));
     if (!s) return turi_nil();
     s[0] = (void *)h;
-    s[1] = (void *)turi_env_track_collection(env, s, set_buf_destroy);
+    s[1] = (void *)turi_env_track_collection(env, s, set_buf_destroy, set_buf_scan);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)s; return v;
 }
 /* Wrap a HAMT that a persistent op derived from `src`.  tur_hamt_set/del (and
@@ -967,11 +1034,26 @@ static void vec_buf_destroy(void *box) {
     free((void *)(intptr_t)v[0]);   /* the growable data buffer */
     free(v);
 }
+/* TR3: enumerate a Vec's cells for the eval-boundary sweep's conservative
+ * mark.  vec_retag_cell types each cell from the vec's recorded element tag,
+ * so a struct-tagged cell surfaces as a real TURI_STRUCT the marker can walk
+ * into (a struct element may hold another collection's handle in a field) and
+ * everything else surfaces as the carrier int candidate it is.  Every cell is
+ * visited, so the enumeration is complete: return true. */
+static bool vec_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
+    int64_t *v = (int64_t *)box;
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    if (!data) return true;
+    for (int64_t i = 0; i < v[1]; i++)
+        mark(vec_retag_cell(v, data[i]), ctx);
+    return true;
+}
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)a; (void)n; (void)ud;
     int64_t *v = (int64_t *)calloc(4, sizeof(int64_t));
     if (!v) return turi_nil();
-    v[3] = (int64_t)(intptr_t)turi_env_track_collection(env, v, vec_buf_destroy);
+    v[3] = (int64_t)(intptr_t)turi_env_track_collection(env, v, vec_buf_destroy,
+                                                        vec_buf_scan);
     TuriValue r = {0}; r.tag = TURI_INT; r.as_int = (int64_t)(intptr_t)v; return r;
 }
 static TuriValue native_vec_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -1180,6 +1262,10 @@ void turi_register_collection_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_hamt_del", native_tur_hamt_del, NULL);
     turi_env_register_native(env, "tur_hamt_has", native_tur_hamt_has, NULL);
     turi_env_register_native(env, "tur_hamt_get", native_tur_hamt_get, NULL);
+    turi_env_register_native(env, "tur_hamt_set_cstr", native_tur_hamt_set_cstr, NULL);
+    turi_env_register_native(env, "tur_hamt_del_cstr", native_tur_hamt_del_cstr, NULL);
+    turi_env_register_native(env, "tur_hamt_has_cstr", native_tur_hamt_has_cstr, NULL);
+    turi_env_register_native(env, "tur_hamt_get_cstr", native_tur_hamt_get_cstr, NULL);
     turi_env_register_native(env, "tur_hamt_merge", native_tur_hamt_merge, NULL);
     turi_env_register_native(env, "tur_hamt_hash_str", native_tur_hamt_hash_str, NULL);
     turi_env_register_native(env, "tur_hamt_hash_ptr", native_tur_hamt_hash_ptr, NULL);

@@ -32,6 +32,7 @@
 ;; inline-C snprintf bodies so `range->str` / `bound->str` run under --interpret.
 ;; str-build.tur is a dependency-free leaf (no Eq/Show instances), so this does
 ;; not perturb Eq [Bound] resolution the way loading all of str.tur would.
+
 (load "stdlib/str-build.tur")
 ;;; bound-inclusive -- construct an inclusive endpoint at v.
 ;;;
@@ -273,6 +274,4 @@
 ;; bound-fmt -- inline-C formatter for a single inclusive/exclusive endpoint.
 
 (defn bound-fmt [kind : int v : int] : cstr
-  (if (= kind 1)
-    (str-concat "[" (int->str v))
-    (str-concat "(" (int->str v))))
+  (if (= kind 1) (str-concat "[" (int->str v)) (str-concat "(" (int->str v))))

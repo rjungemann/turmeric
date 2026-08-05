@@ -1,0 +1,184 @@
+;;; tur/httpd-string -- optional owned-String accessors for stdlib/httpd.
+;;;
+;;; The `httpd-req-cookie` / `httpd-req-form` accessors return a `cstr` that is a
+;;; fresh malloc on the HIT path but a static `""` literal on the MISS path (the
+;;; header/field is absent).  That sentinel mixing makes the blind
+;;; `string/adopt-cstr` recipe unsafe here: adopting the miss-path literal would
+;;; `free()` static storage (undefined behavior), and the `""` sentinel cannot
+;;; distinguish "present and empty" from "absent" at all.
+;;;
+;;; This opt-in module layers the honest type on top: `option<String>`.  Each
+;;; `*-opt` is a thin Turmeric wrapper over an inline-C `*-raw` helper that
+;;; returns a freshly-malloc'd `cstr` on a match and a NULL pointer on any miss
+;;; (never a static literal).  The wrapper maps NULL -> `none` and adopts the
+;;; fresh buffer into `some` -- so there is no static-literal free, and "present
+;;; but empty" is a distinct `some ""` (a fresh empty buffer) from "absent"
+;;; (`none`).  Because the Option is constructed in Turmeric with real
+;;; `some`/`none`, it is an ordinary by-value `(Option String)` that composes
+;;; anywhere (`let`-bind it, pass it, `option-map` it) -- consume it with
+;;; `some?` / `unwrap` / `unwrap-or`.
+;;;
+;;; It is ADDITIVE: the `cstr` accessors in stdlib/httpd stay for callers that
+;;; want the borrow-and-immediately-use path.  It is a SEPARATE module so the
+;;; httpd core does not pull `stdlib/string` (map/typeclass) into every server's
+;;; load graph -- only programs that want owned cookie/form Strings load this.
+;;;
+;;; Note: the `*-raw` helpers have inline-C bodies (they reuse httpd's
+;;; request-parsing walk), so like stdlib/httpd itself they run on the compiled
+;;; path.
+;;;
+;;; Since: v2 (string-owned-builders-and-optional-accessors-plan, Part 2)
+(load "stdlib/httpd.tur")
+
+(load "stdlib/string.tur")
+;;; httpd-req-cookie-raw -- internal: cookie value as a fresh cstr, or NULL.
+;;;
+;;; Same Cookie-header walk as httpd-req-cookie, but returns NULL (not "") on
+;;; every miss and a freshly-malloc'd buffer on a match (an empty match yields a
+;;; fresh 1-byte ""), so the caller can tell absent from present-empty and adopt
+;;; the buffer without ever freeing a static literal.
+
+(defn httpd-req-cookie-raw [conn : ptr<void> name : cstr] : cstr
+  ```c
+  if (!conn || !name || !*name) return NULL;
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
+  const char *cookie_hdr = NULL;
+  while (h) {
+      if (h->name && strcasecmp(h->name, "Cookie") == 0) {
+          cookie_hdr = h->value ? h->value : "";
+          break;
+      }
+      h = h->next;
+  }
+  if (!cookie_hdr) return NULL;
+  size_t nlen = strlen(name);
+  const char *p = cookie_hdr;
+  while (*p) {
+      /* Skip leading whitespace / separators. */
+      while (*p == ' ' || *p == '\t' || *p == ';') p++;
+      if (!*p) break;
+      const char *kstart = p;
+      while (*p && *p != '=' && *p != ';') p++;
+      size_t klen = (size_t)(p - kstart);
+      const char *vstart = NULL;
+      size_t vlen = 0;
+      if (*p == '=') {
+          p++;
+          vstart = p;
+          while (*p && *p != ';') p++;
+          vlen = (size_t)(p - vstart);
+      }
+      if (klen == nlen && strncmp(kstart, name, nlen) == 0) {
+          char *out = (char *)malloc(vlen + 1);
+          if (!out) return NULL;
+          if (vlen > 0) memcpy(out, vstart, vlen);
+          out[vlen] = '\0';
+          return out;
+      }
+  }
+  return NULL;
+  ```)
+;;; httpd-req-cookie-opt -- read a cookie value as an optional owned String.
+;;;
+;;; Parses the request's `Cookie:` header into name=value pairs and returns the
+;;; value for `name` as `some` owned String, or `none` if the arguments are bad,
+;;; the header is absent, or the cookie is not present.  Unlike the `cstr` form
+;;; (`httpd-req-cookie`, which returns `""` for both absent and present-empty),
+;;; a present cookie with an empty value is `some ""`, distinct from `none`.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- cookie name to look up (case-sensitive, per RFC 6265)
+;;;
+;;; Returns:
+;;;   (Option String) -- some owned value on a match, none on any miss.
+;;;
+;;; Example:
+;;;   (let [o (httpd-req-cookie-opt c "session")]
+;;;     (if (some? o) (string/to-cstr (unwrap o)) "<no session>"))
+;;;
+;;; Since: v2
+
+(defn httpd-req-cookie-opt [conn : ptr<void> name : cstr] : (Option String)
+  (let [raw (httpd-req-cookie-raw conn name)]
+    (if (cstr-null? raw) (none) (some (string/adopt-cstr raw)))))
+;;; httpd-req-form-raw -- internal: decoded form value as a fresh cstr, or NULL.
+;;;
+;;; Same body walk + percent/plus decode as httpd-req-form, but returns NULL (not
+;;; "") on every miss and a freshly-malloc'd decoded buffer on a match, so the
+;;; caller can tell absent from present-empty and adopt without freeing a literal.
+
+(defn httpd-req-form-raw [conn : ptr<void> field : cstr] : cstr
+  ```c
+  if (!conn || !field || !*field) return NULL;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->body || c->body_len <= 0) return NULL;
+  size_t flen = strlen(field);
+  const char *p   = c->body;
+  const char *end = c->body + c->body_len;
+  while (p < end) {
+      const char *kstart = p;
+      while (p < end && *p != '=' && *p != '&') p++;
+      size_t klen = (size_t)(p - kstart);
+      const char *vstart = NULL;
+      const char *vend   = NULL;
+      if (p < end && *p == '=') {
+          p++;
+          vstart = p;
+          while (p < end && *p != '&') p++;
+          vend = p;
+      }
+      if (klen == flen && strncmp(kstart, field, flen) == 0) {
+          size_t vlen = vend ? (size_t)(vend - vstart) : 0;
+          char *out = (char *)malloc(vlen + 1);
+          if (!out) return NULL;
+          size_t oi = 0;
+          for (size_t i = 0; i < vlen; i++) {
+              char ch = vstart[i];
+              if (ch == '+') {
+                  out[oi++] = ' ';
+              } else if (ch == '%' && i + 2 < vlen) {
+                  char hex[3] = { vstart[i+1], vstart[i+2], '\0' };
+                  /* strtoul rejects bad hex -> 0; that's fine here. */
+                  unsigned long uv = strtoul(hex, NULL, 16);
+                  out[oi++] = (char)uv;
+                  i += 2;
+              } else {
+                  out[oi++] = ch;
+              }
+          }
+          out[oi] = '\0';
+          return out;
+      }
+      if (p < end && *p == '&') p++;
+  }
+  return NULL;
+  ```)
+;;; httpd-req-form-opt -- look up a URL-encoded form field as an optional String.
+;;;
+;;; Walks the (already-received) request body for `name=value` separated by `&`,
+;;; percent-decoding the value and mapping `+` to space per the
+;;; application/x-www-form-urlencoded convention.  Returns `some` owned String on
+;;; a match, or `none` when the arguments are bad, the body is empty, or the field
+;;; is absent.  A present field with an empty value is `some ""`, distinct from
+;;; `none` (which the `cstr` form `httpd-req-form` cannot express).
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   field -- form field name (case-sensitive, plain ASCII)
+;;;
+;;; Returns:
+;;;   (Option String) -- some decoded owned value on a match, none on any miss.
+;;;
+;;; Example:
+;;;   (let [o (httpd-req-form-opt c "username")]
+;;;     (if (some? o) (string/to-cstr (unwrap o)) "<anonymous>"))
+;;;
+;;; Since: v2
+
+(defn httpd-req-form-opt [conn : ptr<void> field : cstr] : (Option String)
+  (let [raw (httpd-req-form-raw conn field)]
+    (if (cstr-null? raw) (none) (some (string/adopt-cstr raw)))))
+;;; cstr-null? -- internal: true iff the cstr pointer is NULL (a miss sentinel).
+
+(defn cstr-null? [s : cstr] : bool ```c return (s == NULL); ```)

@@ -9,8 +9,12 @@
 (extern-c rand [^] :int)
 
 (extern-c srand [^int] :void)
+;; NOTE: `time` is NOT declared via extern-c. It is only ever called from
+;; inline-C as `time(NULL)`, which resolves to the libc prototype in <time.h>
+;; (pulled in by the codegen preamble). An `(extern-c time [^ptr] :ptr)`
+;; binding emits `extern void *time(void *)`, which conflicts with the real
+;; `time_t time(time_t *)` and breaks the C compile on a standard toolchain.
 
-(extern-c time [^ptr] :ptr)
 
 (extern-c malloc [^ptr size] :ptr)
 
@@ -35,48 +39,52 @@
 ;;; Since: Phase 16
 ;; Real-Random implementation
 ;; Uses libc rand() function
+;;; random-next-int! -- Real-Random's next_int slot: a random integer in
+;;; [min, max], auto-seeding libc rand() with time(NULL) on first use.
+;;; Internal; hoisted to file scope so Real-Random's inline-C can take its
+;;; address (nested + static functions are non-standard C).
 
-(defn Real-Random []
+(defn random-next-int! [min : int max : int] : int
   ```c
-  /* Define the Random struct */
+  static int seeded = 0;
+  if (!seeded) {
+      srand((unsigned int)time(NULL));
+      seeded = 1;
+  }
+  int range = (int)max - (int)min + 1;
+  int value = rand() % range;
+  return (int64_t)((int)min + value);
+  ```)
+;;; random-next-float! -- Real-Random's next_float slot: a random integer in
+;;; [0, 10000), auto-seeding libc rand() with time(NULL) on first use.
+;;; Internal; hoisted to file scope (see random-next-int!).
+
+(defn random-next-float! [] : int
+  ```c
+  static int seeded = 0;
+  if (!seeded) {
+      srand((unsigned int)time(NULL));
+      seeded = 1;
+  }
+  return (int64_t)(rand() % 10000);
+  ```)
+
+(defn Real-Random [] : ptr
+  ```c
+  /* Define the Random struct. The function-pointer field types must match the
+     emitted Turmeric signatures of the hoisted helpers: `: int` params/return
+     lower to int64_t. */
   typedef struct Random Random;
   struct Random {
-      int (*next_int)(int min, int max);
-      int (*next_float)(void);
+      int64_t (*next_int)(int64_t min, int64_t max);
+      int64_t (*next_float)(void);
   };
 
-  /* next_int implementation using rand() */
-  static int random_next_int(int min, int max) {
-      /* Seed with time if not already seeded */
-      static int seeded = 0;
-      if (!seeded) {
-          srand((unsigned int)time(NULL));
-          seeded = 1;
-      }
-
-      /* rand() returns [0, RAND_MAX] */
-      int range = max - min + 1;
-      int value = rand() % range;
-      return min + value;
-  }
-
-  /* next_float implementation - returns [0, 10000) */
-  static int random_next_float(void) {
-      /* Seed with time if not already seeded */
-      static int seeded = 0;
-      if (!seeded) {
-          srand((unsigned int)time(NULL));
-          seeded = 1;
-      }
-
-      /* Return value in [0, 10000) */
-      return rand() % 10000;
-  }
-
-  /* Create and populate the capability struct */
+  /* Create and populate the capability struct, referencing the file-scope
+     helpers by address via the __TUR_CNAME_...__ placeholder. */
   Random* rng = (Random*)malloc(sizeof(Random));
-  rng->next_int = random_next_int;
-  rng->next_float = random_next_float;
+  rng->next_int = __TUR_CNAME_random-next-int!__;
+  rng->next_float = __TUR_CNAME_random-next-float!__;
   return (void*)rng;
   ```)
 ;;; Real-Random-free -- release a Random capability created by Real-Random.
@@ -87,7 +95,7 @@
 ;;; Since: Phase 16
 ;; Free a Real-Random
 
-(defn Real-Random-free [rng]
+(defn Real-Random-free [rng : ptr] : void
   ```c
   free(rng);
   ```)
@@ -110,35 +118,42 @@
 ;;; Since: Phase 16
 ;; Seeded-Random implementation - uses a fixed seed for reproducibility
 ;; Useful for testing
+;;; seeded-next-int! -- Seeded-Random's next_int slot: a random integer in
+;;; [min, max] drawn from the current libc rand() state. Does not auto-seed;
+;;; Seeded-Random calls srand(seed) at construction. Internal; hoisted to file
+;;; scope so Seeded-Random's inline-C can take its address.
 
+(defn seeded-next-int! [min : int max : int] : int
+  ```c
+  int range = (int)max - (int)min + 1;
+  int value = rand() % range;
+  return (int64_t)((int)min + value);
+  ```)
+;;; seeded-next-float! -- Seeded-Random's next_float slot: a random integer in
+;;; [0, 10000) drawn from the current libc rand() state. Does not auto-seed
+;;; (see seeded-next-int!). Internal; hoisted to file scope.
 
-(defn Seeded-Random [seed]
+(defn seeded-next-float! [] : int
+  ```c
+  return (int64_t)(rand() % 10000);
+  ```)
+
+(defn Seeded-Random [seed : int] : ptr
   ```c
   typedef struct Random Random;
   struct Random {
-      int (*next_int)(int min, int max);
-      int (*next_float)(void);
+      int64_t (*next_int)(int64_t min, int64_t max);
+      int64_t (*next_float)(void);
   };
 
-  /* Seed the RNG */
+  /* Seed the RNG once at construction; the hoisted helpers just draw rand(). */
   srand((unsigned int)seed);
 
-  /* next_int implementation */
-  static int seeded_next_int(int min, int max) {
-      int range = max - min + 1;
-      int value = rand() % range;
-      return min + value;
-  }
-
-  /* next_float implementation - returns [0, 10000) */
-  static int seeded_next_float(void) {
-      return rand() % 10000;
-  }
-
-  /* Create and populate the capability struct */
+  /* Create and populate the capability struct, referencing the file-scope
+     helpers by address via the __TUR_CNAME_...__ placeholder. */
   Random* rng = (Random*)malloc(sizeof(Random));
-  rng->next_int = seeded_next_int;
-  rng->next_float = seeded_next_float;
+  rng->next_int = __TUR_CNAME_seeded-next-int!__;
+  rng->next_float = __TUR_CNAME_seeded-next-float!__;
   return (void*)rng;
   ```)
 ;;; Seeded-Random-free -- release a Random capability created by Seeded-Random.
@@ -149,7 +164,7 @@
 ;;; Since: Phase 16
 ;; Free a Seeded-Random
 
-(defn Seeded-Random-free [rng]
+(defn Seeded-Random-free [rng : ptr] : void
   ```c
   free(rng);
   ```)

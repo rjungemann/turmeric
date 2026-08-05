@@ -212,10 +212,19 @@
   : int
   ```c
   #include <sys/stat.h>
-  /* MinGW's mkdir takes one argument (the legacy MSVC signature); Windows has
-   * no POSIX permission bits, so the 0755 is dropped rather than translated. */
-#ifdef _WIN32
   #include <direct.h>
+  /* MinGW's mkdir takes one argument (the legacy MSVC signature); Windows has
+   * no POSIX permission bits, so the 0755 is dropped rather than translated.
+   *
+   * direct.h is included at the TOP of the body, outside the #ifdef, on purpose.
+   * Only leading bare directives are hoisted to file scope
+   * (tur_hoist_top_includes_scan); one left inside the #ifdef stays in the
+   * function body, where it is block-scoped AND -- because of the header's own
+   * include guard -- expands to nothing in the SECOND function that needs it,
+   * leaving an implicit declaration of _mkdir. Hoisting it bare is safe on
+   * POSIX: tur_emit_hoisted_include wraps angle includes in
+   * `#if __has_include(<...>)`, so a platform without direct.h just skips it. */
+#ifdef _WIN32
   return (int64_t)_mkdir(path);
 #else
   return (int64_t)mkdir(path, 0755);
@@ -241,10 +250,12 @@
   ```c
   #include <sys/stat.h>
   #include <errno.h>
-  /* One-arg mkdir on MinGW (see fs/mkdir).  A body-local macro keeps both call
-   * sites below identical across platforms. */
-#ifdef _WIN32
   #include <direct.h>
+  /* One-arg mkdir on MinGW (see fs/mkdir).  A body-local macro keeps both call
+   * sites below identical across platforms.  direct.h sits outside the #ifdef
+   * for the hoisting reason documented on fs/mkdir -- this is the very function
+   * that broke when it was inside. */
+#ifdef _WIN32
   #define __tur_mkdir(p) _mkdir(p)
 #else
   #define __tur_mkdir(p) mkdir((p), 0755)

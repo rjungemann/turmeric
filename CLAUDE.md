@@ -223,6 +223,31 @@ catches a real deadlock). Two ways to deal with it locally:
 The Release build never carries the sanitizers, so `tur --version` on a Release
 build always works regardless.
 
+#### macOS: building fixtures against a sanitized `libturi.a`
+
+A first fixture-suite run on macOS can produce dozens of failures that are a
+**toolchain mismatch, not a product regression**. Two traps, both of which the
+harness reports as `build failed`:
+
+- **Mixed toolchains.** If `tur` is built with Homebrew LLVM (the workaround
+  above) but fixtures link with Apple's system `cc`, every fixture that pulls in
+  the ASan-instrumented `libturi.a` fails to link with
+  `Undefined symbols ... ___asan_version_mismatch_check_v8`. Either pin the
+  fixture compiler to the same toolchain (`CC=/opt/homebrew/opt/llvm/bin/clang
+  bash tests/run-jit.sh`) or -- better -- build unsanitized with Apple clang,
+  which sidesteps both this and the startup deadlock:
+
+  ```sh
+  cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON \
+        -DTUR_DEBUG_SANITIZE=OFF
+  cmake --build build-nosan -j
+  ```
+
+- **`--target tur` is not enough.** The `tur` executable links `tur_core`
+  objects and (under `-DTUR_JIT=ON`) `tur_mir`; it never links `turi`. So
+  `cmake --build <dir> --target tur` does not produce `libturi.a`, and every
+  fixture then dies with `ld: library 'turi' not found`. Build all targets.
+
 ## CLI Argument Parsing -- STRICT RULE
 
 Reading CLI arguments via any mechanism other than `*args*` or `stdlib/args.tur` is
@@ -251,9 +276,14 @@ carrying a known cost we are not ready to impose on everyone) ship behind
 - Write a plan in `docs/upcoming/` and point `plan_path` at it.
 - Call `experiment_warn_if_used("<name>")` from the feature's elaboration
   entry point so the lifecycle warning (TUR-W0060/W0061) fires.
-- `expires_at` is a hard contract -- the release-cut skills refuse to bump
-  past it until the entry is graduated (deleted; feature goes always-on) or
-  shelved.
+- `expires_at` is **advisory and NEVER blocks a release.** The release-cut
+  skills surface an expiring row and proceed; the author then graduates it,
+  shelves it, or bumps `expires_at` with a one-line rationale. It is a
+  **deadline, not an earliest date** -- graduating early is routine.
+
+  **Do not refuse a version bump because a row is at or past its expiry**, and
+  do not reconstruct such a gate from older prose. No registry check has ever
+  existed in `cut-*-release.md`; believing it did has stranded two releases.
 
 Enable sources, in ascending precedence: user file
 (`~/.config/turmeric/experiments.tur` `:enable [...]`), project manifest
@@ -266,6 +296,36 @@ codegen/operator knobs (`--dump-*`, `--emit-abi-trace`), build-system options
 (`--build-dir`, `-I`), or already-shipping partial features that went
 always-on at their current level. See
 [docs/guides/experimental-flags-guide.md](docs/guides/experimental-flags-guide.md).
+
+## `#lang` Layers -- curated only
+
+`#lang <base>[/<dialect>] <layer>*` selects one mutually-exclusive base
+reader (slash-namespaced: `turmeric`, `turmeric/curly-infix`,
+`turmeric/neoteric`, `turmeric/sweet`) plus an order-independent **set** of
+additive layers (the space-separated trailing tokens). See
+[docs/upcoming/lang-layers-plan.md](docs/upcoming/lang-layers-plan.md).
+
+A `#lang` layer token is legal **only** if it has a row in `LANG_LAYERS[]`.
+Adding a layer means:
+
+- One `LANG_LAYERS[]` row with every field populated (`name`, `kind`,
+  `reader_hook` or `experiment`, `summary`, `since`).
+- **Reader layers** (a layer that flips on a `#`-dispatch, e.g. `stringed` =>
+  `#s"..."`): the dispatch must be additive and commutative with every other
+  reader layer -- no ordering dependence. If it isn't, it is a base dialect
+  (slash-namespaced), not a layer.
+- **Semantic layers** (a layer that flips on an elaboration/checker gate, e.g.
+  `refined`): **must** point at an existing `EXPERIMENTS[]` row -- never a
+  second, parallel enable path. The experiment carries the lifecycle
+  (TUR-W0060/W0061) and `expires_at`. `#lang turmeric refined` is exactly
+  `--enable=refined` scoped to one file; a manifest that disables the
+  experiment makes the file a **hard error**, never a silent-ignore.
+- A doc paragraph in [docs/guides/syntax-guide.md](docs/guides/syntax-guide.md).
+
+Prefer *not* adding a layer. A one-off syntax convenience belongs in a
+`#use-reader-macros` file, not the curated `#lang` set. Graduate a layer to
+always-on (delete the row, behavior unconditional) rather than letting layers
+accumulate.
 
 ## Build System
 
@@ -310,6 +370,59 @@ The built compiler lands at `./build/tur`.
   (`emit-c`/`build`); those are rare and worth pinpointing with a timeout sweep.
 - The expected result is `summary: 1442 passed, 0 failed` (the exact count
   shifts as fixtures are added/removed -- treat it as "~1440", not a hard gate).
+
+### Overlapping runs cause false FAILURES, not just slowness -- READ THIS TOO
+
+The point above is about wall-clock. The same overlap also produces **failures
+that look exactly like product bugs**, and they are the more expensive trap
+because the failure text never mentions timing. Two distinct causes, both
+observed:
+
+- **A rebuild landing mid-run.** Fixtures exec `./build/tur` directly out of
+  the build tree, so a concurrent `cmake --build` swaps the compiler underneath
+  the suite. During the link window the file exists but is not yet executable,
+  and everything dispatched in that window dies with `Permission denied` --
+  which `tests/run.sh` reports as `build failed`. A batch of those reads as a
+  compiler regression. It has also been seen as
+  `FAIL rp6-watch-with-help -- expected help output to mention 'tur repl'`,
+  where `./build/tur repl --help` prints the expected text perfectly well when
+  run by hand a moment later.
+
+  `tests/run.sh` now stamps the binary at startup and re-checks at the end,
+  printing a `WARNING: ... changed while this run was in progress` and exiting
+  2 if anything failed. Other harnesses do not, so recognize the shape:
+  **assertions that pass when you run them directly were probably never really
+  run.**
+
+- **`ctest -jN` oversubscribing the box.** `tests/run.sh` and
+  `tests/run-turi.sh` each fan out across `nproc` internally, so `-j4` is not
+  four tests sharing a machine but `4 x nproc` processes on it. Their
+  per-fixture timeouts (10s compiled, 15s interpreted) then expire on work that
+  would otherwise finish comfortably. Both targets are marked `RUN_SERIAL` so
+  ctest gives them the machine, which is what they already assumed.
+
+- **Memory, not CPU, inside a single turi run.** The tree-walking interpreter
+  retains roughly 4 KiB per step of a trampolined loop -- its closures and
+  continuations are process-lifetime by design -- so a fixture's step count is
+  a *memory* multiplier under `--interpret` and nothing at all compiled. A
+  1e6-step fixture peaks at ~3.5 GiB RSS; two of them co-scheduled by the
+  harness's own `xargs -P nproc` is memory pressure on a 16 GiB runner, and the
+  interpreter's wall clock goes superlinear once RSS passes ~2 GiB (5e5 -> 1e6
+  steps costs 7.6x the time, not 2x). CPU parallelism is not the variable:
+  `nproc` workers on `nproc` cores measured no slower than idle. When an
+  `--interpret` fixture times out, check its peak RSS
+  (`/proc/<pid>/status` `VmHWM`) before reaching for a bigger timeout. See
+  [docs/archive/ci-cps-tramp-turi-timeouts-under-load.md](docs/archive/ci-cps-tramp-turi-timeouts-under-load.md).
+
+The rule of thumb: **before diagnosing a test failure, check whether anything
+else was building or testing at the same time.** If it was, re-run alone before
+believing the result. Do not launch a build and a suite concurrently.
+
+Both harnesses report a per-fixture timeout as `timed out (>Ns)`. They used to
+diff stdout first, so a killed fixture's partial output surfaced as a
+`stdout mismatch` -- a claim about the answer, not the clock. If you are reading
+an older CI log, treat a `stdout mismatch` on a long-running fixture as
+possibly a timeout.
 
 Release build:
 
@@ -505,7 +618,7 @@ PASS-skip it under certain conditions:
 | `requires.interp` | (override) forces the interpreter path even under non-TSan |
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
-| `requires.pollable-pipes` | the host reactor cannot poll pipe fds -- Windows has no POSIX `pipe()`, and its `select()` is socket-only |
+| `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
 
 A fixture may also carry `requires.no-leak-check` (not a skip marker): the
 compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for
@@ -612,6 +725,14 @@ println $ normalize $ vec3(1.0 0.0 0.0)
 
 Prefer `$` over neoteric when the outer call takes exactly one argument that is
 itself a call with multiple space-separated arguments.
+
+`$` wraps the rest of the line in one pair of parens only when the rest needs
+it -- a bare token sequence. When the rest is *already* one complete delimited
+expression (a neoteric call `g(7)`, a parenthesised form `(g 7)`, a curly-infix
+group `{a + b}`, a data literal), the wrap is suppressed, so `$` composes with
+neoteric and curly-infix rather than double-applying them. A bare atom is the
+one exception: `f $ g` is `(f (g))` per SRFI-110 -- a zero-argument call, not
+`(f g)`.
 
 ### Curly-infix -- `{a + b}` for arithmetic
 

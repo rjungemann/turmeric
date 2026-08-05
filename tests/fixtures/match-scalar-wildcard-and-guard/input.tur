@@ -1,0 +1,57 @@
+;; `match` on a non-ADT scrutinee: wildcard-only arms, and guarded arms.
+;;
+;; Two codegen defects, both of which reproduced with no refinements anywhere
+;; and both of which lived in the same block:
+;;
+;;   1. The scalar path was entered only when SOME arm spelled a literal.
+;;      A match with only wildcard or binder arms fell through to the ADT path,
+;;      which reads `adt->name` -- and an `:int` has no AdtDef. UBSan caught it
+;;      as a null-pointer member access; without a sanitizer it is a read
+;;      through NULL.
+;;
+;;   2. The scalar path emitted an if/else-if chain, which cannot express a
+;;      GUARD: a guarded arm may fail its guard and fall through, so its test
+;;      is not the whole condition. A guarded wildcard emitted a bare `else`,
+;;      and the arm after it emitted a second one -- `'else' without a previous
+;;      'if'`, a program that could not be built at all.
+;;
+;; The fix is one structure: a flat sequence of `if` blocks each jumping to the
+;; end on success, which is what the ADT path already did and for the same
+;; reason. It also gives a binder somewhere to be bound BEFORE a guard that
+;; mentions it is evaluated.
+
+(defn only-wildcard [p : int] : int
+  (match p _ 0))
+
+(defn only-binder [p : int] : int
+  (match p x x))
+
+(defn two-wildcards [p : int] : int
+  (match p _ 1 _ 2))
+
+(defn literal-first [p : int] : int
+  (match p
+    0 10
+    1 11
+    _ 12))
+
+(defn guarded-wildcard [p : int] : int
+  (match p
+    _ when (> p 2) 99
+    _              0))
+
+(defn guard-then-literal [p : int] : int
+  (match p
+    0 0
+    _ when (not= p 0) (/ 10 p)
+    _                 0))
+
+(defn main [] : int
+  (println (only-wildcard 3))
+  (println (only-binder 3))
+  (println (two-wildcards 3))
+  (println (literal-first 1))
+  (println (guarded-wildcard 3))
+  (println (guarded-wildcard 1))
+  (println (guard-then-literal 5))
+  0)

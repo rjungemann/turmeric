@@ -156,12 +156,124 @@ single target (usually `tests/run.sh` cold), not the sum. Removing the
 `-j` and shipping is a soft regression that will not show up in any test's
 own timing -- watch for it in code review.
 
+`-j` is safe here only because the heavy targets are marked `RUN_SERIAL`
+(`tur_tests`, `turi_fixture_tests`, `tur_jit_fixture_tests`): each already
+fans out across `nproc` internally, so letting ctest run two of them at once
+oversubscribes the box and expires their per-fixture timeouts. Keep the
+marking when you add a fan-out harness -- see "Failures That Are Not Product
+Bugs" in [test-runner-contract.md](test-runner-contract.md).
+
 ---
 
-## 6. Timeout budget
+## 6. A check that enumerated nothing passes vacuously
+
+`head -z` / `--zero-terminated` is a GNU coreutils extension; BSD/macOS
+`head` does not have it. In `tests/run-fmt.sh` it errored, the
+NUL-separated `read` loop never ran, the failure counter stayed at zero,
+and `fmt-idempotence-stdlib` reported PASS having checked **zero files**.
+Formatter idempotence had no macOS coverage at all and the summary line
+said everything was fine.
+
+The general shape: **any check whose `pass` is guarded only by "no
+failures accumulated" is greenest when its enumeration breaks.** Every
+file-walking check needs an explicit "checked at least one file" guard:
+
+```bash
+SEEN=0
+while IFS= read -r -d '' f; do
+    SEEN=$((SEEN + 1))
+    ...
+done < <(find stdlib -name '*.tur' -print0)
+
+if [ "$SEEN" -eq 0 ]; then
+    fail "$NAME" "no files checked -- stdlib enumeration produced nothing"
+elif [ "$FAILED" -eq 0 ]; then
+    pass "$NAME"
+fi
+```
+
+Bound a sample inside the loop (`[ "$SEEN" -ge 20 ] && break`) rather than
+with a `head` in the pipeline. `tests/run-fmt.sh` carries both guards
+(`fmt-bootstrap-stdlib`, `fmt-idempotence-stdlib`) -- copy them.
+
+---
+
+## 7. Heap probes and sanitizers do not mix
+
+A malloc-probe assertion means nothing under ASan, and it means nothing
+*differently* per platform:
+
+- **glibc** -- ASan replaces the allocator, so `mallinfo2().uordblks`
+  reads 0 and the check is vacuously green.
+- **Darwin** -- the probe reads ASan's own zone and the free quarantine
+  inflates it (measured: 160 bytes per iteration of quarantined frees).
+
+The two platforms disagree, which is worse than both being wrong: the
+glibc leg looks like a working control for the Darwin leg.
+
+Separately, `malloc_zone_statistics(malloc_default_zone(), ...)` on Darwin
+measures the **whole default zone**, including stdlib bucket/page
+bookkeeping, and moves in 16-32 KB steps. Absolute heap-delta assertions
+are noise there; glibc's `mallinfo2().uordblks` is the narrow equivalent.
+
+Two rules fall out:
+
+1. The diagnostic that settles "leak or noise" is **scaling**: a real leak
+   grows with iteration count, noise does not. Probe at two sizes before
+   believing a number.
+2. `mallinfo2` is useless anywhere in this tree that links an
+   ASan-instrumented `libturi`. Use RSS from `/proc/self/statm`, which is
+   allocator-independent.
+
+---
+
+## 8. Harness environment parity
+
+`tests/run.sh` exports `TUR_BIND_LOOPBACK=1`; `stdlib/httpd.tur` and
+`stdlib/async_socket.tur` read it at run time and bind `INADDR_LOOPBACK`
+instead of `INADDR_ANY`. A sibling harness that forgets the export makes
+every server fixture bind all interfaces.
+
+That is not a cosmetic difference. It surfaced as an apparent macOS-only
+JIT defect: BSD permits a wildcard bind while a specific address holds the
+port, so the second server silently succeeded and stole nothing on Linux
+(which refuses the wildcard-over-specific bind) but did on macOS. The
+mechanism was BSD socket semantics; the cause was one missing `export` in
+`tests/run-jit.sh`.
+
+Rule: **any env var `tests/run.sh` exports, every sibling harness must
+export.** Diff them before landing a new runner:
+
+```sh
+grep -n TUR_BIND_LOOPBACK tests/run.sh tests/run-jit.sh
+```
+
+---
+
+## 9. String literals are not reliably merged
+
+C11 6.4.5p7 leaves it **unspecified** whether identical string literals in
+one translation unit share an address. gcc and clang merge them; c2mir
+(the JIT backend) does not.
+
+A fixture that probes a map with the *same* literal it inserted therefore
+tests pointer identity on one engine and content equality on another:
+
+```c
+/* gcc: MERGED (a == b)          c2mir: DISTINCT (a != b) */
+```
+
+So a JIT-only failure on a `cstr`-keyed container can be a **fixture**
+defect, not an engine defect. Build the probe key separately from the
+insert key -- or compare by content -- before filing anything against the
+backend.
+
+---
+
+## 10. Timeout budget
 
 `bash tests/run.sh` is expected to complete in ~4-5 minutes end-to-end and
-**must** always be invoked with a 10-minute (`timeout: 600000`) budget --
+**must** always be invoked with a 12-minute (`timeout: 720000`) budget --
 see the top-level `CLAUDE.md` "Test Suite Timeout" rule. If a run stretches
 to 15-20 minutes, suspect CPU contention (overlapping suite runs), not a
 hang: per-fixture *run* timeouts already cap at 10s, so a genuine runtime
@@ -172,6 +284,8 @@ loop surfaces as `FAIL`, not an indefinite stall.
 ## See also
 
 - [test-runner-contract.md](test-runner-contract.md) -- stdlib test
-  framework contract (assertions, discovery, exit semantics).
+  framework contract (assertions, discovery, exit semantics), plus
+  "Failures that are not product bugs" (sanitizer-laundered crashes,
+  overlapping runs, contract fixtures under Release).
 - [performance-guide.md](performance-guide.md) -- user-facing performance
   guidance for Turmeric programs (not the test harness itself).

@@ -207,6 +207,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0039_METHOD_DEFN_CLASH:          return "TUR-W0039";
         case TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH: return "TUR-W0040";
         case TUR_W0041_HIGH_ARITY:                 return "TUR-W0041";
+        case TUR_W0042_SHADOWS_SPECIAL_FORM:       return "TUR-W0042";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -235,9 +236,24 @@ const char *diag_code_to_string(DiagCode code) {
         /* IT1: Union type errors */
         case TUR_E0300_UNION_TYPE_MISMATCH:        return "TUR-E0300";
         case TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH: return "TUR-E0301";
+        case TUR_E0302_SEALED_OPAQUE_CAST:         return "TUR-E0302";
         /* IT3: Intersection type errors */
         case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
         case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
+        /* RT3: refinement-type discharge */
+        case TUR_E0370_REFINE_ILL_TYPED:          return "TUR-E0370";
+        case TUR_E0371_REFINE_NOT_PROVED:         return "TUR-E0371";
+        case TUR_W0372_REFINE_UNKNOWN:            return "TUR-W0372";
+        case TUR_W0373_REFINE_NONLINEAR:          return "TUR-W0373";
+        case TUR_E0374_REFINE_INSTANCE_STRONGER:  return "TUR-E0374";
+        case TUR_E0375_REFINE_EFFECTFUL:          return "TUR-E0375";
+        case TUR_E0376_REFINE_TYPE_PARAM:         return "TUR-E0376";
+        case TUR_W0377_REFINE_INSTANCE_LENIENCY:  return "TUR-W0377";
+        case TUR_E0378_REFINE_IN_FN_TYPE:         return "TUR-E0378";
+        case TUR_I0379_REFINE_ORACLE_MISMATCH:    return "TUR-I0379";
+        case TUR_W0380_REFINE_TYPE_ARG_UNENFORCED: return "TUR-W0380";
+        case TUR_E0381_WRITES_FRAME_INVALID:       return "TUR-E0381";
+        case TUR_E0382_WRITES_FRAME_EXCEEDED:      return "TUR-E0382";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
@@ -269,6 +285,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
+        case TUR_E0621_TUR_VERSION_BELOW_FLOOR:   return "TUR-E0621";
+        case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
+        case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
         default:                          return "";
     }
 }
@@ -345,6 +364,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
     if (strcmp(s, "TUR-W0040") == 0) return TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH;
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
+    if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -373,9 +393,24 @@ DiagCode diag_code_from_string(const char *s) {
     /* IT1: Union type errors */
     if (strcmp(s, "TUR-E0300") == 0) return TUR_E0300_UNION_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0301") == 0) return TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH;
+    if (strcmp(s, "TUR-E0302") == 0) return TUR_E0302_SEALED_OPAQUE_CAST;
     /* IT3: Intersection type errors */
     if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
     if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
+    /* RT3: refinement-type discharge */
+    if (strcmp(s, "TUR-E0370") == 0) return TUR_E0370_REFINE_ILL_TYPED;
+    if (strcmp(s, "TUR-E0371") == 0) return TUR_E0371_REFINE_NOT_PROVED;
+    if (strcmp(s, "TUR-W0372") == 0) return TUR_W0372_REFINE_UNKNOWN;
+    if (strcmp(s, "TUR-W0373") == 0) return TUR_W0373_REFINE_NONLINEAR;
+    if (strcmp(s, "TUR-E0374") == 0) return TUR_E0374_REFINE_INSTANCE_STRONGER;
+    if (strcmp(s, "TUR-E0375") == 0) return TUR_E0375_REFINE_EFFECTFUL;
+    if (strcmp(s, "TUR-E0376") == 0) return TUR_E0376_REFINE_TYPE_PARAM;
+    if (strcmp(s, "TUR-W0377") == 0) return TUR_W0377_REFINE_INSTANCE_LENIENCY;
+    if (strcmp(s, "TUR-E0378") == 0) return TUR_E0378_REFINE_IN_FN_TYPE;
+    if (strcmp(s, "TUR-I0379") == 0) return TUR_I0379_REFINE_ORACLE_MISMATCH;
+    if (strcmp(s, "TUR-W0380") == 0) return TUR_W0380_REFINE_TYPE_ARG_UNENFORCED;
+    if (strcmp(s, "TUR-E0381") == 0) return TUR_E0381_WRITES_FRAME_INVALID;
+    if (strcmp(s, "TUR-E0382") == 0) return TUR_E0382_WRITES_FRAME_EXCEEDED;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
@@ -407,6 +442,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
+    if (strcmp(s, "TUR-E0621") == 0) return TUR_E0621_TUR_VERSION_BELOW_FLOOR;
+    if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
+    if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
     return DIAG_CODE_NONE;
 }
 
@@ -832,6 +870,31 @@ static const DiagExplanation diag_explanations_[] = {
       "is a safe abstraction over an unsafe implementation:\n"
       "  (defn safe-fn [] :int (unsafe (raw-c-helper)))\n",
     },
+    { TUR_W0042_SHADOWS_SPECIAL_FORM,
+      "TUR-W0042: Definition shadows a special form\n"
+      "\n"
+      "A defn or defmacro was given the name of a reserved special form, e.g.\n"
+      "  (defn return [x :int] : (fn [] int) ...)\n"
+      "\n"
+      "Call heads are matched against the special forms by name BEFORE any\n"
+      "binding, macro, or typeclass-method lookup, so the definition is accepted\n"
+      "but never consulted: a bare (return 1) elaborates as the early-return\n"
+      "form, not as a call to your function. The resulting type error -- if there\n"
+      "is one at all -- lands on the caller's argument and never mentions the\n"
+      "name collision.\n"
+      "\n"
+      "Fix: rename the definition. `pure` is the conventional name for a monadic\n"
+      "unit, which is the usual reason `return` gets reached for:\n"
+      "  (defn pure [x :int] : (fn [] int) ...)\n"
+      "\n"
+      "Inside a defmodule the definition is still reachable through its qualified\n"
+      "name ((mymod/return 1)), since a qualified head symbol never matches a\n"
+      "special form -- but the bare name stays shadowed, so renaming is better.\n"
+      "\n"
+      "Names that are deliberately shadowable (handler, with, default-of, and the\n"
+      "session ops send/recv/close/...) do not trigger this warning: a user\n"
+      "definition of those genuinely wins over the form.\n",
+    },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,
       "TUR-E0100: Linear value dropped without being consumed\n"
@@ -1162,7 +1225,38 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "`(:: v :any)` (or just passing v where an `any` is expected) heap-boxes it\n"
       "as a one-word handle; `(cast h T)` reads it back as T.  See\n"
-      "docs/upcoming/byvalue-adt-int-cast-plan.md.\n",
+      "docs/archive/byvalue-adt-int-cast-plan.md.\n",
+    },
+    { TUR_E0302_SEALED_OPAQUE_CAST,
+      "TUR-E0302: Cannot cast across a sealed opaque's representation boundary\n"
+      "\n"
+      "`(defopaque H :int :sealed)` declares that H's representation is private\n"
+      "to the module that defines it.  Outside that module, `::` refuses BOTH\n"
+      "directions: you can neither unwrap an H to its representation nor build\n"
+      "an H from one.\n"
+      "\n"
+      "Example:\n"
+      "  ;; in module ecs/refined-world\n"
+      "  (defopaque RGWorld :int :sealed)\n"
+      "\n"
+      "  ;; in some other module\n"
+      "  (:: w :int)         ; error: cannot unwrap sealed 'RGWorld'\n"
+      "  (:: n RGWorld)      ; error: cannot fabricate sealed 'RGWorld'\n"
+      "\n"
+      "Why this exists: `::` is a COERCING cast, so an ordinary defopaque can\n"
+      "always be unwrapped and re-wrapped -- which mints an ALIAS of a handle\n"
+      "the type system believes is uniquely held.  That bounds every guarantee\n"
+      "built on the handle.  The motivating case is a `frozen` region: mutating\n"
+      "the borrowed world is correctly TUR-E0200, but mutating an alias rebuilt\n"
+      "through `::` was not.\n"
+      "\n"
+      "Fix: go through the declaring module's API.  If you genuinely need the\n"
+      "representation outside, that module should export a function for it --\n"
+      "which makes the escape explicit and reviewable instead of implicit.\n"
+      "\n"
+      "This check is part of the `sealed-opaque` experiment; without\n"
+      "--enable=sealed-opaque, `:sealed` parses but imposes nothing.  See\n"
+      "docs/upcoming/sealed-opaque-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
       "TUR-E0296: `with` requires a :copy type\n"
@@ -1306,6 +1400,201 @@ static const DiagExplanation diag_explanations_[] = {
       "widen the intersection to include the actual type.\n"
       "\n"
       "Enable with: turc -Xintersection-types myfile.tur\n",
+    },
+    /* RT3: refinement-type discharge explanations */
+    { TUR_E0371_REFINE_NOT_PROVED,
+      "TUR-E0371: Refinement predicate cannot be proved statically\n"
+      "\n"
+      "Under the `refined` experiment the compiler tries to PROVE each\n"
+      "#refine{...} predicate instead of only checking it at runtime.  This\n"
+      "obligation was not just undecided -- a backend found a counterexample,\n"
+      "so the predicate genuinely does not hold for every input.\n"
+      "\n"
+      "Example:\n"
+      "  (defn wrong [x : int] : #refine{ r : int | (> r 0) }\n"
+      "    x)          ; x may be 0 or negative\n"
+      "\n"
+      "Fix by constraining the input so the result follows:\n"
+      "  (defn ok [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }\n"
+      "    x)\n"
+      "\n"
+      "The runtime contract check is still emitted, so the program remains\n"
+      "safe; --strict-refine turns this into a hard failure instead.\n"
+      "\n"
+      "Refinement checking is on in every build -- `refined` graduated in\n"
+      "v0.33.0, so there is no flag to enable.\n",
+    },
+    { TUR_W0372_REFINE_UNKNOWN,
+      "TUR-W0372: Solver returned unknown for a refinement predicate\n"
+      "\n"
+      "No stage of the in-house decision procedure could decide this\n"
+      "obligation, so the runtime contract check is kept -- exactly the\n"
+      "behavior you would get with contract types alone.  This is a sound\n"
+      "outcome, not a miscompile.\n"
+      "\n"
+      "Common causes:\n"
+      "  - the predicate or the expression it constrains falls outside the\n"
+      "    supported fragment (quantifier-free linear integer/real arithmetic\n"
+      "    with equality and uninterpreted functions);\n"
+      "  - a nonlinear subterm was abstracted away (see TUR-W0373);\n"
+      "  - the propositional structure exceeded the small-DNF cap.\n"
+      "\n"
+      "Adding an explicit refinement to a parameter usually supplies the\n"
+      "missing hypothesis.  --strict-refine turns this into a hard error for\n"
+      "builds that want every obligation discharged statically.\n",
+    },
+    { TUR_E0378_REFINE_IN_FN_TYPE,
+      "TUR-E0378: Refinement written inside a function type\n"
+      "\n"
+      "A `(fn ...)` type cannot carry refinements on its parameters or its\n"
+      "result. Writing one there is rejected rather than ignored, because a\n"
+      "silently dropped refinement reads like a guarantee that is being\n"
+      "checked and is not.\n"
+      "\n"
+      "This is the known limit on HIGHER-ORDER checking. A function value with\n"
+      "refined parameters may be passed and called freely -- its own entry\n"
+      "checks still run, so nothing unsound follows -- but the refinement\n"
+      "cannot be seen through the function type, so neither the body that\n"
+      "calls it nor the caller that supplies it is checked statically:\n"
+      "\n"
+      "    (defn safe-div [a : int b : #refine{ v : int | (not= v 0) }] : int ...)\n"
+      "    (defn apply1 [f : (fn [int int] int) x : int] : int (f 10 x))\n"
+      "    (apply1 safe-div 0)   ; allowed; caught at run time, not compile time\n"
+      "\n"
+      "Closing that gap needs refinements to be part of function types, with\n"
+      "the contravariant subtyping check that implies. Until then, options are\n"
+      "to take the value at a named type with a `defn` wrapper that carries the\n"
+      "refinement, or to accept the runtime check.\n" },
+    { TUR_W0377_REFINE_INSTANCE_LENIENCY,
+      "TUR-W0377: Call relies on instance-specific leniency\n"
+      "\n"
+      "The argument violates the CLASS signature's refinement, but the instance\n"
+      "this call resolved to explicitly demands less, so the call is allowed.\n"
+      "\n"
+      "A typeclass instance may accept more than its class promises (see\n"
+      "TUR-E0374 for the other direction), and a call whose instance is known\n"
+      "statically is checked against that instance -- the more precise contract\n"
+      "of the two. This warning marks where the two disagree.\n"
+      "\n"
+      "It matters because the leniency is not part of the interface. Adding a\n"
+      "stricter instance later, or lifting this call into a generic function\n"
+      "where dispatch stays dynamic, checks the argument against the CLASS\n"
+      "predicate instead -- and this call would then fail.\n"
+      "\n"
+      "Fix by passing an argument the class signature admits, or, if the\n"
+      "leniency is intended, by widening the class signature so it is part of\n"
+      "the published contract rather than one instance's private extension.\n"
+      "\n"
+      "Only a DEFINITE violation warns: the argument has to be one the class\n"
+      "predicate rejects outright, not merely one it cannot prove.\n" },
+    { TUR_W0380_REFINE_TYPE_ARG_UNENFORCED,
+      "TUR-W0380: Refinement in type-argument position is not enforced\n"
+      "\n"
+      "A refinement written as a TYPE ARGUMENT -- the payload slot of a\n"
+      "container -- is peeled to its base type and the predicate is dropped:\n"
+      "\n"
+      "    (defn f [b : (Box #refine{ v : int | (> v 0) })] : int ...)\n"
+      "    ;; behaves exactly as (Box int); nothing checks the payload\n"
+      "\n"
+      "The refinement is not silently honored and it is not an error either.\n"
+      "It is peeled because leaving it in place is worse: a live contract type\n"
+      "inside a type application makes every ordinary use of the payload fail\n"
+      "(operator lookup, overload resolution, and return-type checking all\n"
+      "compare kinds without peeling), so the annotation would break the\n"
+      "program rather than merely fail to help it.\n"
+      "\n"
+      "Enforcing it needs a refinement to survive as a type argument all the\n"
+      "way to the binder that unpacks the container, plus a checked crossing\n"
+      "where a constructor call's result is matched against a declared type.\n"
+      "That is a real feature, not an oversight, and it is not built.\n"
+      "\n"
+      "To actually check the value, refine at a position that IS enforced --\n"
+      "a parameter, a return type, or a `let` annotation:\n"
+      "\n"
+      "    (defn unwrap [b : Box] : #refine{ v : int | (> v 0) } ...)\n"
+      "\n"
+      "or check the payload after unpacking it.\n" },
+    { TUR_E0381_WRITES_FRAME_INVALID,
+      "TUR-E0381: Malformed `#writes` frame\n"
+      "\n"
+      "A `#writes` annotation names the parameters whose mutable state the\n"
+      "body may write.  It is spelled either as one parameter or as a vector\n"
+      "of them, and every name must be a parameter of THIS function:\n"
+      "\n"
+      "    (defn move! [^mut w : World dt : float] #writes w : void ...)\n"
+      "    (defn swap2! [^mut a : Buf ^mut b : Buf] #writes [a b] : void ...)\n"
+      "    (defn peek [^borrow w : World] #writes [] : int ...)\n"
+      "\n"
+      "`#writes []` is the empty frame -- a positive claim that the body\n"
+      "writes nothing.  It is NOT the same as omitting the annotation, which\n"
+      "means \"unknown, assume anything\".\n"
+      "\n"
+      "This is an error rather than an ignored decoration because a frame that\n"
+      "does not resolve cannot be checked against the body, and downstream\n"
+      "code is entitled to believe a declaration that compiled.\n" },
+    { TUR_E0382_WRITES_FRAME_EXCEEDED,
+      "TUR-E0382: Body writes outside its declared `#writes` frame\n"
+      "\n"
+      "The function declared a write frame, and its body writes something the\n"
+      "frame does not cover:\n"
+      "\n"
+      "    (defn bump! [^mut a : Ctr ^mut b : Ctr] #writes [a] : void\n"
+      "      (set! (.n a) 1)\n"
+      "      (set! (.n b) 2))   ;; TUR-E0382: `b` is not in the frame\n"
+      "\n"
+      "A declared frame the body exceeds is an error, not a silent widening --\n"
+      "the same rule `#reads` follows.  Widening it silently would make the\n"
+      "annotation unfalsifiable, and the whole point of the checked tier is\n"
+      "that an optimization may act on the claim.\n"
+      "\n"
+      "Three write channels are checked: a direct `set!`/`swap!`/`reset!`, an\n"
+      "argument passed `^mut` to a callee, and a callee's own declared frame.\n"
+      "Fix it by widening the declaration to what the body actually writes, or\n"
+      "by narrowing the body.\n"
+      "\n"
+      "Only a body with no inline C is checked.  An inline-C body cannot be\n"
+      "walked, so its frame stays trusted-with-declaration and never reports\n"
+      "this code -- checked-when-checkable, never checked-by-pretending.\n" },
+    { TUR_W0373_REFINE_NONLINEAR,
+      "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
+      "\n"
+      "Multiplication or division of two variables (`(* x y)`, `(/ x y)`) is\n"
+      "outside the linear fragment the refinement solver decides.  Such a term\n"
+      "is abstracted to an opaque function symbol: congruence closure still\n"
+      "relates two occurrences of the same product, but no arithmetic facts\n"
+      "about it are available, so proofs that depend on them will come back\n"
+      "unknown (TUR-W0372) and fall back to the runtime check.\n"
+      "\n"
+      "This is deliberate.  Turmeric does not climb the nonlinear wall; a\n"
+      "genuinely nonlinear obligation gets a runtime check instead.\n"
+      "\n"
+      "Multiplication by a LITERAL stays linear and is fully decided:\n"
+      "  (* x 2)   ; linear -- decided\n"
+      "  (* x y)   ; nonlinear -- uninterpreted\n",
+    },
+    { TUR_E0374_REFINE_INSTANCE_STRONGER,
+      "TUR-E0374: Instance method demands more than its class signature\n"
+      "\n"
+      "A typeclass method's parameter refinement in the CLASS signature is the\n"
+      "promise callers program against.  An instance may accept MORE than the\n"
+      "class promises, but it may not accept less: a caller that honours the\n"
+      "class contract would then be handed to an instance that rejects its\n"
+      "argument, and the method's entry check would panic on a value the\n"
+      "caller was entitled to pass.\n"
+      "\n"
+      "Example:\n"
+      "  (defclass Scaler [a]\n"
+      "    (scale-by [self : a, k : #refine{ v : int | (>= v 0) }] : int))\n"
+      "\n"
+      "  (definstance Scaler [int]\n"
+      "    (scale-by [self : int, k : #refine{ v : int | (> v 0) }] : int\n"
+      "      (* self k)))    ; error: rejects 0, which the class admits\n"
+      "\n"
+      "Either widen the instance to match the class, or narrow the class\n"
+      "signature so every caller knows the stronger requirement.\n"
+      "\n"
+      "Only reported when the compiler can PROVE the instance is stronger; an\n"
+      "undecidable pair is left to the runtime check.\n",
     },
     { TUR_E0151_RELEVANT_DROPPED,
       "TUR-E0151: Relevant value dropped without being used\n"
@@ -2216,12 +2505,18 @@ static void lsp_build_array(Buf *b) {
     for (size_t i = 0; i < lsp_entry_count_; i++) {
         const DiagLspEntry *e = &lsp_entries_[i];
         int sev = (e->level <= DIAG_HELP) ? lsp_severity[e->level] : 3;
+        /* A zero-width range paints nothing: the squiggle has no characters to
+         * sit under, so the diagnostic is invisible in the editor even though
+         * it is present in the response. Every client had to widen these by
+         * hand; widen once here instead. */
+        unsigned col_end = e->col_end0 > e->col_start0 ? e->col_end0
+                                                       : e->col_start0 + 1;
         if (i > 0) buf_putc(b, ',');
         buf_printf(b,
             "{\"severity\":%d"
             ",\"range\":{\"start\":{\"line\":%u,\"character\":%u}"
                        ",\"end\":{\"line\":%u,\"character\":%u}}",
-            sev, e->line0, e->col_start0, e->line0, e->col_end0);
+            sev, e->line0, e->col_start0, e->line0, col_end);
         buf_puts(b, ",\"message\":");
         json_escape_string(b, e->message);
         const char *code_str = diag_code_to_string(e->code);

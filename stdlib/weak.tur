@@ -1,0 +1,177 @@
+;;; tur/weak -- weak<T> non-owning references, and the cycle break they exist for.
+;;;
+;;; Opt-in: load it when you need one.
+;;;
+;;;   (load "stdlib/weak.tur")
+;;;
+;;; `weak` and `upgrade` have been language intrinsics since Phase 9, but the
+;;; library gave them no surface -- so the moment a program adopted `rc<T>` for
+;;; a parent/child or observer graph, the one tool that keeps such a graph
+;;; leak-free lived outside stdlib.  This module is that surface: five named,
+;;; documented wrappers over intrinsics that already worked.  No new mechanism.
+;;;
+;;; The Rust parallel is exact:
+;;;
+;;;   Rc::downgrade(&r)  ->  (rc/downgrade r)
+;;;   Weak::upgrade(&w)  ->  (weak/upgrade w)   ; Option<Rc<T>> / (Option rc<A>)
+;;;   drop(w)            ->  (weak/drop w)
+;;;
+;;; A weak<A> holds no strong count, so it never keeps its referent alive and
+;;; never closes a strong cycle.  That is exactly why it breaks one: give the
+;;; back-edge of a parent/child graph to a weak and the forward edges alone
+;;; decide the lifetime.  Unlike the cycle collector, this works with the GC
+;;; off and reclaims at the moment the last strong handle goes, not at (gc!).
+;;;
+;;; The stdlib itself uses none of this.  A 2026-07-24 audit of all ~138 stdlib
+;;; modules found it builds no rc<T> graphs at all -- persistent-immutable
+;;; structures plus linear/affine handles, so there is nothing to break.  This
+;;; module is stocked toolbox, not current need; see
+;;; docs/guides/ownership-guide.md for when reaching for it is the right call.
+;;;
+;;; It is a separate module rather than part of stdlib/rc.tur, deliberately.
+;;; Originally it had to be: rc.tur did not compile at all, so an API placed
+;;; there would have been unusable (fixed 2026-07-26, see
+;;; docs/archive/rc-tur-legacy-instances-do-not-compile.md).  It stays separate
+;;; now because the split is the better shape -- reaching for a weak reference
+;;; should not drag in rc.tur's Functor/Foldable/Clone instances and the
+;;; typeclass surface behind them.  Same reasoning as stdlib/rcchain.tur: one
+;;; opt-in module, one job.
+;;;
+;;; Since: stdlib-weak-ref-audit WR1
+;; Weak references over rc<T>.
+;;; rc/downgrade -- create a non-owning weak<A> observer of an rc<A>.
+;;;
+;;; The counterpart of `rc/clone`: where a clone mints a second *strong* handle
+;;; that keeps the value alive, a downgrade mints a *weak* one that does not.
+;;; Rust spells this `Rc::downgrade`.
+;;;
+;;; The rc is taken `^borrow`, so downgrading does not consume the caller's
+;;; handle -- one rc can be observed by any number of weaks.
+;;;
+;;; Parameters:
+;;;   r -- the rc<A> to observe (borrowed, not consumed)
+;;;
+;;; Returns:
+;;;   A weak<A> observing the same allocation without owning it. Release it with
+;;;   `weak/drop` when done: a weak is NOT dropped automatically at scope exit,
+;;;   and the control block outlives its value until the last weak goes away.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 42)]
+;;;     (let [w (rc/downgrade r)]
+;;;       (println (rc/strong-count r))   ; => 1 -- a weak adds no strong count
+;;;       (weak/drop w)))
+;;;
+;;; Since: stdlib-weak-ref-audit WR1
+(defn rc/downgrade [A] [^borrow r : rc<A>] : weak<A> (weak r))
+;;; weak/upgrade -- try to reclaim a strong rc<A> from a weak<A>.
+;;;
+;;; Returns some(rc) when the referent is still alive -- and that rc is a NEW
+;;; strong handle the caller owns and must `rc/drop` -- or none once the last
+;;; strong handle has gone. Rust spells this `Weak::upgrade`.
+;;;
+;;; This is what makes weak observation safe rather than merely cheap: there is
+;;; no way to read through a weak without first asking whether the value is
+;;; still there, so a dangling read is not expressible.
+;;;
+;;; Use `weak/unwrap` to take the rc out of the some case. The generic `unwrap`
+;;; from stdlib/option.tur cannot be used here: a generic type parameter passes
+;;; its value through the int64 element carrier, and an owning rc<A> is rejected
+;;; at that crossing.
+;;;
+;;; Parameters:
+;;;   w -- the weak<A> to upgrade (borrowed, not consumed)
+;;;
+;;; Returns:
+;;;   (Option rc<A>) -- some(strong handle) if alive, none if the value is gone.
+;;;
+;;; Example:
+;;;   (let [o (weak/upgrade w)]
+;;;     (if (some? o)
+;;;       (let [s (weak/unwrap o)]
+;;;         (rc/drop s))          ; the upgraded handle is ours to release
+;;;       (println "gone")))
+;;;
+;;; Since: stdlib-weak-ref-audit WR1
+
+(defn weak/upgrade [A] [^borrow w : weak<A>] : (Option rc<A>)
+  ```c
+  RcControlBlock *cb = rc_upgrade(w);
+  return cb ? tur_some_ptr(cb) : tur_none();
+  ```)
+;;; weak/unwrap -- take the rc<A> out of a successful (weak/upgrade w).
+;;;
+;;; Check `some?` first. On a none the result is a null rc handle, which is
+;;; inert rather than fatal (`rc/drop` on it is a no-op), but it is not a live
+;;; value and must not be dereferenced.
+;;;
+;;; Parameters:
+;;;   o -- the (Option rc<A>) returned by weak/upgrade
+;;;
+;;; Returns:
+;;;   The contained rc<A>. The caller owns it and must `rc/drop` it.
+;;;
+;;; Example:
+;;;   (let [o (weak/upgrade w)]
+;;;     (when (some? o)
+;;;       (let [s (weak/unwrap o)]
+;;;         (rc/drop s))))
+;;;
+;;; Since: stdlib-weak-ref-audit WR1
+
+(defn weak/unwrap [A] [o : (Option rc<A>)] : rc<A> (.value o))
+;;; weak/alive? -- is the weak's referent still alive?
+;;;
+;;; A peek that mints nothing: unlike `weak/upgrade` it creates no strong
+;;; handle, so there is nothing to drop afterwards. Use it for observation
+;;; (logging, assertions, pruning a list of dead observers); use `weak/upgrade`
+;;; when you actually need the value, since between an `alive?` and a later read
+;;; the answer could change.
+;;;
+;;; Parameters:
+;;;   w -- the weak<A> to test (borrowed, not consumed)
+;;;
+;;; Returns:
+;;;   true if a strong handle still exists, false once the value has been freed.
+;;;
+;;; Example:
+;;;   (let [w (let [r (rc/of 99)] (rc/downgrade r))]
+;;;     (println (weak/alive? w))   ; => false -- r died at scope exit
+;;;     (weak/drop w))
+;;;
+;;; Since: stdlib-weak-ref-audit WR1
+
+(defn weak/alive? [A] [^borrow w : weak<A>] : bool
+  ```c
+  return w != NULL && rc_strong_count(w) > 0;
+  ```)
+;;; weak/drop -- release a weak<A> observation.
+;;;
+;;; A weak is NOT released automatically at scope exit, so this call is what
+;;; ends the observation. The value itself is freed when the last *strong*
+;;; handle goes; the control block carrying the counts outlives it until the
+;;; last weak is dropped -- which is precisely what lets a later `weak/upgrade`
+;;; answer "gone" instead of dangling.
+;;;
+;;; A weak stored in a struct field is an exception: the field is
+;;; weak-decremented for you when the owning value is freed, so a back-edge
+;;; installed with `(set! (.parent child) (rc/downgrade parent))` needs no
+;;; matching drop.
+;;;
+;;; Parameters:
+;;;   w -- the weak<A> to release (consumed)
+;;;
+;;; Returns:
+;;;   Nothing.
+;;;
+;;; Example:
+;;;   (let [r (rc/of 42)]
+;;;     (let [w (rc/downgrade r)]
+;;;       (weak/drop w)))
+;;;
+;;; Since: stdlib-weak-ref-audit WR1
+
+(defn weak/drop [A] [w : weak<A>] : void
+  ```c
+  if (w) rc_weak_decrement(w);
+  ```)

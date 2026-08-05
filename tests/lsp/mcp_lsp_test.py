@@ -97,6 +97,32 @@ class Server:
         self._next_id = 0
         self._encode   = mcp_encode   if transport == "mcp" else lsp_encode
         self._read_one = mcp_read_one if transport == "mcp" else lsp_read_one
+        self.diagnostics: list[dict] = []
+
+    def send_batch(self, msgs: list[dict]) -> None:
+        """Write several messages in one go.
+
+        Cancellation can only be observed if the cancel is already on the wire
+        when the server looks -- a message at a time would always lose the
+        race.
+        """
+        self.proc.stdin.write(b"".join(self._encode(m) for m in msgs))
+        self.proc.stdin.flush()
+
+    def next_id(self) -> int:
+        self._next_id += 1
+        return self._next_id
+
+    def await_id(self, want: int) -> dict | None:
+        while True:
+            r = self._read_one(self.proc.stdout)
+            if r is None:
+                return None
+            if r.get("method") == "textDocument/publishDiagnostics":
+                self.diagnostics.append(r.get("params", {}))
+                continue
+            if r.get("id") == want:
+                return r
 
     def call(self, method: str, params: dict | None = None,
              notification: bool = False, expect_response: bool = True) -> dict | None:
@@ -112,12 +138,7 @@ class Server:
             return None
         # The LSP server may emit publishDiagnostics notifications before the
         # response -- skip over them and return the first message with our id.
-        while True:
-            r = self._read_one(self.proc.stdout)
-            if r is None:
-                return None
-            if r.get("id") == msg["id"]:
-                return r
+        return self.await_id(msg["id"])
 
     def close(self) -> None:
         try:
@@ -376,6 +397,434 @@ def test_lsp() -> None:
         os.unlink(good_path)
 
 
+def test_lsp_encoding_and_deferred_analysis() -> None:
+    """positionEncoding, \\uXXXX decoding, and deferred (debounced) analysis."""
+    print("--- LSP encoding / deferred analysis ---")
+
+    # json.dumps defaults to ensure_ascii=True, so the accented character below
+    # goes out on the wire as a \\u00e9 escape — exactly the path under test.
+    src = '(def a "é") (def later 2)\n'
+    # `later` sits at byte 18 once the escape is decoded (e-acute is 2 UTF-8
+    # bytes). Passing the escape through as the 5 literal chars "u00e9" would
+    # report 21, and every position after it would be wrong by 3.
+    expected_col = src.encode("utf-8").index(b"later")
+
+    path = make_tempfile("(def a 1)\n")
+    uri = "file://" + path
+    try:
+        srv = Server([TUR, "lsp"], transport="lsp")
+        r = srv.call("initialize", {
+            "processId": None, "rootUri": None, "capabilities": {},
+        })
+        caps = r["result"]["capabilities"] if r else {}
+        check(caps.get("positionEncoding") == "utf-8",
+              f"lsp init: positionEncoding is utf-8 (got {caps.get('positionEncoding')!r})")
+
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur",
+                             "version": 1, "text": src},
+        }, notification=True)
+
+        r = srv.call("textDocument/documentSymbol", {"textDocument": {"uri": uri}})
+        symbols = r["result"] if r and r.get("result") else []
+        later = next((s for s in symbols
+                      if isinstance(s, dict) and s.get("name") == "later"), None)
+        check(later is not None,
+              f"lsp uXXXX: 'later' found (got {[s.get('name') for s in symbols]})")
+        if later:
+            col = later["selectionRange"]["start"]["character"]
+            check(col == expected_col,
+                  f"lsp uXXXX: escape decoded, 'later' at {expected_col} (got {col})")
+
+        # Analysis is deferred until the client goes quiet, but a request that
+        # reads symbols must flush it first — otherwise the answer would
+        # describe the buffer as it was before the edit.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": "(def freshly-added 7)\n"}],
+        }, notification=True)
+        r = srv.call("textDocument/documentSymbol", {"textDocument": {"uri": uri}})
+        names = {s.get("name") for s in (r["result"] if r and r.get("result") else [])
+                 if isinstance(s, dict)}
+        check("freshly-added" in names,
+              f"lsp deferred analysis: request flushes pending edit (got {names})")
+        check("later" not in names,
+              f"lsp deferred analysis: stale symbols dropped (got {names})")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+        srv.close()
+    finally:
+        os.unlink(path)
+
+
+GAPS_TUR = textwrap.dedent("""\
+    ;;; twice -- double an int
+    (defn twice [a :int] :int
+      (* a 2))
+
+    ;;; combine -- add two ints
+    (defn combine [a :int b :int] :int
+      (+ a b))
+    """)
+
+
+def test_lsp_client_gaps() -> None:
+    """The gaps a real client (Trowel) had to work around -- see
+    docs/upcoming/lsp-client-gaps-plan.md."""
+    print("--- LSP client-gap coverage ---")
+    path = make_tempfile(GAPS_TUR)
+    uri = "file://" + path
+    try:
+        srv = Server([TUR, "lsp"], transport="lsp")
+
+        # A client that advertises plaintext-only hover must not be sent
+        # fenced markdown to strip back out itself.
+        r = srv.call("initialize", {
+            "processId": None, "rootUri": None,
+            "capabilities": {
+                "textDocument": {"hover": {"contentFormat": ["plaintext"]}},
+            },
+        })
+        caps = r["result"]["capabilities"] if r else {}
+        check(caps.get("documentFormattingProvider") is True,
+              "lsp init: documentFormattingProvider advertised")
+        check(isinstance(caps.get("signatureHelpProvider"), dict),
+              "lsp init: signatureHelpProvider advertised")
+        # Space fires on nearly every keystroke in a lisp; neither known client
+        # was willing to honor it, so it should not be advertised.
+        triggers = caps.get("completionProvider", {}).get("triggerCharacters")
+        check(triggers == ["("],
+              f"lsp init: completion triggers are ['('] only (got {triggers!r})")
+
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur",
+                             "version": 1, "text": GAPS_TUR},
+        }, notification=True)
+
+        # -- 2.2/2.3/2.5: completion at the very start of the buffer ----------
+        r = srv.call("textDocument/completion", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 0, "character": 0},
+        })
+        res = r["result"] if r else None
+        check(isinstance(res, dict) and "items" in res,
+              f"lsp completion: CompletionList shape (got {type(res).__name__})")
+        items = res.get("items", []) if isinstance(res, dict) else []
+        check(len(items) > 0,
+              "lsp completion at offset 0: non-empty (was empty -- the word at "
+              "the cursor was read as the prefix)")
+        labels = [i.get("label") for i in items]
+        # The buffer's own definitions must not be truncated behind stdlib.
+        check("twice" in labels and "combine" in labels,
+              f"lsp completion: document-local symbols present (first={labels[:4]})")
+        if "twice" in labels and len(labels) > 2:
+            check(labels.index("twice") < 2 and labels.index("combine") < 2,
+                  f"lsp completion: document-local symbols first (got {labels[:4]})")
+
+        # -- 2.1: completion survives a buffer that does not parse ------------
+        broken = GAPS_TUR + "\n(smoke\n"
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": broken}],
+        }, notification=True)
+        r = srv.call("textDocument/completion", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 8, "character": 0},
+        })
+        stale = r["result"].get("items", []) if r and r.get("result") else []
+        check(len(stale) > 0,
+              "lsp completion: last-good symbols retained through a parse "
+              f"failure (got {len(stale)} items)")
+
+        # A zero-width diagnostic range paints nothing; it must be widened.
+        widths = [d["range"]["end"]["character"] - d["range"]["start"]["character"]
+                  for p in srv.diagnostics for d in p.get("diagnostics", [])
+                  if d["range"]["start"]["line"] == d["range"]["end"]["line"]]
+        check(all(w > 0 for w in widths),
+              f"lsp diagnostics: no zero-width ranges (got widths {widths})")
+
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 3},
+            "contentChanges": [{"text": GAPS_TUR}],
+        }, notification=True)
+
+        # -- 4: hover honors the negotiated contentFormat ---------------------
+        r = srv.call("textDocument/hover", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 1, "character": 7},
+        })
+        contents = (r["result"] or {}).get("contents", {}) if r and r.get("result") else {}
+        if isinstance(contents, dict):
+            check(contents.get("kind") == "plaintext",
+                  f"lsp hover: plaintext honored (got {contents.get('kind')!r})")
+            check("```" not in contents.get("value", ""),
+                  f"lsp hover: no markdown fences in plaintext "
+                  f"(got {contents.get('value', '')[:60]!r})")
+
+        # -- 3.2: textDocument/formatting -------------------------------------
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 4},
+            "contentChanges": [{"text": "(defn  sloppy   [ ] :int\n        1)\n"}],
+        }, notification=True)
+        r = srv.call("textDocument/formatting", {
+            "textDocument": {"uri": uri},
+            "options": {"tabSize": 2, "insertSpaces": True},
+        })
+        edits = r["result"] if r else None
+        check(isinstance(edits, list) and len(edits) == 1,
+              f"lsp formatting: one full-document edit (got {edits!r})")
+        if isinstance(edits, list) and edits:
+            e = edits[0]
+            check(e["range"]["start"] == {"line": 0, "character": 0},
+                  "lsp formatting: edit starts at the top of the buffer")
+            check("sloppy" in e["newText"] and "(defn  sloppy" not in e["newText"],
+                  f"lsp formatting: output is reformatted (got {e['newText']!r})")
+
+        # An unformattable buffer returns "no edits", not an error popup.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 5},
+            "contentChanges": [{"text": "(defn oops [\n"}],
+        }, notification=True)
+        r = srv.call("textDocument/formatting", {
+            "textDocument": {"uri": uri}, "options": {},
+        })
+        check(r is not None and r.get("result") is None and "error" not in r,
+              f"lsp formatting: unparseable buffer yields null, not an error "
+              f"(got {r})")
+
+        # -- 3.3: signatureHelp ------------------------------------------------
+        call_src = GAPS_TUR + "\n(defn use [] :int\n  (combine 1 2))\n"
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 6},
+            "contentChanges": [{"text": call_src}],
+        }, notification=True)
+        # Line 9 is "  (combine 1 2))"; character 13 sits on the second argument.
+        r = srv.call("textDocument/signatureHelp", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 9, "character": 13},
+        })
+        sig = r["result"] if r else None
+        check(isinstance(sig, dict) and sig.get("signatures"),
+              f"lsp signatureHelp: signature returned (got {sig!r})")
+        if isinstance(sig, dict) and sig.get("signatures"):
+            s0 = sig["signatures"][0]
+            check("combine" in s0.get("label", ""),
+                  f"lsp signatureHelp: names the callee (got {s0.get('label')!r})")
+            check(len(s0.get("parameters", [])) == 2,
+                  f"lsp signatureHelp: two parameters (got {s0.get('parameters')!r})")
+            check(sig.get("activeParameter") == 1,
+                  f"lsp signatureHelp: second argument is active "
+                  f"(got {sig.get('activeParameter')!r})")
+
+        # Outside any call there is nothing to describe.
+        r = srv.call("textDocument/signatureHelp", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 0, "character": 0},
+        })
+        check(r is not None and r.get("result") is None,
+              f"lsp signatureHelp: null at top level (got {r})")
+
+        # -- 3.1: $/cancelRequest ---------------------------------------------
+        # The cancel and a following request go out in the same write, so both
+        # are already buffered when the server drains after its analysis flush.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 7},
+            "contentChanges": [{"text": call_src + "\n(def tail 1)\n"}],
+        }, notification=True)
+        doomed = srv.next_id()
+        follow = srv.next_id()
+        srv.send_batch([
+            {"jsonrpc": "2.0", "id": doomed, "method": "textDocument/completion",
+             "params": {"textDocument": {"uri": uri},
+                        "position": {"line": 0, "character": 0}}},
+            {"jsonrpc": "2.0", "method": "$/cancelRequest", "params": {"id": doomed}},
+            {"jsonrpc": "2.0", "id": follow, "method": "textDocument/documentSymbol",
+             "params": {"textDocument": {"uri": uri}}},
+        ])
+        r = srv.await_id(doomed)
+        check(r is not None and r.get("error", {}).get("code") == -32800,
+              f"lsp $/cancelRequest: cancelled request answered -32800 (got {r})")
+        r = srv.await_id(follow)
+        names = {s.get("name") for s in (r["result"] if r and r.get("result") else [])
+                 if isinstance(s, dict)}
+        check("tail" in names,
+              f"lsp $/cancelRequest: queued follow-up still served (got {names})")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+        srv.close()
+    finally:
+        os.unlink(path)
+
+
+def test_lsp_unprimed_completion() -> None:
+    """Completion in a document that has NEVER parsed.
+
+    Retention (§2.1) rescues a document that used to parse. It does nothing
+    for one that never has, and the pre-existing gap-coverage test cannot see
+    that: it issues a request between the didOpen and the breaking edit, which
+    forces an analysis and primes the index. Every case here is deliberately
+    unprimed -- no request lands before the buffer is broken.
+
+    See docs/reported/lsp-symbol-retention-never-primes.md.
+    """
+    print("--- LSP completion without a primed index ---")
+
+    GOOD = "(defn zorkle [a :int] :int a)\n"
+    # `zorkle` rather than a plain name on purpose: a symbol that collides with
+    # an auto-loaded stdlib name makes the file fail to compile, which would
+    # silently turn a passing assertion into a vacuous one.
+    BROKEN_TAIL = "\n(smoke\n"
+
+    def completion_items(srv, uri, line, char):
+        r = srv.call("textDocument/completion", {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": char},
+        })
+        res = r["result"] if r and r.get("result") else {}
+        return res.get("items", []) if isinstance(res, dict) else []
+
+    # -- opened good, edited broken before any analysis ran ------------------
+    path = make_tempfile(GOOD)
+    uri = "file://" + path
+    try:
+        srv = Server([TUR, "lsp"], transport="lsp")
+        srv.call("initialize", {"processId": None, "rootUri": None,
+                                "capabilities": {}})
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur",
+                             "version": 1, "text": GOOD},
+        }, notification=True)
+        # NO request here -- that is the whole point.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": GOOD + BROKEN_TAIL}],
+        }, notification=True)
+
+        items = completion_items(srv, uri, 2, 0)
+        check(len(items) > 0,
+              f"lsp unprimed: broken before first analysis still completes "
+              f"(got {len(items)} items)")
+
+        # Once it parses, the document's own definitions take over and rank
+        # ahead of the stdlib -- the fallback must not displace them.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 3},
+            "contentChanges": [{"text": GOOD}],
+        }, notification=True)
+        labels = [i.get("label") for i in completion_items(srv, uri, 1, 0)]
+        check(labels and labels[0] == "zorkle",
+              f"lsp unprimed: own symbols return and rank first once it parses "
+              f"(got {labels[:3]})")
+
+        # And retention still works from there.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 4},
+            "contentChanges": [{"text": GOOD + BROKEN_TAIL}],
+        }, notification=True)
+        r = srv.call("textDocument/documentSymbol", {"textDocument": {"uri": uri}})
+        names = {s.get("name") for s in (r["result"] if r and r.get("result") else [])
+                 if isinstance(s, dict)}
+        check("zorkle" in names,
+              f"lsp unprimed: retention still applies after a later break "
+              f"(got {names})")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+        srv.close()
+    finally:
+        os.unlink(path)
+
+    # -- opened already broken: never parsed, nothing of its own to retain ---
+    path = make_tempfile(GOOD + BROKEN_TAIL)
+    uri = "file://" + path
+    try:
+        srv = Server([TUR, "lsp"], transport="lsp")
+        srv.call("initialize", {"processId": None, "rootUri": None,
+                                "capabilities": {}})
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur", "version": 1,
+                             "text": GOOD + BROKEN_TAIL},
+        }, notification=True)
+
+        items = completion_items(srv, uri, 2, 0)
+        labels = [i.get("label") for i in items]
+        check(len(items) > 0,
+              f"lsp never-parsed: completion falls back to the stdlib "
+              f"(got {len(items)} items)")
+        # The fallback is the stdlib surface only. A document symbol appearing
+        # here would mean the cache had been filled from some other document's
+        # analysis, which would leak one file's definitions into another's
+        # completions.
+        check("zorkle" not in labels,
+              f"lsp never-parsed: fallback carries no document-local symbols "
+              f"(got {labels[:4]})")
+        # Real completion, not a raw dump: the prefix still filters.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": GOOD + BROKEN_TAIL + "vec-new\n"}],
+        }, notification=True)
+        pf = [i.get("label") for i in completion_items(srv, uri, 3, 4)]
+        check(pf and all(l.lower().startswith("vec-") for l in pf),
+              f"lsp never-parsed: prefix still filters the fallback (got {pf[:4]})")
+
+        # Diagnostics for the real document must be unaffected -- the stdlib
+        # harvest runs its own compile and must not leak into them.
+        diags = [d for p in srv.diagnostics for d in p.get("diagnostics", [])]
+        check(len(diags) > 0,
+              "lsp never-parsed: the document's own diagnostics still publish")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+        srv.close()
+    finally:
+        os.unlink(path)
+
+
+def test_lsp_unsaved_buffer() -> None:
+    """A document with no filesystem path still gets language support.
+
+    Analysis routes the buffer through a temp file, so an `untitled:` URI is
+    not actually a blocker on the server side -- worth pinning, because the
+    client that skipped unsaved buffers assumed otherwise.
+    """
+    print("--- LSP unsaved (untitled) buffer ---")
+    uri = "untitled:Untitled-1"
+    src = "(defn scratch [a :int] :int\n  (+ a 1))\n"
+    srv = Server([TUR, "lsp"], transport="lsp")
+    try:
+        srv.call("initialize", {"processId": None, "rootUri": None,
+                                "capabilities": {}})
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur",
+                             "version": 1, "text": src},
+        }, notification=True)
+
+        r = srv.call("textDocument/documentSymbol", {"textDocument": {"uri": uri}})
+        names = {s.get("name") for s in (r["result"] if r and r.get("result") else [])
+                 if isinstance(s, dict)}
+        check("scratch" in names,
+              f"lsp untitled: symbols collected (got {names})")
+
+        r = srv.call("textDocument/formatting", {
+            "textDocument": {"uri": uri}, "options": {},
+        })
+        edits = r["result"] if r else None
+        check(isinstance(edits, list) and edits,
+              f"lsp untitled: formatting works without a real path (got {edits!r})")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+    finally:
+        srv.close()
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -386,6 +835,10 @@ def main() -> int:
         return 0
     test_mcp()
     test_lsp()
+    test_lsp_encoding_and_deferred_analysis()
+    test_lsp_client_gaps()
+    test_lsp_unprimed_completion()
+    test_lsp_unsaved_buffer()
     print(f"\nResults: {PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

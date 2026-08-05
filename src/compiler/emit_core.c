@@ -2,6 +2,7 @@
 #include "emit_internal.h"
 #include "mangle.h"
 #include "platform_fs.h"  /* strndup() on Windows */
+#include "globals.h"      /* compiler config globals */
 
 /* ------------ helpers ------------ */
 
@@ -102,13 +103,13 @@ static bool emit_find_abi_binding(const EmitAbiSpecialization *spec,
     return false;
 }
 
-#ifndef NDEBUG
 /* R3 (carrier-crossing-recovery-routing-plan): does this type's structural spine
  * still carry an unresolved parametric param (a TY_TYVAR)?  A recovered concrete
  * type that answers `true` is the exact signature of a carrier<->concrete crossing
  * whose monomorphization was not fully recovered -- the silent-miscompile defect
- * the routing chokepoints exist to prevent.  Debug-only (the only caller, the R3
- * gate, is compiled out under NDEBUG). */
+ * the routing chokepoints exist to prevent.  Consulted by the R3 debug gate AND by
+ * emit_reresolve_disp_type's Edge-1 bail (both Debug and Release), so it is not
+ * Debug-only. */
 static bool type_spine_has_tyvar(const Type *t, int depth) {
     if (!t || depth > 8) return false;
     if (t->kind == TY_TYVAR) return true;
@@ -117,7 +118,6 @@ static bool type_spine_has_tyvar(const Type *t, int depth) {
                type_spine_has_tyvar(t->as.app.arg, depth + 1);
     return false;
 }
-#endif
 
 /* R3 chokepoint gate: assert that a type recovered by a carrier<->concrete
  * recovery chokepoint is concrete *enough* before it flows into code emission.
@@ -185,11 +185,79 @@ Type emit_resolve_type(EmitCtx *ctx, Type t) {
             if (!t.as.app.fn || !t.as.app.arg) return t;
             Type fn = emit_resolve_type(ctx, *t.as.app.fn);
             Type arg = emit_resolve_type(ctx, *t.as.app.arg);
+            /* constrained-hkt-abstract-var-requires-last-param-free: mirror the
+             * two instantiation paths -- when the head resolved to a hole-headed
+             * partial application, saturate through the hole so a spec body's
+             * `(m a)` materialises as `Result__int__cstr`, matching the
+             * signature emit_abi_instantiate_type already mangled. */
+            if (type_app_has_hole(&fn)) {
+                uint8_t hp = type_app_hole_pos(&fn);
+                Type ctor  = fn.as.app.fn ? *fn.as.app.fn : fn;
+                Type fixed = fn.as.app.arg ? *fn.as.app.arg : arg;
+                Type first  = (hp == 0) ? arg   : fixed;
+                Type second = (hp == 0) ? fixed : arg;
+                Type inner;
+                memset(&inner, 0, sizeof(inner));
+                inner.kind = TY_APP;
+                inner.copy_kind = ctor.copy_kind;
+                inner.as.app.fn  = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                inner.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                *inner.as.app.fn  = ctor;
+                *inner.as.app.arg = first;
+                Type outer;
+                memset(&outer, 0, sizeof(outer));
+                outer.kind = TY_APP;
+                outer.copy_kind = ctor.copy_kind;
+                outer.as.app.fn  = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                outer.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                *outer.as.app.fn  = inner;
+                *outer.as.app.arg = second;
+                return outer;
+            }
             Type out = t;
             out.as.app.fn = (Type *)emit_type_scratch(ctx, sizeof(Type));
             out.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
             *out.as.app.fn = fn;
             *out.as.app.arg = arg;
+            return out;
+        }
+        case TY_FN: {
+            if (!t.as.fn.arg_full_types && !t.as.fn.result_full_type) return t;
+            Type out = t;
+            if (t.as.fn.arity > 0 && t.as.fn.arg_full_types && t.as.fn.arg_kinds) {
+                Type **nfull = (Type **)emit_type_scratch(
+                    ctx, (size_t)t.as.fn.arity * sizeof(Type *));
+                uint8_t *nkinds = (uint8_t *)emit_type_scratch(
+                    ctx, (size_t)t.as.fn.arity * sizeof(uint8_t));
+                for (uint32_t i = 0; i < t.as.fn.arity; i++) {
+                    nkinds[i] = t.as.fn.arg_kinds[i];
+                    nfull[i] = t.as.fn.arg_full_types[i];
+                    if (!t.as.fn.arg_full_types[i]) continue;
+                    Type sub = emit_resolve_type(ctx, *t.as.fn.arg_full_types[i]);
+                    Type *slot = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                    *slot = sub;
+                    /* Only adopt the substitution when it actually RESOLVED.
+                     * A context whose bindings do not cover this tyvar leaves
+                     * `sub` a TY_TYVAR; overwriting the stable erased kind with
+                     * it renames the monomorph (`fn1_int__int` ->
+                     * `fn1_struct__struct`, `struct` being the tyvar token) so
+                     * the definition no longer matches its forward declaration. */
+                    if (sub.kind == TY_TYVAR || sub.kind == TY_UNKNOWN) continue;
+                    nfull[i] = slot;
+                    nkinds[i] = (uint8_t)sub.kind;
+                }
+                out.as.fn.arg_full_types = nfull;
+                out.as.fn.arg_kinds = nkinds;
+            }
+            if (t.as.fn.result_full_type) {
+                Type sub = emit_resolve_type(ctx, *t.as.fn.result_full_type);
+                Type *slot = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                *slot = sub;
+                if (sub.kind != TY_TYVAR && sub.kind != TY_UNKNOWN) {
+                    out.as.fn.result_full_type = slot;
+                    out.as.fn.result_kind = sub.kind;
+                }
+            }
             return out;
         }
         case TY_UNION: {
@@ -486,6 +554,63 @@ bool expr_contains_return_or_throw(const Expr *e) {
     }
 }
 
+/* closure-drop-glue S1c: does `e`'s subtree contain any inline-C block?  A
+ * `^fat`/fn-typed parameter referenced inside an inline-C body can be STORED by
+ * the C text (e.g. `s[2] = (int64_t)f;` in schema/transform), which the
+ * AST-level closure escape analysis cannot see -- a param is a C-visible formal,
+ * not an AST capture.  So a body containing ANY inline-C must NOT be treated as
+ * non-retaining.  Conservative by construction: an unmodeled node kind returns
+ * true (assume it might hide inline-C), so the non-retention inference only ever
+ * DISqualifies a fn -- it never wrongly greenlights a free.  Only the common,
+ * fully-understood control/leaf kinds return false. */
+bool expr_subtree_has_inline_c(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_INLINE_C:
+            return true;
+        /* leaves: no inline-C */
+        case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DICT:
+        case EX_FN_DEF:   /* a nested fn-def's own body is analyzed on its own */
+            return false;
+        case EX_CALL:
+            if (expr_subtree_has_inline_c(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_subtree_has_inline_c(e->as.call_.args[i])) return true;
+            return expr_subtree_has_inline_c(e->as.call_.dict_arg);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_subtree_has_inline_c(e->as.let_.bindings[i].init)) return true;
+            return expr_subtree_has_inline_c(e->as.let_.body);
+        case EX_IF:
+            return expr_subtree_has_inline_c(e->as.if_.cond)
+                || expr_subtree_has_inline_c(e->as.if_.then_)
+                || expr_subtree_has_inline_c(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_subtree_has_inline_c(e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_subtree_has_inline_c(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_MATCH:
+            if (expr_subtree_has_inline_c(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (expr_subtree_has_inline_c(e->as.match_.arms[i].guard)) return true;
+                if (expr_subtree_has_inline_c(e->as.match_.arms[i].body)) return true;
+            }
+            return false;
+        case EX_ASCRIBE: return expr_subtree_has_inline_c(e->as.ascribe_.inner);
+        case EX_CAST:    return expr_subtree_has_inline_c(e->as.cast_.expr);
+        case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
+        default:
+            /* Unmodeled kind -- conservatively assume it may hide inline-C. */
+            return true;
+    }
+}
+
 /* Fat-closure-env scoped-free escape analysis
  * (docs/reported/fat-closure-env-leak.md).
  *
@@ -504,8 +629,11 @@ bool expr_contains_return_or_throw(const Expr *e) {
  * than risking a use-after-free.  A reference to `b` inside a nested closure is
  * detected via that closure's precomputed capture set (EX_CLOSURE/EX_FN_DEF),
  * so the "callee position is fine" relaxation never leaks into a nested body.
- * EX_DEFER is treated as an escape because a deferred body runs at the same
- * scope-exit point as the free, making the ordering unsafe to reason about. */
+ * EX_DEFER runs at the same scope-exit point as the free, but can only reach
+ * `b` through its capture set, so it is an escape only when it actually captures
+ * `b` (mirroring EX_CLOSURE); a defer that does not reference the closure -- e.g.
+ * an owning sibling binding's injected auto-drop `(defer (drop r))` -- does not
+ * block the free. */
 /* catch-unwind-return-bridge-residuals (Part A): true for a scalar `err-val`
  * result type -- an integer/float/bool value the extraction copies out by value.
  * For a caught box, err-val hands back box->err_val, which IS the panic-payload
@@ -633,6 +761,66 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                     if (box_accessor && arg &&
                         arg->kind == EX_VAR && arg->as.var.binding == b)
                         continue;
+                    /* closure-drop-glue S1: a `^borrow` fn-param (FA_BORROW) is
+                     * borrowed, not retained -- the callee invokes but does not
+                     * store/return it.  So `b` passed to a borrowed param does NOT
+                     * escape and its env may be freed at scope exit.  Same soundness
+                     * posture as the box-accessor whitelist (only greenlights a
+                     * free); relies on the callee honouring its ^borrow contract.
+                     *
+                     * closure-drop-glue S1c: the same relaxation applies to an
+                     * INFERRED non-retaining fn-param (nonretain_param_mask bit i)
+                     * -- a fn-typed / ^fat param the callee body only CALLS.  This
+                     * covers the common `^fat h` consuming-callee shape that carries
+                     * no `^borrow` annotation.  Soundness rides the same escape
+                     * analysis that set the bit: if the callee let the closure
+                     * escape, the bit is clear and the arg is walked as an escape. */
+                    if (arg && arg->kind == EX_VAR && arg->as.var.binding == b) {
+                        const Binding *fb = cur->as.call_.fn_binding;
+                        if (fb && fb->type.kind == TY_FN
+                            && i < fb->type.as.fn.arity
+                            && fb->type.as.fn.arg_flags
+                            && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+                            continue;
+                        if (fb && i < 32 &&
+                            (fb->nonretain_param_mask & (1u << i)))
+                            continue;
+                    }
+                    /* closure-drop-glue (mw-compose-of): a `^borrow & rest` callee
+                     * reads/invokes each rest element but retains none.  The rest
+                     * param is the last declared param (index arity-1); any argument
+                     * at or past it is a rest element, so `b` passed there does NOT
+                     * escape -- the caller frees its env at scope exit (once per
+                     * binding, so passing the same value twice cannot double-free,
+                     * unlike a callee-side per-apply free).  The rest arguments are
+                     * collected into a single EX_CONS_LIST node whose items reach the
+                     * cons builder wrapped in carrier casts (EX_CAST / EX_ASCRIBE /
+                     * fat/poly coercions); walk the items, skip an item that peels to
+                     * `b` (borrowed, non-escaping), and push the rest. */
+                    if (arg && arg->kind == EX_CONS_LIST) {
+                        const Binding *fb = cur->as.call_.fn_binding;
+                        if (fb && fb->type.kind == TY_FN
+                            && fb->type.as.fn.is_variadic
+                            && fb->type.as.fn.rest_borrow
+                            && fb->type.as.fn.arity >= 1
+                            && i >= fb->type.as.fn.arity - 1) {
+                            for (uint32_t ci = 0; ci < arg->as.cons_list_.n; ci++) {
+                                const Expr *pa = arg->as.cons_list_.items[ci];
+                                while (pa) {
+                                    if (pa->kind == EX_ASCRIBE) pa = pa->as.ascribe_.inner;
+                                    else if (pa->kind == EX_CAST) pa = pa->as.cast_.expr;
+                                    else if (pa->kind == EX_FN_TO_FAT) pa = pa->as.fn_to_fat_.inner;
+                                    else if (pa->kind == EX_POLY_TO_FAT) pa = pa->as.poly_to_fat_.inner;
+                                    else if (pa->kind == EX_POLY_WRAP) pa = pa->as.poly_wrap_.inner;
+                                    else break;
+                                }
+                                if (pa && pa->kind == EX_VAR && pa->as.var.binding == b)
+                                    continue; /* borrowed rest element -- no escape */
+                                ESC_PUSH(arg->as.cons_list_.items[ci]);
+                            }
+                            continue; /* handled the cons-list arg element-wise */
+                        }
+                    }
                     ESC_PUSH(arg);
                 }
                 ESC_PUSH(cur->as.call_.dict_arg);
@@ -654,6 +842,26 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                     for (uint32_t i = 0; i < c->n_captures; i++)
                         if (c->captures[i] == b) { escapes = true; goto esc_done; }
                 }
+                break;
+            /* A defer body runs at scope exit -- the same point as the env free --
+             * but it can only reference `b` through its precomputed capture set
+             * (the body is lifted into a thunk that reaches enclosing locals via
+             * `captures`, exactly like EX_CLOSURE/EX_FN_DEF).  So consult that set:
+             * `b` captured -> the defer uses the closure at scope exit -> escape;
+             * `b` NOT captured -> the defer cannot touch the closure, and freeing
+             * its env is safe regardless of the shared scope-exit ordering.
+             *
+             * fat-closure-env-leak-with-owning-sibling: an owning let-binding
+             * (rc/ref) injects its auto-drop as a `(defer (drop r))` into the let
+             * body.  The prior blanket `default: escape` for EX_DEFER therefore
+             * flagged EVERY sibling closure as escaping whenever an owning binding
+             * was present, so the closure env leaked (16 B/construction) in any let
+             * that also bound an rc/ref -- even when the closure captured only
+             * scalars.  Consulting the capture set fixes that without ever
+             * greenlighting a free of an env the defer actually uses. */
+            case EX_DEFER:
+                for (uint8_t i = 0; i < cur->as.defer_.n_captures; i++)
+                    if (cur->as.defer_.captures[i] == b) { escapes = true; goto esc_done; }
                 break;
             /* Inline-C may name `b` through its capture array (__TUR_CAP_N__) in
              * addition to its evaluated sub-expressions. */
@@ -716,6 +924,25 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                 break;
             case EX_REF:        ESC_PUSH(cur->as.ref_.expr);        break;
             case EX_DEREF:      ESC_PUSH(cur->as.deref_.expr);      break;
+            /* fat-closure-env-leak-with-owning-sibling: the rc/weak/ref-family
+             * operations are single-operand nodes; walk the operand so `b` is
+             * detected iff it actually flows into one (e.g. `(rc/of b)` stores the
+             * closure into an rc -> escape).  Previously these fell to the
+             * conservative `default: escape`, so a sibling OWNING binding whose
+             * init is `(rc/of ...)` / `(weak ...)` / etc. was read as an escape of
+             * EVERY sibling closure -- the exact reason a let that bound both an rc
+             * and a capturing closure leaked the closure env. */
+            case EX_RC_OF:       ESC_PUSH(cur->as.rc_of_.expr);       break;
+            case EX_RC_CLONE:    ESC_PUSH(cur->as.rc_clone_.expr);    break;
+            case EX_RC_DROP:     ESC_PUSH(cur->as.rc_drop_.expr);     break;
+            case EX_RC_PTR:      ESC_PUSH(cur->as.rc_ptr_.expr);      break;
+            case EX_RC_COUNT:    ESC_PUSH(cur->as.rc_count_.expr);    break;
+            case EX_RC_FROM_REF: ESC_PUSH(cur->as.rc_from_ref_.expr); break;
+            case EX_REF_FROM_RC: ESC_PUSH(cur->as.ref_from_rc_.expr); break;
+            case EX_WEAK:         ESC_PUSH(cur->as.weak_.expr);         break;
+            case EX_WEAK_UPGRADE: ESC_PUSH(cur->as.weak_upgrade_.expr); break;
+            case EX_WEAK_PRED:    ESC_PUSH(cur->as.weak_pred_.expr);    break;
+            case EX_REF_PRED:     ESC_PUSH(cur->as.ref_pred_.expr);     break;
             case EX_BORROW_IMMUT: ESC_PUSH(cur->as.borrow_immut_.expr); break;
             case EX_BORROW_MUT:   ESC_PUSH(cur->as.borrow_mut_.expr);   break;
             case EX_SET_DEREF:
@@ -836,6 +1063,185 @@ bool catch_box_binding_escapes(const Expr *e, const Binding *b) {
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, ignore);
+}
+
+/* catch-unwind-panic-payload-leaks (Leak 2): runtime sinks that CONSUME their
+ * argument -- print it -- and never retain a pointer into it beyond the call.
+ * A box-owned pointer (the caught message an err-val / inline-C accessor hands
+ * back) passed to one of these is dead once the call returns, so the box may be
+ * deep-freed at scope exit.  A general call is NOT on this list: it could stash
+ * the pointer invisibly (e.g. through an inline-C body), so it never confines. */
+static bool box_reader_result_void_sink(const char *name) {
+    if (!name) return false;
+    static const char *const sinks[] = {
+        "println", "print", "eprintln", "eprint",
+        "println-float", "printf-float", "print-show", "print-char",
+        "print-char-list", NULL,
+    };
+    for (int i = 0; sinks[i]; i++)
+        if (strcmp(name, sinks[i]) == 0) return true;
+    return false;
+}
+
+/* catch-unwind-panic-payload-leaks (Leak 2): is every use of caught-box binding
+ * `b` in `e` safe for a DEEP box free (box struct + owned payload/message) at
+ * b's scope exit?  Beyond the scalar-accessor whitelist that
+ * catch_box_binding_escapes admits, this also admits handing `b` to a reader
+ * (e.g. the fixture's inline-C `panic-msg`, which returns a pointer INTO the
+ * box-owned message) PROVIDED the reader's result is `confined` -- consumed
+ * within the scope so no box-owned pointer is live at the free point.
+ *
+ * `confined` is true when the value of `e` is discarded or flows only into a
+ * known non-retaining runtime sink (the print family above).  It must start
+ * true only for a box scope whose own result cannot carry a box-owned pointer
+ * out (a non-pointer scalar / nil scope value); the caller enforces that.
+ *
+ * Soundness (only ever greenlights a free):
+ *   - a reader result reaching a store / return / capture is caught because that
+ *     context recurses with confined=false (or, for a `b` appearing directly,
+ *     falls to the strict escape walk), and an unconfined reader use returns
+ *     false;
+ *   - a reader result BOUND to a local is caught: a let-binding init is walked
+ *     with confined=false, so the alias cannot later escape unnoticed;
+ *   - an unmodeled form defers to the strict escape walk, whose own default is
+ *     to treat the unknown as an escape. */
+static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_NIL_LIT: case EX_SYM_LIT:
+            return true;
+        case EX_VAR:
+            /* A bare `b` as this expression's result is safe only if confined --
+             * its value (the box pointer) is then discarded / printed, not kept. */
+            return e->as.var.binding != b || confined;
+        case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
+        case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
+        case EX_IF:
+            return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
+                   box_uses_confined(e->as.if_.then_, b, confined) &&
+                   box_uses_confined(e->as.if_.else_or_null, b, confined);
+        case EX_MATCH: {
+            if (!box_uses_confined(e->as.match_.scrutinee, b, /*discarded=*/true))
+                return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (!box_uses_confined(e->as.match_.arms[i].guard, b, true))
+                    return false;
+                if (!box_uses_confined(e->as.match_.arms[i].body, b, confined))
+                    return false;
+            }
+            return true;
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                bool tail = (i + 1 == e->as.do_.n);
+                if (!box_uses_confined(e->as.do_.items[i], b, tail ? confined : true))
+                    return false;
+            }
+            return true;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                /* A binding init's value is retained in the bound local, so a
+                 * box-owned pointer flowing there could outlive the box: NOT
+                 * confined. */
+                if (!box_uses_confined(e->as.let_.bindings[i].init, b, false))
+                    return false;
+            return box_uses_confined(e->as.let_.body, b, confined);
+        case EX_BUILTIN: {
+            /* A print-family builtin (e.g. `println`) consumes -- prints -- its
+             * argument and never retains a pointer into it, so it confines its
+             * args' results.  Any other builtin operates on scalars; a box-owned
+             * pointer never flows into one, and if `b` somehow appears it is
+             * checked unconfined (conservative). */
+            const char *bn = e->as.builtin.spec ? e->as.builtin.spec->name : NULL;
+            bool sink = box_reader_result_void_sink(bn);
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!box_uses_confined(e->as.builtin.args[i], b, sink))
+                    return false;
+            return true;
+        }
+        case EX_CALL: {
+            if (e->as.call_.fn_expr) return false;   /* indirect: opaque callee */
+            const Binding *fb = e->as.call_.fn_binding;
+            const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+            bool acc = nm && (strcmp(nm, "ok?") == 0 || strcmp(nm, "err?") == 0 ||
+                              strcmp(nm, "ok-val") == 0);
+            if (!acc && nm && strcmp(nm, "err-val") == 0 &&
+                err_val_result_is_freeable_scalar(e->type.kind))
+                acc = true;
+            bool sink = box_reader_result_void_sink(nm);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = e->as.call_.args[i];
+                /* catch-box-reader-confinement-whitelist: beyond the hardcoded
+                 * print family, a USER-DEFINED callee confines this argument
+                 * when its body was inferred not to retain that parameter.
+                 * Per-argument rather than per-call: a two-parameter logger may
+                 * retain one and print the other. */
+                bool arg_sink = sink ||
+                    (fb && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i)));
+                if (a && a->kind == EX_VAR && a->as.var.binding == b) {
+                    if (acc) continue;             /* scalar result cannot alias */
+                    if (arg_sink) continue;        /* printed, not retained */
+                    /* general reader: its result aliases box memory -- safe only
+                     * if THIS call's result is itself confined. */
+                    if (!confined) return false;
+                    continue;
+                }
+                /* A sink/accessor confines its args' results; a general call does
+                 * not (it may stash them), so recurse with confined=false there. */
+                if (!box_uses_confined(a, b, (arg_sink || acc)))
+                    return false;
+            }
+            return box_uses_confined(e->as.call_.dict_arg, b, false);
+        }
+        default:
+            /* Stores / returns / captures / unmodeled forms: defer to the strict
+             * escape walk.  It sees `b` itself (not a bound alias -- those are
+             * gated at their let-binding above) and treats any unknown as an
+             * escape, so a `true` there correctly denies the free. */
+            return !catch_box_binding_escapes(e, b);
+    }
+}
+
+/* catch-unwind-panic-payload-leaks (Leak 2): true when a caught-box binding `b`
+ * whose scope is `body` may be deep-freed at scope exit even though it is read
+ * through a reader (not only the scalar-accessor whitelist).  `scope_result`
+ * is the type of the box's scope value: the relaxation is sound only if that
+ * value cannot itself carry a box-owned pointer out, i.e. it is a non-pointer
+ * scalar or nil. */
+bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
+                                       TypeKind scope_result) {
+    switch (scope_result) {
+        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+        case TY_FLOAT64: case TY_FLOAT32:
+            break;
+        default:
+            return false;   /* scope value could carry a box-owned pointer out */
+    }
+    return box_uses_confined(body, b, /*confined=*/true);
+}
+
+/* catch-box-reader-confinement-whitelist: true when `body` provably does not
+ * RETAIN a pointer into its pointer-carrying scalar parameter `p` -- every use
+ * of `p` is discarded or flows into another non-retaining sink.  This is the
+ * inferred replacement for trusting a name list: a user-defined logger whose
+ * body only prints its argument now confines exactly like `println` does.
+ *
+ * `result_cannot_carry` must be true only when the function's own result cannot
+ * carry the pointer back out (a non-pointer scalar or nil return); the caller
+ * establishes it, mirroring the scope_result gate on
+ * catch_box_binding_reader_confined.
+ *
+ * Same soundness posture as the rest of this family: it only ever greenlights a
+ * free, and every unmodeled form falls through to the strict escape walk whose
+ * default is "escapes". */
+bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry) {
+    if (!body || !p) return false;
+    return box_uses_confined(body, p, result_cannot_carry);
 }
 
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every
@@ -1126,18 +1532,25 @@ char *mangle_dynvar_name(const char *name) {
  * Caller frees. */
 char *mangle_field_name(const char *name) {
     size_t len = strlen(name);
-    char *p = (char *)malloc(len + 1);
+    /* c-keyword-function-names-not-mangled: a field (or struct/ctor) named
+     * after a C reserved word emits `int64_t int;` / `struct enum { ... }`.
+     * Guard it exactly as raw_name_for_binding guards a colliding global. This
+     * is the single chokepoint for declaration and every access site, so both
+     * move together. */
+    size_t pre = tur_name_is_c_keyword(name, len) ? TUR_NAME_GUARD_PREFIX_LEN : 0;
+    char *p = (char *)malloc(pre + len + 1);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (pre) memcpy(p, TUR_NAME_GUARD_PREFIX, pre);
     for (size_t i = 0; i < len; i++) {
         char c = name[i];
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
             (c >= '0' && c <= '9') || c == '_') {
-            p[i] = c;
+            p[pre + i] = c;
         } else {
-            p[i] = '_';
+            p[pre + i] = '_';
         }
     }
-    p[len] = '\0';
+    p[pre + len] = '\0';
     return p;
 }
 
@@ -1217,7 +1630,9 @@ char *raw_name_for_binding(const Binding *b) {
         mod_prefix_len  = j;
     }
 
-    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len);
+    /* +8 slack reserves room for the `tur_u_` libc-collision guard prefix
+     * (6 bytes) plus the NUL, applied to a bare global below. */
+    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len) + 8;
     char *p = (char *)malloc(total);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
@@ -1240,8 +1655,41 @@ char *raw_name_for_binding(const Binding *b) {
         memcpy(p + k, b->name->name, b->name->len);
         k += b->name->len;
     } else if (b->is_global) {
+        /* codegen-user-defn-collides-with-libc-pipe2: a bare (non-module)
+         * top-level global whose spelling is a libc/POSIX symbol the system
+         * headers declare would emit `static int64_t read(...)` and conflict
+         * with e.g. <unistd.h>'s `read` ("static declaration follows non-static
+         * declaration"). Prefix such names with `tur_u_` so the user function
+         * gets its own C symbol. Module-qualified globals already carry a
+         * distinguishing prefix (mod_prefix_len > 0, so `geom__read` never
+         * matches), and extern-c bindings (handled above) intentionally keep
+         * the libc spelling to name the real symbol. Applied at both definition
+         * and every use through this single chokepoint, so all sites agree;
+         * `main` is never remapped. */
+        if (mod_prefix_len == 0 && !is_main_binding &&
+            tur_name_collides_libc(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
+        /* c-keyword-function-names-not-mangled: `(defn double ...)` would emit
+         * `static int64_t double(int64_t);`. Unlike the libc guard this applies
+         * only when the name reaches C unqualified -- a module-prefixed global
+         * is `geom__double`, which is not a keyword. */
+        else if (mod_prefix_len == 0 &&
+                 tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
         tur_mangle_append(p, &k, b->name->name, b->name->len);
     } else {
+        /* Function-locals and parameters. A keyword here lands as
+         * `f(int64_t double)` / `int64_t return;`, so it needs the same guard --
+         * and an inline-C body could never have referenced the raw spelling
+         * anyway, since it would not have parsed. */
+        if (tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
         tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);
     }
     p[k] = '\0';
@@ -1473,6 +1921,30 @@ bool emit_dispatch_tyvar(const Expr *call, Type *out) {
         if (recv && recv->type.kind == TY_TYVAR) { *out = recv->type; return true; }
     }
     if (call->type.kind == TY_TYVAR) { *out = call->type; return true; }
+    /* constrained-hkt-spec-keeps-representative-instance: a higher-kinded class
+     * method called on the abstract constructor has receiver `(m int)` and
+     * result `(m b)` -- TY_APP spines whose HEAD is the dispatch variable.  The
+     * bare-TY_TYVAR checks above are a kind-`*` assumption and never see it, so
+     * the spec kept the env-ordered representative.  Hand back the whole spine;
+     * emit_resolve_type grounds it per spec and selection matches head-wise.
+     * Checked last so every kind-`*` case keeps its existing answer, and
+     * deliberately inert for the scan-time predicate (which re-checks TY_TYVAR). */
+    {
+        const Expr *recv = (call->as.call_.n_args >= 1 && call->as.call_.args)
+            ? call->as.call_.args[0] : NULL;
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        const Type *cands[2];
+        uint8_t nc = 0;
+        if (recv) cands[nc++] = &recv->type;
+        cands[nc++] = &call->type;
+        for (uint8_t i = 0; i < nc; i++) {
+            const Type *t = cands[i];
+            if (t->kind != TY_APP) continue;
+            const Type *head = t;
+            while (head->kind == TY_APP && head->as.app.fn) head = head->as.app.fn;
+            if (head->kind == TY_TYVAR) { *out = *t; return true; }
+        }
+    }
     return false;
 }
 
@@ -1690,6 +2162,29 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
         }
     }
     if (resolved.kind == TY_TYVAR) return false; /* still unbound: keep base/repr */
+    /* Edge 1 (generic-show-wrapper-cps-monomorphization-plan): a dispatch type with
+     * a CONCRETE HEAD but an unresolved element -- e.g. `(show x)` inside a
+     * `show-line` clone specialized on `(Vec ?)` from `(show-line (vec-new))`,
+     * where the empty container never let the element type be inferred -- is a
+     * TY_APP whose spine carries a tyvar.  Instance SELECTION keys on the head
+     * (Show[Vec], matched head-wise by emit_inst_head_matches), and the element is
+     * used only inside the instance body for per-element dispatch, which an empty
+     * container never runs.  So let the caller's authoritative head-match resolve
+     * it rather than tripping the R3 assertion (Debug) / silently selecting a
+     * carrier `__inst_*` (Release).  This is safe: a TY_APP dispatch type has no
+     * carrier-rep suffix fallback (emit_inst_suffix_component(TY_APP) == NULL), so
+     * emit_reresolve_method_call either matches by head or yields NULL (keep
+     * baked).  Matches the direct `(show (vec-new))` path, which renders `[]`.
+     * If the HEAD itself is unresolved there is nothing to select -- keep
+     * base/repr, as for a bare tyvar. */
+    if (type_spine_has_tyvar(&resolved, 0)) {
+        const Type *head = &resolved;
+        while (head->kind == TY_APP && head->as.app.fn) head = head->as.app.fn;
+        if (head->kind == TY_TYVAR || head->kind == TY_UNKNOWN) return false;
+        *out_resolved = resolved;
+        *out_dict = dict;
+        return true;
+    }
     /* R3 gate: a successful re-resolution must yield a concrete dispatch type.
      * A TY_APP whose spine still carries a tyvar would silently select the
      * carrier-representative `__inst_*` -- the routing hole this asserts away. */
@@ -1714,7 +2209,7 @@ FnDef *emit_reresolve_method_fndef(EmitCtx *ctx, const Expr *call) {
                                            dict->as.dict_.method_name);
 }
 
-static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
+char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     Type resolved;
     const Expr *dict = NULL;
     if (!emit_reresolve_disp_type(ctx, call, &resolved, &dict)) return NULL;
@@ -1850,16 +2345,25 @@ int emit_call_dict_env_dispatch_index(EmitCtx *ctx, const Expr *call) {
           call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
           call->as.call_.dict_arg->as.dict_.instance &&
           call->as.call_.dict_arg->as.dict_.instance->typeclass &&
-          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
-          /* The receiver must be the constraint's own type variable -- a
-           * concrete same-class call in the same mapper body (e.g. `(show 42)`
-           * alongside `(show x)`) is instance-resolved and must NOT be routed
-           * through the polymorphic env dict.  Mirrors the elab-side gate in
-           * mapper_scan_dispatch / dict_clone_nested_dispatch_rec. */
-          call->as.call_.n_args >= 1 && call->as.call_.args &&
-          call->as.call_.args[0] &&
-          call->as.call_.args[0]->type.kind == TY_TYVAR))
+          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0'))
         return -1;
+    /* The dispatch must be on the constraint's own type variable -- a concrete
+     * same-class call in the same mapper body (e.g. `(show 42)` alongside
+     * `(show x)`) is instance-resolved and must NOT be routed through the
+     * polymorphic env dict.  Mirrors the elab-side gate
+     * (call_dispatched_constraint_class): receiver-directed keys on a bare
+     * tyvar receiver; return-directed (`pure`/`empty` -- Route B,
+     * constrained-hkt-lifted-lambda-keeps-representative-instance) keys on the
+     * result being tyvar-headed. */
+    {
+        bool recv_is_tyvar =
+            call->as.call_.n_args >= 1 && call->as.call_.args &&
+            call->as.call_.args[0] &&
+            call->as.call_.args[0]->type.kind == TY_TYVAR;
+        const Type *h = &call->type;
+        while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+        if (!recv_is_tyvar && h->kind != TY_TYVAR) return -1;
+    }
     const TypeClass *mtc = call->as.call_.dict_arg->as.dict_.instance->typeclass;
     for (uint8_t k = 0; k < ctx->cur_dict_env_n; k++)
         if (ctx->cur_dict_env_classes[k] == mtc) return (int)k;
@@ -3680,6 +4184,24 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         }
     }
 
+    /* repr-trace (representation-consolidation-meta-plan increment 0):
+     * with --emit-abi-trace, print every carrier<->concrete crossing this
+     * chokepoint lowers, with the lowering form it picked -- the
+     * value-position counterpart of the fn-param decision lines in
+     * elab_fns.c.  (TUR_M3_AUDIT above is the older, env-gated variant
+     * with its own tripwire; both stay.) */
+    if (g_emit_abi_trace) {
+        const char *dir = (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+            ? "carrier->concrete" : "concrete->carrier";
+        const char *form =
+            (type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty))
+                ? "heap-reinterpret"
+                : carrier_is_inline(concrete_ty.kind) ? "inline-reinterpret"
+                                                      : "aggregate";
+        fprintf(stderr, "repr-trace bridge %s %s %s\n",
+                dir, form, type_name(concrete_ty));
+    }
+
     const char *cname = emit_type_c_name(ctx, concrete_ty);
     Buf out;
     buf_init(&out);
@@ -3819,7 +4341,13 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                         free(mp); free(bf);
                     }
                     buf_printf(&out, "}");
-                    if (is_option) buf_printf(&out, " : (%s){0})", cname);
+                    /* S1/findings 16.4: cname can be scalar; emit_c_zero_of
+                     * picks ((T)0) vs (T){0} so c2mir accepts either. */
+                    if (is_option) {
+                        char *z = emit_c_zero_of(cname);
+                        buf_printf(&out, " : %s)", z);
+                        free(z);
+                    }
                     free(src_tmp);
                     used_canonical = true;
                 }
@@ -4066,12 +4594,103 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
      * query the table -- so a literal-only program emits no constructor. */
     if (g_n_sym_records > 0 && g_sym_intern_used) {
         buf_puts(out, "extern void tur_sym_register(const struct __tur_sym *);\n");
-        buf_puts(out, "__attribute__((constructor)) static void __tur_sym_seed(void) {\n");
+        buf_puts(out, "static void __tur_sym_seed(void) {\n");
         for (uint32_t i = 0; i < g_n_sym_records; i++) {
             buf_printf(out, "    tur_sym_register((const struct __tur_sym *)&%s);\n",
                        g_sym_records[i].cid);
         }
         buf_puts(out, "}\n");
+        static_init_register("__tur_sym_seed", STATIC_INIT_REGISTRY);
     }
     if (g_n_sym_records > 0) buf_putc(out, '\n');
+}
+
+/* ============================================================================
+ * S1b (jit-engine-plan): explicit static initialization.
+ * ============================================================================
+ *
+ * Every startup action the emitter used to hang off
+ * `__attribute__((constructor))` is registered here instead and called from an
+ * explicit `__tur_static_init()` at the top of `main`.  The motivation is the
+ * JIT: c2mir parses GCC attributes and discards them with NO diagnostic
+ * (docs/upcoming/jit-engine-j0-findings.md section 3.1), so a dropped
+ * `constructor` cost a SIGSEGV in effectful code and wrong output in dynamic
+ * variables -- silently.  An ordinary call survives any C11 front end.
+ *
+ * A single `__attribute__((constructor))` wrapper is still emitted, so the
+ * `cc` path keeps working exactly as before for the two cases an explicit call
+ * from `main` cannot cover: separate compilation (each TU initializes itself,
+ * and only one TU has `main`) and `--shared` libraries (no `main` at all).
+ * `__tur_static_init` is therefore idempotent -- whichever of the two paths
+ * fires first wins and the other is a no-op.
+ *
+ * Ordering was previously the toolchain's business (`.init_array` order within
+ * a TU).  It is now ours, and the bands below encode the dependencies:
+ * dynamic-variable pthread keys must exist before anything reads a dynamic
+ * var, the registries must be populated before any effectful indirect call
+ * dispatches through them, and `__tur_module_def_init` runs *user* code so it
+ * goes last.
+ */
+
+typedef struct StaticInitEntry {
+    char           *fn;    /* malloc'd owned copy of the C identifier */
+    StaticInitBand  band;
+} StaticInitEntry;
+
+static StaticInitEntry *g_static_inits   = NULL;
+static uint32_t         g_n_static_inits = 0;
+static uint32_t         g_cap_static_inits = 0;
+
+void static_init_reset(void) {
+    for (uint32_t i = 0; i < g_n_static_inits; i++) free(g_static_inits[i].fn);
+    free(g_static_inits);
+    g_static_inits     = NULL;
+    g_n_static_inits   = 0;
+    g_cap_static_inits = 0;
+}
+
+void static_init_register(const char *fn, StaticInitBand band) {
+    if (!fn || !*fn) return;
+    for (uint32_t i = 0; i < g_n_static_inits; i++)
+        if (strcmp(g_static_inits[i].fn, fn) == 0) return;   /* idempotent by name */
+    if (g_n_static_inits == g_cap_static_inits) {
+        uint32_t nc = g_cap_static_inits ? g_cap_static_inits * 2 : 8;
+        StaticInitEntry *ne = (StaticInitEntry *)realloc(g_static_inits,
+                                                         nc * sizeof(StaticInitEntry));
+        if (!ne) return;
+        g_static_inits     = ne;
+        g_cap_static_inits = nc;
+    }
+    g_static_inits[g_n_static_inits].fn   = strdup(fn);
+    g_static_inits[g_n_static_inits].band = band;
+    g_n_static_inits++;
+}
+
+uint32_t static_init_count(void) { return g_n_static_inits; }
+
+/* Emit the definition.  MUST come after every registered function's own
+ * definition: they are all `static`, so a forward reference would be an
+ * implicit declaration.  The declaration `main` calls is emitted in the
+ * runtime preamble instead. */
+void static_init_emit(Buf *out) {
+    buf_puts(out,
+        "/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.\n"
+        " * Called from main(); the constructor below covers the no-main cases\n"
+        " * (separate compilation, --shared).  Whichever runs first wins. */\n"
+        "static void __tur_static_init(void) {\n");
+    if (g_n_static_inits > 0) {
+        buf_puts(out, "    static int __tur_static_init_done = 0;\n"
+                      "    if (__tur_static_init_done) return;\n"
+                      "    __tur_static_init_done = 1;\n");
+        for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
+            for (uint32_t i = 0; i < g_n_static_inits; i++)
+                if (g_static_inits[i].band == (StaticInitBand)band)
+                    buf_printf(out, "    %s();\n", g_static_inits[i].fn);
+    }
+    buf_puts(out, "}\n");
+    if (g_n_static_inits > 0)
+        buf_puts(out,
+            "__attribute__((constructor))\n"
+            "static void __tur_static_init_ctor(void) { __tur_static_init(); }\n");
+    buf_putc(out, '\n');
 }

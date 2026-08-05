@@ -44,8 +44,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-new [A]
-  []
+(defn set-new [A] []
   #fx{}
   : (Set A)
   ```c
@@ -69,9 +68,7 @@
 ;;; set-add-eq-o -- raw insert: explicit hash, boxed carrier element,
 ;;; comparator and ownership flag.
 
-(defn set-add-eq-o [A]
-  [s (Set A) h :int x :int keyeq owned :int]
-  : (Set A)
+(defn set-add-eq-o [A] [s (Set A) h :int x :int keyeq owned :int] : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_set_eq_o(set->hamt, (uint64_t)h, (void*)(intptr_t)x,
@@ -82,9 +79,7 @@
   ```)
 ;;; set-has-eq-o? -- raw membership test: explicit hash, boxed carrier element.
 
-(defn set-has-eq-o? [A]
-  [s (Set A) h :int x :int keyeq owned :int]
-  : bool
+(defn set-has-eq-o? [A] [s (Set A) h :int x :int keyeq owned :int] : bool
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_has_eq_o(set->hamt, (uint64_t)h, (void*)(intptr_t)x,
@@ -92,9 +87,7 @@
   ```)
 ;;; set-del-eq-o -- raw removal: explicit hash, boxed carrier element.
 
-(defn set-del-eq-o [A]
-  [s (Set A) h :int x :int keyeq owned :int]
-  : (Set A)
+(defn set-del-eq-o [A] [s (Set A) h :int x :int keyeq owned :int] : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_del_eq_o(set->hamt, (uint64_t)h, (void*)(intptr_t)x,
@@ -189,8 +182,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-count [A]
-  [s (Set A)]
+(defn set-count [A] [s (Set A)]
   #fx{}
   : int
   ```c
@@ -221,8 +213,7 @@
 ;; owned String) would need the boxes retained here.
 
 
-(defn set-union [A]
-  [a (Set A) b (Set A)]
+(defn set-union [A] [a (Set A) b (Set A)]
   #fx{}
   : (Set A)
   ```c
@@ -259,8 +250,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-intersect [A]
-  [a (Set A) b (Set A)]
+(defn set-intersect [A] [a (Set A) b (Set A)]
   #fx{}
   : (Set A)
   ```c
@@ -299,8 +289,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-diff [A]
-  [a (Set A) b (Set A)]
+(defn set-diff [A] [a (Set A) b (Set A)]
   #fx{}
   : (Set A)
   ```c
@@ -430,8 +419,7 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-free [A]
-  [s (Set A)]
+(defn set-free [A] [s (Set A)]
   #fx{}
   : void
   ```c
@@ -446,8 +434,7 @@
   ```)
 ;;; set-hamt -- internal accessor returning the backing HAMT pointer.
 
-(defn set-hamt [A]
-  [s (Set A)]
+(defn set-hamt [A] [s (Set A)]
   #fx{}
   : ptr<void>
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s; return (__TUR_RET__)(intptr_t)set->hamt; ```)
@@ -484,9 +471,7 @@
 ;;; Since: Phase TCO-Eq-MapSet
 
 
-(defn set-eq-driver [A]
-  [s1 (Set A) s2 (Set A)]
-  : bool
+(defn set-eq-driver [A] [s1 (Set A) s2 (Set A)] : bool
   (let [iter   (hamt/iter-alloc (set-hamt s1))
         keyeq  (hamt/keyeq (set-hamt s1))
         result (set-eq-loop iter (set-hamt s2) keyeq)]
@@ -509,9 +494,7 @@
 ;;; (`set_hyeq_hyfull`), so existing carrier callers are unaffected.
 
 
-(defn set-eq-full [A]
-  [s1 (Set A) s2 (Set A)]
-  : bool
+(defn set-eq-full [A] [s1 (Set A) s2 (Set A)] : bool
   (and (= (set-count s1) (set-count s2)) (set-eq-driver s1 s2)))
 
 (definstance Eq [Set]

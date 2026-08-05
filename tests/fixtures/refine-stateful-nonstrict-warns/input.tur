@@ -1,0 +1,20 @@
+;; C2 (#reads): an unproven #reads crossing in NON-strict mode WARNS (TUR-W0372,
+;; "no runtime fallback") but still compiles and runs -- it is trusted, not
+;; silently elided, and not a hard error (that is --strict-refine's job). Here
+;; the read is OUTSIDE a `frozen` region, so the guard cannot discharge the
+;; crossing; `alive?` is constant-true, so the trusted read is runtime-safe.
+(defstruct World [n : int])
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (if (alive? w 0)
+      (get-Pos! w 0)
+      -1)))
+(defn main [] : int
+  (println (run))
+  0)

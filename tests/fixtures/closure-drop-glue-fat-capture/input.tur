@@ -1,0 +1,26 @@
+;; closure-drop-glue (Model R) type-honesty (a): a `^fat` closure-handle capture
+;; is now identifiable (is_fat survives onto the capture binding, even though its
+;; env field is the erased int64 carrier) and is MOVED into the capturing env.
+;; The env's drop-glue walks it via TUR_CLOSURE_DROP, so releasing the OUTER
+;; handle frees the whole chain -- the middleware `(fn [next] (fn [conn] ...))`
+;; shape.  Sound because the move makes the env the sole owner (a second capture
+;; is a compile-time use-after-move, see errors/closure-drop-glue-fat-alias).
+(defn call-next [^fat n : int c : int] : int
+  ```c return (int)TUR_APPLY1((int64_t)(intptr_t)n, (int64_t)c); ```)
+
+(defn base [c : int] : int (+ c 100))
+
+(defn wrap [^fat next : int] : ptr<void>
+  (let [_n next]
+    (fn [c : int] : int (call-next _n c))))
+
+(defn store-call-drop [f : ptr<void>] : int
+  ```c
+  int64_t r = TUR_APPLY1((int64_t)(intptr_t)f, 5);
+  TUR_CLOSURE_DROP(f);   /* drops outer env; its drop-glue walks _n -> frees base */
+  return (int)r;
+  ```)
+
+(defn main [] : int
+  (println (store-call-drop (wrap base)))
+  0)

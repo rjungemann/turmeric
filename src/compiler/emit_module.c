@@ -4,8 +4,10 @@
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
+#include "experiments.h" /* experiment_warn_if_used (closure-drop-glue) */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
+#include "rc.h"        /* DEDUP-4b: RC_VT_* -- pinned against TypeKind below */
 
 /* ------------ program-level emit ------------ */
 
@@ -645,6 +647,99 @@ static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_p
     return result;
 }
 
+/* fn-value-fat-normalization: return the C name of a file-scope, statically
+ * initialized `{ drop-glue, shim, orig }` box for (shim, fnptr), creating it on
+ * first request; NULL when this TU has no place to put one.
+ *
+ * EX_FN_TO_FAT otherwise mallocs a fresh box every time it executes.  When the
+ * boxed value is a file-scope function the box contents are constant, so the
+ * allocation is pure waste -- and worse than waste: nothing drops a box handed
+ * to a normalized fn param, so a loop that boxes per iteration leaks without
+ * bound (measured: 122 MiB over 5e6 iterations, 24 bytes a turn).
+ *
+ * Layout is byte-compatible with the malloc'd box on purpose --
+ * `sizeof(void *)` of drop-glue header followed by two int64 slots, handle
+ * pointing at slot 0 -- because tur_closure_drop recovers the header at
+ * `h[-1]` and the fat-call protocol reads slots 0/1.  The union gives the
+ * storage max(void *, int64_t) alignment without a struct's padding, which
+ * would move slot 0 off `+ sizeof(void *)` on a 32-bit target (wasm32).
+ *
+ * The header is `__tur_fatbox_keep`, a no-op, rather than the malloc'd box's
+ * NULL.  NULL means "free the base allocation" to tur_closure_drop, which on a
+ * static address is a heap corruption; a no-op glue makes every drop path
+ * (struct drop glue, __dk_reap, an owning field released twice) correctly do
+ * nothing.  That also makes SHARING a box between boxing sites safe, which is
+ * what the dedup relies on: the box is write-once (EX_FN_TO_FAT and
+ * EX_POLY_TO_FAT are the only writers of these slots in the tree, both at
+ * creation), and nothing compares fn values by identity.
+ *
+ * Filled from __tur_static_init rather than a static initializer: casting a
+ * function pointer to int64_t is not an address constant, and S1b exists
+ * precisely so startup work survives any C11 front end (c2mir included). */
+const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
+                                        const char *fnptr) {
+    if (!ctx || !ctx->fatbox_init || !ctx->thunk_typedefs) return NULL;
+    if (!shim || !*shim || !fnptr || !*fnptr) return NULL;
+
+    Buf key; buf_init(&key);
+    buf_puts(&key, shim); buf_putc(&key, '|'); buf_puts(&key, fnptr);
+    buf_putc(&key, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
+        if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
+            buf_free(&key);
+            static char name[96];
+            snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)i);
+            return name;
+        }
+    }
+    if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
+        uint32_t nc = ctx->cap_fatbox_keys ? ctx->cap_fatbox_keys * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_keys = nn;
+        ctx->cap_fatbox_keys = nc;
+    }
+    uint32_t idx = ctx->n_fatbox_keys++;
+    ctx->fatbox_keys[idx] = strdup(key.data);
+    if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_free(&key);
+
+    if (idx == 0) {
+        buf_puts(ctx->thunk_typedefs,
+            "/* fn-value-fat-normalization: no-op drop glue for statically\n"
+            " * allocated { shim, orig } boxes.  tur_closure_drop treats a NULL\n"
+            " * header as \"free the base allocation\", which would free() a\n"
+            " * static address; this makes every drop of such a box a no-op. */\n"
+            "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
+    }
+    /* The drop-glue header is a STATIC initializer, not a fill: `__a` is the
+     * union's first member and occupies exactly the header slot, and a
+     * function-pointer-to-void* conversion is an address constant (the
+     * preamble's __tur_fatshim_keep[] table already relies on that).  It has
+     * to be initialized at load time rather than from __tur_fatbox_init,
+     * because tur_closure_drop's else-branch is `free(header_address)` -- with
+     * a zero-initialized header GCC cannot prove that branch dead and warns
+     * `'free' called on unallocated object` at every drop site that inlines it
+     * (-Wfree-nonheap-object).  Non-NULL from load time folds the branch away.
+     * The int64 SLOTS still need the fill: a function pointer cast to int64_t
+     * is not an address constant. */
+    buf_printf(ctx->thunk_typedefs,
+        "static union { void *__a; int64_t __b;\n"
+        "               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }\n"
+        "    __tur_fatbox_%u = { .__a = (void *)__tur_fatbox_keep };\n",
+        (unsigned)idx);
+    buf_printf(ctx->fatbox_init,
+        "    { char *__b = (char *)&__tur_fatbox_%u;\n"
+        "      int64_t *__s = (int64_t *)(__b + sizeof(void *));\n"
+        "      __s[0] = (int64_t)(intptr_t)%s;\n"
+        "      __s[1] = (int64_t)(intptr_t)%s; }\n",
+        (unsigned)idx, shim, fnptr);
+
+    static char name[96];
+    snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)idx);
+    return name;
+}
+
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params) {
     /* The call site invokes the boxed fn through the typed-thunk cast only when
@@ -707,13 +802,67 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     return name;
 }
 
-char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
-                                  Type result_type, Type *param_types,
-                                  uint8_t n_params) {
+/* E2 (fat-closure fn-value threading): emit a `<wrapper>__cps` twin for a
+ * poly-wrap thunk `<wrapper>` (e.g. `__poly_1285`) that boxes an EFFECTFUL named
+ * fn `inner_fn` (e.g. `cb`) into a `tur_poly_fn_t`.  The twin has the fat
+ * closure's `fn_cps` ABI -- `(void *env, int64_t arg, struct DK *__kont)` -- and
+ * DK-threads the call to `inner_fn`'s CPS entry, recovered from the direct->CPS
+ * registry (the same channel E2a uses for a fn-value param).  So an effectful
+ * callback invoked through a fat-closure param performs on the caller's
+ * trampoline, not a fresh root.  `inner_fn` is force-declared here (thunk_typedefs
+ * is emitted ahead of the normal forward decls) and is registered by its own
+ * addr-taken CPS-registration constructor.  Returns the malloc'd twin name, or
+ * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
+ * The caller restricts `inner_fn` to a plain `int`/`int64` arg AND result, whose
+ * C spelling is exactly the `int64_t <fn>(int64_t)` this forward-declares. */
+char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
+                                 const char *inner_fn) {
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, wrapper_name);
+    buf_puts(&nb, "__cps");
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) { free(name); return NULL; }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* thunk_typedefs precedes the normal forward decls, so declare inner_fn's
+     * direct entry ourselves (single int64 arg + int64 return -- the caller's
+     * gate guarantees an int-register-class arg/result).  `__tur_cps_fn` /
+     * `__tur_cps_lookup` / `dk_run` come from the DK runtime preamble, already
+     * emitted above this section. */
+    buf_printf(target, "static int64_t %s(int64_t);\n", inner_fn);
+    buf_printf(target, "static int64_t %s(void *__pwe, int64_t __pwx, struct DK *__kont) {\n", name);
+    buf_puts(target, "    (void)__pwe;\n");
+    buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)%s);\n", inner_fn);
+    buf_puts(target, "    if (__c) return ((int64_t(*)(int64_t, struct DK *))__c)(__pwx, __kont);\n");
+    buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(__pwx));\n", inner_fn);
+    buf_puts(target, "}\n");
+    return name;
+}
+
+/* Does `result_type` return a by-value aggregate that cannot ride the int64
+ * `tur_poly_fn_t.fn` ABI without boxing?  Shared by both spill shims (the
+ * named-wrapper one below and the fat-closure one after it) so the two agree
+ * on exactly which returns need a carrier box. */
+static bool spill_result_is_byvalue_aggregate(Type result_type) {
     /* Only by-value aggregates need spilling: a struct/applied type with a
      * concrete codegen layout whose C name is not the int64 carrier. */
     const char *rc = type_c_name(result_type);
-    if (!rc || strcmp(rc, "int64_t") == 0) return NULL;
+    if (!rc || strcmp(rc, "int64_t") == 0) return false;
     bool is_aggr = (result_type.kind == TY_APP &&
                     type_has_concrete_codegen_layout(&result_type) &&
                     !type_uses_carrier_abi(result_type));
@@ -730,7 +879,14 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
                  adt_is_byvalue_product(result_type.as.adt_.def))
             is_aggr = true;
     }
-    if (!is_aggr) return NULL;
+    return is_aggr;
+}
+
+char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
+                                  Type result_type, Type *param_types,
+                                  uint8_t n_params) {
+    const char *rc = type_c_name(result_type);
+    if (!spill_result_is_byvalue_aggregate(result_type)) return NULL;
 
     Buf nb; buf_init(&nb);
     buf_puts(&nb, "__tur_aggrspill_");
@@ -767,6 +923,69 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
         buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
     buf_puts(target, ") {\n    ");
     buf_printf(target, "%s __r = %s(__e", rc, real_fn);
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+    buf_puts(target, ");\n    ");
+    buf_printf(target, "void *__p = malloc(sizeof(%s));\n    ", rc);
+    buf_printf(target, "memcpy(__p, &__r, sizeof(%s));\n    ", rc);
+    buf_puts(target, "return (int64_t)(intptr_t)__p;\n}\n");
+    return name;
+}
+
+/* nested-bind-over-result-typed-boundary: the fat-closure twin of the shim
+ * above.  A CAPTURING continuation has no named wrapper to spill -- its real
+ * entry point lives in the closure env's `__fn` slot at offset 0 and is only
+ * known at run time -- so the shim is keyed on the SIGNATURE and reads the
+ * callee out of the env it is handed.  Needed whenever such a closure returns
+ * a by-value aggregate and the consuming instance invokes it through the int64
+ * `tur_poly_fn_t.fn` cast: without the box the struct return (RAX:RDX or an
+ * sret hidden pointer) is read as a plain int64 handle and the consumer
+ * dereferences garbage.  Returns NULL when the return already rides the
+ * carrier, or when a param is not int-register-class (the poly-fn ABI only
+ * carries int64 args, so a wider param has no valid shim). */
+char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
+                                      Type *param_types, uint8_t n_params) {
+    const char *rc = type_c_name(result_type);
+    if (!spill_result_is_byvalue_aggregate(result_type)) return NULL;
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc || strcmp(pc, "int64_t") != 0) return NULL;
+    }
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatspill_");
+    append_sanitized_c_token(&nb, rc);
+    buf_printf(&nb, "_%u", (unsigned)n_params);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) { return name; }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++)
+        buf_printf(target, ", int64_t a%u", (unsigned)i);
+    buf_puts(target, ") {\n    ");
+    /* `__fn` is the first slot of every closure env -- the same offset the
+     * uncast fat-closure emit reads with `((int64_t *)env)[0]`. */
+    buf_printf(target, "%s (*__f)(void *", rc);
+    for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
+    buf_printf(target, ") = (%s (*)(void *", rc);
+    for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
+    buf_puts(target, "))(intptr_t)((int64_t *)__e)[0];\n    ");
+    buf_printf(target, "%s __r = __f(__e", rc);
     for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
     buf_puts(target, ");\n    ");
     buf_printf(target, "void *__p = malloc(sizeof(%s));\n    ", rc);
@@ -955,11 +1174,82 @@ static Type emit_abi_instantiate_type(const Type *t,
             if (!t->as.app.fn || !t->as.app.arg) return *t;
             Type fn = emit_abi_instantiate_type(t->as.app.fn, bindings, n_bindings, arena);
             Type arg = emit_abi_instantiate_type(t->as.app.arg, bindings, n_bindings, arena);
+            /* constrained-hkt-abstract-var-requires-last-param-free: mirror
+             * call_instantiate_type -- when the head substituted to a
+             * hole-headed partial application, saturating it puts `arg` at the
+             * hole rather than currying it on the end, so the spec's result
+             * type (and hence its mangled name and C signature) is
+             * `Result__int__cstr`, not the transposed `Result__cstr__int`. */
+            if (type_app_has_hole(&fn)) {
+                uint8_t hp = type_app_hole_pos(&fn);
+                Type ctor  = fn.as.app.fn ? *fn.as.app.fn : fn;
+                Type fixed = fn.as.app.arg ? *fn.as.app.arg : arg;
+                Type first  = (hp == 0) ? arg   : fixed;
+                Type second = (hp == 0) ? fixed : arg;
+                Type inner;
+                memset(&inner, 0, sizeof(inner));
+                inner.kind = TY_APP;
+                inner.copy_kind = ctor.copy_kind;
+                inner.as.app.fn  = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                inner.as.app.arg = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *inner.as.app.fn  = ctor;
+                *inner.as.app.arg = first;
+                Type outer;
+                memset(&outer, 0, sizeof(outer));
+                outer.kind = TY_APP;
+                outer.copy_kind = ctor.copy_kind;
+                outer.as.app.fn  = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                outer.as.app.arg = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *outer.as.app.fn  = inner;
+                *outer.as.app.arg = second;
+                return outer;
+            }
             Type out = *t;
             out.as.app.fn = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
             out.as.app.arg = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
             *out.as.app.fn = fn;
             *out.as.app.arg = arg;
+            return out;
+        }
+        case TY_FN: {
+            if (!t->as.fn.arg_full_types && !t->as.fn.result_full_type) return *t;
+            Type out = *t;
+            if (t->as.fn.arity > 0 && t->as.fn.arg_full_types && t->as.fn.arg_kinds) {
+                Type **nfull = (Type **)emit_abi_type_scratch(
+                    arena, (size_t)t->as.fn.arity * sizeof(Type *));
+                uint8_t *nkinds = (uint8_t *)emit_abi_type_scratch(
+                    arena, (size_t)t->as.fn.arity * sizeof(uint8_t));
+                for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+                    nkinds[i] = t->as.fn.arg_kinds[i];
+                    nfull[i] = t->as.fn.arg_full_types[i];
+                    if (!t->as.fn.arg_full_types[i]) continue;
+                    Type sub = emit_abi_instantiate_type(
+                        t->as.fn.arg_full_types[i], bindings, n_bindings, arena);
+                    Type *slot = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                    *slot = sub;
+                    /* Only adopt the substitution when it actually RESOLVED.
+                     * A context whose bindings do not cover this tyvar leaves
+                     * `sub` a TY_TYVAR; overwriting the stable erased kind with
+                     * it renames the monomorph (`fn1_int__int` ->
+                     * `fn1_struct__struct`, `struct` being the tyvar token) so
+                     * the definition no longer matches its forward declaration. */
+                    if (sub.kind == TY_TYVAR || sub.kind == TY_UNKNOWN) continue;
+                    nfull[i] = slot;
+                    nkinds[i] = (uint8_t)sub.kind;
+                }
+                out.as.fn.arg_full_types = nfull;
+                out.as.fn.arg_kinds = nkinds;
+            }
+            if (t->as.fn.result_full_type) {
+                Type sub = emit_abi_instantiate_type(t->as.fn.result_full_type,
+                                                    bindings, n_bindings, arena);
+                Type *slot = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *slot = sub;
+                if (sub.kind != TY_TYVAR && sub.kind != TY_UNKNOWN) {
+                    out.as.fn.result_full_type = slot;
+                    out.as.fn.result_kind = sub.kind;
+                }
+            }
             return out;
         }
         case TY_UNION: {
@@ -1181,6 +1471,100 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
         default:
             return NULL;
     }
+}
+
+/* struct-of-closures monomorphization: collecting sibling of
+ * emit_find_passed_spec_closure.  Where that finder returns the FIRST captured
+ * closure PASSED as a call argument whose result type follows the active spec's
+ * tyvars, this gathers EVERY such closure -- the N closures a
+ * `(make-struct S clo1 clo2 ...)` (lowered to a ctor CALL) hands to its ctor.
+ * The single-result finder links only clo1; this collects all so each gets its
+ * own per-spec clone + suffixed env.  Appends to out[*n_out..cap), de-duping by
+ * binding identity, never exceeding `cap`. */
+static void emit_collect_passed_spec_closures(
+        const Expr *e, const AbiTypeBinding *bindings, uint8_t n_bindings,
+        Arena *arena, Binding **out, uint8_t cap, uint8_t *n_out) {
+    if (!e || *n_out >= cap) return;
+    switch (e->kind) {
+        case EX_CLOSURE: {
+            struct Closure *cl = e->as.closure_.closure;
+            if (cl && cl->fn && cl->fn->binding &&
+                cl->fn->binding->type.kind == TY_FN) {
+                const Type *rt = cl->fn->binding->type.as.fn.result_full_type;
+                if (rt) {
+                    Type inst = emit_abi_instantiate_type(rt, bindings, n_bindings, arena);
+                    if (inst.kind != rt->kind || !type_eq(inst, *rt)) {
+                        for (uint8_t i = 0; i < *n_out; i++)
+                            if (out[i] == cl->fn->binding) return;  /* de-dup */
+                        if (*n_out < cap) out[(*n_out)++] = cl->fn->binding;
+                    }
+                }
+            }
+            return;
+        }
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                emit_collect_passed_spec_closures(e->as.call_.args[i], bindings,
+                                                  n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_ASCRIBE:
+            emit_collect_passed_spec_closures(e->as.ascribe_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_POLY_WRAP:
+            emit_collect_passed_spec_closures(e->as.poly_wrap_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_FN_TO_FAT:
+            emit_collect_passed_spec_closures(e->as.fn_to_fat_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_POLY_TO_FAT:
+            emit_collect_passed_spec_closures(e->as.poly_to_fat_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_LET:
+            emit_collect_passed_spec_closures(e->as.let_.body, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                emit_collect_passed_spec_closures(e->as.do_.items[i], bindings,
+                                                  n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_IF:
+            emit_collect_passed_spec_closures(e->as.if_.then_, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            emit_collect_passed_spec_closures(e->as.if_.else_or_null, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                emit_collect_passed_spec_closures(e->as.match_.arms[i].body, bindings,
+                                                  n_bindings, arena, out, cap, n_out);
+            return;
+        default:
+            return;
+    }
+}
+
+/* struct-of-closures monomorphization: the lookup the EX_CLOSURE construction
+ * and thunk-call emit sites share.  See the header doc. */
+const EmitAbiSpecialization *emit_inner_closure_spec_for_binding(
+        const EmitCtx *ctx, const EmitAbiSpecialization *cur,
+        const Binding *binding) {
+    if (!ctx || !cur || !binding) return NULL;
+    if (cur->inner_closure_spec_idx >= 0) {
+        const EmitAbiSpecialization *isp =
+            &ctx->abi_specializations[cur->inner_closure_spec_idx];
+        if (isp->binding == binding) return isp;
+    }
+    for (uint8_t i = 0; i < cur->n_extra_inner_closure_spec_idx; i++) {
+        const EmitAbiSpecialization *isp =
+            &ctx->abi_specializations[cur->extra_inner_closure_spec_idx[i]];
+        if (isp->binding == binding) return isp;
+    }
+    return NULL;
 }
 
 /* constrained-instance-element-dispatch-in-closures: does `bindings` map `name`
@@ -1781,7 +2165,20 @@ static bool body_has_dispatch_on_app_tyvar(
             for (uint8_t i = 0; i < n_bindings; i++) {
                 if (bindings[i].name &&
                     strcmp(bindings[i].name, recv->type.as.tyvar_.name) == 0 &&
-                    bindings[i].type.kind == TY_APP) {
+                    /* generic-show-dispatch-opaque-carrier: a class var bound to a
+                     * concrete TY_APP (`Map[cstr int]`) OR a bare nominal TY_ADT --
+                     * including an opaque newtype like `String`
+                     * (`defopaque String :ptr<void>`) -- collapses to the int64
+                     * carrier (abi_changes stays false), yet its instance differs
+                     * from the baked int representative.  Without minting a spec
+                     * here the base clone dispatches `(show x)` through
+                     * `__inst_Show_show_int` and renders e.g. a String's payload
+                     * pointer as a decimal.  TY_ADT covers the non-parametric
+                     * nominal case the TY_APP check misses; a class var bound to a
+                     * genuine primitive (int/bool/float/cstr) is never TY_ADT, so
+                     * this does not over-mint for those. */
+                    (bindings[i].type.kind == TY_APP ||
+                     bindings[i].type.kind == TY_ADT)) {
                     return true;
                 }
             }
@@ -1941,6 +2338,56 @@ static const Symbol *emit_arena_symbol(Arena *arena, const char *s) {
     sym->len = (uint32_t)n;
     sym->hash = 0;
     return sym;
+}
+
+/* poly-closure-result-specialization: build and assign the suffixed env-struct
+ * name (`__env_N__spec__<res>`) for an inner-closure body spec, so a register-
+ * class- or layout-changing specialization gets its own struct instead of
+ * aliasing the base int64-carrier env.  Handles the `__h<n>` disambiguator when
+ * two sibling specs would otherwise collapse to the same suffixed name (the
+ * hkt-cata-mixed-carrier-env-collision case).  No-op if the spec already has an
+ * override or the closure has no env.  Extracted so both the primary inner
+ * closure and the extra struct-of-closures links share one implementation. */
+static void emit_assign_inner_env_override(EmitCtx *ctx, FnDef *inner_fd,
+                                           Type inner_res,
+                                           EmitAbiSpecialization *inner_spec) {
+    if (inner_spec->env_name_override) return;
+    if (!inner_fd->closure || !inner_fd->closure->env_name) return;
+    Buf en; buf_init(&en);
+    buf_puts(&en, inner_fd->closure->env_name->name);
+    buf_puts(&en, "__spec__");
+    append_sanitized_c_token(&en, type_c_name(inner_res));
+    buf_putc(&en, '\0');
+    bool en_collides = false;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        EmitAbiSpecialization *os = &ctx->abi_specializations[i];
+        if (os == inner_spec || !os->env_name_override) continue;
+        if (strcmp(os->env_name_override->name, en.data) == 0) {
+            en_collides = true;
+            break;
+        }
+    }
+    if (en_collides) {
+        char *base = strdup(en.data);
+        if (!base) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t n = 1; en_collides; n++) {
+            en.len = 0;
+            buf_printf(&en, "%s__h%u", base, n);
+            buf_putc(&en, '\0');
+            en_collides = false;
+            for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+                EmitAbiSpecialization *os = &ctx->abi_specializations[i];
+                if (os == inner_spec || !os->env_name_override) continue;
+                if (strcmp(os->env_name_override->name, en.data) == 0) {
+                    en_collides = true;
+                    break;
+                }
+            }
+        }
+        free(base);
+    }
+    inner_spec->env_name_override = emit_arena_symbol(ctx->type_arena, en.data);
+    buf_free(&en);
 }
 
 static bool emit_inner_closure_needs_float_spec(Binding *inner,
@@ -2355,18 +2802,40 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     if (ctx->current_abi_specialization && call->as.call_.dict_arg) {
         Type rresolved = {0}; const Expr *rdict = NULL;
         FnDef *redisp = NULL;
+        bool redisp_is_hkt = false;
         if (emit_reresolve_disp_type(ctx, call, &rresolved, &rdict) && rdict &&
             rdict->as.dict_.instance && rdict->as.dict_.instance->typeclass) {
             redisp = emit_concrete_inst_method_fndef(
                 ctx, rdict->as.dict_.instance->typeclass, rresolved,
                 rdict->as.dict_.method_name);
+            /* constrained-hkt-spec-keeps-representative-instance: is the
+             * re-dispatched class parameterised over a type CONSTRUCTOR? */
+            const TypeClass *rtc = rdict->as.dict_.instance->typeclass;
+            if (rtc->type_param_kinds) {
+                for (uint8_t i = 0; i < rtc->n_type_params; i++)
+                    if (rtc->type_param_kinds[i] != KIND_STAR) {
+                        redisp_is_hkt = true; break;
+                    }
+            }
         }
         if (redisp && redisp->binding) {
             /* G2: when the re-dispatched instance method is itself parametric and
              * the recovered receiver is a concrete parametric container, mint its
              * by-value spec and route the call to it (the carrier base alone would
-             * silently miscompile a by-value/float element). */
-            if (emit_abi_try_nested_instance_dispatch_redirect(
+             * silently miscompile a by-value/float element).
+             *
+             * constrained-hkt-spec-keeps-representative-instance: NOT for a
+             * higher-kinded class.  Those keep the uniform int64-carrier dispatch
+             * (Plan M6/M7 -- the same carve-out elab applies when binding the
+             * class var), and their instance methods are emitted against the
+             * carrier: `__inst_Monad_bind_Option` takes `int64_t ma` and derefs
+             * it, so a by-value spec clones that body under a struct parameter and
+             * produces ill-typed C (`some_qu` fed a `tur_adt_Option__int`).
+             * A wide-functor Path B body still gets its by-value twin -- from the
+             * interning below, via the existing is_vl_wide_mono carve-out, not
+             * from this redirect. */
+            if (!redisp_is_hkt &&
+                emit_abi_try_nested_instance_dispatch_redirect(
                     ctx, call, items, n_items, redisp, &rresolved)) {
                 return;
             }
@@ -2493,7 +2962,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     uint8_t nb = 0;
                     for (uint8_t k = 0; k < an1 && nb < ABI_TYPE_BINDINGS_MAX; k++) {
                         if (ae2[k].kind == TY_TYVAR && ae2[k].as.tyvar_.name &&
-                            type_has_concrete_codegen_layout(&ae1[k])) {
+                            (type_has_concrete_codegen_layout(&ae1[k]) ||
+                             (ae1[k].kind == TY_APP &&
+                              type_app_is_concrete_adt(&ae1[k])))) {
+                            /* vec-empty-like-monomorph-selects-int-element:
+                             * type_has_concrete_codegen_layout returns false for
+                             * EVERY TY_APP by design -- its own comment says so,
+                             * and names `type_app_is_concrete_adt` as the
+                             * companion predicate for a concrete parametric ADT.
+                             * Consulting only the first one made this recovery
+                             * decline any ADT-application element, so a spec over
+                             * `(Vec (Map sym int))` synthesized no `{A -> ...}`
+                             * binding, fell through the `n_bindings == 0` gate
+                             * below, and never interned its own callee monomorph
+                             * -- leaving `vec-empty-like__`'s Map clone calling
+                             * `vec_new__spec__tur_adt_Vec__int__`, the int one.
+                             * The int clone worked only because `int` is not a
+                             * TY_APP.  The either/or pairing is the established
+                             * idiom for this question (cf. emit_expr.c's
+                             * field_read_emits_byvalue_aggregate). */
                             rehydrated[nb].name = ae2[k].as.tyvar_.name;
                             rehydrated[nb].type = ae1[k];
                             nb++;
@@ -2940,19 +3427,52 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * (`re_cata__spec__double`) instead of a spurious int64 sibling whose return
      * register class (rax vs xmm0) is wrong.  Only fires for a bare-tyvar declared
      * result still sitting on the carrier; an int element recovers to int (no
-     * change), a float/bool/etc. recovers to its native kind. */
+     * change), a float/bool/etc. recovers to its native kind.
+     *
+     * CS3 nested specialization (findings 30): this is NOT specific to a passed
+     * closure clone -- it is the general shape of a generic body calling another
+     * generic whose result tyvar only the ACTIVE spec binds.  The gate used to
+     * require `is_passed_closure_clone`, so an ordinary function spec
+     * (`use-second` specialized to `(Pair int float)` calling `pair-second`)
+     * took exactly the spurious int64 sibling this comment warns about: the
+     * callee returned the float's BIT PATTERN in an int64 and the caller handed
+     * it back through an implicit int64->double NUMERIC conversion, printing
+     * 4.61425e+18 for 3.14 -- under gcc and MIR alike.  Widening the gate is
+     * what makes `(defn use-second [A B] [p :(Pair A B)] :B (pair-second p))`
+     * resolve its inner call to the sibling spec with the matching return ABI.
+     * See tests/fixtures/typed-slots/cs3-nested-specialization.
+     *
+     * Outside a passed closure clone the recovery is held to what this comment
+     * has always SAID it recovers -- a PRIMITIVE / register-class result.  A
+     * recovered by-value AGGREGATE stays on the carrier there: those ride the
+     * int64 carrier by deliberate convention, and un-collapsing one retypes the
+     * spec's return while its consumers still pass/accept the carrier (a
+     * `(Vec (Option int))` push handed an `Option__int` where the accessor
+     * declares int64 -- constrained-loop-vec-push-byvalue-result-element).  The
+     * aggregate case has its own recovery path above, keyed on the CALL's own
+     * bindings rather than the active spec's. */
     if (!result_type_override &&
         ctx->current_abi_specialization &&
-        ctx->current_abi_specialization->is_passed_closure_clone &&
         fn_binding->type.as.fn.result_kind == TY_TYVAR &&
         generic_result.kind == TY_TYVAR &&
         (result_type.kind == TY_TYVAR || result_type.kind == TY_INT) &&
         spec_bindings && spec_n_bindings > 0) {
         Type recovered = emit_abi_instantiate_type(
             &generic_result, spec_bindings, spec_n_bindings, ctx->type_arena);
-        if (recovered.kind != TY_TYVAR && recovered.kind != TY_INT &&
-            recovered.kind != TY_UNKNOWN)
-            result_type = recovered;
+        bool prim_only = !ctx->current_abi_specialization->is_passed_closure_clone;
+        bool ok_kind = recovered.kind != TY_TYVAR && recovered.kind != TY_INT &&
+                       recovered.kind != TY_UNKNOWN;
+        if (ok_kind && prim_only) {
+            switch (recovered.kind) {
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_BOOL:  case TY_CSTR:
+                case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                    break;                 /* register-class primitive: recover */
+                default: ok_kind = false;  /* aggregate / nil / ptr: stay carrier */
+            }
+        }
+        if (ok_kind) result_type = recovered;
     }
     /* constrained-defn-monomorphize: when the call's element bindings were
      * re-hydrated from the active spec (above), `call->type` was the elab-
@@ -3621,60 +4141,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * the base env struct (no suffixed override).  Suffixing it would emit
              * a redundant identical struct; sharing keeps the base `__env_N` and
              * snapshots minimal. */
-            if (!inner_dispatch && !inner_spec->env_name_override &&
-                inner_fd->closure && inner_fd->closure->env_name) {
-                Buf en; buf_init(&en);
-                buf_puts(&en, inner_fd->closure->env_name->name);
-                buf_puts(&en, "__spec__");
-                append_sanitized_c_token(&en, type_c_name(inner_res));
-                buf_putc(&en, '\0');
-                /* hkt-cata-mixed-carrier-env-collision: the carrier `B` lowers to
-                 * the int64 carrier (`type_c_name` -> `int64_t`) for BOTH a fat
-                 * function carrier (`B = (fn [int] int)`, whose env's `__fn` slot
-                 * is a `tur_thunk_*`) and a plain value carrier (`B = int`, whose
-                 * `__fn` is a bare `int64_t`).  The two specs are genuinely
-                 * distinct (type_eq kept them apart and emit_abi_clone_name
-                 * already gave them distinct `__h<n>` clone names), but this
-                 * env-struct name collapses both to `__env_N__spec__int64_t`, so
-                 * the two struct definitions redefine each other in the same TU.
-                 * Mirror the Gap H clone-name disambiguator here: when the base
-                 * env name collides with another spec's already-assigned
-                 * env_name_override, append `__h<n>` (deterministic in intern
-                 * order, so it reproduces across the header/impl emit passes).
-                 * No effect on non-colliding names -> existing snapshots are
-                 * untouched. */
-                bool en_collides = false;
-                for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
-                    EmitAbiSpecialization *os = &ctx->abi_specializations[i];
-                    if (os == inner_spec || !os->env_name_override) continue;
-                    if (strcmp(os->env_name_override->name, en.data) == 0) {
-                        en_collides = true;
-                        break;
-                    }
-                }
-                if (en_collides) {
-                    char *base = strdup(en.data);
-                    if (!base) { fprintf(stderr, "tur: oom\n"); abort(); }
-                    for (uint32_t n = 1; en_collides; n++) {
-                        en.len = 0;
-                        buf_printf(&en, "%s__h%u", base, n);
-                        buf_putc(&en, '\0');
-                        en_collides = false;
-                        for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
-                            EmitAbiSpecialization *os = &ctx->abi_specializations[i];
-                            if (os == inner_spec || !os->env_name_override) continue;
-                            if (strcmp(os->env_name_override->name, en.data) == 0) {
-                                en_collides = true;
-                                break;
-                            }
-                        }
-                    }
-                    free(base);
-                }
-                inner_spec->env_name_override =
-                    emit_arena_symbol(ctx->type_arena, en.data);
-                buf_free(&en);
-            }
+            if (!inner_dispatch)
+                emit_assign_inner_env_override(ctx, inner_fd, inner_res, inner_spec);
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
             ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
             if (inner_passed)
@@ -3698,6 +4166,73 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     ? (uint32_t)(saved_c - ctx->abi_specializations) : 0;
                 ctx->current_abi_specialization = &ctx->abi_specializations[inner_idx];
                 emit_abi_scan_expr(ctx, inner_fd->body, items, n_items);
+                ctx->current_abi_specialization = saved_in
+                    ? &ctx->abi_specializations[saved_ci] : saved_c;
+            }
+        }
+    }
+
+    /* struct-of-closures monomorphization: the block above links the FIRST
+     * closure a struct-of-closures return builds (`compose-lens` returning
+     * `(make-struct Lens get put)`, lowered to a ctor CALL whose args are the
+     * `get`/`put` closures).  `emit_find_passed_spec_closure` returns only that
+     * first closure, and `inner_closure_spec_idx` holds only its index -- so the
+     * SECOND (and further) closures keep the base int64-carrier env, and the
+     * ctor-body construction assigns a by-value monomorph struct (`l1`) into an
+     * `int64_t` slot: a hard C type error.  Collect every additional passed
+     * closure here and link each with its own per-spec clone + suffixed env.
+     * Gated to the plain-passed (`inner_passed`) case: `inner_dispatch`
+     * (constrained-instance) needs constraint grounding this slim path omits,
+     * and `inner_float`-only returns are single-closure by construction. */
+    if (inner_passed && inner_closure && fd && fd->body) {
+        Binding *extras[TUR_EXTRA_INNER_CLOSURE_MAX + 1];
+        uint8_t n_extras = 0;
+        emit_collect_passed_spec_closures(fd->body, bindings, n_bindings,
+                                          ctx->type_arena, extras,
+                                          TUR_EXTRA_INNER_CLOSURE_MAX + 1,
+                                          &n_extras);
+        for (uint8_t ci = 0; ci < n_extras; ci++) {
+            Binding *xclo = extras[ci];
+            if (xclo == inner_closure) continue;   /* already linked above */
+            const Expr *xexpr = emit_abi_find_fn_expr(items, n_items, xclo);
+            if (!xexpr || xexpr->kind != EX_FN_DEF || !xexpr->as.fn_def_.fn)
+                continue;
+            FnDef *xfd = xexpr->as.fn_def_.fn;
+            Type xargs[MAX_FN_ARITY];
+            uint32_t xn = xfd->n_params;
+            for (uint8_t i = 0; i < xn; i++) {
+                if (i == 0) { xargs[i] = xfd->param_types[0]; continue; }
+                const Type *aft = (xclo->type.as.fn.arg_full_types &&
+                                   i < xclo->type.as.fn.arity)
+                    ? xclo->type.as.fn.arg_full_types[i] : NULL;
+                xargs[i] = emit_abi_instantiate_type(
+                    aft ? aft : &xfd->param_types[i], bindings, n_bindings,
+                    ctx->type_arena);
+            }
+            Type xres = xclo->type.as.fn.result_full_type
+                ? emit_abi_instantiate_type(xclo->type.as.fn.result_full_type,
+                                            bindings, n_bindings, ctx->type_arena)
+                : emit_type_from_kind(xclo->type.as.fn.result_kind);
+            uint32_t x_before = ctx->n_abi_specializations;
+            EmitAbiSpecialization *xspec = emit_abi_intern_spec(
+                ctx, xclo, xexpr, xfd, bindings, n_bindings,
+                xargs, (uint8_t)xn, xres, NULL, false);
+            bool x_is_new = ctx->n_abi_specializations != x_before;
+            emit_assign_inner_env_override(ctx, xfd, xres, xspec);
+            uint32_t x_idx = (uint32_t)(xspec - ctx->abi_specializations);
+            ctx->abi_specializations[x_idx].is_passed_closure_clone = true;
+            EmitAbiSpecialization *osp = &ctx->abi_specializations[outer_spec_idx];
+            if (osp->n_extra_inner_closure_spec_idx < TUR_EXTRA_INNER_CLOSURE_MAX)
+                osp->extra_inner_closure_spec_idx[
+                    osp->n_extra_inner_closure_spec_idx++] = (int32_t)x_idx;
+            if (x_is_new && xfd->body) {
+                const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
+                bool saved_in = saved_c >= ctx->abi_specializations &&
+                                saved_c < ctx->abi_specializations + ctx->n_abi_specializations;
+                uint32_t saved_ci = saved_in
+                    ? (uint32_t)(saved_c - ctx->abi_specializations) : 0;
+                ctx->current_abi_specialization = &ctx->abi_specializations[x_idx];
+                emit_abi_scan_expr(ctx, xfd->body, items, n_items);
                 ctx->current_abi_specialization = saved_in
                     ? &ctx->abi_specializations[saved_ci] : saved_c;
             }
@@ -4944,6 +5479,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
      * this override-skip, a `Dec[int]` spec returning `(Result int cstr)`
      * still lowers to `int64_t`, and the caller's bridge has to unbox — the
      * very bridge crossing Path A is trying to retire. */
+    size_t _spec_ret_start = out->len;   /* S1: capture the emitted return type */
     if (spec->fn->box_aggregate_result) {
         /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): an
          * ABI-specialized functor-wrapping closure `g` returns its wide `(f A)`
@@ -4971,30 +5507,265 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     } else {
         buf_puts(out, type_c_name(spec->result_type));
     }
+    /* S1: same capture as the forward-decl pass -- specs are not top-level
+     * items, so this is the only place their return type is written. */
+    char *_spec_ret = NULL;
+    if (out->len > _spec_ret_start) {
+        size_t _l = out->len - _spec_ret_start;
+        _spec_ret = (char *)malloc(_l + 1);
+        if (_spec_ret) { memcpy(_spec_ret, out->data + _spec_ret_start, _l); _spec_ret[_l] = '\0'; }
+    }
     buf_printf(out, " %s(", spec->clone_name);
     for (uint32_t i = 0; i < spec->n_args; i++) {
         if (i > 0) buf_puts(out, ", ");
         /* B4 slice 2: a wide by-value ADT closure param crosses as an int64 box
          * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
          * already concrete, so type_is_wide_byval_adt reads them directly. */
-        if (spec->fn->closure && !spec->fn->params[i]->is_poly_fn &&
+        const char *pc;
+        if (spec->fn->closure && !spec->fn->byval_fn_field_closure &&
+            !spec->fn->params[i]->is_poly_fn &&
             spec->fn->param_types[i].kind != TY_FN &&
             type_is_wide_byval_adt(spec->arg_types[i])) {
-            buf_puts(out, "int64_t");
+            pc = "int64_t";
         } else if (spec->fn->params[i]->is_poly_fn) {
-            buf_puts(out, "tur_poly_fn_t");
+            pc = "tur_poly_fn_t";
         } else if (spec->fn->param_types[i].kind == TY_FN
                    && spec->fn->param_types[i].as.fn.cfnptr) {
             /* typed-c-abi-function-pointers: cfnptr -> concrete typedef. */
             const char *td = register_fn_ptr_typedef(&spec->fn->param_types[i]);
-            buf_puts(out, td ? td : "int64_t");
+            pc = td ? td : "int64_t";
         } else if (spec->fn->param_types[i].kind == TY_FN) {
-            buf_puts(out, "int64_t");
+            pc = "int64_t";
         } else {
-            buf_puts(out, type_c_name(spec->arg_types[i]));
+            pc = type_c_name(spec->arg_types[i]);
         }
+        buf_puts(out, pc);
+        /* gcc14-int-conversion (carrier-representation-tracking): record this ABI
+         * spec's ACTUAL emitted param C type keyed by its clone name (== the
+         * call-site fn_name), so a reverse int64<-pointer straddle at a
+         * spec-dispatch call (`__inst_Eq_..._int64_t(a, b)` with a pointer `b`
+         * into the int64 param) can consult ground truth.  Specs are not top-level
+         * items, so the forward-decl pass over `items` never records them. */
+        emit_sig_record_param_ctype(spec->clone_name, i, spec->n_args, pc);
     }
     buf_puts(out, ");\n");
+    emit_sig_record_ret_ctype(spec->clone_name, spec->n_args, _spec_ret);
+    free(_spec_ret);
+}
+
+/* gcc14-int-conversion (carrier-representation-tracking): ground-truth side
+ * table of emitted param C-types, keyed by emitted C name.  See emit_internal.h.
+ * File-scope (like g_prog / g_cps_path); emit_sig_reset() clears it per program. */
+typedef struct EmitSigEntry {
+    char     *cname;
+    uint32_t  n_params;
+    char    **param_ctypes;   /* n_params strings (each strdup'd, may be NULL) */
+    /* S1 (jit-engine-plan section 4): the ACTUAL emitted C return-type string,
+     * captured the same way the param types are -- as the substring the forward
+     * declaration wrote.  It is what `__auto_type t = f(...)` deduced, so a call
+     * site can name the type outright instead of asking GNU C to infer it. */
+    char     *ret_ctype;
+} EmitSigEntry;
+static EmitSigEntry *g_sig_tab;
+static uint32_t      g_sig_tab_n;
+static uint32_t      g_sig_tab_cap;
+
+/* Superseded ret_ctype strings, retired rather than freed.
+ *
+ * emit_sig_lookup_ret_ctype hands out the entry's INTERIOR pointer, and
+ * callers hold it across further emission -- emit_expr.c's declared-type
+ * recovery keeps it in `ret_ct` and dereferences it later.  Re-recording a
+ * return type used to free the old string in place, which turned every
+ * outstanding pointer into a dangler; ASan caught it as a heap-use-after-free
+ * at emit_expr.c (read) / here (free), and 43 fixtures failed under a
+ * sanitized Debug build.
+ *
+ * Retiring instead of freeing keeps every pointer ever returned valid for the
+ * whole emission, which is the lifetime callers already assume.  The strings
+ * are released in emit_sig_reset with the rest of the table, so the
+ * leak-checked compiler path stays clean. */
+static char    **g_sig_retired;
+static uint32_t  g_sig_retired_n;
+static uint32_t  g_sig_retired_cap;
+
+static void emit_sig_retire(char *s) {
+    if (!s) return;
+    if (g_sig_retired_n == g_sig_retired_cap) {
+        uint32_t nc = g_sig_retired_cap ? g_sig_retired_cap * 2 : 16;
+        char **nt = (char **)realloc(g_sig_retired, nc * sizeof(char *));
+        if (!nt) { free(s); return; }   /* OOM: the old behavior, not a leak */
+        g_sig_retired = nt;
+        g_sig_retired_cap = nc;
+    }
+    g_sig_retired[g_sig_retired_n++] = s;
+}
+
+void emit_sig_reset(void) {
+    for (uint32_t i = 0; i < g_sig_tab_n; i++) {
+        for (uint32_t j = 0; j < g_sig_tab[i].n_params; j++)
+            free(g_sig_tab[i].param_ctypes[j]);
+        free(g_sig_tab[i].param_ctypes);
+        free(g_sig_tab[i].ret_ctype);
+        free(g_sig_tab[i].cname);
+    }
+    free(g_sig_tab);
+    g_sig_tab = NULL;
+    g_sig_tab_n = 0;
+    g_sig_tab_cap = 0;
+    for (uint32_t i = 0; i < g_sig_retired_n; i++) free(g_sig_retired[i]);
+    free(g_sig_retired);
+    g_sig_retired = NULL;
+    g_sig_retired_n = 0;
+    g_sig_retired_cap = 0;
+}
+
+static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) {
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0) return &g_sig_tab[i];
+    if (g_sig_tab_n == g_sig_tab_cap) {
+        uint32_t nc = g_sig_tab_cap ? g_sig_tab_cap * 2 : 64;
+        EmitSigEntry *nt = (EmitSigEntry *)realloc(g_sig_tab, nc * sizeof(EmitSigEntry));
+        if (!nt) return NULL;
+        g_sig_tab = nt;
+        g_sig_tab_cap = nc;
+    }
+    EmitSigEntry *e = &g_sig_tab[g_sig_tab_n++];
+    e->cname = strdup(cname);
+    e->n_params = n_params;
+    e->param_ctypes = n_params
+        ? (char **)calloc(n_params, sizeof(char *)) : NULL;
+    e->ret_ctype = NULL;   /* S1: a fresh entry has no recorded return type yet */
+    return e;
+}
+
+void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
+                                 const char *ctype) {
+    if (!cname || idx >= n_params) return;
+    EmitSigEntry *e = emit_sig_find_or_add(cname, n_params);
+    if (!e || e->n_params != n_params || !e->param_ctypes) return;
+    free(e->param_ctypes[idx]);
+    e->param_ctypes[idx] = ctype ? strdup(ctype) : NULL;
+}
+
+/* S1: record/lookup the emitted C return type.  Recorded from the same
+ * forward-declaration pass as the params, so it is the identical string the
+ * prototype carries rather than a re-derivation. */
+void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
+                               const char *ctype) {
+    if (!cname || !ctype) return;
+    /* n_params is threaded through because emit_sig_find_or_add fixes an
+     * entry's arity on creation and emit_sig_record_param_ctype refuses to
+     * write into an entry whose arity disagrees.  Creating the entry here with
+     * a placeholder 0 would therefore silently discard every param type for a
+     * function whose return type is recorded first. */
+    EmitSigEntry *e = emit_sig_find_or_add(cname, n_params);
+    if (!e) return;
+    /* Re-recording the same type is the common case and must not churn the
+     * retired list; it also keeps the previously handed-out pointer live and
+     * correct, which is strictly better than replacing it with an equal copy. */
+    if (e->ret_ctype && strcmp(e->ret_ctype, ctype) == 0) return;
+    emit_sig_retire(e->ret_ctype);   /* readers may still hold it -- see above */
+    e->ret_ctype = strdup(ctype);
+}
+
+const char *emit_sig_lookup_ret_ctype(const char *cname) {
+    if (!cname) return NULL;
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0) return g_sig_tab[i].ret_ctype;
+    return NULL;
+}
+
+const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
+    if (!cname) return NULL;
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0)
+            return (idx < g_sig_tab[i].n_params) ? g_sig_tab[i].param_ctypes[idx] : NULL;
+    return NULL;
+}
+
+/* gcc14-int-conversion (carrier-representation-tracking): the local-variable /
+ * temp emitted-C-type side table.  See emit_internal.h.  File-scope, cleared per
+ * program by emit_localvar_reset().  Small linear map -- programs have thousands
+ * of temps, but a lookup only happens at a straddle-suspect binder init. */
+typedef struct EmitLocalVarEntry { char *cname; char *ctype; } EmitLocalVarEntry;
+static EmitLocalVarEntry *g_lv_tab;
+static uint32_t           g_lv_tab_n;
+static uint32_t           g_lv_tab_cap;
+
+void emit_localvar_reset(void) {
+    for (uint32_t i = 0; i < g_lv_tab_n; i++) {
+        free(g_lv_tab[i].cname);
+        free(g_lv_tab[i].ctype);
+    }
+    free(g_lv_tab);
+    g_lv_tab = NULL;
+    g_lv_tab_n = 0;
+    g_lv_tab_cap = 0;
+}
+
+void emit_localvar_record_ctype(const char *cname, const char *ctype) {
+    if (!cname || !ctype) return;
+    for (uint32_t i = 0; i < g_lv_tab_n; i++)
+        if (strcmp(g_lv_tab[i].cname, cname) == 0) {
+            free(g_lv_tab[i].ctype);
+            g_lv_tab[i].ctype = strdup(ctype);
+            return;
+        }
+    if (g_lv_tab_n == g_lv_tab_cap) {
+        uint32_t nc = g_lv_tab_cap ? g_lv_tab_cap * 2 : 256;
+        EmitLocalVarEntry *nt =
+            (EmitLocalVarEntry *)realloc(g_lv_tab, nc * sizeof(EmitLocalVarEntry));
+        if (!nt) return;
+        g_lv_tab = nt;
+        g_lv_tab_cap = nc;
+    }
+    g_lv_tab[g_lv_tab_n].cname = strdup(cname);
+    g_lv_tab[g_lv_tab_n].ctype = strdup(ctype);
+    g_lv_tab_n++;
+}
+
+const char *emit_localvar_lookup_ctype(const char *cname) {
+    if (!cname) return NULL;
+    for (uint32_t i = 0; i < g_lv_tab_n; i++)
+        if (strcmp(g_lv_tab[i].cname, cname) == 0) return g_lv_tab[i].ctype;
+    return NULL;
+}
+
+/* S1 (jit-engine-plan section 4): see emit_internal.h. */
+bool emit_c_type_is_scalar(const char *cname) {
+    if (!cname || !*cname) return false;
+    size_t n = strlen(cname);
+    while (n > 0 && cname[n - 1] == ' ') n--;
+    if (n == 0) return false;
+    if (cname[n - 1] == '*') return true;   /* any pointer, incl. `const char *` */
+
+    /* Compare on the LAST word so `unsigned long`, `const char`, and `long long`
+     * all land on their final token. */
+    size_t start = n;
+    while (start > 0 && (isalnum((unsigned char)cname[start - 1]) ||
+                         cname[start - 1] == '_'))
+        start--;
+    static const char *const scalars[] = {
+        "bool", "_Bool", "char", "short", "int", "long", "float", "double",
+        "unsigned", "signed",
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t",
+    };
+    size_t wlen = n - start;
+    for (size_t i = 0; i < sizeof scalars / sizeof scalars[0]; i++)
+        if (strlen(scalars[i]) == wlen && strncmp(cname + start, scalars[i], wlen) == 0)
+            return true;
+    return false;
+}
+
+char *emit_c_zero_of(const char *cname) {
+    if (!cname) return tur_strdup("0");
+    size_t n = strlen(cname) + 8;
+    char *out = (char *)malloc(n);
+    if (!out) return NULL;
+    snprintf(out, n, emit_c_type_is_scalar(cname) ? "((%s)0)" : "(%s){0}", cname);
+    return out;
 }
 
 /* Emit C forward declarations for every EX_FN_DEF in items.  Used by both
@@ -5002,6 +5773,12 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
  * so that mutually-recursive static functions resolve at C-compile time. */
 static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                   const Expr **items, uint32_t n_items) {
+    /* S1: the per-program reset used to live HERE, which silently discarded
+     * every record made before this pass ran.  In the single-file path
+     * emit_program emits ADT ctors into `early_file` first, so their recorded
+     * return types were wiped a moment later and every `ctor_X(...)` call site
+     * fell back to __auto_type.  The reset now happens once at the top of each
+     * caller (emit_program / emit_implementation), before anything records. */
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind != EX_FN_DEF) continue;
@@ -5025,6 +5802,9 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             fd->binding->is_from_stdlib) {
             buf_puts(out, "static ");
         }
+        /* S1: the return type is written by the branches below; capture the
+         * exact substring so a call site can name it instead of __auto_type. */
+        size_t _ret_start = out->len;
         if (e->type.kind == TY_FN) {
             TypeKind result = e->type.as.fn.result_kind;
             /* RT/SC5: carrier-return bridge -- must mirror the definition path
@@ -5081,16 +5861,20 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                  * definition and the dict slot. */
                 Type rft_r = rft ? emit_resolve_type(ctx, *rft)
                                  : type_simple(TY_UNKNOWN, CK_COPY);
-                bool typed_byval_adt = body_is_inline_c && rft &&
-                    (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
-                    !type_uses_carrier_abi(rft_r) &&
-                    !type_is_heap_adt(rft_r) &&
-                    type_has_concrete_codegen_layout(&rft_r);
+                bool typed_byval_adt =
+                    inline_c_returns_byvalue_adt(ctx, body_is_inline_c, rft);
+                /* inline-c-rc-return-misses-carrier-bridge: mirror emit_fns.c --
+                 * an owning return lowers to RcControlBlock * even for inline-C
+                 * bodies, so the forward decl agrees with the definition. */
+                bool typed_rc = body_is_inline_c && rft &&
+                    (rft->kind == TY_RC || rft->kind == TY_WEAK ||
+                     rft->kind == TY_REF || rft->kind == TY_LREF);
                 if (fn_ret_td && !body_is_inline_c) {
                     buf_puts(out, fn_ret_td);
                 } else if (typed_byval_adt) {
                     buf_puts(out, type_c_name(rft_r));
-                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct || typed_cfnptr)) {
+                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct ||
+                                   typed_cfnptr || typed_rc)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {
                     buf_puts(out, "int64_t");
@@ -5130,14 +5914,30 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             buf_puts(out, "void");
         }
         const char *fn_name = raw_name_for_binding(fd->binding);
+        /* S1: out->data[_ret_start..len) is now exactly the emitted return type.
+         * Stashed rather than recorded immediately -- emit_sig_find_or_add fixes
+         * an entry's arity on creation, so the record has to follow the param
+         * loop or it would lock the entry at 0 params. */
+        char *_ret_ty = NULL;
+        if (out->len > _ret_start) {
+            size_t _rlen = out->len - _ret_start;
+            _ret_ty = (char *)malloc(_rlen + 1);
+            if (_ret_ty) { memcpy(_ret_ty, out->data + _ret_start, _rlen); _ret_ty[_rlen] = '\0'; }
+        }
         buf_printf(out, " %s(", fn_name);
         for (uint32_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
+            /* gcc14-int-conversion: capture the ACTUAL emitted param C-type string
+             * (whatever branch below writes) so call sites can bridge against
+             * ground truth.  The forward decl emits only the type here (no param
+             * name), so out->data[_sig_start..len) is exactly the type. */
+            size_t _sig_start = out->len;
             /* B4 slice 2: a wide by-value ADT closure param crosses as an int64
              * box pointer -- mirror emit_fns.c's needs_box_load signature. */
             Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                 ? *e->type.as.fn.arg_full_types[j] : fd->param_types[j];
-            if (fd->closure && !fd->params[j]->is_poly_fn &&
+            if (fd->closure && !fd->byval_fn_field_closure &&
+                !fd->params[j]->is_poly_fn &&
                 fd->param_types[j].kind != TY_FN &&
                 type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
                 buf_puts(out, "int64_t");
@@ -5174,8 +5974,21 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     buf_puts(out, type_c_name(_fwd_pty));
                 }
             }
+            /* Record the just-emitted param type substring (ground truth). */
+            if (out->len > _sig_start) {
+                size_t _len = out->len - _sig_start;
+                char *_ty = (char *)malloc(_len + 1);
+                if (_ty) {
+                    memcpy(_ty, out->data + _sig_start, _len);
+                    _ty[_len] = '\0';
+                    emit_sig_record_param_ctype(fn_name, j, fd->n_params, _ty);
+                    free(_ty);
+                }
+            }
         }
         buf_puts(out, ");\n");
+        emit_sig_record_ret_ctype(fn_name, fd->n_params, _ret_ty);
+        free(_ret_ty);
         free((void*)fn_name);
     }
     /* CPS3: forward declarations for __cps wrappers */
@@ -5258,14 +6071,48 @@ static void emit_cons_helper(Buf *out) {
  * fields live at `s->as.<ctor>._<fi>`.  Mirrors the struct emission at the
  * `def->needs_drop_glue` site below; the names are keyed off the mangled C type
  * name (`drop_glue_tur_adt_<Name>`) so they never collide with the struct glue. */
+/* True when this ADT is laid out as a tag + union rather than a single flat
+ * product, i.e. the field paths are per-variant and releasing them needs a
+ * dispatch on `s->tag`. */
+static bool adt_glue_is_tagged(const AdtDef *def) {
+    return def->n_ctors > 1;
+}
+
 static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                                      const char *adt_c_name) {
     if (!def->needs_drop_glue || def->n_ctors == 0) return;
     const CtorDef *ctor = def->ctors[0];
+    const bool tagged = adt_glue_is_tagged(def);
+
+    /* drop-glue-shallow-nested-owning-aggregate: forward-declare the drop/walk
+     * glue of any nested owning aggregate field.  A boxed sub-aggregate is an
+     * opaque int64 in this type's layout, so its glue may be emitted AFTER ours
+     * (emission order is not guaranteed inner-first for a carrier field).  A
+     * redundant forward decl of an already-defined static is valid C. */
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+    const CtorDef *fdc = def->ctors[ci];
+    for (uint32_t fi = 0; fi < fdc->n_fields; fi++) {
+        if (fdc->fields[fi].drop_inner_def) {
+            char *imn = mangle_field_name(fdc->fields[fi].drop_inner_def->name);
+            buf_printf(out, "static void drop_glue_tur_adt_%s(void *);\n", imn);
+            buf_printf(out, "static void walk_glue_tur_adt_%s(void *, RcWalkChildFn, void *);\n",
+                       imn);
+            free(imn);
+        }
+    }
+    }
 
     buf_printf(out, "static void drop_glue_%s(void *ptr) {\n", adt_c_name);
     buf_printf(out, "    if (!ptr) return;\n");
     buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+    /* rc-of-sum-type-drops-no-glue: a tagged ADT releases the owning fields of
+     * the LIVE variant only, so the field loop runs once per ctor inside a
+     * switch.  A single-variant (flat product) ADT keeps the original shape
+     * exactly, so its emitted text -- and every snapshot of it -- is unchanged. */
+    if (tagged) buf_printf(out, "    switch (s->tag) {\n");
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+    ctor = def->ctors[ci];
+    if (tagged) buf_printf(out, "    case %u:\n", ci);
     /* Drop fields in REVERSE order, matching struct drop-glue. */
     for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
         TypeKind k = ctor->fields[fi].kind;
@@ -5277,24 +6124,105 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
             buf_printf(out, "    if (s->%s) rc_weak_decrement(s->%s);\n", mp, mp);
         } else if (k == TY_REF || k == TY_LREF) {
             buf_printf(out, "    if (s->%s) free(s->%s);\n", mp, mp);
+        } else if (ctor->fields[fi].drop_inner_def) {
+            /* drop-glue-shallow-nested-owning-aggregate: the field is an int64
+             * carrier holding a malloc'd box of a nested owning by-value
+             * aggregate.  Its own drop glue releases the box's owners and frees
+             * the box (it is a plain heap allocation, uniquely owned by this
+             * value under the same move discipline a direct rc field relies on). */
+            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            buf_printf(out,
+                       "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
+                       mp, imn, mp);
+            free(imn);
+        } else if (k == TY_FN && ctor->fields[fi].full_type &&
+                   ctor->fields[fi].full_type->kind == TY_FN &&
+                   ctor->fields[fi].full_type->as.fn.boxed) {
+            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a heap fat
+             * handle (a `{shim, fn}` box for a bare fn, or a capturing closure
+             * env).  The struct is move-only (needs_drop_glue), so the handle has
+             * a single owner -- free it.  (A capturing env with OWNING captures
+             * leaks those captures for now; a scalar-capture env and a bare-fn
+             * shim box are freed whole.  An UNboxed nullary/>4-arg fn field is a
+             * plain fn pointer -- not heap -- and is NOT matched here.) */
+            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
         }
         free(mp);
     }
+    if (tagged) buf_printf(out, "        break;\n");
+    }
+    if (tagged) buf_printf(out, "    }\n");
     buf_printf(out, "    free(ptr);\n");
     buf_printf(out, "}\n\n");
+    ctor = def->ctors[0];   /* restore for the sections below */
+
+    /* local-struct-drop (fn-field): free ONLY the boxed fn-field handles of a
+     * STACK-resident by-value local (no rc/ref decrement -- those are discharged
+     * by the elaborator's injected `(defer (drop! (.f o)))` -- and no `free(ptr)`,
+     * since `ptr` is a stack address).  Called from emit_let_value for a binding
+     * the elaborator flagged `drops_fn_fields`.  Emitted ONLY when the value has a
+     * boxed fn-field (marked unused -- a given local of this type may not be
+     * flagged in every scope). */
+    bool has_boxed_fnfield = false;
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        if (ctor->fields[fi].kind == TY_FN && ctor->fields[fi].full_type &&
+            ctor->fields[fi].full_type->kind == TY_FN &&
+            ctor->fields[fi].full_type->as.fn.boxed) {
+            has_boxed_fnfield = true;
+            break;
+        }
+    }
+    if (has_boxed_fnfield) {
+        buf_printf(out, "static void drop_fnfields_%s(void *ptr) __attribute__((unused));\n",
+                   adt_c_name);
+        buf_printf(out, "static void drop_fnfields_%s(void *ptr) {\n", adt_c_name);
+        buf_printf(out, "    if (!ptr) return;\n");
+        buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+        for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
+            if (!(ctor->fields[fi].kind == TY_FN && ctor->fields[fi].full_type &&
+                  ctor->fields[fi].full_type->kind == TY_FN &&
+                  ctor->fields[fi].full_type->as.fn.boxed))
+                continue;
+            char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
+            /* closure-drop-glue: a boxed fn-field holds a headered fat handle
+             * (env[-1] drop-glue; the fat pointer is PAST it), so a bare free of
+             * the field would be an interior free.  Release via TUR_CLOSURE_DROP
+             * (recovers the header, walks owning captures, frees the base). */
+            buf_printf(out, "    if (s->%s) TUR_CLOSURE_DROP(s->%s);\n", mp, mp);
+            free(mp);
+        }
+        buf_printf(out, "}\n\n");
+    }
 
     /* Walk glue -- enumerate strong (rc) children for the cycle walker. */
     buf_printf(out, "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
                adt_c_name);
     buf_printf(out, "    if (!ptr || !cb) return;\n");
     buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+    /* rc-of-sum-type-drops-no-glue: same per-variant dispatch as the drop glue,
+     * so the cycle walker can enumerate a tagged ADT's rc children. */
+    if (tagged) buf_printf(out, "    switch (s->tag) {\n");
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+    ctor = def->ctors[ci];
+    if (tagged) buf_printf(out, "    case %u:\n", ci);
     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        char *mp = adt_field_member_path(def, ctor, fi);
         if (ctor->fields[fi].kind == TY_RC) {
-            char *mp = adt_field_member_path(def, ctor, fi);
             buf_printf(out, "    if (s->%s) cb(s->%s, ctx);\n", mp, mp);
-            free(mp);
+        } else if (ctor->fields[fi].drop_inner_def) {
+            /* Recurse into the boxed sub-aggregate so its own rc children are
+             * enumerated for the cycle collector. */
+            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            buf_printf(out,
+                       "    if (s->%s) walk_glue_tur_adt_%s((void *)(intptr_t)s->%s, cb, ctx);\n",
+                       mp, imn, mp);
+            free(imn);
         }
+        free(mp);
     }
+    if (tagged) buf_printf(out, "        break;\n");
+    }
+    if (tagged) buf_printf(out, "    }\n");
     buf_printf(out, "}\n\n");
 }
 
@@ -5348,7 +6276,8 @@ static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
  * typedef, only monomorphized type-applications, so without this the per-module
  * .c references `tur_adt_Either` / `ctor_Left` with no definition.  See
  * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
-static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
+static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
+                                       bool typedef_only) {
     /* CONV-S1 (defstruct-as-defadt): a struct-origin ADT superseded by a later
      * same-name defgadt/defdata is skipped at emission -- the winner owns the
      * `tur_adt_<Name>` C name, so emitting the loser's typedef/ctors here would
@@ -5377,6 +6306,13 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
      * named, C-ABI-compatible aggregate + a `<Name>` surface alias, so inline-C
      * that reads it by its surface type/field names compiles unchanged. */
     bool named = adt_uses_named_layout(def);
+    /* Guard the base layout typedef so the module header (separate compilation,
+     * emit_header calls this with typedef_only) and the per-module .c
+     * (impl_early) can both emit it without a C `redefinition` -- the header is
+     * #included first and wins.  Constructors + drop/walk glue are emitted below
+     * (.c-local, `static`) only when !typedef_only. */
+    buf_printf(out, "#ifndef TUR_TD_%s\n#define TUR_TD_%s\n",
+               adt_c_name, adt_c_name);
     if (named) {
         CtorDef *ctor = def->ctors[0];
         buf_printf(out, "typedef struct %s {\n", adt_c_name);
@@ -5444,11 +6380,19 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
             free(sname);
         }
     }
+    buf_puts(out, "#endif\n");  /* TUR_TD_<Name> base layout guard */
+    if (typedef_only) return;
 
     /* CONV-S1 (slice 2): a by-value ADT with rc/ref/weak fields needs the same
      * drop/walk glue a struct gets, so an `rc/of` wrapping it releases the inner
      * owned fields when the control block hits zero. */
-    if (byval) emit_adt_byval_drop_glue(out, def, adt_c_name);
+    /* rc-of-sum-type-drops-no-glue: a MULTI-VARIANT ADT with owning fields needs
+     * this just as much.  It used to be byval-only, so `(rc/of (Full some-rc))`
+     * got a NULL drop_fn and no walker -- the rc payload was never released
+     * (a leak with the collector off) and the walker could not trace through the
+     * box (a blind spot with it on).  option<T> and result<T,E> are
+     * multi-variant, so this was not an exotic corner. */
+    emit_adt_byval_drop_glue(out, def, adt_c_name);
 
     /* CONV-S1 seam 3: a non-parametric :heap record ADT (a lowered `:heap`
      * struct with no type params) returns a typed pointer to its by-value header
@@ -5471,8 +6415,20 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
         CtorDef *ctor = def->ctors[ci];
         char *mctor = mangle_field_name(ctor->name);
+        const char *ctor_ret_c = heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
         buf_printf(out, "static %s ctor_%s(",
-                   heap ? adt_ptr_name : byval ? adt_c_name : "int64_t", mctor);
+                   ctor_ret_c, mctor);
+        /* S1: a ctor is not an EX_FN_DEF either, so record it here.  This is the
+         * `ctor_X(...)` case the old __auto_type comment called out explicitly:
+         * a heap ADT ctor returns the concrete `tur_adt_X *` even though its
+         * source type c-names to the int64 carrier, so naming the type from the
+         * source type would be wrong -- naming it from what the prototype
+         * actually says is right by construction. */
+        {
+            char ctor_sym[288];
+            snprintf(ctor_sym, sizeof ctor_sym, "ctor_%s", mctor);
+            emit_sig_record_ret_ctype(ctor_sym, ctor->n_fields, ctor_ret_c);
+        }
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval || heap);
@@ -5593,6 +6549,51 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)\n");
     buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
     buf_puts(out, "    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)\n");
+    /* closure-drop-glue (Model R): TUR_CLOSURE_DROP releases a fat-closure handle
+     * that opaque C (httpd/reactor teardown) or a scope-exit free owns.  Flag-off,
+     * it is a plain `free` of the env pointer (the base language's behavior -- an
+     * escaping env still leaks unless the caller frees it).  Flag-on, each fat env
+     * is allocated with an 8-byte drop-glue header at env[-1]; the handle is
+     * released through that header's `drop_glue_env_N`, which walks owning captures
+     * and frees the base allocation.  NULL is a safe no-op either way. */
+    /* closure-drop-glue (GRADUATED 2026-07-22): every heap fat-closure env
+     * carries an env[-1] drop-glue header; TUR_CLOSURE_DROP routes a fat-handle
+     * free through it (recovering the header, walking owning captures, freeing the
+     * base) instead of interior-freeing the past-header pointer.  Emitted in every
+     * build so stdlib teardown written in Turmeric (httpd.tur) can reference it. */
+    buf_puts(out, "static void tur_closure_drop(void *__h) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_closure_drop(void *__h) {\n");
+    buf_puts(out, "    if (!__h) return;\n");
+    buf_puts(out, "    void (**__hdr)(void *) = ((void (**)(void *))__h) - 1;\n");
+    buf_puts(out, "    void (*__d)(void *) = *__hdr;\n");
+    buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
+    /* async/reactor: the precompiled reactor/fiber group in libturi owns callback
+     * closure boxes and frees them at teardown, but cannot name the per-program
+     * tur_closure_drop.  libturi defines a WEAK `tur_closure_headers_enabled = 0`;
+     * this STRONG definition overrides it to 1 so the reactor releases owned boxes
+     * through their drop-glue header (walking captures) instead of interior-freeing
+     * the past-header fat pointer.  A strong-over-weak override (not an extern +
+     * constructor) so a program that never links reactor.o still defines the
+     * symbol cleanly.
+     *
+     * Separate compilation (guarded == shared): this preamble is replicated into
+     * every module TU, so a bare strong `= 1` would be defined N times and the
+     * link fails with duplicate symbols.  Route it through the owner-TU pattern
+     * (TUR_RT_OWNER, the generated tur_runtime.c, which pulls this block via
+     * tur_runtime.h): the single owner TU carries the strong override; every
+     * other module TU sees only an `extern` declaration.  Single-file mode keeps
+     * the historical bare strong def (one TU, byte-identical output). */
+    if (guarded) {
+        buf_puts(out, "#ifdef TUR_RT_OWNER\n");
+        buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "extern int tur_closure_headers_enabled;\n");
+        buf_puts(out, "#endif\n");
+    } else {
+        buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
+    }
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
      * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
      * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
@@ -5735,6 +6736,214 @@ static void emit_rt_global(Buf *out, bool shared,
     }
     buf_printf(out, "#ifdef TUR_RT_OWNER\n%s#else\nextern %s;\n#endif\n",
                owner_body, extern_decl);
+}
+
+/* TLS1 (jit-engine-plan, findings 14.3): a THREAD-LOCAL runtime global.
+ *
+ * Under a GNU-family compiler this is exactly emit_rt_global -- the `cc` path
+ * keeps the plain `TUR_THREAD_LOCAL` variable it always had, at zero cost.
+ *
+ * Under any other front end the variable is not declared at all.  c2mir
+ * accepts `_Thread_local`, warns "Thread local is not implemented", and then
+ * treats the variable as an ordinary global -- so every spawned thread shares
+ * one slot, which is how 8 STM workers ended up sharing one transaction
+ * descriptor and losing updates (stm-stress).  Multi-threading under the JIT
+ * is a requirement (owner decision, 2026-07-29), so instead of documenting the
+ * gap, the name is #defined to a deref of a host-runtime accessor: the host is
+ * compiled by a real cc, holds a genuine `__thread` slot per variable
+ * (src/runtime/tur_tls.c), and hands back the calling thread's instance by
+ * address -- the same host-residency pattern as tur_atomics.c, applied to
+ * state instead of operations.
+ *
+ * An object-like macro rewrites every use site in the preamble text with no
+ * per-site emitter change; verified against all 1,928 emitted TUs that none
+ * of these names ever appears as a struct member (findings 15).  Slots are
+ * stored as void* / int / bool / int64_t / jmp_buf in the host, so the host needs no
+ * knowledge of preamble-private struct types; pointer-typed slots get the
+ * type back via `cast` here (NULL for a slot whose host type is already
+ * exact).  Shared mode takes the same #else branch -- accessors are
+ * process-global, which collapses the per-TU-static-TLS split for free. */
+static void emit_rt_tls(Buf *out, bool shared,
+                        const char *owner_body, const char *extern_decl,
+                        const char *name, const char *accessor_ret,
+                        const char *accessor, const char *cast) {
+    buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+    emit_rt_global(out, shared, owner_body, extern_decl);
+    buf_puts(out, "#else\n");
+    buf_printf(out, "extern %s %s(void);\n", accessor_ret, accessor);
+    if (cast)
+        buf_printf(out, "#define %s (*(%s)%s())\n", name, cast, accessor);
+    else
+        buf_printf(out, "#define %s (*%s())\n", name, accessor);
+    buf_puts(out, "#endif\n");
+}
+
+/* ---------------------------------------------------------------------------
+ * DEDUP-4b: the rc<T>/GC runtime comes from the archive.
+ *
+ * When the program is going to link libturt_runtime.a (which since 4b step 1
+ * carries rc.c / gc.c / rc_free_queue.c), the preamble must stop DEFINING the
+ * collector and merely declare it -- otherwise the program runs a hand-written
+ * replica while the maintained implementation sits unused in the archive.
+ *
+ * A third state on the DEDUP-3 switch rather than a new mechanism.  Resolved at
+ * emit time, before codegen, because the emitted text depends on it; the probe
+ * is a pure filesystem check so it can move ahead of the link step that
+ * normally makes this decision (see apply_runtime_lib_mode in main.c).
+ * ------------------------------------------------------------------------- */
+static bool g_rcgc_from_archive = false;
+
+void emit_set_rcgc_from_archive(bool from_archive) {
+    g_rcgc_from_archive = from_archive;
+}
+
+/* DEDUP-4b: a runtime GLOBAL the archive owns.
+ *
+ * Omitted entirely rather than `extern`-declared, which looks over-cautious
+ * until you look at `rc_free_queue`: the emitted copy spells it
+ * `RcControlBlock *[RC_FREE_QUEUE_CAPACITY]` and the runtime spells it a
+ * struct.  An `extern` with the wrong type is strictly worse than no
+ * declaration -- it links silently and misreads memory, which is the exact
+ * failure mode this whole series exists to stamp out.  Module code only ever
+ * touches gc_all_blocks_count and gc_suspect_count (measured across all 1859
+ * fixtures), and gc.c exports both, so nothing needs a declaration here. */
+static bool rt_global_from_archive(void) {
+    return g_rcgc_from_archive;
+}
+
+/* DEDUP-3 (docs/archive/gc-cycle-collection-plan.md): open/close the owner-TU guard around a run
+ * of rc<T>/GC runtime function DEFINITIONS.
+ *
+ * The same split emit_rt_global does for state, applied to code.  Shared mode
+ * used to replicate every rc/gc body into every module TU as `static`; now the
+ * single owner TU (tur_runtime.c, which #defines TUR_RT_OWNER) carries one
+ * externally-linked definition of each and every other TU sees only the
+ * prototype emitted by emit_rcgc_prototypes.  One instance of the collector per
+ * program instead of one per module -- and, for the later steps of the de-dup,
+ * a single switch that can suppress the emitted definitions entirely once the
+ * runtime archive supplies them.
+ *
+ * Single-file mode (`shared == false`) emits no guard at all, so its output is
+ * byte-identical to before this split.  Runs must bracket definitions ONLY:
+ * typedefs, `#define`s and emit_rt_global state stay outside, since every TU
+ * needs to see them. */
+/* DEDUP-5: where a suppressed run of definitions started, so the end marker can
+ * rewind over it.  A single mark suffices because the runs are sequential, never
+ * nested -- see the five emit_rt_defs_begin/end pairs in the rc/GC block. */
+static size_t g_rcgc_defs_mark = 0;
+
+static void emit_rt_defs_begin(Buf *out, bool shared) {
+    if (g_rcgc_from_archive) {
+        /* DEDUP-5: remember where this run starts so emit_rt_defs_end can drop
+         * it.  DEDUP-4b originally wrapped these in `#if 0` -- excluded but
+         * still emitted -- so the text stayed readable next to its call sites
+         * while both implementations existed and the switch was a one-line
+         * revert.  That has baked; the ~500 dead lines in every generated .c
+         * are now just noise, so the run is discarded outright. */
+        g_rcgc_defs_mark = out->len;
+        return;
+    }
+    if (shared) buf_puts(out, "#ifdef TUR_RT_OWNER\n");
+}
+static void emit_rt_defs_end(Buf *out, bool shared) {
+    if (g_rcgc_from_archive) {
+        /* Rewind.  Buf is length-tracked with no NUL invariant (see
+         * buf_write), so truncating the length is the whole operation. */
+        out->len = g_rcgc_defs_mark;
+        return;
+    }
+    if (shared) buf_puts(out, "#endif /* TUR_RT_OWNER */\n");
+}
+
+/* DEDUP-4b: a runtime global belonging to the rc<T>/GC block specifically.
+ * Identical to emit_rt_global except that archive mode omits it -- see
+ * rt_global_from_archive for why omission beats an `extern`. */
+static void emit_rcgc_global(Buf *out, bool shared,
+                             const char *owner_body, const char *extern_decl) {
+    if (rt_global_from_archive()) return;
+    if (!shared) { emit_rt_global(out, shared, owner_body, extern_decl); return; }
+    /* DEDUP-5: hidden in a .so, for the same reason as the functions -- the
+     * registry and free queue are per-library state and must not be reachable
+     * from, or interposable by, anything outside it. */
+    buf_printf(out, "#ifdef TUR_RT_OWNER\nTUR_RT_LOCAL %s#else\nextern TUR_RT_LOCAL %s;\n#endif\n",
+               owner_body, extern_decl);
+}
+
+/* DEDUP-3: prototypes for every rc<T>/GC runtime function, so a non-owner
+ * module TU can call into the owner's definitions.  Shared mode only -- in
+ * single-file mode the definitions themselves precede every use.  Emitted after
+ * the GcMode typedef, which gc_set_mode's signature needs. */
+static void emit_rcgc_prototypes(Buf *out) {
+    /* DEDUP-4b: the allocation entry points take `uint8_t value_type` in
+     * src/runtime/rc.c but `int value_type_kind` in the emitted copy.  While
+     * the emitted copy supplies the definitions the prototype must match IT;
+     * once the archive does, it must match the ARCHIVE, or the declaration
+     * conflicts with the real definition on every ABI that treats the two
+     * differently. */
+    const char *vt = g_rcgc_from_archive ? "uint8_t" : "int";
+    buf_printf(out,
+        "/* rc<T>/GC runtime prototypes -- definitions live %s. */\n",
+        g_rcgc_from_archive ? "in the runtime archive (DEDUP-4b)"
+                            : "in the TUR_RT_OWNER translation unit (DEDUP-3)");
+    buf_printf(out,
+        "RcControlBlock *rc_cb_alloc_kinded(size_t value_size, %s value_type, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind);\n"
+        "RcControlBlock *rc_cb_alloc(size_t value_size, %s value_type, RcDropFn drop_fn);\n"
+        "RcControlBlock *rc_cb_alloc_struct(size_t value_size, %s value_type, RcDropFn drop_fn, RcWalkFn walk_fn);\n"
+        "RcControlBlock *tur_rc_from_ref(void *ref_value, %s value_type);\n",
+        vt, vt, vt, vt);
+    buf_puts(out,
+        "void gc_set_color(RcControlBlock *cb, GcColor color);\n"
+        "GcColor gc_get_color(RcControlBlock *cb);\n"
+        "void gc_register_block(RcControlBlock *cb);\n"
+        "void gc_unregister_block(RcControlBlock *cb);\n"
+        "void gc_add_suspect(RcControlBlock *cb);\n"
+        "void gc_remove_suspect(RcControlBlock *cb);\n"
+        "void gc_on_strong_decrement(RcControlBlock *cb);\n"
+        "uint32_t rc_free_queue_drain(void);\n"
+        "void rc_free_queue_push(RcControlBlock *cb);\n"
+        "void default_rc_drop_fn(void *value);\n"
+        "void inline_scalar_drop_fn(void *value);\n"
+        "void drop_ref_payload(void *value);\n"
+        "void drop_rc_payload(void *value);\n"
+        "void drop_weak_payload(void *value);\n"
+        "RcDropFn default_drop_fn_for_type(int value_type_kind);\n"
+        "RcDropFn inline_default_drop_fn_for_type(int value_type_kind);\n"
+        "uint64_t rc_strong_increment(RcControlBlock *cb);\n"
+        "bool rc_strong_decrement(RcControlBlock *cb);\n"
+        "uint64_t rc_weak_increment(RcControlBlock *cb);\n"
+        "bool rc_weak_decrement(RcControlBlock *cb);\n"
+        "uint64_t rc_strong_count(RcControlBlock *cb);\n"
+        "uint64_t rc_weak_count(RcControlBlock *cb);\n"
+        "bool rc_is_alive(RcControlBlock *cb);\n"
+        "RcControlBlock *rc_upgrade(RcControlBlock *cb);\n"
+        "void *rc_get_value(RcControlBlock *cb);\n"
+        "void rc_set_value(RcControlBlock *cb, void *value, RcDropFn drop_fn);\n"
+        "void *tur_ref_from_rc(RcControlBlock *cb);\n"
+        "void __gc_mark_struct_child(RcControlBlock *child, void *ctx);\n"
+        "void gc_mark_phase(void);\n"
+        "void gc_trial_deletion_phase(void);\n"
+        "void gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx);\n"
+        "void gc_mark_gray_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_mark_gray(RcControlBlock *s);\n"
+        "void gc_scan_black_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_scan_black(RcControlBlock *s);\n"
+        "void gc_scan_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_scan(RcControlBlock *s);\n"
+        "void gc_collect_white_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_collect_white(RcControlBlock *s);\n"
+        "void gc_cycle_collect_phase(void);\n"
+        "void gc_collect(void);\n"
+        "void gc_force(void);\n"
+        "void gc_enable(void);\n"
+        "void gc_disable(void);\n"
+        "void gc_set_mode(GcMode mode);\n"
+        "void gc_auto(void);\n"
+        "void gc_on_alloc_checkpoint(void);\n"
+        "uint64_t gc_stat_collections(void);\n"
+        "uint64_t gc_stat_objects_freed(void);\n"
+        "uint64_t gc_stat_live_blocks(void);\n"
+        "uint64_t gc_stat_candidate_high_water(void);\n"
+        "bool gc_is_alive(RcControlBlock *cb);\n\n");
 }
 
 /* Emit the inline C runtime preamble.  `shared == false`: single-file mode, one
@@ -6156,13 +7365,19 @@ static void emit_win_ucontext_shim(Buf *out) {
  * because it remaps close/recv/send/accept/connect/socket/fcntl -- which must
  * not happen in a program that has no sockets (it would hijack file close()).
  *
- * It closes two gaps that BSD-vs-Winsock differ on:
+ * It closes three gaps that BSD-vs-Winsock differ on:
  *   1. Compile: F_GETFL/F_SETFL/O_NONBLOCK/fcntl don't exist for Winsock. The
  *      only fcntl idiom used is setting O_NONBLOCK, which maps to
- *      ioctlsocket(FIONBIO).
+ *      ioctlsocket(FIONBIO).  setsockopt's option value is `const char *` there
+ *      rather than `const void *`, so a POSIX-shaped call is
+ *      -Wincompatible-pointer-types -- a hard error on gcc >= 14.
  *   2. Runtime: a would-block socket op reports via WSAGetLastError(), not
  *      errno -- so `errno == EWOULDBLOCK` in the fixtures would never be true.
  *      The recv/send/accept/connect wrappers copy WSAGetLastError() into errno.
+ *   3. Semantics: SO_RCVTIMEO/SO_SNDTIMEO take a `struct timeval` on POSIX and
+ *      a DWORD count of milliseconds on Winsock.  This is the dangerous one --
+ *      a plain cast compiles clean and then sets a garbage timeout from the
+ *      reinterpreted struct bytes, so the wrapper converts instead.
  *
  * close() is socket-aware (getsockopt SO_TYPE distinguishes a socket from a CRT
  * fd) so it can safely stand in for BOTH file and socket close in a socket
@@ -6204,6 +7419,45 @@ static void emit_winsock_compat_shim(Buf *out) {
     buf_puts(out, "    return __r;\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static int tur_compat_close(int __fd){ int __t; int __tl=(int)sizeof(__t); if (getsockopt((SOCKET)__fd,SOL_SOCKET,SO_TYPE,(char*)&__t,&__tl)==0) return closesocket((SOCKET)__fd); return _close(__fd); }\n");
+    buf_puts(out, "static int tur_compat_setsockopt(int __fd,int __lv,int __opt,const void*__v,socklen_t __l){\n");
+    /* SO_REUSEADDR is the one option whose MEANING inverts across the two
+     * stacks, so passing it through would be actively wrong rather than merely
+     * non-portable.  POSIX SO_REUSEADDR permits rebinding a port in TIME_WAIT
+     * but still refuses to bind over a LIVE socket; Winsock SO_REUSEADDR
+     * permits binding over a live socket (it is closer to POSIX SO_REUSEPORT).
+     * Forwarding it therefore turns "refuse to double-bind" into "silently
+     * steal the port" -- which is how httpd-new-pool-fail-drops-handler's
+     * deliberate bind conflict came to succeed on Windows.
+     *
+     * Dropping it restores the half that matters: a conflicting bind is
+     * refused, as on POSIX.  Report success so callers that check the return
+     * see what they would on POSIX.
+     *
+     * Residual difference, deliberately accepted: POSIX SO_REUSEADDR also
+     * allows rebinding a TIME_WAIT port, and plain Winsock does not, so a
+     * server restarted immediately after shutdown can see WSAEADDRINUSE where
+     * POSIX would have let it bind.  Refusing a real conflict is worth more
+     * than the restart convenience; SO_EXCLUSIVEADDRUSE would be stricter still
+     * and does not recover the TIME_WAIT case either. */
+    buf_puts(out, "    if (__lv == SOL_SOCKET && __opt == SO_REUSEADDR) return 0;\n");
+    buf_puts(out, "    if (__lv == SOL_SOCKET && (__opt == SO_RCVTIMEO || __opt == SO_SNDTIMEO)\n");
+    buf_puts(out, "        && __l == (socklen_t)sizeof(struct timeval)) {\n");
+    buf_puts(out, "        const struct timeval *__tv = (const struct timeval *)__v;\n");
+    buf_puts(out, "        DWORD __ms = (DWORD)(__tv->tv_sec * 1000L + __tv->tv_usec / 1000L);\n");
+    buf_puts(out, "        return setsockopt((SOCKET)__fd,__lv,__opt,(const char*)&__ms,(int)sizeof(__ms));\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return setsockopt((SOCKET)__fd,__lv,__opt,(const char*)__v,(int)__l);\n");
+    buf_puts(out, "}\n");
+    /* getsockopt differs in BOTH pointer arguments: the value is char* rather
+     * than void*, and the length is int* rather than socklen_t*.  Bounce the
+     * length through a real int so the sizes cannot disagree on a platform
+     * where socklen_t is not int. */
+    buf_puts(out, "static int tur_compat_getsockopt(int __fd,int __lv,int __opt,void*__v,socklen_t*__l){\n");
+    buf_puts(out, "    int __n = __l ? (int)*__l : 0;\n");
+    buf_puts(out, "    int __r = getsockopt((SOCKET)__fd,__lv,__opt,(char*)__v,__l ? &__n : NULL);\n");
+    buf_puts(out, "    if (__l) *__l = (socklen_t)__n;\n");
+    buf_puts(out, "    return __r;\n");
+    buf_puts(out, "}\n");
     buf_puts(out, "#define socket(a,b,c)  tur_compat_socket((a),(b),(c))\n");
     buf_puts(out, "#define fcntl(a,b,c)   tur_compat_fcntl((a),(b),(c))\n");
     buf_puts(out, "#define recv(a,b,c,d)  tur_compat_recv((a),(b),(c),(d))\n");
@@ -6211,13 +7465,34 @@ static void emit_winsock_compat_shim(Buf *out) {
     buf_puts(out, "#define accept(a,b,c)  tur_compat_accept((a),(b),(c))\n");
     buf_puts(out, "#define connect(a,b,c) tur_compat_connect((a),(b),(c))\n");
     buf_puts(out, "#define close(a)       tur_compat_close((a))\n");
+    buf_puts(out, "#define setsockopt(a,b,c,d,e) tur_compat_setsockopt((a),(b),(c),(d),(e))\n");
+    buf_puts(out, "#define getsockopt(a,b,c,d,e) tur_compat_getsockopt((a),(b),(c),(d),(e))\n");
     buf_puts(out, "#endif /* _WIN32 */\n");
 }
+
+/* S2 (jit-engine-plan, findings 19.4): when set, emit_runtime_preamble forces
+ * every program-gated block on (the cps_uses_* scan gates below), producing
+ * the feature-complete preamble the split-runtime artifacts are generated
+ * from.  Set only by emit_rt_split_source; never during normal emission. */
+static bool g_rt_split_all_gates = false;
 
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
     const char *rt_fn = shared ? "static " : "";
+    /* DEDUP-3: the rc<T>/GC block is the exception to rt_fn's replicate-as-static
+     * rule -- its definitions are emitted once, in the TUR_RT_OWNER TU (see
+     * emit_rt_defs_begin), so they must carry EXTERNAL linkage there for the
+     * other module TUs to reach them.  Two prefixes because the two families
+     * differ in single-file mode, which stays byte-identical: the internal
+     * helpers were `static`, the rc_ / tur_rc_ API surface never was. */
+    /* DEDUP-4b: archive mode has no local definitions at all, so a `static`
+     * forward declaration would name a function that this TU never defines
+     * ("used but never defined") and would hide the archive's. */
+    const char *rcgc_helper = g_rcgc_from_archive ? ""
+                            : shared                ? "TUR_RT_LOCAL "
+                                                    : "static ";
+    const char *rcgc_api    = shared ? "TUR_RT_LOCAL " : "";
     buf_puts(out, "/* generated by tur (phase 2) */\n");
     /* Feature-test macro: must precede every #include so glibc exposes POSIX
      * declarations (clock_gettime, nanosleep, ...) used by the emitted runtime
@@ -6228,10 +7503,97 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-but-set-variable\"\n");
+    /* DEDUP-5: define TUR_RT_LOCAL up here, ahead of every use.  `rcgc_helper`
+     * and `rcgc_api` expand to it in a --shared build, and the first thing they
+     * qualify is the rc_free_queue_reset_drain_state forward declaration in the
+     * catch-unwind block -- which is emitted well before the rc/GC section that
+     * used to carry this #define.  With the definition down there the generated
+     * runtime header opened with an unqualified `TUR_RT_LOCAL void ...;` and
+     * every split/shared build failed to compile.  See the rationale for the
+     * hidden visibility itself at the rc/GC block below. */
+    if (shared) {
+        buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+        buf_puts(out, "#  define TUR_RT_LOCAL __attribute__((visibility(\"hidden\")))\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "#  define TUR_RT_LOCAL\n");
+        buf_puts(out, "#endif\n");
+    }
+    /* S1 (jit-engine-plan section 4): thread-local storage, spelled portably.
+     *
+     * The preamble needs TLS in ~11 places.  `__thread` is a GNU extension that
+     * every cc we target accepts, but it is not C at all -- c2mir registers only
+     * the C11 keyword `_Thread_local` (c2mir.c kw_add) and has no `kw_add` for
+     * the GNU spelling on any target, so a literal `__thread` made the JIT's
+     * subset shim mandatory for every program including `arith`.
+     *
+     * Keyed on __STDC_VERSION__ rather than swapped outright: the generated C is
+     * compiled `-std=c99` (see cc_flags in main.c), where `_Thread_local` is not
+     * a standard keyword.  gcc happens to accept it there anyway, but relying on
+     * that across every supported cc buys nothing -- this way the cc path keeps
+     * the exact spelling it has always used, and only a C11-or-later front end
+     * (c2mir reports 201112) sees the standard one. */
+    buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
+    buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
+    buf_puts(out, "#endif\n");
+    /* 6(a) (jit-engine-plan section 4): atomics, spelled through a macro layer.
+     *
+     * The preamble needs atomics in 18 places -- STM's version clock and each
+     * TVar's version/value, the scheduler's cancel flag, and select's
+     * winner-claim compare-exchange.  All were emitted as literal `__atomic_*`
+     * GCC builtins, which c2mir does not implement AT ALL (zero occurrences of
+     * the family in its whole tree), so the JIT spike had to #define them down
+     * to plain loads and stores -- sound only for single-threaded programs, and
+     * silent corruption under `spawn` otherwise.
+     *
+     * Under __GNUC__/__clang__ these expand to exactly the builtins that were
+     * emitted before, so the cc path is byte-identical in behaviour and keeps
+     * the inline atomic on the STM commit path.  Any other front end gets calls
+     * into the host runtime (src/runtime/tur_atomics.c), resolved by address
+     * like hamt.c -- which is what plan section 3.2 step 4 asks for.
+     *
+     * c2mir predefines neither macro (verified, not assumed), so the gate lands
+     * it on the fallback.  The order argument is accepted and discarded there;
+     * the host functions are seq_cst, a strengthening of every order used. */
+    buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_U64(p, mo)        __atomic_load_n((p), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_U64(p, v, mo)    __atomic_store_n((p), (v), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_ADD_FETCH_U64(p, v, mo) __atomic_add_fetch((p), (v), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_PTR(p, mo)        __atomic_load_n((p), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_PTR(p, v, mo)    __atomic_store_n((p), (v), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_INT(p, mo)        __atomic_load_n((p), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_CAS_INT(p, e, d, s, f) "
+                  "__atomic_compare_exchange_n((p), (e), (d), 0, (s), (f))\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#  define __ATOMIC_RELAXED 0\n");
+    buf_puts(out, "#  define __ATOMIC_CONSUME 1\n");
+    buf_puts(out, "#  define __ATOMIC_ACQUIRE 2\n");
+    buf_puts(out, "#  define __ATOMIC_RELEASE 3\n");
+    buf_puts(out, "#  define __ATOMIC_ACQ_REL 4\n");
+    buf_puts(out, "#  define __ATOMIC_SEQ_CST 5\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_U64(p, mo)        tur_atomic_load_u64((p))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_U64(p, v, mo)    tur_atomic_store_u64((p), (v))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_ADD_FETCH_U64(p, v, mo) tur_atomic_add_fetch_u64((p), (v))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_PTR(p, mo)        tur_atomic_load_ptr((void *const volatile *)(p))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_PTR(p, v, mo)    tur_atomic_store_ptr((void *volatile *)(p), (v))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_INT(p, mo)        tur_atomic_load_int((p))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_CAS_INT(p, e, d, s, f) tur_atomic_cas_int((p), (e), (d))\n");
+    buf_puts(out, "#endif\n");
+    /* S1b (jit-engine-plan): forward declaration for the explicit static
+     * initializer.  `main` calls it as its first statement, and `main` may be
+     * emitted well before the definition (a user-defined `main` lands in the
+     * function-body buffer, while the definition must follow every registered
+     * initializer -- they are all `static`).  Declared unconditionally so the
+     * preamble stays independent of what the program turns out to register;
+     * the definition is likewise always emitted, empty if nothing registered.
+     * The -Wunused-function pragma above covers the no-main TUs. */
+    buf_puts(out, "static void __tur_static_init(void);\n");
     /* Phase P3: HAMT lowering - include HAMT header when needed */
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
     }
+
     /* WIN1 (windows-support-plan): the emitted C is portable, so the platform
      * split lives in the OUTPUT as #ifdef _WIN32 rather than being decided by
      * whichever host ran `tur emit-c`.  A snapshot generated on Linux therefore
@@ -6269,11 +7631,40 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
+    /* 6(a): the host-runtime atomics the TUR_ATOMIC_* fallback calls.  Declared
+     * HERE, not up with the macro definitions, because they are spelled in
+     * terms of uint64_t and the macro block precedes every #include.  Under a
+     * GNU compiler the fallback branch is never taken and the mistake would be
+     * invisible; under c2mir it is a parse error on every program. */
+    buf_puts(out, "#if !defined(__GNUC__) && !defined(__clang__)\n");
+    buf_puts(out, "extern uint64_t tur_atomic_load_u64(const volatile uint64_t *);\n");
+    buf_puts(out, "extern void     tur_atomic_store_u64(volatile uint64_t *, uint64_t);\n");
+    buf_puts(out, "extern uint64_t tur_atomic_add_fetch_u64(volatile uint64_t *, uint64_t);\n");
+    buf_puts(out, "extern void    *tur_atomic_load_ptr(void *const volatile *);\n");
+    buf_puts(out, "extern void     tur_atomic_store_ptr(void *volatile *, void *);\n");
+    buf_puts(out, "extern int      tur_atomic_load_int(const volatile int *);\n");
+    buf_puts(out, "extern int      tur_atomic_cas_int(volatile int *, int *, int);\n");
+    buf_puts(out, "#endif\n");
+    /* jit-xxh64-missing-prototype (docs/archive): inline-C instance bodies for
+     * multiword struct keys call tur_hamt_hash_xxh64, and NOTHING declared it
+     * -- stdlib/hamt.tur extern-c's its siblings (box_key, box_key_eq) but not
+     * this one.  The implicit declaration truncated the 64-bit hash to int on
+     * the cc path on every host, and under the JIT on arm64 macOS c2mir
+     * lowers the unprototyped call as all-anonymous-variadic (stack-passed on
+     * Apple's ABI), so the callee read garbage registers and took SIGBUS.
+     * Spelled exactly as hamt.h:336 so the two declarations are identical
+     * when g_needs_hamt also includes the header.  HERE, after <stdint.h> /
+     * <stddef.h> -- the first attempt sat with the pre-include macro block
+     * and broke every fixture on an undeclared uint64_t, the exact mistake
+     * findings 14.1 already recorded once. */
+    buf_puts(out, "uint64_t tur_hamt_hash_xxh64(const void *data, size_t len);\n");
     /* Phase T19: Thread primitives - pthread on all supported platforms
      * (MinGW supplies these via winpthreads, so no split is needed). */
     buf_puts(out, "#include <pthread.h>\n");
     /* Phase 20-21: Software Transactional Memory */
     buf_puts(out, "#include <stdlib.h>\n");
+    /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
+    buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
     /* WIN1: ucontext over Win32 Fibers.  Emitted rather than #included because
      * generated C is standalone -- it cannot reach src/platform_ucontext_win.h.
@@ -6292,12 +7683,30 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_regex_h) {
         /* MinGW ships no POSIX <regex.h>.  Fail at compile time with a sentence
          * that names the cause, rather than emitting a call to a regcomp that
-         * does not exist and letting the linker say "undefined reference". */
-        buf_puts(out, "#ifdef _WIN32\n");
-        buf_puts(out, "#error \"stdlib/re.tur needs POSIX <regex.h>, which MinGW does not provide; regex is not supported on Windows yet\"\n");
-        buf_puts(out, "#else\n");
-        buf_puts(out, "#include <regex.h>\n");
-        buf_puts(out, "#endif\n");
+         * does not exist and letting the linker say "undefined reference".
+         *
+         * The split-runtime artifact is the one place that diagnostic must not
+         * appear.  emit_rt_split_source() force-enables every gate, and the
+         * result is a committed file (src/runtime/generated/) that is both
+         * compiled into tur_core itself and spliced ahead of every JIT'd
+         * program -- so a bare #error there breaks the Windows build of the
+         * *compiler*, not one stdlib module.  Emit the plain include instead:
+         * it still carries regex.h into the spliced region on POSIX (a JIT'd
+         * regex program needs it, since this block sits above the split
+         * marker), and compiles away on Windows.  A Windows program that
+         * actually uses regex still gets the #error, from its own per-program
+         * emission where g_rt_split_all_gates is false. */
+        if (g_rt_split_all_gates) {
+            buf_puts(out, "#ifndef _WIN32\n");
+            buf_puts(out, "#include <regex.h>\n");
+            buf_puts(out, "#endif\n");
+        } else {
+            buf_puts(out, "#ifdef _WIN32\n");
+            buf_puts(out, "#error \"stdlib/re.tur needs POSIX <regex.h>, which MinGW does not provide; regex is not supported on Windows yet\"\n");
+            buf_puts(out, "#else\n");
+            buf_puts(out, "#include <regex.h>\n");
+            buf_puts(out, "#endif\n");
+        }
     }
     /* inline-c-function-scope-include-guards fix: emit every `#include`
      * directive that elab lifted from the top of an inline-C body so
@@ -6409,7 +7818,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * per-module header emission dedupe to one tur_poly_fn_t. Single-file mode
      * emits it bare (byte-identical). */
     if (shared) buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n#define TUR_POLY_FN_T_DEFINED\n");
-    buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+    buf_puts(out, "struct DK;\n");  /* E2: forward-declare so fn_cps's DK* is the real type, not typedef-scoped */
+    buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;\n");  /* E2: fn_cps DK-threading slot (NULL for pure fn-values) */
     if (shared) buf_puts(out, "#endif\n");
     /* ET3: handler runtime type.
      * tur_handler_t is a handler value: an env pointer plus a dispatch function.
@@ -6436,8 +7846,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * double-free shared envs -- it is the application site (with-handler) that
      * frees, and only the outermost owner frees.  See
      * docs/first-class-handlers-semantics.md (FH1.2 invariant). */
-    buf_puts(out, "/* FH1: first-class handler dispatch-table entry */\n");
-    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;\n");
+    buf_puts(out, "/* FH1: first-class handler dispatch-table entry.\n");
+    buf_puts(out, " * B3: `dk_tag`/`dk_fn` carry the DK-ABI variant of the case (emitted at the\n");
+    buf_puts(out, " * handler-literal site when it is created inside colored code), so a dynamic\n");
+    buf_puts(out, " * `(with-handler <value> body)` can install a DK handler group from the table\n");
+    buf_puts(out, " * (dk_hgroup_from_table) instead of running the body on the fiber.  The fiber\n");
+    buf_puts(out, " * path leaves them 0 (calloc-zeroed) and never reads them. */\n");
+    buf_puts(out, "struct DK;\n");
+    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; int dk_tag; intptr_t (*dk_fn)(intptr_t, intptr_t, struct DK *); } tur_handler_entry_t;\n");
     buf_puts(out, "/* FH1: first-class handler value -- effect-keyed dispatch table */\n");
     buf_puts(out, "typedef struct { tur_handler_entry_t *entries; int n_entries; } tur_handler_table_t;\n");
     buf_puts(out, "static tur_handler_table_t *tur_handler_table_new(int n) {\n");
@@ -6576,12 +7992,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "} STM_State;\n");
     emit_rt_global(out, shared, "STM_State __stm_state;\n", "STM_State __stm_state");
     emit_rt_global(out, shared, "pthread_once_t __stm_once = PTHREAD_ONCE_INIT;\n", "pthread_once_t __stm_once");
-    emit_rt_global(out, shared, "__thread STM_Transaction *__stm_current_tx = NULL;\n", "__thread STM_Transaction *__stm_current_tx");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx = NULL;\n", "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx",
+                "__stm_current_tx", "void **", "tur_tls_stm_current_tx_ptr", "STM_Transaction **");
     buf_printf(out, "%sSTM_Transaction *tur_stm_current_tx(void) { return __stm_current_tx; }\n", rt_fn);
     buf_printf(out, "%svoid tur_stm_set_current_tx(STM_Transaction *tx) { __stm_current_tx = tx; }\n", rt_fn);
     /* Lazy, once-only state initialization (no generated-main wiring needed). */
     buf_puts(out, "static void __stm_do_init(void) {\n");
-    buf_puts(out, "    __atomic_store_n(&__stm_state.version_clock, (uint64_t)0, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "    TUR_ATOMIC_STORE_U64(&__stm_state.version_clock, (uint64_t)0, __ATOMIC_RELEASE);\n");
     buf_puts(out, "    pthread_mutex_init(&__stm_state.retry_lock, NULL);\n");
     buf_puts(out, "    pthread_cond_init(&__stm_state.retry_cond, NULL);\n");
     buf_puts(out, "    for (int i = 0; i < STM_NUM_LOCK_BUCKETS; i++) {\n");
@@ -6604,7 +8021,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    __stm_ensure_init();\n");
     buf_puts(out, "    TVar *tv = malloc(sizeof(TVar));\n");
     buf_puts(out, "    tv->value = initial_value;\n");
-    buf_puts(out, "    __atomic_store_n(&tv->version, (uint64_t)0, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "    TUR_ATOMIC_STORE_U64(&tv->version, (uint64_t)0, __ATOMIC_RELEASE);\n");
     buf_puts(out, "    return tv;\n");
     buf_puts(out, "}\n");
     /* TL2 lock-free read: snapshot version, load value, re-check version. */
@@ -6612,10 +8029,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    for (int i = 0; i < tx->write_count; i++) {\n");
     buf_puts(out, "        if (tx->write_set[i] == tv) return tx->new_values[i];\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    uint64_t v1 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    uint64_t v1 = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "    if ((v1 & 1u) || v1 > tx->read_stamp) { tx->aborted = true; return NULL; }\n");
-    buf_puts(out, "    void *val = __atomic_load_n(&tv->value, __ATOMIC_ACQUIRE);\n");
-    buf_puts(out, "    uint64_t v2 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    void *val = TUR_ATOMIC_LOAD_PTR(&tv->value, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    uint64_t v2 = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "    if (v1 != v2) { tx->aborted = true; return NULL; }\n");
     buf_puts(out, "    if (tx->read_count < 256) {\n");
     buf_puts(out, "        int seen = 0;\n");
@@ -6675,11 +8092,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    unsigned idxs[128];\n");
     buf_puts(out, "    int nidx = __stm_write_buckets(tx, idxs);\n");
     buf_puts(out, "    for (int i = 0; i < nidx; i++) pthread_mutex_lock(&__stm_state.lock_buckets[idxs[i]].lock);\n");
-    buf_puts(out, "    uint64_t wv = __atomic_add_fetch(&__stm_state.version_clock, (uint64_t)2, __ATOMIC_ACQ_REL);\n");
+    buf_puts(out, "    uint64_t wv = TUR_ATOMIC_ADD_FETCH_U64(&__stm_state.version_clock, (uint64_t)2, __ATOMIC_ACQ_REL);\n");
     buf_puts(out, "    /* Re-validate the whole read set, including read-then-written TVars */\n");
     buf_puts(out, "    for (int i = 0; i < tx->read_count; i++) {\n");
     buf_puts(out, "        TVar *tv = tx->read_set[i];\n");
-    buf_puts(out, "        uint64_t cur = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "        uint64_t cur = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "        if ((cur & 1u) || cur != tx->read_versions[i]) {\n");
     buf_puts(out, "            for (int k = nidx - 1; k >= 0; k--) pthread_mutex_unlock(&__stm_state.lock_buckets[idxs[k]].lock);\n");
     buf_puts(out, "            return false;\n");
@@ -6688,13 +8105,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    /* Publish: lock (odd), store value, store new even version */\n");
     buf_puts(out, "    for (int i = 0; i < tx->write_count; i++) {\n");
     buf_puts(out, "        TVar *tv = tx->write_set[i];\n");
-    buf_puts(out, "        uint64_t locked = __atomic_load_n(&tv->version, __ATOMIC_RELAXED) | 1u;\n");
-    buf_puts(out, "        __atomic_store_n(&tv->version, locked, __ATOMIC_RELEASE);\n");
-    buf_puts(out, "        __atomic_store_n(&tv->value, tx->new_values[i], __ATOMIC_RELEASE);\n");
-    buf_puts(out, "        __atomic_store_n(&tv->version, wv, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "        uint64_t locked = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_RELAXED) | 1u;\n");
+    buf_puts(out, "        TUR_ATOMIC_STORE_U64(&tv->version, locked, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "        TUR_ATOMIC_STORE_PTR(&tv->value, tx->new_values[i], __ATOMIC_RELEASE);\n");
+    buf_puts(out, "        TUR_ATOMIC_STORE_U64(&tv->version, wv, __ATOMIC_RELEASE);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tx->committed = true;\n");
-    buf_puts(out, "    for (int i = 0; i < nidx; i++) __atomic_add_fetch(&__stm_state.lock_buckets[idxs[i]].commit_seq, (uint64_t)1, __ATOMIC_ACQ_REL);\n");
+    buf_puts(out, "    for (int i = 0; i < nidx; i++) TUR_ATOMIC_ADD_FETCH_U64(&__stm_state.lock_buckets[idxs[i]].commit_seq, (uint64_t)1, __ATOMIC_ACQ_REL);\n");
     buf_puts(out, "    for (int i = nidx - 1; i >= 0; i--) pthread_mutex_unlock(&__stm_state.lock_buckets[idxs[i]].lock);\n");
     buf_puts(out, "    pthread_mutex_lock(&__stm_state.retry_lock);\n");
     buf_puts(out, "    pthread_cond_broadcast(&__stm_state.retry_cond);\n");
@@ -6711,7 +8128,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Begin: snapshot the global clock into the transaction's read stamp. */
     buf_puts(out, "static void __tur_stm_begin(STM_Transaction *tx) {\n");
     buf_puts(out, "    __stm_ensure_init();\n");
-    buf_puts(out, "    tx->read_stamp = __atomic_load_n(&__stm_state.version_clock, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    tx->read_stamp = TUR_ATOMIC_LOAD_U64(&__stm_state.version_clock, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "}\n");
     /* Park until a bucket covering the read set commits (global cond + filter). */
     buf_puts(out, "static void __tur_stm_park(STM_Transaction *tx) {\n");
@@ -6720,14 +8137,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        unsigned bi = __stm_bucket_idx(tx->read_set[i]);\n");
     buf_puts(out, "        int seen = 0;\n");
     buf_puts(out, "        for (int j = 0; j < n; j++) { if (idxs[j] == bi) { seen = 1; break; } }\n");
-    buf_puts(out, "        if (!seen) { idxs[n] = bi; seqs[n] = __atomic_load_n(&__stm_state.lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE); n++; }\n");
+    buf_puts(out, "        if (!seen) { idxs[n] = bi; seqs[n] = TUR_ATOMIC_LOAD_U64(&__stm_state.lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE); n++; }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    if (n == 0) return;\n");
     buf_puts(out, "    pthread_mutex_lock(&__stm_state.retry_lock);\n");
     buf_puts(out, "    for (;;) {\n");
     buf_puts(out, "        int advanced = 0;\n");
     buf_puts(out, "        for (int i = 0; i < n; i++) {\n");
-    buf_puts(out, "            if (__atomic_load_n(&__stm_state.lock_buckets[idxs[i]].commit_seq, __ATOMIC_ACQUIRE) != seqs[i]) { advanced = 1; break; }\n");
+    buf_puts(out, "            if (TUR_ATOMIC_LOAD_U64(&__stm_state.lock_buckets[idxs[i]].commit_seq, __ATOMIC_ACQUIRE) != seqs[i]) { advanced = 1; break; }\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        if (advanced) break;\n");
     buf_puts(out, "        pthread_cond_wait(&__stm_state.retry_cond, &__stm_state.retry_lock);\n");
@@ -6899,11 +8316,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * note in the plan.  The transport stays setjmp/longjmp; the chain is purely
      * the handler-discovery structure the plan's D1 calls for. */
     buf_puts(out, "typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;\n");
-    emit_rt_global(out, shared, "__thread tur_handler_node *tur_handler_chain = NULL;\n", "__thread tur_handler_node *tur_handler_chain");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain = NULL;\n", "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain",
+                "tur_handler_chain", "void **", "tur_tls_handler_chain_ptr", "tur_handler_node **");
     /* Panic-return signal: thread-local propagation flag.  Set by panic,
      * checked after every panic-capable call site, consumed by catch-unwind.
      * Always-on since the panic-return-signal experiment graduated. */
-    emit_rt_global(out, shared, "__thread int tur_panicking = 0;\n", "__thread int tur_panicking");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_panicking = 0;\n", "TUR_THREAD_LOCAL int tur_panicking",
+                "tur_panicking", "int *", "tur_tls_panicking_ptr", NULL);
     /* Heap continuation node used by the general catch-unwind segment-splitter
      * trampoline (always-on since stackless-catch-unwind graduated).  `tag`
      * names the resume segment (0 = DONE / function return), `saved[]` (up to
@@ -6924,7 +8343,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }\n");
     buf_puts(out, "static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
-    buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int);\n");
+    buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int, int);\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
@@ -6936,7 +8355,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * The defer chain stops at this function's frame tree (the catch boundary
      * lives in a different call frame), giving partial unwind for free. */
     buf_printf(out, "    if (tur_handler_chain) {\n");
-    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__);\n", (int)TY_CSTR);
+    /* owns_value = 1: the strdup'd message is a heap block this payload owns. */
+    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__, 1);\n", (int)TY_CSTR);
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
     /* Signal transport -- set the flag and RETURN; the caller's per-call-site
      * check propagates it up to the catch-unwind boundary. */
@@ -6980,23 +8400,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    void *value;\n");
     buf_puts(out, "    const char *file;\n");
     buf_puts(out, "    int line;\n");
+    /* catch-unwind-panic-payload-leaks (Leak 1): 1 iff `value` is a heap block
+     * this payload owns and must free (the `strdup`'d message on the tur_panic
+     * path).  0 for every tur_panic_with payload -- those carry a
+     * caller-supplied / borrowed / inline-scalar value that must NOT be freed.
+     * This bit resolves the ambiguity that previously forced the payload value
+     * to leak unconditionally to stay sound. */
+    buf_puts(out, "    int owns_value;\n");
     buf_puts(out, "};\n\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload = NULL;\n\n", "tur_panic_payload *global_panic_payload");
-    buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line) {\n");
+    buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line, int owns_value) {\n");
     buf_puts(out, "    tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));\n");
     buf_puts(out, "    if (!p) { fprintf(stderr, \"panic: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line;\n");
+    buf_puts(out, "    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line; p->owns_value = owns_value;\n");
     buf_puts(out, "    return p;\n");
     buf_puts(out, "}\n\n");
-    /* Free the payload *record* only, never p->value: the panic value is
-     * opaque -- a user may (panic-with <scalar>) so p->value can be an inline
-     * scalar reinterpreted as a pointer (never heap), or a value borrowed
-     * elsewhere.  Freeing it is a nonheap-free / double-free hazard.  This
-     * matches tur_result_box_free's deliberate refusal to free the caught
-     * payload value (see its comment below and
+    /* catch-unwind-panic-payload-leaks (Leak 1): free the payload record, and
+     * additionally free p->value iff this payload OWNS it (owns_value == 1 --
+     * the heap `strdup`'d message on the tur_panic path).  A tur_panic_with
+     * payload carries owns_value == 0: its value may be an inline scalar
+     * reinterpreted as a pointer (never heap) or a value borrowed elsewhere, so
+     * freeing it is a nonheap-free / double-free hazard.  The ownership bit is
+     * exactly what resolves the ambiguity that previously forced the value to
+     * leak unconditionally (see
      * docs/archive/history/catch-unwind-returned-err-box-payload-leak.md). */
     buf_puts(out, "static void panic_payload_free(tur_panic_payload *p) {\n");
-    buf_puts(out, "    if (p) { free(p); }\n");
+    buf_puts(out, "    if (p) { if (p->owns_value) free(p->value); free(p); }\n");
     buf_puts(out, "}\n\n");
     /* Phase R2: Panic payload accessors */
     buf_puts(out, "static int tur_panic_payload_type(tur_panic_payload *p) {\n");
@@ -7024,6 +8453,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    union { int64_t ok_val; void *ok_ptr; tur_panic_payload *err; } u;\n");
     buf_puts(out, "};\n\n");
     buf_puts(out, "typedef void (*tur_thunk_fn)(void *env, tur_result *out);\n\n");
+    /* rc-free-queue-drain-quadratic: the queue globals are emitted far below
+     * this point, so the unwind handlers reach the flag through a helper.  In
+     * ARCHIVE mode (rcgc_helper == "") the replica is elided and this resolves
+     * to the runtime's rc_free_queue_reset_drain_state in rc_free_queue.c --
+     * the same function, one copy. */
+    buf_printf(out, "%svoid rc_free_queue_reset_drain_state(void);  /* Forward decl */\n", rcgc_helper);
     buf_puts(out, "static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
     buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
@@ -7037,6 +8472,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
+    /* rc-free-queue-drain-quadratic: the longjmp may have unwound out of the
+     * middle of rc_free_queue_drain, skipping the assignment that clears the
+     * in-drain flag.  Left set, every later drain would no-op and the deferred
+     * frees would pile up forever.  The queue stays consistent (freed prefix /
+     * pending tail), so only the flag is reset.  Mirrors the same reset in
+     * tur_catch_unwind in src/runtime/runtime.c -- this copy has its OWN
+     * rc_free_queue_draining global, so it needs its own reset.  The _box
+     * variants below use the tur_panicking return path (no longjmp), so the
+     * drain there always completes and they need nothing. */
+    buf_puts(out, "        rc_free_queue_reset_drain_state();\n");
     buf_puts(out, "        out->tag = TUR_RESULT_ERR;\n");
     buf_puts(out, "        out->u.err = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
@@ -7056,6 +8501,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
+    /* rc-free-queue-drain-quadratic: the longjmp may have unwound out of the
+     * middle of rc_free_queue_drain, skipping the assignment that clears the
+     * in-drain flag.  Left set, every later drain would no-op and the deferred
+     * frees would pile up forever.  The queue stays consistent (freed prefix /
+     * pending tail), so only the flag is reset.  Mirrors the same reset in
+     * tur_catch_unwind in src/runtime/runtime.c -- this copy has its OWN
+     * rc_free_queue_draining global, so it needs its own reset.  The _box
+     * variants below use the tur_panicking return path (no longjmp), so the
+     * drain there always completes and they need nothing. */
+    buf_puts(out, "        rc_free_queue_reset_drain_state();\n");
     buf_puts(out, "        if (global_panic_payload && global_panic_payload->type_tag == expected_type) {\n");
     buf_puts(out, "            out->tag = TUR_RESULT_ERR;\n");
     buf_puts(out, "            out->u.err = global_panic_payload;\n");
@@ -7112,8 +8567,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
         buf_puts(out, "        }\n");
         buf_puts(out, "        /* type mismatch: leave the signal + payload staged so it\n");
-        buf_puts(out, "         * propagates to the next outer boundary via the return path. */\n");
-        buf_puts(out, "        return tur_box_err(0);\n");
+        buf_puts(out, "         * propagates to the next outer boundary via the return path.\n");
+        buf_puts(out, "         * catch-unwind-panic-payload-leaks: return a NULL box rather\n");
+        buf_puts(out, "         * than allocating tur_box_err(0).  tur_panicking is still set,\n");
+        buf_puts(out, "         * so the caller's per-call-site check propagates without ever\n");
+        buf_puts(out, "         * inspecting this value; allocating a box here only leaks it\n");
+        buf_puts(out, "         * (the re-raise skips its scope-exit free).  A stray free of a\n");
+        buf_puts(out, "         * NULL box is a safe no-op. */\n");
+        buf_puts(out, "        return 0;\n");
         buf_puts(out, "    }\n");
         buf_puts(out, "    return tur_box_ok(__v);\n");
         buf_puts(out, "}\n\n");
@@ -7123,19 +8584,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * discarded (statement-position catch-unwind / catch-panic-of).  The box is the
      * tur_result_box_t minted by tur_box_ok/tur_box_err in the *_box helpers above;
      * an err box additionally owns the caught tur_panic_payload record (moved out of
-     * global_panic_payload), so free that record too.  We free only the payload
-     * *struct*, never payload->value: catch-unwind's payload value is opaque -- a
-     * user may panic-with an inline scalar (e.g. (void*)42) or a value owned
-     * elsewhere, so freeing it is a nonheap-free / double-free hazard (this is why
-     * panic_payload_free, which does free(p->value), is not reused here).  An ok
-     * box's ok_val is likewise a plain value/handle the box never owned -- left
-     * untouched.  Only called where the value provably does not escape, so this is
-     * not a premature free. */
+     * global_panic_payload), so free that record too.  catch-unwind-panic-payload-leaks
+     * (Leak 1): route the payload free through panic_payload_free, which reclaims
+     * payload->value iff the payload OWNS it (owns_value == 1 -- the strdup'd panic
+     * message); a scalar/borrowed panic-with value (owns_value == 0) is left alone,
+     * so this is neither a nonheap-free nor a double-free.  An ok box's ok_val is a
+     * plain value/handle the box never owned -- left untouched.  Only called where
+     * the value provably does not escape, so this is not a premature free. */
     buf_puts(out, "static void tur_result_box_free(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static void tur_result_box_free(int64_t __r) {\n");
     buf_puts(out, "    tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;\n");
     buf_puts(out, "    if (!__b) return;\n");
-    buf_puts(out, "    if (!__b->is_ok) free((tur_panic_payload *)(intptr_t)__b->err_val);\n");
+    buf_puts(out, "    if (!__b->is_ok) panic_payload_free((tur_panic_payload *)(intptr_t)__b->err_val);\n");
     buf_puts(out, "    free(__b);\n");
     buf_puts(out, "}\n\n");
 
@@ -7164,12 +8624,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * presence scan (cps.c) instead of the old `cl_can_lower` "would the direct
      * emitter lower it" subset check -- verified byte-identical corpus-wide, since
      * post-D4 every cloneable reset lowers natively so presence == can-lower. */
-    const bool cps_uses_delimited    = preamble_uses_base_delimited(program);
-    const bool cps_uses_cloneable_dk = cps_expr_contains_cloneable_shift(program);
-    const bool cps_uses_serial       = preamble_uses_serial(program);
-    const bool cps_uses_callcc       = preamble_uses_callcc(program);
-    const bool cps_ir_emittable      = emit_cps_ir_program_has_emittable(program);
-    const bool cps_uses_cloneable_rt = cps_expr_contains_cloneable_shift(program)
+    /* S2 (jit-engine-plan): emit_rt_split_source forces every program-gated
+     * prelude on so the split runtime TU / declarations artifacts are
+     * feature-complete regardless of any single program -- same effect the
+     * `shared ||` alternatives below give --shared mode, extended to the
+     * program-scan gates. */
+    const bool cps_uses_delimited    = g_rt_split_all_gates || preamble_uses_base_delimited(program);
+    const bool cps_uses_cloneable_dk = g_rt_split_all_gates || cps_expr_contains_cloneable_shift(program);
+    const bool cps_uses_serial       = g_rt_split_all_gates || preamble_uses_serial(program);
+    const bool cps_uses_callcc       = g_rt_split_all_gates || preamble_uses_callcc(program);
+    const bool cps_ir_emittable      = g_rt_split_all_gates || emit_cps_ir_program_has_emittable(program);
+    const bool cps_uses_cloneable_rt = g_rt_split_all_gates
+                                    || cps_expr_contains_cloneable_shift(program)
                                     || expr_has_multishot_handler(program)
                                     || cps_uses_cloneable_dk;
 
@@ -7243,7 +8709,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
         cps_uses_serial || cps_ir_emittable) {
-        emit_cps_runtime_prelude(out);
+        emit_cps_runtime_prelude_ex(out, g_opt_cps_tramp_resume);
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
      * direct emitter lowers a base (reset ...) whose body reaches a shift through
@@ -7261,7 +8727,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
         buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
-        emit_rt_global(out, shared, "__thread tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "__thread tur_shift_reset_ctx *tur_cur_shift_reset");
+        emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
+                "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
      * runtime (emitted above) and the DK machine (just emitted) in scope.  A
@@ -7290,44 +8757,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         emit_cps_callcc_prelude(out);
     }
 
-    /* Phase 19: Effect handler chain */
-    buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");
-    /* Phase P19-5: TurContK — a lightweight per-invocation continuation token.
-     * Each tur_effect_perform call allocates one on the stack and passes its
-     * address as `k` to the handler function.  `consumed` is set by (resume k v)
-     * so that (cont? k) can verify freshness at runtime. */
-    buf_puts(out, "typedef struct { bool consumed; void *origin_fiber; } TurContK;\n\n");
-    /* Phase 19D: Effect-capture continuation context */
-    buf_puts(out, "/* Phase 19D: Effect-capture continuation context */\n");
-    buf_puts(out, "typedef struct TurEffectCaptureCtx TurEffectCaptureCtx;\n");
-    buf_puts(out, "struct TurEffectCaptureCtx {\n");
-    buf_puts(out, "    bool has_pending_effect;\n");
-    buf_puts(out, "    const char *eff_name;\n");
-    buf_puts(out, "    int64_t eff_args[8];  /* v1: max 8 args */\n");
-    buf_puts(out, "    int eff_n_args;\n");
-    buf_puts(out, "    int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);\n");
-    buf_puts(out, "    void *body_env;  /* heap-allocated env for body captures */\n");
-    buf_puts(out, "    void *table;     /* FH3: tur_handler_table_t* for value-based dispatch (else NULL) */\n");
-    buf_puts(out, "    bool shallow_consumed;  /* F2: a shallow handler that has run its case once; a\n");
-    buf_puts(out, "                             * subsequent same-effect perform bubbles to the enclosing\n");
-    buf_puts(out, "                             * handler instead of re-matching here (handle-shallow). */\n");
-    buf_puts(out, "};\n\n");
-    buf_puts(out, "typedef struct EffectHandlerCase EffectHandlerCase;\n");
-    buf_puts(out, "struct EffectHandlerCase {\n");
-    buf_puts(out, "    const char *effect_name;\n");
-    buf_puts(out, "    int64_t (*handler_fn)(int64_t *args, int n_args, int64_t k, void *env);\n");
-    buf_puts(out, "    void *env;\n");
-    buf_puts(out, "};\n\n");
-    buf_puts(out, "typedef struct EffectHandlerFrame EffectHandlerFrame;\n");
-    buf_puts(out, "struct EffectHandlerFrame {\n");
-    buf_puts(out, "    struct EffectHandlerFrame *parent;\n");
-    buf_puts(out, "    int n_cases;\n");
-    buf_puts(out, "    EffectHandlerCase cases[8];\n");
-    buf_puts(out, "};\n\n");
+    /* Phase 19 fiber effect runtime (TurContK / TurEffectCaptureCtx /
+     * EffectHandlerCase / EffectHandlerFrame) DELETED 2026-07-19: the CPS/DK
+     * backend is the sole effect lowering (cps-tramp-resume graduated), so no
+     * emitted program performs/handles an effect on the fiber.  Corpus-verified
+     * zero call sites.  See docs/archive/cps-dk-sole-effect-lowering-plan.md
+     * Stage G.  FiberBlock (concurrency) and tur_handler_table_t (DK handler
+     * values) stay. */
         /* Phase T21-A/B / P19-8: FiberBlock — cooperative fiber runtime via ucontext_t.
      * tur_current_fiber is thread-local; set/restored by tur_fiber_block_resume.
-     * tur_effect_perform checks tur_current_fiber->effect_handler_chain for fiber-local
-     * effect handler chains (Phase T21-B / P19-8). */
+     * The per-fiber effect handler fields are gone (fiber effect runtime deleted). */
     buf_puts(out, "/* Phase T21: FiberBlock */\n");
     buf_puts(out, "#ifdef __clang__\n");
     buf_puts(out, "#pragma clang diagnostic push\n");
@@ -7343,7 +8782,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int parked; /* Phase T21: scheduler park/unpark */\n");
     buf_puts(out, "    int64_t result;\n");
     buf_puts(out, "    int64_t arg;\n");
-    buf_puts(out, "    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */\n");
     buf_puts(out, "    bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */\n");
     buf_puts(out, "    void (*entry_fn)(void);\n");
     buf_puts(out, "    void *fiber_local; /* Phase T21: fiber-local storage */\n");
@@ -7353,9 +8791,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase TG-004-1 PR: Per-fiber panic handling for auto-cancel propagation */
     buf_puts(out, "    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
-    buf_puts(out, "    void *eff_ctx;  /* Phase 19D: NULL for regular fibers, TurEffectCaptureCtx* for effect-capture fibers */\n");
     buf_puts(out, "};\n\n");
-    emit_rt_global(out, shared, "__thread FiberBlock *tur_current_fiber = NULL;\n", "__thread FiberBlock *tur_current_fiber");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
+                "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
     /* Phase R2: tur_panic_with body — placed here so FiberBlock and
      * tur_current_fiber are in scope for the per-fiber panic check. */
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
@@ -7371,14 +8809,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
     /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
     buf_puts(out, "    if (tur_handler_chain) {\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    /* owns_value = 0: panic-with carries a caller-supplied / scalar / borrowed
+     * value the payload must never free (catch-unwind-panic-payload-leaks). */
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     /* Signal transport (always-on): fire defers, set the flag, RETURN. */
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
     buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    /* owns_value = 0: panic-with carries a caller-supplied / scalar / borrowed
+     * value the payload must never free (catch-unwind-panic-payload-leaks). */
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
@@ -7388,7 +8830,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Cooperative cancellation flag */
-    emit_rt_global(out, shared, "__thread bool tur_fiber_cancelled_flag = false;\n\n", "__thread bool tur_fiber_cancelled_flag");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag = false;\n\n", "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag",
+                "tur_fiber_cancelled_flag", "bool *", "tur_tls_fiber_cancelled_flag_ptr", NULL);
     /* Phase T22: TaskGroup notification forward declaration */
     buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n");
     /* Forward-declare tur_fiber_set_cancelled before tur_fiber_shim uses it */
@@ -7410,10 +8853,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    TurThreadState *state;\n");
     buf_puts(out, "} TurThreadSpawnArg;\n\n");
     buf_puts(out, "/* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */\n");
-    emit_rt_global(out, shared, "__thread TurThreadState *tur_current_thread_state = NULL;\n", "__thread TurThreadState *tur_current_thread_state");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;\n", "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state",
+                "tur_current_thread_state", "void **", "tur_tls_current_thread_state_ptr", "TurThreadState **");
     buf_puts(out, "/* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */\n");
-    emit_rt_global(out, shared, "__thread jmp_buf tur_cancel_jmpbuf;\n", "__thread jmp_buf tur_cancel_jmpbuf");
-    emit_rt_global(out, shared, "__thread int tur_cancel_jmpbuf_valid = 0;\n\n", "__thread int tur_cancel_jmpbuf_valid");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf",
+                "tur_cancel_jmpbuf", "jmp_buf *", "tur_tls_cancel_jmpbuf_ptr", NULL);
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;\n\n", "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid",
+                "tur_cancel_jmpbuf_valid", "int *", "tur_tls_cancel_jmpbuf_valid_ptr", NULL);
     buf_puts(out, "static void *tur_thread_trampoline(void *raw) {\n");
     buf_puts(out, "    TurThreadSpawnArg *a = (TurThreadSpawnArg *)raw;\n");
     buf_puts(out, "    tur_current_thread_state = a->state;\n");
@@ -7424,7 +8870,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int tur_thread_cancel_requested(void) {\n");
     buf_puts(out, "    TurThreadState *s = tur_current_thread_state;\n");
-    buf_puts(out, "    return s ? __atomic_load_n(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;\n");
+    buf_puts(out, "    return s ? TUR_ATOMIC_LOAD_INT(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "/* TC0: cancel action -- longjmp into cancel guard if active, else exit thread */\n");
     buf_puts(out, "static void tur_thread_do_cancel(void) {\n");
@@ -7464,7 +8910,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            f->panic_jmpbuf_valid = 0;\n");
     buf_puts(out, "            tur_current_fiber = NULL;\n");
     buf_puts(out, "            if (global_panic_payload) {\n");
-    buf_puts(out, "                typedef struct TaskGroupBlock { bool cancelled; bool done; int64_t cancel_reason; pthread_mutex_t lock; pthread_cond_t done_cond; } TaskGroupBlock;\n");
+    /* emitted-taskgroupblock-layout-mismatch (docs/archive): this shim used
+     * to declare {cancelled, done, cancel_reason, lock, cond} -- fields in the
+     * WRONG ORDER vs what task-group-new allocates, so it wrote the flags over
+     * the mutex's first bytes and locked offset 16, the middle of the real
+     * mutex.  All three emitted TaskGroupBlock typedefs now spell the ONE
+     * canonical layout, verbatim from stdlib/taskgroup.tur:78. */
+    buf_puts(out, "                typedef struct TaskGroupBlock { pthread_mutex_t lock; pthread_cond_t done_cond; int64_t task_count; int64_t completed_count; bool cancelled; bool done; int64_t cancel_reason; } TaskGroupBlock;\n");
     buf_puts(out, "                TaskGroupBlock *g = (TaskGroupBlock *)task_group;\n");
     buf_puts(out, "                pthread_mutex_lock(&g->lock);\n");
     buf_puts(out, "                g->cancelled = true;\n");
@@ -7489,8 +8941,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
-    /* Declare global_effect_handler_chain before tur_fiber_block_new uses it */
-    emit_rt_global(out, shared, "__thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n", "__thread EffectHandlerFrame *global_effect_handler_chain");
     buf_puts(out, "static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {\n");
     buf_puts(out, "    if (!stack_size) stack_size = 1024 * 1024;\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));\n");
@@ -7500,8 +8950,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;\n");
     /* SCH-004: Initialize migration_safe flag - fibers are migration-safe by default */
     buf_puts(out, "    f->migration_safe = true;\n");
-    /* SCH-004: Copy global effect handler chain to fiber for migration safety */
-    buf_puts(out, "    f->effect_handler_chain = (void *)global_effect_handler_chain;\n");
     buf_puts(out, "    getcontext(&f->ctx);\n");
     buf_puts(out, "    f->ctx.uc_stack.ss_sp = f->stack;\n");
     buf_puts(out, "    f->ctx.uc_stack.ss_size = stack_size;\n");
@@ -7517,13 +8965,39 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase T22: Check if fiber or its task group was cancelled before resuming */
     buf_puts(out, "    if (f->cancelled) { f->done = 1; return 0; }\n");
     buf_puts(out, "    if (f->task_group) {\n");
-    buf_puts(out, "        typedef struct TaskGroupBlock { bool cancelled; } TaskGroupBlock;\n");
+    /* emitted-taskgroupblock-layout-mismatch (docs/archive): this shim used
+     * to declare {bool cancelled;} -- reading byte 0 of the initialized MUTEX
+     * as the flag.  glibc leaves that byte 0 and clang masks bool loads to
+     * bit 0, so both cc paths passed by two layers of luck; c2mir tests the
+     * whole byte (0x5A on macOS), so every fiber spawned into a TaskGroup was
+     * born cancelled and taskgroup-async exited silently empty.  Canonical
+     * layout, verbatim from stdlib/taskgroup.tur:78. */
+    buf_puts(out, "        typedef struct TaskGroupBlock { pthread_mutex_t lock; pthread_cond_t done_cond; int64_t task_count; int64_t completed_count; bool cancelled; bool done; int64_t cancel_reason; } TaskGroupBlock;\n");
     buf_puts(out, "        if (((TaskGroupBlock *)f->task_group)->cancelled) { f->cancelled = 1; f->done = 1; return 0; }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
     buf_puts(out, "    tur_current_fiber = f;\n");
     buf_puts(out, "    f->arg = arg;\n");
-    buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    /* CPS/DK: g_dk_driver (the current DK entry-driver landing) and the DK
+     * meta-stack depth are STACK-DISCIPLINED -- they name a setjmp buffer / frame
+     * on the CURRENT C stack.  A resumed fiber runs on its own stack and may
+     * install its own DK handle (setting g_dk_driver to a buffer ON THE FIBER
+     * STACK), then YIELD out mid-handle without restoring it (the yield is a
+     * swapcontext, not a return, so the fiber wrapper's `g_dk_driver = __dksave`
+     * never runs).  Left unrestored, the resumer's next dk_perform longjmps into
+     * the fiber's (possibly freed) stack -> SIGSEGV / "longjmp causes uninitialized
+     * stack frame".  Save the resumer's driver + meta depth across the swapcontext
+     * and restore them when control returns, so the fiber's driver never leaks
+     * out.  Emitted only under the trampoline path (g_opt_cps_tramp_resume) that
+     * declares g_dk_driver / g_dk_meta_n; flag-off those globals do not exist and a
+     * fiber program stays byte-identical. */
+    if (g_opt_cps_tramp_resume) {
+        buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+        buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
+    } else {
+        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    }
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
     buf_puts(out, "}\n\n");
@@ -7533,18 +9007,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->result = value;\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "}\n\n");
-    /* Phase 19D: Effect-capture continuation helpers */
-    buf_puts(out, "/* Phase 19D: Effect-capture continuation helpers */\n");
-    buf_puts(out, "static int64_t tur_effect_cont_resume(int64_t k_as_int64, int64_t v) {\n");
-    buf_puts(out, "    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;\n");
-    buf_puts(out, "    TurEffectCaptureCtx *ctx = (TurEffectCaptureCtx *)fiber->eff_ctx;\n");
-    buf_puts(out, "    if (!ctx) { fprintf(stderr, \"continuation error: not a capturable continuation\\n\"); abort(); }\n");
-    buf_puts(out, "    return ctx->dispatch(ctx, k_as_int64, v);\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static bool tur_effect_cont_valid(int64_t k_as_int64) {\n");
-    buf_puts(out, "    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;\n");
-    buf_puts(out, "    return !fiber->done;\n");
-    buf_puts(out, "}\n\n");
+    /* Phase 19D effect-capture continuation helpers (tur_effect_cont_resume /
+     * tur_effect_cont_valid) DELETED 2026-07-19 with the fiber effect runtime. */
     /* Phase T21: Fiber-local storage */
     buf_puts(out, "typedef struct FiberLocalEntry FiberLocalEntry;\n");
     buf_puts(out, "struct FiberLocalEntry {\n");
@@ -7585,6 +9049,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase T22: TaskGroup notification on fiber completion */
     buf_puts(out, "static void tur_task_group_notify_done(void *task_group) {\n");
     buf_puts(out, "    if (!task_group) return;\n");
+    /* emitted-taskgroupblock-layout-mismatch: this one had the right offsets
+     * for every field it touches, but its trailing field said `pthread_t
+     * owner_thread` where the real block has `int64_t cancel_reason` -- a
+     * misleading name for the next editor.  Canonical layout, verbatim from
+     * stdlib/taskgroup.tur:78. */
     buf_puts(out, "    typedef struct TaskGroupBlock {\n");
     buf_puts(out, "        pthread_mutex_t lock;\n");
     buf_puts(out, "        pthread_cond_t done_cond;\n");
@@ -7592,7 +9061,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        int64_t completed_count;\n");
     buf_puts(out, "        bool cancelled;\n");
     buf_puts(out, "        bool done;\n");
-    buf_puts(out, "        pthread_t owner_thread;\n");
+    buf_puts(out, "        int64_t cancel_reason;\n");
     buf_puts(out, "    } TaskGroupBlock;\n");
     buf_puts(out, "    TaskGroupBlock *g = (TaskGroupBlock *)task_group;\n");
     buf_puts(out, "    pthread_mutex_lock(&g->lock);\n");
@@ -7992,7 +9461,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    bool             running;\n");
     buf_puts(out, "    int              active;\n");
     buf_puts(out, "} TurSchedulerMT;\n\n");
-    emit_rt_global(out, shared, "__thread TurSchedulerMT *tur_current_scheduler_mt = NULL;\n\n", "__thread TurSchedulerMT *tur_current_scheduler_mt");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt = NULL;\n\n", "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt",
+                "tur_current_scheduler_mt", "void **", "tur_tls_current_scheduler_mt_ptr", "TurSchedulerMT **");
     buf_puts(out, "static void tur_scheduler_mt_enqueue_locked(TurSchedulerMT *s, FiberBlock *f) {\n");
     buf_puts(out, "    if (((s->qtail + 1) % s->qcap) == s->qhead) {\n");
     buf_puts(out, "        size_t ncap = s->qcap * 2;\n");
@@ -8301,6 +9771,25 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        }\n");
     buf_puts(out, "        return dk_invoke(subk, f->value);\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    /* cps-async graduation: a pending future backed by a RUNNABLE scheduler\n");
+    buf_puts(out, "     * fiber (e.g. a fiber spawned via tur_scheduler_spawn, or a TaskGroup\n");
+    buf_puts(out, "     * child) completes only when the scheduler runs it.  Mirror\n");
+    buf_puts(out, "     * tur_await_future's non-fiber branch: drain runnable fibers until the\n");
+    buf_puts(out, "     * future resolves, then resume the captured continuation inline.  Bounded\n");
+    buf_puts(out, "     * by run_queue_len, so a future that can only complete asynchronously\n");
+    buf_puts(out, "     * (the deferred reactor / async-boundary park below) does not spin. */\n");
+    buf_puts(out, "    if (tur_scheduler) {\n");
+    buf_puts(out, "        while (!tur_future_done(f) && tur_scheduler->run_queue_len > 0) {\n");
+    buf_puts(out, "            tur_scheduler_run_one(tur_scheduler);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        if (tur_future_done(f)) {\n");
+    buf_puts(out, "            if (f->status == FUTURE_REJECTED) {\n");
+    buf_puts(out, "                fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
+    buf_puts(out, "                abort();\n");
+    buf_puts(out, "            }\n");
+    buf_puts(out, "            return dk_invoke(subk, f->value);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    /* pending: park a private copy of the captured continuation on on_complete */\n");
     buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));\n");
     buf_puts(out, "    if (!rec) { fprintf(stderr, \"await: oom\\n\"); abort(); }\n");
@@ -8339,8 +9828,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    TurSelectWaiter *w = (TurSelectWaiter *)waiter_list;\n");
     buf_puts(out, "    while (w) {\n");
     buf_puts(out, "        int exp = -1;\n");
-    buf_puts(out, "        if (__atomic_compare_exchange_n(w->selected_idx, &exp, w->clause_idx, 0,\n");
-    buf_puts(out, "                                        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {\n");
+    buf_puts(out, "        if (TUR_ATOMIC_CAS_INT(w->selected_idx, &exp, w->clause_idx,\n");
+    buf_puts(out, "                               __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {\n");
     buf_puts(out, "            pthread_mutex_lock(w->wakeup_mutex);\n");
     buf_puts(out, "            pthread_cond_signal(w->wakeup_cond);\n");
     buf_puts(out, "            pthread_mutex_unlock(w->wakeup_mutex);\n");
@@ -8522,139 +10011,25 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return winner;\n");
     buf_puts(out, "}\n\n");
 
-    /* global_effect_handler_chain is declared earlier, before tur_fiber_block_new */
-    buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
-        /* T21-B: use fiber-local handler chain when inside a fiber */
-    buf_puts(out, "    EffectHandlerFrame *frame =\n");
-    buf_puts(out, "        (tur_current_fiber && tur_current_fiber->effect_handler_chain)\n");
-    buf_puts(out, "        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain\n");
-    buf_puts(out, "        : global_effect_handler_chain;\n");
-    buf_puts(out, "    while (frame) {\n");
-    buf_puts(out, "        for (int __i = 0; __i < frame->n_cases; __i++) {\n");
-    buf_puts(out, "            if (strcmp(frame->cases[__i].effect_name, name) == 0) {\n");
-    /* Phase 19D: intercept case - handler_fn == NULL means fiber-yield to parent dispatch loop */
-    buf_puts(out, "                if (frame->cases[__i].handler_fn == NULL) {\n");
-    buf_puts(out, "                    /* Phase 19D: intercept case - yield fiber to parent dispatch loop */\n");
-    buf_puts(out, "                    FiberBlock *__cur = tur_current_fiber;\n");
-    buf_puts(out, "                    if (!__cur || !__cur->eff_ctx) { fprintf(stderr, \"Unhandled effect: %s\\n\", name); abort(); }\n");
-    buf_puts(out, "                    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)__cur->eff_ctx;\n");
-    buf_puts(out, "                    __cap->eff_name = name;\n");
-    buf_puts(out, "                    int __cn = n_args < 8 ? n_args : 8;\n");
-    buf_puts(out, "                    for (int __ai = 0; __ai < __cn; __ai++) __cap->eff_args[__ai] = args[__ai];\n");
-    buf_puts(out, "                    __cap->eff_n_args = n_args;\n");
-    buf_puts(out, "                    __cap->has_pending_effect = true;\n");
-    buf_puts(out, "                    tur_fiber_block_yield(0);\n");
-    buf_puts(out, "                    __cap->has_pending_effect = false;\n");
-    buf_puts(out, "                    return __cur->arg;\n");
-    buf_puts(out, "                }\n");
-    /* Phase P19-5: allocate a fresh TurContK on the stack per invocation */
-    buf_puts(out, "                TurContK __fresh_k = {false, tur_current_fiber};\n");
-    buf_puts(out, "                return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);\n");
-    buf_puts(out, "            }\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "        frame = frame->parent;\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"Unhandled effect: %s\\n\", name);\n");
-    buf_puts(out, "    abort();\n");
-    buf_puts(out, "    return 0;\n");
-    buf_puts(out, "}\n\n");
-
-    /* FH3/FH5: generic dispatch loop for first-class handler values.
-     * Identical in shape to the per-handle __dispatch_<id> emitted by
-     * emit_effects_handle, but it scans a runtime tur_handler_table_t instead
-     * of compile-time inline cases.  with-handler installs this as the
-     * TurEffectCaptureCtx.dispatch fn and points ctx.table at the handler
-     * value's table.  Multishot entries (cont_kind == CK_MULTISHOT) wrap the
-     * fiber continuation in a cloneable cont, mirroring the inline path. */
-    /* True-multishot snapshot fields mirror the per-handle path: capture the
-     * fiber's suspended stack at the perform point and restore it per resume so
-     * each resume re-runs an independent copy.  See
-     * docs/reported/turi-effect-multishot-degenerate-resume.md.  The extra
-     * fields + restore are gated on multishot use so non-multishot programs keep
-     * the original (smaller) struct and codegen unchanged. */
-    bool msdyn_multishot = shared || expr_has_multishot_handler(program);
-    if (msdyn_multishot)
-        buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; "
-                      "FiberBlock *fiber; char *stack_image; size_t image_size; "
-                      "ucontext_t saved_ctx; };\n");
-    else
-        buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; };\n");
-    buf_puts(out, "static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val);\n");
-    buf_puts(out, "static int64_t __tur_msdyn_cont(void *__env, int64_t __v) {\n");
-    buf_puts(out, "    struct __tur_msdyn_env *__e = (struct __tur_msdyn_env *)__env;\n");
-    if (msdyn_multishot) {
-        buf_puts(out, "    if (__e->fiber && __e->stack_image) {\n");
-        buf_puts(out, "        memcpy(__e->fiber->stack, __e->stack_image, __e->image_size);\n");
-        buf_puts(out, "        __e->fiber->ctx = __e->saved_ctx;\n");
-        buf_puts(out, "        __e->fiber->done = 0;\n");
-        buf_puts(out, "    }\n");
-    }
-    buf_puts(out, "    return tur_handler_dispatch(__e->ctx, __e->k_int, __v);\n");
-    buf_puts(out, "}\n");
-    buf_puts(out, "static void *__tur_msdyn_clone(const void *__env) {\n");
-    buf_puts(out, "    const struct __tur_msdyn_env *__o = (const struct __tur_msdyn_env *)__env;\n");
-    buf_puts(out, "    struct __tur_msdyn_env *__c = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));\n");
-    buf_puts(out, "    if (__c) *__c = *__o;\n");
-    buf_puts(out, "    return __c;\n");
-    buf_puts(out, "}\n");
-    buf_puts(out, "static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {\n");
-    buf_puts(out, "    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;\n");
-    buf_puts(out, "    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;\n");
-    buf_puts(out, "    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);\n");
-    buf_puts(out, "    if (__fiber->done) { return __fiber->result; }\n");
-    buf_puts(out, "    if (!__dcap->has_pending_effect) return __r;\n");
-    buf_puts(out, "    tur_handler_table_t *__tbl = (tur_handler_table_t *)__dcap->table;\n");
-    buf_puts(out, "    for (int __i = 0; __tbl && __i < __tbl->n_entries; __i++) {\n");
-    buf_puts(out, "        if (strcmp(__dcap->eff_name, __tbl->entries[__i].eff_name) == 0) {\n");
-    buf_puts(out, "            tur_handler_entry_t *__en = &__tbl->entries[__i];\n");
-    /* The multishot branch references the cloneable-continuation runtime, which
-     * is only emitted when the program uses multishot/cloneable continuations.
-     * Gate it on the same predicate; otherwise multishot dispatch is unreachable
-     * (a multishot handler literal makes the predicate true via
-     * expr_has_multishot_handler). */
-    if (shared || cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program)) {
-    buf_printf(out, "            if (__en->cont_kind == %d) { /* CK_MULTISHOT */\n", (int)CK_MULTISHOT);
-    buf_puts(out, "                struct __tur_msdyn_env *__ms = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));\n");
-    buf_puts(out, "                if (!__ms) abort();\n");
-    buf_puts(out, "                __ms->ctx = __ctx_void; __ms->k_int = __k_int;\n");
-    /* Snapshot the fiber stack for true multishot.  Gated on msdyn_multishot
-     * (NOT cloneable-shift) so a cloneable-shift-only program -- which emits
-     * this branch as dead code -- keeps the original struct/codegen. */
-    if (msdyn_multishot) {
-    buf_puts(out, "                __ms->fiber = __fiber;\n");
-    buf_puts(out, "                __ms->image_size = __fiber->stack_size;\n");
-    buf_puts(out, "                __ms->stack_image = (char *)malloc(__fiber->stack_size);\n");
-    buf_puts(out, "                if (!__ms->stack_image) abort();\n");
-    buf_puts(out, "                memcpy(__ms->stack_image, __fiber->stack, __fiber->stack_size);\n");
-    buf_puts(out, "                __ms->saved_ctx = __fiber->ctx;\n");
-    }
-    buf_puts(out, "                int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__tur_msdyn_cont, __ms, __tur_msdyn_clone, free);\n");
-    buf_puts(out, "                return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_ms, __en->env);\n");
-    buf_puts(out, "            }\n");
-    }
-    buf_puts(out, "            return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_int, __en->env);\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "    }\n");
-    /* Bubble unhandled effect to the outer fiber, mirroring the per-handle path. */
-    buf_puts(out, "    FiberBlock *__outer_f = tur_current_fiber;\n");
-    buf_puts(out, "    if (__outer_f && __outer_f->eff_ctx) {\n");
-    buf_puts(out, "        TurEffectCaptureCtx *__oc = (TurEffectCaptureCtx *)__outer_f->eff_ctx;\n");
-    buf_puts(out, "        __oc->eff_name = __dcap->eff_name;\n");
-    buf_puts(out, "        int __bn = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;\n");
-    buf_puts(out, "        for (int __bi = 0; __bi < __bn; __bi++) __oc->eff_args[__bi] = __dcap->eff_args[__bi];\n");
-    buf_puts(out, "        __oc->eff_n_args = __dcap->eff_n_args;\n");
-    buf_puts(out, "        __oc->has_pending_effect = true;\n");
-    buf_puts(out, "        tur_fiber_block_yield(0);\n");
-    buf_puts(out, "        __oc->has_pending_effect = false;\n");
-    buf_puts(out, "        return tur_handler_dispatch(__ctx_void, __k_int, __outer_f->arg);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"dispatch: unhandled effect: %s\\n\", __dcap->eff_name);\n");
-    buf_puts(out, "    abort();\n");
-    buf_puts(out, "    return 0;\n");
-    buf_puts(out, "}\n\n");
+    /* tur_effect_perform + the first-class-handler-value fiber dispatch
+     * (__tur_msdyn_env / __tur_msdyn_cont / __tur_msdyn_clone / tur_handler_dispatch)
+     * DELETED 2026-07-19 with the fiber effect runtime (Stage G).  The CPS/DK
+     * backend is the sole effect lowering; no emitted program performs or dispatches
+     * an effect on the fiber (corpus-verified zero call sites).  tur_handler_table_t
+     * / tur_handler_entry_t and tur_cloneable_cont_* stay -- the DK handler-value
+     * path (dk_hgroup_from_table) and the DK __Shift bridge use them. */
 
     /* Phase 9: Emit rc.h inline for rc<T> + weak<T> support */
     /* Phase 10: GC color enum and runtime (needed by rc_cb_alloc) */
+    /* DEDUP-5: in a --shared build the rc/GC block is the .so's OWN collector.
+     * It must not be visible outside the library: two Turmeric objects in one
+     * process (a host and the .so it dlopens) each carry a collector with its
+     * own registry, and a control block registered in one registry must never
+     * be freed through the other -- cb->gc_index would index the wrong array.
+     * Measured separate today, but only because the host's symbols happen not
+     * to interpose; hidden visibility makes that structural instead of lucky. */
+    /* TUR_RT_LOCAL itself is defined at the top of the preamble -- it qualifies
+     * declarations emitted earlier than this point. */
     buf_puts(out, "/* rc<T> + weak<T> reference counting - Phase 9 */\n");
     buf_puts(out, "/* Phase 10: GC color enum for Bacon-Rajan */\n");
     buf_puts(out, "typedef enum { GC_WHITE, GC_GREY, GC_BLACK, GC_PURPLE } GcColor;\n\n");
@@ -8674,89 +10049,260 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase 10: Bacon-Rajan GC fields */
     buf_puts(out, "    uint8_t color;           /* GC color */\n");
     buf_puts(out, "    bool may_contain_cycles;  /* Hint for GC */\n");
+    buf_puts(out, "    uint32_t gc_index;        /* CG0: slot in gc_all_blocks, or RC_GC_INDEX_NONE */\n");
+    buf_puts(out, "    bool gc_buffered;         /* CG1: in the candidate-root buffer */\n");
+    buf_puts(out, "    uint64_t gc_trial;        /* CG2: scratch trial refcount */\n");
+    buf_puts(out, "    bool gc_collecting;       /* CG2: in the white set being freed */\n");
     buf_puts(out, "    uint8_t reserved[6];\n");
     buf_puts(out, "};\n\n");
+    /* DEDUP-1: same layout guard as src/runtime/rc.c, verbatim. */
+    buf_puts(out, "/* ---------------------------------------------------------------------------\n");
+    buf_puts(out, " * DEDUP-1: RcControlBlock layout guard.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * This struct exists TWICE: here, and hand-written into every compiled program\n");
+    buf_puts(out, " * by the compiler (emit_module.c). The two copies must stay layout-compatible,\n");
+    buf_puts(out, " * because linking one against the other -- the end goal of de-duplicating them\n");
+    buf_puts(out, " * -- silently mis-reads every field past the first divergence otherwise.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * They HAD diverged: `value_type_kind` and `color` were enums here (4 bytes)\n");
+    buf_puts(out, " * and `uint8_t` in the emitted copy, shifting every GC field after them. Both\n");
+    buf_puts(out, " * are fixed-width now, and these assertions pin the widths and the field order\n");
+    buf_puts(out, " * so any future drift is a COMPILE error in whichever copy changed, instead of\n");
+    buf_puts(out, " * a runtime mis-read. Three bugs this session (CG1, CG3, CG4) came from these\n");
+    buf_puts(out, " * copies drifting apart; each was invisible to half the test suite.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * Deliberately no assertion on the total sizeof or on absolute offsets: those\n");
+    buf_puts(out, " * are padding-dependent and would break on a different ABI without indicating\n");
+    buf_puts(out, " * a real divergence. Field widths and relative order are what must match.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * Written with the typedef trick rather than _Static_assert because the emitted\n");
+    buf_puts(out, " * programs are compiled as C99, and both copies carry the identical text.\n");
+    buf_puts(out, " * --------------------------------------------------------------------------- */\n");
+    buf_puts(out, "#define RC_LAYOUT_ASSERT(name, cond) typedef char rc_layout_##name[(cond) ? 1 : -1]\n");
+    buf_puts(out, "\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(strong_w,  sizeof(((RcControlBlock *)0)->strong_count)      == 8);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(weak_w,    sizeof(((RcControlBlock *)0)->weak_count)        == 8);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(vtk_w,     sizeof(((RcControlBlock *)0)->value_type_kind)   == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(color_w,   sizeof(((RcControlBlock *)0)->color)             == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(mcc_w,     sizeof(((RcControlBlock *)0)->may_contain_cycles) == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(index_w,   sizeof(((RcControlBlock *)0)->gc_index)          == 4);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(buffered_w,sizeof(((RcControlBlock *)0)->gc_buffered)       == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(trial_w,   sizeof(((RcControlBlock *)0)->gc_trial)          == 8);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(collect_w, sizeof(((RcControlBlock *)0)->gc_collecting)     == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_1, offsetof(RcControlBlock, strong_count)  < offsetof(RcControlBlock, weak_count));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_2, offsetof(RcControlBlock, weak_count)    < offsetof(RcControlBlock, value));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_3, offsetof(RcControlBlock, value)         < offsetof(RcControlBlock, drop_fn));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_4, offsetof(RcControlBlock, drop_fn)       < offsetof(RcControlBlock, walk_fn));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_5, offsetof(RcControlBlock, walk_fn)       < offsetof(RcControlBlock, value_type_kind));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_6, offsetof(RcControlBlock, value_type_kind) < offsetof(RcControlBlock, color));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_7, offsetof(RcControlBlock, color)         < offsetof(RcControlBlock, may_contain_cycles));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_8, offsetof(RcControlBlock, may_contain_cycles) < offsetof(RcControlBlock, gc_index));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_9, offsetof(RcControlBlock, gc_index)      < offsetof(RcControlBlock, gc_buffered));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_10, offsetof(RcControlBlock, gc_buffered)  < offsetof(RcControlBlock, gc_trial));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_11, offsetof(RcControlBlock, gc_trial)     < offsetof(RcControlBlock, gc_collecting));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_12, offsetof(RcControlBlock, gc_collecting) < offsetof(RcControlBlock, reserved));\n");
+    buf_puts(out, "\n");
     /* Phase 9: Deferred free queue to avoid deep recursion in rc_strong_decrement */
     buf_puts(out, "#define RC_FREE_QUEUE_CAPACITY 65536\n");
-    emit_rt_global(out, shared, "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n", "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY]");
-    emit_rt_global(out, shared, "uint32_t rc_free_queue_count = 0;\n", "uint32_t rc_free_queue_count");
-    buf_puts(out, "static uint32_t rc_free_queue_drain(void);  /* Forward decl */\n");
-    buf_puts(out, "static void rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */\n");
-    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */\n", rt_fn);
-    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb);    /* Forward decl */\n", rt_fn);
-    buf_puts(out, "static void rc_free_queue_push(RcControlBlock *cb) {\n");
+    emit_rcgc_global(out, shared, "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n", "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY]");
+    emit_rcgc_global(out, shared, "uint32_t rc_free_queue_count = 0;\n", "uint32_t rc_free_queue_count");
+    /* rc-free-queue-drain-quadratic: cursor of the next block to free, and the
+     * reentrancy flag that makes a cursor safe.  The drain used to pop from the
+     * front and memmove the remainder down one slot per pop -- O(n^2), measured
+     * at 378 ms to free 65,000 blocks in the runtime copy.  Mirrors
+     * src/runtime/rc_free_queue.c; see there for the full reasoning. */
+    emit_rcgc_global(out, shared, "uint32_t rc_free_queue_head = 0;\n", "uint32_t rc_free_queue_head");
+    emit_rcgc_global(out, shared, "bool rc_free_queue_draining = false;\n", "bool rc_free_queue_draining");
+    buf_printf(out, "%suint32_t rc_free_queue_drain(void);  /* Forward decl */\n", rcgc_helper);
+    buf_printf(out, "%svoid rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */\n", rcgc_helper);
+    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */\n", rcgc_api);
+    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb);    /* Forward decl */\n", rcgc_api);
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%svoid rc_free_queue_push(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
     buf_puts(out, "    if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {\n");
-    buf_puts(out, "        fprintf(stderr, \"rc_free_queue: full, aborting\\n\");\n");
-    buf_puts(out, "        abort();\n");
+    /* 1. Reclaim the drained prefix.  The cursor drain only advances `head`, so
+     *    `count` grows monotonically until the walk ends -- without this a long
+     *    drain would hit the cap and abort where the old front-popping drain
+     *    kept the count falling.  This memmove runs on overflow, not per block,
+     *    so the moved-pointer total stays linear. */
+    buf_puts(out, "        if (rc_free_queue_head > 0) {\n");
+    buf_puts(out, "            uint32_t __live = rc_free_queue_count - rc_free_queue_head;\n");
+    buf_puts(out, "            if (__live > 0) memmove(rc_free_queue, rc_free_queue + rc_free_queue_head,\n");
+    buf_puts(out, "                                    (size_t)__live * sizeof(RcControlBlock *));\n");
+    buf_puts(out, "            rc_free_queue_count = __live;\n");
+    buf_puts(out, "            rc_free_queue_head = 0;\n");
+    buf_puts(out, "        }\n");
+    /* 2. Outside a drain, freeing what is pending is the cheapest way to make
+     *    room and is what bounds the queue.  Never from inside one -- that is
+     *    the reentrancy the flag exists to prevent.  (The runtime copy has
+     *    always recovered this way; this copy used to abort outright, which is
+     *    the divergence being closed.) */
+    buf_puts(out, "        if (!rc_free_queue_draining && rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY)\n");
+    buf_puts(out, "            rc_free_queue_drain();\n");
+    /* 3. Still full: mid-drain, with drop glue pushing children faster than the
+     *    cursor consumes them.  This copy is a fixed array and cannot grow (the
+     *    runtime copy reallocs here), so abort remains the last resort. */
+    buf_puts(out, "        if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {\n");
+    buf_puts(out, "            fprintf(stderr, \"rc_free_queue: full, aborting\\n\");\n");
+    buf_puts(out, "            abort();\n");
+    buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    rc_free_queue[rc_free_queue_count++] = cb;\n");
     buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
     /* Phase 10: GC globals and helper functions (needed before rc_cb_alloc) */
     buf_puts(out, "#define GC_GLOBAL_REGISTRY_CAPACITY 4096\n");
-    emit_rt_global(out, shared, "RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];\n", "RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY]");
-    emit_rt_global(out, shared, "uint32_t gc_all_blocks_count = 0;\n\n", "uint32_t gc_all_blocks_count");
+    buf_puts(out, "#define RC_GC_INDEX_NONE ((uint32_t)0xFFFFFFFFu)\n");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_all_blocks = NULL;\n", "RcControlBlock **gc_all_blocks");
+    emit_rcgc_global(out, shared, "uint32_t gc_all_blocks_count = 0;\n", "uint32_t gc_all_blocks_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_all_blocks_capacity = 0;\n\n", "uint32_t gc_all_blocks_capacity");
+    /* CG0: growth helper shared by the registry, suspect buffer and grey queue.
+     * The old fixed 4096-entry arrays silently dropped everything past the cap,
+     * making the collector blind above 4096 live rc blocks. */
+    if (shared) buf_puts(out, "bool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed);\n");
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%sbool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed) {\n", rcgc_helper);
+    buf_puts(out, "    if (*cap >= needed) return true;\n");
+    buf_puts(out, "    uint32_t ncap = *cap ? *cap : 256u;\n");
+    buf_puts(out, "    while (ncap < needed) {\n");
+    buf_puts(out, "        if (ncap > (0xFFFFFFFFu / 2u)) { ncap = needed; break; }\n");
+    buf_puts(out, "        ncap *= 2u;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    RcControlBlock **grown = (RcControlBlock **)realloc(*vec, (size_t)ncap * sizeof(RcControlBlock *));\n");
+    buf_puts(out, "    if (!grown) return false;\n");
+    buf_puts(out, "    *vec = grown; *cap = ncap; return true;\n");
+    buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
     /* GC state must be declared early because gc_on_strong_decrement (called from
      * rc_strong_decrement) needs it.  The collector functions themselves are
      * defined later, after all RC helpers. */
     buf_puts(out, "#define GC_SUSPECT_THRESHOLD 128\n");
-    buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n\n");
-    buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;\n\n");
-    emit_rt_global(out, shared, "RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];\n", "RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS]");
-    emit_rt_global(out, shared, "uint32_t gc_suspect_count = 0;\n", "uint32_t gc_suspect_count");
-    emit_rt_global(out, shared, "RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];\n", "RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS]");
-    emit_rt_global(out, shared, "uint32_t gc_grey_count = 0;\n", "uint32_t gc_grey_count");
-    emit_rt_global(out, shared, "GcMode gc_mode = GC_DISABLED;\n", "GcMode gc_mode");
-    emit_rt_global(out, shared, "bool gc_enabled = false;\n\n", "bool gc_enabled");
-    buf_puts(out, "static void gc_collect(void);  /* Forward decl */\n\n");
-    buf_puts(out, "static void gc_set_color(RcControlBlock *cb, GcColor color) {\n");
+    buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n");
+    /* CG5: allocation-driven AUTO trigger.  Mirrors src/runtime/gc.h -- GC_AUTO
+     * is appended LAST so the pre-existing ordinals, which both copies encode,
+     * are unchanged. */
+    buf_puts(out, "#define GC_AUTO_ALLOC_INTERVAL 4096\n\n");
+    buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD, GC_AUTO } GcMode;\n\n");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_suspect_roots = NULL;\n", "RcControlBlock **gc_suspect_roots");
+    emit_rcgc_global(out, shared, "uint32_t gc_suspect_count = 0;\n", "uint32_t gc_suspect_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_suspect_capacity = 0;\n", "uint32_t gc_suspect_capacity");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_grey_queue = NULL;\n", "RcControlBlock **gc_grey_queue");
+    emit_rcgc_global(out, shared, "uint32_t gc_grey_count = 0;\n", "uint32_t gc_grey_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_grey_capacity = 0;\n", "uint32_t gc_grey_capacity");
+    emit_rcgc_global(out, shared, "GcMode gc_mode = GC_DISABLED;\n", "GcMode gc_mode");
+    emit_rcgc_global(out, shared, "bool gc_enabled = false;\n", "bool gc_enabled");
+    /* CG5: AUTO-mode state (mirrors src/runtime/gc.c). */
+    emit_rcgc_global(out, shared, "uint32_t gc_allocs_since_collect = 0;\n", "uint32_t gc_allocs_since_collect");
+    emit_rcgc_global(out, shared, "bool gc_in_collection = false;\n", "bool gc_in_collection");
+    /* CG6: the replica had NO counters at all, so `(gc-stats ...)` would have
+     * reported zeroes on the --shared / bare-emit-c paths while reporting real
+     * numbers on the archive path -- a statistic that silently lies is worse
+     * than one that is absent.  Mirrors src/runtime/gc.c. */
+    emit_rcgc_global(out, shared, "uint64_t gc_collections = 0;\n", "uint64_t gc_collections");
+    emit_rcgc_global(out, shared, "uint64_t gc_objects_freed = 0;\n", "uint64_t gc_objects_freed");
+    emit_rcgc_global(out, shared, "uint64_t gc_candidate_high_water = 0;\n", "uint64_t gc_candidate_high_water");
+    emit_rcgc_global(out, shared, "int gc_trace_enabled = -1;\n\n", "int gc_trace_enabled");
+    buf_printf(out, "%svoid gc_collect(void);  /* Forward decl */\n", rcgc_helper);
+    /* CG5: gc_register_block calls the checkpoint, which is defined further
+     * down next to gc_set_mode.  Without this the emitted C has an implicit
+     * declaration -- a hard error under -std=c99, and only latent because the
+     * default cc flags are laxer than the fixture compile. */
+    buf_printf(out, "%svoid gc_on_alloc_checkpoint(void);  /* Forward decl */\n\n", rcgc_helper);
+    /* DEDUP-3: every module TU sees the prototypes; only the owner sees bodies.
+     * Placed here because gc_set_mode's signature needs the GcMode typedef. */
+    if (shared || g_rcgc_from_archive) emit_rcgc_prototypes(out);
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%svoid gc_set_color(RcControlBlock *cb, GcColor color) {\n", rcgc_helper);
     buf_puts(out, "    if (cb) cb->color = color;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static GcColor gc_get_color(RcControlBlock *cb) {\n");
+    buf_printf(out, "%sGcColor gc_get_color(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (cb) return cb->color;\n");
     buf_puts(out, "    return GC_WHITE;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_register_block(RcControlBlock *cb) {\n");
-    buf_puts(out, "    if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;\n");
+    /* CG1: gc_unregister_block drops the block from the candidate buffer, but
+     * gc_remove_suspect is emitted further down -- forward-declare it. */
+    buf_printf(out, "%svoid gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */\n\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_register_block(RcControlBlock *cb) {\n", rcgc_helper);
+    buf_puts(out, "    if (!cb) return;\n");
+    /* CG5: the allocation checkpoint, BEFORE cb joins the registry.  A block is
+     * registered before its caller writes the payload, so collecting after the
+     * insert hands the walker uninitialised heap as a child pointer -- the
+     * first version of this segfaulted in gc_get_color.  See the matching
+     * comment in src/runtime/gc.c. */
+    buf_puts(out, "    gc_on_alloc_checkpoint();\n");
+    buf_puts(out, "    cb->gc_buffered = false;\n");
+    buf_puts(out, "    cb->gc_collecting = false;\n");
+    buf_puts(out, "    cb->gc_trial = 0;\n");
+    buf_puts(out, "    if (gc_all_blocks_count >= gc_all_blocks_capacity) {\n");
+    buf_puts(out, "        uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u : GC_GLOBAL_REGISTRY_CAPACITY;\n");
+    buf_puts(out, "        if (!gc_vec_reserve(&gc_all_blocks, &gc_all_blocks_capacity, want)) {\n");
+    buf_puts(out, "            cb->gc_index = RC_GC_INDEX_NONE;\n");
+    buf_puts(out, "            cb->color = GC_WHITE; cb->may_contain_cycles = true; return;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    cb->gc_index = gc_all_blocks_count;\n");
     buf_puts(out, "    gc_all_blocks[gc_all_blocks_count++] = cb;\n");
     buf_puts(out, "    cb->color = GC_WHITE;\n");
     buf_puts(out, "    cb->may_contain_cycles = true;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_unregister_block(RcControlBlock *cb) {\n");
+    /* CG0: O(1) swap-remove via the stored index -- this runs on every rc free,
+     * so the old linear scan was quadratic in a long-running program. */
+    buf_printf(out, "%svoid gc_unregister_block(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
-    buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
-    buf_puts(out, "        if (gc_all_blocks[i] == cb) {\n");
-    buf_puts(out, "            gc_all_blocks[i] = gc_all_blocks[gc_all_blocks_count - 1];\n");
-    buf_puts(out, "            gc_all_blocks_count--;\n");
-    buf_puts(out, "            break;\n");
-    buf_puts(out, "        }\n");
+    /* CG1 safety: a freed block must leave the candidate buffer, or the next
+     * collection dereferences freed memory. */
+    buf_puts(out, "    gc_remove_suspect(cb);\n");
+    buf_puts(out, "    uint32_t idx = cb->gc_index;\n");
+    buf_puts(out, "    if (idx == RC_GC_INDEX_NONE || idx >= gc_all_blocks_count || gc_all_blocks[idx] != cb) {\n");
+    buf_puts(out, "        cb->gc_index = RC_GC_INDEX_NONE; return;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    RcControlBlock *last = gc_all_blocks[gc_all_blocks_count - 1u];\n");
+    buf_puts(out, "    gc_all_blocks[idx] = last;\n");
+    buf_puts(out, "    if (last) last->gc_index = idx;\n");
+    buf_puts(out, "    gc_all_blocks_count--;\n");
+    buf_puts(out, "    cb->gc_index = RC_GC_INDEX_NONE;\n");
     buf_puts(out, "}\n\n");
     /* Phase 10: Suspect buffer management (before rc_strong_decrement) */
-    buf_puts(out, "static void gc_add_suspect(RcControlBlock *cb) {\n");
+    buf_printf(out, "%svoid gc_add_suspect(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;\n");
-    buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
-    buf_puts(out, "        if (gc_suspect_roots[i] == cb) return;\n");
+    /* CG1: O(1) dedup via the classic `buffered` flag -- the old linear scan
+     * would be quadratic now that every non-zero strong decrement offers a
+     * candidate root. */
+    buf_puts(out, "    if (cb->gc_buffered) return;\n");
+    /* CG6: a block with no rc children cannot be a cycle ROOT, so buffering it
+     * costs a slot plus a walk per collection for nothing.  This is what makes
+     * may_contain_cycles (written by both copies, read by neither) mean
+     * something.  Mirrors src/runtime/gc.c. */
+    buf_puts(out, "    if (!cb->may_contain_cycles) return;\n");
+    buf_puts(out, "    if (gc_suspect_count >= gc_suspect_capacity) {\n");
+    buf_puts(out, "        if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity, gc_suspect_count + 1u)) return;\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    if (gc_suspect_count >= GC_MAX_SUSPECTS) return;\n");
+    buf_puts(out, "    cb->gc_buffered = true;\n");
     buf_puts(out, "    gc_suspect_roots[gc_suspect_count++] = cb;\n");
+    buf_puts(out, "    if (gc_suspect_count > gc_candidate_high_water)\n");
+    buf_puts(out, "        gc_candidate_high_water = gc_suspect_count;\n");
     buf_puts(out, "    cb->color = GC_PURPLE;\n");
     buf_puts(out, "    /* Threshold mode: auto-collect when buffer is full */\n");
     buf_puts(out, "    if (gc_mode == GC_THRESHOLD && gc_suspect_count >= GC_SUSPECT_THRESHOLD) {\n");
     buf_puts(out, "        gc_collect();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_remove_suspect(RcControlBlock *cb) {\n");
-    buf_puts(out, "    if (!cb) return;\n");
+    buf_printf(out, "%svoid gc_remove_suspect(RcControlBlock *cb) {\n", rcgc_helper);
+    buf_puts(out, "    if (!cb || !cb->gc_buffered) return;\n");
     buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
     buf_puts(out, "        if (gc_suspect_roots[i] == cb) {\n");
     buf_puts(out, "            gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];\n");
     buf_puts(out, "            gc_suspect_count--;\n");
-    buf_puts(out, "            return;\n");
+    /* Clear only on a real hit -- see the note in src/runtime/gc.c: with two
+     * collectors in one process, clearing the flag for a block this collector
+     * never buffered desynchronizes the one that did. */
+    buf_puts(out, "            cb->gc_buffered = false;\n");
+    buf_puts(out, "            break;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_on_strong_decrement(RcControlBlock *cb) {\n");
+    buf_printf(out, "%svoid gc_on_strong_decrement(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
     buf_puts(out, "    /* Zombie: strong reached 0 but weak refs still exist */\n");
     buf_puts(out, "    if (cb->weak_count > 0) {\n");
@@ -8764,14 +10310,27 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "\n/* Phase 9: Deferred free queue drain */\n");
-    buf_puts(out, "static uint32_t rc_free_queue_drain(void) {\n");
+    buf_printf(out, "%suint32_t rc_free_queue_drain(void) {\n", rcgc_helper);
     buf_puts(out, "    if (rc_free_queue_count == 0) return 0;\n");
+    /* Reentrancy: the struct-field drop glue this emitter generates calls
+     * rc_free_queue_drain() itself, and that glue runs from INSIDE this walk.
+     * A nested call does not double-free (it carries on from the shared
+     * cursor) -- what it does is add a C stack frame per link, defeating the
+     * whole reason this queue exists.  Measured on a 200,000-deep chain: ASan
+     * stack-overflow, on the pre-fix code too.  The quadratic memmove was what
+     * kept anyone from driving a cascade deep enough to hit it.  So this guard
+     * is load-bearing: the outer walk frees the children the glue queued, in
+     * the same pass, still FIFO. */
+    buf_puts(out, "    if (rc_free_queue_draining) return 0;\n");
+    buf_puts(out, "    rc_free_queue_draining = true;\n");
     buf_puts(out, "    uint32_t freed = 0;\n");
-    buf_puts(out, "    while (rc_free_queue_count > 0) {\n");
-    buf_puts(out, "        RcControlBlock *cb = rc_free_queue[0];\n");
-    buf_puts(out, "        memmove(rc_free_queue, rc_free_queue + 1,\n");
-    buf_puts(out, "                (rc_free_queue_count - 1) * sizeof(RcControlBlock *));\n");
-    buf_puts(out, "        rc_free_queue_count--;\n");
+    /* `head` and `count` are re-read every iteration and deliberately not
+     * cached: the drop glue below pushes children onto the back (growing
+     * `count`) and can compact the array (rewriting `head`).  FIFO order holds
+     * -- children queued by this pass are freed after everything already
+     * pending, in the same pass. */
+    buf_puts(out, "    while (rc_free_queue_head < rc_free_queue_count) {\n");
+    buf_puts(out, "        RcControlBlock *cb = rc_free_queue[rc_free_queue_head++];\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
     /* F1-2-4: smart drop dispatch for RCK_EXISTENTIAL blocks whose
      * payload is itself an rc reference (RCEXP_RC).  See rc_cb_free in
@@ -8785,30 +10344,61 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        free(cb);\n");
     buf_puts(out, "        freed++;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    rc_free_queue_count = 0;\n");
+    buf_puts(out, "    rc_free_queue_head = 0;\n");
+    buf_puts(out, "    rc_free_queue_draining = false;\n");
     buf_puts(out, "    return freed;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void default_rc_drop_fn(void *value) {\n");
+    /* rc-free-queue-drain-quadratic: clear the in-drain flag after a panic
+     * unwound THROUGH a drain, skipping the assignment above.  Left set, every
+     * later drain would no-op and the deferred frees would pile up forever.
+     * `head`/`count` still describe a consistent queue (freed prefix, pending
+     * tail), so the next drain resumes rather than re-freeing. */
+    buf_printf(out, "%svoid rc_free_queue_reset_drain_state(void) {\n", rcgc_helper);
+    buf_puts(out, "    rc_free_queue_draining = false;\n");
+    buf_puts(out, "}\n\n");
+    buf_printf(out, "%svoid default_rc_drop_fn(void *value) {\n", rcgc_helper);
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void drop_ref_payload(void *value) {\n");
+    /* Mirror of inline_scalar_drop_fn in src/runtime/rc.c: a scalar payload
+     * allocated by rc_cb_alloc* lives inline at (cb + 1), so free(value) would
+     * hand free() an interior pointer.  free(cb) in rc_cb_free reclaims it.
+     * Separate-payload blocks (tur_rc_from_ref) keep default_rc_drop_fn. */
+    buf_printf(out, "%svoid inline_scalar_drop_fn(void *value) {\n", rcgc_helper);
+    buf_puts(out, "    (void)value;\n");
+    buf_puts(out, "}\n\n");
+    buf_printf(out, "%svoid drop_ref_payload(void *value) {\n", rcgc_helper);
     buf_puts(out, "    if (!value) return;\n");
     buf_puts(out, "    void *inner = *((void **)value);\n");
     buf_puts(out, "    if (inner) free(inner);\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void drop_rc_payload(void *value) {\n");
+    buf_printf(out, "%svoid drop_rc_payload(void *value) {\n", rcgc_helper);
     buf_puts(out, "    if (!value) return;\n");
     buf_puts(out, "    RcControlBlock *inner = *((RcControlBlock **)value);\n");
     buf_puts(out, "    if (inner) { rc_strong_decrement(inner); rc_free_queue_drain(); }\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void drop_weak_payload(void *value) {\n");
+    buf_printf(out, "%svoid drop_weak_payload(void *value) {\n", rcgc_helper);
     buf_puts(out, "    if (!value) return;\n");
     buf_puts(out, "    RcControlBlock *inner = *((RcControlBlock **)value);\n");
     buf_puts(out, "    if (inner) rc_weak_decrement(inner);\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static RcDropFn default_drop_fn_for_type(int value_type_kind) {\n");
+    /* DEDUP-4/4b: the emitted program cannot see TypeKind (it is the compiler's
+     * enum), so this switch hardcodes the ordinals, and src/runtime/rc.c -- now
+     * free of types.h so it can compile into the C99 runtime archive -- spells
+     * them RC_VT_*.  A reorder of TypeKind would silently desync all three:
+     * every rc<T>/weak<T> would get the wrong drop glue, with no diagnostic.
+     * This is the one place that sees both the enum and rc.h, so it is where
+     * they get pinned together. */
+    _Static_assert(TY_REF == RC_VT_REF && TY_RC == RC_VT_RC &&
+                   TY_WEAK == RC_VT_WEAK,
+                   "TypeKind reordered: the drop-glue ordinals emitted below, "
+                   "and src/runtime/rc.h's RC_VT_*, no longer agree");
+    _Static_assert(RC_VT_REF == 8 && RC_VT_RC == 9 && RC_VT_WEAK == 10,
+                   "RC_VT_* changed: the literals emitted below must follow");
+    buf_printf(out, "%sRcDropFn default_drop_fn_for_type(int value_type_kind) {\n", rcgc_helper);
     buf_puts(out, "    switch (value_type_kind) {\n");
     buf_puts(out, "        case 8: return drop_ref_payload;   /* TY_REF */\n");
     buf_puts(out, "        case 9: return drop_rc_payload;    /* TY_RC */\n");
@@ -8816,48 +10406,98 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        default: return default_rc_drop_fn;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    /* Mirror of inline_default_drop_fn_for_type in src/runtime/rc.c: the
+     * defaulting used by the rc_cb_alloc* entry points, whose scalar payload
+     * is inline.  The three non-scalar glues stay -- their payload cell is
+     * always a separate allocation, so their free(value) is correct. */
+    buf_printf(out, "%sRcDropFn inline_default_drop_fn_for_type(int value_type_kind) {\n", rcgc_helper);
+    buf_puts(out, "    switch (value_type_kind) {\n");
+    buf_puts(out, "        case 8: return drop_ref_payload;   /* TY_REF */\n");
+    buf_puts(out, "        case 9: return drop_rc_payload;    /* TY_RC */\n");
+    buf_puts(out, "        case 10: return drop_weak_payload; /* TY_WEAK */\n");
+    buf_puts(out, "        default: return inline_scalar_drop_fn;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
     /* EXG5: layout-tag constants kept in sync with runtime/rc.h. */
     buf_puts(out, "#define RCK_OPAQUE       0\n");
     buf_puts(out, "#define RCK_EXISTENTIAL  1\n");
     buf_puts(out, "#define RCK_STRUCT       2\n");
     buf_puts(out, "#define RCEXP_OPAQUE     0\n");
     buf_puts(out, "#define RCEXP_RC         1\n");
-    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {\n", rt_fn);
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {\n", rcgc_api);
     buf_puts(out, "    size_t total_size = sizeof(RcControlBlock) + value_size;\n");
     buf_puts(out, "    RcControlBlock *cb = (RcControlBlock *)malloc(total_size);\n");
     buf_puts(out, "    if (!cb) { fprintf(stderr, \"rc: out of memory\\n\"); abort(); }\n");
     buf_puts(out, "    cb->strong_count = 1;\n");
     buf_puts(out, "    cb->weak_count = 0;\n");
     buf_puts(out, "    cb->value = (void *)(cb + 1);\n");
-    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);\n");
+    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : inline_default_drop_fn_for_type(value_type_kind);\n");
     buf_puts(out, "    cb->walk_fn = NULL;\n");
     buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
     buf_puts(out, "    cb->reserved[0] = kind;\n");
     buf_puts(out, "    cb->reserved[1] = payload_kind;\n");
+    /* CG5: under AUTO a later allocation can collect while this block is
+     * registered but unwritten; zeroing makes the walker see a NULL child
+     * instead of garbage.  Confined to AUTO so the always-on RC path keeps its
+     * malloc semantics. */
+    buf_puts(out, "    if (gc_mode == GC_AUTO && value_size) memset(cb->value, 0, value_size);\n");
     buf_puts(out, "    /* Register with GC; primitives (type_kind<=7) cannot form cycles */\n");
     buf_puts(out, "    gc_register_block(cb);\n");
     buf_puts(out, "    if (value_type_kind <= 7) cb->may_contain_cycles = false;\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sRcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n", rt_fn);
+    buf_printf(out, "%sRcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n", rcgc_api);
     buf_puts(out, "    return rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_OPAQUE, RCEXP_OPAQUE);\n");
     buf_puts(out, "}\n\n");
     /* DS3: RCK_STRUCT variant -- attaches a walk_fn for the cycle collector. */
-    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn) {\n", rt_fn);
+    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn) {\n", rcgc_api);
     buf_puts(out, "    RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_STRUCT, 0);\n");
     buf_puts(out, "    cb->walk_fn = walk_fn;\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_strong_increment(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_strong_increment(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return ++cb->strong_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb) {\n", rt_fn);
+    /* Mirror of rc_release_value in src/runtime/rc.c: run the block's value
+     * teardown exactly once and mark it done by nulling `value`, so every later
+     * path (rc_weak_decrement, the free queue, a gc sweep) skips it instead of
+     * double-dropping.  The two copies must stay in step -- see the DEDUP-1
+     * layout guard note in rc.c. */
+    buf_printf(out, "%svoid rc_release_value(RcControlBlock *cb) {\n", rcgc_helper);
+    buf_puts(out, "    if (!cb || !cb->value) return;\n");
+    /* F1-2-4: an RCEXP_RC existential payload holds an inner RcControlBlock
+     * pointer in its first 8 bytes; release it before the value's own drop
+     * hook fires so the inner allocation does not leak. */
+    buf_puts(out, "    if (cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {\n");
+    buf_puts(out, "        int64_t __raw = *(const int64_t *)cb->value;\n");
+    buf_puts(out, "        RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;\n");
+    buf_puts(out, "        if (__inner) rc_strong_decrement(__inner);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (cb->drop_fn) cb->drop_fn(cb->value);\n");
+    buf_puts(out, "    cb->value = NULL;\n");
+    buf_puts(out, "}\n\n");
+    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return false;\n");
+    /* CG2: drop glue for a cycle member decrements children that are also being
+     * freed -- fall through without freeing or buffering. */
+    buf_puts(out, "    if (cb->gc_collecting) {\n");
+    buf_puts(out, "        if (cb->strong_count > 0) cb->strong_count--;\n");
+    buf_puts(out, "        return false;\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    cb->strong_count--;\n");
     buf_puts(out, "    if (cb->strong_count == 0) {\n");
     buf_puts(out, "        if (cb->weak_count > 0) {\n");
+    /* stdlib-weak-ref-audit WR1: the VALUE dies at strong 0 (as Rust's Rc
+     * does); only the control block lives on so a weak observer is told
+     * "gone" rather than dangling.  Deferring the value teardown to
+     * rc_weak_decrement deadlocks the parent/child cycle break -- the
+     * surviving weak lives inside the parent's own value, which only the
+     * value's drop glue can release.  See the rc.c copy for the measurement. */
+    buf_puts(out, "            rc_release_value(cb);\n");
     buf_puts(out, "            gc_on_strong_decrement(cb);\n");
     buf_puts(out, "            return false;\n");
     buf_puts(out, "        } else {\n");
@@ -8865,49 +10505,43 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            return true;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
+    /* CG1: count still > 0 -- the edge a self-sustaining cycle produces, which
+     * the old zombie-only hook never saw. Gated on gc_mode so the default
+     * (collector off) path is a single global compare. */
+    buf_puts(out, "    if (gc_mode != GC_DISABLED) gc_add_suspect(cb);\n");
     buf_puts(out, "    return false;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_weak_increment(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_weak_increment(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return ++cb->weak_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    cb->weak_count--;\n");
     buf_puts(out, "    if (cb->weak_count == 0 && cb->strong_count == 0) {\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
-    /* F1-2-4: same smart-drop dispatch as rc_free_queue_drain.  The
-     * weak path runs when the last weak ref is released after the
-     * value already reached zombie state; if the zombie's payload is
-     * an RCEXP_RC pointer, we still need to decrement the inner ref
-     * before freeing the outer block. */
-    buf_puts(out, "        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {\n");
-    buf_puts(out, "            int64_t __raw = *(const int64_t *)cb->value;\n");
-    buf_puts(out, "            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;\n");
-    buf_puts(out, "            if (__inner) rc_strong_decrement(__inner);\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "        /* Free zombie value if GC did not already collect it */\n");
-    buf_puts(out, "        if (cb->value && cb->drop_fn) {\n");
-    buf_puts(out, "            cb->drop_fn(cb->value);\n");
-    buf_puts(out, "        }\n");
+    /* Release the value if nothing has yet -- normally the zombie transition
+     * in rc_strong_decrement already did, and rc_release_value is then a
+     * no-op.  This still covers a block that never went through that path. */
+    buf_puts(out, "        rc_release_value(cb);\n");
     buf_puts(out, "        free(cb);\n");
     buf_puts(out, "        return true;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    return false;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_strong_count(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_strong_count(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return cb->strong_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_weak_count(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_weak_count(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return cb->weak_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sbool rc_is_alive(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%sbool rc_is_alive(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    return cb->strong_count > 0;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sRcControlBlock *rc_upgrade(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%sRcControlBlock *rc_upgrade(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    if (cb->strong_count > 0) {\n");
     buf_puts(out, "        rc_strong_increment(cb);\n");
@@ -8915,11 +10549,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%svoid *rc_get_value(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%svoid *rc_get_value(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    return cb->value;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sRcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {\n", rt_fn);
+    /* Mirror of rc_set_value in src/runtime/rc.c: repoint the payload at a
+     * separate allocation and re-derive the default glue for it -- the
+     * rc_cb_alloc default assumes an inline payload and must not free().
+     * EX_RC_OF emits calls to this, so the replica needs the definition. */
+    buf_printf(out, "%svoid rc_set_value(RcControlBlock *cb, void *value, RcDropFn drop_fn) {\n", rcgc_api);
+    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    cb->value = value;\n");
+    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(cb->value_type_kind);\n");
+    buf_puts(out, "}\n\n");
+    buf_printf(out, "%sRcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {\n", rcgc_api);
     buf_puts(out, "    if (!ref_value) return NULL;\n");
     buf_puts(out, "    RcControlBlock *cb = (RcControlBlock *)malloc(sizeof(RcControlBlock));\n");
     buf_puts(out, "    if (!cb) { fprintf(stderr, \"rc/from-ref: out of memory\\n\"); abort(); }\n");
@@ -8934,7 +10577,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    gc_register_block(cb);\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%svoid *tur_ref_from_rc(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%svoid *tur_ref_from_rc(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    if (cb->strong_count != 1 || cb->weak_count != 0) {\n");
     buf_puts(out, "        fprintf(stderr, \"ref/from-rc requires unique rc (strong_count==1 and weak_count==0), got strong=%llu weak=%llu\\n\",\n");
@@ -8951,16 +10594,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase 10: Emit remaining GC runtime — mark + trial deletion phases */
     buf_puts(out, "/* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */\n");
     /* DS3: child-mark callback used by RCK_STRUCT walk_fns inside gc_mark_phase. */
-    buf_puts(out, "static void __gc_mark_struct_child(RcControlBlock *child, void *ctx) {\n");
+    buf_printf(out, "%svoid __gc_mark_struct_child(RcControlBlock *child, void *ctx) {\n", rcgc_helper);
     buf_puts(out, "    (void)ctx;\n");
     buf_puts(out, "    if (child && child->color != GC_BLACK) {\n");
     buf_puts(out, "        child->color = GC_BLACK;\n");
-    buf_puts(out, "        if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "        if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {\n");
     buf_puts(out, "            gc_grey_queue[gc_grey_count++] = child;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_mark_phase(void) {\n");
+    buf_printf(out, "%svoid gc_mark_phase(void) {\n", rcgc_helper);
     buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
     buf_puts(out, "        gc_all_blocks[i]->color = GC_WHITE;\n");
     buf_puts(out, "    }\n");
@@ -8971,7 +10614,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        RcControlBlock *cb = gc_all_blocks[i];\n");
     buf_puts(out, "        if (cb->strong_count > 0) {\n");
     buf_puts(out, "            cb->color = GC_BLACK;\n");
-    buf_puts(out, "            if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "            if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {\n");
     buf_puts(out, "                gc_grey_queue[gc_grey_count++] = cb;\n");
     buf_puts(out, "            }\n");
     buf_puts(out, "        }\n");
@@ -8988,7 +10631,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;\n");
     buf_puts(out, "            if (inner && inner->color != GC_BLACK) {\n");
     buf_puts(out, "                inner->color = GC_BLACK;\n");
-    buf_puts(out, "                if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "                if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {\n");
     buf_puts(out, "                    gc_grey_queue[gc_grey_count++] = inner;\n");
     buf_puts(out, "                }\n");
     buf_puts(out, "            }\n");
@@ -8998,7 +10641,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     /* Trial deletion: free zombie suspects not reachable from strong roots */
-    buf_puts(out, "static void gc_trial_deletion_phase(void) {\n");
+    buf_printf(out, "%svoid gc_trial_deletion_phase(void) {\n", rcgc_helper);
     buf_puts(out, "    uint32_t i = 0;\n");
     buf_puts(out, "    while (i < gc_suspect_count) {\n");
     buf_puts(out, "        RcControlBlock *cb = gc_suspect_roots[i];\n");
@@ -9013,38 +10656,280 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            cb->drop_fn(cb->value);\n");
     buf_puts(out, "            cb->value = NULL;\n");
     buf_puts(out, "        }\n");
+    /* CG1: remove from the suspect buffer via gc_remove_suspect (which also
+     * clears cb->gc_buffered) BEFORE unregistering. The old code open-coded the
+     * swap-remove here; now that gc_unregister_block also drops the block from
+     * the buffer, doing both would decrement gc_suspect_count twice and walk the
+     * loop off the end of the buffer. `i` is deliberately not advanced -- the
+     * swap moved a new element into slot i. */
+    buf_puts(out, "        gc_remove_suspect(cb);\n");
     buf_puts(out, "        /* Unregister from global registry (cb stays alive for weak refs) */\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
-    buf_puts(out, "        /* Remove from suspect buffer without advancing i */\n");
-    buf_puts(out, "        gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];\n");
-    buf_puts(out, "        gc_suspect_count--;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_collect(void) {\n");
+    emit_rt_defs_end(out, shared);
+    /* ===== CG2: real Bacon-Rajan trial deletion (mirrors src/runtime/gc.c) =====
+     * Trial decrements land on a scratch counter, never the real strong_count;
+     * the white set is freed only after the whole traversal; members are
+     * flagged gc_collecting so drop glue cannot double-free. */
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_pending_free = NULL;\n", "RcControlBlock **gc_pending_free");
+    emit_rcgc_global(out, shared, "uint32_t gc_pending_count = 0;\n", "uint32_t gc_pending_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_pending_capacity = 0;\n", "uint32_t gc_pending_capacity");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_cand_roots = NULL;\n", "RcControlBlock **gc_cand_roots");
+    emit_rcgc_global(out, shared, "uint32_t gc_cand_count = 0;\n", "uint32_t gc_cand_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_cand_capacity = 0;\n\n", "uint32_t gc_cand_capacity");
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%svoid gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx) {\n", rcgc_helper);
+    buf_puts(out, "    if (!cb || !cb->value) return;\n");
+    buf_puts(out, "    if (cb->reserved[0] == RCK_EXISTENTIAL && cb->reserved[1] == RCEXP_RC) {\n");
+    buf_puts(out, "        int64_t raw = *(const int64_t *)cb->value;\n");
+    buf_puts(out, "        RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;\n");
+    buf_puts(out, "        if (inner) fn(inner, ctx);\n");
+    buf_puts(out, "    } else if (cb->reserved[0] == RCK_STRUCT && cb->walk_fn) {\n");
+    buf_puts(out, "        cb->walk_fn(cb->value, fn, ctx);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "\n");
+    buf_printf(out, "%svoid gc_mark_gray(RcControlBlock *s);\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_scan(RcControlBlock *s);\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_scan_black(RcControlBlock *s);\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_collect_white(RcControlBlock *s);\n", rcgc_helper);
+    buf_puts(out, "\n");
+    buf_printf(out, "%svoid gc_mark_gray_child(RcControlBlock *t, void *ctx) {\n", rcgc_helper);
+    buf_puts(out, "    (void)ctx; if (!t) return;\n");
+    buf_puts(out, "    if (t->gc_trial > 0) t->gc_trial--;\n");
+    buf_puts(out, "    gc_mark_gray(t);\n");
+    buf_puts(out, "}\n");
+    buf_printf(out, "%svoid gc_mark_gray(RcControlBlock *s) {\n", rcgc_helper);
+    buf_puts(out, "    if (!s || s->color == GC_GREY) return;\n");
+    buf_puts(out, "    s->color = GC_GREY;\n");
+    buf_puts(out, "    gc_each_child(s, gc_mark_gray_child, NULL);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "\n");
+    buf_printf(out, "%svoid gc_scan_black_child(RcControlBlock *t, void *ctx) {\n", rcgc_helper);
+    buf_puts(out, "    (void)ctx; if (!t) return;\n");
+    buf_puts(out, "    t->gc_trial++;\n");
+    buf_puts(out, "    if (t->color != GC_BLACK) gc_scan_black(t);\n");
+    buf_puts(out, "}\n");
+    buf_printf(out, "%svoid gc_scan_black(RcControlBlock *s) {\n", rcgc_helper);
+    buf_puts(out, "    if (!s) return;\n");
+    buf_puts(out, "    s->color = GC_BLACK;\n");
+    buf_puts(out, "    gc_each_child(s, gc_scan_black_child, NULL);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "\n");
+    buf_printf(out, "%svoid gc_scan_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_scan(t); }\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_scan(RcControlBlock *s) {\n", rcgc_helper);
+    buf_puts(out, "    if (!s || s->color != GC_GREY) return;\n");
+    buf_puts(out, "    if (s->gc_trial > 0) { gc_scan_black(s); }\n");
+    buf_puts(out, "    else { s->color = GC_WHITE; gc_each_child(s, gc_scan_child, NULL); }\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "\n");
+    buf_printf(out, "%svoid gc_collect_white_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_collect_white(t); }\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_collect_white(RcControlBlock *s) {\n", rcgc_helper);
+    buf_puts(out, "    if (!s || s->color != GC_WHITE || s->gc_buffered) return;\n");
+    buf_puts(out, "    s->color = GC_BLACK;\n");
+    buf_puts(out, "    if (gc_pending_count >= gc_pending_capacity) {\n");
+    buf_puts(out, "        if (!gc_vec_reserve(&gc_pending_free, &gc_pending_capacity, gc_pending_count + 1u)) return;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    gc_pending_free[gc_pending_count++] = s;\n");
+    buf_puts(out, "    gc_each_child(s, gc_collect_white_child, NULL);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "\n");
+    buf_printf(out, "%svoid gc_cycle_collect_phase(void) {\n", rcgc_helper);
+    buf_puts(out, "    if (gc_suspect_count == 0) return;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
+    buf_puts(out, "        RcControlBlock *cb = gc_all_blocks[i];\n");
+    buf_puts(out, "        if (cb) cb->gc_trial = cb->strong_count;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
+    buf_puts(out, "        RcControlBlock *s = gc_suspect_roots[i];\n");
+    buf_puts(out, "        if (s && s->color == GC_PURPLE && s->strong_count > 0) gc_mark_gray(s);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
+    buf_puts(out, "        RcControlBlock *s = gc_suspect_roots[i];\n");
+    buf_puts(out, "        if (s && s->strong_count > 0) gc_scan(s);\n");
+    buf_puts(out, "    }\n");
+    /* CollectWhite must start from the DRAINED CANDIDATES, not every block:
+     * blocks are born WHITE at registration, so sweeping all-WHITE would
+     * collect live values this collection never examined. */
+    buf_puts(out, "    gc_pending_count = 0;\n");
+    buf_puts(out, "    gc_cand_count = 0;\n");
+    buf_puts(out, "    {\n");
+    buf_puts(out, "        uint32_t w = 0;\n");
+    buf_puts(out, "        for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
+    buf_puts(out, "            RcControlBlock *s = gc_suspect_roots[i];\n");
+    buf_puts(out, "            if (s && s->strong_count > 0) {\n");
+    buf_puts(out, "                s->gc_buffered = false;\n");
+    buf_puts(out, "                if (gc_cand_count < gc_cand_capacity || gc_vec_reserve(&gc_cand_roots, &gc_cand_capacity, gc_cand_count + 1u))\n");
+    buf_puts(out, "                    gc_cand_roots[gc_cand_count++] = s;\n");
+    buf_puts(out, "                continue;\n");
+    buf_puts(out, "            }\n");
+    buf_puts(out, "            gc_suspect_roots[w++] = s;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        gc_suspect_count = w;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_cand_count; i++) gc_collect_white(gc_cand_roots[i]);\n");
+    buf_puts(out, "    gc_cand_count = 0;\n");
+    buf_puts(out, "    if (gc_pending_count == 0) return;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_pending_count; i++) gc_pending_free[i]->gc_collecting = true;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_pending_count; i++) {\n");
+    buf_puts(out, "        RcControlBlock *cb = gc_pending_free[i];\n");
+    buf_puts(out, "        if (cb->value && cb->drop_fn) { cb->drop_fn(cb->value); cb->value = NULL; }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_pending_count; i++) {\n");
+    buf_puts(out, "        RcControlBlock *cb = gc_pending_free[i];\n");
+    buf_puts(out, "        gc_unregister_block(cb);\n");
+    buf_puts(out, "        cb->strong_count = 0;\n");
+    buf_puts(out, "        if (cb->weak_count > 0) { cb->gc_collecting = false; continue; }\n");
+    buf_puts(out, "        free(cb);\n");
+    buf_puts(out, "        gc_objects_freed++;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    gc_pending_count = 0;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "\n");
+    buf_printf(out, "%svoid gc_collect(void) {\n", rcgc_helper);
     buf_puts(out, "    if (!gc_enabled || gc_mode == GC_DISABLED) return;\n");
+    /* CG5: drop glue may allocate, re-entering the checkpoint.  Refuse to nest
+     * rather than sweep a registry that is mid-collection. */
+    buf_puts(out, "    if (gc_in_collection) return;\n");
+    buf_puts(out, "    gc_in_collection = true;\n");
+    buf_puts(out, "    gc_allocs_since_collect = 0;\n");
+    buf_puts(out, "    gc_collections++;\n");
+    /* CG6: sampled before the phases so the "in" figures describe what this
+     * collection was handed. */
+    buf_puts(out, "    uint32_t trace_candidates_in = gc_suspect_count;\n");
+    buf_puts(out, "    uint32_t trace_live_in = gc_all_blocks_count;\n");
+    buf_puts(out, "    uint64_t trace_freed_before = gc_objects_freed;\n");
+    buf_puts(out, "    gc_cycle_collect_phase();\n");
     buf_puts(out, "    gc_grey_count = 0;\n");
-    buf_puts(out, "    gc_mark_phase();\n");
-    buf_puts(out, "    gc_trial_deletion_phase();\n");
+    /* PT2: the zombie sweep is skipped when the candidate buffer is empty.
+     * gc_cycle_collect_phase has just drained every candidate with
+     * strong_count > 0, so what remains IS the zombie set, and
+     * gc_trial_deletion_phase reads that buffer and nothing else -- with it
+     * empty the pair is a no-op that still costs gc_mark_phase a full walk of
+     * gc_all_blocks.  Nothing outside the collector reads the colors it
+     * leaves (gc_is_alive is the only consumer and has no callers; rc_upgrade
+     * tests strong_count), and the next collection resets every color and
+     * gc_trial from scratch.  See the runtime copy in src/runtime/gc.c for the
+     * measurements. */
+    buf_puts(out, "    if (gc_suspect_count > 0) {\n");
+    buf_puts(out, "        gc_mark_phase();\n");
+    buf_puts(out, "        gc_trial_deletion_phase();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (gc_trace_enabled < 0) {\n");
+    buf_puts(out, "        const char *__tur_gct = getenv(\"TUR_GC_TRACE\");\n");
+    buf_puts(out, "        gc_trace_enabled = (__tur_gct && *__tur_gct && strcmp(__tur_gct, \"0\") != 0) ? 1 : 0;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (gc_trace_enabled == 1) {\n");
+    buf_puts(out, "        fprintf(stderr, \"[gc] #%llu mode=%d candidates=%u freed=%llu live=%u->%u\\n\",\n");
+    buf_puts(out, "                (unsigned long long)gc_collections, (int)gc_mode,\n");
+    buf_puts(out, "                trace_candidates_in,\n");
+    buf_puts(out, "                (unsigned long long)(gc_objects_freed - trace_freed_before),\n");
+    buf_puts(out, "                trace_live_in, gc_all_blocks_count);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    gc_in_collection = false;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_force(void) {\n");
+    buf_printf(out, "%svoid gc_force(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_collect();\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_enable(void) {\n");
+    buf_printf(out, "%svoid gc_enable(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_enabled = true;\n");
     buf_puts(out, "    /* Default to manual mode when enabled */\n");
     buf_puts(out, "    if (gc_mode == GC_DISABLED) gc_mode = GC_MANUAL;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_disable(void) {\n");
+    buf_printf(out, "%svoid gc_disable(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_enabled = false;\n");
     buf_puts(out, "    gc_mode = GC_DISABLED;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_set_mode(GcMode mode) {\n");
+    buf_printf(out, "%svoid gc_set_mode(GcMode mode) {\n", rcgc_helper);
     buf_puts(out, "    gc_mode = mode;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static bool gc_is_alive(RcControlBlock *cb) {\n");
+    /* CG5: automatic collection, mirroring src/runtime/gc.c.  The checkpoint is
+     * called from gc_register_block -- an ALLOCATION site, never the decrement
+     * path, because collecting out of rc_strong_decrement reenters the
+     * collector while a caller is mid-mutation (the DEDUP-4a lesson). */
+    buf_printf(out, "%suint64_t gc_stat_collections(void) { return gc_collections; }\n", rcgc_helper);
+    buf_printf(out, "%suint64_t gc_stat_objects_freed(void) { return gc_objects_freed; }\n", rcgc_helper);
+    buf_printf(out, "%suint64_t gc_stat_live_blocks(void) { return (uint64_t)gc_all_blocks_count; }\n", rcgc_helper);
+    buf_printf(out, "%suint64_t gc_stat_candidate_high_water(void) { return gc_candidate_high_water; }\n\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_auto(void) {\n", rcgc_helper);
+    buf_puts(out, "    gc_enabled = true;\n");
+    buf_puts(out, "    gc_mode = GC_AUTO;\n");
+    buf_puts(out, "    gc_allocs_since_collect = 0;\n");
+    buf_puts(out, "}\n\n");
+    buf_printf(out, "%svoid gc_on_alloc_checkpoint(void) {\n", rcgc_helper);
+    buf_puts(out, "    if (gc_mode != GC_AUTO || !gc_enabled) return;\n");
+    buf_puts(out, "    if (gc_in_collection) return;\n");
+    buf_puts(out, "    gc_allocs_since_collect++;\n");
+    buf_puts(out, "    bool by_candidates = gc_suspect_count >= GC_SUSPECT_THRESHOLD;\n");
+    buf_puts(out, "    bool by_allocations = gc_allocs_since_collect >= GC_AUTO_ALLOC_INTERVAL;\n");
+    buf_puts(out, "    if (!by_candidates && !by_allocations) return;\n");
+    buf_puts(out, "    gc_collect();\n");
+    buf_puts(out, "}\n\n");
+    buf_printf(out, "%sbool gc_is_alive(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    if (cb->strong_count > 0) return true;\n");
     buf_puts(out, "    return (cb->color == GC_BLACK || cb->color == GC_GREY);\n");
+    buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
+
+    /* collections-cannot-hold-rc-values (map side, step c): value-ownership
+     * shims for a collection holding rc<T> elements.
+     *
+     * A collection that owns rc<T> values needs `void (*)(void *)` ops to hand
+     * the HAMT (tur_hamt_val_ops), but rc_strong_increment returns uint64_t and
+     * rc_strong_decrement returns bool -- calling either through a mismatched
+     * function-pointer type is UB, so they cannot simply be cast.  These adapt
+     * the signature.
+     *
+     * They are emitted HERE, into the program, rather than living in hamt.c,
+     * and that placement is the whole point: hamt.c is precompiled into
+     * libturt_runtime.a, so an rc call written inside it would always bind the
+     * archive's rc.c -- wrong under TUR_RCGC_FROM_ARCHIVE=0 and --shared, where
+     * the program carries its own emitted replica and the two would be separate
+     * collectors operating on the same blocks.  Emitted, they bind to whichever
+     * copy this program actually uses.  (Same reason stdlib/vec.tur does its
+     * rc release from inline-C.)
+     *
+     * `static` so every TU gets its own copy and no owner guard is needed. */
+    buf_puts(out, "/* rc<T> value-ownership shims for collections (see tur_hamt_val_ops). */\n");
+    buf_puts(out, "static void __tur_rc_val_retain(void *__v) __attribute__((unused));\n");
+    buf_puts(out, "static void __tur_rc_val_retain(void *__v) {\n");
+    buf_puts(out, "    if (__v) rc_strong_increment((RcControlBlock *)__v);\n}\n");
+    buf_puts(out, "static void __tur_rc_val_release(void *__v) __attribute__((unused));\n");
+    buf_puts(out, "static void __tur_rc_val_release(void *__v) {\n");
+    buf_puts(out, "    if (__v) rc_strong_decrement((RcControlBlock *)__v);\n}\n\n");
+
+    /* collections-cannot-hold-rc-values item 3: the GC hooks for
+     * stdlib/rcvec.tur, a flat vector of rc<A> the cycle collector can trace
+     * through.  The { data, len, cap } header is the INLINE payload of an
+     * RCK_STRUCT block (rc_cb_alloc_struct), so unlike a plain Vec the
+     * container itself is GC-visible: the walk hook reports each slot as a
+     * child (one generic walker serves every element type -- a slot is always
+     * an RcControlBlock *), and the drop hook releases each slot and frees the
+     * buffer.  The header itself is never freed here -- it lives inside the
+     * control block's own allocation, which rc_cb_free reclaims.
+     *
+     * Emitted here rather than compiled into the runtime archive for the same
+     * reason as the shims above: the drop hook decrements refcounts, and must
+     * bind to whichever collector copy this program actually runs. */
+    buf_puts(out, "/* stdlib/rcvec.tur: GC-visible flat vector of rc<A> (walk + drop hooks). */\n");
+    buf_puts(out, "typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_rcvec_t;\n");
+    buf_puts(out, "static void tur_rcvec_walk(void *value, RcWalkChildFn cb, void *ctx) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_rcvec_walk(void *value, RcWalkChildFn cb, void *ctx) {\n");
+    buf_puts(out, "    tur_rcvec_t *v = (tur_rcvec_t *)value;\n");
+    buf_puts(out, "    if (!v || !v->data) return;\n");
+    buf_puts(out, "    for (int64_t i = 0; i < v->len; i++)\n");
+    buf_puts(out, "        if (v->data[i]) cb((RcControlBlock *)(intptr_t)v->data[i], ctx);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_rcvec_drop(void *value) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_rcvec_drop(void *value) {\n");
+    buf_puts(out, "    tur_rcvec_t *v = (tur_rcvec_t *)value;\n");
+    buf_puts(out, "    if (!v) return;\n");
+    buf_puts(out, "    for (int64_t i = 0; i < v->len; i++)\n");
+    buf_puts(out, "        if (v->data[i]) rc_strong_decrement((RcControlBlock *)(intptr_t)v->data[i]);\n");
+    buf_puts(out, "    free(v->data);\n");
+    buf_puts(out, "    v->data = NULL; v->len = 0; v->cap = 0;\n");
     buf_puts(out, "}\n\n");
 
     /* SS2: TurChannel -- synchronous rendezvous channel for session types. */
@@ -9156,7 +11041,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n");
     /* SS3c: thread-local storage for recv-timeout value. */
-    emit_rt_global(out, shared, "_Thread_local int64_t tur__rtv_ = 0;\n", "_Thread_local int64_t tur__rtv_");
+    emit_rt_tls(out, shared, "_Thread_local int64_t tur__rtv_ = 0;\n", "_Thread_local int64_t tur__rtv_",
+                "tur__rtv_", "int64_t *", "tur_tls_rtv_ptr", NULL);
     buf_puts(out, "static int64_t tur_session_recv_timeout(TurChannel *ch, int64_t ms) {\n");
     buf_puts(out, "    struct timespec ts;\n");
     buf_puts(out, "    clock_gettime(CLOCK_REALTIME, &ts);\n");
@@ -9256,13 +11142,34 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    free(role);\n");
     buf_puts(out, "}\n\n");
+    /* S2 (jit-engine-plan section 4): the end of the fixed runtime preamble,
+     * named.  Everything above this line is runtime -- the same code
+     * `libturi.a` / `libturt_runtime.a` already contain -- and everything below
+     * is this program.  Nothing in the compiler needs the distinction today,
+     * which is why it was never marked; a JIT does, and S2's deliverable is "a
+     * named, documented symbol boundary" -- a region has to be delimited
+     * before its symbols can be.
+     *
+     * There is no natural terminator to key off instead: the last block above
+     * (`tur_role_close`) is gated on session types, and every other candidate
+     * is gated on something too.  Splitting by longest-common-prefix across a
+     * few TUs -- which is what produced the "3,847 lines, byte-identical across
+     * programs" claim in findings 4.3 -- conflates the runtime with whatever
+     * stdlib forward declarations those particular programs happened to share,
+     * and reports a fixed region that is not fixed corpus-wide.  See findings
+     * 13.1.
+     *
+     * Emitted unconditionally, including in `--shared` mode and in every
+     * separately-compiled TU, so a consumer can split any emitted C exactly. */
+    buf_puts(out, "/* ==== tur: end of fixed runtime preamble ==== */\n");
 }
 
 /* project-mode-rc-runtime-preamble-missing: shared runtime header for the
  * owner-TU design.  Wraps the full runtime preamble (shared mode: globals
- * owner-gated, functions demoted to static, all CPS machinery forced on) in an
- * include guard.  `program` is NULL -- shared mode forces every program-gated
- * block on so the header is feature-complete regardless of any single module. */
+ * owner-gated, most functions demoted to static, the rc<T>/GC family
+ * owner-gated too per DEDUP-3, all CPS machinery forced on) in an include
+ * guard.  `program` is NULL -- shared mode forces every program-gated block on
+ * so the header is feature-complete regardless of any single module. */
 void emit_shared_runtime_header(Buf *out) {
     /* Reset the per-TU codegen registries the preamble consults, mirroring the
      * setup emit_program does before its own preamble emission. */
@@ -9273,6 +11180,42 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "#ifndef TUR_RUNTIME_H\n#define TUR_RUNTIME_H\n");
     emit_runtime_preamble(out, NULL, /*shared=*/true);
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
+}
+
+/* S2 (jit-engine-plan, findings 19.4): the feature-complete SINGLE-FILE
+ * runtime preamble -- every program-gated block forced on, single-file
+ * linkage (not --shared's static demotion) -- ending at the preamble marker.
+ *
+ * Two consumers, which MUST see identical text for the same process state:
+ *   (a) the split-generation tool (`tur emit-rt-split` -> tools/
+ *       gen-runtime-split.py) producing the committed runtime-TU +
+ *       declarations artifacts, plus the recorded content hash;
+ *   (b) cmd_jit at JIT time, hashing this emission against the recorded
+ *       hash to decide whether the committed artifacts still describe the
+ *       compiler it is running in.  Any drift -- an emitter edit, a knob like
+ *       --backtrack-depth or --enable=cps-tramp-resume, archive-mode state --
+ *       changes this text, fails the compare, and falls back to full-preamble
+ *       emission.  Never wrong, just slower.
+ *
+ * Knobs are deliberately NOT normalized here: the text must reflect the
+ * current process state so the hash compare covers them.  Gate globals
+ * (g_needs_*) are forced and restored because they are per-program facts,
+ * not knobs. */
+void emit_rt_split_source(Buf *out) {
+    extern bool g_needs_hamt, g_needs_regex_h, g_has_variadics, g_cps_path;
+    extern bool g_needs_winsock;
+    bool s_hamt = g_needs_hamt, s_regex = g_needs_regex_h;
+    bool s_var = g_has_variadics, s_cps = g_cps_path, s_wsk = g_needs_winsock;
+    g_needs_hamt = true; g_needs_regex_h = true;
+    g_has_variadics = true; g_cps_path = true; g_needs_winsock = true;
+    g_rt_split_all_gates = true;
+    type_codegen_reset_adt_apps();
+    type_codegen_reset_fn_ptr_typedefs();
+    sym_codegen_reset();
+    emit_runtime_preamble(out, NULL, /*shared=*/false);
+    g_rt_split_all_gates = false;
+    g_needs_hamt = s_hamt; g_needs_regex_h = s_regex;
+    g_has_variadics = s_var; g_cps_path = s_cps; g_needs_winsock = s_wsk;
 }
 
 /* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF
@@ -9337,10 +11280,139 @@ static const Binding *vl_composed_adapter_binding(const Expr *body) {
     return NULL;
 }
 
+/* lens-composition-codegen-blockers (Blocker 2c): peel value-wrappers off `arg`
+ * and return the lifted-closure FnDef it constructs, or NULL. */
+static FnDef *emit_arg_closure_fndef(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_CLOSURE && arg->as.closure_.closure)
+        return arg->as.closure_.closure->fn;
+    if (arg && arg->kind == EX_FN && arg->as.fn_.fn)
+        return arg->as.fn_.fn;
+    return NULL;
+}
+
+/* Blocker 2c: mark every lifted closure stored as a VALUE into a struct/ADT
+ * fn-field.  A `make-struct S ... clo ...` lowers to a ctor CALL (call_.ctor
+ * set) or an EX_MAKE_STRUCT whose field values are the closures; such a closure
+ * is invoked through the field's TYPED thunk (by-value params), so its wide
+ * by-value ADT params must NOT be B4-boxed.  Marks the base FnDef, which every
+ * ABI spec shares via spec->fn, so the b4box gate sees it in both. */
+static void emit_mark_byval_fn_field_closures(const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                emit_mark_byval_fn_field_closures(e->as.program.items[i]);
+            return;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                emit_mark_byval_fn_field_closures(e->as.fn_def_.fn->body);
+            return;
+        case EX_FN:
+            if (e->as.fn_.fn)
+                emit_mark_byval_fn_field_closures(e->as.fn_.fn->body);
+            return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                emit_mark_byval_fn_field_closures(e->as.closure_.closure->fn->body);
+            return;
+        case EX_DEF:
+            emit_mark_byval_fn_field_closures(e->as.def_.init);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                emit_mark_byval_fn_field_closures(e->as.let_.bindings[i].init);
+            emit_mark_byval_fn_field_closures(e->as.let_.body);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                emit_mark_byval_fn_field_closures(e->as.do_.items[i]);
+            return;
+        case EX_IF:
+            emit_mark_byval_fn_field_closures(e->as.if_.cond);
+            emit_mark_byval_fn_field_closures(e->as.if_.then_);
+            emit_mark_byval_fn_field_closures(e->as.if_.else_or_null);
+            return;
+        case EX_RETURN:
+            emit_mark_byval_fn_field_closures(e->as.return_.value);
+            return;
+        case EX_ASCRIBE:
+            emit_mark_byval_fn_field_closures(e->as.ascribe_.inner);
+            return;
+        case EX_MATCH:
+            emit_mark_byval_fn_field_closures(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                emit_mark_byval_fn_field_closures(e->as.match_.arms[i].body);
+            return;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                FnDef *cf = emit_arg_closure_fndef(e->as.make_struct_.field_values[i]);
+                if (cf) cf->byval_fn_field_closure = true;
+                emit_mark_byval_fn_field_closures(e->as.make_struct_.field_values[i]);
+            }
+            return;
+        case EX_CALL:
+            /* A ctor call (make-struct lowered to the auto-bound record ctor)
+             * stores each arg into a struct field; a closure arg is a typed
+             * fn-field value. */
+            if (e->as.call_.ctor ||
+                (e->as.call_.fn_binding &&
+                 e->as.call_.fn_binding->is_construct_template)) {
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    FnDef *cf = emit_arg_closure_fndef(e->as.call_.args[i]);
+                    if (cf) cf->byval_fn_field_closure = true;
+                }
+            }
+            emit_mark_byval_fn_field_closures(e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                emit_mark_byval_fn_field_closures(e->as.call_.args[i]);
+            return;
+        default:
+            return;
+    }
+}
+
+/* J2: when set, emit_program appends the per-export `<mangled>__ffi` shims
+ * (normally a --shared-only emission).  Set by the REPL's in-process spice
+ * build only; every other emission keeps byte-identical output. */
+bool g_emit_ffi_export_shims = false;
+static void emit_ffi_export_shims(Buf *out, const Expr *program);
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
         return -1;
+    }
+    emit_mark_byval_fn_field_closures(program);
+    /* gcc14-int-conversion / S1: start this program's ground-truth side tables
+     * fresh, ahead of every recording site (ADT ctors land in `early_file`
+     * before the forward-declaration pass runs). */
+    emit_sig_reset();
+    emit_localvar_reset();
+    static_init_reset();   /* S1b: per-program explicit-init registry */
+    /* S1: record every extern-c return type BEFORE any body is emitted.  The
+     * per-item record below still runs, but it is too late for bodies the
+     * emitter lifts ahead of the item loop -- a partially-applied printf's pap
+     * thunk in a `(load ...)`-first program hoists its call before the item
+     * loop reaches the extern-c form, and its temp stayed on __auto_type. */
+    {
+        uint32_t _n_pre = 0;
+        const Expr **_pre = flatten_program_items(program, &_n_pre);
+        for (uint32_t _i = 0; _pre && _i < _n_pre; _i++) {
+            if (_pre[_i]->kind != EX_EXTERN_C) continue;
+            ExternC *_ec = _pre[_i]->as.extern_c_.ext;
+            char *_m = mangle_field_name(_ec->c_name->name);
+            emit_sig_record_ret_ctype(_m, _ec->n_params, type_c_name(_ec->return_type));
+            free(_m);
+        }
+        free((void *)_pre);
     }
 
     /* Two buffers: file scope (statics) and main body. We assemble at the end. */
@@ -9362,6 +11434,7 @@ int emit_program(Buf *out, const Expr *program) {
      * to handler functions; handler functions visible to fn definitions. */
     Buf early_file;  buf_init(&early_file);
     Buf thunk_typedefs; buf_init(&thunk_typedefs);
+    Buf fatbox_init; buf_init(&fatbox_init);
     Buf fwd_decls;   buf_init(&fwd_decls);
     Buf extern_decls; buf_init(&extern_decls);
     Buf defer_thunks; buf_init(&defer_thunks);
@@ -9385,6 +11458,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs;
+    ctx.fatbox_init = &fatbox_init;
     ctx.indent = 4;
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
@@ -9405,6 +11479,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.poly_fatshim_names = NULL;
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
+    ctx.fatbox_keys = NULL;
+    ctx.n_fatbox_keys = 0;
+    ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
     ctx.n_exbox_dict_names = 0;
     ctx.cap_exbox_dict_names = 0;
@@ -9620,7 +11697,7 @@ int emit_program(Buf *out, const Expr *program) {
 
             /* CONV-S1 (slice 2): by-value ADT drop/walk glue (mirror of
              * emit_adt_typedef_and_ctors). */
-            if (byval) emit_adt_byval_drop_glue(&early_file, def, adt_c_name);
+            emit_adt_byval_drop_glue(&early_file, def, adt_c_name);
 
             /* Skip the dead generic-base ctor of a parametric `:heap` ADT --
              * see the mirror note in emit_adt_typedef_and_ctors above. */
@@ -9630,8 +11707,18 @@ int emit_program(Buf *out, const Expr *program) {
             for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
                 CtorDef *ctor = def->ctors[ci];
                 char *mctor = mangle_field_name(ctor->name);
-                buf_printf(&early_file, "static %s ctor_%s(",
-                           heap ? adt_ptr_name : byval ? adt_c_name : "int64_t", mctor);
+                const char *ctor_ret_c2 =
+                    heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
+                buf_printf(&early_file, "static %s ctor_%s(", ctor_ret_c2, mctor);
+                /* S1: emit_program emits ctors HERE, not through
+                 * emit_adt_typedef_and_ctors, so the record has to be made at
+                 * both sites -- recording only the other one left every
+                 * `ctor_X(...)` call on __auto_type in the single-file path. */
+                {
+                    char ctor_sym2[288];
+                    snprintf(ctor_sym2, sizeof ctor_sym2, "ctor_%s", mctor);
+                    emit_sig_record_ret_ctype(ctor_sym2, ctor->n_fields, ctor_ret_c2);
+                }
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     if (fi > 0) buf_puts(&early_file, ", ");
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -9713,16 +11800,29 @@ int emit_program(Buf *out, const Expr *program) {
                     "        frame = prev;\n"
                     "    }\n"
                     "}\n"
-                    "__attribute__((constructor))\n"
                     "static void _dynvar_init_%s(void) {\n"
                     "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
                     "}\n"
+                    /* S1b/cleanup: idempotent.  The emitter now calls this
+                     * explicitly at the end of the binding block AND leaves
+                     * the __attribute__((cleanup)) in place for the exits an
+                     * explicit call cannot see (return/goto out of scope).
+                     * On the cc path both fire, so the first one clears the
+                     * pointer and the second is a no-op; under the JIT, where
+                     * c2mir discards the attribute, the explicit call is the
+                     * whole mechanism.  See jit-engine-j0-findings.md 12.5. */
                     "static void _dynvar_pop_%s(TurDynFrame **fp) {\n"
+                    "    if (!*fp) return;\n"
                     "    pthread_setspecific(_dynvar_key_%s, (*fp)->prev);\n"
+                    "    *fp = 0;\n"
                     "}\n\n",
                     mname,
                     mname, mname, mname,
                     mname, mname);
+                /* S1b: the key must exist before any read of this dynamic var. */
+                char initfn[256];
+                snprintf(initfn, sizeof(initfn), "_dynvar_init_%s", mname);
+                static_init_register(initfn, STATIC_INIT_KEYS);
                 free(mname);
             }
 
@@ -9917,6 +12017,18 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                 }
             }
+            /* S1: record the return type for EVERY extern-c form, including the
+             * suppressed ones -- suppression only means "the system header or
+             * hamt.h already declares this, do not emit a duplicate decl", but
+             * call sites still hoist these into typed temps, and `printf` et al
+             * being unrecorded left their temps on __auto_type.  The extern-c
+             * form itself is the type authority here (`:int` on printf). */
+            {
+                char *ec_rec = mangle_field_name(ec->c_name->name);
+                emit_sig_record_ret_ctype(ec_rec, ec->n_params,
+                                          type_c_name(ec->return_type));
+                free(ec_rec);
+            }
             if (!suppress_ec) {
             /* extern-c names map to a real C symbol via the LEGACY fold (e.g.
              * `tur_hamt_new` stays itself; `tvar/new` -> `tvar_new`). This must
@@ -9924,9 +12036,15 @@ int emit_program(Buf *out, const Expr *program) {
              * call sites (raw_name_for_binding special-cases is_extern_c), and
              * any inline-C reference all agree on the real symbol name. */
             char *ec_mangled = mangle_field_name(ec->c_name->name);
+            const char *ec_ret_c = type_c_name(ec->return_type);
             buf_printf(&extern_decls, "extern %s %s(",
-                       type_c_name(ec->return_type),
+                       ec_ret_c,
                        ec_mangled);
+            /* S1: an extern-c callee never passes through emit_fn_forward_decls,
+             * so without this its call sites had no recorded return type and
+             * stayed on __auto_type -- which is most of the residue on any
+             * HAMT/string/IO-using program. */
+            emit_sig_record_ret_ctype(ec_mangled, ec->n_params, ec_ret_c);
             free(ec_mangled);
             for (uint32_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(&extern_decls, ", ");
@@ -9962,10 +12080,19 @@ int emit_program(Buf *out, const Expr *program) {
         EmitAbiSpecialization *sp = &ctx.abi_specializations[i];
         /* poly-closure-result-specialization: hoist a linked inner-closure clone
          * ahead of its outer so the suffixed env struct is defined at file scope
-         * before the outer body's EX_CLOSURE references it. */
-        if (sp->inner_closure_spec_idx >= 0) {
-            EmitAbiSpecialization *isp =
-                &ctx.abi_specializations[sp->inner_closure_spec_idx];
+         * before the outer body's EX_CLOSURE references it.  struct-of-closures
+         * monomorphization: hoist the primary link AND every extra link, so each
+         * closure a `(make-struct S clo1 clo2 ...)` return builds has its env +
+         * drop-glue at file scope (else the outer body's EX_CLOSURE emits them
+         * inline as invalid nested definitions). */
+        int32_t hoist_idxs[TUR_EXTRA_INNER_CLOSURE_MAX + 1];
+        uint8_t n_hoist = 0;
+        if (sp->inner_closure_spec_idx >= 0)
+            hoist_idxs[n_hoist++] = sp->inner_closure_spec_idx;
+        for (uint8_t hi = 0; hi < sp->n_extra_inner_closure_spec_idx; hi++)
+            hoist_idxs[n_hoist++] = sp->extra_inner_closure_spec_idx[hi];
+        for (uint8_t hi = 0; hi < n_hoist; hi++) {
+            EmitAbiSpecialization *isp = &ctx.abi_specializations[hoist_idxs[hi]];
             if (!isp->emitted) {
                 ctx.current_abi_specialization = isp;
                 ctx.fn_name_override = isp->clone_name;
@@ -10558,13 +12685,12 @@ int emit_program(Buf *out, const Expr *program) {
             buf_free(&thunk_body);
             buf_puts(&file, "}\n");
         }
-        buf_puts(&file,
-            "__attribute__((constructor))\n"
-            "static void __module_defers_init(void) {\n");
+        buf_puts(&file, "static void __module_defers_init(void) {\n");
         for (uint32_t i = 0; i < n_prog_defers; i++) {
             buf_printf(&file, "    atexit(__module_defer_%u);\n", i);
         }
         buf_puts(&file, "}\n");
+        static_init_register("__module_defers_init", STATIC_INIT_ATEXIT);
         free(prog_defers);
     }
 
@@ -10587,19 +12713,30 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
-     *  2. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
-     *  3. concrete_fn_ptr_typedefs - typed fn-ptr typedefs for parametric struct fields
+     *  2. concrete_fn_ptr_typedefs - typed fn-ptr typedefs for parametric struct fields
+     *  3. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
      *  4. extern_decls - user extern-c declarations
      *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
      *  6. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
      *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
      *  8. file        - Turmeric function definitions (can reference handler fns by name)
      *  9. main()      - entry point body
-     */
+     *
+     * macos-int-conversion-carrier-pointer-straddles: (2) and (3) are written in
+     * the opposite order to the one they are GENERATED in above, and both orders
+     * are load-bearing.  Generation must run adt_apps first because emitting a
+     * monomorph calls type_c_name, which is what REGISTERS the fn-ptr typedefs;
+     * collecting them earlier would miss every one.  Output must put the
+     * typedefs first because a monomorph over a `(c-fn ...)` element names one
+     * in its own typedef and ctor signature -- `tur_adt_Option__fnc1_int__int`
+     * holds a `tur_fnptr_int64_t_int64_t_t`.  That was latent until cfnptr got
+     * its own mangle token: before, such a monomorph collided with the ordinary
+     * `(fn ...)` one and the `#ifndef` guard preprocessed the whole block away,
+     * so the dangling reference never reached cc. */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
-    if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
+    if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
@@ -10610,6 +12747,9 @@ int emit_program(Buf *out, const Expr *program) {
     if (cprelude.len)    { buf_write(out, cprelude.data, cprelude.len); buf_putc(out, '\n'); }
     buf_free(&early_file);
     buf_free(&thunk_typedefs);
+    /* NOTE: fatbox_init is NOT freed here -- it is read further down, where the
+     * __tur_fatbox_init definition is emitted (it must follow the forward decls
+     * for the functions it takes addresses of). */
     buf_free(&extern_decls);
     buf_free(&fwd_decls);
     buf_free(&defer_thunks);
@@ -10632,6 +12772,9 @@ int emit_program(Buf *out, const Expr *program) {
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        /* S1b: first statement, matching where the constructors used to run
+         * (before the Windows stdio mode switch and before g_panic_trace). */
+        buf_puts(out, "    __tur_static_init();\n");
         emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_emit_panic_trace) {
@@ -10657,17 +12800,42 @@ int emit_program(Buf *out, const Expr *program) {
         /* Gap F: when the user has their own main(), `body` is silently
          * dropped (pre-existing behaviour for top-level non-def
          * statements after a user main). The def initializers in
-         * `def_init_body` are wired into a __constructor__ function so
-         * the runtime invokes them before main() runs. Supported by
-         * gcc + clang + ICC; the runtime preamble already assumes
-         * constructor priority works.
+         * `def_init_body` are wired into an init function so they run
+         * before the user's main() body does.
+         *
+         * S1b: registered in the STATIC_INIT_DEFS band, which runs last --
+         * these are the only initializers that execute *user* code, so they
+         * must see the pthread keys and registries already in place.
          *
          * Filed under docs/reported/top-level-def-init-dropped.md. */
-        buf_puts(out, "static void __tur_module_def_init(void) __attribute__((constructor));\n");
         buf_puts(out, "static void __tur_module_def_init(void) {\n");
         buf_write(out, def_init_body.data, def_init_body.len);
         buf_puts(out, "}\n\n");
+        static_init_register("__tur_module_def_init", STATIC_INIT_DEFS);
     }
+
+    /* fn-value-fat-normalization: fill the statically allocated { shim, orig }
+     * boxes.  KEYS band -- the earliest -- so a box is live before any
+     * registry, atexit or user def-init code can reach a boxing site. */
+    if (fatbox_init.len) {
+        buf_puts(out, "static void __tur_fatbox_init(void) {\n");
+        buf_write(out, fatbox_init.data, fatbox_init.len);
+        buf_puts(out, "}\n\n");
+        static_init_register("__tur_fatbox_init", STATIC_INIT_KEYS);
+    }
+    buf_free(&fatbox_init);
+
+    /* S1b: after every registered initializer's own definition (they are all
+     * `static`), and after `main` -- the preamble carries the declaration. */
+    static_init_emit(out);
+
+    /* J2: the REPL's in-process spice build compiles the whole spice as ONE
+     * single-file TU, and its high-arity exports need the same
+     * `<mangled>__ffi` shims the --shared path emits per module
+     * (interpreter-arbitrary-arity-ffi).  Gated so every other single-file
+     * emission stays byte-identical -- shims would be dead weight in a
+     * normal binary and would churn every fixture snapshot. */
+    if (g_emit_ffi_export_shims) emit_ffi_export_shims(out, program);
 
     buf_free(&file);
     buf_free(&body);
@@ -10679,10 +12847,20 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.fatshim_names);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    free(ctx.fatbox_keys);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
+    /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
+     * closes, so only the backing arrays outlive emission. */
+    for (uint32_t _dg = 0; _dg < ctx.n_dynvar_guards; _dg++) {
+        free(ctx.dynvar_guard_ptrs[_dg]);
+        free(ctx.dynvar_guard_names[_dg]);
+    }
+    free(ctx.dynvar_guard_ptrs);
+    free(ctx.dynvar_guard_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
@@ -10822,6 +13000,155 @@ int emit_exports_manifest(Buf *out, const Expr *program) {
     return 0;
 }
 
+/* interpreter-arbitrary-arity-ffi (Phase 1): classify a parameter/return
+ * TypeKind for the per-export FFI shim.  Returns:
+ *   'i' -- int-register class (read from iv[]): :int / :bool / :cstr / :ptr /
+ *          sized ints.  The shim casts iv[k] (via intptr_t) to the real C type.
+ *   'f' -- float class (read from fv[]): :float / :float32 / :float64.
+ *   'v' -- :void return only (never an arg class).
+ *   '?' -- not representable as a scalar the FFI layer marshals (structs,
+ *          ADTs, carriers, :never).  The shim is omitted for this export and
+ *          the loader falls back to the legacy shape table / clean error.
+ *
+ * The 'i'/'f'/'v' results agree with the loader's class_for_tag(
+ * manifest_type_tag(k)) mapping in src/turi/spice_loader.c so the shim reads
+ * the same buffer the interpreter marshalled the arg into.  This is stricter
+ * than that mapping only in that a non-scalar (which the manifest spells :any,
+ * class 'i') is reported '?' here -- the shim cannot cast a struct to int64,
+ * so it declines rather than emit invalid C. */
+static char ffi_shim_class_for_kind(TypeKind k, bool is_return) {
+    switch (k) {
+        case TY_NIL:      return is_return ? 'v' : '?';
+        case TY_BOOL:
+        case TY_INT:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_INT8:  case TY_INT16:  case TY_INT32:  case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return 'i';
+        case TY_FLOAT:
+        case TY_FLOAT32:
+        case TY_FLOAT64:
+            return 'f';
+        default:
+            return '?';
+    }
+}
+
+/* interpreter-arbitrary-arity-ffi (Phase 1): emit a uniform-signature FFI
+ * shim next to each exported defn so the interpreter/REPL can call it at
+ * arbitrary arity without a generated shape table.  For an export
+ * `m__big(A0, A1, ...) -> R`, emits:
+ *
+ *     void m__big__ffi(const int64_t *iv, const double *fv,
+ *                      int64_t *out_i, double *out_f) {
+ *         *out_i = (int64_t)(intptr_t)m__big((A0)(intptr_t)iv[0],
+ *                                            (A1)fv[1], ...);
+ *     }
+ *
+ * Each parameter reads iv[k] (int-register class) or fv[k] (float class) --
+ * the exact buffer/position the interpreter marshals to -- cast to the real
+ * declared C parameter type (more precise than the generic shape-table
+ * trampolines, which rely on a blanket function-pointer cast).  The result is
+ * written back to *out_i (int-class return) or *out_f (float-class return); a
+ * :void return writes neither.  The shim symbol name is the export's mangled
+ * name plus `__ffi`; the loader probes it with dlsym and falls back to the
+ * legacy shape table when it is absent (spices built before this change).
+ *
+ * Skipped (no shim; legacy path / clean error handles the call): variadic
+ * exports, and any export whose return or a parameter is not a scalar the FFI
+ * layer represents (its class is '?').  The set walked here mirrors
+ * emit_exports_manifest exactly so the manifest and the shim stay in lockstep.
+ *
+ * Emitted with external linkage (no `static`) so dlsym can find it. */
+static void emit_ffi_export_shims(Buf *out, const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return;
+    uint32_t n_items;
+    const Expr **items = flatten_program_items(program, &n_items);
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind != EX_FN_DEF) continue;
+        FnDef *fd = e->as.fn_def_.fn;
+        const Binding *b = fd->binding;
+        if (!b->is_exported) continue;
+        /* Same skips as emit_exports_manifest: static stdlib defns aren't in
+         * the .so's dynamic symbol table, and `main` is never module-exported. */
+        if (b->is_from_stdlib) continue;
+        if (b->name->len == 4 && memcmp(b->name->name, "main", 4) == 0) continue;
+        if (e->type.kind != TY_FN) continue;
+        /* Variadic exports are not callable from the REPL yet (cons-list
+         * marshaling is a separate feature); leave them to the clean error. */
+        if (e->type.as.fn.is_variadic) continue;
+
+        /* Classify return + params; decline the shim on any non-scalar slot. */
+        char ret_cls = ffi_shim_class_for_kind(e->type.as.fn.result_kind,
+                                                /*is_return=*/true);
+        if (ret_cls == '?') continue;
+        bool representable = true;
+        for (uint32_t j = 0; j < fd->n_params; j++) {
+            if (ffi_shim_class_for_kind(fd->param_types[j].kind,
+                                        /*is_return=*/false) == '?') {
+                representable = false;
+                break;
+            }
+        }
+        if (!representable) continue;
+
+        char *mangled = raw_name_for_binding(b);
+        buf_printf(out,
+                   "void %s__ffi(const int64_t *iv, const double *fv, "
+                   "int64_t *out_i, double *out_f) {\n",
+                   mangled);
+        buf_puts(out, "    ");
+        if (ret_cls == 'i')      buf_puts(out, "*out_i = (int64_t)(intptr_t)");
+        else if (ret_cls == 'f') buf_puts(out, "*out_f = (double)");
+        /* ret 'v': call for effect, no assignment. */
+        buf_printf(out, "%s(", mangled);
+        for (uint32_t j = 0; j < fd->n_params; j++) {
+            if (j > 0) buf_puts(out, ", ");
+            char cls = ffi_shim_class_for_kind(fd->param_types[j].kind,
+                                               /*is_return=*/false);
+            const char *cty = type_c_name(fd->param_types[j]);
+            if (cls == 'f') {
+                buf_printf(out, "(%s)fv[%u]", cty, (unsigned)j);
+            } else {
+                /* intptr_t intermediate makes both int->int and int->pointer
+                 * (e.g. :cstr -> const char *) casts warning-free. */
+                buf_printf(out, "(%s)(intptr_t)iv[%u]", cty, (unsigned)j);
+            }
+        }
+        buf_puts(out, ");\n");
+        /* Silence -Wunused-parameter for buffers this shim never touches
+         * (an all-int export never reads fv/out_f, a :void one never writes). */
+        buf_puts(out, "    (void)iv; (void)fv; (void)out_i; (void)out_f;\n");
+        buf_puts(out, "}\n");
+        free(mangled);
+    }
+    free(items);
+}
+
+/* True iff any constructor field of `def` embeds a parametric monomorph
+ * (`(Option cstr)` -> tur_adt_Option__cstr, a nested struct-app) BY VALUE.  Such
+ * a base typedef must be emitted AFTER type_codegen_emit_adt_apps flushes that
+ * monomorph.  A base with no such field can -- and, for a recursive by-value
+ * fixed point whose monomorph embeds IT by value (`GNode ~= GNodeF GNode`,
+ * `tur_adt_GNodeF__GNode` holding `tur_adt_GNode` fields), MUST -- be emitted
+ * BEFORE the flush, so the monomorph sees a complete base type instead of an
+ * incomplete forward decl. */
+static bool adt_has_inline_byval_monomorph_field(const AdtDef *def) {
+    if (!def) return false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const CtorField *pf = &ctor->fields[fi];
+            if (pf->full_type && pf->full_type->kind == TY_APP &&
+                adt_field_is_inline_byval(pf))
+                return true;
+        }
+    }
+    return false;
+}
+
 /* Emit a C header file for a module. Contains declarations (not definitions).
  * When separate_compilation is true (Phase M3): only exported functions are
  * declared, and #includes for each imported module's header are emitted. */
@@ -10879,7 +13206,8 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         buf_puts(out, "/* rank-2 polymorphic closure carrier (typeclass-method params) */\n");
         buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n");
         buf_puts(out, "#define TUR_POLY_FN_T_DEFINED\n");
-        buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+        buf_puts(out, "struct DK;\n");  /* E2: forward-declare so fn_cps's DK* is the real type, not typedef-scoped */
+        buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;\n");  /* E2: fn_cps DK-threading slot (NULL for pure fn-values) */
         buf_puts(out, "#endif\n\n");
     }
 
@@ -11083,8 +13411,50 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         }
     }
 
+    /* Base ADT typedefs, Pass A (recursive-byval-fixpoint ordering): a
+     * monomorph can embed a module-local base ADT BY VALUE -- e.g. the by-value
+     * fixed point `GNode ~= GNodeF GNode`, where `tur_adt_GNodeF__GNode` holds
+     * `tur_adt_GNode` fields.  That base typedef must precede the
+     * type_codegen_emit_adt_apps flush below, or the monomorph names an
+     * incomplete type ("field has incomplete type 'tur_adt_GNode'").  Emit,
+     * BEFORE the flush, every base ADT that does NOT itself embed a monomorph by
+     * value (those have no forward dependency on the about-to-be-flushed set;
+     * mirrors emit_program's Pass-0-before-monomorph-flush ordering). */
+    if (separate_compilation) {
+        for (uint32_t i = 0; i < h_n_items; i++) {
+            const Expr *e = h_items[i];
+            if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
+            AdtDef *adef = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
+                                                   : e->as.defdata_.def;
+            if (adef && !adt_has_inline_byval_monomorph_field(adef))
+                emit_adt_typedef_and_ctors(out, adef, true);
+        }
+    }
+
     type_codegen_emit_adt_apps(out);
     type_codegen_emit_fn_ptr_typedefs(out);
+
+    /* Base ADT typedefs, Pass B (split-path-missing-adt-base-typedefs): the
+     * header is the sole cross-TU emitter of the base `tur_adt_<Name>` layout --
+     * type_codegen_emit_adt_apps above emits only the monomorphized
+     * type-applications, and emit_implementation's impl_early emits the base
+     * typedef into the .c (guarded, so redundant once the header carries it).  A
+     * non-parametric by-value defstruct/ADT that appears in an exported
+     * prototype (e.g. `f(const tur_adt_ADSRParams *)`) is otherwise named by the
+     * header with no definition -- "unknown type name" / "field has incomplete
+     * type".  Emit the guarded layout (typedef_only: no ctors/glue) for every
+     * module-local base ADT (a base with an inline-by-value monomorph field is
+     * emitted here, AFTER its field monomorphs were flushed; Pass A's guarded
+     * emissions are no-ops on the second pass). */
+    if (separate_compilation) {
+        for (uint32_t i = 0; i < h_n_items; i++) {
+            const Expr *e = h_items[i];
+            if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
+            AdtDef *adef = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
+                                                   : e->as.defdata_.def;
+            if (adef) emit_adt_typedef_and_ctors(out, adef, true);
+        }
+    }
 
     if (separate_compilation) {
         uint32_t n_decls = 0;
@@ -11264,11 +13634,18 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1/SYM2: clear interned-symbol records for this TU */
+    /* gcc14-int-conversion / S1: reset the ground-truth side tables here rather
+     * than inside emit_fn_forward_decls, so records made by earlier passes
+     * (notably ADT ctor return types) survive.  See the note there. */
+    emit_sig_reset();
+    emit_localvar_reset();
+    static_init_reset();   /* S1b: per-TU explicit-init registry */
 
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);
 
     Buf thunk_typedefs2; buf_init(&thunk_typedefs2);
+    Buf fatbox_init2; buf_init(&fatbox_init2);
 
     EmitCtx ctx;
     /* Zero every field first -- see the companion memset above; the manual
@@ -11280,6 +13657,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs2;
+    ctx.fatbox_init = &fatbox_init2;
     ctx.indent = 4;
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
@@ -11300,6 +13678,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.poly_fatshim_names = NULL;
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
+    ctx.fatbox_keys = NULL;
+    ctx.n_fatbox_keys = 0;
+    ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
     ctx.n_exbox_dict_names = 0;
     ctx.cap_exbox_dict_names = 0;
@@ -11568,7 +13949,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
             const AdtDef *adef = (e->kind == EX_DEFGADT)
                 ? e->as.defgadt_.def : e->as.defdata_.def;
-            emit_adt_typedef_and_ctors(&impl_early, adef);
+            emit_adt_typedef_and_ctors(&impl_early, adef, false);
         }
     }
 
@@ -11667,6 +14048,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         ctx.current_scan_fn = NULL;
     }
 
+    /* interpreter-arbitrary-arity-ffi (Phase 1): emit one uniform-signature
+     * `<mangled>__ffi` shim per exported defn so the REPL/interpreter can call
+     * a spice export at arbitrary arity without the generated shape table.
+     * Appended after the real function bodies above (which the shim calls) so
+     * the definition precedes the shim in this TU. */
+    emit_ffi_export_shims(&file, program);
+
     /* project-mode-rc-runtime-preamble-missing: drain function-level defer
      * thunks accumulated while emitting the bodies above.  Auto-drop of rc/ref
      * values and explicit (defer ...) forms register these; emit_program emits
@@ -11696,13 +14084,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         /* Emit constructor that registers thunks via atexit in definition
          * order. atexit is LIFO so last-defined defer fires first, matching
          * function-level defer semantics. */
-        buf_printf(&file,
-            "__attribute__((constructor))\n"
-            "static void __module_defers_%s_init(void) {\n", guard);
+        buf_printf(&file, "static void __module_defers_%s_init(void) {\n", guard);
         for (uint32_t i = 0; i < n_module_defers; i++) {
             buf_printf(&file, "    atexit(__module_defer_%u);\n", i);
         }
         buf_puts(&file, "}\n");
+        char dinit[256];
+        snprintf(dinit, sizeof(dinit), "__module_defers_%s_init", guard);
+        static_init_register(dinit, STATIC_INIT_ATEXIT);
         free(module_defers);
     }
 
@@ -11747,6 +14136,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_emit_panic_trace) {
@@ -11767,20 +14157,46 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         buf_puts(out, "}\n");
     }
 
+    /* fn-value-fat-normalization: fill this TU's statically allocated
+     * { shim, orig } boxes (see the whole-program path for the rationale).
+     * KEYS band -- the earliest. */
+    if (fatbox_init2.len) {
+        buf_puts(out, "static void __tur_fatbox_init(void) {\n");
+        buf_write(out, fatbox_init2.data, fatbox_init2.len);
+        buf_puts(out, "}\n\n");
+        static_init_register("__tur_fatbox_init", STATIC_INIT_KEYS);
+    }
+
+    /* S1b: after every registered initializer's definition.  Emitted in
+     * separate-compilation mode too -- there is no `main` in this TU to call
+     * it, so the constructor wrapper is the whole mechanism there. */
+    static_init_emit(out);
+
     buf_free(&file);
     buf_free(&body);
     buf_free(&impl_fwd_decls);
     buf_free(&thunk_typedefs2);
+    buf_free(&fatbox_init2);
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    free(ctx.fatbox_keys);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
+    /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
+     * closes, so only the backing arrays outlive emission. */
+    for (uint32_t _dg = 0; _dg < ctx.n_dynvar_guards; _dg++) {
+        free(ctx.dynvar_guard_ptrs[_dg]);
+        free(ctx.dynvar_guard_names[_dg]);
+    }
+    free(ctx.dynvar_guard_ptrs);
+    free(ctx.dynvar_guard_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);

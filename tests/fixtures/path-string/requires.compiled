@@ -1,0 +1,4 @@
+tur/path-string composes inline-C path/* helpers; the module docstring states
+it "runs on the compiled path; use the underlying path/* cstr forms under
+--interpret". --interpret aborts with "inline-C not supported". Compiled path is
+green (bash tests/run.sh).

@@ -291,6 +291,14 @@ concrete struct at the resolved call site). It **panics** on any schema
 violation, like `schema-decode!`; for graceful handling, validate with
 `schema-decode` first and branch on `schema-decode-ok?`.
 
+> **`name : cstr` vs `name : String`.** `json/get-string` *borrows* a pointer
+> into the decoded JSON node, so a `cstr` field holds that borrow and dangles the
+> moment the node is freed -- yet the `User` is meant to outlive the node. For a
+> field decoded from boundary data, prefer an owned `String`
+> (`[name : String age : int]`, filled with `(string/from-cstr (json/get-string
+> ...))`), which copies the bytes into a value the struct owns. See
+> [strings-guide.md](strings-guide.md).
+
 Ascribing `decode!` to a type with no `HasSchema` instance is a **compile-time**
 error (`no instance 'HasSchema T'`).
 
@@ -418,5 +426,5 @@ struct. See the `schema-hkt-functor`, `schema-hkt-alternative`,
 > you (and `Functor` is loaded globally), so `(load "stdlib/schema.tur")` is
 > enough -- no `(load "stdlib/typeclass.tur")` is required to use the instances.
 
-See [docs/archive/history/schema-plan.md](../archive/history/schema-plan.md) for the full design and the
+See [docs/archive/history/schema-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/schema-plan.md) for the full design and the
 rationale behind the Validation (accumulating) semantics.

@@ -1,0 +1,24 @@
+;; show-owned-result-plan stage 1: --interpret parity for show-string.
+;; The requires.interp marker routes this fixture through `tur run
+;; --interpret`, so it asserts the interpreter renders show-string identically
+;; to the compiled path (see the sibling show-string-owned fixture).  Limited to
+;; the types whose Show has a registered interpreter native (int/float/bool/
+;; cstr/String and the pure-Turmeric collection instances).
+(load "stdlib/string-slice.tur")
+
+(defn emit [s : String] : void
+  (do
+    (println (string/to-cstr s))
+    (string/release s)))
+
+(defn main [] : int
+  (do
+    (emit (show 42))
+    (emit (show 7.1))
+    (emit (show true))
+    (emit (show "hello"))
+    (emit (show (int->string 99)))
+    (emit (show (vec-of 1 2 3)))
+    (emit (show (set-of 5)))
+    (emit (show (hamt-of 1 10)))
+    0))

@@ -1,0 +1,25 @@
+;; RT4 soundness, the direction that matters: a result about which nothing is
+;; known must NOT acquire a refinement.
+;;
+;; `lower` returns `x - 5` for a positive `x`, which can be negative, so no
+;; template is provable and nothing is published about its result.  The
+;; crossing into `twice`'s `Pos` parameter therefore stays undischarged --
+;; silent by default (the callee still checks on entry), and a hard error under
+;; --strict-refine, which is what this fixture asserts.
+;;
+;; If template inference ever started guessing rather than proving, this
+;; fixture would go green and the whole feature would be unsound.
+(load "stdlib/refine.tur")
+
+(defn twice [y : Pos] : int
+  (* y 2))
+
+(defn lower [x : Pos] : int
+  (- x 5))
+
+(defn use-lower [p : Pos] : int
+  (twice (lower p)))
+
+(defn main [] : int
+  (println (use-lower 9))
+  0)

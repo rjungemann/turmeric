@@ -63,6 +63,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[binding-forms-guide.md](binding-forms-guide.md)** -- Internal `define`, `letrec`, and named-let -- the three local binding idioms that complement `let` and `defn`
 - **[data-literals-guide.md](data-literals-guide.md)** -- Compact literal syntax for maps, vecs, and sets using `#map{...}`, `#set{...}`, and `[...]`
+- **[numeric-tower-guide.md](numeric-tower-guide.md)** -- Exact `Rational` and hand-written `Complex` arithmetic, the `#rat{...}` / `#cx{...}` literals, and `Num`-typeclass operator overloading
+- **[strings-guide.md](strings-guide.md)** -- The `cstr` vs `str` vs `String` tiering -- which string type to reach for, and when an owned `String` must replace a borrowed `cstr`
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, and exports
 - **[structs-guide.md](structs-guide.md)** -- Defining and using struct types with `defstruct`
 - **[sum-types-guide.md](sum-types-guide.md)** -- Declaring sum types with `defdata`, pattern matching, exhaustiveness, the `#fx{NonExhaustive}` opt-out, the FFI layout, and the stdlib `Either` module
@@ -82,6 +84,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[typeclass-guide.md](typeclass-guide.md)** -- Defining typeclasses with `defclass`, implementing instances with `definstance`, constraints, associated types, functional dependencies, and default implementations
 - **[hkt-guide.md](hkt-guide.md)** -- Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[hrt-guide.md](hrt-guide.md)** -- Higher-ranked types: rank-2/3 polymorphic function parameters
+- **[row-types-guide.md](row-types-guide.md)** -- Type-level rows: the `#row{...}` reader form, row-kinded (`^&`) parameters, the row algebra, erasure, and the limits
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** -- Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
 - **[sized-types-guide.md](sized-types-guide.md)** -- Tracking data-structure sizes in the type system for memory layout, stack allocation, and type-safe array operations
 - **[sized-primitives-guide.md](sized-primitives-guide.md)** -- Fixed-width numeric types (`int8/i8` through `uint64/u64`, `float32/f32`) -- literal syntax, coercion rules, and casting
@@ -92,7 +95,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[gadts-cookbook.md](gadts-cookbook.md)** -- GADTs cookbook: practical patterns and recipes
 - **[existential-types-guide.md](existential-types-guide.md)** -- Existential types: pack/open, typeclass constraints, hiding concrete types behind opaque boundaries
 - **[opaques-guide.md](opaques-guide.md)** -- Named nominal newtypes over a representation type -- what they are, what they're for, and how to construct, unwrap, and combine them
-- **[advanced-type-system-rationale.md](advanced-type-system-rationale.md)** -- Why Turmeric chose the type system features it did, and why dependent and refinement types were correctly deferred
+- **[advanced-type-system-rationale.md](advanced-type-system-rationale.md)** -- Why Turmeric chose the type system features it did, why dependent types remain deferred, and how refinement types went from deferred to shipped
 
 ## Type Safety
 
@@ -104,11 +107,17 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[error-handling-guide.md](error-handling-guide.md)** -- `Result`, `Option`, `panic`, contract macros (`assert!`, `require!`, `ensure!`)
 - **[contract-types-guide.md](contract-types-guide.md)** -- Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts
 
+## Refinement Types
+
+- **[refinement-types-guide.md](refinement-types-guide.md)** -- Static discharge of `#refine{ x : T | p }`: what gets proved, call-site crossings, `--strict-refine`, and the documented limits
+- **[stateful-refinements-guide.md](stateful-refinements-guide.md)** -- Refinements over mutable state: `#reads` measures and the `frozen` region that makes them congruent
+- **[refinement-solver-internals-guide.md](refinement-solver-internals-guide.md)** -- How the in-house solver chain works (normalization, EUF, Fourier-Motzkin, Nelson-Oppen, cube expansion), and how to debug a specific obligation
+
 ## Functional Patterns
 
 - **[arrows-guide.md](arrows-guide.md)** -- Bare-function arrow combinators and building DSP signal graphs with `stdlib/arrow.tur` and `stdlib/signal/`
 - **[generators-guide.md](generators-guide.md)** -- Zero-overhead generators with `gen`/`yield`, lazy `Seq` combinators, and the `Range` type
-- **[effects-vs-monads.md](effects-vs-monads.md)** -- Design rationale: why effects instead of Haskell-style monads
+- **[effects-vs-monads.md](effects-vs-monads.md)** -- When to reach for an effect handler and when to reach for a monad value
 
 ## Concurrency and Async
 
@@ -203,10 +212,14 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[performance-guide.md](performance-guide.md)** -- Writing fast Turmeric programs -- numerical computation, data structures, string processing, concurrency, memory, recursion, I/O, and benchmarking methodology
 - **[monomorphization-abi-guide.md](monomorphization-abi-guide.md)** -- How Turmeric's end-to-end monomorphization ABI works, why the by-value path replaced the int64 carrier, and how to read `__spec_*` symbols
+- **[jit-guide.md](jit-guide.md)** -- The in-process MIR JIT (`tur jit`) end to end -- what MIR is, how the engine is wired into the build, and what it does differently from the `cc` path (the fallback contract, the permanent constraints, and the inline-C rules that only bite under the JIT)
 
 ## Compiler Internals
 
 - **[compiler-internals.md](compiler-internals.md)** -- End-to-end walkthrough of the `tur` compiler pipeline and source layout in `src/`, aimed at contributors
+- **[value-representations-guide.md](value-representations-guide.md)** -- The representation inventory and the producer/boundary matrix -- the live scoreboard for the representation-consolidation campaign
+- **[gc-guide.md](gc-guide.md)** -- How memory is managed -- reference counting, the Bacon-Rajan cycle collector, arenas, and what is (and isn't) GC-managed
+- **[ownership-guide.md](ownership-guide.md)** -- Which ownership strategy to reach for -- persistent-immutable, single-owner mutable, linear/affine handles, `rc<T>` for genuine sharing, and `weak<T>` to break the resulting cycles
 - **[name-mangling-guide.md](name-mangling-guide.md)** -- How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies
 - **[type-erasure-guide.md](type-erasure-guide.md)** -- Snapshot of where the `tur` compiler collapses higher-level types down to `int64_t` at the C boundary, and the three mechanisms it uses
 - **[typeclass-internals-guide.md](typeclass-internals-guide.md)** -- How `definstance` lowers to a C dictionary struct + singleton, how method-field C types are resolved, and the closure-handle convention
@@ -230,8 +243,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 **By topic:**
 - Getting Started → [quickstart.md](quickstart.md), [syntax-guide.md](syntax-guide.md), [repl.md](repl.md), [repl-tutorial.md](repl-tutorial.md), [releases-and-installation-guide.md](releases-and-installation-guide.md)
-- Language Basics → [structs-guide.md](structs-guide.md), [sum-types-guide.md](sum-types-guide.md), [module-system-guide.md](module-system-guide.md), [binding-forms-guide.md](binding-forms-guide.md), [function-arity-guide.md](function-arity-guide.md), [currying-guide.md](currying-guide.md), [cli-args-guide.md](cli-args-guide.md)
-- Type System → [polymorphism-guide.md](polymorphism-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md), [sized-primitives-guide.md](sized-primitives-guide.md)
+- Language Basics → [structs-guide.md](structs-guide.md), [sum-types-guide.md](sum-types-guide.md), [strings-guide.md](strings-guide.md), [module-system-guide.md](module-system-guide.md), [binding-forms-guide.md](binding-forms-guide.md), [function-arity-guide.md](function-arity-guide.md), [currying-guide.md](currying-guide.md), [cli-args-guide.md](cli-args-guide.md)
+- Type System → [polymorphism-guide.md](polymorphism-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [row-types-guide.md](row-types-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md), [sized-primitives-guide.md](sized-primitives-guide.md)
 - Advanced Types → [gadts-guide.md](gadts-guide.md), [existential-types-guide.md](existential-types-guide.md), [opaques-guide.md](opaques-guide.md), [advanced-type-system-rationale.md](advanced-type-system-rationale.md)
 - Type Safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Error Handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
@@ -244,8 +257,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
 - Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
-- Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md)
-- Compiler Internals → [compiler-internals.md](compiler-internals.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
+- Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
+- Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
 - Interoperability → [c-integration-guide.md](c-integration-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)
 
@@ -259,6 +272,6 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Planning and Design
 
 For design documents, architecture, and phase planning, see:
-- **[../](../README.md)** -- Main docs folder
-- **[../archive/](../archive/README.md)** -- Active planning documents
-- **[../archive/history/](../archive/history/README.md)** -- Historical completed work
+- **[docs/](https://github.com/rjungemann/turmeric/tree/main/docs)** -- Main docs folder
+- **[../archive/](https://github.com/rjungemann/turmeric/blob/main/docs/archive/README.md)** -- Active planning documents
+- **[../archive/history/](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/README.md)** -- Historical completed work

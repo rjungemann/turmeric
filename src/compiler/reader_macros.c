@@ -44,6 +44,7 @@ void reader_macros_init(ReaderMacroRegistry *reg, Arena *arena) {
     reg->len     = 0;
     reg->cap     = 0;
     reg->strict  = false;
+    reg->keep_define_forms = false;
 }
 
 bool reader_macros_is_reserved(StrSlice name, int delim) {

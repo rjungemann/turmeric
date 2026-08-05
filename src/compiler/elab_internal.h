@@ -19,6 +19,7 @@
 #include "types.h"
 #include "effect.h"    /* Phase 19 */
 #include "globals.h"   /* ET4: g_effect_types_enabled */
+#include "refine_collect.h" /* RT1: refinement proof obligations */
 /* Phase U5: External declarations for global unsafe linting configuration */
 extern uint32_t g_unsafe_max_lines;
 extern bool g_unsafe_warn_nested;
@@ -227,6 +228,12 @@ typedef struct Elab {
     const Symbol *sym_hamt_count; /* hamt/count */
     const Symbol *sym_hamt_merge; /* hamt/merge */
     const Symbol *sym_hamt_hash_ptr; /* hamt_hash_ptr */
+    /* Content-keyed cstr entry points -- :cstr keys route here so runtime-
+     * built keys (equal text, distinct pointers) behave like literals. */
+    const Symbol *sym_hamt_set_cstr; /* hamt/set-cstr */
+    const Symbol *sym_hamt_del_cstr; /* hamt/del-cstr */
+    const Symbol *sym_hamt_get_cstr; /* hamt/get-cstr */
+    const Symbol *sym_hamt_has_cstr; /* hamt/has-cstr? */
     const Symbol *sym_defer;      /* Phase 4 */
     const Symbol *sym_return;     /* return - early return with defer firing */
     /* Phase 5 */
@@ -307,6 +314,11 @@ typedef struct Elab {
     const Symbol *sym_gc_force;    /* gc! */
     const Symbol *sym_gc_enable;   /* gc-enable! */
     const Symbol *sym_gc_disable;  /* gc-disable! */
+    const Symbol *sym_gc_auto;     /* gc-auto! (CG5, cycle-gc experiment) */
+    const Symbol *sym_gc_collections;   /* gc-collections (CG6) */
+    const Symbol *sym_gc_objects_freed; /* gc-objects-freed (CG6) */
+    const Symbol *sym_gc_live_blocks;   /* gc-live-blocks (CG6) */
+    const Symbol *sym_gc_cand_hw;       /* gc-candidate-high-water (CG6) */
     /* Phase 6: Macro system */
     const Symbol *sym_defmacro;   /* defmacro */
     const Symbol *sym_quote;      /* quote */
@@ -326,6 +338,9 @@ typedef struct Elab {
     const Symbol *kw_move;        /* :move keyword for defstruct */
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     const Symbol *kw_affine;      /* :affine keyword for defopaque (at-most-once) */
+    const Symbol *kw_sealed;      /* :sealed keyword for defopaque -- `::` cannot
+                                   * cross the type/representation boundary
+                                   * outside the declaring module */
     const Symbol *kw_heap;        /* :heap keyword for defstruct (typed-pointer ABI) */
     const Symbol *kw_no_auto_ctor;/* CTOR-V0: :no-auto-ctor keyword for defstruct */
     /* Phase 12: Borrow traits */
@@ -339,11 +354,16 @@ typedef struct Elab {
     /* Phase HKT-P2: defrec — recursive type binders */
     const Symbol *sym_defrec;      /* defrec */
     const Symbol *sym_deftype;      /* deftype */
-    /* Phase TA1: defalias — primitive type alias declarations */
+    /* Phase TA1/TA2: defalias — transparent type alias declarations.
+     * TA1 accepted primitive keywords only; TA2 accepts any type expression
+     * (composites included), so `type_alias_types` carries the full resolved
+     * target and `type_alias_kinds` is its `kind` field, kept as a fast
+     * TypeKind-only view for the ladders that only need the kind. */
     const Symbol *sym_defalias;
 
     const Symbol **type_alias_names;  /* interned alias name symbols */
-    TypeKind      *type_alias_kinds;  /* resolved target TypeKind */
+    TypeKind      *type_alias_kinds;  /* resolved target TypeKind (== types[i]->kind) */
+    Type         **type_alias_types;  /* resolved target type, arena-allocated */
     uint32_t       n_type_aliases;    /* number of declared aliases */
     uint32_t       cap_type_aliases;  /* allocated capacity */
     /* Phase HKT-P1: type-app — type-level application */
@@ -465,6 +485,13 @@ typedef struct Elab {
     struct Binding   *cur_hkt_dict_binding;
     uint32_t unsafe_depth;
     uint32_t macro_expand_depth;
+    /* ambiguous-dispatch-error-quality: span of the OUTERMOST macro call site
+     * currently being expanded (recorded when macro_expand_depth goes 0->1).
+     * A diagnostic raised deep inside a macro expansion (e.g. a `.method` call a
+     * derive macro emits) can attribute itself to where the USER wrote the macro
+     * call, instead of the macro-body span in stdlib/macros.tur.  Only valid when
+     * macro_expand_depth > 0. */
+    Span     macro_call_site_span;
     /* Phase U5: Unsafe linting configuration */
     uint32_t unsafe_max_lines;      /* max lines in unsafe block before warning (0 = disabled) */
     bool     unsafe_warn_nested;     /* warn on nested unsafe blocks */
@@ -615,6 +642,21 @@ typedef struct Elab {
      * set by elab_cloneable_shift's reified path at depth d and read by the
      * enclosing reset on exit. */
     bool             reified_shift_at_depth[64];
+    /* Capability-folding (cps-shift-reset-capability-folding-plan item 1):
+     * a plain `reset` promotes to the SERIAL reified delimiter (EX_SERIAL_RESET)
+     * instead of the cloneable one (EX_CLONEABLE_RESET) when the resuming shift
+     * that bound at depth d had a `serial-cont` receiver.  Set alongside
+     * reified_shift_at_depth[d] by elab_cont_shift_core's serial route, read by
+     * the enclosing `reset` on exit to pick the delimiter flavor. */
+    bool             reified_serial_at_depth[64];
+    /* Capability-folding item 1: true at depth d when the delimiter that
+     * established depth d is the literal `cloneable-reset` KEYWORD (which pins the
+     * cloneable flavor), false when it is a plain `reset` (flavor-flexible).  Set
+     * by elab_cloneable_reset / cleared by elab_reset at entry, read by
+     * elab_cont_shift_core's serial route so a `serial-cont` shift under a pinned
+     * cloneable-reset gets a clear diagnostic instead of the misleading downstream
+     * TUR-E0706 "context not capturable". */
+    bool             pinned_cloneable_at_depth[64];
     /* cps-backend-n6 cross-function resume: set true the first time a resuming
      * shift with no lexical reset is lowered onto the synthetic __Shift effect
      * (elab_cont_shift_core).  Read by the gated post-elaboration pass
@@ -787,7 +829,210 @@ typedef struct Elab {
      * rewritten call through; elab_call reads-and-clears it at entry so a nested
      * user `(Name ...)` during arg elaboration is still rejected. */
     bool              make_struct_ctor_rewrite;
+    /* RT1 (refinement-types-plan): proof obligations collected from
+     * `#refine{...}` crossings during this compilation unit.  Only populated
+     * when the `refined` experiment is on; the discharge pass (RT3) decides
+     * each one and the runtime contract check is elided exactly for those a
+     * backend proved. */
+    RefineObligationVec refine_obs;
+    /* RT1 call-site crossings, recorded during elaboration and RESOLVED AFTER
+     * IT (refine_resolve_call_sites, elab_toplevel.c).  Deferral is what makes
+     * the check independent of definition order: at the moment `(safe-div 10 0)`
+     * is elaborated, `safe-div`'s parameter predicates may not be stamped yet
+     * (the binding is a pass-1 forward declaration), but by the end of the unit
+     * they always are -- and it is the SAME Binding object, because elab_defn
+     * reuses the forward declaration rather than replacing it. */
+    struct RefineCallSite *refine_call_sites;
+    uint32_t               n_refine_call_sites;
+    uint32_t               cap_refine_call_sites;
+    /* WF2: `#writes`-annotated functions awaiting the deferred frame walk.  See
+     * WriteFrameSite below for why this is deferred rather than checked inline. */
+    struct WriteFrameSite *wf_frame_sites;
+    uint32_t               n_wf_frame_sites;
+    uint32_t               cap_wf_frame_sites;
+    /* Open-addressed (callee, call_form) -> index+1 set, so deduplicating a
+     * re-elaborated call site stays O(1) instead of rescanning every crossing
+     * recorded so far -- which would make an opted-in build quadratic in its
+     * call count. */
+    uint32_t              *refine_cs_htab;
+    uint32_t               refine_cs_htab_cap;
+    /* refine: macro-call form -> the expansion elaboration actually walked
+     * (parallel arrays, arena-allocated).  The crossing path walk uses this to
+     * traverse INTO an expansion, so a crossing or guard GENERATED by a macro
+     * template -- absent from the source caller body -- is still reachable
+     * from the caller-body walk.  A `~@body`-spliced user form never needed
+     * this (it sits in the source as a macro-call argument, found by the
+     * generic walk); a template-constructed `(get! ~w ~e)` exists only
+     * post-expansion.  Recorded only under the `refined` experiment. */
+    const struct Form    **refine_mexp_calls;
+    const struct Form    **refine_mexp_bodies;
+    uint32_t               n_refine_mexps;
+    uint32_t               cap_refine_mexps;
 } Elab;
+
+/* CT0: a contract type in ANNOTATION position contributes its BASE type to the
+ * signature; the predicate rides separately, as an entry check and (under
+ * `refined`) as a hypothesis.  EVERY site that resolves a parameter or return
+ * annotation must peel it -- leaving a TY_CONTRACT in a signature makes every
+ * use of that value fail to type with `expected { _ : ? | ... }`.
+ *
+ * That defect reached three sites independently before this helper existed:
+ * `defn` return types, `fn` parameters, and typeclass instance-method
+ * parameters.  If you are adding a fourth annotation site, call this.
+ *
+ * `*out_pred` / `*out_var` receive the predicate and its bound variable when
+ * one was peeled; both are left untouched otherwise. */
+static inline Type *rt_peel_contract(Type *ann, const Form **out_pred,
+                                     const char **out_var) {
+    if (ann && ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
+        if (out_pred) *out_pred = ann->as.contract_.predicate;
+        if (out_var)  *out_var  = ann->as.contract_.var_name;
+        return ann->as.contract_.base_type;
+    }
+    return ann;
+}
+
+/* Peel a contract in TYPE-ARGUMENT position (`(Box #refine{...})`) to its base
+ * type, warning TUR-W0380 that the payload predicate is not enforced.  Called
+ * from BOTH type-application loops -- type_expr_from_form's and
+ * fn_type_from_form_impl's; see the definition in elab_types.c for why there
+ * are two and why this warns rather than dropping the predicate silently. */
+Type *rt_peel_type_arg_contract(Type *arg_type, Span at);
+
+/* CT1: wrap a function body so its RESULT is checked against `pred`.  Shared by
+ * `defn` and typeclass instance methods; see elab_fns.c for why it is not
+ * hand-rolled per site. */
+Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
+                           const Form *pred, const char *var_name,
+                           const char *fail_msg, Span span);
+
+/* CT1: inject an entry check for each `{ v : T | pred }` parameter.  Shared by
+ * `defn`, `fn`, and typeclass instance methods so a contract parameter is
+ * enforced identically wherever it is written.  Must be called while the
+ * function's own scope is current -- the predicate is elaborated in it. */
+Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
+                             Binding **params, uint32_t n_params,
+                             const Form **ct_preds, const char **ct_vars,
+                             const uint32_t *ct_idx, uint32_t n_ct, Span span);
+
+/* True when contract checks are being emitted for this build. */
+bool rt_contracts_emitted(void);
+
+/* RT1 helpers shared by the annotation sites (defn / fn / typeclass methods). */
+VCSort rt_sort_of_kind(TypeKind k);
+bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out);
+RefineFnResolver rt_refine_resolver(Elab *e);
+
+/* One pending call-site crossing: `call_form`'s arguments cross into
+ * `callee`'s parameters.  Nothing is looked up here -- see the field comment
+ * on Elab.refine_call_sites for why. */
+typedef struct RefineCallSite {
+    const Binding *callee;
+    /* The callee's name AS WRITTEN at this site.  A typeclass method's binding
+     * carries its mangled C symbol (`__inst_Scaler_scale_hyby_int`), which is
+     * not something to put in a diagnostic; the source form's head is. */
+    const char    *callee_display;
+    const Form    *call_form;    /* the whole `(f a b)` form */
+    uint32_t       arg_offset;   /* index of the first argument in call_form */
+    RefineEnv     *env;          /* the caller's hypotheses (may be NULL) */
+    const char    *caller_name;
+    /* The caller's whole body, back-filled alongside `env`.  The crossing
+     * needs it to recover its own PATH CONDITIONS: `call_form` is a pointer
+     * into this tree, so walking down to it collects every branch that had to
+     * be taken to reach the call.
+     *
+     * WHOLE is load-bearing: a multi-form body arrives as a synthetic
+     * `(do ...)` (see rt_whole_body).  This used to be the defn's LAST body
+     * form, which is the return obligation's subject and not the same thing --
+     * a call in any earlier form was then never found by the walk and lost
+     * every condition guarding it. */
+    const Form    *caller_body;
+    /* RT1: when this crossing is a STATICALLY-resolved typeclass dispatch whose
+     * instance demands LESS than its class, the class's own parameter
+     * predicates.  The obligation is still the instance's -- the resolved
+     * instance is the more precise contract, and the argument is genuinely
+     * acceptable to it -- but an argument the CLASS rejects is relying on that
+     * instance's private leniency, which is not part of the interface and
+     * evaporates the moment dispatch goes dynamic or a stricter instance
+     * appears.  That is TUR-W0377.  NULL for every other crossing, and for a
+     * dispatch whose instance restates its class predicate (nothing to
+     * disagree about). */
+    const Form   **class_param_preds;
+    const char   **class_param_vars;
+    uint32_t       n_class_params;
+    /* C2 / #reads: the names of the bindings that are BORROWED (frozen) in
+     * scope at this crossing -- captured from the borrow checker's scope at
+     * crossing-creation time, when it authoritatively knows what is live.  A
+     * `#reads w` measure is congruent here exactly when its world argument is
+     * one of these.  NULL / 0 when nothing is frozen. */
+    const char   **frozen_names;
+    uint32_t       n_frozen;
+    Span           loc;
+} RefineCallSite;
+
+/* Record a crossing (deduplicated on (callee, call_form)).  No-op unless the
+ * `refined` experiment is on.  Returns the index it was stored at (or the
+ * current count when deduplicated), so elab_defn can back-fill the caller's
+ * hypotheses over the range its body produced. */
+uint32_t refine_note_call_site(Elab *e, const Binding *callee,
+                               const Form *call_form, uint32_t arg_offset);
+
+/* WF2 (checked-write-frames-plan): one `#writes`-annotated function, recorded
+ * during elaboration and verified AFTER it (wf_resolve_write_frames).  The
+ * deferral is load-bearing for the same reason it is for refinement crossings:
+ * "every callee's declared frame stays inside this one" is a question about
+ * functions that may be defined later in the file, and a check that answered it
+ * differently depending on definition order would be worthless. */
+typedef struct WriteFrameSite {
+    Binding      *fn;          /* the annotated function; where the verdict lands */
+    Binding     **params;      /* its parameters, for arg -> frame-slot mapping */
+    uint32_t      n_params;
+    const Form   *defn_form;   /* the whole `(defn ...)`; the body is a suffix */
+    uint32_t      body_start;  /* index of the first body form within defn_form */
+    const Form   *annot;       /* the `#writes` form, for the diagnostic span */
+} WriteFrameSite;
+
+/* Record an annotated function for the deferred WF2 walk.  No-op unless the
+ * `write-frames` experiment is on. */
+void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
+                        const Form *defn_form, uint32_t body_start,
+                        const Form *annot);
+
+/* Verify every recorded frame against its body, stamping `writes_checked` on
+ * the ones that hold and emitting TUR-E0382 on the ones that do not. */
+void wf_resolve_write_frames(Elab *e);
+
+/* Record that macro-call form `call` elaborated to `expansion`, so the
+ * crossing path walk can traverse INTO the expansion (macro-GENERATED
+ * crossings/guards are otherwise unreachable from the source caller body).
+ * Deduplicated on `call`; a re-elaboration overwrites with the latest
+ * expansion (whose nodes the newest crossings point into -- an older
+ * crossing still matches by span, since every copy of a template node
+ * carries the same template span).  No-op unless `refined` is on. */
+void refine_note_macro_expansion(Elab *e, const Form *call,
+                                 const Form *expansion);
+
+/* Attach the CLASS signature's parameter predicates to an already-recorded
+ * crossing, so a statically-resolved dispatch whose instance demands less can
+ * be linted (TUR-W0377) without changing what it is obliged to prove. */
+void refine_note_call_site_class_preds(Elab *e, const Binding *callee,
+                                       const Form *call_form,
+                                       const Form **preds, const char **vars,
+                                       uint32_t n_params);
+
+/* Attach `env` / `caller` to every crossing recorded at or after `from` that
+ * does not already have one.  Called by elab_defn once its body is elaborated
+ * and its hypothesis environment is built.  Back-filling rather than keeping a
+ * mutable "current env" on Elab is deliberate: elab_defn has many early-error
+ * returns, and a stale environment left behind by one of them would hand a
+ * later crossing hypotheses that do not hold there -- which is exactly the
+ * direction the soundness invariant forbids. */
+void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
+                               const char *caller, const Form *body);
+
+/* Resolve and discharge every recorded crossing.  Runs once, after all
+ * elaboration, from elaborate_program. */
+void refine_resolve_call_sites(Elab *e);
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
 typedef struct GenContext {
@@ -903,6 +1148,11 @@ void elab_force_load_module(Elab *e, const char *module_name);
 int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
                              Form *const *forms, uint32_t nforms,
                              Form ***out_forms, uint32_t *out_n);
+/* Pass-1 forward declaration of a single top-level (defn ...) form into
+ * e->global.  Shared by elaborate_program (entry unit) and import_module
+ * (imported/loaded modules) so bare top-level defns spliced by (load ...) can
+ * self/mutually recurse.  A non-defn form is a no-op. */
+void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_check_not_moved(Binding *b, Span use_span, const char *use_desc);
@@ -917,6 +1167,11 @@ uint32_t linear_state_snapshot_bindings(const Scope *scope,
 bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
+/* set-bang-rc-release: stamp every `(set! binding v)` in `body` so codegen
+ * releases the value being overwritten, normalizing borrow-shaped `v` to a
+ * genuine +1 first.  Call ONLY for a binding that owns a continuous reference
+ * (i.e. one that also qualifies for the scope-exit rc auto-drop). */
+void elab_set_rc_release(Arena *arena, Expr *body, Binding *binding);
 bool is_field_consumed(const Expr *body, Binding *binding, uint32_t field_idx);
 bool is_field_consumed_in_handler(const Expr *body, Binding *binding, uint32_t field_idx);
 Binding *expr_closure_fn_binding(const Expr *expr);
@@ -1130,6 +1385,11 @@ Expr *elab_ref_pred(Elab *e, const Form *call);
 Expr *elab_gc_force(Elab *e, const Form *call);
 Expr *elab_gc_enable(Elab *e, const Form *call);
 Expr *elab_gc_disable(Elab *e, const Form *call);
+Expr *elab_gc_auto(Elab *e, const Form *call);
+Expr *elab_gc_collections(Elab *e, const Form *call);
+Expr *elab_gc_objects_freed(Elab *e, const Form *call);
+Expr *elab_gc_live_blocks(Elab *e, const Form *call);
+Expr *elab_gc_candidate_high_water(Elab *e, const Form *call);
 
 /* elab_effects.c */
 Expr *elab_reset(Elab *e, const Form *call);
@@ -1254,6 +1514,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
  * the name is not a typed "ptr<...>" form (e.g. "ptr<void>" or a non-ptr
  * name), so callers can fall through to their existing handling. */
 Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+    Span span, const Symbol *rec_name, const Symbol **type_params,
+    Kind *type_param_kinds, uint8_t n_type_params);
+/* rc-angle-bracket-annotation-becomes-tyvar: resolve a typed reference-family
+ * keyword annotation (`rc<T>`, `weak<T>`, `ref<T>`, `lref<T>`) to its real
+ * TY_RC/TY_WEAK/TY_REF/TY_LREF Type.  Returns NULL when the name is not one of
+ * these angle-bracket forms, so callers fall through to their existing
+ * handling (bare `rc`, tyvar, alias, ...). */
+Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     Span span, const Symbol *rec_name, const Symbol **type_params,
     Kind *type_param_kinds, uint8_t n_type_params);
 /* Resolve a type-annotation form (F_KEYWORD `:int`, spaced F_TYPE_ANN

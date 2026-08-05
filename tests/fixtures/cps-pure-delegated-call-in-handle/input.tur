@@ -1,0 +1,30 @@
+;; BODY-STRUCT-OR-TAINT fix (docs/reported -> archive): a colored function whose
+;; handled body makes a non-tail call to a colored helper (`greet`, performs
+;; Write) and, in the reified continuation, a PURE delegated user-fn call
+;; (`add-int`) whose result is delivered to the handle's prompt.
+;;
+;; Before the fix, handle_delim_ok had no CT_LETRAW case, so the delegated call
+;; fell to term_core_ok, which rejected the subsequent KK_PROMPT deliver
+;; (term_core_ok returned false while first_unsupported found no named residual --
+;; the two disagreed), evicting `run`/`greet` to the fiber as BODY-STRUCT-OR-TAINT.
+;; Now handle_delim_ok admits a pure (letraw_effect_free) delegated op, so `run`
+;; emits run__cps and runs the Write handler on the DK.  An EFFECTFUL delegated
+;; call still evicts (handle-effectful-fn-param-same-fn is unchanged).
+;;
+;; The handler prints "hi" (Write msg) and resumes with 0; the continuation then
+;; evaluates (add-int 3 4) = 7 as run's result.  Output: hi then 7.
+(defeffect Write [msg :cstr] :nil)
+
+(defn add-int [x : int y : int] : int (+ x y))
+
+(defn greet [name : cstr] #fx{Write} : nil
+  (perform (Write name)))
+
+(defn run [] : int
+  (handle
+    (do (greet "hi") (add-int 3 4))
+    (Write [msg] k) (do (println msg) (resume k 0))))
+
+(defn main [] : int
+  (println (run))
+  0)

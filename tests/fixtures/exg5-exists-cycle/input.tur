@@ -16,14 +16,21 @@
 ;;   - rc/of on a struct with rc fields tagging the block RCK_STRUCT
 ;;     and attaching walk_glue_S so the cycle walker can trace through.
 ;;
-;; The current Bacon-Rajan trial-deletion is still zombie-only (the
-;; suspect set is only populated when strong->0 with weak>0), so the
-;; live cycle is not reclaimed by gc! today.  The walker IS exercised
-;; (the mark phase invokes walk_glue_S for s1/s2 when they enter the
-;; grey queue) but trial deletion treats them as live because their
-;; strong_count stays > 0.  Extending the suspect tracking to handle
-;; live cycles is tracked separately; this fixture documents the
-;; topology and ensures gc! runs through the RCK_STRUCT path cleanly.
+;; CG7 (gc-cycle-collection-followup-plan): this fixture used to DOCUMENT
+;; non-collection.  When it was written the trial deletion was zombie-only --
+;; the suspect set was populated only when strong->0 with weak>0 -- so the
+;; cycle survived gc! and all this could assert was that the RCK_STRUCT walker
+;; ran without tripping.
+;;
+;; CG2 replaced that phase with real Bacon-Rajan trial deletion, so the cycle
+;; below is now RECLAIMED, and CG6 added the counters needed to say so from
+;; Turmeric rather than inferring it from a heap probe.  Promoted accordingly:
+;; the assertions after gc! are the point of the fixture now.
+;;
+;; Note the let scope closes BEFORE gc!.  That is what makes this garbage
+;; rather than a live cycle: each node drops to strong=1, held only by the
+;; other.  (tests/fixtures/gc-live-cycle-survives covers the opposite
+;; direction, where an external root must keep the cycle alive.)
 (defstruct S :move [next : rc<S>])
 
 ;; Initial sentinel for S.next at construction time -- the back-edge is
@@ -44,8 +51,11 @@
     ;; After back-edge: both at strong=2.
     (println (rc/strong-count s1))   ; 2
     (println (rc/strong-count s2)))  ; 2
-  ;; Force a collection.  The walker traverses through the RCK_STRUCT
-  ;; payloads but the live cycle stays alive under today's GC.
+  ;; Force a collection.  The walker traverses the RCK_STRUCT payloads, trial
+  ;; deletion subtracts the two in-cycle edges, and both nodes fall to a zero
+  ;; trial count -- garbage.
   (gc!)
   (println "post-gc")
+  (println (if (> (gc-objects-freed) 0) 1 0))   ; 1 -- the cycle was reclaimed
+  (println (gc-live-blocks))                    ; 0 -- nothing survived it
   0)

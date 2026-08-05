@@ -1,6 +1,8 @@
 /* elab_toplevel.c -- top-level form dispatch and the elaborate_program entry point. */
 #include "elab_internal.h"
 #include "platform_fs.h"  /* realpath() on Windows */
+#include "globals.h"      /* g_opt_cps_tramp_resume (top-level-main synthesis gate) */
+#include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
@@ -740,17 +742,17 @@ typedef struct {
 static const Symbol *load_path_key(SymbolTable *st, const char *path,
                                    const char *stdlib_dir) {
     char resolved[4096];
-    if (realpath(path, resolved) != NULL)
-        return intern_cstr(st, resolved);
-    /* A cwd-relative `stdlib/<rest>` load does not resolve via realpath() when
-     * the build runs from a directory other than the repo root -- e.g. the REPL
-     * builds a spice from the project's cwd (spice_loader.c).  Canonicalize it
-     * through the resolved stdlib dir (the same fallback the read side uses at
-     * the elab_read_file recovery below) so its dedup key matches the ABSOLUTE
-     * key the auto-load prefix seeded (load_path_key(sf->path) over the absolute
-     * stdlib path).  Without this, map.tur's `(load "stdlib/hamt.tur")` misses
-     * the already-auto-loaded hamt and re-splices it -- a
-     * "'tur_hamt_new' is already defined" collision that is purely cwd-dependent.
+    /* A `stdlib/<rest>` load MEANS "the stdlib's <rest>", which is the file the
+     * auto-load prefix already spliced from `stdlib_dir` (`resolve_stdlib_root`).
+     * Canonicalize it through `stdlib_dir` FIRST -- before the cwd-relative
+     * realpath below -- so its dedup key matches the auto-load seed regardless
+     * of where the build is invoked.  This is load-bearing when the two disagree:
+     * running from a checkout root makes `realpath("stdlib/hamt.tur")` succeed as
+     * the CWD copy while the auto-load resolved `stdlib_dir` to a *different*
+     * stdlib (e.g. an installed one on `TUR_STDLIB_DIR`), so the cwd key misses
+     * the seeded key and map.tur's `(load "stdlib/hamt.tur")` re-splices an
+     * already-auto-loaded hamt -- a "'tur_hamt_new' is already defined" collision
+     * that only reproduces off a checkout root and from a bare subprocess.
      * The stdlib dir already ends in ".../stdlib", so drop the leading
      * "stdlib/" component to avoid ".../stdlib/stdlib/...". */
     if (stdlib_dir && strncmp(path, "stdlib/", 7) == 0) {
@@ -759,6 +761,8 @@ static const Symbol *load_path_key(SymbolTable *st, const char *path,
         if (an > 0 && (size_t)an < sizeof(alt) && realpath(alt, resolved) != NULL)
             return intern_cstr(st, resolved);
     }
+    if (realpath(path, resolved) != NULL)
+        return intern_cstr(st, resolved);
     return intern_cstr(st, path);
 }
 
@@ -915,8 +919,47 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         sfile->src = src_copy;
         sfile->len = src_len;
         sfile->file_id = e->next_import_file_id++;
-        sfile->reader_type = reader_type_from_extension(path_buf);
-        if (sfile->reader_type == READER_UNKNOWN) sfile->reader_type = READER_TURMERIC;
+        /* load-ignores-inline-lang-directive: a loaded file's dialect was taken
+         * from its EXTENSION only, so `(load "sweetlib.tur")` on a file whose
+         * first line is `#lang turmeric/sweet` handed sweet source to the plain
+         * reader and died on the directive itself ("unexpected character '#'").
+         * Run the same detect_lang_layered sweep the entry file gets
+         * (resolve_reader_type in main.c) so the directive is both honoured and
+         * stripped.  Extension still wins for the base when it selected a
+         * non-default reader -- the directive is then a redundant hint --
+         * and layers ride along regardless of which source picked the base. */
+        {
+            ReaderType ext_type = reader_type_from_extension(path_buf);
+            if (ext_type == READER_UNKNOWN) ext_type = READER_TURMERIC;
+            const char  *lsrc  = src_copy;
+            size_t       llen  = src_len;
+            LangLayerSet layers = 0;
+            const char  *bad = NULL;
+            size_t       bad_len = 0;
+            ReaderType lang_type = detect_lang_layered(src_copy, src_len,
+                                                       &lsrc, &llen,
+                                                       &layers, &bad, &bad_len);
+            if (bad) {
+                diag_emit(DIAG_ERROR, path_f->span,
+                          "unknown #lang layer '%.*s' in loaded file '%s' "
+                          "(TUR-E0330)", (int)bad_len, bad, path_buf);
+                lx->rc = -1;
+                continue;
+            }
+            ReaderType chosen =
+                (ext_type != READER_TURMERIC) ? ext_type : lang_type;
+            if (!reader_type_is_implemented(chosen)) {
+                diag_emit(DIAG_ERROR, path_f->span,
+                          "#lang %s in loaded file '%s' is not yet implemented",
+                          reader_type_name(chosen), path_buf);
+                lx->rc = -1;
+                continue;
+            }
+            sfile->src         = lsrc;
+            sfile->len         = llen;
+            sfile->reader_type = chosen;
+            sfile->lang_layers = layers;
+        }
         diag_register_file(sfile);
         /* Transitive-RM (T2): share the entry file's macro registry. */
         uint32_t lf_n = 0;
@@ -1031,6 +1074,372 @@ static Type fwd_shallow_type_arg(Elab *e, const Form *af,
     return type_tyvar_named("_");
 }
 
+/* A top-level statement USED to be fold-unsafe when its handle subtree carried a
+ * `set!` (the escaping-mutable shape, effect-capture-k -- the DK had no
+ * by-reference mutable capture) or a value-position nested handle (effect-nested).
+ * BOTH now DK-lower:
+ *  - the nested handle rides an LH_RESUME_CONT resume-frame whose borrowed `__kont`
+ *    is copied into the nested handle's continuation env (CE.borrowed_kont);
+ *  - the escaping mutable is lowered to a by-reference heap cell (B7): a `(set! m k)`
+ *    store of a continuation deep-copies the chain into a shared cell captured by
+ *    reference into the lifted handler case + continuation (emit_cps_ir.c
+ *    g_byref_muts / dk_copy_range copy-on-store).
+ * A synthesized d2b main whose shape the CPS subset still cannot admit is dropped
+ * by the taint fixpoint and falls back to the historical direct/fiber main
+ * (emit_cps_ir_try_fn returns false before the d2b wrapper) -- never a hard error.
+ * So nothing is categorically fold-unsafe here now; keep the scan helper for
+ * future shape-specific gating. */
+static bool fold_stmt_is_risky(const Elab *e, const Form *f) {
+    (void)e; (void)f;
+    return false;
+}
+
+/* True when `f` contains a `(perform ...)` that is NOT lexically guarded by an
+ * enclosing `handle`/`reset` and NOT inside a nested `fn`/lambda.  Such a perform
+ * is a TOP-LEVEL unhandled effect: elaboration rejects it with a compile-time
+ * TUR-E0008 via the `fn_body_depth == 0 && !is_effect_handled` check
+ * (elab_effects.c).  Folding the statement into the synthesized main body would
+ * put the perform at `fn_body_depth > 0`, suppressing that diagnostic and
+ * deferring to a bare runtime abort instead (errors/effect-unhandled).  A perform
+ * UNDER a handle/reset (the idiomatic B1 `(println (handle (perform E) (E ..) ..))`
+ * top-level effect statement) is conservatively assumed handled, so the fold still
+ * fires for it; a perform inside a nested `fn` runs at fn_body_depth > 0 either way
+ * and never carried the top-level diagnostic, so it does not block the fold. */
+static bool form_has_toplevel_unhandled_perform(const Elab *e, const Form *f) {
+    if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head && head->tag == F_SYM) {
+        const Symbol *hs = head->as.sym;
+        if (hs == e->sym_perform) return true;
+        /* a handle/reset guards its subtree; a nested fn/lambda is its own body */
+        if (hs == e->sym_handle || hs == e->sym_reset
+            || hs == e->sym_fn || hs == e->sym_lambda) return false;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (form_has_toplevel_unhandled_perform(e, f->as.list.items[i])) return true;
+    return false;
+}
+
+/* Classify a `(defmacro name [params] TEMPLATE)` form: does its expansion
+ * produce a STATEMENT (fold-safe) rather than a top-level definition/directive?
+ *
+ * A top-level macro CALL is normally ambiguous to the synthesized-main fold --
+ * it may expand to a top-level `defn`/`defmodule` (stays top-level) OR to a
+ * statement like `(handle ...)` (should fold into main's do-body and DK-lower).
+ * The fold runs BEFORE macros are registered, so we cannot expand the call; but
+ * we can inspect the macro's DEFINITION.  Return true only when the body is a
+ * single template form whose direct head is a symbol that provably cannot be a
+ * top-level definition: not a `def*` head, not a module directive / `do` /
+ * quote / quasiquote head, and not itself another macro (whose expansion we
+ * cannot see through here).  A statement-form head (`handle`, `reset`, `let`,
+ * `if`, or a plain function call) qualifies.  Conservative by construction:
+ * quasiquoted templates (distinct F_QUASIQUOTE tag), multi-form bodies, and
+ * macro-of-macro templates all return false and keep the historical fiber path.
+ * On success `*out_template` is the template form, for the risky-shape check. */
+static bool macro_form_stmt_safe(const Elab *e, const Form *dm,
+                                 const Symbol *const *macro_names, uint32_t n_macro,
+                                 const Form **out_template) {
+    *out_template = NULL;
+    /* exactly `(defmacro name [params] TEMPLATE)` -- 4 items, single body form */
+    if (dm->tag != F_LIST || dm->as.list.len != 4) return false;
+    const Form *tmpl = dm->as.list.items[3];
+    if (!tmpl || tmpl->tag != F_LIST || tmpl->as.list.len == 0) return false;
+    const Form *th = tmpl->as.list.items[0];
+    if (!th || th->tag != F_SYM || !th->as.sym->name) return false;
+    const Symbol *ths = th->as.sym;
+    const char *thn = ths->name;
+    if (thn[0] == 'd' && thn[1] == 'e' && thn[2] == 'f') return false; /* def* */
+    if (ths == e->sym_import || ths == e->sym_load || ths == e->sym_export
+        || ths == e->sym_extern_c || ths == e->sym_defmodule
+        || ths == e->sym_do || ths == e->sym_quote || ths == e->sym_quasiquote)
+        return false;
+    for (uint32_t m = 0; m < n_macro; m++)
+        if (macro_names[m] == ths) return false;   /* macro-of-macro: opaque */
+    *out_template = tmpl;
+    return true;
+}
+
+/* Pass-1 forward declaration of a single top-level (defn ...) form.
+ *
+ * Registers the defn's name into ep->global (with the best-effort forward-decl
+ * type) so a self-recursive or mutually-recursive call in the body resolves
+ * even before Pass-2 elaborates the body.  Extracted from elaborate_program so
+ * import_module can run the same pre-pass over the bare top-level defns a
+ * (load ...) splices into an imported module -- without it those spliced defns
+ * (e.g. stdlib/typeclass-show.tur's `vec-show-loop`, which the reentrant
+ * string<->typeclass load chain pulls into an imported module) elaborate
+ * linearly with no forward decl and a self-call reports "unknown function".
+ * See docs/archive/compiled-string-return-int-conversion.md (secondary
+ * blocker). */
+void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *head = f->as.list.items[0];
+            if (head->tag == F_SYM) {
+                if (head->as.sym == ep->sym_defn) {
+                    /* Parse defn declaration without body */
+                    if (f->as.list.len >= 3) {
+                        /* Phase R5: skip optional #[no-unwind] / #[used] bare
+                         * attribute symbols (either order) before the name. */
+                        uint32_t name_idx = 1;
+                        while ((uint32_t)f->as.list.len > name_idx &&
+                               f->as.list.items[name_idx]->tag == F_SYM &&
+                               (f->as.list.items[name_idx]->as.sym == ep->sym_no_unwind_attr ||
+                                f->as.list.items[name_idx]->as.sym == ep->sym_used_attr)) {
+                            name_idx++;
+                        }
+                        /* Phase M6: skip optional (export-as "c_name") attribute */
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_LIST &&
+                            f->as.list.items[name_idx]->as.list.len == 2 &&
+                            f->as.list.items[name_idx]->as.list.items[0]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.list.items[0]->as.sym == ep->sym_export_as_attr) {
+                            name_idx += 1; /* skip (export-as "c_name") */
+                        }
+                        /* F4: skip optional ^deprecated [message] attribute */
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_deprecated) {
+                            name_idx += 1;
+                            if ((uint32_t)f->as.list.len > name_idx &&
+                                f->as.list.items[name_idx]->tag == F_STR) {
+                                name_idx += 1;
+                            }
+                        }
+                        if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
+                        Form *name_f = f->as.list.items[name_idx];
+                        if (name_f->tag == F_SYM) {
+                            /* Parse return type annotation if present */
+                            TypeKind return_kind = TY_INT; /* default */
+                            /* defdata-parametric-forward-decl-inference: full
+                             * TY_APP result type for a compound parametric-ADT
+                             * return (e.g. (PRes Expr)), stamped onto the
+                             * forward decl so a sibling caller declared earlier
+                             * sees the concrete type args. */
+                            Type *fwd_result_full = NULL;
+                            uint32_t params_idx_local = name_idx + 1; /* params usually here */
+                            /* poly-defn-recursive-return-type-inference: a defn with
+                             * explicit type parameters spells as
+                             *   (defn name [TypeVars] [params] :ret body)        -- 2-vec
+                             *   (defn name [TypeVars] [Constraints] [params] :ret body) -- 3-vec
+                             * so the params vector is at name_idx+2 (or +3), not +1.
+                             * Without this skip, ret_idx points at the params vec, the
+                             * keyword/sym/type-ann probe below misses, and the forward
+                             * decl falls back to TY_INT -- breaking recursive self-calls
+                             * inside a poly-defn body (e.g. `: bool` typed as int).
+                             * Mirrors the F_VEC detection in elab_fns.c elab_defn. */
+                            if (f->as.list.len > params_idx_local + 1 &&
+                                f->as.list.items[params_idx_local]->tag == F_VEC &&
+                                f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
+                                /* type-param vec present; bump past it */
+                                params_idx_local++;
+                                /* optional constraint vec between TypeVars and params */
+                                if (f->as.list.len > params_idx_local + 1 &&
+                                    f->as.list.items[params_idx_local]->tag == F_VEC &&
+                                    f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
+                                    params_idx_local++;
+                                }
+                            }
+                            uint32_t ret_idx = params_idx_local + 1; /* :ret follows params */
+                            /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
+                            if (f->as.list.len > ret_idx && f->as.list.items[ret_idx]->tag == F_MAP) {
+                                ret_idx++;
+                            }
+                            if (f->as.list.len > ret_idx) {
+                                Form *ret_f = f->as.list.items[ret_idx];
+                                /* Accept spaced `: T` (F_TYPE_ANN of a single
+                                 * symbol/keyword) by treating the inner as a
+                                 * keyword.  Compound `: (-> a b)` still routes
+                                 * through the F_TYPE_ANN branch below. */
+                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1) {
+                                    Form *inner = ret_f->as.list.items[0];
+                                    if (inner->tag == F_SYM || inner->tag == F_KEYWORD) {
+                                        ret_f = inner;
+                                    } else if (inner->tag == F_NIL) {
+                                        /* `: nil` -- the bare `nil` literal in a type
+                                         * position is parsed as F_NIL by the reader;
+                                         * it means the nil/void return type. */
+                                        return_kind = TY_NIL;
+                                        ret_f = NULL;
+                                    }
+                                }
+                                if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
+                                    const Symbol *kw = ret_f->as.sym;
+                                    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                                        return_kind = TY_INT;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                                        return_kind = TY_BOOL;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
+                                        return_kind = TY_NIL;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
+                                        /* SS3a: :nil return type must forward-declare as void,
+                                         * not TY_INT, so recursive nil-returning functions
+                                         * correctly infer TY_NIL for their body type. */
+                                        return_kind = TY_NIL;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                                        return_kind = TY_CSTR;
+                                    } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
+                                        return_kind = TY_PTR_VOID;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                                        return_kind = TY_PTR_VOID;
+                                    } else {
+                                        /* bare-adt-forward-decl-inference: a non-parametric
+                                         * user type name -- `: T` for a `defdata` /
+                                         * `defstruct` / `defopaque` T (RF0 has already
+                                         * registered the stub) -- must forward-declare with
+                                         * that ADT's real result type, not the TY_INT
+                                         * default.  Without this, a sibling caller declared
+                                         * *earlier* in the module (mutual / forward
+                                         * recursion) types the call as `int`, and a `match`
+                                         * arm returning the ADT then reports a spurious
+                                         * "arm types incompatible -- expected int, got adt".
+                                         * (docs/reported/logic-port-language-gaps.md GAP 2.) */
+                                        for (uint32_t ai = 0; ai < ep->n_adt_defs; ai++) {
+                                            if (strcmp(ep->adt_defs[ai]->name, kw->name) == 0) {
+                                                Type adt_ty = type_adt(ep->adt_defs[ai]);
+                                                Type *tt = (Type *)arena_alloc(
+                                                    arena, sizeof(Type));
+                                                *tt = adt_ty;
+                                                return_kind = adt_ty.kind;
+                                                fwd_result_full = tt;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
+                                    /* Compound return type: peek at the head symbol to
+                                     * recognize Session[P] returns for pass-1 forward decls. */
+                                    Form *head_f = ret_f->as.list.items[0];
+                                    /* The compound annotation payload is either a bare
+                                     * symbol (`Session`) or an application list
+                                     * (`(PRes Expr)`); recover the type-constructor
+                                     * symbol from whichever shape it is. */
+                                    const Symbol *tycon_sym = NULL;
+                                    if (head_f->tag == F_SYM) {
+                                        tycon_sym = head_f->as.sym;
+                                    } else if (head_f->tag == F_LIST &&
+                                               head_f->as.list.len > 0 &&
+                                               head_f->as.list.items[0]->tag == F_SYM) {
+                                        tycon_sym = head_f->as.list.items[0]->as.sym;
+                                    }
+                                    if (tycon_sym &&
+                                            strcmp(tycon_sym->name, "Session") == 0) {
+                                        return_kind = TY_SESSION;
+                                    } else if (tycon_sym) {
+                                        /* defdata-parametric-forward-decl-inference:
+                                         * a compound `(F A B)` return whose head is a
+                                         * registered ADT/struct stub (RF0 has run) --
+                                         * e.g. (PRes Expr), (Option Foo), (Vec T).
+                                         * Build the full TY_APP so a sibling caller
+                                         * declared earlier in the module resolves the
+                                         * scrutinee's concrete type args (otherwise the
+                                         * pattern binding falls back to the placeholder
+                                         * carrier and downstream constructor arms
+                                         * mismatch). Gated on a registered ADT head so
+                                         * fn_type_from_form only walks pre-registered
+                                         * names and cannot emit a spurious diagnostic. */
+                                        bool head_is_adt = false;
+                                        for (uint32_t ai = 0; ai < ep->n_adt_defs; ai++) {
+                                            if (strcmp(ep->adt_defs[ai]->name,
+                                                       tycon_sym->name) == 0) {
+                                                head_is_adt = true;
+                                                break;
+                                            }
+                                        }
+                                        if (head_is_adt) {
+                                            /* Collect the defn's own type params (poly
+                                             * defn) so a return like (PRes A) keeps A as
+                                             * a named tyvar rather than an unknown name. */
+                                            const Symbol *tp_syms[MAX_FN_ARITY];
+                                            Kind tp_kinds[MAX_FN_ARITY];
+                                            uint8_t n_tp = 0;
+                                            if (params_idx_local > name_idx + 1 &&
+                                                (uint32_t)f->as.list.len > name_idx + 1 &&
+                                                f->as.list.items[name_idx + 1]->tag == F_VEC) {
+                                                Form *tpv = f->as.list.items[name_idx + 1];
+                                                for (uint32_t ti = 0;
+                                                     ti < tpv->as.list.len && n_tp < MAX_FN_ARITY;
+                                                     ti++) {
+                                                    Form *tf = tpv->as.list.items[ti];
+                                                    if (tf->tag == F_SYM) {
+                                                        tp_syms[n_tp] = tf->as.sym;
+                                                        tp_kinds[n_tp] = KIND_STAR;
+                                                        n_tp++;
+                                                    }
+                                                }
+                                            }
+                                            (void)tp_kinds;
+                                            Type *ann = fwd_shallow_result_app(
+                                                ep, head_f, tp_syms, n_tp);
+                                            if (ann && ann->kind == TY_APP) {
+                                                return_kind = TY_APP;
+                                                fwd_result_full = ann;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            /* Count actual arity + scalar arg kinds from the
+                             * params vector.  fwd_decl_scan_params skips
+                             * `^`-prefixed markers (^fat/^mut/...) so the
+                             * forward-declared arity is not over-stated (see
+                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md). */
+                            TypeKind *arg_kinds = NULL;
+                            uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
+                                ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
+                                : 0;
+                            Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
+                            /* defdata-parametric-forward-decl-inference: carry the
+                             * full compound result type on the forward decl. */
+                            if (fwd_result_full) {
+                                fn_type.as.fn.result_full_type = fwd_result_full;
+                            }
+                            /* MF3: if the name is already in global scope (e.g. an
+                             * auto-loaded stdlib defn), do NOT pre-register a
+                             * duplicate forward decl. Pass 2's elab_defn will then
+                             * see the original binding (with is_from_stdlib set
+                             * correctly) and either reuse it as a forward decl or
+                             * emit the shadow diagnostic. */
+                            if (!scope_lookup(&ep->global, name_f->as.sym)) {
+                                Binding *b = binding_new(ep, name_f->as.sym, fn_type, false, true, f->span);
+                                scope_add(&ep->global, b);
+                            }
+                        }
+                    }
+                    next_form:;
+                }
+            }
+        }
+}
+
+/* TR2: session lifecycle. A session is just a heap-allocated Elab whose state
+ * survives between calls; `arena`/`st` are re-pointed at each call's arena. The
+ * zeroed `arena` field marks a session that has not been initialised yet. */
+ElabSession *elab_session_new(void) {
+    Elab *s = (Elab *)calloc(1, sizeof(Elab));
+    return (ElabSession *)s;
+}
+
+void elab_session_free(ElabSession *session) {
+    Elab *e = (Elab *)session;
+    if (!e) return;
+    if (e->arena) {   /* initialised: tear down the same state the non-session
+                       * path frees at return */
+        scope_free(&e->global);
+        free(e->adt_defs);
+        free(e->forward_type_syms);
+        free(e->handled_effect_names);
+        free(e->pending_reset_nodes);
+        free(e->macros);
+        free(e->macro_expansion_stack);
+        free(e->loaded_modules);
+        free(e->dynvar_entries);
+        free(e->active_dynvar_bindings);
+        free((void *)e->load_expanded_paths);
+        free(e->file_scope_defs);
+    }
+    free(e);
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -1042,8 +1451,53 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         int n_include_dirs,
                         uint32_t *out_n_file_scope_defs,
                         struct ReaderMacroRegistry *user_macros) {
+    return elaborate_program_session(arena, st, forms, nforms, stdlib_prefix,
+                                     module_base_dir, separate_compilation,
+                                     sandboxed, out_tc_env, include_dirs,
+                                     n_include_dirs, out_n_file_scope_defs,
+                                     user_macros, /*session=*/NULL);
+}
+
+Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
+                        Form *const *forms, uint32_t nforms,
+                        uint32_t stdlib_prefix,
+                        const char *module_base_dir,
+                        bool separate_compilation,
+                        bool sandboxed,
+                        TypeClassEnv *out_tc_env,
+                        const char **include_dirs,
+                        int n_include_dirs,
+                        uint32_t *out_n_file_scope_defs,
+                        struct ReaderMacroRegistry *user_macros,
+                        ElabSession *session) {
     Elab e;
-    elab_init_state(&e, arena, st);
+    /* TR2: restore accumulated state from the session (a plain struct copy --
+     * every field is POD or a malloc'd/arena pointer). `scope` is the one
+     * self-referential field (it points at `global` inside the struct), so it
+     * is re-anchored after the copy; a session is only ever saved at top level,
+     * where scope == &global and no fn-entry scope is open. */
+    Elab *sess = (Elab *)session;
+    const bool sess_live = (sess && sess->arena != NULL);
+    if (sess_live) {
+        e = *sess;
+        e.arena = arena;
+        e.st    = st;
+        e.scope = &e.global;
+        e.fn_entry_outer_scope = NULL;
+        /* Per-FILE state must NOT carry across calls: each incremental call is
+         * conceptually a new file (a REPL turn, or the next preloaded stdlib
+         * module). Without this reset, `has_defmodule` stays true after the
+         * first defmodule-wrapped file and every later one fails with "only one
+         * defmodule is allowed per file" -- which is exactly what the
+         * whole-program path avoided by resetting at the stdlib_prefix/file
+         * boundary. Accumulated state (scope, typeclasses, registries,
+         * loaded_modules) is what we deliberately keep. */
+        e.has_defmodule       = false;
+        e.current_module_name = NULL;
+        e.current_module      = NULL;
+    } else {
+        elab_init_state(&e, arena, st);
+    }
     e.user_macros = user_macros;
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
     /* stdlib fallback: TUR_STDLIB_DIR env var, else "stdlib" */
@@ -1214,250 +1668,199 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
 
+    /* v2 sole-effect-lowering (top-level-handle taint root): fold trailing
+     * top-level STATEMENT forms into a synthesized `(defn main [] : int
+     * (do <stmts> 0))` so an effect handler written at top level -- the idiomatic
+     * `(println (handle ...))` with no explicit `main` -- flows through the CPS/DK
+     * backend like a user main.  Without this the statements are direct/fiber-
+     * emitted into a synthesized `int main()` that never reaches the CPS
+     * classifier, so the top-level handle stays on the fiber, base_taints its
+     * effect, and every performer of that effect is forced onto the fiber
+     * (SIG-TAINT).  See docs/reported/cps-toplevel-synthesized-main-bypasses-dk.md.
+     *
+     * CONSERVATIVE + macro-safe: only fires when there is NO user `main` and
+     * every user-region top-level form is cleanly classifiable WITHOUT expanding
+     * macros -- either a definition/directive (head name starts with "def", or a
+     * known module directive; stays top-level) or a plain non-macro call (folded
+     * into main).  A macro call is ambiguous (it may expand to a top-level def OR
+     * a statement -- see macro-emits-multiple-top-level-forms), a top-level `do`
+     * progn may carry defs, and a bare atom would be dropped once the historical
+     * synthesized-main path is suppressed; ANY of these in the user region aborts
+     * the fold and preserves the historical behaviour exactly.  Only the entry
+     * unit is transformed (never a separately-compiled module).
+     *
+     * GATED on --enable=cps-tramp-resume: flag-off, the base CPS admissible
+     * subset is narrower and the N6.5 direct/fiber fallback is retired, so a
+     * synthesized d2b `main` whose handle subtree leaves the subset would HARD-
+     * ERROR instead of gracefully fibering.  The historical synthesized-`int
+     * main()` path (never subject to the CPS classifier) stays the flag-off
+     * behaviour; the fold only fires under the experiment, keeping flag-off
+     * codegen byte-identical. */
+    /* Interpreter parity (tur-eval-prints-fn-main): the tree-walking interpreter
+     * never reaches the CPS/DK backend this fold exists to feed, and folding a
+     * bare top-level expression into `(defn main [] : int (do <expr> 0))` makes
+     * turi_eval return the synthesized `main` closure (`#<fn main>`) instead of
+     * the expression's value -- and, at the non-`main`-calling entry points
+     * (`tur eval '<expr>'`, the non-interactive REPL), the statements never run
+     * at all.  Under the interpreter every top-level form is evaluated directly
+     * in turi_eval_impl's loop, so leaving statements top-level both runs their
+     * side effects and surfaces the last expression's value.  The fold graduated
+     * to default-on with `cps-tramp-resume` (2026-07-19), which is what regressed
+     * the interpreter eval/REPL value display; suppress it under g_interpret_mode
+     * to restore correct value semantics while keeping the compiled-path fold. */
+    if (g_opt_cps_tramp_resume && !g_interpret_mode
+        && !separate_compilation && stdlib_prefix <= nforms) {
+        /* Collect every defmacro name (user + stdlib) so a macro-headed
+         * top-level statement can be detected.  Also record each macro's
+         * defmacro form so a statement-producing macro (template head is a
+         * special form / plain call, provably not a top-level def) can be
+         * FOLDED into the synthesized main instead of aborting the fold. */
+        const Symbol **macro_names = NULL;
+        const Form **macro_defs = NULL;
+        uint32_t n_macro = 0, cap_macro = 0;
+        for (uint32_t i = 0; i < nforms; i++) {
+            Form *f = forms[i];
+            if (!f || f->tag != F_LIST || f->as.list.len < 2) continue;
+            Form *h = f->as.list.items[0];
+            if (!h || h->tag != F_SYM || h->as.sym != e.sym_defmacro) continue;
+            Form *nm = f->as.list.items[1];
+            if (!nm || nm->tag != F_SYM) continue;
+            if (n_macro == cap_macro) {
+                cap_macro = cap_macro ? cap_macro * 2 : 16;
+                macro_names = realloc(macro_names, cap_macro * sizeof(*macro_names));
+                macro_defs  = realloc(macro_defs,  cap_macro * sizeof(*macro_defs));
+            }
+            macro_defs[n_macro]    = f;
+            macro_names[n_macro++] = nm->as.sym;
+        }
+        bool have_user_main = false, ambiguous = false, any_stmt = false;
+        for (uint32_t i = stdlib_prefix; i < nforms && !ambiguous; i++) {
+            Form *f = forms[i];
+            if (!f) continue;
+            if (f->tag == F_CBLOCK) continue;             /* file-scope C stays */
+            if (f->tag != F_LIST || f->as.list.len == 0) { ambiguous = true; break; }
+            Form *head = f->as.list.items[0];
+            if (!head || head->tag != F_SYM || !head->as.sym->name) { ambiguous = true; break; }
+            const Symbol *hs = head->as.sym;
+            const char *hn = hs->name;
+            /* definition: any def* head stays top-level */
+            if (hn[0] == 'd' && hn[1] == 'e' && hn[2] == 'f') {
+                if (hs == e.sym_defn) {
+                    uint32_t ni = 1;   /* skip ^attr / (export-as ..) prefix syms */
+                    while (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM
+                           && f->as.list.items[ni]->as.sym->name
+                           && f->as.list.items[ni]->as.sym->name[0] == '^') ni++;
+                    if (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM
+                        && f->as.list.items[ni]->as.sym->len == 4
+                        && memcmp(f->as.list.items[ni]->as.sym->name, "main", 4) == 0)
+                        have_user_main = true;
+                }
+                continue;
+            }
+            /* module directives stay top-level */
+            if (hs == e.sym_import || hs == e.sym_load || hs == e.sym_export
+                || hs == e.sym_extern_c || hs == e.sym_defmodule) continue;
+            /* macro call / do progn / quote form: ambiguous -> abort the fold */
+            if (hs == e.sym_do) { ambiguous = true; break; }
+            /* fn-body-only forms (`?`, `return`) are illegal at top level and are
+             * rejected during elaboration by an `fn_body_depth == 0` check.  Folding
+             * one into the synthesized main body would put it INSIDE a function,
+             * suppressing that rejection and surfacing a misleading downstream error
+             * (e.g. top-level `(? 42)` -> "requires a Result value" instead of "only
+             * allowed inside a function body").  Abort the fold so the form stays
+             * top-level and keeps its correct diagnostic -- such a program is a
+             * compile error either way, so the historical path is exactly right. */
+            if (hs == e.sym_question || hs == e.sym_return) { ambiguous = true; break; }
+            int macro_idx = -1;
+            for (uint32_t m = 0; m < n_macro; m++)
+                if (macro_names[m] == hs) { macro_idx = (int)m; break; }
+            if (macro_idx >= 0) {
+                /* A macro whose template provably expands to a STATEMENT (head is
+                 * a special form / plain call, not a def / directive / do / nested
+                 * macro) is fold-safe: folded into main's do-body it expands there
+                 * and DK-lowers, exactly like a literal top-level handle.  Reject
+                 * (keep the historical fiber path) when we cannot prove that, or
+                 * when the template OR the call args carry a fold-risky shape
+                 * (escaping-mutable set!-in-handle). */
+                const Form *tmpl = NULL;
+                if (!macro_form_stmt_safe(&e, macro_defs[macro_idx],
+                                          macro_names, n_macro, &tmpl)
+                    || fold_stmt_is_risky(&e, tmpl)
+                    || fold_stmt_is_risky(&e, f)) {
+                    ambiguous = true; break;
+                }
+                any_stmt = true;
+                continue;
+            }
+            /* a plain call: a genuine top-level statement -- but abort the fold
+             * if its handle subtree is a shape the DK backend miscompiles (nested
+             * handle / escaping-mut set!), leaving it on the historical fiber path. */
+            if (fold_stmt_is_risky(&e, f)) { ambiguous = true; break; }
+            /* a top-level unhandled perform in a PLAIN-call statement must keep its
+             * compile-time TUR-E0008 (elab_effects.c) rather than be folded into
+             * main and deferred to a runtime abort (errors/effect-unhandled).  Only
+             * applied here, in the plain-call branch: a MACRO-call statement (handled
+             * above) may install a handler via its template expansion (e.g.
+             * with-fail-println wraps its body in a handle), which this pre-expansion
+             * lexical scan cannot see, so scanning it would wrongly abort a fold that
+             * DK-lowers fine after expansion (effect-with-fail / effect-with-write). */
+            if (form_has_toplevel_unhandled_perform(&e, f)) { ambiguous = true; break; }
+            any_stmt = true;
+        }
+        free(macro_names);
+        free(macro_defs);
+
+        if (!have_user_main && !ambiguous && any_stmt) {
+            /* Build `(defn main [] : int (do <stmts...> 0))`, keeping every
+             * definition/directive in place and collecting the statement forms
+             * in source order. */
+            Span sp = (nforms > 0) ? forms[nforms - 1]->span : (Span){0,0,0,0,0,0};
+            Form **new_forms = (Form **)arena_alloc(arena, (nforms + 1) * sizeof(Form *));
+            uint32_t nn = 0;
+            Form **stmts = (Form **)arena_alloc(arena, (nforms + 1) * sizeof(Form *));
+            uint32_t n_stmts = 0;
+            for (uint32_t i = 0; i < nforms; i++) {
+                Form *f = forms[i];
+                bool is_stmt = false;
+                if (i >= stdlib_prefix && f && f->tag == F_LIST && f->as.list.len > 0
+                    && f->as.list.items[0]->tag == F_SYM) {
+                    const char *hn = f->as.list.items[0]->as.sym->name;
+                    const Symbol *hs = f->as.list.items[0]->as.sym;
+                    bool is_def = hn && hn[0]=='d' && hn[1]=='e' && hn[2]=='f';
+                    bool is_dir = (hs == e.sym_import || hs == e.sym_load
+                                   || hs == e.sym_export || hs == e.sym_extern_c
+                                   || hs == e.sym_defmodule);
+                    is_stmt = !is_def && !is_dir;
+                }
+                if (is_stmt) stmts[n_stmts++] = f;
+                else         new_forms[nn++] = f;
+            }
+            /* do-body: (do stmt1 .. stmtN 0) */
+            Form **do_items = (Form **)arena_alloc(arena, (n_stmts + 2) * sizeof(Form *));
+            do_items[0] = form_sym(arena, sp, e.sym_do);
+            for (uint32_t i = 0; i < n_stmts; i++) do_items[i + 1] = stmts[i];
+            do_items[n_stmts + 1] = form_int(arena, sp, 0);
+            Form *do_body = form_list(arena, sp, do_items, n_stmts + 2);
+            /* (defn main [] : int <do_body>) */
+            Form **defn_items = (Form **)arena_alloc(arena, 5 * sizeof(Form *));
+            defn_items[0] = form_sym(arena, sp, e.sym_defn);
+            defn_items[1] = form_sym(arena, sp, intern_cstr(st, "main"));
+            defn_items[2] = form_vec(arena, sp, NULL, 0);
+            defn_items[3] = form_type_ann(arena, sp, form_sym(arena, sp, intern_cstr(st, "int")));
+            defn_items[4] = do_body;
+            new_forms[nn++] = form_list(arena, sp, defn_items, 5);
+            forms = (Form *const *)new_forms;
+            nforms = nn;
+        }
+    }
+
     /* Phase 2: Two-pass elaboration for mutual recursion support.
      * Pass 1: Collect all top-level defn declarations and add them to scope.
      * This allows mutually recursive functions to see each other. */
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
-        Form *f = forms[i];
-        if (f->tag == F_LIST && f->as.list.len > 0) {
-            Form *head = f->as.list.items[0];
-            if (head->tag == F_SYM) {
-                if (head->as.sym == e.sym_defn) {
-                    /* Parse defn declaration without body */
-                    if (f->as.list.len >= 3) {
-                        /* Phase R5: skip optional #[no-unwind] / #[used] bare
-                         * attribute symbols (either order) before the name. */
-                        uint32_t name_idx = 1;
-                        while ((uint32_t)f->as.list.len > name_idx &&
-                               f->as.list.items[name_idx]->tag == F_SYM &&
-                               (f->as.list.items[name_idx]->as.sym == e.sym_no_unwind_attr ||
-                                f->as.list.items[name_idx]->as.sym == e.sym_used_attr)) {
-                            name_idx++;
-                        }
-                        /* Phase M6: skip optional (export-as "c_name") attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_LIST &&
-                            f->as.list.items[name_idx]->as.list.len == 2 &&
-                            f->as.list.items[name_idx]->as.list.items[0]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.list.items[0]->as.sym == e.sym_export_as_attr) {
-                            name_idx += 1; /* skip (export-as "c_name") */
-                        }
-                        /* F4: skip optional ^deprecated [message] attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == e.sym_caret_deprecated) {
-                            name_idx += 1;
-                            if ((uint32_t)f->as.list.len > name_idx &&
-                                f->as.list.items[name_idx]->tag == F_STR) {
-                                name_idx += 1;
-                            }
-                        }
-                        if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
-                        Form *name_f = f->as.list.items[name_idx];
-                        if (name_f->tag == F_SYM) {
-                            /* Parse return type annotation if present */
-                            TypeKind return_kind = TY_INT; /* default */
-                            /* defdata-parametric-forward-decl-inference: full
-                             * TY_APP result type for a compound parametric-ADT
-                             * return (e.g. (PRes Expr)), stamped onto the
-                             * forward decl so a sibling caller declared earlier
-                             * sees the concrete type args. */
-                            Type *fwd_result_full = NULL;
-                            uint32_t params_idx_local = name_idx + 1; /* params usually here */
-                            /* poly-defn-recursive-return-type-inference: a defn with
-                             * explicit type parameters spells as
-                             *   (defn name [TypeVars] [params] :ret body)        -- 2-vec
-                             *   (defn name [TypeVars] [Constraints] [params] :ret body) -- 3-vec
-                             * so the params vector is at name_idx+2 (or +3), not +1.
-                             * Without this skip, ret_idx points at the params vec, the
-                             * keyword/sym/type-ann probe below misses, and the forward
-                             * decl falls back to TY_INT -- breaking recursive self-calls
-                             * inside a poly-defn body (e.g. `: bool` typed as int).
-                             * Mirrors the F_VEC detection in elab_fns.c elab_defn. */
-                            if (f->as.list.len > params_idx_local + 1 &&
-                                f->as.list.items[params_idx_local]->tag == F_VEC &&
-                                f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
-                                /* type-param vec present; bump past it */
-                                params_idx_local++;
-                                /* optional constraint vec between TypeVars and params */
-                                if (f->as.list.len > params_idx_local + 1 &&
-                                    f->as.list.items[params_idx_local]->tag == F_VEC &&
-                                    f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
-                                    params_idx_local++;
-                                }
-                            }
-                            uint32_t ret_idx = params_idx_local + 1; /* :ret follows params */
-                            /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
-                            if (f->as.list.len > ret_idx && f->as.list.items[ret_idx]->tag == F_MAP) {
-                                ret_idx++;
-                            }
-                            if (f->as.list.len > ret_idx) {
-                                Form *ret_f = f->as.list.items[ret_idx];
-                                /* Accept spaced `: T` (F_TYPE_ANN of a single
-                                 * symbol/keyword) by treating the inner as a
-                                 * keyword.  Compound `: (-> a b)` still routes
-                                 * through the F_TYPE_ANN branch below. */
-                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1) {
-                                    Form *inner = ret_f->as.list.items[0];
-                                    if (inner->tag == F_SYM || inner->tag == F_KEYWORD) {
-                                        ret_f = inner;
-                                    } else if (inner->tag == F_NIL) {
-                                        /* `: nil` -- the bare `nil` literal in a type
-                                         * position is parsed as F_NIL by the reader;
-                                         * it means the nil/void return type. */
-                                        return_kind = TY_NIL;
-                                        ret_f = NULL;
-                                    }
-                                }
-                                if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
-                                    const Symbol *kw = ret_f->as.sym;
-                                    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
-                                        return_kind = TY_INT;
-                                    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
-                                        return_kind = TY_BOOL;
-                                    } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
-                                        return_kind = TY_NIL;
-                                    } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
-                                        /* SS3a: :nil return type must forward-declare as void,
-                                         * not TY_INT, so recursive nil-returning functions
-                                         * correctly infer TY_NIL for their body type. */
-                                        return_kind = TY_NIL;
-                                    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
-                                        return_kind = TY_CSTR;
-                                    } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
-                                        return_kind = TY_PTR_VOID;
-                                    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
-                                        return_kind = TY_PTR_VOID;
-                                    } else {
-                                        /* bare-adt-forward-decl-inference: a non-parametric
-                                         * user type name -- `: T` for a `defdata` /
-                                         * `defstruct` / `defopaque` T (RF0 has already
-                                         * registered the stub) -- must forward-declare with
-                                         * that ADT's real result type, not the TY_INT
-                                         * default.  Without this, a sibling caller declared
-                                         * *earlier* in the module (mutual / forward
-                                         * recursion) types the call as `int`, and a `match`
-                                         * arm returning the ADT then reports a spurious
-                                         * "arm types incompatible -- expected int, got adt".
-                                         * (docs/reported/logic-port-language-gaps.md GAP 2.) */
-                                        for (uint32_t ai = 0; ai < e.n_adt_defs; ai++) {
-                                            if (strcmp(e.adt_defs[ai]->name, kw->name) == 0) {
-                                                Type adt_ty = type_adt(e.adt_defs[ai]);
-                                                Type *tt = (Type *)arena_alloc(
-                                                    arena, sizeof(Type));
-                                                *tt = adt_ty;
-                                                return_kind = adt_ty.kind;
-                                                fwd_result_full = tt;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
-                                    /* Compound return type: peek at the head symbol to
-                                     * recognize Session[P] returns for pass-1 forward decls. */
-                                    Form *head_f = ret_f->as.list.items[0];
-                                    /* The compound annotation payload is either a bare
-                                     * symbol (`Session`) or an application list
-                                     * (`(PRes Expr)`); recover the type-constructor
-                                     * symbol from whichever shape it is. */
-                                    const Symbol *tycon_sym = NULL;
-                                    if (head_f->tag == F_SYM) {
-                                        tycon_sym = head_f->as.sym;
-                                    } else if (head_f->tag == F_LIST &&
-                                               head_f->as.list.len > 0 &&
-                                               head_f->as.list.items[0]->tag == F_SYM) {
-                                        tycon_sym = head_f->as.list.items[0]->as.sym;
-                                    }
-                                    if (tycon_sym &&
-                                            strcmp(tycon_sym->name, "Session") == 0) {
-                                        return_kind = TY_SESSION;
-                                    } else if (tycon_sym) {
-                                        /* defdata-parametric-forward-decl-inference:
-                                         * a compound `(F A B)` return whose head is a
-                                         * registered ADT/struct stub (RF0 has run) --
-                                         * e.g. (PRes Expr), (Option Foo), (Vec T).
-                                         * Build the full TY_APP so a sibling caller
-                                         * declared earlier in the module resolves the
-                                         * scrutinee's concrete type args (otherwise the
-                                         * pattern binding falls back to the placeholder
-                                         * carrier and downstream constructor arms
-                                         * mismatch). Gated on a registered ADT head so
-                                         * fn_type_from_form only walks pre-registered
-                                         * names and cannot emit a spurious diagnostic. */
-                                        bool head_is_adt = false;
-                                        for (uint32_t ai = 0; ai < e.n_adt_defs; ai++) {
-                                            if (strcmp(e.adt_defs[ai]->name,
-                                                       tycon_sym->name) == 0) {
-                                                head_is_adt = true;
-                                                break;
-                                            }
-                                        }
-                                        if (head_is_adt) {
-                                            /* Collect the defn's own type params (poly
-                                             * defn) so a return like (PRes A) keeps A as
-                                             * a named tyvar rather than an unknown name. */
-                                            const Symbol *tp_syms[MAX_FN_ARITY];
-                                            Kind tp_kinds[MAX_FN_ARITY];
-                                            uint8_t n_tp = 0;
-                                            if (params_idx_local > name_idx + 1 &&
-                                                (uint32_t)f->as.list.len > name_idx + 1 &&
-                                                f->as.list.items[name_idx + 1]->tag == F_VEC) {
-                                                Form *tpv = f->as.list.items[name_idx + 1];
-                                                for (uint32_t ti = 0;
-                                                     ti < tpv->as.list.len && n_tp < MAX_FN_ARITY;
-                                                     ti++) {
-                                                    Form *tf = tpv->as.list.items[ti];
-                                                    if (tf->tag == F_SYM) {
-                                                        tp_syms[n_tp] = tf->as.sym;
-                                                        tp_kinds[n_tp] = KIND_STAR;
-                                                        n_tp++;
-                                                    }
-                                                }
-                                            }
-                                            (void)tp_kinds;
-                                            Type *ann = fwd_shallow_result_app(
-                                                &e, head_f, tp_syms, n_tp);
-                                            if (ann && ann->kind == TY_APP) {
-                                                return_kind = TY_APP;
-                                                fwd_result_full = ann;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            /* Count actual arity + scalar arg kinds from the
-                             * params vector.  fwd_decl_scan_params skips
-                             * `^`-prefixed markers (^fat/^mut/...) so the
-                             * forward-declared arity is not over-stated (see
-                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md). */
-                            TypeKind *arg_kinds = NULL;
-                            uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
-                                ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
-                                : 0;
-                            Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
-                            /* defdata-parametric-forward-decl-inference: carry the
-                             * full compound result type on the forward decl. */
-                            if (fwd_result_full) {
-                                fn_type.as.fn.result_full_type = fwd_result_full;
-                            }
-                            /* MF3: if the name is already in global scope (e.g. an
-                             * auto-loaded stdlib defn), do NOT pre-register a
-                             * duplicate forward decl. Pass 2's elab_defn will then
-                             * see the original binding (with is_from_stdlib set
-                             * correctly) and either reuse it as a forward decl or
-                             * emit the shadow diagnostic. */
-                            if (!scope_lookup(&e.global, name_f->as.sym)) {
-                                Binding *b = binding_new(&e, name_f->as.sym, fn_type, false, true, f->span);
-                                scope_add(&e.global, b);
-                            }
-                        }
-                    }
-                    next_form:;
-                }
-            }
-        }
+        elab_pre_declare_toplevel_defn(&e, arena, forms[i]);
     }
 
     /* Phase M0+: Validate defmodule position per source file.
@@ -1504,6 +1907,11 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
     if (rc != 0) {
+        /* TR2: with a session the state is owned by the caller -- save it back
+         * (so elab_session_free reclaims it exactly once) instead of freeing
+         * here. The caller must discard the session after any failure: partial
+         * definitions from this program may already have entered its scope. */
+        if (sess) { *sess = e; return NULL; }
         scope_free(&e.global);
         free(e.adt_defs);
         free(e.forward_type_syms);
@@ -1614,6 +2022,24 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         free(e.file_scope_defs);
     }
 
+    /* TR2: report the file-scope-def count before the session reset below
+     * clears it (the non-session path reads e.n_file_scope_defs at return). */
+    const uint32_t n_fsd_out = (uint32_t)e.n_file_scope_defs;
+    if (sess) {
+        /* Everything freed above this point must be cleared, or the saved
+         * session would carry dangling pointers into the next call.  These are
+         * all per-call working sets, not accumulated state. */
+        e.file_scope_defs   = NULL;
+        e.n_file_scope_defs = 0;
+        e.cap_file_scope_defs = 0;
+        e.bare_fat_specs   = NULL;
+        e.n_bare_fat_specs = 0;
+        e.cap_bare_fat_specs = 0;
+        e.bare_fat_lazy_bindings   = NULL;
+        e.n_bare_fat_lazy_bindings = 0;
+        e.cap_bare_fat_lazy_bindings = 0;
+    }
+
     /* Phase M6: Check for C symbol name collisions among exported bindings.
      * Two exported bindings from different modules collide when their mangled
      * C names are identical (e.g. module "my-lib" and "my_lib" both exporting
@@ -1695,17 +2121,46 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
 
-    scope_free(&e.global);
-    free(e.adt_defs);
-    free(e.forward_type_syms);
-    free(e.handled_effect_names);
-    free(e.pending_reset_nodes);
-    free(e.macros);
-    free(e.macro_expansion_stack);
-    free(e.loaded_modules); /* Phase M2 */
-    free(e.dynvar_entries);
-    free(e.active_dynvar_bindings);
-    free((void *)e.load_expanded_paths);
+    /* RT1/RT3 (refinement-types-plan): resolve the call-site crossings recorded
+     * during elaboration -- deferred to here so a call to a later-defined
+     * function is checked exactly like a call to an earlier-defined one -- then
+     * decide any obligation not already resolved in place and print the
+     * per-compile summary when TUR_REFINE_STATS=1.  A no-op for a unit with no
+     * `#refine{...}` in it (nothing was collected).
+     *
+     * Runs BEFORE the session branch below: the obligations were collected
+     * during this elaboration and have to be decided either way.  Handing the
+     * session back to the caller is not a reason to leave them undischarged --
+     * that would silently skip static checking for every session-based
+     * elaboration. */
+    /* WF2 (checked-write-frames-plan): verify every `#writes` frame against its
+     * body.  Runs BEFORE the crossing resolution below, because that is where a
+     * checked frame is CONSUMED -- WF3 asks "can this callee stale my
+     * hypothesis?" and may only believe a frame that has already been checked.
+     * Same deferral rationale as the crossings themselves: a frame's callees may
+     * be defined later in the unit. */
+    wf_resolve_write_frames(&e);
+    refine_resolve_call_sites(&e);
+    refine_discharge_all(&e.refine_obs, arena);
+
+    if (sess) {
+        /* TR2: the accumulated state IS the session -- hand it back instead of
+         * tearing it down, so the next call resolves against it. Ownership
+         * transfers to the caller (elab_session_free reclaims it). */
+        *sess = e;
+    } else {
+        scope_free(&e.global);
+        free(e.adt_defs);
+        free(e.forward_type_syms);
+        free(e.handled_effect_names);
+        free(e.pending_reset_nodes);
+        free(e.macros);
+        free(e.macro_expansion_stack);
+        free(e.loaded_modules); /* Phase M2 */
+        free(e.dynvar_entries);
+        free(e.active_dynvar_bindings);
+        free((void *)e.load_expanded_paths);
+    }
     if (rc != 0) return NULL;
 
     Expr *prog = expr_new(arena, EX_PROGRAM, TYPE_NIL,
@@ -1717,6 +2172,6 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     /* Tier 3: expose actual file-scope-def count so the interpreter can
      * distinguish them from (load ...)-expanded inline forms. */
     if (out_n_file_scope_defs)
-        *out_n_file_scope_defs = (uint32_t)e.n_file_scope_defs;
+        *out_n_file_scope_defs = n_fsd_out;
     return prog;
 }
