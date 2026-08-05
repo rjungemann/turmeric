@@ -58,6 +58,7 @@ does not share an investigation with the three above.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
+| [cps-case-reopen-marker-kont-truncates-capture](cps-case-reopen-marker-kont-truncates-capture.md) | high | the remaining two-spine instance after the handle-chain unification: a case that RE-OPENS an outer effect gets a marker-copy `__kont`, so the outer effect's multishot capture truncates at the marker (prints `1025` where the answer is `2025`) and -- worse -- a tail-resuming outer handler longjmps past the inner perform's C-stack delivery, losing the program's output entirely (silent exit 14 where `1014` should print). Pre-existing, verified on the pre-unification compiler. A measured experiment (real chain as `__kont`) fixes both modes and leaves exactly one defect -- the inline path's second delivery -- so the fix is scoped: move the post-case delivery in-chain for re-opening cases |
 
 `handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
 landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --

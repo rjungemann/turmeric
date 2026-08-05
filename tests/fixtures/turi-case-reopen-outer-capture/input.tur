@@ -1,0 +1,39 @@
+;; A handler case RE-OPENS an outer effect whose handler multishot-resumes.
+;; The re-opened effect's continuation spans the rest of the case, the inner
+;; handle's delivery, and every frame out to the outer handler -- so the
+;; per-resume values must include the frames BETWEEN the two handles.
+;; The interpreter's work-stack driver gets all of these right; the compiled
+;; path truncates the capture at the case's marker-copy __kont (prints 1025 /
+;; 9017, and loses the output entirely on the tail-resume variant).  This
+;; fixture pins the correct answers on the interpreter until the compiled
+;; path's case-call protocol is fixed; then fold these into a both-paths
+;; fixture next to effect-multishot-nontail-resume-inner-handle.  See
+;; docs/reported/cps-case-reopen-marker-kont-truncates-capture.md.
+(defeffect In [] : int)
+(defeffect Out [] : int)
+
+(defn main [] : int
+  ;; k_out = (fn [v] (+ 1000 (+ 7 v))): 1008 + 1017 = 2025
+  (println (handle
+             (+ 1000 (handle (+ 7 (perform (In)))
+                       (In [] k2) (resume k2 (perform (Out)))))
+             (Out [] ^multishot k) (+ (resume k 1) (resume k 10))))
+  ;; weighted: pins WHERE each resume's value landed
+  ;; 1000*(1000 + 7 + 1) + (1000 + 7 + 10) = 1009017
+  (println (handle
+             (+ 1000 (handle (+ 7 (perform (In)))
+                       (In [] k2) (resume k2 (perform (Out)))))
+             (Out [] ^multishot k) (+ (* 1000 (resume k 1)) (resume k 10))))
+  ;; single TAIL resume: 1000 + (7 + 7) = 1014 (the compiled path prints
+  ;; nothing here and exits 14 -- the stranded-delivery mode)
+  (println (handle
+             (+ 1000 (handle (+ 7 (perform (In)))
+                       (In [] k2) (resume k2 (perform (Out)))))
+             (Out [] ^multishot k) (resume k 7)))
+  ;; nothing between the handles: truncation happens to be harmless; both
+  ;; paths agree today and must keep agreeing
+  (println (handle
+             (handle (+ 7 (perform (In)))
+               (In [] k2) (resume k2 (perform (Out))))
+             (Out [] ^multishot k) (+ (resume k 1) (resume k 10))))
+  0)
