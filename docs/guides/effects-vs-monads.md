@@ -248,9 +248,29 @@ Prints `68` -- every combination of `{1, 3}` with `{10, 20}`, summed:
 continuation, and the two `perform`s compose, so the second `Choose` re-explores
 under each branch of the first.
 
-To resume a *variable* number of times, pass the resumption strategy through the
-effect payload. The receiver gets `k` as a properly typed continuation and may
-call it as often as it likes, including recursively:
+To resume a *variable* number of times, fold the continuation over the range
+with a loop in the clause -- the direct expression of bounded nondeterminism:
+
+```turmeric
+(defn main [] : int
+  (println (handle (+ 10 (perform (Choose 1 3)))
+             (Choose [lo hi] ^multishot k)
+             (let [^mut a 0 ^mut i lo]
+               (while (<= i hi) (set! a (+ a (resume k i))) (set! i (+ i 1)))
+               a)))
+  0)
+```
+
+Prints `36` -- `(10+1) + (10+2) + (10+3)`, one full run of the continuation per
+iteration. (Compiled path only for now: under `tur --interpret` a multishot
+resume from the second iteration of a `while` aborts -- see
+`docs/reported/turi-multishot-resume-in-while-aborts.md`.)
+
+When the resumption strategy is itself recursive -- or you want it in a named
+helper -- pass it through the effect payload instead. `k` is type-erased inside
+a handler clause and cannot be handed to a helper directly, but a receiver
+carried in the payload gets it as a properly typed continuation and may call it
+as often as it likes:
 
 ```turmeric
 (defeffect ChooseE [f : (fn [multishot-effect-cont] int)] : int)
@@ -294,9 +314,7 @@ defn main [] : int
   0
 ```
 
-Prints `561` -- the sum over all 3 x 11 combinations. This indirection is
-necessary because `k` is type-erased inside a handler clause and cannot be
-handed to a helper directly.
+Prints `561` -- the sum over all 3 x 11 combinations.
 
 ### Parsing
 
@@ -644,12 +662,14 @@ one:
 - `k` is type-erased inside the clause and cannot be passed to a helper
   expecting a `cont<...>`. Route the resumption strategy through the effect
   payload instead (as the nondeterminism example above does).
-- A `while` loop in a clause is not supported. The compiler says so with a
-  located error naming this workaround: hoist the loop into a helper function
-  and call it from the clause. Conditionals -- `if` in either tail or statement
-  position, and `when` -- are fine.
+- Loops and conditionals in a clause are supported -- including a `while` that
+  `resume`s per iteration (the multi-shot fold above). The remaining exception
+  is a `perform` of an *outer-handled effect* from inside such a loop: the
+  compiler rejects that with a located error naming the workaround (hoist the
+  loop into a helper function and call it from the clause).
 
-See `docs/reported/` for the open compiler defects behind the last two.
+The first two are open compiler defects tracked in `docs/reported/`; the third
+is a designed eviction with its own diagnostic.
 
 ## Compared to Haskell
 

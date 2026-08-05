@@ -1857,6 +1857,66 @@ static bool await_cont_reset_ok(const CTerm *t) {
  * (not scalar-checked); resume.v and other atoms are scalar. */
 static bool handle_case_ok_rec(const CTerm *t);
 
+/* The body of a CT_LOOP that sits inside a handler CASE.  The loop is emitted
+ * as its own synthesized helper (emit_loop), so its body does not follow the
+ * case-body grammar: its exit arm delivers to the helper's KK_RET (which the
+ * case context turns into a plain `return`), its back-edge is CT_CONTINUE, and
+ * a `resume` inside it is an ordinary dk_invoke against the case's `k`
+ * threaded in as a loop-invariant param.
+ *
+ * Deliberately NARROWER than term_core_ok: no CT_PERFORM / CT_HANDLE /
+ * CT_RESET / CT_AWAIT / nested CT_LOOP.  In the case context the loop helper
+ * is entered with a NULL DK continuation (its result is RETURNED, not
+ * dk_run), so any interior op that would thread `__kont` into the DK machine
+ * would hand it a null chain at run time.  Admitting those means giving the
+ * helper a real chain to thread first; until then they evict, which is the
+ * safe answer. */
+static bool case_loop_body_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            /* KK_RET: the loop's exit delivery (build_loop constructs exactly
+             * one).  KK_VAR: a jump to a join within the loop body. */
+            return (t->as.appcont.kont.kind == KK_RET
+                    || t->as.appcont.kont.kind == KK_VAR)
+                && atom_ok(&t->as.appcont.v);
+        case CT_LETVAL:
+            return atom_ok(&t->as.letval.v) && case_loop_body_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec))
+                return false;
+            if (!is_println_shape(t->as.letprim.spec->shape))
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return case_loop_body_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!atom_ok(&t->as.letcall.args[i])) return false;
+            return case_loop_body_ok(t->as.letcall.body);
+        case CT_LETCONT:
+            return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty)
+                    || t->as.letcont.param.ty == TY_NIL)
+                && case_loop_body_ok(t->as.letcont.jbody)
+                && case_loop_body_ok(t->as.letcont.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && case_loop_body_ok(t->as.if_.then_)
+                && case_loop_body_ok(t->as.if_.else_);
+        case CT_RESUME:
+            /* The multi-shot fold: `(resume k i)` each iteration.  dk_invoke
+             * re-invokes the same k exactly as the straight-line double-resume
+             * a case already supports; the loop only changes how many times. */
+            return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
+                && case_loop_body_ok(t->as.resume.body);
+        case CT_CONTINUE:
+            for (uint32_t i = 0; i < t->as.cont_.n; i++)
+                if (!atom_ok(&t->as.cont_.args[i])) return false;
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Admission entry for a handler CASE body.
  *
  * emit_lifted gives each case its own DK frame with a fresh join stack, so
@@ -1923,6 +1983,24 @@ static bool handle_case_ok_rec(const CTerm *t) {
         case CT_RESUME:
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && handle_case_ok_rec(t->as.resume.body);
+        case CT_LOOP: {
+            /* A `while` in the case body (`(Choose [lo hi] ^multishot k)
+             * (let [^mut a 0 ^mut i lo] (while (<= i hi) ...) a)` -- the
+             * multi-shot fold).  The loop is emitted as its own helper whose
+             * result is RETURNED into the case (emit_loop's return-direct
+             * mode), so admit its params/inits at the slot gate and its body
+             * by the dedicated loop-body grammar.  Joins inside the loop body
+             * must close within it -- the helper has its own frame. */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!(slot_ok_t(t->as.loop.params[i].type, t->as.loop.params[i].ty)
+                      || t->as.loop.params[i].ty == TY_NIL))
+                    return false;
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!atom_ok(&t->as.loop.inits[i])) return false;
+            uint32_t ldef[CC_MAX_BOUND];
+            return case_loop_body_ok(t->as.loop.body)
+                && joins_closed_rec(t->as.loop.body, ldef, 0);
+        }
         case CT_LETRAW:
             return letraw_ok(t) && handle_case_ok_rec(t->as.letraw.body);
         case CT_CALLCC:
@@ -6216,15 +6294,18 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * the base). */
                 indent_buf(&tmp, 4);
                 buf_puts(&tmp, "__dk_reap_closure((intptr_t)arg);\n");
-            } else if (case_reopens(body)) {
-                /* Effect re-opening: `k` is captured into a perform-continuation
-                 * env whose field is the int64_t word (k is typed TY_INT).  Bind
-                 * it as that word -- not `DK *` -- so the env store matches its
-                 * field type with no int-from-pointer warning; emit_resume casts
-                 * `(DK *)k` at each use. */
-                buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)subk;\n", kn);
             } else {
-                buf_printf(&tmp, "DK *%s = subk;\n", kn);
+                /* Bind `k` as the int64_t word its Binding is typed as -- not
+                 * `DK *`.  Every read site casts (`dk_invoke((DK *)(k), ...)`,
+                 * `((DK *)(k))->consumed`, the `cont?` check), so nothing needs
+                 * the pointer spelling, and every place the local can FLOW
+                 * needs the word: a perform-continuation env field (the
+                 * re-opening case, which always bound it this way), and a
+                 * loop-invariant helper param when a `while` in the case body
+                 * resumes k per iteration (`int64_t k_<id>` in the synthesized
+                 * loop helper -- a `DK *` local there is an int-from-pointer
+                 * hard error under GCC >= 14 at the entry call). */
+                buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)subk;\n", kn);
             }
             free(kn);
         }
@@ -6445,6 +6526,21 @@ static void emit_loop(CE *ce, const CTerm *t) {
     /* 2. Emit the loop body into a temp buffer; nested handle/reset helpers
      * accumulate into ce->helpers ahead of the loop helper definition. */
     Buf tmp; buf_init(&tmp);
+    /* Where does the loop's exit value go?  Its exit arm delivers to the
+     * helper's own KK_RET; what THAT means depends on how the enclosing frame
+     * delivers to the loop's result_kont.  In an ordinary function or a
+     * reset/handle continuation the target is a real DK chain -- thread it and
+     * dk_run at the exit (ret_direct=false, the historical behavior).  In a
+     * handler-case / shift-body frame a KK_PROMPT delivery is a plain
+     * `return` (shift_mode), and in a perform-continuation frame a KK_RET
+     * delivery is too (ret_mode) -- there is NO chain to thread, so the
+     * helper must RETURN its exit value and be entered with a NULL kont it
+     * never reads.  This is what lets a `while` live inside a handler clause:
+     * the case helper returns the loop helper's return, and dk_perform routes
+     * it exactly as it routes a straight-line case value. */
+    bool ret_direct = (t->as.loop.result_kont.kind == KK_PROMPT)
+                          ? ce->shift_mode
+                          : ce->ret_mode;
     CE hc = *ce;
     hc.out = &tmp;
     hc.indent = 4;
@@ -6453,7 +6549,7 @@ static void emit_loop(CE *ce, const CTerm *t) {
     hc.cur_loop_name = lname;
     hc.cur_loop_inv = inv_names;
     hc.shift_mode = false;
-    hc.ret_mode = false;
+    hc.ret_mode = ret_direct;
     hc.handler_case_mode = false;
     hc.case_tail_resume = false;
     /* The exit arm delivers the live-after var to the helper's KK_RET; its
@@ -6487,7 +6583,10 @@ static void emit_loop(CE *ce, const CTerm *t) {
      * threading the enclosing continuation (KK_RET -> this fn's __kont, KK_PROMPT
      * -> cur_k). */
     char *argv = atoms_csv(ce, t->as.loop.inits, np);
-    const char *thread = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
+    /* ret_direct: the helper returns its exit value and never reads its kont
+     * param -- see the mode note above. */
+    const char *thread = ret_direct ? "NULL"
+        : (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
     if (np && inv_names)
         ce_line(ce, "return %s__cps(%s, %s, %s); /* cps-while-native loop entry */", lname, argv, inv_names, thread);
     else if (np)

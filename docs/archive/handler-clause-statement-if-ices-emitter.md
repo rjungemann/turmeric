@@ -1,18 +1,29 @@
 ---
-status: open (partially fixed 2026-08-05 -- the `while` shape remains)
-severity: medium (was high; the ICE is gone and two of the three shapes compile)
+status: RESOLVED 2026-08-05 (all three shapes; two landings same day)
+severity: was high
 discovered: 2026-07-29
 area: compiler (CPS admission, src/compiler/emit_cps_ir.c + src/passes/cps_ir.c)
 ---
 
 # An `if` in statement position inside a `handle` clause ICEs the emitter
 
-> **Update 2026-08-05.** The title shape and the `when` shape now compile and
-> run correctly; the `while` shape does not, but it reports a located error
-> instead of aborting the compiler. Three separate root causes were found where
-> the report assumed one -- see [Status](#status-2026-08-05) at the bottom. The
-> "Root cause" section below is superseded: it guessed at the coloring
-> analysis, and the coloring analysis was never wrong.
+> **RESOLVED 2026-08-05, in two landings.** The first fixed the `if` and
+> `when` shapes and replaced the ICE with a located error; the second admitted
+> `CT_LOOP` in a handler case, which fixes the `while` shape -- including the
+> multi-shot fold the report called "the blocking case in practice". Three
+> separate root causes were found where the report assumed one -- see
+> [Status](#status-2026-08-05) and [Resolution of the third
+> shape](#resolution-of-the-third-shape-2026-08-05-second-landing) at the
+> bottom. The "Root cause" section below is superseded: it guessed at the
+> coloring analysis, and the coloring analysis was never wrong.
+>
+> One narrow eviction remains **by design**, with a located diagnostic: a
+> `perform` of an outer-handled effect from inside a loop inside a clause
+> (`tests/fixtures/errors/effect-handler-clause-loop-perform-unsupported`).
+> And one **new divergence was found on the way**: turi aborts on a multishot
+> resume from the second iteration of a `while` -- spun off into
+> [turi-multishot-resume-in-while-aborts](../reported/turi-multishot-resume-in-while-aborts.md),
+> which is why the fold fixture is `requires.compiled`.
 
 ## Summary
 
@@ -121,9 +132,9 @@ which is fix direction 2's territory.
 
 | Shape | Root cause | State |
 | --- | --- | --- |
-| `(do (if c a b) v)` -- the title shape | `handle_case_ok` had no `CT_LETCONT` arm | **fixed** |
-| `(do (when c a) v)` | `cps_tail(b, NULL, kont)` on the absent else -> `CT_UNSUPPORTED("null")` | **fixed** |
-| `(while ...)` in a clause | `handle_case_ok` has no `CT_LOOP` arm | **open** |
+| `(do (if c a b) v)` -- the title shape | `handle_case_ok` had no `CT_LETCONT` arm | **fixed** (first landing) |
+| `(do (when c a) v)` | `cps_tail(b, NULL, kont)` on the absent else -> `CT_UNSUPPORTED("null")` | **fixed** (first landing) |
+| `(while ...)` in a clause | `handle_case_ok` has no `CT_LOOP` arm | **fixed** (second landing, below) |
 
 ### What was fixed
 
@@ -153,13 +164,69 @@ output agree.
 
 ### What is still open
 
-A `while` in a handler clause. `cps-while-native` lowers a loop with an interior
+*(Superseded by the second landing -- kept for the reasoning.)* A `while` in a
+handler clause. `cps-while-native` lowers a loop with an interior
 control op into a synthesized tail-recursive `__cps` helper (`CT_LOOP`), and
 `handle_case_ok` has no arm for one inside a lifted case. Admitting it is not a
 missing switch arm like the two above -- it means emitting that helper from
 inside a DK frame -- so it is left for whoever takes on the loop lowering. The
 report's second listed shape (folding a multi-shot continuation over a range) is
 this one, and remains the blocking case in practice.
+
+## Resolution of the third shape (2026-08-05, second landing)
+
+"Emitting that helper from inside a DK frame" turned out to hinge on one
+question: **where does the loop's exit value go?** The helper's exit arm
+delivers to its own `KK_RET`, and what that means depends on how the enclosing
+frame delivers to the loop's `result_kont`. In an ordinary function or a
+reset/handle continuation the target is a real DK chain -- thread it and
+`dk_run` at the exit, the historical behavior. In a handler-case frame a
+`KK_PROMPT` delivery is a plain `return` (the case helper's value IS its return
+value, routed by `dk_perform`). So the loop helper gets a **return-direct
+mode**: it returns its exit value, is entered with a `NULL` kont it never
+reads, and the case helper returns the loop helper's return -- composing with
+`dk_perform`'s routing exactly as a straight-line case value does
+(`emit_loop`'s `ret_direct`).
+
+Three pieces around that core:
+
+- **Admission** (`handle_case_ok_rec` gains a `CT_LOOP` arm): params/inits at
+  the slot gate; the body via a dedicated `case_loop_body_ok` grammar that is
+  deliberately NARROWER than `term_core_ok` -- no interior `CT_PERFORM` /
+  `CT_HANDLE` / `CT_RESET` / `CT_AWAIT`, because the helper's kont is NULL in
+  this context and any op that threads it into the DK machine would hand it a
+  null chain at run time. Those shapes still evict, to the located error the
+  first landing added. `CT_RESUME` IS admitted: it targets the case's own `k`,
+  not the chain.
+
+- **The multi-shot fold works because `dk_invoke` already re-invokes.** The
+  straight-line double-resume (`(+ (resume k lo) (resume k hi))`) was already
+  supported; each in-loop `resume` is the same `dk_invoke` against the same
+  `k`, so the loop only changes how many times. Verified by value:
+  `(handle (+ 10 (perform (Choose 1 3))) ... fold ...)` prints `36` --
+  `(10+1)+(10+2)+(10+3)` -- so the continuation demonstrably runs once per
+  iteration.
+
+- **`k` now binds as its int64 word in every case** (`emit_lifted`). The plain
+  arm used to bind `DK *k` while the binding is int-typed; the loop-invariant
+  threading then spelled the helper param `int64_t` from the binding's type and
+  passed the `DK *` local -- an int-from-pointer hard error under GCC >= 14.
+  Every read site already casts (`dk_invoke((DK *)(k), ...)`,
+  `((DK *)(k))->consumed`, the `cont?` check), and the re-opening arm had
+  already made this exact move for the same reason (env field stores), so the
+  pointer spelling had no remaining consumer.
+
+Fixtures: `tests/fixtures/effect-multishot-resume-in-loop` (the fold, by
+value, including through a non-`main` function called twice) and the extended
+`effect-handler-clause-statement-position` (plain `while` in a clause, which
+absorbed the program from the deleted
+`errors/effect-handler-clause-loop-unsupported` fixture exactly as that
+fixture's comment instructed). The new
+`errors/effect-handler-clause-loop-perform-unsupported` pins the one remaining
+eviction's diagnostic and carries the same delete-me-if-admitted instruction.
+
+The N6.5-gate note below stands: the `experimental_surface` exemption is still
+wider than its rationale, and narrowing it is still its own change.
 
 ### The ICE is gone regardless
 
@@ -186,7 +253,10 @@ radius, and the downstream diagnostic already removes the ICE.
 
 ### Note on the interpreter
 
-Every shape here runs correctly under `tur --interpret`, including the `while`
-one. turi evaluates handlers directly and never reaches the CPS admission gate,
-so this is a compiled-path divergence -- which is why the error fixture carries
-`requires.compiled`.
+Every shape here runs correctly under `tur --interpret` **except one found
+during the second landing**: a multishot resume from the second iteration of a
+`while` aborts turi (the compiled path runs it correctly, so the divergence now
+points the other way). That is its own report --
+[turi-multishot-resume-in-while-aborts](../reported/turi-multishot-resume-in-while-aborts.md).
+turi evaluates handlers directly and never reaches the CPS admission gate, so
+the error fixtures here carry `requires.compiled`.

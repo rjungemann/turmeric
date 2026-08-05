@@ -57,14 +57,18 @@ does not share an investigation with the three above.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [handler-clause-statement-if-ices-emitter](handler-clause-statement-if-ices-emitter.md) | medium | **partially fixed 2026-08-05.** The `if` and `when` shapes compile and run; the ICE is gone everywhere (now a located error). A `while` in a clause is still unsupported -- `CT_LOOP` has no arm in `handle_case_ok`. Three root causes, not one; the coloring analysis was never involved |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
 
-Adjacent by symptom (both make the textbook state handler unwritable, and
-`docs/guides/effects-vs-monads.md` documents both under "Handler-clause
-restrictions"), but they are different mechanisms: one is CPS *admission* (not
-coloring -- the 2026-08-05 investigation disproved that, and the first row's
-one-liner used to say coloring), one is capture admission.
+`handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
+landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --
+the multi-shot fold included) and moved to
+[docs/archive](../archive/handler-clause-statement-if-ices-emitter.md). Its
+archived note records that it was three root causes, none of them the CPS
+*coloring* the report pointed at -- the mechanism was CPS *admission*, the
+same family as the remaining row's capture admission. One narrow eviction
+survives by design (a `perform` of an outer effect inside a loop inside a
+clause), with a located diagnostic and its own delete-me-if-admitted error
+fixture.
 
 ## Interpreter (`--interpret` / `tur repl`) divergence
 
@@ -73,6 +77,7 @@ one-liner used to say coloring), one is capture admission.
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
 | [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
+| [turi-multishot-resume-in-while-aborts](turi-multishot-resume-in-while-aborts.md) | medium | a `^multishot` resume from the SECOND iteration of a `while` in a clause aborts turi (`eval_body_thunk`); straight-line triple-resume and one-iteration loops are fine. Compiled path runs it correctly, so the multi-shot fold is compiled-only until fixed |
 
 The first absorbed two symptom reports on 2026-08-01
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values`,

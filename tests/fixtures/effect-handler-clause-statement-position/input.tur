@@ -34,4 +34,18 @@
 
   ;; still works in tail position, which is what already compiled
   (println (handle (perform (Ask)) (Ask [] k) (if (> 1 0) 1 2)))
+
+  ;; a while loop in the clause (CT_LOOP admitted in a handler case): the
+  ;; clause counts to 3 and delivers the counter.  This program was the
+  ;; errors/effect-handler-clause-loop-unsupported fixture while the loop was
+  ;; not yet admitted; per that fixture's own instructions it moved here as a
+  ;; passing case when CT_LOOP admission landed.
+  (println (handle (perform (Ask)) (Ask [] k)
+             (let [^mut i 0] (while (< i 3) (set! i (+ i 1))) i)))
+
+  ;; the loop may print per iteration
+  (println (handle (perform (Ask)) (Ask [] k)
+             (let [^mut n 0]
+               (while (< n 2) (println "iter") (set! n (+ n 1)))
+               n)))
   0)
