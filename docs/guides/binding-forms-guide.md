@@ -1,28 +1,43 @@
 ---
 title: Binding Forms Guide
 category: Language Basics
-description: Internal define, letrec, and named-let -- the three local binding idioms that complement let and defn
+description: def in a body, letrec, and named-let -- the three local binding idioms that complement let and defn
 ---
 
 # Binding Forms Guide
 
 Turmeric provides three complementary local-binding primitives beyond `let`:
-`define` for sequential body-level bindings, `letrec` for mutually-recursive
+body-level `def` for sequential bindings, `letrec` for mutually-recursive
 helpers, and *named let* for tail-recursive loops. All three desugar through
 the same elaborator primitive so their typing, continuation-discipline, and
 codegen are consistent with `let`.
 
 ---
 
-## `define` -- Body-level sequential binding
+## `def` -- one form, two positions
 
-`define` introduces a name inside a *body* -- the body of a `defn`, `fn`,
-`let`, or `do`. It splices a `let` wrapping all subsequent forms:
+`def` means "bind this name here". **Position, not spelling, selects what that
+means:**
+
+| Position | Meaning |
+|----------|---------|
+| Top level | A global binding, with static storage. Redefining is an error. |
+| A body | A binding scoped over the rest of the body -- a `let` in disguise. Rebinding shadows. |
+
+`define` is an accepted **alias** for `def`, with identical meaning in both
+positions. Older code uses `define` for the body case and `def` for the
+top-level case; either spelling works either way, and new code can simply
+use `def` everywhere.
+
+### Body-level sequential binding
+
+In a body -- the body of a `defn`, `fn`, `let`, `do`, `when`, or `while` --
+`def` splices a `let` wrapping all subsequent forms:
 
 ```turmeric
 (do
-  (define x 1)
-  (define y (+ x 1))
+  (def x 1)
+  (def y (+ x 1))
   (println y))         ;; prints 2
 ```
 
@@ -39,50 +54,66 @@ Sweet-exp:
 
 ```sweet-exp
 do
-  define x 1
-  define y +(x 1)
+  def x 1
+  def y +(x 1)
   println(y)
 ```
 
 ### Supported body positions
 
-`define` works anywhere a *body sequence* is valid:
-
 | Form | Example |
 |------|---------|
-| `defn` body | `(defn f [] (define x 1) x)` |
-| `fn` body | `(fn [] (define x 1) x)` |
-| `let` body | `(let [y 2] (define x y) x)` |
-| `do` body | `(do (define x 1) x)` |
+| `defn` body | `(defn f [] (def x 1) x)` |
+| `fn` body | `(fn [] (def x 1) x)` |
+| `let` body | `(let [y 2] (def x y) x)` |
+| `do` body | `(do (def x 1) x)` |
+| `when` / `while` body | `(when c (do (def x 1) (use x)))` |
+| macro expansion | any of the above, after expansion |
 
-`define` is **not** valid at top level (use `def` there), in `if` branches,
-or anywhere that is not a body sequence.
+An *expression* position -- an `if` branch, a call argument, a `cond` test --
+is neither the top level nor a body, and a binding there would have nothing to
+scope over. That is a diagnostic:
+
+```
+error: `def` here has nothing to scope over: a `def` in an expression position
+binds a name no later form can see. Put it at the top level, or in a body
+(`do`, `fn`, `let`, `when`, `while`), or use `let` if you meant a binding
+local to this expression
+```
 
 ### Annotations
 
-All annotations that `let` accepts work on `define`:
+All annotations that `let` accepts work on a body-level `def`:
 
 ```turmeric
 (defn counter [] : int
-  (define ^mut n 0)
+  (def ^mut n 0)
   (set! n (+ n 1))
   n)
 ```
 
-Type annotations are written after the name:
+`^persistent` and `^deprecated` are top-level-`def` annotations -- static
+storage and a deprecation nudge on a global. Neither has a local meaning, so
+both are rejected on a body binding rather than silently ignored.
+
+### Type annotations
+
+A type annotation goes between the name and the init, in either the spaced or
+the fused spelling, exactly as top-level `def` and `let` accept it:
 
 ```turmeric
-(define total :int (+ a b))
+(def total : int (+ a b))
+(def total :int  (+ a b))
 ```
 
 ### Semantics: let\* (sequential)
 
-Each `define` sees all earlier bindings but **not** later ones -- the same
-rule as `let`. Self-recursion inside a `define` init does not work:
+Each body-level `def` sees all earlier bindings but **not** later ones -- the
+same rule as `let`. Self-recursion inside its init does not work:
 
 ```turmeric
 ;; Error: f is not in scope inside its own init
-(define f (fn [n] (f n)))
+(def f (fn [n] (f n)))
 
 ;; Fix: use letrec (see below) or lift f to top-level defn
 ```
@@ -207,14 +238,14 @@ Annotate binding names the same way as `let`:
 
 | Situation | Reach for |
 |---|---|
-| Simple sequential local name | `define` or `let` |
+| Simple sequential local name | body-level `def` or `let` |
 | Self-recursive local function | `letrec [f (fn ...)]` |
 | Mutually recursive local helpers | `letrec [f (fn ...) g (fn ...)]` |
 | Tail-recursive loop with initial values | Named `let` |
-| Top-level constant or function | `def` / `defn` |
+| Top-level constant or function | top-level `def` / `defn` |
 
-`define` and `let` share sequential semantics: pick whichever reads more
-naturally in context. `define` saves one level of indentation when the body
+Body-level `def` and `let` share sequential semantics: pick whichever reads
+more naturally in context. `def` saves one level of indentation when the body
 is long; `let` keeps the binding and its use visually co-located.
 
 Named `let` is idiomatic for loops; `letrec` is idiomatic for mutual helpers

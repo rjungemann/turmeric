@@ -10416,59 +10416,14 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         }
     }
 
-    /* 5b. REPL implicit-do: if the new turn's forms contain a top-level
-     * (define ...), wrap them in a single (do ...) form so the splice
-     * helper handles them.  This makes `define` usable at the REPL prompt
-     * without erroring.  Only fires when the new turn has at least one
-     * define form; top-level defn/def forms are unaffected. */
+    /* 5b. def/define consolidation D2: the REPL implicit-do wrap is retired.
+     * It existed only to keep a top-level `(define ...)` from erroring, by
+     * wrapping the turn in a `(do ...)` so the body-splice helper caught it --
+     * which also scoped the binding to that one turn, so a name defined at the
+     * prompt did not survive to the next one.  `define` is now a spelling of
+     * `def`, so a top-level `define` is a genuine top-level binding and needs
+     * no workaround.  See docs/upcoming/def-define-consolidation-plan.md. */
     uint32_t prior = env->prior_toplevel;
-    {
-        bool new_has_define = false;
-        for (uint32_t i = prior; i < nforms; i++) {
-            Form *f = forms[i];
-            if (f->tag == F_LIST && f->as.list.len >= 1) {
-                Form *h = f->as.list.items[0];
-                if (h->tag == F_SYM &&
-                    strcmp(h->as.sym->name, "define") == 0) {
-                    new_has_define = true;
-                    break;
-                }
-            }
-        }
-        if (new_has_define) {
-            uint32_t nn   = nforms - prior;
-            Arena   *a    = eval_arena;
-            Span     sp   = (nn > 0) ? forms[prior]->span : (Span){0};
-            Form   **wrap = (Form **)arena_alloc(a, (nn + 1) * sizeof(Form *));
-            /* Build sym "do" in the existing symbol table. */
-            /* Intern "do" through the symbol table already in the arena. */
-            StrSlice sl_do = { "do", 2 };
-            const Symbol *sym_do_s = symtab_intern(&env->st, sl_do);
-            wrap[0] = form_sym(a, sp, sym_do_s);
-            for (uint32_t i = 0; i < nn; i++) wrap[i + 1] = forms[prior + i];
-            Form *do_form = form_list(a, sp, wrap, nn + 1);
-            /* Replace new-turn forms with the single do wrapper. */
-            forms[prior] = do_form;
-            nforms = prior + 1;
-            /* Rebuild the combined source string to match the updated nforms
-             * so src_acc stays consistent on the next turn. */
-            Buf wrapped_src;
-            buf_init(&wrapped_src);
-            buf_write(&wrapped_src, "(do ", 4);
-            buf_write(&wrapped_src, src_body, body_len);
-            buf_putc(&wrapped_src, ')');
-            src_body = arena_strdup(eval_arena, wrapped_src.data, wrapped_src.len);
-            body_len = wrapped_src.len;
-            buf_free(&wrapped_src);
-            /* TR2: the wrap rewrote the new-turn forms into a single (do ...);
-             * keep the accumulated vector in sync with what is elaborated (and
-             * with the rewritten src_body that step 8 appends to src_acc). */
-            if (!acc_forms_set(env, forms, nforms)) {
-                env->n_acc_forms = acc_committed;
-                return turi_error("out of memory");
-            }
-        }
-    }
 
     /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit).
      * Pass prior_toplevel as stdlib_prefix so the elaborator resets

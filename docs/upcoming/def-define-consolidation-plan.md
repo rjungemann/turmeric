@@ -1,6 +1,7 @@
 # Consolidate `def` and `define`
 
-> **Status:** proposed (2026-07-29)
+> **Status:** D1, D2, D3 LANDED (2026-08-05). D4 (the annotation audit) is
+> still open -- see §7 for the execution record and what D4 inherits.
 > **Type:** Language / elaboration
 
 ## 0. Summary
@@ -253,3 +254,117 @@ empty:
 - Interpreter parity: every one of the above under `tests/run-turi.sh` as
   well as `tests/run.sh`.
 - Twelve-minute timeout on every suite run.
+
+---
+
+## 7. Execution record (2026-08-05)
+
+**D1, D2, D3 landed. D4 remains open.** Both suites green after the change:
+`bash tests/run.sh` -> 2532 passed, 0 failed; `bash tests/run-turi.sh` ->
+1723 passed, 0 failed, 704 skipped. **No fixture snapshot moved** -- §4's
+"no codegen change is expected" held, so nothing needed regenerating and
+nothing needed investigating.
+
+### 7.1 What landed
+
+**D1 -- alias plumbing.**
+
+- `splice_internal_defines` (`src/compiler/elab_forms.c`) now recognizes both
+  spellings through a new `splice_body_def_head` helper, which also returns the
+  head symbol so every diagnostic in the splice quotes what the user wrote.
+- `elab_call.c` dispatches `sym_def` and `sym_define` to the same `elab_def`.
+  `elab_define_error` is deleted (definition and declaration).
+- `elab_def` (`src/compiler/elab_fns.c`) reads the head spelling into `kw` and
+  echoes it in all five of its diagnostics.
+- §3.3's message replaced "def is only valid at the top level".
+
+**D2 -- REPL.** The implicit-do wrap at `src/turi/eval.c` step 5b is deleted;
+`src/turi/repl.c`'s `:help` table describes `def` by position and lists
+`define` as the alias. Verified by hand: `(define x 41)` then `(+ x 1)` on the
+next turn evaluates to `42`, where it was previously unbound.
+
+**D3 -- feature parity.** §3.5(a) type ascription (both the spaced `: type`
+`F_TYPE_ANN` and the fused `:type` `F_KEYWORD` forms) and §3.5(c) the
+`^persistent` / `^deprecated` rejections.
+
+### 7.2 The scope guard §3.1 did not anticipate
+
+§3.1 proposed making the splice's symbol comparison `sym_define || sym_def`
+unconditionally. That would have changed the meaning of a **top-level**
+`(do ...)` window: `elab_do` does not push a scope, so a top-level
+`(do (def x 1) ...)` creates a global today, and an unconditional splice would
+have demoted it to a `let` -- a violation of §4's "nothing that compiles today
+changes meaning."
+
+`splice_body_def_head` therefore accepts `def` only when
+`e->scope != &e->global`. `define` is unchanged in every position, so the guard
+is invisible except in the one corner it protects. A survey of the tree found
+**zero** top-level `(do ...)` windows containing a `def`, so this is a
+compatibility guarantee rather than a fix for anything in-tree.
+
+### 7.3 A defect found on the way: the dropped prefix
+
+`splice_internal_defines` built its `let` from the first `define` onward and
+returned it as the whole body, **discarding every form before it**:
+
+```turmeric
+(defn main [] : int
+  (println "before")   ;; never ran
+  (define x 1)
+  (println x)
+  0)                   ;; printed only "1"
+```
+
+Fixed by wrapping the prefix and the generated `let` in a `(do ...)` when the
+first definition is not at index 0. The re-entrant `elab_do` -> splice call on
+that wrapper terminates: the prefix items are by construction not definitions,
+and the generated form's head is `let`. Fixture: `def-body-prefix-runs`.
+
+### 7.4 An engine divergence found on the way, NOT fixed
+
+The compiled path elaborates a bare top-level *expression*'s subforms in a
+pushed scope; the interpreter elaborates them in the global scope. So
+`(if true (def x 1) 2)` at file scope gives the §3.3 diagnostic compiled, but
+under `--interpret` mints the global and fails one level up on the `if` type
+mismatch. Filed as
+[docs/reported/turi-toplevel-expr-subforms-elaborate-in-global-scope.md](../reported/turi-toplevel-expr-subforms-elaborate-in-global-scope.md).
+
+This surfaced because the pre-existing `errors/define-bad-position` fixture is
+shared by both harnesses. Its probe moved inside a `defn` body, where the two
+engines agree, and it still tests exactly what it tested before.
+
+### 7.5 Fixtures
+
+New, per §6: `def-in-body` (one case per splice call site -- `defn`, `fn`,
+`let`, `do`, `when`, `while`), `def-in-macro-body`, `define-at-top-level`,
+`def-body-type-ascription` (the float probe uses `7.1`),
+`def-body-prefix-runs`, `def-body-shadows`,
+`errors/def-in-expression-position`, `errors/define-persistent-in-body`,
+`errors/def-deprecated-in-body`, `errors/def-redefine-toplevel`.
+
+Changed: `errors/define-bad-position` (§7.4, plus the §3.3 message).
+
+Two §6 items came out differently than written:
+
+- The `when` case does not assert on `(when ...)`'s value. stdlib's `when` is
+  `(defmacro when [test body] (if test (do body)))` -- a two-argument macro
+  whose `if` has no else, so it yields nil regardless of its body. That is
+  unrelated to this plan; the fixture writes through a `^mut` binding instead.
+- Interpreter parity is covered by `tests/run-turi.sh` picking up the same
+  fixture directories, not by separate fixtures.
+
+### 7.6 What D4 inherits
+
+§3.5(b) -- top-level `def` gaining (or specifically rejecting) `^mut`,
+`^linear`, `^unique`, `^affine`, `^relevant` -- is untouched. `elab_def` still
+parses only `^persistent` and `^deprecated`, so a top-level
+`(def ^mut x 0)` still falls through to the generic arity diagnostic rather
+than either working or saying why not. That is exactly the "silently-dropped
+annotation is worse than an error" case D4 exists to close, one annotation at
+a time.
+
+Note for whoever picks it up: §7.2's scope guard is what currently keeps a
+top-level `(do (define ^mut counter 0) ...)` working (fixture `define-annot`).
+If D4 gives top-level `def` a real `^mut` meaning, revisit whether the guard is
+still wanted or whether the splice should become unconditional as §3.1
+originally proposed.

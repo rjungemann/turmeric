@@ -1344,7 +1344,6 @@ Expr *elab_unsafe(Elab *e, const Form *call);
 
 /* elab_forms.c */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span);
-Expr *elab_define_error(Elab *e, const Form *call);
 Expr *elab_let(Elab *e, const Form *call);
 Expr *elab_letstar(Elab *e, const Form *call);
 Expr *elab_letrec(Elab *e, const Form *call);

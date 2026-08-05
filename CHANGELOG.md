@@ -2,6 +2,44 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **`def` and `define` are one form; position, not spelling, selects the
+  meaning.** `def` at the top level is a global binding (unchanged, and
+  redefining is still an error); `def` in a body is a binding scoped over the
+  rest of the body -- what `define` has always done. `define` is an accepted
+  alias for `def` in both positions. Nothing that compiled before compiles
+  differently: every change is a position or spelling that used to be an error
+  becoming legal. See
+  [docs/upcoming/def-define-consolidation-plan.md](docs/upcoming/def-define-consolidation-plan.md).
+- **A name defined at the REPL prompt with `define` now survives to the next
+  turn.** `define` used to error at the top level, so the REPL worked around it
+  by wrapping each turn containing one in an implicit `(do ...)` -- which also
+  scoped the binding to that single turn. A top-level `define` is a real
+  top-level binding now, so the wrap is gone. Anyone relying on the
+  turn-scoped behaviour was relying on a workaround.
+- **A body binding takes a `: type` ascription**, in either the spaced
+  (`(def x : float 7.1)`) or fused (`(def x :float 7.1)`) spelling, matching
+  top-level `def` and `let`. It used to be an error.
+- **A `def`/`define` in an expression position gets an explanation instead of a
+  rule.** `(if c (def x 1) ...)` now says the binding has nothing to scope
+  over, and names the positions that would work.
+
+### Fixed
+
+- **Statements above the first body-level `define` are no longer silently
+  dropped.** The define splice built its `let` from the first `define` onward
+  and discarded everything before it, so in
+  `(defn main [] : int (println "before") (define x 1) (println x) 0)` the
+  first `println` never ran and the program printed only `1`. It now prints
+  both lines.
+- **`^persistent` and `^deprecated` on a body binding are rejected rather than
+  quietly ignored.** `^persistent` was accepted by the splice and demoted to an
+  ordinary `let` binding -- i.e. it silently did not do what it said. Both are
+  top-level-`def` annotations and now say so.
+
 ## [0.33.2] -- 2026-08-02
 
 ### Added

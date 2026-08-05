@@ -8318,6 +8318,13 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
 }
 
 Expr *elab_def(Elab *e, const Form *call) {
+    /* def/define consolidation D1: `define` is a spelling of `def`, so every
+     * diagnostic below quotes the head symbol the user actually wrote rather
+     * than a fixed "def". */
+    const char *kw = "def";
+    if (call->as.list.len >= 1 && call->as.list.items[0]->tag == F_SYM)
+        kw = call->as.list.items[0]->as.sym->name;
+
     /* Phase P3: Check for ^persistent annotation before name */
     /* Syntax: (def ^persistent name init) */
     uint32_t name_idx = 1;
@@ -8365,24 +8372,33 @@ Expr *elab_def(Elab *e, const Form *call) {
             init_f = call->as.list.items[name_idx + 1];
         } else {
             diag_emit(DIAG_ERROR, call->span,
-                      "def takes (def [^persistent] [^deprecated [\"msg\"]] name [: type] init)");
+                      "%s takes (%s [^persistent] [^deprecated [\"msg\"]] name [: type] init)",
+                      kw, kw);
             return NULL;
         }
     }
-    
+
     Form *name_f = call->as.list.items[name_idx];
     if (name_f->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, name_f->span, "def name must be a symbol");
+        diag_emit(DIAG_ERROR, name_f->span, "%s name must be a symbol", kw);
         return NULL;
     }
-    /* Top-level only — error if not in global scope. */
+    /* D1/§3.3: a body window was already rewritten to a `let` by
+     * splice_internal_defines, so reaching here in non-global scope means an
+     * expression position -- an `if` branch, a call argument, a `cond` test --
+     * where the binding would have nothing to scope over. */
     if (e->scope != &e->global) {
-        diag_emit(DIAG_ERROR, call->span, "def is only valid at the top level");
+        diag_emit(DIAG_ERROR, call->span,
+                  "`%s` here has nothing to scope over: a `%s` in an expression "
+                  "position binds a name no later form can see. Put it at the top "
+                  "level, or in a body (`do`, `fn`, `let`, `when`, `while`), or "
+                  "use `let` if you meant a binding local to this expression",
+                  kw, kw);
         return NULL;
     }
     if (scope_lookup(e->scope, name_f->as.sym)) {
         diag_emit(DIAG_ERROR, name_f->span,
-                  "def: '%s' is already defined", name_f->as.sym->name);
+                  "%s: '%s' is already defined", kw, name_f->as.sym->name);
         return NULL;
     }
 
@@ -8437,8 +8453,8 @@ Expr *elab_def(Elab *e, const Form *call) {
     /* Phase 5: ref<T> is scope-local only — disallow at top-level def */
     if (init->type.kind == TY_REF) {
         diag_emit(DIAG_ERROR, call->span,
-                  "def: ref<T> values must be scope-local; use let instead of def for '%s'",
-                  name_f->as.sym->name);
+                  "%s: ref<T> values must be scope-local; use let instead of %s for '%s'",
+                  kw, kw, name_f->as.sym->name);
         return NULL;
     }
 
