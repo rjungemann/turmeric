@@ -1,11 +1,24 @@
 ---
-status: open
+status: open (layer 1 fixed 2026-08-05; the residual is a different, deeper defect -- see Execution)
 severity: high (silent wrong answer, no diagnostic)
 discovered: 2026-08-05
-area: compiler (CPS/DK backend, handler-case resume lowering)
+area: compiler (CPS/DK runtime: dk_invoke trampoline scope; handle-continuation frame envs)
 ---
 
 # A non-tail multishot resume whose continuation re-enters an inner handle drops the rest of the clause
+
+> **Executed 2026-08-05.** The title defect -- the rest of the clause being
+> discarded -- was one of **two stacked defects** and is fixed: `dk_invoke` now
+> scopes the tail-resume trampoline instead of letting a yield longjmp past it
+> to the program entry. The repro's answer is still wrong, for an independent
+> and pre-existing reason that the first defect was masking: a multishot resume
+> across a nested handle runs the **outer handle's continuation once per
+> resume**, because a handle-continuation frame's env is a baked pointer to the
+> *original* chain that `dk_copy_range` cannot rewrite. See
+> [Execution](#execution-2026-08-05). The root-cause section below is
+> superseded -- its guess about `dk_invoke`'s boundary "not being sealed
+> against a fresh prompt" was directionally right about layer 1 and silent
+> about layer 2.
 
 ## Summary
 
@@ -93,3 +106,93 @@ High: silent wrong answers, in the composition the effects guide recommends
 `effects-vs-monads.md`'s "nest handlers -- no lifting" advice and folds a
 multishot continuation over work that touches an inner handler gets a number,
 not an error.
+
+## Execution (2026-08-05)
+
+### Layer 1 -- the tail-resume yield escaped `dk_invoke` (FIXED)
+
+Reading the emitted C for the repro made the mechanism exact. The inner `Log`
+handler is installed with `dk_handler_tail`, so its case ends in
+`dk_tail_resume`, which is `longjmp(*g_dk_driver, 1)`. The outer `Ask` case
+runs its resumes through `dk_invoke`. `g_dk_driver` named the **program entry**
+landing, so that longjmp unwound straight past `dk_invoke` *and past the
+handler case that called it* -- the second `resume` and the `+` never ran, and
+the value the driver eventually produced became the program's result. That is
+precisely "the rest of the clause is discarded".
+
+`dk_invoke` now installs its own landing and runs the trampoline bounded by the
+meta-stack watermark it captured at entry, restoring the previous landing on
+exit (`__dk_drive_bounded`, `src/compiler/emit_dk_runtime.c`). Deliveries
+queued during the invoked run drain inside the invoke; anything an outer level
+queued stays for that level. A nested trampoline must not steal an outer
+landing -- that is true regardless of anything below, so this fix stands on its
+own and would still be needed after layer 2 is fixed.
+
+The E7 fast path is untouched: a tail resume reached with **no** intervening
+`dk_invoke` still yields all the way to the entry driver, so deep effectful
+recursion stays flat. Verified by `cps-tramp-resume-deep-1m` (the 1e6-deep
+fixture) still passing.
+
+Because the emitted preamble changed, 141 `expected.c` snapshots were
+regenerated in the same change, per CLAUDE.md, along with the three
+`src/runtime/generated/` split artifacts (`tools/gen-runtime-split.py`).
+
+### Layer 2 -- copied chains escape through baked frame envs (OPEN)
+
+With layer 1 fixed the clause runs to completion -- and the repro prints **two
+lines**, `2` then `20`. The outer `handle`'s continuation (the `println`) runs
+**once per resume**.
+
+The emitted chain says why:
+
+```c
+DK *__h0 = dk_hgroup(dk_handler(2, main_hc0_0, 0,
+               dk_frame(main_hk0, (intptr_t)__kont, ...)));
+DK *__h1 = dk_hgroup(dk_handler_tail(3, main_hc1_0, 0,
+               dk_frame(main_hk1, (intptr_t)__h0, ...)));   /* <- env = __h0 */
+```
+
+A handle's continuation is a `DKK_FRAME` whose **env is a raw pointer to the
+enclosing chain**, and the frame body jumps to it explicitly
+(`main_hk1` is `return dk_run(__kont /* = __h0 */, v)`); the node's own `next`
+carries only transparent handler markers. So the continuation is an *explicit
+jump*, not a chain link.
+
+`dk_copy_range` copies `fn` and `env` verbatim. A resumed copy of the chain
+therefore still jumps to the **original** `__h0` -- escaping the delimiter and
+re-entering the real outer continuation, printing, once for every resume.
+
+This is **pre-existing and independent of E7**, established by making the inner
+handler resume in NON-tail position (`(+ 0 (resume k2 ...))`), which takes
+`dk_perform`'s inline path and never touches `dk_tail_resume`:
+
+| | before layer-1 fix | after |
+| --- | --- | --- |
+| inner handler tail-resumes (the repro) | `2` | `2` `20` |
+| inner handler resumes non-tail | `2` `20` | `2` `20` |
+
+The non-tail variant is unchanged by the fix -- it was already exhibiting layer
+2 alone. What the fix did is make the tail-resume path agree with it, which is
+the correct convergence: the E7 escape had been *masking* the deeper defect by
+unwinding before the second resume could expose it.
+
+### Why layer 2 is not fixed here
+
+It is a design question, not a patch. Copy-based multishot resume and
+jump-by-baked-env handle continuations are structurally incompatible: to make a
+copied chain deliver into its *own* tail, either
+
+1. `dk_copy_range` must rewrite frame envs that are chain pointers (it cannot
+   tell one from an ordinary `intptr_t` env today -- the node would need to
+   mark which envs are chains), or
+2. handle continuations must become ordinary chain links (`k->next`) rather
+   than explicit `dk_run(env, v)` jumps, which changes what every
+   `dk_frame(main_hk*, ...)` emission means.
+
+Either is a runtime-level change with its own plan and its own regression
+surface. The remaining wrongness is now *precisely* located, which is the part
+that was missing when this was filed.
+
+`tests/fixtures/turi-ws-driven-operands` continues to pin the correct answers
+(22, 2020) on the interpreter. There is still deliberately no compiled fixture
+for this shape -- it would have to assert `2`/`20`.

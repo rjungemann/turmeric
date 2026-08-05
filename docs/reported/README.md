@@ -58,7 +58,7 @@ does not share an investigation with the three above.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
-| [cps-multishot-nontail-resume-inner-handle-drops-clause-rest](cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md) | high | a NON-tail multishot `resume` whose continuation re-enters an inner `handle` delivers the first resume's value as the outer handle's value; the rest of the clause never runs. Prints 2 where the answer is 22, no diagnostic. Single resume fine, no-inner-handle fine; turi (now able to run the shape) is the correct reference |
+| [cps-multishot-nontail-resume-inner-handle-drops-clause-rest](cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md) | high | **layer 1 fixed 2026-08-05** (`dk_invoke` now scopes the tail-resume trampoline, so a yield no longer longjmps past the handler case). The residual is a **different, pre-existing** defect the first was masking: a handle continuation is a frame whose env is a baked pointer to the ORIGINAL chain, so a copied/resumed chain jumps out of its delimiter and the outer continuation runs once per resume -- prints `2`/`20` where the answer is `22`. Fixing it needs either chain-aware env rewriting in `dk_copy_range` or handle continuations as chain links; both are runtime redesigns |
 
 `handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
 landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --
