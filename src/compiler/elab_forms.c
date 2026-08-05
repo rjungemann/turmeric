@@ -1,5 +1,6 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
+#include "experiments.h"        /* G3: experiment_warn_if_used("global-state") */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -3128,6 +3129,27 @@ Expr *elab_set(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, target->span,
                   "set!: '%s' is immutable; use ^mut at the binding site to allow it",
                   b->name->name);
+        return NULL;
+    }
+    /* G3 (mutable-globals-plan §4.3), behind `--enable=global-state`: an
+     * exported global is READ-ONLY outside its defining module.  A module that
+     * exports a counter for reading should not thereby export it for writing --
+     * the same argument `:sealed` makes about an opaque's representation.
+     *
+     * Only bites across a real module boundary: a global with no defining
+     * module (every single-file program) and a write from inside the owning
+     * module are both untouched.  The permission lives at the definition site,
+     * `(export (mut g))`, so the decision sits with the code that owns the
+     * invariant rather than with whoever wants to write it. */
+    if (g_opt_global_state && b->is_global && !b->is_export_mut &&
+        b->defining_module_name != NULL &&
+        b->defining_module_name != e->current_module_name) {
+        experiment_warn_if_used("global-state");
+        diag_emit(DIAG_ERROR, target->span,
+                  "set!: '%s' is owned by module '%s' and is exported read-only; "
+                  "call a setter that module exports, or have it export the global "
+                  "as `(export (mut %s))`",
+                  b->name->name, b->defining_module_name->name, b->name->name);
         return NULL;
     }
     Expr *value = elab_form(e, call->as.list.items[2]);

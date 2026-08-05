@@ -174,6 +174,9 @@ typedef struct Elab {
     TypeClassEnv typeclass_env;
 
     /* Cached symbols for special-form dispatch. */
+    /* G3 (mutable-globals-plan §4.3): the head of an `(export (mut g))` entry,
+     * which marks an exported global as writable from outside its module. */
+    const Symbol *sym_export_mut;
     const Symbol *sym_def;
     const Symbol *sym_define; /* internal define -- body form only */
     const Symbol *sym_let;

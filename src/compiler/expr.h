@@ -136,6 +136,16 @@ struct Binding {
     bool          is_continuation;
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
+    /* G3 (mutable-globals-plan §4.3), behind `--enable=global-state`: this
+     * global was exported as `(export (mut g))`, i.e. its module explicitly
+     * permits writes from outside.  A plain `(export g)` exports it READ-ONLY:
+     * importers may read it, only the defining module may `set!` it.
+     *
+     * The permission lives at the DEFINITION site, not the use site, so the
+     * decision sits with the code that owns the invariant -- the same reason
+     * `:sealed` is declared on the opaque rather than asserted by its
+     * consumers. */
+    bool          is_export_mut;
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
     /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
     const char   *c_export_name;
@@ -974,6 +984,8 @@ typedef struct DefModule {
     const char *docstring;       /* optional docstring (or NULL) */
     const Symbol **exports;           /* exported symbols */
     uint32_t n_exports;
+    const Symbol **exports_mut;       /* G3: names in (export (mut g)) -- writable outside */
+    uint32_t       n_exports_mut;
     const Symbol **exported_effects;  /* PR5-3-B: effect names in (export (effect Name)) */
     uint32_t       n_exported_effects;
     ImportSpec *imports;         /* import specs */

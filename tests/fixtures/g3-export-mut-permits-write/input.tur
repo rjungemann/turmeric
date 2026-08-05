@@ -1,0 +1,24 @@
+;; G3 (docs/upcoming/mutable-globals-plan.md section 4.3), behind
+;; --enable=global-state: an exported global is READ-ONLY outside its defining
+;; module.  A module that exports a counter for reading should not thereby
+;; export it for writing -- the same argument :sealed makes about an opaque's
+;; representation.
+;;
+;; The permission lives at the DEFINITION site, `(export (mut g))`, so the
+;; decision sits with the code that owns the invariant rather than with whoever
+;; wants to write it.  It reuses the existing structured-export form that
+;; `(export (effect Name))` established, rather than adding an annotation.
+;;
+;; Shown here: reading a plainly-exported global is fine, calling a setter the
+;; module exports is fine, and writing an `(mut ...)`-exported global directly
+;; is fine.  The paired negative errors/g3-cross-module-global-write is the
+;; same file writing the PLAIN one.
+(defmodule main
+  (import g3lib/ctr :refer [bump peek hits shared])
+  (defn main [] : int
+    (bump)                  ; a setter the module exports
+    (println (peek))
+    (println hits)          ; reading a plainly-exported global: fine
+    (set! shared 41)        ; exported (mut shared): writing is permitted
+    (println shared)
+    0))

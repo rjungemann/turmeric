@@ -1,0 +1,7 @@
+(defmodule g3lib/ctr
+  ;; `bump` is a function -- `(mut ...)` marks an exported GLOBAL as writable,
+  ;; so this is meaningless and is rejected rather than left inert.
+  (export (mut bump) peek)
+  (def ^mut hits 0)
+  (defn bump [] : void (set! hits (+ hits 1)))
+  (defn peek [] : int hits))

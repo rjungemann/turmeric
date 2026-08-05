@@ -1,0 +1,5 @@
+(defmodule g3lib/ctr
+  (export bump peek hits)
+  (def ^mut hits 0)
+  (defn bump [] : void (set! hits (+ hits 1)))
+  (defn peek [] : int hits))

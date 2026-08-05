@@ -1,6 +1,6 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
-> **Status:** **G1 and G2 LANDED 2026-08-05** (see §10, §15). G3-G5 proposed.
+> **Status:** **G1, G2, G3 LANDED 2026-08-05** (see §10, §15, §16). G4-G5 proposed.
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
@@ -385,7 +385,7 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
 - **G2 -- globals in the frame vocabulary. LANDED 2026-08-05; see §15.** §4.2. Upgrades G1's blanket
   UNVERIFIED to "verified against a frame that names the global". Behind
   `--enable=global-state`.
-- **G3 -- module encapsulation.** §4.3. The one phase that can reject existing
+- **G3 -- module encapsulation. LANDED 2026-08-05; see §16.** §4.3. The one phase that can reject existing
   code. Behind the same gate. Wants its own soak time before graduating.
 - **G4 -- `^thread-local` and `^atomic`.** §4.4. Independent of G2/G3; can land
   in either order relative to them. **Split them**: `^atomic` first -- it is much
@@ -1286,3 +1286,88 @@ so.
 
 Unchanged: exported globals are still writable by every importer (H3). G2 gave
 frames a vocabulary for globals; it said nothing about who may write one.
+
+---
+
+## 16. G3 execution record (2026-08-05)
+
+**Landed**, behind `--enable=global-state`. `tests/run.sh` -> 2555 passed, 0
+failed; `tests/run-turi.sh` -> 1746 passed, 0 failed, 704 skipped. No fixture
+snapshot moved.
+
+### 16.1 The rule
+
+An exported global is readable by importers and writable only from its defining
+module. `set!` on another module's global is an error naming the owning module
+and both ways out:
+
+```
+error: set!: 'hits' is owned by module 'ctr' and is exported read-only;
+call a setter that module exports, or have it export the global as
+`(export (mut hits))`
+```
+
+It bites only across a **real module boundary**. A global with no defining
+module -- every single-file program -- and a write from inside the owning module
+are both untouched, which is what keeps this from being a broad break.
+
+### 16.2 The escape hatch: `(export (mut g))`
+
+§4.3 asked for a permission declared at the definition site, and said it
+"should not be a new annotation if an existing one can carry it". It does not
+need one: the export list **already** has a structured form,
+`(export (effect Name))`, and `(mut g)` slots into the same parse arm.
+
+```turmeric
+(defmodule ctr
+  (export bump peek hits (mut shared))   ; hits read-only outside; shared writable
+  (def ^mut hits   0)
+  (def ^mut shared 0)
+  ...)
+```
+
+A `(mut g)` entry exports the name normally *as well*, so a reader needs no
+second entry. This beats an annotation on the `def` for the reason §4.3 gives:
+the permission is a statement about the module's interface, and it belongs
+where the rest of that interface is written.
+
+### 16.3 Two rejections, by name
+
+`(mut ...)` on something that cannot be written is refused rather than left
+inert -- the silently-meaningless-annotation shape the D4 audit and G2 both went
+out of their way to remove.
+
+- **On a function.** A top-level `defn` is `is_global` too, so staticness alone
+  does not separate a data global from a function; the fn type (or a backing
+  `FnDef`) is what does. Caught during implementation: the first cut reported a
+  function as "an immutable global", which is true and useless.
+- **On an immutable global.** Same reasoning as G2's rejection of one in a
+  `#writes` frame: permitting outside writes to something nothing can write is
+  a claim that cannot be true.
+
+### 16.4 Fixtures
+
+`g3-export-mut-permits-write` (reading a plain export, calling an exported
+setter, and writing a `(mut ...)` export -- all fine), plus
+`errors/g3-cross-module-global-write`, `errors/g3-export-mut-not-a-global`,
+`errors/g3-export-mut-immutable`.
+
+Each is a two-module fixture in the shape
+`errors/sealed-opaque-cross-module-fabricate` established: `input.tur` holds the
+importing module and a sibling directory holds the imported one.
+
+**Harness bug found on the way, filed not fixed:** a fixture directory whose
+input is not `input.tur` or `<dirname>.tur` is reported as **PASS** while
+running nothing. Four directories are in that state -- `sandbox/` (17 files),
+`stm/` (7, including atomicity and deadlock-freedom), `module-transitive-imports/`
+(4), `typeclass/` (2) -- and no other harness picks them up. 30 `.tur` files
+that the summary line counts as passing. Filed as
+[docs/reported/fixture-dirs-with-loose-tur-files-pass-without-running.md](../reported/fixture-dirs-with-loose-tur-files-pass-without-running.md).
+Found because `module-transitive-imports` looked like the multi-module fixture
+precedent and turned out not to run; the shape G3's fixtures actually use is
+`errors/sealed-opaque-cross-module-fabricate`'s.
+
+### 16.5 What G4/G5 inherit
+
+Unchanged. G3 said who may write a global; it said nothing about thread safety
+(G4, §11/§13.6-13.7) or the guide/graduation work (G5).

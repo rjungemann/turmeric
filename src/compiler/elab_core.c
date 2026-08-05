@@ -2088,6 +2088,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defmodule = intern_cstr(st, "defmodule");
     e->sym_export = intern_cstr(st, "export");
     e->sym_effect = intern_cstr(st, "effect");
+    e->sym_export_mut = intern_cstr(st, "mut");   /* G3: (export (mut g)) */
     e->sym_import = intern_cstr(st, "import");
     e->sym_load = intern_cstr(st, "load");
     e->sym_as = intern_cstr(st, "as");   /* Phase N: (as Type expr) cast */

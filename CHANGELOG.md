@@ -6,6 +6,16 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **An exported global is read-only outside its defining module**, behind
+  `--enable=global-state`. A module that exports a counter for reading no longer
+  thereby exports it for writing; `set!` on another module's global names the
+  owning module and both ways out. The permission is granted at the definition
+  site with `(export (mut g))` -- reusing the structured-export form
+  `(export (effect Name))` established, rather than adding an annotation -- so
+  the decision sits with the code that owns the invariant. Only bites across a
+  real module boundary: single-file programs and in-module writes are
+  untouched. `(mut ...)` on a function or an immutable global is rejected by
+  name rather than left inert.
 - **A `#writes` frame may name a mutable global**, behind
   `--enable=global-state`. `(defn bump! [] #writes [hits] : void ...)` lets a
   body that maintains global state carry a *checked* frame instead of being
