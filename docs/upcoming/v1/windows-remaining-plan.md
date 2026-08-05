@@ -53,11 +53,49 @@ firewall).
 
 ---
 
-## WIN2 -- `turmeric-godot` GDExtension Windows build (THE north star, not started)
+## WIN2 -- `turmeric-godot` GDExtension Windows build (THE north star -- LOADS)
 
 **Goal:** build the shim from `../turmeric-godot/` as a Windows `.dll` and load
 it in a stock Godot 4 binary. This is the actual point of Windows support -- the
 compiler/runtime work exists to serve it.
+
+**Reached 2026-08-04.** The shim builds as
+`libturmeric-godot.windows.template_debug.x86_64.dll` and initializes in a stock
+Godot 4.3.stable:
+
+```
+$ scons platform=windows arch=x86_64 target=template_debug use_mingw=yes
+$ Godot_v4.3-stable_win64.exe --headless --editor --path examples/spike --quit
+[turmeric-godot] initialize(level=2)
+[turmeric-godot] ctor called
+[turmeric-godot] registered Turmeric script language + resource format
+[turmeric-godot] initialize(level=3)
+```
+
+Startup and shutdown are both clean (exit 0, full uninitialize sequence). The
+link used `-Wl,--no-undefined`, so nothing is left unresolved.
+
+Three notes for whoever picks this up:
+
+- **Use `--editor`, not plain `--headless --path`.** Without it Godot goes into
+  run mode, bails with "no main scene defined", and never loads the extension at
+  all -- which reads exactly like a load failure. The spike project's own header
+  comment still recommends the plain form.
+- **Headless Godot 4.3 hangs at teardown on this box**, with
+  `Pages in use exist at exit in PagedAllocator`. Verified as NOT ours: an empty
+  project with no GDExtension hangs identically. Wrap runs in a `timeout`.
+- **One error remains**, and it is an ordering problem rather than a load
+  failure: `[turmeric-godot] TurmericEditorSyntaxHighlighter class not
+  registered; is the GDExtension loaded?` is pushed *before* `initialize(level=2)`.
+  The editor plugin in `addons/turmeric-godot-editor` runs ahead of the
+  extension's EDITOR-level registration. Not known to be Windows-specific --
+  untested on Linux/macOS.
+
+What is NOT yet demonstrated: **the AOT path has never run.** Loading the
+extension does not compile a `.tur` script, so the Windows-specific work in
+`aot_cache.cpp` (cmd.exe quoting, `std::system` exit decoding, `.dll` cache
+naming) is still unexercised. That needs a project that actually attaches a
+Turmeric script.
 
 ### Prerequisite in this repo: shared-library output naming -- DONE
 
