@@ -12,11 +12,12 @@
 ;; arithmetic must run once per resume, so a wrong resume count or a lost
 ;; continuation changes the number, not just the timing.
 ;;
-;; requires.compiled: turi's fiber-based effect runtime aborts on a multishot
-;; resume from the SECOND iteration of a `while` (the same three resumes
-;; written straight-line work) -- see
-;; docs/reported/turi-multishot-resume-in-while-aborts.md.  The compiled path
-;; is the one under test here.
+;; This also runs under `--interpret`: turi drives `while` on its work-stack
+;; (DK_WHILE), so a resume inside the loop reaches the driver with the prompt
+;; visible and each one clones the captured slice.  It briefly could not --
+;; the loop was a black box, which forced the handle onto the one-shot fiber
+;; and aborted the interpreter on the second resume; see
+;; docs/archive/turi-multishot-resume-in-while-aborts.md.
 (defeffect Choose [lo : int hi : int] : int)
 
 ;; 2*(1+2+..+n), via a non-main function so the loop helper is exercised
@@ -44,4 +45,17 @@
   ;; 2*(1+2+3+4) = 20, twice -- the helper re-enters cleanly across calls
   (println (doubled-sum 4))
   (println (doubled-sum 4))
+  ;; The mirror image: the continuation is captured INSIDE a loop (the perform
+  ;; is in the handle body's loop) and resumed twice.  Under turi the captured
+  ;; work-stack slice then contains a loop frame that has to clone per resume;
+  ;; compiled, it is an ordinary two-suspension multishot.  Each resume runs
+  ;; the remaining iterations with its own value: 1+1 and 10+10 -> 22, summed
+  ;; over the two resumes of the outer suspension -> 44.
+  (println (handle
+             (let [^mut i 0 ^mut sum 0]
+               (while (< i 2)
+                 (do (let [v (perform (Choose 0 0))] (set! sum (+ sum v)))
+                     (set! i (+ i 1))))
+               sum)
+             (Choose [lo hi] ^multishot k) (+ (resume k 1) (resume k 10))))
   0)

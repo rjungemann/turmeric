@@ -723,6 +723,16 @@ run_negative() {
         return
     fi
 
+    # Interpreter-only skip (mirrors the happy-path guard above).  A negative
+    # fixture asserting a `--interpret` diagnostic is owned by
+    # tests/run-turi.sh's run_turi_error_fixture; the compiled path may reject
+    # the same program for an unrelated reason, so its expected.diag is not a
+    # claim about this suite.
+    if [ -f "$dir/requires.interp-only" ]; then
+        write_result "PASS" "$name" "(interp-only-skipped)" ""
+        return
+    fi
+
     # Per-fixture timeout (default 10s) -- negative fixtures only emit-c, but an
     # untimed front-end hang stalled the suite just like the happy path did.
     local fixture_timeout=10

@@ -262,9 +262,7 @@ with a loop in the clause -- the direct expression of bounded nondeterminism:
 ```
 
 Prints `36` -- `(10+1) + (10+2) + (10+3)`, one full run of the continuation per
-iteration. (Compiled path only for now: under `tur --interpret` a multishot
-resume from the second iteration of a `while` aborts -- see
-`docs/reported/turi-multishot-resume-in-while-aborts.md`.)
+iteration.
 
 When the resumption strategy is itself recursive -- or you want it in a named
 helper -- pass it through the effect payload instead. `k` is type-erased inside

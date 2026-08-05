@@ -77,12 +77,18 @@ fixture.
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
 | [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
-| [turi-multishot-resume-in-while-aborts](turi-multishot-resume-in-while-aborts.md) | medium | a `^multishot` resume from the SECOND iteration of a `while` in a clause aborts turi (`eval_body_thunk`); straight-line triple-resume and one-iteration loops are fine. Compiled path runs it correctly, so the multi-shot fold is compiled-only until fixed |
 
 The first absorbed two symptom reports on 2026-08-01
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values`,
 `turi-hkt-byvalue-bind-pure-wrong-value`, both now in `docs/archive/`). It is
 the single red line in `tests/run-turi.sh`.
+
+A fourth was resolved 2026-08-05:
+[turi-multishot-resume-in-while-aborts](../archive/turi-multishot-resume-in-while-aborts.md)
+-- turi aborted on a multi-shot resume from inside a `while`, because the loop
+was a black box to the work-stack driver and forced the handle onto the
+single-shot fiber. `while` is now driven (`DK_WHILE`), and the fiber fallback
+reports instead of `abort()`ing when it is genuinely reached.
 
 ## Surface / expressiveness
 

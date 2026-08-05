@@ -1215,6 +1215,31 @@ static void eval_body_thunk(void) {
 /* Resume body fiber with value val; return body's next result (or final). */
 static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
                                    TuriEffectCont *cont, TuriValue val) {
+    /* A fiber continuation is single-shot: its body ran to completion on this
+     * one ucontext, so there is no state left to re-enter.  swapcontext'ing
+     * into the finished fiber lands past the end of eval_body_thunk, whose
+     * only recourse is abort() -- the interpreter dying with no message, which
+     * at a REPL takes the session with it.  Refuse here instead, and say which
+     * shapes do support multi-shot.
+     *
+     * A multi-shot resume ordinarily never reaches this function: a capturable
+     * handle runs on the work-stack, where each resume clones the captured
+     * slice (DK_RESUME).  This is the fallback path for a handle ws_capturable
+     * rejected -- one whose body or clause reaches a perform through a form the
+     * driver cannot descend.  See
+     * docs/archive/turi-multishot-resume-in-while-aborts.md, where a `while`
+     * was such a form. */
+    if (cont->done)
+        return turi_error("eval: resume: this continuation has already been "
+                          "resumed and its body has finished. Multi-shot resume "
+                          "needs the work-stack path, which this handler falls "
+                          "outside of: its body or one of its clauses reaches "
+                          "`perform` through a form the interpreter cannot "
+                          "descend (a native higher-order call, a "
+                          "`catch-unwind` thunk, a match scrutinee, or "
+                          "similar). Reaching the `perform` through plain "
+                          "control flow -- `if`, `do`, `let`, `while`, a direct "
+                          "call -- keeps the handler on the multi-shot path");
     cont->resume_val = val;
 
     /* Re-install the handler frame around the body re-entry for a DEEP handler,
@@ -4798,6 +4823,21 @@ typedef enum {
                       * expr = the EX_STM, index = next item, frame = enclosing.
                       * A retry/abort request on g_stm_tx short-circuits the rest
                       * of the block (matching the eval_expr_impl EX_STM loop). */
+    DK_WHILE,        /* A (while COND BODY) driven on the work-stack.  expr = the
+                      * EX_WHILE, frame = enclosing, index = phase (0 = the
+                      * value just returned is COND's, 1 = it is BODY's).  Every
+                      * iteration re-descends from this one frame, so the loop
+                      * costs O(1) work-stack depth however long it runs.
+                      *
+                      * The point is not depth -- eval_expr_impl's C `while`
+                      * was already flat -- but TRANSPARENCY: a `perform` or
+                      * `resume` inside the loop has to land in the driver's
+                      * descending switch with the enclosing DK_PROMPT visible
+                      * on `st`.  Evaluating the loop through eval_expr made it
+                      * a black box, which forced any handle whose body or
+                      * clause contained a `while` onto the one-shot fiber path
+                      * -- where a second resume aborted the interpreter.  See
+                      * docs/archive/turi-multishot-resume-in-while-aborts.md. */
     DK_RESUME,       /* C3: a (resume k value) whose `value` is driven on the
                       * work-stack (was eval_expr), so recursion in the resume
                       * value arg folds instead of C-recursing.  last = the
@@ -5361,8 +5401,14 @@ static bool ws_has_perform(const Expr *e) {
     case EX_POLY_WRAP:   return ws_has_perform(e->as.poly_wrap_.inner);
     case EX_FN_TO_FAT:   return ws_has_perform(e->as.fn_to_fat_.inner);
     case EX_POLY_TO_FAT: return ws_has_perform(e->as.poly_to_fat_.inner);
+    /* The driver descends both halves of a `while` (DK_WHILE), so it is as
+     * transparent as an `if` -- answer from its parts rather than defaulting
+     * to "may perform". */
+    case EX_WHILE:
+        return ws_has_perform(e->as.while_.cond) ||
+               ws_has_perform(e->as.while_.body);
     default:
-        /* EX_CALL, EX_HANDLE, EX_WHILE, EX_TRY_CATCH, ... -- conservatively
+        /* EX_CALL, EX_HANDLE, EX_TRY_CATCH, ... -- conservatively
          * assume a perform may run synchronously. */
         return true;
     }
@@ -5399,6 +5445,14 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
         return ws_capturable(env, frame, e->as.if_.cond, depth) &&
                ws_capturable(env, frame, e->as.if_.then_, depth) &&
                ws_capturable(env, frame, e->as.if_.else_or_null, depth);
+    case EX_WHILE:
+        /* DK_WHILE descends both halves, so a perform/resume in either lands
+         * in the driver with the prompt visible -- exactly like an `if`.  A
+         * loop that resumes per iteration is the multi-shot fold, and it is
+         * the reason this case exists: without it the whole handle fell back
+         * to the one-shot fiber, which aborted on the second resume. */
+        return ws_capturable(env, frame, e->as.while_.cond, depth) &&
+               ws_capturable(env, frame, e->as.while_.body, depth);
     case EX_DO:
         for (uint32_t i = 0; i < e->as.do_.n; i++)
             if (!ws_capturable(env, frame, e->as.do_.items[i], depth)) return false;
@@ -6259,6 +6313,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 tail = false; descending = true;
                 break;
             }
+            case EX_WHILE:
+                /* Drive the loop on the work-stack so a perform/resume in the
+                 * condition or the body reaches the driver with the enclosing
+                 * DK_PROMPT visible.  Start in phase 0 by descending the
+                 * condition; DK_WHILE alternates from there. */
+                DRIVE_PUSH(((DriveCont){ .kind = DK_WHILE, .expr = control,
+                                         .frame = cf, .index = 0 }));
+                control = control->as.while_.cond;
+                tail = false; descending = true;
+                break;
             case EX_STM: {
                 /* C2: drive the stm body sequence on the work-stack so recursion
                  * inside an item folds (DK_STM_SEQ).  A retry/abort request
@@ -6542,6 +6606,29 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 free(b);
                 len--;
+                break;
+            }
+            case DK_WHILE: {
+                /* index 0: `cur` is the condition's value.  index 1: it is the
+                 * body's.  Mirrors the eval_expr_impl EX_WHILE loop exactly,
+                 * including its asymmetry -- the condition bails on any signal
+                 * (env_signaled), the body bails only on an error or a
+                 * `return`, so a `throw`/`abort`/`panic` raised in the body
+                 * propagates through the enclosing frames rather than being
+                 * caught by the loop. */
+                const Expr *we = top->expr;
+                if (top->index == 0) {
+                    if (turi_is_error(cur) || env_signaled(env)) { len--; break; }
+                    if (!turi_is_truthy(cur)) { cur = turi_nil(); len--; break; }
+                    top->index = 1;
+                    control = we->as.while_.body; cf = top->frame;
+                    tail = false; descending = true;
+                } else {
+                    if (turi_is_error(cur) || env->returning) { len--; break; }
+                    top->index = 0;
+                    control = we->as.while_.cond; cf = top->frame;
+                    tail = false; descending = true;
+                }
                 break;
             }
             case DK_STM_SEQ: {
