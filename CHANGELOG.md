@@ -4,6 +4,19 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`^mut` on a top-level `def` -- mutable globals.** `(def ^mut hits 0)` gives
+  static storage that `set!` may write. This closes a dead end: `set!` on a
+  global already advised "use `^mut` at the binding site", and the binding site
+  rejected `^mut`, so the only fix the diagnostic named did not exist. Without
+  the annotation a global stays immutable and `set!` on it is still an error.
+  A `^mut` global is process-wide mutable state with no synchronization --
+  nothing checks that it is shared safely across threads.
+- **`def` annotations may appear in any order**, matching `let`:
+  `(def ^mut ^persistent c ...)` and `(def ^persistent ^mut c ...)` are the
+  same declaration.
+
 ### Changed
 
 - **`def` and `define` are one form; position, not spelling, selects the
@@ -39,6 +52,16 @@ All notable changes to Turmeric are documented here.
   quietly ignored.** `^persistent` was accepted by the splice and demoted to an
   ordinary `let` binding -- i.e. it silently did not do what it said. Both are
   top-level-`def` annotations and now say so.
+- **Every `def` annotation is now either accepted or rejected by name.**
+  `^linear`, `^relevant`, `^affine`, and `^unique` on a top-level `def` used to
+  fall through to a generic arity diagnostic that never mentioned the
+  annotation. Each is now refused with its own reason: `^linear` and
+  `^relevant` are verified when a binding's scope ends and a global's never
+  does; `^affine` would count elaboration sites across the program rather than
+  uses at run time, so two functions naming the global would be rejected even
+  if only one ever ran; `^unique` asserts no aliasing, which a name every
+  function can reach cannot have. An unrecognized `^`-led annotation says
+  "unknown annotation" and lists what `def` accepts.
 
 ## [0.33.2] -- 2026-08-02
 

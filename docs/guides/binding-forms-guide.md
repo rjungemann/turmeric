@@ -83,6 +83,16 @@ local to this expression
 
 ### Annotations
 
+Which annotations are legal depends on the position, and each one is either
+accepted or rejected *by name* -- none is silently dropped.
+
+| Annotation | Body binding | Top level |
+|---|---|---|
+| `^mut` | yes | yes |
+| `^linear` / `^unique` / `^affine` / `^relevant` | yes | no |
+| `^persistent` | no | yes |
+| `^deprecated "msg"` | no | yes |
+
 All annotations that `let` accepts work on a body-level `def`:
 
 ```turmeric
@@ -92,9 +102,37 @@ All annotations that `let` accepts work on a body-level `def`:
   n)
 ```
 
-`^persistent` and `^deprecated` are top-level-`def` annotations -- static
-storage and a deprecation nudge on a global. Neither has a local meaning, so
-both are rejected on a body binding rather than silently ignored.
+`^mut` also works at the top level, giving a mutable global -- static storage
+that `set!` may write:
+
+```turmeric
+(def ^mut hits 0)
+
+(defn hit [] : void
+  (set! hits (+ hits 1)))
+```
+
+Without `^mut`, a global is immutable and `set!` on it is an error. (A `^mut`
+global is process-wide mutable state with no synchronization; nothing checks
+that you share one safely across threads.)
+
+`^persistent` and `^deprecated` are top-level annotations -- static storage and
+a deprecation nudge on a global. Neither has a local meaning, so both are
+rejected on a body binding.
+
+The substructural annotations go the other way: they are body-only. `^linear`
+and `^relevant` are verified when the binding's scope ends, and a global's
+scope never ends; `^affine` would count elaboration sites across the whole
+program rather than uses at run time; `^unique` asserts no aliasing, which a
+name every function can reach cannot have. All four are rejected at the top
+level with that reason rather than accepted and left unenforced.
+
+Annotations may appear in any order before the name:
+
+```turmeric
+(def ^mut ^persistent cache (hamt/new))
+(def ^persistent ^mut cache (hamt/new))   ;; identical
+```
 
 ### Type annotations
 

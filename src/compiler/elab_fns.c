@@ -8325,35 +8325,107 @@ Expr *elab_def(Elab *e, const Form *call) {
     if (call->as.list.len >= 1 && call->as.list.items[0]->tag == F_SYM)
         kw = call->as.list.items[0]->as.sym->name;
 
-    /* Phase P3: Check for ^persistent annotation before name */
-    /* Syntax: (def ^persistent name init) */
+    /* Syntax: (def [^mut|^persistent|^deprecated ["msg"]]* name [: type] init)
+     *
+     * D4/§3.5(b): annotations are consumed in any order (matching `let`), and
+     * every annotation this form does NOT support is rejected by name with a
+     * reason.  Silently dropping one is the outcome D4 exists to prevent. */
     uint32_t name_idx = 1;
     bool is_persistent = false;
+    bool is_mut = false;
     bool is_deprecated_attr = false;
     const char *deprecation_msg = NULL;
 
-    if (call->as.list.len > 3) {
-        Form *first = call->as.list.items[name_idx];
-        if (first->tag == F_SYM && first->as.sym == e->sym_caret_persistent) {
-            is_persistent = true;
-            name_idx++;
-        }
-    }
+    while (name_idx < call->as.list.len &&
+           call->as.list.items[name_idx]->tag == F_SYM) {
+        Form *cur = call->as.list.items[name_idx];
+        const Symbol *s = cur->as.sym;
 
-    /* F4: ^deprecated ["message"] before the name (after ^persistent) */
-    if (call->as.list.len > name_idx + 2 &&
-        call->as.list.items[name_idx]->tag == F_SYM &&
-        call->as.list.items[name_idx]->as.sym == e->sym_caret_deprecated) {
-        is_deprecated_attr = true;
-        name_idx++;
-        if (call->as.list.items[name_idx]->tag == F_STR) {
-            Form *msg_f = call->as.list.items[name_idx];
-            char *msg_buf = (char *)arena_alloc(e->arena, msg_f->as.s.len + 1);
-            memcpy(msg_buf, msg_f->as.s.p, msg_f->as.s.len);
-            msg_buf[msg_f->as.s.len] = '\0';
-            deprecation_msg = msg_buf;
+        if (s == e->sym_caret_persistent) { is_persistent = true; name_idx++; continue; }
+
+        /* D4: ^mut on a global is meaningful -- static storage that `set!` may
+         * write.  Without it, `(set! g v)` told the user to "use ^mut at the
+         * binding site" and the binding site rejected ^mut: a dead end. */
+        if (s == e->sym_caret_mut) { is_mut = true; name_idx++; continue; }
+
+        /* F4: ^deprecated ["message"] */
+        if (s == e->sym_caret_deprecated) {
+            is_deprecated_attr = true;
             name_idx++;
+            if (name_idx < call->as.list.len &&
+                call->as.list.items[name_idx]->tag == F_STR) {
+                Form *msg_f = call->as.list.items[name_idx];
+                char *msg_buf = (char *)arena_alloc(e->arena, msg_f->as.s.len + 1);
+                memcpy(msg_buf, msg_f->as.s.p, msg_f->as.s.len);
+                msg_buf[msg_f->as.s.len] = '\0';
+                deprecation_msg = msg_buf;
+                name_idx++;
+            }
+            continue;
         }
+
+        /* D4: the substructural annotations are rejected, each for its own
+         * reason.  They are not "unsupported yet" -- they are unenforceable on
+         * a global, and a half-working check is worse than none.
+         *
+         * ^linear / ^relevant are verified at SCOPE EXIT (elab_let's ST1 pass,
+         * elab_forms.c) -- "was this consumed / used by the time its scope
+         * ended".  The global scope has no exit, so there is no point at which
+         * the obligation could be discharged or reported.
+         *
+         * ^affine is checked per use site (elab_toplevel.c), which WOULD fire
+         * on a global -- but on elaboration order across the whole program, not
+         * on anything the program does.  Two functions naming the global would
+         * be rejected even if only one is ever called.  That is the
+         * silently-half-working outcome, so it is refused outright.
+         *
+         * ^unique asserts no aliasing; a global is a name every function in the
+         * program can reach, so uniqueness is not a property it can have. */
+        if (s == e->sym_caret_linear || s == e->sym_caret_relevant) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: '%s' cannot be enforced on a top-level binding -- the "
+                      "obligation is checked when the binding's scope ends, and a "
+                      "global's scope never ends. Bind it in a body (`let`, or a "
+                      "`%s` inside a `defn`/`fn`/`do`) where the check has a "
+                      "scope exit to run at",
+                      kw, s->name, kw);
+            return NULL;
+        }
+        if (s == e->sym_caret_affine) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: '%s' cannot be enforced on a top-level binding -- "
+                      "\"used at most once\" would count elaboration sites across "
+                      "the whole program, not uses at run time, so two functions "
+                      "naming it would be rejected even if only one ever runs. "
+                      "Bind it in a body (`let`, or a `%s` inside a "
+                      "`defn`/`fn`/`do`) instead",
+                      kw, s->name, kw);
+            return NULL;
+        }
+        if (s == e->sym_caret_unique) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: '%s' has no meaning on a top-level binding -- a global "
+                      "is a name every function in the program can reach, so it "
+                      "cannot be unaliased. Bind it in a body (`let`, or a `%s` "
+                      "inside a `defn`/`fn`/`do`), or pass it as a `^unique` "
+                      "parameter",
+                      kw, s->name, kw);
+            return NULL;
+        }
+
+        /* Any other caret-led symbol in annotation position is a typo or an
+         * annotation that belongs to some other form; say so rather than
+         * falling through to the generic arity diagnostic, which never
+         * mentions the annotation at all. */
+        if (s->len > 1 && s->name[0] == '^') {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: unknown annotation '%s'; %s accepts ^mut, ^persistent, "
+                      "and ^deprecated \"msg\"",
+                      kw, s->name, kw);
+            return NULL;
+        }
+
+        break;  /* not an annotation -- this is the binding name */
     }
 
     Form *init_f = NULL;
@@ -8372,8 +8444,8 @@ Expr *elab_def(Elab *e, const Form *call) {
             init_f = call->as.list.items[name_idx + 1];
         } else {
             diag_emit(DIAG_ERROR, call->span,
-                      "%s takes (%s [^persistent] [^deprecated [\"msg\"]] name [: type] init)",
-                      kw, kw);
+                      "%s takes (%s [^mut] [^persistent] [^deprecated \"msg\"] "
+                      "name [: type] init)", kw, kw);
             return NULL;
         }
     }
@@ -8459,7 +8531,7 @@ Expr *elab_def(Elab *e, const Form *call) {
     }
 
     Binding *b = binding_new(e, name_f->as.sym, init->type,
-                             /*is_mut=*/false, /*is_global=*/true, name_f->span);
+                             /*is_mut=*/is_mut, /*is_global=*/true, name_f->span);
     b->is_persistent = is_persistent;
     /* F4: ^deprecated on def */
     b->is_deprecated = is_deprecated_attr;

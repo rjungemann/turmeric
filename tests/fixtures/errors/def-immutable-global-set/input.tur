@@ -1,0 +1,7 @@
+;; A global without ^mut still rejects set!.  The advice the diagnostic gives
+;; ("use ^mut at the binding site") is now actionable -- see def-mut-global.
+(def x 1)
+
+(defn main [] : int
+  (set! x 2)
+  0)

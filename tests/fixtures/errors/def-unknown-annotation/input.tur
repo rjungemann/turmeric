@@ -1,0 +1,3 @@
+(def ^mmut x 1)
+
+(defn main [] : int 0)

@@ -1,0 +1,3 @@
+(def ^relevant x 1)
+
+(defn main [] : int 0)
