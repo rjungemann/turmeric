@@ -5,7 +5,7 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of eighteen. Keep
+This index exists so a triage pass reads one file instead of two dozen. Keep
 it current when you file, absorb, or archive a report -- a row here is cheaper
 than re-deriving the grouping.
 
@@ -116,9 +116,13 @@ build-only by design, so these three are still not FIXTURE-watched on Windows.
 
 ## Platform-independent, found on a platform sweep
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [term-set-cooked-restores-zeroed-state](term-set-cooked-restores-zeroed-state.md) | medium | `term/set-cooked` restores zeroed state, not what `term/set-raw` saved -- each declares its own function-local `static` of the same name, and the docstring claims the opposite. **All platforms**, POSIX `termios` path included; found during the Windows port but not caused by it |
+Empty. `term-set-cooked-restores-zeroed-state` was the only row and was
+resolved 2026-08-05 (fix direction 2 -- one inline-C body owning the saved
+state -- plus a pty-backed round-trip fixture); it now lives at
+[docs/archive/term-set-cooked-restores-zeroed-state.md](../archive/term-set-cooked-restores-zeroed-state.md).
+The heading stays because the *category* is worth keeping in view: a defect
+found while sweeping one platform is not thereby a defect of that platform,
+and that one had been in the POSIX path from the start.
 
 ## Filing conventions
 

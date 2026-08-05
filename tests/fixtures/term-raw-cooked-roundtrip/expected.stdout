@@ -1,0 +1,18 @@
+cooked canonical:
+true
+set-raw:
+0
+raw canonical:
+false
+raw echo:
+false
+set-cooked:
+0
+restored canonical:
+true
+restored echo:
+true
+mode restored exactly:
+true
+second set-cooked:
+-1

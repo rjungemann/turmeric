@@ -62,8 +62,17 @@ if (fg == -1 || fg != getpgrp()) {
 ```
 
 The `stdlib/term.tur` helpers (`term/set-raw`, `term/set-cooked`) already
-carry this guard; keep it in place, and copy the pattern into any new
+carry this guard -- in `term/set-mode`, the single inline-C body both of
+them delegate to; keep it in place, and copy the pattern into any new
 terminal-state code.
+
+The guard is also why terminal-state code is hard to *test*: it makes both
+helpers no-op under the harness, which always redirects stdout.
+`tests/fixtures/term-raw-cooked-roundtrip` gets past it by building a
+terminal rather than borrowing one -- `posix_openpt`, then `fork` +
+`setsid` + `ioctl(TIOCSCTTY)` in the child so the pty slave is a
+controlling terminal whose foreground process group is the child's. Reuse
+that shape for anything else that has to exercise a real tty.
 
 ---
 

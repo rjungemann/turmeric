@@ -82,11 +82,93 @@
   #include <unistd.h>
   return isatty((int)fd) != 0;
   ```)
+;;; term/set-mode -- switch a terminal between raw and cooked mode.
+;;;
+;;; The single owner of the saved terminal state.  term/set-raw and
+;;; term/set-cooked are thin wrappers over this, and they must be, because a
+;;; `static` inside an inline-C body is local to the one C function that body
+;;; lowers to: two bodies each declaring `saved_termios` get two distinct
+;;; objects, and the restore then reads a zeroed one rather than what was
+;;; saved.  Keeping both directions in a single body is what makes them share
+;;; the same object.
+;;;
+;;; Parameters:
+;;;   fd  -- file descriptor of the terminal
+;;;   raw -- true to enter raw mode, false to restore the saved state
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.  Restoring with nothing saved is an error.
+;;;
+;;; Example:
+;;;   (term/set-mode 0 true)   ; => 0
+;;;
+;;; Since: Phase B2
+
+(defn term/set-mode [fd : int raw : bool] : int
+  ```c
+  #include <termios.h>
+  #include <unistd.h>
+  #include <io.h>
+  /* Windows has no termios.  The console analogue is GetConsoleMode /
+   * SetConsoleMode on the underlying HANDLE: clearing ENABLE_LINE_INPUT stops
+   * the line-discipline buffering, ENABLE_ECHO_INPUT stops the echo, and
+   * ENABLE_PROCESSED_INPUT stops Ctrl-C being swallowed as a signal -- together
+   * the three that cfmakeraw() turns off.  GetConsoleMode fails on a redirected
+   * handle, which is the same "not a terminal" answer the POSIX branch's
+   * tcgetpgrp guard produces, so both return -1 there.
+   *
+   * `have_saved` makes entering raw mode idempotent: a second entry must not
+   * overwrite the saved state with the raw state it just installed, or the
+   * restore would put the terminal back into raw. */
+#ifdef _WIN32
+  static DWORD saved_console_mode;
+  static int have_saved = 0;
+  HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+  if (h == INVALID_HANDLE_VALUE) return -1;
+  DWORD mode;
+  if (!GetConsoleMode(h, &mode)) return -1;
+  if (raw) {
+    DWORD raw_mode = (have_saved ? saved_console_mode : mode) &
+                     (DWORD)~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT |
+                              ENABLE_PROCESSED_INPUT);
+    if (!SetConsoleMode(h, raw_mode)) return -1;
+    if (!have_saved) { saved_console_mode = mode; have_saved = 1; }
+    return 0;
+  }
+  if (!have_saved) return -1;
+  if (!SetConsoleMode(h, saved_console_mode)) return -1;
+  have_saved = 0;
+  return 0;
+#else
+  static struct termios saved_termios;
+  static int have_saved = 0;
+  // Guard against SIGTTOU: if this process is not the foreground process
+  // group on the terminal (e.g. running under xargs/subshell workers in the
+  // doctest harness), skip terminal state modification to avoid a kernel
+  // stop signal that manifests as a silent, infinite hang.
+  pid_t fg = tcgetpgrp((int)fd);
+  if (fg == -1 || fg != getpgrp()) return -1;
+  if (raw) {
+    struct termios cur, raw_t;
+    if (tcgetattr((int)fd, &cur) != 0) return -1;
+    raw_t = have_saved ? saved_termios : cur;
+    cfmakeraw(&raw_t);
+    if (tcsetattr((int)fd, TCSAFLUSH, &raw_t) != 0) return -1;
+    if (!have_saved) { saved_termios = cur; have_saved = 1; }
+    return 0;
+  }
+  if (!have_saved) return -1;
+  if (tcsetattr((int)fd, TCSAFLUSH, &saved_termios) != 0) return -1;
+  have_saved = 0;
+  return 0;
+#endif
+  ```)
 ;;; term/set-raw -- put a terminal into raw mode (no line buffering or echo).
 ;;;
 ;;; Saves the original termios so term/set-cooked can restore it.
 ;;; The saved state is stored in a static variable; only one fd is
-;;; tracked at a time.
+;;; tracked at a time.  Entering raw mode twice is idempotent -- the second
+;;; call does not overwrite the saved state.
 ;;;
 ;;; Parameters:
 ;;;   fd -- file descriptor of the terminal
@@ -100,45 +182,13 @@
 ;;; Since: Phase B2
 
 (defn term/set-raw [fd : int] : int
-  ```c
-  #include <termios.h>
-  #include <unistd.h>
-  #include <io.h>
-  /* Windows has no termios.  The console analogue is GetConsoleMode /
-   * SetConsoleMode on the underlying HANDLE: clearing ENABLE_LINE_INPUT stops
-   * the line-discipline buffering, ENABLE_ECHO_INPUT stops the echo, and
-   * ENABLE_PROCESSED_INPUT stops Ctrl-C being swallowed as a signal -- together
-   * the three that cfmakeraw() turns off.  GetConsoleMode fails on a redirected
-   * handle, which is the same "not a terminal" answer the POSIX branch's
-   * tcgetpgrp guard produces, so both return -1 there. */
-#ifdef _WIN32
-  static DWORD saved_console_mode;
-  HANDLE h = (HANDLE)_get_osfhandle((int)fd);
-  if (h == INVALID_HANDLE_VALUE) return -1;
-  DWORD mode;
-  if (!GetConsoleMode(h, &mode)) return -1;
-  saved_console_mode = mode;
-  DWORD raw_mode = mode & (DWORD)~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT |
-                                   ENABLE_PROCESSED_INPUT);
-  return SetConsoleMode(h, raw_mode) ? 0 : -1;
-#else
-  static struct termios saved_termios;
-  struct termios raw;
-  // Guard against SIGTTOU: if this process is not the foreground process
-  // group on the terminal (e.g. running under xargs/subshell workers in the
-  // doctest harness), skip terminal state modification to avoid a kernel
-  // stop signal that manifests as a silent, infinite hang.
-  pid_t fg = tcgetpgrp((int)fd);
-  if (fg == -1 || fg != getpgrp()) return -1;
-  if (tcgetattr((int)fd, &saved_termios) != 0) return -1;
-  raw = saved_termios;
-  cfmakeraw(&raw);
-  return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &raw);
-#endif
-  ```)
+  (term/set-mode fd true))
 ;;; term/set-cooked -- restore a terminal to cooked (canonical) mode.
 ;;;
 ;;; Restores the termios state that was saved by the last term/set-raw call.
+;;; With nothing saved -- no preceding term/set-raw, or a second call after
+;;; the state has already been restored -- this is an error rather than a
+;;; write of some default mode.
 ;;;
 ;;; Parameters:
 ;;;   fd -- file descriptor of the terminal
@@ -152,29 +202,7 @@
 ;;; Since: Phase B2
 
 (defn term/set-cooked [fd : int] : int
-  ```c
-  #include <termios.h>
-  #include <unistd.h>
-  #include <io.h>
-  /* See term/set-raw.  NOTE: like the POSIX branch, this restores from a static
-   * local to THIS function, which is not the one term/set-raw wrote -- so the
-   * restore is to a zeroed value, not the saved state.  That defect is
-   * pre-existing and platform-independent; mirrored here rather than diverging
-   * one platform silently.  See docs/reported/term-set-cooked-restores-zeroed-state.md. */
-#ifdef _WIN32
-  static DWORD saved_console_mode;
-  HANDLE h = (HANDLE)_get_osfhandle((int)fd);
-  if (h == INVALID_HANDLE_VALUE) return -1;
-  DWORD probe;
-  if (!GetConsoleMode(h, &probe)) return -1;
-  return SetConsoleMode(h, saved_console_mode) ? 0 : -1;
-#else
-  static struct termios saved_termios;
-  pid_t fg = tcgetpgrp((int)fd);
-  if (fg == -1 || fg != getpgrp()) return -1;
-  return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &saved_termios);
-#endif
-  ```)
+  (term/set-mode fd false))
 ;; -- ANSI color helpers -------------------------------------------------------
 ;; Each helper wraps s in the appropriate ANSI escape sequence when stdout is
 ;; a tty and NO_COLOR is not set; otherwise returns a plain copy of s.
