@@ -176,22 +176,68 @@ The non-tail variant is unchanged by the fix -- it was already exhibiting layer
 the correct convergence: the E7 escape had been *masking* the deeper defect by
 unwinding before the second resume could expose it.
 
-### Why layer 2 is not fixed here
+### Why layer 2 is not fixed here -- the two-spine problem
 
-It is a design question, not a patch. Copy-based multishot resume and
-jump-by-baked-env handle continuations are structurally incompatible: to make a
-copied chain deliver into its *own* tail, either
+Direction 2 above (make the continuation a chain link) was **built and
+measured**, then reverted. It is worth recording exactly how far it gets and
+what it runs into, because the obstacle is not the part anyone would predict.
 
-1. `dk_copy_range` must rewrite frame envs that are chain pointers (it cannot
-   tell one from an ordinary `intptr_t` env today -- the node would need to
-   mark which envs are chains), or
-2. handle continuations must become ordinary chain links (`k->next`) rather
-   than explicit `dk_run(env, v)` jumps, which changes what every
-   `dk_frame(main_hk*, ...)` emission means.
+The attempt: give the DK node the jump instead of the frame body --
+`dk_frame_kont(fn, env, kont, next)` with `kont` cleared by a reifying copy
+(`dk_copy_local`, used by `dk_perform`/`dk_shift` for `sub` but *not* by E7's
+deferred delivery, which stands in for running the real rest of the program and
+must keep jumping). The emitted continuation helper becomes a pure value
+transform that returns; `dk_run_impl`'s `DKK_FRAME` case does
+`if (k->kont) return dk_run_impl(k->kont, v, false);` and otherwise falls
+through to `next`.
 
-Either is a runtime-level change with its own plan and its own regression
-surface. The remaining wrongness is now *precisely* located, which is the part
-that was missing when this was filed.
+**This produces the right value.** The repro computes **22**. Both delivery
+kinds have to convert together -- a handle continuation nested inside another
+handle delivers to `KK_PROMPT`, not `KK_RET`, so converting only the `KK_RET`
+path leaves the nested case still jumping (that intermediate state still
+printed `2`/`20`).
+
+But the program no longer prints: 22 escapes as `main`'s return value. The
+reason is the real structural obstacle --
+
+**The chain has two spines that do not agree.** `main__cps` builds
+
+```c
+__h0 = hgroup(handler(Ask, case, frame(main_hk0, ..., dk_copy_enclosing_handlers(__kont))))
+__h1 = hgroup(handler_tail(Log, case, frame(main_hk1, ..., dk_copy_enclosing_handlers(__h0))))
+                                                          /* ^ MARKER COPIES */
+```
+
+`__h1`'s tail is not `__h0` -- it is a copy of `__h0`'s handler *markers*,
+terminated by `dk_done()`. So:
+
+- the `next` spine, which `dk_perform` walks to find `H` and which
+  `dk_copy_range` follows, reaches only marker copies and dead-ends at `done`;
+- the real continuation (`main_hk0`, which prints) is reachable **only** via the
+  baked `dk_run(__h0, v)` jump.
+
+That is why `dk_perform` finds `H` = a *marker copy* whose `H->next` is a
+dead-end, and why its `dk_run_impl(H->next, r)` delivery has nothing to run.
+Before the attempt, the outer continuation ran *inside the resumed
+sub-continuation* by falling through `main_hk1`'s jump into `__h0` -- which is
+precisely the same jump that re-runs it once per resume. **The bug and the
+mechanism that makes the normal case work are the same line.** Removing the
+jump fixes the multishot case and severs the single-shot one.
+
+So a real fix has to unify the spines, not patch either: `__h1`'s tail must be
+the actual `__h0` (so the search, the copy boundary, and the delivery all agree)
+rather than a marker copy. The marker copy exists for **ownership** -- each
+handle chain is `__dk_reap_keep`'d and `dk_free` walks `->next`, so linking a
+live enclosing chain in as the tail would free it twice. Unifying therefore
+needs a borrowed-tail notion in the chain representation (a node that the free
+walk stops at, or refcounted chains), and `dk_perform`'s copy boundary needs to
+stop at the real `H` across that link.
+
+That is a runtime representation change with its own plan and its own
+regression surface across 2570 fixtures -- not something to land opportunistically.
+
+The revert is clean: layer 1 (committed) stands, and the repro is back to
+`2`/`20`.
 
 `tests/fixtures/turi-ws-driven-operands` continues to pin the correct answers
 (22, 2020) on the interpreter. There is still deliberately no compiled fixture
