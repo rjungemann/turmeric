@@ -2162,6 +2162,52 @@ static bool parse_instance_head_arg(Elab *e, const Form *f, Type *out) {
     return true;
 }
 
+/* Resolve a PRIMITIVE type name appearing in a `definstance` constraint
+ * (`[TC float]`, `[(TC cstr)]`).  Returns false for anything that is not a
+ * built-in scalar so the caller can go on to try type parameters and
+ * user-defined type names.
+ *
+ * This is the same name set `parse_instance_head_arg` accepts, factored out so
+ * the constraint parsers cannot drift back to recognising a hand-written subset
+ * of it -- they used to accept exactly `int`/`bool`/`cstr` and silently keep
+ * their `TYPE_INT` initializer for every other spelling, which made `[TC float]`
+ * mean `[TC int]`.  See docs/archive/definstance-constraint-type-defaults-to-int.md. */
+static bool constraint_prim_type(const Symbol *kw, Type *out) {
+    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0)  { *out = TYPE_INT;  return true; }
+    if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) { *out = TYPE_BOOL; return true; }
+    if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) { *out = TYPE_CSTR; return true; }
+    if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
+        (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) { *out = TYPE_NIL; return true; }
+    if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) { *out = TYPE_PTR_VOID; return true; }
+    TypeKind nk = typekind_from_symbol(kw->name);
+    if (nk != TY_UNKNOWN) { *out = type_simple(nk, CK_COPY); return true; }
+    return false;
+}
+
+/* Resolve a USER-DEFINED type name appearing in a `definstance` constraint
+ * (`[TC MyStruct]`).  Mirrors the instance head's own resolution: the type
+ * namespace first (so the owning module is credited), then the value binding,
+ * which is where a lowered `defstruct` whose constructor shadows the type name
+ * is found.  Returns false when the name is not a known type -- the caller
+ * reports that rather than defaulting. */
+/* The ADT a `definstance` head argument is built from.  A bare head (`[Cons]`)
+ * is the ADT itself; an applied head (`[(Option A)]`, `[(Map cstr V)]`) is a
+ * TY_APP spine whose innermost `fn` is the constructor.  Used to decide whether
+ * a constraint variable names one of the head's type parameters. */
+static AdtDef *constraint_head_adt(const Type *t) {
+    while (t && t->kind == TY_APP) t = t->as.app.fn;
+    if (t && t->kind == TY_ADT) return t->as.adt_.def;
+    return NULL;
+}
+
+static bool constraint_named_type(Elab *e, const Symbol *kw, Type *out) {
+    Type *ty = elab_lookup_type_by_name(e, kw);
+    if (ty && ty->kind == TY_ADT && ty->as.adt_.def) { *out = *ty; return true; }
+    Binding *b = scope_lookup(e->scope, kw);
+    if (b && b->type.kind == TY_ADT && b->type.as.adt_.def) { *out = b->type; return true; }
+    return false;
+}
+
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
  *
  * Defines an instance of a typeclass for concrete types.
@@ -2717,7 +2763,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         const Symbol *ct_var = NULL;
                         if (constraint_form->as.list.len >= 2) {
                             Form *type_arg_form = constraint_form->as.list.items[1];
-                            if (type_arg_form->tag == F_SYM) {
+                            /* A keyword spelling (`[TC :cstr]`) names a type
+                             * exactly as the instance head's own parser
+                             * accepts it.  Anything else is not a type at
+                             * all -- reported below rather than left on the
+                             * `TYPE_INT` initializer. */
+                            if (type_arg_form->tag == F_SYM ||
+                                type_arg_form->tag == F_KEYWORD) {
                                 const Symbol *type_param_name = type_arg_form->as.sym;
                                 if (n_constraint_tyvar_syms < 32) {
                                     bool dup = false;
@@ -2743,18 +2795,9 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         break;
                                     }
                                 }
-                                if (!found) {
-                                    if (type_arg_form->as.sym->len == 3 &&
-                                        memcmp(type_arg_form->as.sym->name, "int", 3) == 0) {
-                                        constrained_type = TYPE_INT; found = true;
-                                    } else if (type_arg_form->as.sym->len == 4 &&
-                                               memcmp(type_arg_form->as.sym->name, "bool", 4) == 0) {
-                                        constrained_type = TYPE_BOOL; found = true;
-                                    } else if (type_arg_form->as.sym->len == 4 &&
-                                               memcmp(type_arg_form->as.sym->name, "cstr", 4) == 0) {
-                                        constrained_type = TYPE_CSTR; found = true;
-                                    }
-                                }
+                                if (!found)
+                                    found = constraint_prim_type(type_param_name,
+                                                                 &constrained_type);
                                 /* CONV-S2: under defstruct-as-defadt the instance
                                  * head is a lowered record ADT (`[Cons]`/`[Vec]`),
                                  * so the constraint var (`A` in `[(Tag A)]`) is one
@@ -2766,9 +2809,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * grounds A, baking the carrier representative. */
                                 if (!found) {
                                     for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
-                                        if (type_args[j].kind == TY_ADT &&
-                                            type_args[j].as.adt_.def) {
-                                            AdtDef *adef = type_args[j].as.adt_.def;
+                                        /* An APPLIED head (`[(Option A)]`) is a
+                                         * TY_APP over the same ADT, and binds
+                                         * its type params exactly as a bare one
+                                         * does -- peel to the constructor so `A`
+                                         * is recognised there too, instead of
+                                         * falling through to the type-name
+                                         * lookup and being reported unknown. */
+                                        AdtDef *adef = constraint_head_adt(&type_args[j]);
+                                        if (adef) {
                                             for (uint8_t k = 0; k < adef->n_type_params; k++) {
                                                 if (adef->type_params[k] &&
                                                     strcmp(adef->type_params[k],
@@ -2780,6 +2829,31 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         }
                                     }
                                 }
+                                /* A user-defined type name (`[TC MyStruct]`).
+                                 * Resolved last so a name that is also a head
+                                 * type arg or an ADT type parameter keeps
+                                 * meaning the parameter, as it did before. */
+                                if (!found && p_idx < 0)
+                                    found = constraint_named_type(e, type_param_name,
+                                                                  &constrained_type);
+                                /* Never default silently: a constraint type we
+                                 * cannot resolve used to keep the `TYPE_INT`
+                                 * initializer, so the constraint was checked --
+                                 * or silently satisfied -- against a type that
+                                 * appears nowhere in the source. */
+                                if (!found && p_idx < 0) {
+                                    diag_emit(DIAG_ERROR, type_arg_form->span,
+                                              "definstance: constraint type '%s' is not a known "
+                                              "type or type parameter",
+                                              type_param_name->name);
+                                    return NULL;
+                                }
+                            } else {
+                                diag_emit(DIAG_ERROR, type_arg_form->span,
+                                          "definstance: constraint type must be a type name, "
+                                          "got a %s literal",
+                                          form_tag_name(type_arg_form->tag));
+                                return NULL;
                             }
                         }
 
@@ -2826,7 +2900,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         const Symbol *ct_var = NULL;
                         if (idx + 1 < n_items) {
                             Form *type_arg_form = next_form->as.list.items[idx + 1];
-                            if (type_arg_form->tag == F_SYM) {
+                            /* A keyword spelling (`[TC :cstr]`) names a type
+                             * exactly as the instance head's own parser
+                             * accepts it.  Anything else is not a type at
+                             * all -- reported below rather than left on the
+                             * `TYPE_INT` initializer. */
+                            if (type_arg_form->tag == F_SYM ||
+                                type_arg_form->tag == F_KEYWORD) {
                                 const Symbol *type_param_name = type_arg_form->as.sym;
                                 ct_var = type_param_name;
                                 bool found = false;
@@ -2838,25 +2918,22 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         break;
                                     }
                                 }
-                                if (!found) {
-                                    if (type_arg_form->as.sym->len == 3 &&
-                                        memcmp(type_arg_form->as.sym->name, "int", 3) == 0) {
-                                        constrained_type = TYPE_INT; found = true;
-                                    } else if (type_arg_form->as.sym->len == 4 &&
-                                               memcmp(type_arg_form->as.sym->name, "bool", 4) == 0) {
-                                        constrained_type = TYPE_BOOL; found = true;
-                                    } else if (type_arg_form->as.sym->len == 4 &&
-                                               memcmp(type_arg_form->as.sym->name, "cstr", 4) == 0) {
-                                        constrained_type = TYPE_CSTR; found = true;
-                                    }
-                                }
+                                if (!found)
+                                    found = constraint_prim_type(type_param_name,
+                                                                 &constrained_type);
                                 /* CONV-S2: lowered record ADT instance head -- see
                                  * the paren-format block above. */
                                 if (!found) {
                                     for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
-                                        if (type_args[j].kind == TY_ADT &&
-                                            type_args[j].as.adt_.def) {
-                                            AdtDef *adef = type_args[j].as.adt_.def;
+                                        /* An APPLIED head (`[(Option A)]`) is a
+                                         * TY_APP over the same ADT, and binds
+                                         * its type params exactly as a bare one
+                                         * does -- peel to the constructor so `A`
+                                         * is recognised there too, instead of
+                                         * falling through to the type-name
+                                         * lookup and being reported unknown. */
+                                        AdtDef *adef = constraint_head_adt(&type_args[j]);
+                                        if (adef) {
                                             for (uint8_t k = 0; k < adef->n_type_params; k++) {
                                                 if (adef->type_params[k] &&
                                                     strcmp(adef->type_params[k],
@@ -2868,6 +2945,31 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         }
                                     }
                                 }
+                                /* A user-defined type name (`[TC MyStruct]`).
+                                 * Resolved last so a name that is also a head
+                                 * type arg or an ADT type parameter keeps
+                                 * meaning the parameter, as it did before. */
+                                if (!found && p_idx < 0)
+                                    found = constraint_named_type(e, type_param_name,
+                                                                  &constrained_type);
+                                /* Never default silently: a constraint type we
+                                 * cannot resolve used to keep the `TYPE_INT`
+                                 * initializer, so the constraint was checked --
+                                 * or silently satisfied -- against a type that
+                                 * appears nowhere in the source. */
+                                if (!found && p_idx < 0) {
+                                    diag_emit(DIAG_ERROR, type_arg_form->span,
+                                              "definstance: constraint type '%s' is not a known "
+                                              "type or type parameter",
+                                              type_param_name->name);
+                                    return NULL;
+                                }
+                            } else {
+                                diag_emit(DIAG_ERROR, type_arg_form->span,
+                                          "definstance: constraint type must be a type name, "
+                                          "got a %s literal",
+                                          form_tag_name(type_arg_form->tag));
+                                return NULL;
                             }
                         }
 
@@ -2898,7 +3000,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  constrained_type.kind == TY_NIL ||
                                  constrained_type.kind == TY_FLOAT ||
                                  constrained_type.kind == TY_PTR_VOID);
-            
+            /* A non-parametric user-defined type (`[TC MyStruct]`) names one
+             * concrete type, so its instance can be looked up here on the same
+             * terms as a primitive's.  A parametric one (`Vec<A>` named bare)
+             * still defers -- the element type is not known yet. */
+            if (!is_primitive && constrained_type.kind == TY_ADT &&
+                constrained_type.as.adt_.def &&
+                constrained_type.as.adt_.def->n_type_params == 0)
+                is_primitive = true;
+
             /* PTC2: For primitive types, validate that a constraint instance exists.
              * For user-defined types (structs, etc.), defer validation to PTC3.
              * Phase B1: float is treated as a primitive for constraint purposes. */

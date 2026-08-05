@@ -1,0 +1,21 @@
+;; A `definstance` constraint naming `float` must be resolved as float, not
+;; silently coerced to `int`.  The constraint parser recognised exactly
+;; int/bool/cstr and kept its `TYPE_INT` initializer for every other spelling,
+;; so `[TC float]` meant `[TC int]` -- and because `TC[int]` exists below, the
+;; unsatisfied constraint was ACCEPTED with no diagnostic at all (exit 0).
+;; Flip the one token `float` -> `bool` and the same program was correctly
+;; rejected, which is what made this hard to spot.  See
+;; docs/archive/definstance-constraint-type-defaults-to-int.md.
+(defclass TC [a]
+  (method [x] : int))
+
+;; TC[int] exists.  TC[float] does NOT exist anywhere in this program.
+(definstance TC [int]
+  (method [x] 1))
+
+;; Requires TC[float], which is unsatisfied: must be rejected, naming `float`.
+(definstance TC [cstr]
+  [TC float]
+  (method [x] 2))
+
+(defn main [] : int 0)

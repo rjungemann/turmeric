@@ -176,3 +176,112 @@ runs *before* `typeclass_env_register_instance` (`:3163`) and so imposes a
 well-founded declaration order on the instance graph. No hang was observed. The
 missing depth cap may still be worth a defensive guard, but there is no known
 input that reaches it, and it should not be filed as a defect on this evidence.
+
+---
+
+## Execution -- RESOLVED 2026-08-05
+
+Fixed in `src/compiler/elab_typeclasses.c`. Every claim in the report above
+reproduced exactly as written against `./build/tur` (v0.33.2, Debug), including
+the one-token `float` -> `bool` flip and the cascade in the user-defined-type
+case. Fix direction 1 was taken, with direction 2 as its backstop.
+
+### What changed
+
+**The three-name `memcmp` chain is gone from both constraint parsers.** They now
+call two small helpers placed next to the instance head's own resolver, so the
+constraint side cannot drift back to recognising a hand-written subset of the
+type names the head accepts:
+
+- `constraint_prim_type` -- `int`/`bool`/`cstr`/`void`/`nil`/`ptr<void>` plus
+  `typekind_from_symbol` for the numeric names. This is what makes `[TC float]`
+  mean float.
+- `constraint_named_type` -- the type namespace (`elab_lookup_type_by_name`)
+  first so the owning module is credited, then the value binding, which is where
+  a lowered `defstruct` whose constructor shadows the type name is found. This
+  is what makes `[TC MyStruct]` mean `MyStruct`.
+
+Resolution order is unchanged where it already worked -- head type args, then
+primitives, then the head ADT's type parameters -- and the new user-type lookup
+runs **last**, so a name that is also a type parameter keeps meaning the
+parameter.
+
+**Nothing defaults silently any more.** A constraint type that resolves to
+nothing is a hard error naming the symbol the user wrote
+(`definstance: constraint type 'Nope' is not a known type or type parameter`).
+
+**A non-parametric user-defined type is validated here, not deferred.**
+`[TC MyStruct]` names one concrete type, so its instance can be looked up on the
+same terms as a primitive's; PTC3 deferral is kept for the parametric case,
+where the element type genuinely is not known yet. This is what makes the
+"struct with no instance" negative reject.
+
+The dead `is_primitive` arms (fix direction 3) were **made reachable rather than
+deleted**: `TY_FLOAT` and `TY_NIL` now arrive from the parser and are exercised
+by the fixtures below, so the comment at what was `:2904` describes live code.
+
+### Two things the report did not anticipate
+
+**1. An applied instance head binds type parameters too, and the strict error
+caught two fixtures that were relying on the old silent default.**
+`(definstance Tag [(Option A)] [(Tag A)] ...)` stores its head as a `TY_APP`
+spine, not a bare `TY_ADT`, so the CONV-S2 type-parameter scan -- which tested
+`kind == TY_ADT` -- never saw `A`. Before the fix that fell through to the
+silent `TYPE_INT` default and `PTC2` validated `Tag[int]`, which happened to
+exist in both fixtures; after it, `A` was correctly reported as an unknown type
+name. Both `definstance-applied-binary-head-kind` and
+`constrained-generic-nested-container-element-dispatch` failed at `tur build`
+until the scan learned to peel the `TY_APP` spine to its constructor
+(`constraint_head_adt`), which is what a bare head already got. A binary head
+(`[(Map cstr V)]`) peels through the whole chain, so `V` resolves to parameter
+index 1.
+
+This is worth recording as a shape, not just a fix: **a strict error can only be
+added once every legitimate resolution path is actually reachable**, and the two
+fixtures were the evidence that one was not. Their `param_idx` is now `>= 0`
+where it used to be `-1`; both still produce their expected output on both
+paths.
+
+**2. The parser only looked inside the constraint form when it was a bare
+symbol.** Anything else -- a keyword (`[TC :cstr]`), a literal -- skipped the
+whole block and kept the `TYPE_INT` initializer, which is the same defect
+arriving through a different door and is not mentioned in the report. Two
+cases matter in practice:
+
+- `[TC :cstr]` -- the keyword spelling of a type name, which the instance head
+  parser has always accepted. Now accepted here too.
+- `[TC nil]` -- `nil` reads as a **literal**, not a symbol, so this silently
+  meant `[TC int]`. It is an easy thing to write by accident (the type spelling
+  is `void`, which does resolve). It is now a hard error naming what was
+  written: `constraint type must be a type name, got a nil literal`.
+
+### Fixtures (fix direction 4)
+
+Four errors negatives and one positive, all running on both paths:
+
+| Fixture | Pins |
+| --- | --- |
+| `errors/definstance-constraint-float-unsatisfied` | `[TC float]` with no `TC[float]` must reject, naming `float` (was: exit 0, no diagnostic) |
+| `errors/definstance-constraint-struct-unsatisfied` | `[TC B]` with no `TC[B]` must reject, naming `B` (was: named `int`, then dropped the instance) |
+| `errors/definstance-constraint-type-unknown` | an unresolvable name is a hard error naming the symbol |
+| `errors/definstance-constraint-type-not-a-type` | a literal constraint form is a hard error, not a silent `int` |
+| `definstance-constraint-user-type` | positive: a constraint over a struct, over `float`, in the paren spelling, and in the keyword spelling, all dispatching |
+
+Suites after the change: `bash tests/run.sh` 2578 passed, 0 failed;
+`bash tests/run-turi.sh` 1765 passed, 0 failed, 705 skipped. No snapshot churn --
+the emitted C is unchanged for every program that compiled before.
+
+### What this does not change
+
+The **declaration-order sensitivity** the report's Notes section identified is
+untouched: the `PTC2` check still runs before `typeclass_env_register_instance`,
+so a constraint must name an instance declared earlier in the file, and a
+self-constraint is rejected. That is what keeps the instance graph well-founded
+and is why the recursive-resolution hang hypothesis did not reproduce. Widening
+resolution to user-defined types does not weaken it -- it extends the same rule
+to a class of constraint that previously was not being checked at all.
+
+The report's parenthetical about a missing depth cap in
+`typeclass_env_lookup_instance` -> `typeclass_instance_constraints_satisfied`
+remains as filed: no known input reaches it, and it was correctly not filed as a
+defect.

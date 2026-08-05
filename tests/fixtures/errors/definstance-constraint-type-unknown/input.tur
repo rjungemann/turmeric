@@ -1,0 +1,13 @@
+;; A constraint type that resolves to nothing at all is a hard error naming the
+;; symbol the user wrote.  It used to keep the parser's `TYPE_INT` initializer,
+;; so the constraint was checked -- or, when `TC[int]` happened to exist,
+;; silently satisfied -- against a type that appears nowhere in the source.  See
+;; docs/archive/definstance-constraint-type-defaults-to-int.md.
+(defclass TC [a]
+  (method [x] : int))
+
+(definstance TC [int]
+  [TC Nope]
+  (method [x] 1))
+
+(defn main [] : int 0)

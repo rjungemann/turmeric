@@ -1,0 +1,20 @@
+;; A constraint naming a user-defined type resolves to that type, so an
+;; unsatisfied one is reported against the type the user actually wrote.  The
+;; parser had no fallback that resolved a user-defined type name, so `[TC B]`
+;; also kept the `TYPE_INT` initializer: with no `TC[int]` in the program this
+;; reported `no instance of 'TC' for type 'int'` -- naming a type that appears
+;; nowhere in the source -- and dropped the whole instance, cascading into "no
+;; instance ... for type 'A'" at the dispatch site.  See
+;; docs/archive/definstance-constraint-type-defaults-to-int.md.
+(defclass TC [a]
+  (method [x] : int))
+
+(defstruct B [v : int])
+(defstruct A [v : int])
+
+;; TC[B] is never defined: must be rejected, naming `B` (not `int`).
+(definstance TC [A]
+  [TC B]
+  (method [x] 1))
+
+(defn main [] : int 0)

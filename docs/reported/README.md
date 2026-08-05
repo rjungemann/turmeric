@@ -22,6 +22,16 @@ filings. The `libedit` CI row *was* verified (three job runs across two heads
 and `main`'s tip); it has since been fixed and archived, so it no longer appears
 below.
 
+**Four rows were added 2026-08-05** -- `fixture-dirs-with-loose-tur-files-pass-without-running`,
+`manifest-read-failure-degrades-to-module-not-found`, `mono-specs-header-comment-stale`
+and `turi-toplevel-expr-subforms-elaborate-in-global-scope`. They were not new
+filings: all four had been sitting in this directory **unindexed**, found while
+archiving `definstance-constraint-type-defaults-to-int`, which was unindexed
+too. Their rows summarise their own filings and were **not** re-verified here,
+so the sweep sentence above does not cover them. If you touch this file, check
+`ls docs/reported/` against it -- an index that silently omits a quarter of the
+directory is worse for triage than no index.
+
 ## Value representation (the consolidation campaign)
 
 The scoreboard for this family is the open-cells table in
@@ -125,6 +135,7 @@ into a frame env again.
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
 | [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
+| [turi-toplevel-expr-subforms-elaborate-in-global-scope](turi-toplevel-expr-subforms-elaborate-in-global-scope.md) | low | a bare top-level expression's subforms elaborate in the GLOBAL scope under `--interpret`, in a pushed one compiled; both paths still reject, only the diagnostic (and which binding a `def` subform creates) diverges |
 
 
 The first absorbed two symptom reports on 2026-08-01
@@ -164,6 +175,24 @@ means "internal" in this codebase, not "synthesized", and the stdlib writes
 ~46 of its own. The 200-item completion cap it also mentions is untouched and
 is not tracked as an open finding -- see that note's "What this does not fix".
 
+`definstance-constraint-type-defaults-to-int` was resolved 2026-08-05 and moved
+to [docs/archive](../archive/definstance-constraint-type-defaults-to-int.md). A
+`definstance` constraint type was resolved by a hardcoded `int`/`bool`/`cstr`
+`memcmp` chain, so `[TC float]` and `[TC MyStruct]` both kept the parser's
+`TYPE_INT` initializer -- silently ACCEPTED against `TC[int]` when that existed,
+and otherwise a spurious error naming `int`, a type absent from the source, that
+dropped the whole instance. Both constraint parsers now resolve through the same
+name set the instance head accepts plus the type namespace, and an unresolvable
+one is a hard error. Two things the report did not have: an APPLIED head
+(`[(Option A)]`) binds type parameters through a `TY_APP` spine the parameter
+scan did not peel, so the new strict error caught two fixtures that were
+relying on the old silent default -- a reminder that **a strict error can only
+be added once every legitimate resolution path is reachable** -- and the parser
+looked inside the constraint form only when it was a bare symbol, so the keyword
+spelling `[TC :cstr]` and the very natural `[TC nil]` (a literal; the type
+spelling is `void`) fell through the same way. Pinned by four `errors/`
+negatives and `tests/fixtures/definstance-constraint-user-type/`.
+
 ## Soundness limits and UB
 
 | Report | Severity | One line |
@@ -177,6 +206,9 @@ is not tracked as an open finding -- see that note's "What this does not fix".
 | --- | --- | --- |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
+| [fixture-dirs-with-loose-tur-files-pass-without-running](fixture-dirs-with-loose-tur-files-pass-without-running.md) | medium | four fixture dirs hold loose `.tur` files under names `run.sh` does not look for, hit the no-input fallback, and are recorded as **PASS** -- 30 files' worth of silent coverage loss, invisible in the summary line |
+| [manifest-read-failure-degrades-to-module-not-found](manifest-read-failure-degrades-to-module-not-found.md) | medium | a BROKEN `build.tur` is indistinguishable from no manifest to every caller, so a one-token typo presents as N unrelated `module not found` errors and `tur check` reports at `error:` severity while exiting **0** |
+| [mono-specs-header-comment-stale](mono-specs-header-comment-stale.md) | low | `mono_specs.h`'s header comment describes a superseded state (registry-only, carrier-box codegen, VBM2b deferred); it contradicts a later paragraph in the same block and has already produced two wrong survey conclusions |
 
 ## Windows port
 
