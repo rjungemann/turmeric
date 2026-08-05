@@ -77,18 +77,26 @@ fixture.
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
 | [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
+| [turi-ws-capturable-stale-black-box-arms](turi-ws-capturable-stale-black-box-arms.md) | medium | `ws_capturable` still calls `set!`/`return`/`get-field` operands black boxes though the driver drives them (SR N2/N3), so a `perform` there silently downgrades a handler to the single-shot fiber. Carries a **verified** three-line fix plus a classification of the whole remaining fallback surface -- what is stale, what needs driver work, what is blocked on `clone_ws_slice` owning boundaries |
 
 The first absorbed two symptom reports on 2026-08-01
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values`,
 `turi-hkt-byvalue-bind-pure-wrong-value`, both now in `docs/archive/`). It is
 the single red line in `tests/run-turi.sh`.
 
-A fourth was resolved 2026-08-05:
+Another was resolved 2026-08-05:
 [turi-multishot-resume-in-while-aborts](../archive/turi-multishot-resume-in-while-aborts.md)
 -- turi aborted on a multi-shot resume from inside a `while`, because the loop
 was a black box to the work-stack driver and forced the handle onto the
 single-shot fiber. `while` is now driven (`DK_WHILE`), and the fiber fallback
 reports instead of `abort()`ing when it is genuinely reached.
+
+`turi-ws-capturable-stale-black-box-arms` is that defect's sibling and the
+follow-up to it: same analysis, same silent downgrade, but arms that went stale
+rather than a form with no arm at all. Read it before touching `ws_capturable`
+-- it enumerates the whole fallback surface, and in particular separates the
+forms the driver already descends safely from the ones whose frames carry a
+heap boundary `clone_ws_slice` would double-free.
 
 ## Surface / expressiveness
 
