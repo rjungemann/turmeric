@@ -324,11 +324,12 @@ what puts the whole plan behind an experiment gate (§6).
 
 ### 4.4 H4: two opt-in spellings, and an honest guide section
 
-- **`^thread-local`** -- each thread gets its own copy, emitted through the
-  existing `TUR_THREAD_LOCAL` macro. Initialization is the open question: the
-  current `__tur_module_def_init` assigns once, which is wrong for a per-thread
-  slot whose initializer is not a constant expression. Resolve during G4;
-  restricting the first cut to constant initializers is an acceptable answer.
+- **`^thread-local`** -- each thread gets its own copy. **Superseded by §11**,
+  which found that the `TUR_THREAD_LOCAL` route sketched here does not work:
+  the JIT has no thread-local storage at all, and its existing workaround
+  covers 11 fixed runtime slots that a user variable cannot join. Restricting
+  to constant initializers does not rescue it. See §11.4 for the design that
+  does work and §11.5 for what it costs.
 - **`^atomic`** -- scalar globals only (`:int`, `:bool`, `:float`, pointer-
   width handles). `set!` and reads lower to `__atomic_store_n` /
   `__atomic_load_n` with sequential consistency, which is exactly the shape
@@ -471,8 +472,12 @@ threads without `^atomic`. §0.1.
 
 Recorded so the reasoning survives; none blocks G1.
 
-1. **`^thread-local` initialization** (§4.4). Constant-initializer-only is an
-   acceptable first cut; per-thread lazy init needs a design.
+1. **`^thread-local` initialization** (§4.4). **ANSWERED -- see §11.** Short
+   version: constant-initializer-only is *not* an acceptable first cut (it is
+   silently broken under the JIT, which fails on the storage rather than the
+   initializer), and per-thread lazy init is unreachable from `__thread` in C.
+   The workable design is one `pthread_key_t` holding a per-thread block,
+   materialized on first access -- the mechanism dynvars already use.
 2. **Does a `#reads` frame naming a global buy anything today?** `#reads` is
    still step 1 -- trusted, refinement-only. A global in a `#reads` frame may be
    documentation until the read side becomes checked. If so, G2 should ship
@@ -607,3 +612,211 @@ support.
 Nothing G1 did makes a global *expressible* in a frame -- a function that
 legitimately maintains global state simply cannot carry a checked frame now.
 That is the right default and the wrong end state, and it is exactly §4.2.
+
+---
+
+## 11. Research: is per-thread lazy init feasible? (open question 1)
+
+Answering §9's first open question. Investigated 2026-08-05. Claims below are
+marked **[ran]** where a probe was compiled and executed, **[read]** where they
+come from reading the tree. The JIT could not be exercised (this build is not
+`-DTUR_JIT=ON`), so every JIT claim is [read].
+
+### 11.0 Verdict
+
+**Feasible, but not the way §4.4 assumed, and the "acceptable first cut" in
+§4.4 is not actually acceptable.** §4.4 proposed emitting `^thread-local`
+through the existing `TUR_THREAD_LOCAL` macro and restricting the first cut to
+constant initializers. Two findings break that:
+
+1. Even a **constant**-initializer `^thread-local` is silently wrong under the
+   JIT, so the restriction does not buy a working first cut -- it buys a
+   working-on-`cc`, broken-on-`tur jit` one.
+2. Per-thread lazy init is not reachable from `__thread` in C at all.
+
+The design that does work is the one the codebase already runs for dynvars: a
+`pthread_key_t` with materialize-on-first-access. Recommendation in §11.4.
+
+### 11.1 The constraint stack
+
+**(a) C has no dynamic TLS initialization. [ran]**
+
+```c
+static __thread int lazy = compute();
+/* error: initializer element is not constant */
+```
+
+C++ gives thread-locals dynamic initialization with compiler-generated guards;
+C does not, in any dialect we target. So `(def ^thread-local buf (make-buffer))`
+cannot lower to a `__thread` variable with an initializer, full stop. The
+guard-flag rewrite (`if (!inited) { inited = 1; v = compute(); }`) compiles and
+works [ran], but it is a manual lowering, not a language feature -- and it puts
+a branch on every read of every `^thread-local`.
+
+**(b) The JIT has no thread-local storage, and the existing workaround does not
+generalize. [read]**
+
+c2mir parses `_Thread_local`, warns "Thread local is not implemented", and then
+treats the variable as an ordinary global -- so every thread shares one slot.
+That is not theoretical: it is how "8 STM workers ended up sharing one
+transaction descriptor and losing updates (stm-stress)"
+(`src/runtime/tur_tls.c` header).
+
+The fix in place is host residency: `emit_rt_tls` (`emit_module.c`) `#define`s
+each name to a deref of an accessor in `src/runtime/tur_tls.c`, which is
+compiled by a real `cc` and holds a genuine `__thread` slot. **It works because
+there are exactly 11 slots, fixed at compiler build time, each with a
+hand-written host counterpart.** A user's `^thread-local` has no host
+counterpart, so under the JIT it would fall through to c2mir's "ordinary
+global" reading -- silently, and into exactly the bug class the mechanism
+exists to prevent. This is why §4.4's constant-initializer first cut does not
+work: the initializer was never the hard part.
+
+**(c) The thread trampoline covers 1 of 6 thread-creation sites. [ran: grep]**
+
+"Run the initializer eagerly on thread entry" is attractive -- it needs no
+per-access cost and no laziness. `tur_thread_trampoline` (`emit_module.c`) is a
+hook we own and already runs per spawned thread. But only `stdlib/thread.tur`
+routes through it. Direct `pthread_create` calls, bypassing it entirely:
+
+| Site | Threads |
+|---|---|
+| `stdlib/future.tur` | 3 (timeout thread, with-timeout t-fn, with-timeout w-fn) |
+| `stdlib/httpd.tur` | the worker pool |
+| `stdlib/taskgroup.tur` | spawn-timeout thread |
+
+So a trampoline-based design would leave a `^thread-local` **zero-initialized
+on an httpd worker** -- reading a plausible-looking wrong value rather than
+failing. Routing all six through one entry hook is a worthwhile refactor and a
+**prerequisite** for this option, not a detail of it.
+
+**(d) `pthread_key_create` is already in the tree, and works everywhere we
+target. [ran + read]**
+
+Dynvars (`defdynamic`) emit one `pthread_key_t` per variable with a cleanup
+destructor, registered in the `STATIC_INIT_KEYS` band of the existing phased
+static-init registry (`emit_module.c`; `emit_internal.h` defines the bands).
+Verified working in this build [ran]: `(binding [*level* 7] ...)` prints
+`1 / 7 / 1`, and the emitted read is
+
+```c
+TurDynFrame *f = (TurDynFrame *)pthread_getspecific(_dynvar_key_level);
+int64_t r = f ? *(int64_t *)f->value : _dynvar_root_level;
+```
+
+It needs no compiler TLS support -- `pthread_getspecific` is a libc call -- so
+it is the one mechanism here that is not blocked by (b). The dynvar code
+carries an explicit note that it works under the JIT. Windows is covered:
+`windows-remaining-plan.md` lists `pthread` (winpthreads) among the link deps.
+
+### 11.2 The fork that decides the design
+
+The dynvar layout above is **lazy by construction and needs no per-thread init
+at all**: the initializer's value lives in a process-global root, a thread with
+no binding reads the root, and only an override allocates a per-thread frame.
+
+It is also the wrong semantics for `^thread-local`. Compare:
+
+```turmeric
+(def ^thread-local buf (make-buffer))
+```
+
+- **Root-sharing (dynvar semantics):** `make-buffer` runs once; every thread
+  reads the *same* buffer until it writes. For a scalar counter that is fine.
+  For anything allocating it is precisely the bug `^thread-local` exists to
+  prevent -- the threads share the buffer.
+- **Per-thread run:** `make-buffer` runs once *per thread*. This is what
+  `^thread-local` has to mean, and it is what forces a real initialization
+  story.
+
+So the dynvar *mechanism* is reusable; its *layout* is not.
+
+### 11.3 Options evaluated
+
+| # | Design | Init cost | Access cost | JIT | Covers all threads | Verdict |
+|---|---|---|---|---|---|---|
+| 1 | `__thread` + constant initializers only (§4.4's first cut) | none | 0.34 ns | **broken** | n/a | rejected -- (b) |
+| 2 | Eager init in the thread trampoline | per thread, always | 0.34 ns | broken | **no** -- (c) | rejected as-is |
+| 3 | `__thread` value + `__thread` guard flag, lazy | per thread, on demand | 0.34 ns + branch | **broken** | yes | rejected -- (b) |
+| 4 | One `pthread_key_t` per thread-local, materialize on first access | per thread, on demand | 1.63 ns | **works** | yes | **recommended** |
+| 4b | **One** key holding a per-thread block of *all* thread-locals | per thread, on demand | 1.63 ns amortized | works | yes | **recommended at scale** |
+
+Access costs measured on this box, `-O2`, with a compiler barrier so neither
+loop hoists [ran]: `__thread` **0.34 ns/access**, `pthread_getspecific`
+**1.63 ns/access** -- about 4.8x, or +1.3 ns absolute. Meaningful in a hot
+loop, negligible otherwise, and `pthread_getspecific` cannot be hoisted across
+a call the way a `__thread` address can.
+
+The key budget is real: `_SC_THREAD_KEYS_MAX` is **1024** on this box and
+exactly 1024 keys were creatable before failure [ran]. Option 4 spends one per
+`^thread-local`, which is fine for tens and a hard wall at a thousand --
+notably a wall shared with dynvars, which already spend one each. **Option 4b
+removes the limit entirely**: one key holds a per-thread struct (or arena) of
+every thread-local, indexed by slot, so a function touching several pays one
+`getspecific` rather than one each. It is strictly better than 4 at any scale
+above a handful and is the design to build if this ships.
+
+### 11.4 Recommendation
+
+**Build option 4b, and drop §4.4's constant-initializer restriction** -- it
+does not simplify anything and it does not produce a working feature under the
+JIT.
+
+Sketch, reusing machinery that exists:
+
+- One `pthread_key_t` for the whole program, created in the `STATIC_INIT_KEYS`
+  band (where dynvar keys already go).
+- The key holds a per-thread block: a zeroed struct with one slot per
+  `^thread-local`, plus one `inited` bit each.
+- Each access lowers to `tur_tl_block()` (one `getspecific`, materializing the
+  block on first use) then a slot read; a slot whose `inited` bit is clear runs
+  the initializer first. Initializer order within a thread is source order,
+  matching `__tur_module_def_init`.
+- The key's destructor frees the block on thread exit -- which `__thread` in C
+  would not give us, and which matters the moment a `^thread-local` holds
+  anything allocated.
+- **Fast path, optional and last:** under `__GNUC__`, cache the block pointer
+  in a `__thread` variable, reducing steady-state cost to a `__thread` read
+  plus a null check. This is the same `#if defined(__GNUC__)` split
+  `emit_rt_tls` already uses, and it must stay an optimization of an
+  already-correct path, never the mechanism -- otherwise the JIT regresses to
+  (b).
+
+### 11.5 What this changes in this plan
+
+- **§4.4's `^thread-local` bullet is superseded by this section.** Its premise
+  ("the current `__tur_module_def_init` assigns once, which is wrong for a
+  per-thread slot whose initializer is not a constant expression") is right
+  about the symptom and wrong about the cure; restricting to constant
+  initializers does not help, because the JIT breaks on the *storage*, not the
+  *initializer*.
+- **§9 open question 1 is answered.** The remaining design work is 11.6, not
+  "needs a design".
+- **G4 gets bigger and reorders.** §5 put `^atomic` first "because it is the
+  smaller of the two and has no open design question" -- that still holds, and
+  the gap just widened. `^atomic` lowers to `__atomic_*` builtins for which the
+  JIT already has a shim (`tur_atomics.c`, same host-residency pattern);
+  `^thread-local` needs the whole of 11.4. They should be separate phases, not
+  one bullet.
+
+### 11.6 Sub-questions left open
+
+1. **Is `^thread-local` wanted enough to pay for 11.4?** It is the largest item
+   in this plan by implementation cost and the one with the least demand
+   evidence. A `^mut` global plus explicit `mutex.tur` covers the shared case;
+   a dynvar covers the ambient-configuration case. Worth a demand signal before
+   building.
+2. **What does a `^thread-local` initializer see?** Source-order within a
+   thread is the obvious rule, but an initializer that reads a *non*-thread-
+   local global is reading state initialized on the main thread, which is fine,
+   while one that reads another `^thread-local` needs the ordering to be
+   defined. Simplest defensible rule: a `^thread-local` initializer may not
+   reference another `^thread-local`.
+3. **Interpreter parity.** turi has no thread-spawn of its own [ran: no
+   `pthread_create` in `src/turi/eval.c`], so a `^thread-local` there is
+   observationally a plain global. That is a defensible answer but it should be
+   a written-down one, not an accident.
+4. **Does the 1024-key wall already threaten dynvars?** They spend a key each
+   today with no cap diagnostic. Independent of this plan, cheap to check, and
+   a nastier failure than it looks -- `pthread_key_create` returning `EAGAIN`
+   is currently unchecked at the dynvar site.
