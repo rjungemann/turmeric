@@ -1,0 +1,25 @@
+;; G2: a written global the frame does not name is TUR-E0382 -- the same code
+;; a write outside the parameter frame gets, because it is the same kind of
+;; mistake.  The message names the global, since "widen the frame" is not
+;; actionable if you cannot see what to widen it with.
+;;
+;; `via-callee` covers the transitive half: the undeclared write happens inside
+;; a callee that takes NO parameters, which is exactly the gap the parameter
+;; frame walk leaves open by design (it consults a callee only when the call
+;; receives a parameter-rooted argument -- sound for parameters, false for
+;; globals, since a call with no arguments can still write one).
+(def ^mut hits   0)
+(def ^mut misses 0)
+
+(defn leaf! [] : void
+  (set! misses (+ misses 1)))
+
+(defn sneaky! [] #writes [hits] : void
+  (set! hits (+ hits 1))
+  (set! misses (+ misses 1)))
+
+(defn via-callee [] #writes [hits] : void
+  (set! hits 1)
+  (leaf!))
+
+(defn main [] : int 0)

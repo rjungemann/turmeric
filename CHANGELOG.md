@@ -6,6 +6,16 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **A `#writes` frame may name a mutable global**, behind
+  `--enable=global-state`. `(defn bump! [] #writes [hits] : void ...)` lets a
+  body that maintains global state carry a *checked* frame instead of being
+  declined outright, and a frame may mix the two (`#writes [a hits]`). Coverage
+  works as it does for parameters: writing a global the frame does not name is
+  `TUR-E0382` naming the global, declared-but-unwritten is fine (a frame is an
+  upper bound), and an unresolvable body is UNVERIFIED. Naming an immutable
+  global is `TUR-E0381` with its own reason. Deliberately `#writes` only --
+  `#reads` grants congruence, so a global there would let a promise about
+  mutable global state pay out in proofs.
 - **`--dump-write-frames`** prints the checked verdict for every declared
   `#writes` frame, with the frame's own verdict and the global-write answer as
   separate columns (`frame=VERIFIED global=YES`). A diagnostic knob, not an

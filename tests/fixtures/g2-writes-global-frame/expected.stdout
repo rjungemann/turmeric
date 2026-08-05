@@ -1,0 +1,7 @@
+write-frame bump!: VERIFIED mask=0x0 frame=VERIFIED global=YES declared=[hits]
+write-frame both!: VERIFIED mask=0x0 frame=VERIFIED global=YES declared=[hits misses]
+write-frame quiet: VERIFIED mask=0x0 frame=VERIFIED global=NO declared=[misses]
+write-frame mixed!: VERIFIED mask=0x1 frame=VERIFIED global=YES declared=[hits]
+2
+1
+7

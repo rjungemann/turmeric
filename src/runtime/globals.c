@@ -267,6 +267,7 @@ bool g_opt_sealed_opaque = false;
  * nothing checks it and nothing acts on it, so a spice can adopt it without
  * breaking consumers who have not enabled the experiment. */
 bool g_opt_write_frames = false;
+bool g_opt_global_state  = false;
 
 /* --strict-refine: hard-fail on any obligation the chain could not prove. */
 bool g_strict_refine = false;

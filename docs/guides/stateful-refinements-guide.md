@@ -352,10 +352,44 @@ write-frame sneaky: UNVERIFIED mask=0x0 frame=VERIFIED global=YES
 `frame=VERIFIED global=YES` reads as "the frame itself holds, but the body
 writes global state, so the frame is not a fact you may build on."
 
-Giving frames a vocabulary that can *name* a global -- so `#writes [a *cache*]`
-becomes expressible and such a body can be checked rather than merely declined
--- is the next step, planned in
-[`mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/mutable-globals-plan.md).
+### Naming a global in the frame
+
+Behind `--enable=global-state`, a `#writes` frame **may name a mutable global**,
+so a body that legitimately maintains global state can carry a checked frame
+instead of being declined outright:
+
+```turmeric
+(def ^mut hits 0)
+
+(defn bump! [] #writes [hits] : void
+  (set! hits (+ hits 1)))
+```
+
+The question then becomes coverage, exactly as for parameters:
+
+| Body | Verdict |
+|---|---|
+| writes only globals the frame names | VERIFIED |
+| writes a global the frame does not name | `TUR-E0382`, naming the global |
+| the walk cannot tell | UNVERIFIED |
+
+Declared-but-never-written is fine -- a frame is an *upper bound* on what the
+body may write, the same reading `#writes [a]` already has for a parameter the
+body happens not to touch. A frame may mix the two: `#writes [a hits]`.
+
+Two rejections have their own reasons rather than a generic one: naming an
+**immutable** global is a claim that cannot be true (`TUR-E0381`), and naming a
+global **without the experiment** is the pre-G2 "not a parameter" error --
+the gate covers the grammar, not just the checking, because accepting the name
+and ignoring it would be exactly the silently-dropped frame member `TUR-E0381`
+exists to prevent.
+
+`#reads` is deliberately **not** part of this. It is the annotation that
+*grants* congruence, so letting it name a global would let a promise about
+mutable global state pay out in proofs -- see
+[`mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/mutable-globals-plan.md)
+sections 12.2 and 12.4, and the `refine-reads-frame-omits-global` fixture pair
+that pins what a broken read-side promise costs.
 
 ## Quick reference
 

@@ -1,6 +1,6 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
-> **Status:** **G1 LANDED 2026-08-05** (see §10). G2-G5 proposed.
+> **Status:** **G1 and G2 LANDED 2026-08-05** (see §10, §15). G3-G5 proposed.
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
@@ -382,7 +382,7 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
   it is a correction to that feature, not a new one. Also lands the §1.3 test
   gap (the global variant of `refine-impure-fx-empty`) and the §4.5 comment
   correction on `rt_collect_set_targets`. **Independently useful; land first.**
-- **G2 -- globals in the frame vocabulary.** §4.2. Upgrades G1's blanket
+- **G2 -- globals in the frame vocabulary. LANDED 2026-08-05; see §15.** §4.2. Upgrades G1's blanket
   UNVERIFIED to "verified against a frame that names the global". Behind
   `--enable=global-state`.
 - **G3 -- module encapsulation.** §4.3. The one phase that can reject existing
@@ -1213,3 +1213,76 @@ The one thing worth doing *immediately*, independent of any plan: §12.6.1's
 fixture. There is currently nothing in the suite pinning what a broken `#reads`
 promise costs, which makes §12.2's behaviour easy to rediscover as a bug. A
 fixture turns the trust boundary from prose into something the suite asserts.
+
+---
+
+## 15. G2 execution record (2026-08-05)
+
+**Landed**, behind `--enable=global-state`. `tests/run.sh` -> 2551 passed, 0
+failed; `tests/run-turi.sh` -> 1742 passed, 0 failed, 704 skipped. No fixture
+snapshot moved, and every frame verdict in `wf1-writes-frame-honored` is
+unchanged.
+
+### 15.1 What landed
+
+`#writes` frame entries that resolve to a **mutable global** extend the frame
+instead of being rejected. G1's blanket "any global write blocks VERIFIED"
+becomes a coverage question, in a helper (`wf_global_verdict`) kept separate
+from `wf_walk` for the reason §4.2 gives -- the two speak different
+vocabularies:
+
+| Body | Gate off (G1) | Gate on (G2) |
+|---|---|---|
+| writes no global | VERIFIED | VERIFIED |
+| writes only declared globals | UNVERIFIED | **VERIFIED** |
+| writes an undeclared global | UNVERIFIED | **TUR-E0382**, naming it |
+| walk cannot tell | UNVERIFIED | UNVERIFIED |
+
+G1's walk grew a set alongside its tri-state (`WgSet`, capped at
+`WF_MAX_FRAME_GLOBALS` = 16, memoized on the `Binding` beside the verdict so a
+second caller replays rather than re-walks). Overflow degrades coverage to
+UNVERIFIED rather than letting a truncated set read as "all covered".
+
+Transitivity comes free from G1: a callee's set unions into the caller's, so an
+undeclared write inside a callee taking **no parameters** is caught -- the gap
+the parameter walk leaves open by design.
+
+### 15.2 Three rejections with their own reasons
+
+- **An undeclared global write** is `TUR-E0382` -- the same code a write
+  outside the parameter frame gets, because it is the same kind of mistake --
+  but the message names the global, since "widen the frame" is not actionable
+  if you cannot see what to widen it with. The note says "add the global to it,
+  or stop writing it".
+- **An immutable global in a frame** is `TUR-E0381` with its own text. Naming
+  one is a claim that cannot be true, and saying so beats a message about
+  parameters.
+- **A global without the experiment** stays the pre-G2 "not a parameter" error.
+  The gate covers the **grammar**, not just the checking: accepting the name and
+  ignoring it would be a silently-dropped frame member, which is what
+  `TUR-E0381` exists to prevent.
+
+### 15.3 Deliberately `#writes` only
+
+Per §12.4 and the owner decision. `#reads` keeps its hard error for a
+non-parameter name, and the experiment row says why in full: `#reads` is the
+annotation that *grants* congruence, so a global there would let a promise about
+mutable global state pay out in proofs. The `refine-reads-frame-omits-global`
+pair pins what that costs.
+
+### 15.4 Fixtures
+
+`g2-writes-global-frame` (declared-and-written, two globals, declared-but-
+unwritten, a mixed parameter+global frame; asserts the dump's new
+`declared=[...]` column), `errors/g2-writes-global-undeclared` (direct **and**
+transitive-through-a-parameterless-callee), `errors/g2-writes-global-immutable`,
+`errors/g2-writes-global-needs-gate`.
+
+The positive carries `requires.interp` for the same harness reason G1's do --
+the compiled path does not capture compile-phase stdout. Its marker file says
+so.
+
+### 15.5 What G3 inherits
+
+Unchanged: exported globals are still writable by every importer (H3). G2 gave
+frames a vocabulary for globals; it said nothing about who may write one.

@@ -1,0 +1,9 @@
+;; G2: naming an IMMUTABLE global in a write frame is a statement that cannot
+;; be true, so it gets its own reason rather than being folded into the
+;; "not a parameter" message the pre-G2 grammar gave.
+(def total 99)
+
+(defn f [] #writes [total] : int
+  7)
+
+(defn main [] : int 0)

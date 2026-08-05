@@ -1365,7 +1365,30 @@ typedef enum WgVerdict {
 
 static WgVerdict wg_worse(WgVerdict a, WgVerdict b) { return a > b ? a : b; }
 
-static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn);
+/* G2: WHICH globals a body writes, accumulated alongside the verdict.  G1 only
+ * needed the yes/no; a frame that can NAME a global needs the set, so it can
+ * ask whether every written global is covered.  `overflow` degrades coverage
+ * to unanswerable rather than letting a truncated set read as "all covered". */
+typedef struct WgSet {
+    const Symbol *names[WF_MAX_FRAME_GLOBALS];
+    uint32_t      n;
+    bool          overflow;
+} WgSet;
+
+static void wg_set_add(WgSet *s, const Symbol *sym) {
+    if (!s || !sym) return;
+    for (uint32_t i = 0; i < s->n; i++) if (s->names[i] == sym) return;
+    if (s->n >= WF_MAX_FRAME_GLOBALS) { s->overflow = true; return; }
+    s->names[s->n++] = sym;
+}
+
+static void wg_set_union(WgSet *dst, const WgSet *src) {
+    if (!dst || !src) return;
+    if (src->overflow) dst->overflow = true;
+    for (uint32_t i = 0; i < src->n; i++) wg_set_add(dst, src->names[i]);
+}
+
+static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn, WgSet *out);
 
 /* True when `sym` names a mutable global -- i.e. a `set!` through it is
  * observable outside the assigning function.  A parameter of the enclosing
@@ -1380,7 +1403,7 @@ static bool wg_target_is_global(Elab *e, const Form *target,
 }
 
 static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
-                         uint32_t n_params, uint32_t depth) {
+                         uint32_t n_params, uint32_t depth, WgSet *out) {
     if (!f) return WG_V_NO;
     if (depth >= WF_SCAN_MAX_DEPTH) return WG_V_UNKNOWN;
     if (f->tag == F_CBLOCK) return WG_V_NO;   /* cannot reach a global; see above */
@@ -1394,7 +1417,7 @@ static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
     if (f->tag != F_LIST && f->tag != F_VEC) return WG_V_NO;
     {
         const Form *mx = rt_macro_expansion(e, f);
-        if (mx) return wg_walk(e, mx, params, n_params, depth);
+        if (mx) return wg_walk(e, mx, params, n_params, depth, out);
     }
     if (f->as.list.len == 0) return WG_V_NO;
 
@@ -1407,8 +1430,10 @@ static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
          rt_sym_is(f->as.list.items[0], "reset!"))) {
         const Form *target = f->as.list.items[1];
         if (target && target->tag == F_SYM) {
-            if (wg_target_is_global(e, target, params, n_params))
+            if (wg_target_is_global(e, target, params, n_params)) {
                 v = wg_worse(v, WG_V_YES);
+                wg_set_add(out, target->as.sym);
+            }
         } else {
             /* A place expression: `(set! (.n g) 9)` reaches whatever `g` names,
              * so it is a global write when its ROOT is a global. */
@@ -1420,12 +1445,14 @@ static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
                 root = root->as.list.items[root->as.list.len - 1];
             if (!root || root->tag != F_SYM) opaque = true;
             if (opaque) v = wg_worse(v, WG_V_UNKNOWN);
-            else if (wg_target_is_global(e, root, params, n_params))
+            else if (wg_target_is_global(e, root, params, n_params)) {
                 v = wg_worse(v, WG_V_YES);
+                wg_set_add(out, root->as.sym);
+            }
         }
         for (uint32_t i = 2; i < f->as.list.len; i++)
             v = wg_worse(v, wg_walk(e, f->as.list.items[i], params, n_params,
-                                    depth + 1));
+                                    depth + 1, out));
         return v;
     }
 
@@ -1447,9 +1474,11 @@ static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
                 } else {
                     Binding *callee = scope_lookup(&e->global, head_f->as.sym);
                     if (callee) {
-                        enum WritesGlobal cw = wf_fn_writes_global(e, callee);
+                        WgSet cset = { { 0 }, 0, false };
+                        enum WritesGlobal cw = wf_fn_writes_global(e, callee, &cset);
                         if (cw == WG_YES)          v = wg_worse(v, WG_V_YES);
                         else if (cw == WG_UNKNOWN) v = wg_worse(v, WG_V_UNKNOWN);
+                        wg_set_union(out, &cset);
                     }
                     /* Otherwise: a special form (`if`, `let`, `do` -- syntax,
                      * whose operands the generic recursion below visits), a
@@ -1477,17 +1506,25 @@ static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
 
     for (uint32_t i = 0; i < f->as.list.len; i++)
         v = wg_worse(v, wg_walk(e, f->as.list.items[i], params, n_params,
-                                depth + 1));
+                                depth + 1, out));
     return v;
 }
 
 /* Memoized per-function answer.  Recursion through a cycle answers WG_NO for
  * the back edge: a cycle contributes no global write of its own, and any real
  * write inside it is seen on the forward edge that reached it. */
-static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn) {
+static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn, WgSet *out) {
     if (!fn) return WG_UNKNOWN;
     if (fn->writes_global == WG_IN_PROGRESS) return WG_NO;
-    if (fn->writes_global != WG_UNCOMPUTED) return fn->writes_global;
+    if (fn->writes_global != WG_UNCOMPUTED) {
+        /* G2: replay the memoized set for the caller unioning into `out`. */
+        if (out) {
+            for (uint32_t i = 0; i < fn->n_writes_globals_seen; i++)
+                wg_set_add(out, fn->writes_globals_seen[i]);
+            if (fn->writes_globals_overflow) out->overflow = true;
+        }
+        return fn->writes_global;
+    }
 
     /* Find the body registered for this function.  A binding with no site is a
      * global `def`, an extern-c declaration, or a builtin -- none of which can
@@ -1499,15 +1536,64 @@ static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn) {
     if (!site || !site->defn_form) { fn->writes_global = WG_NO; return WG_NO; }
 
     fn->writes_global = WG_IN_PROGRESS;
+    WgSet seen = { { 0 }, 0, false };
     WgVerdict v = WG_V_NO;
     const Form *d = site->defn_form;
     for (uint32_t bi = site->body_start; bi < d->as.list.len; bi++)
         v = wg_worse(v, wg_walk(e, d->as.list.items[bi], site->params,
-                                site->n_params, 0));
+                                site->n_params, 0, &seen));
     fn->writes_global = (v == WG_V_YES)     ? WG_YES
                       : (v == WG_V_UNKNOWN) ? WG_UNKNOWN
                                             : WG_NO;
+    /* Memoize the set beside the verdict so a second caller replays it rather
+     * than re-walking, and so the coverage check has it without a second pass. */
+    fn->writes_globals_overflow = seen.overflow;
+    fn->n_writes_globals_seen   = seen.n;
+    if (seen.n > 0) {
+        fn->writes_globals_seen = (const Symbol **)arena_alloc(
+            e->arena, seen.n * sizeof(const Symbol *));
+        for (uint32_t i = 0; i < seen.n; i++)
+            fn->writes_globals_seen[i] = seen.names[i];
+    }
+    if (out) wg_set_union(out, &seen);
     return fn->writes_global;
+}
+
+/* The global half of a frame verdict, kept separate from wf_walk's parameter
+ * half because they speak different vocabularies (mutable-globals-plan §4.2).
+ *
+ * G1 (gate off): a frame cannot NAME a global, so any global write blocks
+ * VERIFIED.  UNVERIFIED, not EXCEEDED, and no diagnostic -- the write is
+ * outside the vocabulary rather than outside the declared frame.
+ *
+ * G2 (`--enable=global-state`): the frame CAN name globals, so the question
+ * becomes coverage, exactly as for parameters:
+ *   - every written global declared  -> VERIFIED (the frame holds)
+ *   - a written global not declared  -> EXCEEDED, and `*uncovered` names it
+ *   - cannot tell (UNKNOWN/overflow) -> UNVERIFIED
+ *
+ * Declared-but-never-written is deliberately fine: a frame is an UPPER bound on
+ * what the body may write, the same reading `#writes [a]` already has for a
+ * parameter the body happens not to touch. */
+static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovered) {
+    if (uncovered) *uncovered = NULL;
+    WgSet seen = { { 0 }, 0, false };
+    enum WritesGlobal g = wf_fn_writes_global(e, fn, &seen);
+    if (g == WG_NO)      return WF_VERIFIED;
+    if (g == WG_UNKNOWN) return WF_UNVERIFIED;
+    if (!g_opt_global_state) return WF_UNVERIFIED;   /* G1: no vocabulary */
+    if (seen.overflow)       return WF_UNVERIFIED;   /* coverage unanswerable */
+    for (uint32_t i = 0; i < seen.n; i++) {
+        bool covered = false;
+        for (uint32_t j = 0; j < fn->n_writes_globals_declared; j++) {
+            if (fn->writes_globals_declared[j] == seen.names[i]) { covered = true; break; }
+        }
+        if (!covered) {
+            if (uncovered) *uncovered = seen.names[i];
+            return WF_EXCEEDED;
+        }
+    }
+    return WF_VERIFIED;
 }
 
 void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
@@ -1557,12 +1643,8 @@ void wf_resolve_write_frames(Elab *e) {
                 v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
                                         s->n_params, s->fn->writes_param_mask,
                                         0, &witness));
-            /* G1: a frame says nothing about globals, so a body that writes one
-             * cannot be VERIFIED.  A DOWNGRADE, never an escalation -- an
-             * EXCEEDED frame is still EXCEEDED and still reported, because that
-             * is a claim about parameters and stands on its own. */
-            if (v == WF_VERIFIED && wf_fn_writes_global(e, s->fn) != WG_NO)
-                v = WF_UNVERIFIED;
+            if (v == WF_VERIFIED)
+                v = wf_worse(v, wf_global_verdict(e, s->fn, NULL));
             if (v == WF_VERIFIED) { s->fn->writes_checked = true; progress = true; }
         }
         if (!progress) break;
@@ -1580,17 +1662,35 @@ void wf_resolve_write_frames(Elab *e) {
                                     &witness));
         /* G1 does NOT suppress an EXCEEDED report: writing a global is not an
          * excuse for also writing outside a declared frame. */
-        if (v != WF_EXCEEDED) continue;
+        const Symbol *uncovered = NULL;
+        if (v != WF_EXCEEDED) {
+            /* G2: an undeclared global write is the same kind of mistake as a
+             * write outside the parameter frame, so it gets the same code --
+             * but a message that names the global, because "widen the frame"
+             * is not actionable if you cannot see what to widen it with. */
+            if (wf_global_verdict(e, s->fn, &uncovered) != WF_EXCEEDED) continue;
+        }
         Span at = witness ? witness->span
                           : (s->annot ? s->annot->span : d->span);
-        diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
-                            "this writes outside the `#writes` frame declared by "
-                            "'%s'",
-                            s->fn->name ? s->fn->name->name : "<fn>");
+        if (uncovered) {
+            diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
+                                "'%s' writes the global '%s', which its `#writes` "
+                                "frame does not name",
+                                s->fn->name ? s->fn->name->name : "<fn>",
+                                uncovered->name);
+        } else {
+            diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
+                                "this writes outside the `#writes` frame declared by "
+                                "'%s'",
+                                s->fn->name ? s->fn->name->name : "<fn>");
+        }
         if (s->annot)
             diag_emit(DIAG_NOTE, s->annot->span,
-                      "the declared frame is here; widen it to what the body "
-                      "writes, or narrow the body");
+                      uncovered
+                        ? "the declared frame is here; add the global to it, or "
+                          "stop writing it"
+                        : "the declared frame is here; widen it to what the body "
+                          "writes, or narrow the body");
     }
 
     /* G1: --dump-write-frames.  One line per DECLARED frame, in source order.
@@ -1611,8 +1711,8 @@ void wf_resolve_write_frames(Elab *e) {
                 fv = wf_worse(fv, wf_walk(e, d->as.list.items[bi], s->params,
                                           s->n_params, s->fn->writes_param_mask,
                                           0, &w));
-            enum WritesGlobal g = wf_fn_writes_global(e, s->fn);
-            printf("write-frame %s: %s mask=0x%x frame=%s global=%s\n",
+            enum WritesGlobal g = wf_fn_writes_global(e, s->fn, NULL);
+            printf("write-frame %s: %s mask=0x%x frame=%s global=%s",
                    s->fn->name ? s->fn->name->name : "<fn>",
                    s->fn->writes_checked ? "VERIFIED" : "UNVERIFIED",
                    s->fn->writes_param_mask,
@@ -1623,6 +1723,16 @@ void wf_resolve_write_frames(Elab *e) {
                  : g == WG_YES     ? "YES"
                  : g == WG_UNKNOWN ? "UNKNOWN"
                                    : "?");
+            /* G2: the declared global frame, so a fixture can tell a covered
+             * write from an unchecked one. */
+            if (s->fn->n_writes_globals_declared > 0) {
+                printf(" declared=[");
+                for (uint32_t gi = 0; gi < s->fn->n_writes_globals_declared; gi++)
+                    printf("%s%s", gi ? " " : "",
+                           s->fn->writes_globals_declared[gi]->name);
+                printf("]");
+            }
+            printf("\n");
         }
         fflush(stdout);
     }
@@ -5157,6 +5267,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * frame ("writes nothing"), not the absence of one -- see expr.h. */
     uint32_t writes_mask_defn     = 0;
     bool     writes_declared_defn = false;
+    /* G2: globals named in this defn's `#writes` frame. */
+    const Symbol *writes_globals_defn[WF_MAX_FRAME_GLOBALS];
+    uint32_t      n_writes_globals_defn = 0;
     const Form *writes_annot_defn = NULL;   /* for the WF2 diagnostic's span */
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
@@ -5257,11 +5370,50 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     }
                 }
                 if (!found) {
-                    diag_emit_with_code(DIAG_ERROR, psym->span,
-                                        TUR_E0381_WRITES_FRAME_INVALID,
-                                        "#writes names '%s', which is not a parameter "
-                                        "of this function",
-                                        psym->as.sym->name);
+                    /* G2 (mutable-globals-plan §4.2): a frame entry that is not
+                     * a parameter may name a MUTABLE GLOBAL, so a body that
+                     * maintains global state can carry a checked frame instead
+                     * of being declined outright (G1).  Gated: with
+                     * `global-state` off this stays the pre-G2 hard error, so
+                     * the grammar is unchanged for anyone who has not opted in.
+                     *
+                     * An IMMUTABLE global is rejected with its own reason
+                     * rather than folded into "not a parameter": naming one in
+                     * a write frame is a statement that cannot be true, and
+                     * saying so beats a message about parameters. */
+                    Binding *gb = g_opt_global_state
+                                ? scope_lookup(&e->global, psym->as.sym) : NULL;
+                    if (gb && gb->is_global && gb->is_mut) {
+                        experiment_warn_if_used("global-state");
+                        bool dup = false;
+                        for (uint32_t gi = 0; gi < n_writes_globals_defn; gi++)
+                            if (writes_globals_defn[gi] == psym->as.sym) { dup = true; break; }
+                        if (!dup) {
+                            if (n_writes_globals_defn < WF_MAX_FRAME_GLOBALS) {
+                                writes_globals_defn[n_writes_globals_defn++] = psym->as.sym;
+                            } else {
+                                diag_emit_with_code(DIAG_ERROR, psym->span,
+                                    TUR_E0381_WRITES_FRAME_INVALID,
+                                    "#writes names '%s' -- a write frame covers at "
+                                    "most %u globals",
+                                    psym->as.sym->name,
+                                    (unsigned)WF_MAX_FRAME_GLOBALS);
+                            }
+                        }
+                    } else if (gb && gb->is_global && !gb->is_mut) {
+                        diag_emit_with_code(DIAG_ERROR, psym->span,
+                                            TUR_E0381_WRITES_FRAME_INVALID,
+                                            "#writes names '%s', an immutable global -- "
+                                            "nothing can write it; declare it `^mut` or "
+                                            "drop it from the frame",
+                                            psym->as.sym->name);
+                    } else {
+                        diag_emit_with_code(DIAG_ERROR, psym->span,
+                                            TUR_E0381_WRITES_FRAME_INVALID,
+                                            "#writes names '%s', which is not a parameter "
+                                            "of this function",
+                                            psym->as.sym->name);
+                    }
                 } else if (found > WF_MAX_FRAME_PARAMS) {
                     /* The mask is 32 bits wide.  Rejected rather than dropped:
                      * a silently ignored frame member is a frame the body can
@@ -6818,6 +6970,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->writes_param_mask = writes_mask_defn;
     b->writes_declared   = writes_declared_defn;
     b->writes_checked    = false;
+    /* G2: copy the declared global frame into the arena beside the mask. */
+    b->n_writes_globals_declared = n_writes_globals_defn;
+    if (n_writes_globals_defn > 0) {
+        b->writes_globals_declared = (const Symbol **)arena_alloc(
+            e->arena, n_writes_globals_defn * sizeof(const Symbol *));
+        for (uint32_t gi = 0; gi < n_writes_globals_defn; gi++)
+            b->writes_globals_declared[gi] = writes_globals_defn[gi];
+    }
     /* G1: registered for EVERY defn, not only annotated ones.  The frame walk
      * still only ever checks a frame that was declared (both loops in
      * wf_resolve_write_frames filter on `writes_declared`), but the

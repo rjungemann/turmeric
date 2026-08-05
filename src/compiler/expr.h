@@ -315,6 +315,12 @@ struct Binding {
      * beyond that is rejected (TUR-E0378) rather than silently dropped.
      * See docs/upcoming/checked-write-frames-plan.md (WF1/WF2). */
 #define WF_MAX_FRAME_PARAMS 32u   /* mask width; see writes_param_mask below */
+/* G2: globals in a write frame are a list, not a mask -- there is no natural
+ * index for them -- so the cap is a list length rather than a word width.
+ * Chosen to match RT_WF3_MAX_TARGETS's order of magnitude; a frame naming more
+ * than this is rejected, never truncated, for the same reason a parameter past
+ * the mask width is. */
+#define WF_MAX_FRAME_GLOBALS 16u
     uint32_t            writes_param_mask;
     bool                writes_declared;
     /* WF2: true when this function's frame was VERIFIED against its body (a
@@ -349,6 +355,26 @@ struct Binding {
         WG_UNKNOWN,         /* something could not be vouched for */
         WG_IN_PROGRESS,     /* on the current recursion stack (cycle guard) */
     }                   writes_global;
+    /* G2 (mutable-globals-plan §4.2), behind `--enable=global-state`: the
+     * globals this function's `#writes` frame DECLARES, and (memoized beside
+     * the verdict above) the globals its body actually writes.
+     *
+     * Two lists rather than one because they answer the two halves of the same
+     * question the parameter mask answers for arguments: declared-but-unwritten
+     * is fine (a frame is an upper bound), written-but-undeclared is
+     * TUR-E0382.  Symbols rather than Bindings -- a global is identified by
+     * name at the frame site, and the walk that collects the written set works
+     * on forms.
+     *
+     * `writes_globals_overflow` is set when the body writes more distinct
+     * globals than the collector can record; coverage is then unanswerable and
+     * the verdict degrades to UNVERIFIED rather than silently claiming the
+     * frame holds. */
+    const struct Symbol **writes_globals_declared;
+    uint32_t              n_writes_globals_declared;
+    const struct Symbol **writes_globals_seen;
+    uint32_t              n_writes_globals_seen;
+    bool                  writes_globals_overflow;
     /* RT4: the refinement this function's RESULT satisfies -- either declared
      * (`: #refine{ r : T | q }`) or inferred by template propagation.  A call
      * appearing inside a predicate or an argument asserts it about the value

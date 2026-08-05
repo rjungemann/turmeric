@@ -256,6 +256,12 @@ extern bool g_opt_sealed_opaque;
  * so this feature needs its own lifecycle home rather than a retired one. */
 extern bool g_opt_write_frames;
 
+/* `global-state` experiment (docs/upcoming/mutable-globals-plan.md, G2):
+ * lets a `#writes` frame NAME a mutable global, so a body that maintains
+ * global state can carry a checked frame instead of being declined outright.
+ * With it off, G1's rule stands: any global write blocks VERIFIED, silently. */
+extern bool g_opt_global_state;
+
 /* lang-layers L4: true once a project manifest declared an `:experiments`
  * key (even the empty list), i.e. the project owner scoped the experiment set.
  * A `#lang <base> <semantic-layer>` file whose backing experiment is absent
