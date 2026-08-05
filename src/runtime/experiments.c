@@ -208,7 +208,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * tier, which is what an optimization may act on.  Gated because the
      * CHECKING can reject a body that compiles today (TUR-E0382) and because
      * WF4 ELIDES a runtime check on the strength of the frame -- neither should
-     * arrive unasked-for.  The annotation parses either way. */
+     * arrive unasked-for.  The annotation parses either way.
+     *
+     * G1 (docs/upcoming/mutable-globals-plan.md) narrows what VERIFIED claims:
+     * a frame speaks about PARAMETERS, so a body that writes a mutable global
+     * is downgraded to UNVERIFIED rather than stamped with a fact an
+     * optimization may act on.  Silent -- a global is outside the frame's
+     * vocabulary, not outside the declared frame. */
     { "write-frames",
       "`#writes w` / `#writes [a b]` -- a checked per-argument write frame; "
       "backs frame-aware hypothesis invalidation and entry-check elision",

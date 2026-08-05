@@ -6,6 +6,11 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`--dump-write-frames`** prints the checked verdict for every declared
+  `#writes` frame, with the frame's own verdict and the global-write answer as
+  separate columns (`frame=VERIFIED global=YES`). A diagnostic knob, not an
+  experiment: it reports what the checker decided and changes nothing.
+
 - **`^mut` on a top-level `def` -- mutable globals.** `(def ^mut hits 0)` gives
   static storage that `set!` may write. This closes a dead end: `set!` on a
   global already advised "use `^mut` at the binding site", and the binding site
@@ -42,6 +47,18 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A `#writes` frame is no longer VERIFIED when the body writes a mutable
+  global** (behind `--enable=write-frames`). A frame's vocabulary is
+  *parameters*; a global is written by name rather than passed, so `#writes []`
+  means "writes none of my arguments", not "writes no storage anywhere" -- and
+  a body declaring it could mutate global state and still be stamped VERIFIED,
+  which is the tier an optimization may act on. The verdict now downgrades to
+  UNVERIFIED, silently: a global write is outside the frame's vocabulary rather
+  than outside the declared frame, so no program stops compiling and no
+  diagnostic is added. The fact propagates through callees, including callees
+  that receive none of the caller's parameters. An EXCEEDED frame is still
+  reported -- a global write does not launder TUR-E0382. See
+  [docs/upcoming/mutable-globals-plan.md](docs/upcoming/mutable-globals-plan.md).
 - **Statements above the first body-level `define` are no longer silently
   dropped.** The define splice built its `let` from the first `define` onward
   and discarded everything before it, so in

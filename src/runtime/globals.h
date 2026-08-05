@@ -88,6 +88,14 @@ extern bool g_strict_effects;
 /* ER6: --dump-effects flag — print inferred effect row for each top-level defn */
 extern bool g_dump_effects;
 
+/* G1 (docs/upcoming/mutable-globals-plan.md): --dump-write-frames flag — print
+ * the WF2 verdict for every DECLARED `#writes` frame, plus the global-write
+ * answer that can downgrade it.  A diagnostic knob, not an experiment: it
+ * reports what the checker decided and changes nothing.  Without it the only
+ * observable difference between VERIFIED and UNVERIFIED is the absence of a
+ * diagnostic, which is not something a fixture can assert on. */
+extern bool g_dump_write_frames;
+
 /* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
  * colored user-level top-level defn */
 extern bool g_dump_cps;

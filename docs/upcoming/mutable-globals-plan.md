@@ -1,6 +1,7 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
-> **Status:** proposed (2026-08-05). Written as the follow-up
+> **Status:** **G1 LANDED 2026-08-05** (see §10). G2-G5 proposed.
+> Written as the follow-up
 > [`def-define-consolidation-plan.md`](def-define-consolidation-plan.md) §8.4
 > named ("giving mutable globals a concurrency story is its own plan, not a
 > rider on this one").
@@ -367,7 +368,7 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
 
 ## 5. Phases
 
-- **G1 -- the soundness fix.** §4.1 plus the §4.5 analysis it needs. A body
+- **G1 -- the soundness fix. LANDED 2026-08-05; see §10.** §4.1 plus the §4.5 analysis it needs. A body
   that writes a global cannot be VERIFIED. No new syntax, no new diagnostic, no
   program stops compiling. Ships under the **existing** `write-frames` gate --
   it is a correction to that feature, not a new one. Also lands the §1.3 test
@@ -485,3 +486,124 @@ Recorded so the reasoning survives; none blocks G1.
    now. A future separately-compiled global needs real linkage (`extern` plus
    one definition), and G3's read-only rule would then have a linker-level
    counterpart worth having.
+
+---
+
+## 10. G1 execution record (2026-08-05)
+
+**Landed.** `tests/run.sh` -> 2545 passed, 0 failed; `tests/run-turi.sh` ->
+1736 passed, 0 failed, 704 skipped. No fixture snapshot moved, and every frame
+that was VERIFIED in `wf1-writes-frame-honored` before the change still is.
+
+### 10.1 Shape of the change
+
+The global question is answered by **its own walk**, and the verdict is
+combined once at the end of `wf_resolve_write_frames`:
+
+```c
+if (v == WF_VERIFIED && wf_fn_writes_global(e, s->fn) != WG_NO)
+    v = WF_UNVERIFIED;
+```
+
+`wf_walk` is untouched. That is not an accident of implementation -- §4.2's
+argument is that a frame and a global are different vocabularies, and keeping
+the walks separate is what stops the second question from leaking into the
+first. `Binding.writes_global` is a tri-state (`WG_NO` / `WG_YES` /
+`WG_UNKNOWN`, plus `WG_IN_PROGRESS` as the cycle guard), memoized per function,
+because "I saw no global write" and "I could not see" are different answers and
+only the first may back a VERIFIED frame.
+
+**Every `defn` is now registered as a frame site**, not only annotated ones --
+the global question has to be answerable for an arbitrary callee, and the body
+forms are only reachable through that registry. Both loops in
+`wf_resolve_write_frames` gained a `writes_declared` filter so a function with
+no frame is never checked against one, and never stamped `writes_checked`.
+
+### 10.2 Two channels ruled out by evidence, not assumption
+
+The calibration that decides whether this feature is usable is what counts as
+a possible global write. Two candidates were ruled out by running them:
+
+- **Inline C cannot reach a turmeric global.** A global emits as a C `static`
+  whose name carries the binding id (`counter_1327`), and that suffix shifts
+  with any unrelated edit earlier in the unit -- verified by adding a `def`
+  above and watching it become `counter_1328`. An inline-C body naming the
+  source spelling is emitted verbatim and dies at the C compile with
+  `undeclared identifier`. So inline C is not a channel, and treating every
+  inline-C callee as a possible global writer -- which was the first draft --
+  would have poisoned most bodies for nothing.
+- **Builtins and special forms are not channels either**, for the same reason.
+  This one had teeth: the first working draft answered `WG_UNKNOWN` for any
+  call head that did not resolve in the global scope, which is every `if`,
+  every `>`, and every field read. It downgraded `calls-clean-cycle` and would
+  have downgraded essentially every real frame. An unresolved head is now
+  treated as no channel.
+
+### 10.3 The residual gap, stated
+
+A `let`-bound closure invoked by its own name is not followed. Answering
+UNKNOWN there would be sound but indistinguishable from the `if`/field-read
+case above, so it would cost the whole feature. A fn-typed **parameter** call
+IS caught (`wf_param_index` on the head -> `WG_UNKNOWN`), which covers the
+common higher-order shape. Following indirect dispatch properly belongs to G2,
+where a fn value's own frame becomes a thing that can be asked about.
+
+Shadowing is pessimistic: a `let` local spelled like a global reads as a global
+write, because the walk matches names. That direction costs a verification,
+never a missed one.
+
+### 10.4 `--dump-write-frames`
+
+New gateless diagnostic flag -- CLAUDE.md exempts `--dump-*` knobs from the
+experiment rule, and this one reports what the checker decided and changes
+nothing. It exists because without it the only observable difference between
+VERIFIED and UNVERIFIED is the *absence* of a diagnostic, which is not
+something a fixture can assert on:
+
+```
+write-frame sneaky: UNVERIFIED mask=0x0 frame=VERIFIED global=YES
+```
+
+`frame=` is the frame walk's own verdict and `global=` is what downgraded it,
+kept as separate columns so a fixture can tell "the frame did not hold" from
+"the frame held but the body writes a global". Both G1 verdict fixtures assert
+the full line.
+
+### 10.5 Fixtures
+
+- `g1-writes-global-unverified` -- the direct case, plus a local-only write
+  (float probe `7.1`) and a clean callee that must stay VERIFIED.
+- `g1-writes-global-transitive` -- one level, two levels, a mutually-recursive
+  cycle that writes a global (the guard must not swallow it), and one that does
+  not (the guard must not poison it).
+- `errors/g1-writes-global-still-exceeds` -- E0382 still fires. A global write
+  downgrades VERIFIED; it does not launder an exceeded frame.
+- `errors/refine-impure-global-not-congruent` -- §1.3's test gap. The mutable-
+  global route into the congruence hole that `errors/refine-impure-fx-empty`
+  names in its comment but could not cover, because a global could not be
+  mutable when it was written.
+
+The two verdict fixtures carry `requires.interp`, which selects the `tur run`
+path. That is a harness detail, not a claim about the interpreter: the compiled
+path runs `tur build` with stdout unredirected and captures only the built
+binary's output, so a compile-time dump never reaches `actual.stdout`. The
+verdict is computed in the elaborator, which both engines share. Each marker
+file says so.
+
+### 10.6 Comment correction shipped alongside
+
+`rt_collect_set_targets`'s comment justified its "a plain symbol target cannot
+alias" rule with turmeric's by-value argument. That argument is about locals
+and does not extend to a global, which is written by name rather than passed.
+The scan is sound anyway -- for a different reason, now written down: a
+hypothesis that depends on a mutable global is never believed, because
+`rt_classify_expr` answers UNKNOWN for a read of any `is_mut` binding. The
+comment now says which reason holds it up, and warns that widening purity to
+admit global reads would make that scan load-bearing in a way it cannot
+support.
+
+### 10.7 What G2 inherits
+
+Nothing G1 did makes a global *expressible* in a frame -- a function that
+legitimately maintains global state simply cannot carry a checked frame now.
+That is the right default and the wrong end state, and it is exactly §4.2.

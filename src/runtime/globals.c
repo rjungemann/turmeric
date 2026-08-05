@@ -122,6 +122,9 @@ bool g_strict_effects = false;
 /* ER6: --dump-effects flag */
 bool g_dump_effects = false;
 
+/* G1: --dump-write-frames flag */
+bool g_dump_write_frames = false;
+
 /* CPS2: --dump-cps flag */
 bool g_dump_cps = false;
 

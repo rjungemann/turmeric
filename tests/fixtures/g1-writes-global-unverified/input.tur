@@ -1,0 +1,37 @@
+;; G1 (docs/upcoming/mutable-globals-plan.md): a `#writes` frame speaks about
+;; PARAMETERS.  A global is written by name rather than passed, so it is
+;; outside the frame's vocabulary -- which meant a body declaring `#writes []`
+;; ("writes nothing") could mutate global state and still be stamped VERIFIED.
+;; VERIFIED is what an optimization may act on, so that claim has to stop
+;; being available to a body that writes a global.
+;;
+;; The `frame=` column is the frame walk's own verdict and the `global=` column
+;; is what downgrades it: `sneaky` shows frame=VERIFIED global=YES, which is
+;; exactly the combination this fixture exists to pin.  Asserting only "no
+;; diagnostic" would pass just as well if the guard were deleted.
+;;
+;; NO diagnostic is emitted: a global write is outside the vocabulary, not
+;; outside the declared frame, so the honest verdict is "cannot verify".
+(def ^mut hidden 0)
+(defstruct Ctr [n : int])
+
+(defn sneaky [x : int] #writes [] : int
+  (set! hidden (+ hidden 1))
+  x)
+
+;; A write to a LOCAL is not a global write -- the guard is not a blanket
+;; decline.  The float probe uses 7.1, never 7.0.
+(defn local-only [] #writes [] : float
+  (let [^mut t 0.0]
+    (set! t 7.1)
+    t))
+
+;; An honest empty frame over a body that writes nothing at all.
+(defn calls-clean [] #writes [] : int (helper))
+(defn helper [] : int 7)
+
+(defn main [] : int
+  (println (sneaky 1))
+  (println (local-only))
+  (println (calls-clean))
+  0)

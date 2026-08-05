@@ -326,6 +326,37 @@ is the author's own code inside an inline-C body, which no frame can license
 removing -- and inline-C is exactly what the checked tier cannot see into.
 WF4 is retired.
 
+### A frame says nothing about globals
+
+A `#writes` frame's vocabulary is **parameters**. A mutable global (`def ^mut`)
+is written by name rather than passed, so a frame can neither name it nor
+exclude it -- `#writes []` means "writes none of my arguments", not "writes no
+storage anywhere".
+
+Because a *checked* frame is a fact an optimization may act on, a body that
+writes a global is therefore **never VERIFIED**: the verdict downgrades to
+UNVERIFIED, silently. No diagnostic, because a global write is outside the
+frame's vocabulary rather than outside the declared frame, and "I cannot check
+this" is not "you did something wrong". The declaration still documents intent;
+nothing optimizes on it.
+
+The fact propagates through callees, including callees that receive none of
+your parameters -- a call with no arguments at all can still write a global.
+`--dump-write-frames` prints the verdict and the global answer as separate
+columns:
+
+```
+write-frame sneaky: UNVERIFIED mask=0x0 frame=VERIFIED global=YES
+```
+
+`frame=VERIFIED global=YES` reads as "the frame itself holds, but the body
+writes global state, so the frame is not a fact you may build on."
+
+Giving frames a vocabulary that can *name* a global -- so `#writes [a *cache*]`
+becomes expressible and such a body can be checked rather than merely declined
+-- is the next step, planned in
+[`mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/mutable-globals-plan.md).
+
 ## Quick reference
 
 | you have | you want | use |

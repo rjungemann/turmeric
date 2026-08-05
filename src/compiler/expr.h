@@ -324,6 +324,31 @@ struct Binding {
      * claim, so they need it checked rather than promised.  WF3's callee-frame
      * widening and WF4's entry-check elision both gate on this bit. */
     bool                writes_checked;
+    /* G1 (docs/upcoming/mutable-globals-plan.md): does this function's body
+     * write a MUTABLE GLOBAL, directly or through a callee?
+     *
+     * The `#writes` frame's vocabulary is PARAMETERS.  A global is written by
+     * name rather than passed, so it is outside that vocabulary entirely and a
+     * frame can neither name it nor exclude it -- which meant a body declaring
+     * `#writes []` ("writes nothing") could mutate global state and still be
+     * stamped VERIFIED.  VERIFIED is what an optimization may act on, so that
+     * claim has to stop being available to a body that writes a global.
+     *
+     * Kept SEPARATE from `writes_param_mask` for the same reason
+     * `writes_declared` is separate from the mask: the two questions have
+     * different vocabularies and collapsing them would make one of the answers
+     * mean something it does not.  This bit only ever DOWNGRADES a verdict
+     * (VERIFIED -> UNVERIFIED); it never produces a diagnostic, because a
+     * global write is outside the frame's vocabulary rather than outside the
+     * declared frame -- "I cannot check this" is not "you did something
+     * wrong". */
+    enum WritesGlobal {
+        WG_UNCOMPUTED = 0,  /* memo empty; a zeroed Binding starts here */
+        WG_NO,              /* walked the body and every resolvable callee */
+        WG_YES,             /* a global assignment was seen */
+        WG_UNKNOWN,         /* something could not be vouched for */
+        WG_IN_PROGRESS,     /* on the current recursion stack (cycle guard) */
+    }                   writes_global;
     /* RT4: the refinement this function's RESULT satisfies -- either declared
      * (`: #refine{ r : T | q }`) or inferred by template propagation.  A call
      * appearing inside a predicate or an argument asserts it about the value
