@@ -2515,7 +2515,7 @@ static bool delim_ok(const CTerm *t) {
              * term_core_ok) forbids, which is why a handle-in-reset used to evict.
              * Admit the continuation via delim_ok (it may deliver to a prompt),
              * with scalar-only captures riding the lifted continuation env.
-             * emit_handle already lifts handle.body as an LH_RESET_CONT that
+             * emit_handle already lifts handle.body as an LH_RESUME_CONT that
              * delivers through cur_k (the enclosing prompt), so no new codegen is
              * needed for this (receiver-free) shape. */
             /* The handled body (handle.delim) runs under the handle's OWN prompt;
@@ -6101,11 +6101,15 @@ typedef enum {
     LH_SHIFT_BODY,    /* DKBody  (env, subk):   shift body, KK_PROMPT -> return value */
     LH_PERFORM_CONT,  /* DKFrame (env, xval):   perform continuation, KK_RET -> return value */
     LH_HANDLER_CASE,  /* DKHandler (env, arg, subk): binds params+k, KK_PROMPT -> return */
-    LH_RESUME_CONT,   /* DKResumeFrame (env, xval, __kont): a MULTI-SUSPENSION perform
-                       * continuation (Track A) -- its body contains a nested control op,
-                       * so it is lifted as a resume-frame that receives its run-time
-                       * downstream chain `__kont` and threads it (KK_RET -> dk_run(__kont,..),
-                       * a nested perform/shift threads __kont).  Caps ride env (no __k). */
+    LH_RESUME_CONT,   /* DKResumeFrame (env, xval, __kont): a frame that receives its
+                       * run-time downstream chain `__kont` and threads it (KK_RET ->
+                       * dk_run(__kont,..); a nested perform/shift threads __kont).  Caps
+                       * ride env (no __k).  Two users: a MULTI-SUSPENSION perform
+                       * continuation (Track A: its body contains a nested control op),
+                       * and every HANDLE continuation (spine unification: the frame's
+                       * `next` is the real, borrowed enclosing chain, so a dk_copy_range
+                       * copy threads its OWN tail instead of a baked original -- the
+                       * multishot-across-nested-handle fix). */
 } LHMode;
 
 /* Effect re-opening: does this handler CASE body itself perform an effect (which,
@@ -7485,16 +7489,26 @@ static void emit_handle(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char kname[256];
     snprintf(kname, sizeof(kname), "%s_hk%d", ce->fn_cn, id);
-    /* lift the handle continuation (like a reset continuation), carrying k + any
-     * scalar captures of the continuation body. */
+    /* Lift the handle continuation as a RESUME-FRAME (LH_RESUME_CONT), not a
+     * RESET_CONT: the frame receives its downstream chain `__kont` AT RUN TIME
+     * (dk_run_impl passes the node's own ->next) instead of reading a pointer
+     * baked into its env at install time.  This is the spine-unification fix
+     * for the two-spine problem (docs/archive/cps-multishot-nontail-resume-
+     * inner-handle-drops-clause-rest.md): a baked env always named the ORIGINAL
+     * enclosing chain, so every dk_copy_range copy of this frame still jumped
+     * there -- escaping its delimiter and re-running the outer continuation
+     * once per multi-shot resume.  A resume-frame copy threads the COPY's own
+     * marker-terminated tail; only the ORIGINAL (whose next borrows the real
+     * enclosing chain, below) reaches the real rest of the program.  The env
+     * carries scalar captures only -- no `__k` slot. */
     CapSet cs;
     bool ok = collect_caps(t->as.handle.body, t->as.handle.x.id, &cs);
     const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
     char *hxn = cvar_cname(ce, t->as.handle.x);
-    emit_lifted(ce, kname, LH_RESET_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
+    emit_lifted(ce, kname, LH_RESUME_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
                 t->as.handle.body, NULL, caps);
     free(hxn);
-    char *hkenv = emit_cont_env(ce, kname, caps, ce->cur_k);
+    char *hkenv = emit_cont_env(ce, kname, caps, NULL);   /* caps-only env */
 
     /* B3 part 2: a DYNAMIC with-handler installs the handler group from the
      * runtime handler table (dk_hgroup_from_table) instead of a static per-case
@@ -7508,7 +7522,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
         char *tblv = atom_str(ce, &t->as.handle.dyn_table);
         ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup_from_table("
                     "(const tur_handler_table_t *)(intptr_t)%s, "
-                    "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))));",
+                    "dk_frame_resume_borrow(%s, %s, %s)));",
                 hchain_d, tblv, kname, hkenv, ce->cur_k);
         free(tblv);
         free(hkenv);
@@ -7558,18 +7572,20 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * resume does not re-install it (the effect-side analogue of shift0). */
     const char *hctor = t->as.handle.shallow ? "dk_handler_shallow" : "dk_handler";
     Buf chain; buf_init(&chain);
-    /* The base is the handle continuation frame.  Its `next` must carry the
-     * ENCLOSING handler markers (a copy of cur_k's handlers, past this handle's
-     * frame) for BOTH deep and shallow handlers: an effect this handle does NOT
-     * handle, performed in its body, must propagate outward to the enclosing
-     * handler (e.g. `inner` handles Write but its body also performs Log, which
-     * must reach the enclosing Log handler in `main`).  The frame buries the
-     * enclosing CONTINUATION in its env (`__k`) and delivers a returning value via
-     * dk_run(__k, v), so the copied handler markers are transparent to the normal-
-     * completion result; they only matter to dk_perform's chain walk.  Using
-     * dk_done() here (the old deep default) severed that propagation ->
-     * `unhandled effect` for an effect that escapes an inner handle. */
-    buf_printf(&chain, "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))", kname, hkenv, ce->cur_k);
+    /* The base is the handle continuation frame.  Its `next` is the ACTUAL
+     * enclosing chain (cur_k), borrowed -- not a done-terminated copy of its
+     * handler markers.  One spine then serves everything the old two-spine
+     * layout split: an effect this handle does NOT handle walks straight into
+     * the real enclosing handlers (outward propagation), dk_perform's capture
+     * boundary stops at the real H, and its H->next delivery runs the real
+     * rest of the program exactly once -- where the marker copy dead-ended at
+     * done and delivery had to happen via the frame's baked env jump, once per
+     * resume (the multi-shot-across-nested-handle miscompile).  The frame is a
+     * RESUME-FRAME: dk_run_impl hands it its own ->next, so the original
+     * threads the borrowed enclosing chain and a reified copy threads the
+     * copy's own tail.  borrow_next keeps this chain's dk_free out of the
+     * enclosing chain (which has its own reap owner). */
+    buf_printf(&chain, "dk_frame_resume_borrow(%s, %s, %s)", kname, hkenv, ce->cur_k);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         /* E7: a deep case that reduces to a TAIL resume installs with

@@ -1,5 +1,5 @@
 ---
-status: open (layer 1 fixed 2026-08-05; the residual is a different, deeper defect -- see Execution)
+status: resolved 2026-08-05 (layer 1: dk_invoke trampoline scoping; layer 2: handle-chain spine unification)
 severity: high (silent wrong answer, no diagnostic)
 discovered: 2026-08-05
 area: compiler (CPS/DK runtime: dk_invoke trampoline scope; handle-continuation frame envs)
@@ -7,18 +7,24 @@ area: compiler (CPS/DK runtime: dk_invoke trampoline scope; handle-continuation 
 
 # A non-tail multishot resume whose continuation re-enters an inner handle drops the rest of the clause
 
-> **Executed 2026-08-05.** The title defect -- the rest of the clause being
-> discarded -- was one of **two stacked defects** and is fixed: `dk_invoke` now
-> scopes the tail-resume trampoline instead of letting a yield longjmp past it
-> to the program entry. The repro's answer is still wrong, for an independent
-> and pre-existing reason that the first defect was masking: a multishot resume
-> across a nested handle runs the **outer handle's continuation once per
-> resume**, because a handle-continuation frame's env is a baked pointer to the
-> *original* chain that `dk_copy_range` cannot rewrite. See
-> [Execution](#execution-2026-08-05). The root-cause section below is
+> **Resolved 2026-08-05, in two layers.** The title defect -- the rest of the
+> clause being discarded -- was one of **two stacked defects**. Layer 1:
+> `dk_invoke` now scopes the tail-resume trampoline instead of letting a yield
+> longjmp past it to the program entry. Layer 2 (the defect layer 1 unmasked --
+> the outer handle's continuation running once per resume): the handle chain's
+> two spines are unified. The handle-continuation frame is now a
+> `DKK_RESUME_FRAME` (it receives its downstream chain at run time instead of
+> jumping to a pointer baked into its env), and its `next` is the **actual**
+> enclosing chain, borrowed (`dk_frame_resume_borrow`; `dk_free` stops at the
+> borrow). One spine then serves `dk_perform`'s handler search, its capture
+> boundary, and its `H->next` delivery alike -- so the outer continuation runs
+> exactly once, however many times the clause resumed. See
+> [Execution](#execution-2026-08-05). The original root-cause section below is
 > superseded -- its guess about `dk_invoke`'s boundary "not being sealed
 > against a fresh prompt" was directionally right about layer 1 and silent
-> about layer 2.
+> about layer 2. The repro and every boundary variant now print the
+> hand-evaluated answers on both paths, pinned by
+> `tests/fixtures/effect-multishot-nontail-resume-inner-handle/`.
 
 ## Summary
 
@@ -95,9 +101,10 @@ completion value in the repro vs. the no-inner-handle variant.
 ## Where the truth is pinned
 
 `tests/fixtures/turi-ws-driven-operands` asserts the correct values on the
-interpreter (22 and 2020 among them). There is deliberately no compiled
-fixture for this shape yet -- it would have to assert the wrong number or
-fail. When this is fixed, move those two cases into a both-paths fixture.
+interpreter (22 and 2020 among them). While the defect was open there was
+deliberately no compiled fixture for this shape (it would have had to assert
+the wrong number); with the fix landed, the both-paths fixture is
+`tests/fixtures/effect-multishot-nontail-resume-inner-handle/`.
 
 ## Impact
 
@@ -137,7 +144,7 @@ Because the emitted preamble changed, 141 `expected.c` snapshots were
 regenerated in the same change, per CLAUDE.md, along with the three
 `src/runtime/generated/` split artifacts (`tools/gen-runtime-split.py`).
 
-### Layer 2 -- copied chains escape through baked frame envs (OPEN)
+### Layer 2 -- copied chains escape through baked frame envs (FIXED)
 
 With layer 1 fixed the clause runs to completion -- and the repro prints **two
 lines**, `2` then `20`. The outer `handle`'s continuation (the `println`) runs
@@ -176,31 +183,14 @@ The non-tail variant is unchanged by the fix -- it was already exhibiting layer
 the correct convergence: the E7 escape had been *masking* the deeper defect by
 unwinding before the second resume could expose it.
 
-### Why layer 2 is not fixed here -- the two-spine problem
+### The two-spine problem, and the fix that resolved it
 
-Direction 2 above (make the continuation a chain link) was **built and
-measured**, then reverted. It is worth recording exactly how far it gets and
-what it runs into, because the obstacle is not the part anyone would predict.
+A first attempt (make the continuation a chain link by giving the DK *node*
+the jump -- `dk_frame_kont` with the jump cleared by a reifying copy) was
+built, measured, and reverted: it computed the right value (22) but severed
+normal delivery, because the obstacle is structural --
 
-The attempt: give the DK node the jump instead of the frame body --
-`dk_frame_kont(fn, env, kont, next)` with `kont` cleared by a reifying copy
-(`dk_copy_local`, used by `dk_perform`/`dk_shift` for `sub` but *not* by E7's
-deferred delivery, which stands in for running the real rest of the program and
-must keep jumping). The emitted continuation helper becomes a pure value
-transform that returns; `dk_run_impl`'s `DKK_FRAME` case does
-`if (k->kont) return dk_run_impl(k->kont, v, false);` and otherwise falls
-through to `next`.
-
-**This produces the right value.** The repro computes **22**. Both delivery
-kinds have to convert together -- a handle continuation nested inside another
-handle delivers to `KK_PROMPT`, not `KK_RET`, so converting only the `KK_RET`
-path leaves the nested case still jumping (that intermediate state still
-printed `2`/`20`).
-
-But the program no longer prints: 22 escapes as `main`'s return value. The
-reason is the real structural obstacle --
-
-**The chain has two spines that do not agree.** `main__cps` builds
+**The chain had two spines that did not agree.** `main__cps` built
 
 ```c
 __h0 = hgroup(handler(Ask, case, frame(main_hk0, ..., dk_copy_enclosing_handlers(__kont))))
@@ -208,37 +198,65 @@ __h1 = hgroup(handler_tail(Log, case, frame(main_hk1, ..., dk_copy_enclosing_han
                                                           /* ^ MARKER COPIES */
 ```
 
-`__h1`'s tail is not `__h0` -- it is a copy of `__h0`'s handler *markers*,
+`__h1`'s tail was not `__h0` -- it was a copy of `__h0`'s handler *markers*,
 terminated by `dk_done()`. So:
 
 - the `next` spine, which `dk_perform` walks to find `H` and which
-  `dk_copy_range` follows, reaches only marker copies and dead-ends at `done`;
-- the real continuation (`main_hk0`, which prints) is reachable **only** via the
-  baked `dk_run(__h0, v)` jump.
+  `dk_copy_range` follows, reached only marker copies and dead-ended at `done`;
+- the real continuation (`main_hk0`, which prints) was reachable **only** via
+  the baked `dk_run(__h0, v)` jump in the frame's body.
 
-That is why `dk_perform` finds `H` = a *marker copy* whose `H->next` is a
-dead-end, and why its `dk_run_impl(H->next, r)` delivery has nothing to run.
-Before the attempt, the outer continuation ran *inside the resumed
+Before any fix, the outer continuation ran *inside the resumed
 sub-continuation* by falling through `main_hk1`'s jump into `__h0` -- which is
-precisely the same jump that re-runs it once per resume. **The bug and the
-mechanism that makes the normal case work are the same line.** Removing the
-jump fixes the multishot case and severs the single-shot one.
+precisely the same jump that re-ran it once per resume. **The bug and the
+mechanism that made the normal case work were the same line.** Removing the
+jump alone fixes the multishot case and severs the single-shot one. The
+marker copies existed for **ownership**: each handle chain is
+`__dk_reap_keep`'d and `dk_free` walks `->next`, so linking a live enclosing
+chain in as the tail would have freed it twice.
 
-So a real fix has to unify the spines, not patch either: `__h1`'s tail must be
-the actual `__h0` (so the search, the copy boundary, and the delivery all agree)
-rather than a marker copy. The marker copy exists for **ownership** -- each
-handle chain is `__dk_reap_keep`'d and `dk_free` walks `->next`, so linking a
-live enclosing chain in as the tail would free it twice. Unifying therefore
-needs a borrowed-tail notion in the chain representation (a node that the free
-walk stops at, or refcounted chains), and `dk_perform`'s copy boundary needs to
-stop at the real `H` across that link.
+**The landed fix unifies the spines** (`emit_dk_runtime.c` +
+`emit_cps_ir.c`'s `emit_handle`), and turned out to need no new frame kind --
+the runtime already had the right one:
 
-That is a runtime representation change with its own plan and its own
-regression surface across 2570 fixtures -- not something to land opportunistically.
+1. **The handle-continuation frame is now a `DKK_RESUME_FRAME`** (lifted as
+   `LH_RESUME_CONT`, installed with `dk_frame_resume_borrow`). A resume-frame
+   receives its downstream chain **at run time** -- `dk_run_impl` passes the
+   node's own `->next` -- instead of reading a pointer baked into its env at
+   install time. So the ORIGINAL frame threads the real enclosing chain, and
+   a `dk_copy_range` COPY threads the copy's own marker-terminated tail:
+   exactly the property that makes a resumed sub-continuation stay inside its
+   delimiter while normal completion still reaches the rest of the program.
+   The env carries scalar captures only -- no `__k` slot to go stale.
+2. **The frame's `next` is the actual enclosing chain, borrowed.** A new
+   `borrow_next` flag on the DK node marks "->next belongs to another chain":
+   `dk_free` frees the node and stops (and never reads the possibly-dead
+   tail), while every walk (`dk_perform`'s search, `dk_copy_range`,
+   `dk_copy_enclosing_handlers`, `__dk_delivery_noop`) crosses it like any
+   link. `dk_copy_node` deliberately does not copy the flag -- a copy owns
+   everything it copied, including nodes past the original's ownership
+   boundary.
 
-The revert is clean: layer 1 (committed) stands, and the repro is back to
-`2`/`20`.
+With one spine, `dk_perform` finds the **real** `H`, captures
+`dk_copy_range(k, H)` up to the real boundary, and delivers
+`dk_run_impl(H->next, r)` through the **real** rest of the program -- exactly
+once, after the clause has finished all its resumes. The E7 flatness guarantee
+survives: only the first perform (against the real chain) queues a real
+delivery; every subsequent perform inside a resumed copy sees the copy's
+marker-terminated tail, so its delivery is a no-op and stays elided
+(`cps-tramp-resume-deep-1m` still passes).
 
-`tests/fixtures/turi-ws-driven-operands` continues to pin the correct answers
-(22, 2020) on the interpreter. There is still deliberately no compiled fixture
-for this shape -- it would have to assert `2`/`20`.
+The repro prints **22** and returns 0; the weighted variant prints **2020**;
+the non-tail-inner and arg-position variants print **22**; the single-resume
+variant stays **14** -- all agreeing with `tur --interpret` and hand
+evaluation. Because the emitted preamble changed, all 141 `expected.c`
+snapshots were regenerated in the same change, along with the
+`src/runtime/generated/` split artifacts. Both suites are green:
+`tests/run.sh` 2571/0, `tests/run-turi.sh` 1758/0/705.
+
+### Where the truth is pinned now
+
+`tests/fixtures/effect-multishot-nontail-resume-inner-handle/` runs the repro
+and all four boundary variants on **both** paths (the both-paths fixture this
+report asked for). `tests/fixtures/turi-ws-driven-operands` continues to pin
+the interpreter-side driving specifics.

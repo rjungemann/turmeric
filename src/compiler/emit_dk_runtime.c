@@ -296,7 +296,16 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    DKKind kind; DKFrame fn; intptr_t env; int tag;\n"
 "    DKBody body; intptr_t body_env;\n"
 "    DKHandler handler; intptr_t handler_env; bool shallow;\n"
-"    DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;\n");
+"    DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;\n"
+/* Spine unification (cps-multishot-nontail-resume-inner-handle-drops-clause-
+ * rest): a handle-continuation frame's `next` is the ACTUAL enclosing chain --
+ * one spine serves dk_perform's search, dk_copy_range's boundary, and the
+ * H->next delivery alike -- but that chain has its own reap owner, so this
+ * node's free must not walk into it.  borrow_next marks exactly that: dk_free
+ * frees this node and stops.  Copies never inherit it (dk_copy_node leaves it
+ * false): a dk_copy_range copy OWNS every node it copied, including the ones
+ * past the borrow point. */
+"    bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */\n");
     if (tramp) buf_puts(out,
 "    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n"
 "    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);\n"
@@ -324,6 +333,21 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "}\n"
 "static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;\n"
+"}\n"
+"/* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing\n"
+" * chain, borrowed.  The one spine then serves every consumer: dk_perform's\n"
+" * handler search walks straight into the real enclosing handlers, its capture\n"
+" * boundary (dk_copy_range(k, H)) stops at the real H, and its delivery\n"
+" * (dk_run_impl(H->next, r)) runs the real rest of the program -- exactly once,\n"
+" * however many times the handler case resumed its sub-continuation.  The frame\n"
+" * fn is a DKResumeFrame, so a COPY of this node threads the COPY's own next\n"
+" * (its reified, marker-terminated tail) rather than a baked env pointer to the\n"
+" * original chain -- which is what confined a resumed continuation to its\n"
+" * delimiter.  borrow_next keeps dk_free out of the enclosing chain (it has its\n"
+" * own reap owner). */\n"
+"__attribute__((unused))\n"
+"static DK *dk_frame_resume_borrow(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"    DK *k = dk_frame_resume(fn, env, next); k->borrow_next = true; return k;\n"
 "}\n"
 "static DK *dk_prompt(int tag, DK *next) {\n"
 "    DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;\n"
@@ -401,6 +425,10 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    c->tail_resume = n->tail_resume;\n"
 "    c->hgroup = n->hgroup;\n");
     buf_puts(out,
+/* borrow_next is deliberately NOT copied: dk_copy_range crosses a borrow link
+ * like any other ->next, and the copy OWNS everything it copied -- its dk_free
+ * must walk the whole copied chain, not stop where the ORIGINAL's ownership
+ * boundary happened to sit. */
 "    c->rfn = n->rfn; return c;\n"
 "}\n"
 "static DK *dk_copy_enclosing_handlers(const DK *from) {\n"
@@ -454,8 +482,11 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    p->next = b;\n"
 "    return a;\n"
 "}\n"
-/* E3a: drop each frame's owning env (if any) before freeing the node. */
-"static void dk_free(DK *k) { while (k) { DK *n = k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
+/* E3a: drop each frame's owning env (if any) before freeing the node.
+ * A borrow_next node ends the walk: its ->next belongs to another chain (with
+ * its own reap entry), so following it would double-free -- and by reap time
+ * the borrowed tail may already be gone, so it must not even be read. */
+"static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
     buf_puts(out,
 "/* Free a single spliced node without following ->next -- used to reclaim the\n"
 " * one-off shift/perform node whose ->next points into an enclosing continuation\n"

@@ -13,7 +13,7 @@ area: interpreter (work-stack capturability analysis, src/turi/eval.c)
 > design, unchanged from the analysis below. Executing this report also
 > uncovered a **compiled-path miscompile** in the very shape the interpreter
 > can now run:
-> [cps-multishot-nontail-resume-inner-handle-drops-clause-rest](../reported/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
+> [cps-multishot-nontail-resume-inner-handle-drops-clause-rest](cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
 
 ## Summary
 
@@ -250,7 +250,7 @@ continuation re-enters an inner handle delivers the first resume's value as
 the outer handle's value and drops the rest of the clause (2 where the answer
 is 22; single resume fine, no-inner-handle fine). Filed with a boundary table
 as
-[cps-multishot-nontail-resume-inner-handle-drops-clause-rest](../reported/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
+[cps-multishot-nontail-resume-inner-handle-drops-clause-rest](cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
 The interpreter is ahead of the compiler on these shapes now, which reverses
 the usual direction of that comparison.
 

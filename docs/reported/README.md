@@ -58,7 +58,6 @@ does not share an investigation with the three above.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
-| [cps-multishot-nontail-resume-inner-handle-drops-clause-rest](cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md) | high | **layer 1 fixed 2026-08-05** (`dk_invoke` now scopes the tail-resume trampoline, so a yield no longer longjmps past the handler case). The residual is a **different, pre-existing** defect the first was masking: a handle continuation is a frame whose env is a baked pointer to the ORIGINAL chain, so a copied/resumed chain jumps out of its delimiter and the outer continuation runs once per resume -- prints `2`/`20` where the answer is `22`. The chain-link fix was **built, measured (value becomes 22) and reverted**: the chain has two disagreeing spines -- `dk_perform` walks/copies `next`, which dead-ends in handler-marker copies, while the real continuation is reachable only via the baked jump. The bug and the mechanism that makes the single-shot case work are the same line. Unifying them needs a borrowed-tail notion in the chain representation (ownership: `dk_free` walks `next`) |
 
 `handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
 landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --
@@ -70,6 +69,16 @@ same family as the remaining row's capture admission. One narrow eviction
 survives by design (a `perform` of an outer effect inside a loop inside a
 clause), with a located diagnostic and its own delete-me-if-admitted error
 fixture.
+
+`cps-multishot-nontail-resume-inner-handle-drops-clause-rest` (a multishot
+non-tail resume across a nested handle printed `2`/`20` where the answer is
+`22`) was resolved 2026-08-05 in two layers -- `dk_invoke` trampoline scoping,
+then unifying the handle chain's two spines (the handle-continuation frame is
+a `DKK_RESUME_FRAME` whose `next` is the actual, borrowed enclosing chain) --
+and moved to
+[docs/archive](../archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
+Both paths now agree on every boundary variant, pinned by
+`tests/fixtures/effect-multishot-nontail-resume-inner-handle/`.
 
 ## Interpreter (`--interpret` / `tur repl`) divergence
 

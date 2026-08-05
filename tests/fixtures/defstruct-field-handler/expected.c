@@ -1012,6 +1012,7 @@ struct DK {
     DKBody body; intptr_t body_env;
     DKHandler handler; intptr_t handler_env; bool shallow;
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
+    bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
     bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
     int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);
                         * distinguishes this handle's cases from an enclosing
@@ -1037,6 +1038,21 @@ static DK *dk_frame_owning(DKFrame fn, intptr_t env,
 }
 static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;
+}
+/* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
+ * chain, borrowed.  The one spine then serves every consumer: dk_perform's
+ * handler search walks straight into the real enclosing handlers, its capture
+ * boundary (dk_copy_range(k, H)) stops at the real H, and its delivery
+ * (dk_run_impl(H->next, r)) runs the real rest of the program -- exactly once,
+ * however many times the handler case resumed its sub-continuation.  The frame
+ * fn is a DKResumeFrame, so a COPY of this node threads the COPY's own next
+ * (its reified, marker-terminated tail) rather than a baked env pointer to the
+ * original chain -- which is what confined a resumed continuation to its
+ * delimiter.  borrow_next keeps dk_free out of the enclosing chain (it has its
+ * own reap owner). */
+__attribute__((unused))
+static DK *dk_frame_resume_borrow(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame_resume(fn, env, next); k->borrow_next = true; return k;
 }
 static DK *dk_prompt(int tag, DK *next) {
     DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;
@@ -1149,7 +1165,7 @@ static DK *dk_append(DK *a, DK *b) {
     p->next = b;
     return a;
 }
-static void dk_free(DK *k) { while (k) { DK *n = k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
+static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
  * (dk_free would walk into that continuation and risk a double free).  See
@@ -7707,8 +7723,8 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static intptr_t main_hk0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t main_hk0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7744,7 +7760,7 @@ static int64_t main__cps(DK *__kont) {
     /* panic-return-signal: ret ctype unknown; no propagation here */
     row_1329 = __ps_162;
     __t1 = (tur_handler_table_t *)(row_1329).h;
-    DK *__h0 = __dk_reap_keep(dk_hgroup_from_table((const tur_handler_table_t *)(intptr_t)__t1, dk_frame(main_hk0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__h0 = __dk_reap_keep(dk_hgroup_from_table((const tur_handler_table_t *)(intptr_t)__t1, dk_frame_resume_borrow(main_hk0, 0, __kont)));
     return dk_perform(2, (intptr_t)(0), __dk_reap_node(dk_frame(main_pf1, 0, __h0)));
 }
 int main(int argc, char **argv) {

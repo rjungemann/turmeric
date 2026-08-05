@@ -13,7 +13,7 @@
 ;; compiled path rejects most of these shapes (a perform inside a set! value /
 ;; match scrutinee is outside the CPS backend's admissible subset), and the
 ;; one it accepts it miscompiles -- see
-;; docs/reported/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md.
+;; docs/archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md.
 ;; The interpreter is ahead of the compiler here; this fixture pins that.
 (defdata Box (MkBox int))
 (defeffect Ask [] : int)
