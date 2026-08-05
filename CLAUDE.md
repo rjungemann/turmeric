@@ -505,6 +505,7 @@ PASS-skip it under certain conditions:
 | `requires.interp` | (override) forces the interpreter path even under non-TSan |
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
+| `requires.pollable-pipes` | the host reactor cannot poll pipe fds -- Windows has no POSIX `pipe()`, and its `select()` is socket-only |
 
 A fixture may also carry `requires.no-leak-check` (not a skip marker): the
 compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for

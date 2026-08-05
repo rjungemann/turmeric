@@ -116,6 +116,26 @@ fi
 _tur_build_dir=$(dirname "$TUR")
 export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -L${_tur_build_dir}/src}"
 
+# Can this host's reactor poll a pipe file descriptor?
+#
+# On Windows, no -- and twice over.  The generated C calls POSIX pipe(), which
+# MinGW does not provide at all (it spells it _pipe, with a different
+# signature), so those fixtures fail to link.  Shimming that in does not rescue
+# them: Windows select() is SOCKET-only, so once the pipe exists select()
+# rejects the CRT file descriptors with WSAENOTSOCK and the fixture prints
+# `poll-count=-1` instead of its expected count.  Measured, not assumed -- see
+# docs/upcoming/v1/windows-remaining-plan.md.
+#
+# Fixtures that register pipe fds with the reactor therefore carry a
+# `requires.pollable-pipes` marker and PASS-skip here.  Routing pipe() through
+# a loopback socketpair is the only way to make them run, and it is not worth
+# it unless a real turmeric-godot use case needs pipe-style async.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) TUR_HOST_POLLABLE_PIPES=0 ;;
+    *)                    TUR_HOST_POLLABLE_PIPES=1 ;;
+esac
+export TUR_HOST_POLLABLE_PIPES
+
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.
 # Fixtures whose directory contains a `requires.tsan` marker file are
@@ -410,6 +430,14 @@ run_happy() {
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
         write_result "PASS" "$name" "(tsan-skipped)" ""
+        return
+    fi
+
+    # Skip fixtures that register pipe fds with the reactor on a host whose
+    # select() cannot poll them (Windows).  See TUR_HOST_POLLABLE_PIPES above.
+    if [ -f "$dir/requires.pollable-pipes" ] \
+       && [ "$TUR_HOST_POLLABLE_PIPES" != "1" ]; then
+        write_result "PASS" "$name" "(pollable-pipes-skipped)" ""
         return
     fi
 

@@ -86,34 +86,50 @@ Clang-cl -- see the archived plan.)
 
 ---
 
-## WIN3 tail -- the ~11 async fixtures still failing
+## WIN3 tail -- the async fixtures still failing
 
 None of these block WIN2; they are the long tail of the async subset.
+Current Windows suite: **2165 passed, 14 failed** (`TUR=./build-win/tur.exe
+bash tests/run.sh`), and all 14 are listed below.
 
-### Pipe-fd polling: a hard `select()` limit (~8 fixtures)
+### Pipe-fd polling: a hard platform limit (9 fixtures) -- SKIPPED, option 1 taken
 
-`reactor-fd-*`, `reactor-fibers-cancel-on-free`, `reactor-fibers-park-fd`,
+`reactor-fd-{modify,readable,remove,writable}`,
+`reactor-fibers-cancel-on-free`, `reactor-fibers-park-fd`,
 `reactor-stop-from-callback`, `reactor-wake-cross-thread`, `scheduler-io-park`
-create a `pipe()` and register the pipe fds with the reactor. **Windows
-`select()` is socket-only** -- it cannot poll pipe or file fds at all, so the
-select-based backend (`src/async/io_iocp.c`) cannot service them.
+create a `pipe()` and register the pipe fds with the reactor. They now carry a
+`requires.pollable-pipes` marker and PASS-skip on Windows.
 
-Options, in rough order of effort:
-1. Accept as a platform limit (Godot scripts don't poll pipes). Mark the fixtures
-   `requires.*`-skip on Windows.
-2. Route `pipe()` through a loopback socket pair AND `read`/`write` through
-   `recv`/`send` for those fds -- intricate, collides with file I/O, fragile.
-   Only worth it if a real turmeric-godot use case needs pipe-style async.
+This is blocked **twice over**, and the first reason is the one you actually
+hit -- an earlier draft of this plan named only the second:
 
-Recommendation: option 1 unless a use case forces option 2.
+1. The generated C calls POSIX `pipe(fds)`. MinGW does not provide it under
+   that name or signature (it has `_pipe(fds, size, mode)`), so every one of
+   these fixtures fails at **link** time -- `undefined reference to 'pipe'`.
+   They never reach the reactor at all.
+2. Shimming `pipe()` in does not rescue them, which was measured rather than
+   assumed: with `_pipe(fds, 65536, 0)` patched into the generated C the
+   fixture links and runs, and prints `poll-count=-1` where it expects
+   `poll-count=1`. Windows `select()` is SOCKET-only, so it rejects the CRT
+   file descriptors with WSAENOTSOCK. Note it fails *fast* -- there is no hang
+   or timeout risk in this family.
 
-### Concurrency stdout mismatches (~3 fixtures)
+The remaining option (route `pipe()` through a loopback socketpair AND
+`read`/`write` through `recv`/`send` for those fds) is intricate, collides with
+file I/O, and is only worth it if a real turmeric-godot use case needs
+pipe-style async. Godot scripts do not poll pipes.
 
-`httpd-h4-keepalive`, `httpd-h6-routing`, `taskgroup-async` build and run but
-produce diverging output -- scheduler/timing under the select backend, not yet
-diagnosed. `scheduler-multithread` sometimes prints the same worker-thread id
-twice (distribution nuance, but it passes). Worth a focused diagnosis pass;
-start by comparing fiber/worker scheduling order against Linux.
+### Concurrency mismatches (5 fixtures, still open)
+
+`httpd-async-limit`, `httpd-h4-keepalive`, `httpd-h6-routing`, `taskgroup-async`
+build and run but produce diverging output -- scheduler/timing under the select
+backend, not yet diagnosed. Worth a focused pass; start by comparing
+fiber/worker scheduling order against Linux.
+
+`scheduler-multithread` has regressed from "passes with a distribution nuance"
+to a hard **timeout (exit 124)**. That one is worth pinpointing first -- a hang
+is a different animal from a scheduling-order difference, and it is the only
+fixture in the suite that eats its full timeout.
 
 ---
 
