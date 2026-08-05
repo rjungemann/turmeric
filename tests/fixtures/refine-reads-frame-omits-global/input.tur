@@ -1,0 +1,60 @@
+;; TRUST-BOUNDARY FIXTURE -- pins what a BROKEN `#reads` promise costs.
+;;
+;; `#reads` is step 1 of the read/write-frame trajectory: TRUSTED, not checked
+;; (docs/guides/stateful-refinements-guide.md).  Its one consumer grants
+;; congruence to an otherwise-impure measure when the named parameter is frozen
+;; at the call site -- enc_reads_arg_frozen, src/compiler/refine_collect.c.
+;;
+;; So a frame that OMITS mutable state the body reads buys a proof it has not
+;; earned.  `alive?` below declares `#reads w` and then reads the global
+;; `fudge`.  Inside the frozen region the crossing is proved and the
+;; caller-side check is elided -- on a predicate that is FALSE by the time the
+;; crossing is reached.  The program prints 7 rather than failing.
+;;
+;; This is the DOCUMENTED contract, not a defect: the design's stated backstop
+;; is "the callee's own entry check is never elided" (this proof elides the
+;; caller-side crossing check, not the safety check).  A real accessor
+;; validates internally and returns a sentinel; `get!` here deliberately does
+;; not, which is what makes the elision observable.
+;;
+;; It is also PRE-EXISTING and not caused by mutable globals: replacing `fudge`
+;; with an inline-C `static int` counter -- writable long before `^mut` on a
+;; top-level `def` existed -- behaves identically.  What `^mut` globals changed
+;; is reachability: breaking the promise no longer requires inline C.
+;;
+;; The paired negative is errors/refine-reads-frame-omits-global-no-region,
+;; where removing the frozen region turns the same program into TUR-W0372.
+;; Both matter: this one alone would pass just as well if the override were
+;; deleted outright.
+;;
+;; EXPECTED TO CHANGE: if the narrow read-side check lands
+;; (docs/upcoming/mutable-globals-plan.md section 12.3 -- refuse the congruence
+;; override when the body demonstrably reads mutable state outside the frame),
+;; this fixture SHOULD start warning and eventually stop proving.  That is the
+;; fix landing, not a regression.  Update it deliberately; do not "repair" it
+;; back to silence.
+(load "stdlib/refine.tur")
+
+(def ^mut fudge 1)
+
+(defstruct World [n : int])
+
+;; Declares `#reads w`.  Actually reads `fudge`.
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  (> fudge 0))
+
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [__b (& w)]                 ; freezes w -- grants congruence to alive?
+      (if (alive? w 0)
+        (do
+          (set! fudge -1)            ; the state alive? really reads changes
+          (get! w 0))                ; crossing: (alive? w 0) is now FALSE
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

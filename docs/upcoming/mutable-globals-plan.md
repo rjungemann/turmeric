@@ -326,8 +326,13 @@ what puts the whole plan behind an experiment gate (§6).
 
 ### 4.4 H4: two opt-in spellings, and an honest guide section
 
-- **`^thread-local`** -- each thread gets its own copy. **Superseded by §11**,
-  which found that the `TUR_THREAD_LOCAL` route sketched here does not work:
+- **`^thread-local`** -- each thread gets its own copy. **Under `tur --interpret`
+  / turi it is observationally a plain global**, and that is the specified
+  behaviour rather than a gap: turi has no user-reachable thread spawn (its only
+  `pthread_create` is a thread-ring benchmark native), so there is no second
+  thread for the annotation to differ on. It is accepted and degenerate there.
+  See §13.4. **Superseded by §11** on the compiled side, which found that the
+  `TUR_THREAD_LOCAL` route sketched here does not work:
   the JIT has no thread-local storage at all, and its existing workaround
   covers 11 fixed runtime slots that a user variable cannot join. Restricting
   to constant initializers does not rescue it. See §11.4 for the design that
@@ -383,8 +388,14 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
 - **G3 -- module encapsulation.** §4.3. The one phase that can reject existing
   code. Behind the same gate. Wants its own soak time before graduating.
 - **G4 -- `^thread-local` and `^atomic`.** §4.4. Independent of G2/G3; can land
-  in either order relative to them. `^atomic` first -- it is the smaller of the
-  two and has no open design question.
+  in either order relative to them. **Split them**: `^atomic` first -- it is much
+  the smaller, its design question is settled (§13.6), and the JIT already has an
+  atomics shim -- then `^thread-local`, which needs the whole of §11.4.
+  Deliverables that are easy to drop and must not be: `^atomic` requires an
+  explicit `^mut` and diagnoses its absence (§13.6); a `^thread-local`
+  initializer may not reference another `^thread-local` (§13.7); and the guide
+  states plainly that `^thread-local` is a plain global under turi (§13.4), with
+  a fixture asserting it parses and runs there.
 - **G5 -- docs and graduation.** The guide section §4.4 promises, a
   `binding-forms-guide.md` cross-reference, the dynvar-vs-global steer from
   §1.2, and the graduation decision for `global-state`.
@@ -486,9 +497,10 @@ Recorded so the reasoning survives; none blocks G1.
    promise about mutable global state pay out in proofs. G2 ships `#writes`
    only, and `#reads` keeps its hard error for a non-parameter name. A narrow
    read-side check is recommended as a companion (§12.3), not a prerequisite.
-3. **Should `^atomic` imply `^mut`?** **ANSWERED -- §13.6.** No: keep them
+3. **Should `^atomic` imply `^mut`?** **DECIDED -- §13.6.** No: keep them
    orthogonal and require `(def ^atomic ^mut n 0)`, matching the `^unique ^mut`
-   idiom the codebase already uses.
+   idiom the codebase already uses. `^atomic` alone is a diagnostic naming
+   `^mut`, never a silent grant.
 4. **Interaction with `--shared` and separate compilation.** **ANSWERED --
    §13.2.** `--shared` already drops `static`, so user globals are exported
    symbols today and the unstable binding-id suffix is part of that ABI.
@@ -996,10 +1008,14 @@ non-parameter name. If a read-side story is wanted later it should arrive
 
 ### 12.6 Sub-questions surfaced
 
-1. **Should the 12.2 program be a fixture regardless?** It pins documented
-   behaviour that is easy to mistake for a bug, and there is currently no
-   fixture showing what a broken `#reads` promise costs. Cheap, and it makes
-   the trust boundary testable rather than merely described.
+1. **Should the 12.2 program be a fixture regardless?** **DONE 2026-08-05.**
+   `refine-reads-frame-omits-global` pins the elided crossing, and
+   `errors/refine-reads-frame-omits-global-no-region` pins the `TUR-W0372` the
+   same program gets without the frozen region. Both carry a header saying the
+   behaviour is the documented trusted-promise contract rather than a defect,
+   that it predates `^mut` globals (the inline-C equivalent is identical), and
+   that §12.3's check landing SHOULD flip the positive -- so the next reader
+   updates it deliberately instead of "repairing" it back to silence.
 2. **Is `#reads`'s one-parameter limit deliberate or incidental?** `#writes`
    grew a bracket form; `#reads` did not. A measure over two frozen resources
    cannot be expressed today. Not needed here -- noting it because the
@@ -1109,9 +1125,10 @@ turmeric reaches. So under `--interpret` a `^thread-local` is observationally a
 plain global, and there is no second thread for it to differ on.
 
 That is a defensible answer, and §11.6.3's point stands: it should be a
-written-down rule (`^thread-local` is accepted and degenerate under turi), not
-an accident. Worth a one-line note in the guide when G4 lands, plus a fixture
-asserting the annotation at least parses and runs there.
+written-down rule, not an accident. **Recorded 2026-08-05** -- §4.4 now states
+it as the specified behaviour, and §5's G4 carries it as a named deliverable
+(guide sentence plus a fixture asserting the annotation parses and runs under
+turi) so it cannot be dropped when the phase is built.
 
 ### 13.5 `#reads`'s one-parameter limit: a deliberate minimal slice [read]
 
@@ -1131,7 +1148,8 @@ and costs nothing semantically.
 
 ### 13.6 Should `^atomic` imply `^mut`? -- NO, require both [read]
 
-§9's third open question. **Recommendation: keep them orthogonal.**
+§9's third open question. **DECIDED 2026-08-05 (owner): keep them orthogonal;
+`^atomic` requires an explicit `^mut`.**
 
 `^mut` is the single gate for `set!` -- `elab_forms.c` tests `b->is_mut` at both
 the bare-symbol and the field-write site, and nothing else grants mutability.
