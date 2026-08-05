@@ -82,6 +82,40 @@ None of these is small; pick deliberately.
    a concrete argument in that spike's favour, and worth weighing before
    investing in options 1 or 2.
 
+   **Spike result (2026-08-05), and it strengthens this option.** A
+   `-DTUR_JIT=ON` Release configure + build was attempted on Windows
+   (MSYS2/UCRT64, gcc 16.1):
+
+   - **MIR fetches and compiles cleanly under MinGW.** The feared answer from
+     [jit-windows-support-spike.md](jit-windows-support-spike.md) question 1 --
+     "MIR-gen only implements the SysV ABI, so Windows is a back-end port" --
+     did **not** materialise at build time. Nothing in `_deps/mir-src` failed.
+   - **The only thing that fails to compile is our own
+     [src/jit_engine.c](../../src/jit_engine.c)** (711 lines), in three small
+     and specific ways:
+     - `#include <dlfcn.h>` -- MinGW has none. Fixed here by including the
+       tree's existing `platform_dl.h`, the same remedy already used in
+       `spice_loader.c` and the Godot shim's AOT image loader.
+     - `#include <sys/resource.h>` plus `getrusage` / `RUSAGE_SELF`, inside the
+       block the file itself labels "Temporary: measures the tier so I0's
+       go/no-go gate has numbers. Remove wholesale if I0 comes back negative."
+       Guarding or deleting that block costs no shipped functionality.
+     - `RTLD_DEFAULT` is undeclared -- `platform_dl.h` defines `RTLD_NOW`,
+       `RTLD_LAZY`, `RTLD_LOCAL` and `RTLD_GLOBAL` but not this one. It means
+       "search the main program's symbols", whose Win32 spelling is
+       `GetModuleHandle(NULL)`. This is a genuine gap in the shim, not a
+       jit_engine quirk, and fixing it there benefits every caller.
+
+   So the Windows JIT looks like **a bounded port of one file**, not a MIR
+   project. Two of the three are already-solved problems applied to one more
+   site; the third is a one-symbol addition to `platform_dl.h`.
+
+   **What the spike did NOT establish:** that it *runs*. Building is not
+   executing -- the MS x64 ABI question, executable-memory allocation, and the
+   emitted `__asm__` block (question 3 of the Windows spike, which hits every
+   JIT compile on Windows) are all untested, because the build never completed.
+   Do not read "MIR compiles" as "the JIT works".
+
 ## Note on `#mode`
 
 Forcing AOT per-script requires the `#mode aot` directive, which until recently

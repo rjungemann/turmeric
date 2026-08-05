@@ -23,7 +23,15 @@
 
 #include "jit_engine.h"
 
-#include <dlfcn.h>
+#ifdef _WIN32
+/* MinGW ships no <dlfcn.h>.  platform_dl.h is the same LoadLibrary shim the
+ * rest of the tree already uses for this (src/turi/spice_loader.c, and the
+ * Godot shim's AOT image loader), so host-symbol resolution goes through one
+ * implementation rather than a second, subtly-different one. */
+#  include "platform_dl.h"
+#else
+#  include <dlfcn.h>
+#endif
 #include <math.h>
 #include <pthread.h>
 #include <setjmp.h>
@@ -42,7 +50,14 @@
 /* Temporary: measures the tier so I0's go/no-go gate has numbers.     */
 /* Remove wholesale if I0 comes back negative and the plan is shelved. */
 /* ------------------------------------------------------------------ */
-#include <sys/resource.h>
+#ifndef _WIN32
+/* getrlimit/setrlimit live here; MinGW has neither the header nor the calls.
+ * Nothing in this file actually calls them today -- the include rides along
+ * with the temporary instrumentation block above -- so guarding it costs no
+ * functionality on Windows. If a real rlimit use lands, it needs a Win32
+ * equivalent (Job Objects), not just an include. */
+#  include <sys/resource.h>
+#endif
 #include <time.h>
 
 static int g_jit_interp_mode;  /* TUR_JIT_GEN=interp */
