@@ -112,9 +112,24 @@ that `set!` may write:
   (set! hits (+ hits 1)))
 ```
 
-Without `^mut`, a global is immutable and `set!` on it is an error. (A `^mut`
-global is process-wide mutable state with no synchronization; nothing checks
-that you share one safely across threads.)
+Without `^mut`, a global is immutable and `set!` on it is an error.
+
+A `^mut` global is process-wide mutable state with **no synchronization** --
+nothing checks that you share one safely across threads. Behind
+`--enable=global-state`, adding `^atomic` makes every read and every `set!`
+sequentially consistent:
+
+```turmeric
+(def ^atomic ^mut ready 0)
+```
+
+That prevents torn access and stops the compiler caching the global in a
+register, which is what would otherwise keep a spinning reader from ever seeing
+another thread's store. It does **not** make `(set! c (+ c 1))` safe -- that is
+a load then a store, not an atomic read-modify-write, so two threads still lose
+updates. Use `stdlib/atomic.tur`'s CAS or fetch-add for a counter, or
+`stdlib/mutex.tur` for anything wider. `^atomic` is eight-byte scalars only and
+does not imply `^mut`.
 
 `^persistent` and `^deprecated` are top-level annotations -- static storage and
 a deprecation nudge on a global. Neither has a local meaning, so both are

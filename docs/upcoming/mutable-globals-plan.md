@@ -1,6 +1,7 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
-> **Status:** **G1, G2, G3 LANDED 2026-08-05** (see §10, §15, §16). G4-G5 proposed.
+> **Status:** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see §10, §15,
+> §16, §17). G4b (`^thread-local`) and G5 proposed.
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
@@ -387,7 +388,7 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
   `--enable=global-state`.
 - **G3 -- module encapsulation. LANDED 2026-08-05; see §16.** §4.3. The one phase that can reject existing
   code. Behind the same gate. Wants its own soak time before graduating.
-- **G4 -- `^thread-local` and `^atomic`.** §4.4. Independent of G2/G3; can land
+- **G4 -- `^thread-local` and `^atomic`. `^atomic` LANDED 2026-08-05; see §17.** §4.4. Independent of G2/G3; can land
   in either order relative to them. **Split them**: `^atomic` first -- it is much
   the smaller, its design question is settled (§13.6), and the JIT already has an
   atomics shim -- then `^thread-local`, which needs the whole of §11.4.
@@ -1371,3 +1372,94 @@ precedent and turned out not to run; the shape G3's fixtures actually use is
 
 Unchanged. G3 said who may write a global; it said nothing about thread safety
 (G4, §11/§13.6-13.7) or the guide/graduation work (G5).
+
+---
+
+## 17. G4a execution record -- `^atomic` (2026-08-05)
+
+**Landed**, behind `--enable=global-state`. `tests/run.sh` -> 2559 passed, 0
+failed; `tests/run-turi.sh` -> 1750 passed, 0 failed, 704 skipped.
+**G4b (`^thread-local`) is NOT in this; it remains as §11.4 describes.**
+
+### 17.1 What landed
+
+`(def ^atomic ^mut g v)` makes every read a `TUR_ATOMIC_LOAD_*` and every `set!`
+a `TUR_ATOMIC_STORE_*`, sequentially consistent, through two chokepoints:
+`atom_var` (value position) and `emit_set_stmt`. `name_for_binding` stays bare
+-- it also spells the definition and every assignment target.
+
+Wrapping the **read** matters as much as the write, and is the easier half to
+skip: a bare global read in a loop may be hoisted into a register, so a spinning
+reader would never observe another thread's store however atomically that store
+was made.
+
+§11.5's claim that "the JIT already has an atomics shim" holds, for a reason
+worth stating exactly: the shim takes a **pointer**
+(`tur_atomic_store_u64(volatile uint64_t *p, ...)`), so it operates on storage
+the JIT already owns. That is the asymmetry with `^thread-local`, which needs
+storage the *host* must own -- `tur_tls.c`'s own header draws the same line
+("applied to state instead of operations"). Atomics generalize to user
+variables; thread-local storage does not.
+
+### 17.2 The limit that matters most
+
+**`^atomic` does not make `(set! c (+ c 1))` safe.** That is a load then a
+store, not an atomic read-modify-write; two threads still lose updates.
+`^atomic` makes each half indivisible, it does not fuse them. A concurrent
+counter wants a CAS or fetch-add (`stdlib/atomic.tur`) or a lock.
+
+This is stated in the changelog, the fixture header, and here, because it is the
+single most likely way for the feature to be misread -- "atomic counter" is what
+the annotation *sounds* like it delivers.
+
+### 17.3 A miscompile caught by the first fixture
+
+The initial scalar set admitted `:bool`. A `bool` global is `static bool g;` --
+**one byte** -- while the atomics layer's host shim is `uint64_t`-typed, so the
+emitted access is eight bytes regardless. `(set! flag true)` compiled to an
+8-byte `__atomic_store_n` into a 1-byte object: a genuine overflow of the
+adjacent statics.
+
+It **printed the right answer**. GCC's `-Wstringop-overflow` is what surfaced
+it, and only because the fixture happened to exercise a bool. Had the first
+fixture used only ints and floats it would have shipped.
+
+`type_is_atomic_scalar` is now eight-byte kinds only -- `:int`, `:float`,
+`:cstr`, `:ptr` -- and a narrower kind is rejected with a reason ("for a bool
+use an int flag") rather than silently widened. Restoring `:bool` means a
+1-byte shim on the non-GNU branch, not a change to the predicate.
+
+### 17.4 Three rejections
+
+`^atomic` without `^mut` (§13.6's decision, enforced rather than assumed); a
+non-8-byte type, pointing at `stdlib/mutex.tur`; and `^atomic` without the
+experiment, refused by name rather than accepted and ignored -- a silently-inert
+`^atomic` would be a global the program believes is synchronised and is not.
+
+### 17.5 Snapshot regen
+
+The float path crosses the integer-typed atomics layer through its bit pattern
+(`__tur_bits_to_f64` / `__tur_f64_to_bits`, `memcpy`-based so it is not
+strict-aliasing UB), which adds two `static inline` helpers to the preamble.
+That is a new preamble, so **141 `expected.c` snapshots were regenerated in this
+same change**, per CLAUDE.md. The diff is uniform and purely additive -- +6 lines
+per file, 846 insertions, **0 deletions** -- which is the shape that confirms the
+helper block is the only codegen change.
+
+### 17.6 What G4b and G5 inherit
+
+- **G4b (`^thread-local`)**: unchanged, and still the larger piece -- all of
+  §11.4 (one `pthread_key_t`, a per-thread block, materialize-on-first-access),
+  plus §13.7's rule that its initializer may not reference another
+  `^thread-local`, plus §13.4's turi note and fixture.
+- **G5**: the guide section §4.4 promises, the dynvar-vs-global steer, and the
+  graduation decision.
+
+### 17.7 Not covered, stated
+
+No fixture asserts that two threads sharing an `^atomic` global do not tear.
+That property is *observed*, not asserted -- a racing fixture would be flaky
+rather than rigorous, and a passing race proves nothing. What the fixture does
+assert is that the lowering is correct and round-trips every admitted scalar
+kind. The honest claim for `^atomic` is "the emitted accesses are atomic", and
+that is what is tested.

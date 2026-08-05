@@ -205,7 +205,9 @@ typedef struct Elab {
     const Symbol *sym_caret_unique;     /* ^unique -- unique value annotation */
     /* ST0: Substructural types */
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
-    const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
+    const Symbol *sym_caret_relevant;
+    /* G4a (mutable-globals-plan §4.4): `^atomic` on a top-level `def`. */
+    const Symbol *sym_caret_atomic;   /* ^relevant -- relevant value annotation */
     /* LB1: ^borrow -- non-consuming parameter annotation for linear/affine handles */
     const Symbol *sym_caret_borrow;     /* ^borrow -- borrow (read without consuming) annotation */
     const Symbol *sym_caret_fat;        /* ^fat -- fat-closure-consuming parameter (A#1) */
@@ -1004,6 +1006,9 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
 /* Verify every recorded frame against its body, stamping `writes_checked` on
  * the ones that hold and emitting TUR-E0382 on the ones that do not. */
 void wf_resolve_write_frames(Elab *e);
+
+/* G4a: may this kind be loaded/stored atomically in one machine operation? */
+bool type_is_atomic_scalar(TypeKind k);
 
 /* Record that macro-call form `call` elaborated to `expansion`, so the
  * crossing path walk can traverse INTO the expansion (macro-GENERATED

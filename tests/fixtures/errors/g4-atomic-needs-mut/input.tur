@@ -1,0 +1,8 @@
+;; G4a: `^atomic` does not imply `^mut` (decided 2026-08-05).  `^mut` is the
+;; single gate for set!, and a second route would make `^atomic` the only
+;; annotation in the language conferring write permission as a side effect --
+;; the surprise the `def` annotation audit existed to remove.  An atomic global
+;; nothing may write is just a global.
+(def ^atomic n 0)
+
+(defn main [] : int 0)

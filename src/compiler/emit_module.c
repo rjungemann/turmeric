@@ -7640,6 +7640,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
     buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* G4a (mutable-globals-plan §4.4): a double crosses the integer-typed
+     * atomics layer through its bit pattern, so one code path serves both front
+     * ends instead of a double-typed shim only the GNU branch could provide.
+     * memcpy rather than a union or a pointer cast: it is the spelling every
+     * compiler folds to a register move and the only one that is not
+     * strict-aliasing UB.  Emitted after <stdint.h>/<string.h> above, which is
+     * what it needs. */
+    buf_puts(out, "static inline double __tur_bits_to_f64(uint64_t b) {\n");
+    buf_puts(out, "    double d; memcpy(&d, &b, sizeof d); return d;\n}\n");
+    buf_puts(out, "static inline uint64_t __tur_f64_to_bits(double d) {\n");
+    buf_puts(out, "    uint64_t b; memcpy(&b, &d, sizeof b); return b;\n}\n");
     /* WIN1: ucontext over Win32 Fibers.  Emitted rather than #included because
      * generated C is standalone -- it cannot reach src/platform_ucontext_win.h.
      * Kept in lockstep with that header; see it for the full rationale.

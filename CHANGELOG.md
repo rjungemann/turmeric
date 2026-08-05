@@ -6,6 +6,16 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`^atomic` on a top-level `def`**, behind `--enable=global-state`. Every read
+  of a `^atomic ^mut` global lowers to a sequentially-consistent load and every
+  `set!` to a sequentially-consistent store. The practical benefit is as much
+  the *load*: a bare global read in a loop may be cached in a register, so a
+  spinning reader would never observe another thread's store however atomically
+  it was made. **It does not make `(set! c (+ c 1))` safe** -- that is a load
+  then a store, not an atomic read-modify-write, and two threads still lose
+  updates; use `stdlib/atomic.tur`'s CAS/fetch-add or a lock. Eight-byte scalars
+  only (`:int`, `:float`, `:cstr`, `:ptr`); anything else is refused with a
+  reason. `^atomic` does not imply `^mut`.
 - **An exported global is read-only outside its defining module**, behind
   `--enable=global-state`. A module that exports a counter for reading no longer
   thereby exports it for writing; `set!` on another module's global names the

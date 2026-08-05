@@ -146,6 +146,19 @@ struct Binding {
      * `:sealed` is declared on the opaque rather than asserted by its
      * consumers. */
     bool          is_export_mut;
+    /* G4a (mutable-globals-plan §4.4), behind `--enable=global-state`: a
+     * `^atomic ^mut` global.  Every read lowers to TUR_ATOMIC_LOAD_* and every
+     * `set!` to TUR_ATOMIC_STORE_*, sequentially consistent.
+     *
+     * Scalars only.  The macro layer takes a POINTER, so unlike thread-local
+     * storage this works under the JIT unchanged: atomicity is an OPERATION on
+     * storage the JIT already owns, where TLS is storage the host would have to
+     * own (see src/runtime/tur_tls.c's header for the same distinction).
+     *
+     * Does NOT imply `^mut` -- decided 2026-08-05.  `^mut` is the single gate
+     * for `set!`, and a second route would make `^atomic` the only annotation
+     * conferring write permission as a side effect. */
+    bool          is_atomic;
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
     /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
     const char   *c_export_name;

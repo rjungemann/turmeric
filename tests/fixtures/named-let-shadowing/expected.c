@@ -64,6 +64,12 @@ uint64_t tur_hamt_hash_xxh64(const void *data, size_t len);
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+static inline double __tur_bits_to_f64(uint64_t b) {
+    double d; memcpy(&d, &b, sizeof d); return d;
+}
+static inline uint64_t __tur_f64_to_bits(double d) {
+    uint64_t b; memcpy(&b, &d, sizeof b); return b;
+}
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN

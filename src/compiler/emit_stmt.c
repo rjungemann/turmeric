@@ -22,6 +22,30 @@ void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     char *bn = name_for_binding(ctx, e->as.set_.target);
     char *v = emit_value(ctx, body, e->as.set_.value);
 
+    /* G4a: a write to an `^atomic` global is a sequentially-consistent store.
+     * Emitted before the rc-release path below because an atomic global is a
+     * scalar by construction (elab_def rejects anything wider), so it never
+     * owns a refcounted value there is an old reference to release. */
+    if (e->as.set_.target && e->as.set_.target->is_atomic) {
+        const Binding *tb = e->as.set_.target;
+        indent_buf(body, ctx->indent);
+        if (tb->type.kind == TY_FLOAT) {
+            buf_printf(body,
+                "TUR_ATOMIC_STORE_U64((volatile uint64_t *)&%s, __tur_f64_to_bits(%s), __ATOMIC_SEQ_CST);\n",
+                bn, v);
+        } else if (tb->type.kind == TY_PTR_VOID || tb->type.kind == TY_CSTR) {
+            buf_printf(body,
+                "TUR_ATOMIC_STORE_PTR((void *volatile *)&%s, (void *)(%s), __ATOMIC_SEQ_CST);\n",
+                bn, v);
+        } else {
+            buf_printf(body,
+                "TUR_ATOMIC_STORE_U64((volatile uint64_t *)&%s, (uint64_t)(%s), __ATOMIC_SEQ_CST);\n",
+                bn, v);
+        }
+        free(bn); free(v);
+        return;
+    }
+
     /* set-bang-rc-release: release the value being overwritten.  Only when the
      * elaborator proved this binding owns a continuous strong reference -- see
      * elab_set_rc_release for why a hand-managed binding must NOT come here.

@@ -1315,6 +1315,28 @@ static WfVerdict wf_walk(Elab *e, const Form *f, Binding *const *params,
     return v;
 }
 
+/* G4a: may a value of this kind be loaded/stored by the atomics macro layer?
+ *
+ * EIGHT-BYTE KINDS ONLY, and the width is the whole point rather than a
+ * detail.  The layer's host shim is `uint64_t`-typed (src/runtime/tur_atomics.c),
+ * so the emitted access is an 8-byte one whatever the declaration says -- and a
+ * narrower global really is declared narrower (`static bool g;` is one byte).
+ * Admitting `:bool` produced an 8-byte `__atomic_store_n` into a 1-byte object:
+ * a genuine overflow of the adjacent statics that GCC caught as
+ * `-Wstringop-overflow` and that still printed the right answer, which is how
+ * it would have shipped.
+ *
+ * A narrower kind is therefore rejected rather than silently widened.  Adding
+ * `:bool` back means a 1-byte shim on the non-GNU branch, not a change here. */
+bool type_is_atomic_scalar(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_FLOAT: case TY_CSTR: case TY_PTR_VOID:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* ------------------------------------------------------------------------- *
  * G1: does a body write a MUTABLE GLOBAL?
  * docs/upcoming/mutable-globals-plan.md §4.1, §4.5.
@@ -8758,6 +8780,7 @@ Expr *elab_def(Elab *e, const Form *call) {
     uint32_t name_idx = 1;
     bool is_persistent = false;
     bool is_mut = false;
+    bool is_atomic = false;
     bool is_deprecated_attr = false;
     const char *deprecation_msg = NULL;
 
@@ -8767,6 +8790,20 @@ Expr *elab_def(Elab *e, const Form *call) {
         const Symbol *s = cur->as.sym;
 
         if (s == e->sym_caret_persistent) { is_persistent = true; name_idx++; continue; }
+
+        /* G4a: `^atomic` -- reads and writes of this global are sequentially
+         * consistent.  Scalars only; the type check happens below, once the
+         * initializer has been elaborated and the type is known. */
+        if (s == e->sym_caret_atomic) {
+            if (!g_opt_global_state) {
+                diag_emit(DIAG_ERROR, cur->span,
+                          "%s: '^atomic' needs --enable=global-state "
+                          "(docs/upcoming/mutable-globals-plan.md)", kw);
+                return NULL;
+            }
+            experiment_warn_if_used("global-state");
+            is_atomic = true; name_idx++; continue;
+        }
 
         /* D4: ^mut on a global is meaningful -- static storage that `set!` may
          * write.  Without it, `(set! g v)` told the user to "use ^mut at the
@@ -8955,9 +8992,34 @@ Expr *elab_def(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* G4a: `^atomic` requires an explicit `^mut` (decided 2026-08-05).  An
+     * atomic global nothing may write is just a global, and making `^atomic`
+     * confer write permission would make it the only annotation in the language
+     * that does so as a side effect. */
+    if (is_atomic && !is_mut) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: '^atomic' does not by itself allow writes -- write "
+                  "`(%s ^atomic ^mut %s ...)`; without `^mut` an atomic global "
+                  "is just a global",
+                  kw, kw, name_f->as.sym->name);
+        return NULL;
+    }
+    /* G4a: scalars only.  A wider value cannot be loaded or stored in one
+     * machine operation, and pretending otherwise would ship exactly the
+     * looks-atomic-and-is-not outcome this plan keeps refusing. */
+    if (is_atomic && !type_is_atomic_scalar(init->type.kind)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: '^atomic' needs an 8-byte scalar (int, float, cstr, or "
+                  "ptr); '%s' is %s -- for a bool use an int flag, and for a "
+                  "wider value use a lock (stdlib/mutex.tur)",
+                  kw, name_f->as.sym->name, type_name(init->type));
+        return NULL;
+    }
+
     Binding *b = binding_new(e, name_f->as.sym, init->type,
                              /*is_mut=*/is_mut, /*is_global=*/true, name_f->span);
     b->is_persistent = is_persistent;
+    b->is_atomic     = is_atomic;
     /* F4: ^deprecated on def */
     b->is_deprecated = is_deprecated_attr;
     b->deprecation_message = deprecation_msg;

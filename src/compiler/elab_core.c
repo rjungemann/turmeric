@@ -1811,6 +1811,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* ST0: Substructural types */
     e->sym_caret_affine    = intern_cstr(st, "^affine");
     e->sym_caret_relevant  = intern_cstr(st, "^relevant");
+    e->sym_caret_atomic   = intern_cstr(st, "^atomic");   /* G4a */
     /* LB1: ^borrow -- non-consuming linear/affine handle accessor parameter */
     e->sym_caret_borrow    = intern_cstr(st, "^borrow");
     e->sym_caret_fat       = intern_cstr(st, "^fat");  /* A#1: fat-closure param */

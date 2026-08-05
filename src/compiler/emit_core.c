@@ -2872,7 +2872,45 @@ static char *emit_reresolve_fn_value(EmitCtx *ctx, const Binding *b) {
 char *atom_var(EmitCtx *ctx, const Binding *b) {
     char *reresolved = emit_reresolve_fn_value(ctx, b);
     if (reresolved) return reresolved;
-    return name_for_binding(ctx, b);
+    char *nm = name_for_binding(ctx, b);
+    /* G4a (mutable-globals-plan §4.4): a read of an `^atomic` global is a
+     * sequentially-consistent load, not a bare reference.  This is the
+     * value-position chokepoint -- `name_for_binding` itself must stay bare,
+     * because it also spells the DEFINITION (`static int64_t g;`) and every
+     * assignment target.
+     *
+     * Wrapping the read matters as much as the write: a bare `g` in a loop is
+     * free to be hoisted into a register, so a thread would never observe
+     * another's store no matter how atomically that store was made.
+     *
+     * The macro layer takes a pointer, so this works under the JIT unchanged --
+     * atomicity is an operation on storage the JIT owns, where thread-local
+     * storage would be storage the host has to own. */
+    if (b && b->is_atomic) {
+        const char *ld = (b->type.kind == TY_PTR_VOID || b->type.kind == TY_CSTR)
+                       ? "TUR_ATOMIC_LOAD_PTR" : "TUR_ATOMIC_LOAD_U64";
+        size_t n = strlen(nm) + 96;
+        char *out = (char *)malloc(n);
+        if (!out) { fprintf(stderr, "tur: oom\n"); abort(); }
+        if (b->type.kind == TY_FLOAT) {
+            /* A double is loaded through its bit pattern: the macro layer's
+             * host shim is integer-typed, and reinterpreting keeps one code
+             * path for both front ends instead of a double-typed shim only the
+             * GNU branch could use. */
+            snprintf(out, n,
+                     "__tur_bits_to_f64(TUR_ATOMIC_LOAD_U64((const volatile uint64_t *)&%s, __ATOMIC_SEQ_CST))",
+                     nm);
+        } else if (b->type.kind == TY_PTR_VOID || b->type.kind == TY_CSTR) {
+            snprintf(out, n, "(%s)%s((void *const volatile *)&%s, __ATOMIC_SEQ_CST)",
+                     type_c_name(b->type), ld, nm);
+        } else {
+            snprintf(out, n, "(%s)TUR_ATOMIC_LOAD_U64((const volatile uint64_t *)&%s, __ATOMIC_SEQ_CST)",
+                     type_c_name(b->type), nm);
+        }
+        free(nm);
+        return out;
+    }
+    return nm;
 }
 char *atom_cstr(StrSlice s) {
     /* Build into a Buf, then strdup out. */
