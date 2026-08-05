@@ -204,6 +204,13 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
 /* Compute the directory part of a file path (Phase M2: module base dir). */
 static void dir_of_path(const char *path, char *out, size_t cap) {
     const char *last_slash = strrchr(path, '/');
+#ifdef _WIN32
+    /* GetModuleFileName / _fullpath return backslashed paths; a '/'-only
+     * split sees no separator at all and answers ".", which silently broke
+     * the exe-relative SDK walk (the JIT could not find hamt.h). */
+    const char *last_bs = strrchr(path, '\\');
+    if (last_bs && (!last_slash || last_bs > last_slash)) last_slash = last_bs;
+#endif
     if (!last_slash) {
         out[0] = '.'; out[1] = '\0';
     } else {
@@ -236,6 +243,13 @@ static int get_exe_path(char *out, size_t cap) {
         }
         return 0;
     }
+#elif defined(_WIN32)
+    /* readlink("/proc/self/exe") has no Windows meaning (the platform_fs.h
+     * stub always fails), so this used to fall through to the argv[0] guess
+     * -- which loses when tur is invoked as a bare `tur` from PATH.
+     * (windows.h is already in scope in this TU via the platform shims.) */
+    unsigned long wn = GetModuleFileNameA(NULL, out, (unsigned long)cap);
+    if (wn > 0 && wn < (unsigned long)cap) return 0;
 #else
     ssize_t n = readlink("/proc/self/exe", out, cap - 1);
     if (n > 0) { out[n] = '\0'; return 0; }
@@ -3452,6 +3466,14 @@ static int jit_sdk_include_dirs(char *inc0, size_t cap0,
                     break;
                 }
                 char *sl = strrchr(dir, '/');
+#ifdef _WIN32
+                /* GetModuleFileName hands back backslashes; a '/'-only split
+                 * ended the walk at depth 0 and the JIT lost hamt.h. */
+                {
+                    char *bs = strrchr(dir, '\\');
+                    if (bs && (!sl || bs > sl)) sl = bs;
+                }
+#endif
                 if (!sl || sl == dir) break;
                 *sl = '\0';
             }
@@ -3611,6 +3633,12 @@ static int cmd_jit(int argc, char **argv) {
                                           jit_inc1, sizeof(jit_inc1),
                                           jit_inc2, sizeof(jit_inc2),
                                           jit_incs);
+    if (getenv("TUR_JIT_SPLIT_DEBUG")) {
+        fprintf(stderr, "jit-debug: n_incs=%d", n_jit_incs);
+        for (int di = 0; di < n_jit_incs; di++)
+            fprintf(stderr, " [%s]", jit_incs[di]);
+        fprintf(stderr, "\n");
+    }
 
     int prog_rc = 0;
     int jrc;
