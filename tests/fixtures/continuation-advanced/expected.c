@@ -7794,13 +7794,13 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static intptr_t test_hynested_hyreset_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hynested_hyreset_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
-static intptr_t test_hynested_hyreset_k1(intptr_t env, intptr_t __t1__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hynested_hyreset_k1(intptr_t env, intptr_t __t1__slot, DK *__kont) {
+    (void)env;
     int64_t __t1 = (int64_t)(__t1__slot);
     int64_t __t2;
     __t2 = (INT64_C(1)) + (__t1);
@@ -7815,8 +7815,8 @@ static intptr_t test_hynested_hyreset_s2(intptr_t env, DK *subk) {
     return (intptr_t)(__t6);
 }
 static int64_t test_hynested_hyreset__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hynested_hyreset_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
-    DK *__p1 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hynested_hyreset_k1, (intptr_t)__p0, dk_copy_enclosing_handlers(__p0))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hynested_hyreset_k0, 0, __kont)));
+    DK *__p1 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hynested_hyreset_k1, 0, __p0)));
     DK *__sd2 = dk_shift(1, test_hynested_hyreset_s2, 0, __p1);
     int64_t __sd2_r = dk_run(__sd2, 0);
     dk_free_node(__sd2);
@@ -7835,8 +7835,8 @@ __attribute__((unused)) static int64_t test_hynested_hyreset() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hyshift_hyreturn_hydifferent_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hyshift_hyreturn_hydifferent_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7849,7 +7849,7 @@ static intptr_t test_hyshift_hyreturn_hydifferent_s1(intptr_t env, DK *subk) {
     return (intptr_t)(__t2);
 }
 static int64_t test_hyshift_hyreturn_hydifferent__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hyshift_hyreturn_hydifferent_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hyshift_hyreturn_hydifferent_k0, 0, __kont)));
     DK *__sd1 = dk_shift(1, test_hyshift_hyreturn_hydifferent_s1, 0, __p0);
     int64_t __sd1_r = dk_run(__sd1, 0);
     dk_free_node(__sd1);
@@ -7868,8 +7868,8 @@ __attribute__((unused)) static int64_t test_hyshift_hyreturn_hydifferent() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hymultiple_hyshifts_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hymultiple_hyshifts_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7882,7 +7882,7 @@ static intptr_t test_hymultiple_hyshifts_s1(intptr_t env, DK *subk) {
     return (intptr_t)(__t4);
 }
 static int64_t test_hymultiple_hyshifts__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hymultiple_hyshifts_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hymultiple_hyshifts_k0, 0, __kont)));
     DK *__sd1 = dk_shift(1, test_hymultiple_hyshifts_s1, 0, __p0);
     int64_t __sd1_r = dk_run(__sd1, 0);
     dk_free_node(__sd1);
@@ -7901,8 +7901,8 @@ __attribute__((unused)) static int64_t test_hymultiple_hyshifts() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hyshift_hyignores_hyk_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hyshift_hyignores_hyk_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7915,7 +7915,7 @@ static intptr_t test_hyshift_hyignores_hyk_s1(intptr_t env, DK *subk) {
     return (intptr_t)(__t2);
 }
 static int64_t test_hyshift_hyignores_hyk__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hyshift_hyignores_hyk_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hyshift_hyignores_hyk_k0, 0, __kont)));
     DK *__sd1 = dk_shift(1, test_hyshift_hyignores_hyk_s1, 0, __p0);
     int64_t __sd1_r = dk_run(__sd1, 0);
     dk_free_node(__sd1);
@@ -7934,13 +7934,13 @@ __attribute__((unused)) static int64_t test_hyshift_hyignores_hyk() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hyreset_hyno_hyshift_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hyreset_hyno_hyshift_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
 static int64_t test_hyreset_hyno_hyshift__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hyreset_hyno_hyshift_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hyreset_hyno_hyshift_k0, 0, __kont)));
     return dk_run(__p0, (intptr_t)(INT64_C(123)));
 }
 __attribute__((unused)) static int64_t test_hyreset_hyno_hyshift() {
@@ -7956,8 +7956,8 @@ __attribute__((unused)) static int64_t test_hyreset_hyno_hyshift() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hydeeply_hynested_hyshift_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hydeeply_hynested_hyshift_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7982,7 +7982,7 @@ static int64_t test_hydeeply_hynested_hyshift__cps(DK *__kont) {
     int64_t a_1350;
     int64_t b_1351;
     int64_t c_1352;
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hydeeply_hynested_hyshift_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hydeeply_hynested_hyshift_k0, 0, __kont)));
     a_1350 = INT64_C(1);
     b_1351 = INT64_C(2);
     c_1352 = INT64_C(3);

@@ -1,5 +1,5 @@
 ---
-status: open (latent -- benign by construction today; hardening note)
+status: resolved 2026-08-05 (converted to LH_RESUME_CONT + dk_frame_resume_borrow, same day as filed)
 severity: low (no reachable misbehavior; becomes real only if await continuations ever re-enter)
 discovered: 2026-08-05
 area: compiler (emit_cps_ir.c emit_await, F3 gap-2 bounded-continuation path)
@@ -52,12 +52,30 @@ re-enters an await continuation -- speculative re-poll, cancellation-with-
 retry, or exposing the continuation to user code. Either one first requires
 the same conversion the handle got.
 
-## Fix directions
+## Execution (2026-08-05)
 
-Mechanical and small, same recipe as the handle: lift as `LH_RESUME_CONT`
-(caps-only env, run-time `__kont`) and install
-`dk_frame_resume_borrow(<aname>, <env>, cur_k)` as the shift's tail -- which
-also replaces the `dk_done()` dead end with the real chain, fixing (a) for
-free. The runtime machinery (`borrow_next`, copy/free discipline) already
-exists and is exercised by every handle. Convert opportunistically the next
-time emit_await is touched, or as a rider on the emit_reset conversion.
+Converted as prescribed, as a rider on the emit_reset conversion
+([cps-reset-frame-pre-unification-layout](cps-reset-frame-pre-unification-layout.md)):
+the bounded await continuation is lifted as `LH_RESUME_CONT` and installed as
+`dk_frame_resume_borrow(<aname>, <caps-only env>, cur_k)` under the
+`__tur_await_body` shift.
+
+One correction to this report's own "mechanical and small" claim, worth
+recording: the conversion is NOT purely mechanical, because this frame rides
+below a **shift** node, so replacing `dk_done()` with the real chain changes
+the shift's CAPTURE EXTENT -- the captured/parked continuation now includes a
+copy of the real chain up to the root prompt, and resuming it replays that
+copy instead of jumping to the baked originals (which become reap-collected
+garbage).  That is the correct self-contained-continuation semantics, and
+`__tur_await_body` is already copy-based on the park path
+(`dk_copy_range(subk, NULL)` + `dk_free` after resume), so it absorbs the
+larger capture unchanged -- but it is a semantic change, not a relabeling,
+and it was verified against the delicate fixtures (async-await-cps,
+-pending, -repark, -two) rather than assumed.  Both traps the report named
+are closed: a perform in a resumed await continuation now finds the (copied)
+enclosing handlers instead of dead-ending at `done`, and there is no baked
+original left for a hypothetical re-entrant resume to double-run.
+
+With both conversions landed, `LH_RESET_CONT` was deleted outright (no users
+left), along with the `__k` env-slot machinery and the `borrowed_kont` copy
+discipline.  Suites green: run.sh 2572/0, run-turi.sh 1759/0/705.

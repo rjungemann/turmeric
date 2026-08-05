@@ -1,5 +1,5 @@
 ---
-status: open (latent -- the exposing shape is a located hard error today, not a miscompile)
+status: resolved 2026-08-05 (converted to LH_RESUME_CONT + dk_frame_resume_borrow, same day as filed)
 severity: low-medium (becomes a silent-wrong-answer miscompile the day the admission widens)
 discovered: 2026-08-05
 area: compiler (emit_cps_ir.c emit_reset; DK runtime chain layout)
@@ -59,16 +59,24 @@ verbatim: the resumed copy jumps to the original chain via the baked env, the
 enclosing continuation runs once per resume, and the marker `next` dead-ends
 delivery. Nothing in the code marks this dependency today except this report.
 
-## Fix directions
+## Execution (2026-08-05)
 
-The same conversion the handle got, mechanically: lift the reset continuation
-as `LH_RESUME_CONT` (threading its run-time `__kont` instead of a baked
-`__cap->__k` / env-as-k), and install it as
-`dk_prompt(1, dk_frame_resume_borrow(<kname>, <caps-only env>, cur_k))`. The
-runtime side (`borrow_next`, `dk_frame_resume_borrow`, copy/free discipline)
-already exists and is exercised by every handle. `emit_await`'s bounded path
-(see [cps-await-cont-baked-env](cps-await-cont-baked-env.md)) is the same
-family. Do the conversion BEFORE widening any perform-inside-reset admission;
-ideally do it opportunistically the next time emit_reset is touched, since it
-is small and the regression surface (reset/shift fixtures) is well covered by
-the suite.
+Converted exactly as the fix direction prescribed, together with the await
+sibling ([cps-await-cont-baked-env](cps-await-cont-baked-env.md)): the reset
+continuation is lifted as `LH_RESUME_CONT` (caps-only env, run-time `__kont`)
+and installed as `dk_prompt(1, dk_frame_resume_borrow(<kname>, <env>,
+cur_k))`. A `shift`'s capture stops at the prompt BEFORE the frame, so shift
+semantics are untouched (verified: continuation-basic/-advanced,
+shift-typed-cont, cps-oracle-reset-nested-if-escape all pass; the two
+reset-bearing `expected.c` snapshots were regenerated). The exposing shape
+(perform-inside-reset under a handle) still evicts with its located hard
+error -- admission was not widened -- but the layout trap this report existed
+to flag is gone: when that admission does widen, dispatch, capture, and
+delivery already cross the reset frame on the one real spine.
+
+With both conversions landed, `LH_RESET_CONT` had no users left and was
+**deleted outright** -- along with the `__k` env-slot machinery in
+`emit_cont_env`/`emit_lifted` and the `borrowed_kont` copy discipline that
+existed only to defend baked-env captures. Nothing can bake an
+original-chain pointer into a frame env again without re-adding the mode.
+Suites green: run.sh 2572/0, run-turi.sh 1759/0/705.

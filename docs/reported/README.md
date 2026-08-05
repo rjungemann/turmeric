@@ -58,8 +58,6 @@ does not share an investigation with the three above.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
-| [cps-reset-frame-pre-unification-layout](cps-reset-frame-pre-unification-layout.md) | low-medium | **latent**: `emit_reset` still builds the pre-unification layout (baked `__k` env + marker `next`) the handle conversion removed. Unreachable today -- perform-inside-reset under a handle evicts with a located hard error (verified single- and multi-shot) -- but it becomes the handle miscompile verbatim if that admission widens. Convert (LH_RESUME_CONT + `dk_frame_resume_borrow`) before widening, or opportunistically |
-| [cps-await-cont-baked-env](cps-await-cont-baked-env.md) | low | **latent**: `emit_await`'s bounded-continuation path bakes `__k` with `next = dk_done()`. Benign by construction (an await continuation resumes exactly once, no user `k`, no admitted perform through it); becomes real only with re-entrant awaits or a widened admission. Same mechanical conversion, as a rider on the reset one |
 
 `handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
 landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --
@@ -93,6 +91,19 @@ through it under the `case_delivers` protocol, so `dk_perform` no longer
 delivers `H->next` a second time. Moved to
 [docs/archive](../archive/cps-case-reopen-marker-kont-truncates-capture.md);
 pinned both-paths by `tests/fixtures/effect-case-reopen-outer-capture/`.
+
+The two LATENT two-spine layouts filed from the same audit were converted the
+same day and archived:
+[cps-reset-frame-pre-unification-layout](../archive/cps-reset-frame-pre-unification-layout.md)
+(the reset continuation frame) and
+[cps-await-cont-baked-env](../archive/cps-await-cont-baked-env.md) (the
+bounded await continuation; NOT purely mechanical -- the frame rides below a
+shift, so the conversion widened the shift's capture extent to a
+self-contained copy of the real chain, verified against the async-await-cps*
+fixtures). With them, `LH_RESET_CONT` and the `__k` env-slot machinery are
+deleted from the emitter: every lifted continuation frame now receives its
+downstream chain at run time, and nothing can bake an original-chain pointer
+into a frame env again.
 
 ## Interpreter (`--interpret` / `tur repl`) divergence
 

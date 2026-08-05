@@ -1808,8 +1808,9 @@ static bool perform_cont_reset_ok(const CTerm *t) {
 
 /* F3 gap-2: an await continuation that is a FULL CPS body (a branch, or a further
  * `await`) but carries a statically-BOUNDED number of await suspensions -- so it
- * is safe to lift like a RESET continuation (LH_RESET_CONT: the frame threads the
- * enclosing k itself, its `next` is dk_done()).  The one thing that is NOT bounded
+ * is safe to lift as a RESUME-FRAME (LH_RESUME_CONT: the frame receives its
+ * downstream chain at run time; its `next` is the real, borrowed enclosing
+ * chain).  The one thing that is NOT bounded
  * is a TAIL CALL: a cps->cps tail call threads __kont and can recurse, and a
  * ready-future inline resume then recurses through dk_invoke in O(N) C stack
  * (worse than the direct TCO path -- a recursive await is by design left to the
@@ -2356,7 +2357,7 @@ static bool term_core_ok(const CTerm *t) {
             /* F3 (cps-async): the awaited future must be a slot-representable atom.
              * The continuation is admitted EITHER as a straight-line value
              * transform (perform_body_ok -> LH_PERFORM_CONT, the F3.1 path) OR as a
-             * BOUNDED full CPS continuation (await_cont_reset_ok -> LH_RESET_CONT,
+             * BOUNDED full CPS continuation (await_cont_reset_ok -> LH_RESUME_CONT,
              * the F3 gap-2 path: a branch or a further sequential `await`, with a
              * statically-bounded number of suspensions and no cps->cps tail call).
              *
@@ -4932,15 +4933,6 @@ typedef struct {
                                      * terminal tail `resume` here emits dk_tail_resume (yield) */
     bool        case_tail_resume;   /* E7: this case was installed with dk_handler_tail (DEEP +
                                      * tail-resume); a SHALLOW case keeps the inline dk_invoke */
-    bool        borrowed_kont;      /* cur_k (`__kont`) is a RESUME_FRAME's BORROWED downstream
-                                     * chain (driver-owned, dk_free'd after the frame yields), not
-                                     * an owned param.  A reset/handle continuation env that
-                                     * captures it OUTLIVES the frame (it is read when the nested
-                                     * continuation is delivered, after the yield), so the capture
-                                     * must COPY the chain (reaped), never alias it -- else a
-                                     * value-position nested handle use-after-frees the enclosing
-                                     * continuation.  See docs/reported/cps-toplevel-synthesized-
-                                     * main-bypasses-dk.md (effect-nested). */
     /* Full Type a value has when it crosses the slot at each continuation target,
      * so Tier C by-value aggregates box/unbox with their real (monomorphized) C
      * type.  ret_ty = the function's return type (KK_RET); cur_ty = the innermost
@@ -5320,7 +5312,7 @@ static void emit_heap_join(CE *ce, const CTerm *t);
 static void emit_loop(CE *ce, const CTerm *t);       /* cps-while-native */
 static void emit_continue(CE *ce, const CTerm *t);   /* cps-while-native */
 static void emit_match(CE *ce, const CTerm *t);      /* B4 */
-static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr);
+static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps);
 static char *cvar_cname(CE *ce, CVar x);
 
 /* The full Type a value has when delivered to continuation `kont` (the target's
@@ -6097,19 +6089,21 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
 
 /* The shape of a lifted helper. */
 typedef enum {
-    LH_RESET_CONT,    /* DKFrame (env=k, xval): reset continuation, KK_RET -> dk_run(k,..) */
     LH_SHIFT_BODY,    /* DKBody  (env, subk):   shift body, KK_PROMPT -> return value */
     LH_PERFORM_CONT,  /* DKFrame (env, xval):   perform continuation, KK_RET -> return value */
     LH_HANDLER_CASE,  /* DKHandler (env, arg, subk): binds params+k, KK_PROMPT -> return */
     LH_RESUME_CONT,   /* DKResumeFrame (env, xval, __kont): a frame that receives its
                        * run-time downstream chain `__kont` and threads it (KK_RET ->
                        * dk_run(__kont,..); a nested perform/shift threads __kont).  Caps
-                       * ride env (no __k).  Two users: a MULTI-SUSPENSION perform
+                       * ride env (no __k).  Users: a MULTI-SUSPENSION perform
                        * continuation (Track A: its body contains a nested control op),
-                       * and every HANDLE continuation (spine unification: the frame's
-                       * `next` is the real, borrowed enclosing chain, so a dk_copy_range
-                       * copy threads its OWN tail instead of a baked original -- the
-                       * multishot-across-nested-handle fix). */
+                       * and every HANDLE, RESET, and bounded-AWAIT continuation (spine
+                       * unification: the frame's `next` is the real, borrowed enclosing
+                       * chain, so a dk_copy_range copy threads its OWN tail instead of a
+                       * baked original -- the multishot-across-nested-handle fix and its
+                       * reset/await riders).  The old LH_RESET_CONT (env-baked `__k` +
+                       * marker `next`) is deleted: nothing may bake an original-chain
+                       * pointer into a frame env again. */
 } LHMode;
 
 /* Effect re-opening: does this handler CASE body itself perform an effect (which,
@@ -6173,23 +6167,12 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
     hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
     hc.case_tail_resume  = (mode == LH_HANDLER_CASE) ? ce->case_tail_resume : false;
-    /* A RESUME_FRAME's `__kont` is the driver-owned downstream chain, freed after
-     * the frame yields; a reset/handle continuation captured inside it must COPY
-     * `__kont`, not alias it (see emit_cont_env / CE.borrowed_kont).  A
-     * re-opening case's `__kont` is the borrowed real enclosing chain -- same
-     * discipline. */
-    hc.borrowed_kont     = (mode == LH_RESUME_CONT) || reopens;
 
     /* N6.3: read the captured values out of the env struct into locals named the
-     * same way the body references them (name_for_binding).  A reset/handle
-     * continuation's env also carries the enclosing continuation `k`. */
+     * same way the body references them (name_for_binding). */
     if (has_caps) {
         indent_buf(&tmp, 4);
         buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
-        if (mode == LH_RESET_CONT) {
-            indent_buf(&tmp, 4);
-            buf_puts(&tmp, "DK *__kont = __cap->__k;\n");
-        }
         for (int i = 0; i < caps->n; i++) {
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
@@ -6212,7 +6195,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * (reset/perform continuation), or bind the handler case's params/k.  The
      * value-param load leaks a Tier C box (consume=false): this frame can run
      * more than once under a multi-shot resume. */
-    if (mode == LH_RESET_CONT || mode == LH_PERFORM_CONT || mode == LH_RESUME_CONT) {
+    if (mode == LH_PERFORM_CONT || mode == LH_RESUME_CONT) {
         char slotexpr[160];
         snprintf(slotexpr, sizeof slotexpr, "%s__slot", xname);
         char *ld = slot_load(ce->ctx, xty, xt, slotexpr, false);
@@ -6346,10 +6329,9 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     buf_putc(&tmp, '\0');
 
     /* N6.3: the env struct type (named <name>_env) shared with the alloc site.
-     * A reset/handle continuation env leads with the enclosing continuation k. */
+     * Caps-only -- no continuation slot (see emit_cont_env). */
     if (has_caps) {
         buf_printf(ce->helpers, "typedef struct {");
-        if (mode == LH_RESET_CONT) buf_puts(ce->helpers, " DK *__k;");
         for (int i = 0; i < caps->n; i++)
             buf_printf(ce->helpers, " %s f%d;", cap_ctype(ce->ctx, caps, i), i);
         buf_printf(ce->helpers, " } %s_env;\n", name);
@@ -6369,11 +6351,6 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         case LH_PERFORM_CONT:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
             if (!has_caps) buf_puts(ce->helpers, "    (void)env;\n");
-            break;
-        case LH_RESET_CONT:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
-            /* With caps, `k` is read from the env struct (above); else env IS k. */
-            if (!has_caps) buf_puts(ce->helpers, "    DK *__kont = (DK *)env;\n");
             break;
         case LH_RESUME_CONT:
             /* Track A: a resume-frame.  __kont is the run-time downstream chain
@@ -6436,7 +6413,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     if (caps || needs_kont) {
         emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
-        char *envexpr = emit_cont_env(ce, jname, caps, NULL);   /* caps-only env */
+        char *envexpr = emit_cont_env(ce, jname, caps);   /* caps-only env */
         snprintf(frame, sizeof frame,
                  "__dk_reap_node(dk_frame_resume(%s, %s, %s))", jname, envexpr, ce->cur_k);
         free(envexpr);
@@ -6637,35 +6614,21 @@ static void emit_continue(CE *ce, const CTerm *t) {
     free(argv);
 }
 
-/* N6.3: emit the alloc+populate of a lifted continuation's env (the body's
- * scalar captures, plus the enclosing continuation `k` when `k_expr` != NULL --
- * reset/handle continuations carry k in the env; a handler case gets k via subk,
- * so it passes k_expr = NULL and its env is caps-only).  Returns a malloc'd C
- * expr for the DK frame env: the env struct pointer when there are captures, else
- * plain (intptr_t)k (or 0 when k-less).  The struct is leaked with the DK nodes. */
-static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr) {
-    /* A reset/handle continuation env captured inside a RESUME_FRAME must COPY the
-     * frame's borrowed (driver-owned) `__kont`, not alias it: the env is read when
-     * the nested continuation is delivered, AFTER the resume frame has yielded and
-     * the driver has dk_free'd its downstream chain.  The copy is reaped at the
-     * outermost entry boundary (like every other delimited DK chain). */
-    char k_capture[256];
-    const char *k_store = k_expr;
-    if (k_expr && ce->borrowed_kont && strcmp(k_expr, "__kont") == 0) {
-        snprintf(k_capture, sizeof k_capture,
-                 "__dk_reap_keep(dk_copy_range((const DK *)%s, NULL))", k_expr);
-        k_store = k_capture;
-    }
-    if (!caps || caps->n == 0) {
-        Buf b; buf_init(&b);
-        if (k_store) buf_printf(&b, "(intptr_t)%s", k_store); else buf_puts(&b, "0");
-        buf_putc(&b, '\0');
-        char *s = strdup(b.data); buf_free(&b); return s;
-    }
+/* N6.3: emit the alloc+populate of a lifted continuation's env -- the body's
+ * scalar captures, nothing else.  Returns a malloc'd C expr for the DK frame
+ * env: the env struct pointer when there are captures, else "0".  The struct
+ * is leaked with the DK nodes (reaped at the entry boundary). */
+static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps) {
+    /* The env is caps-only: every lifted frame that needs its enclosing
+     * continuation receives it AT RUN TIME (a DKResumeFrame's third parameter,
+     * from the node's own ->next).  The pre-unification `__k` env slot -- a
+     * pointer to the ORIGINAL chain baked in at install time, which every
+     * dk_copy_range copy still jumped to -- is gone, and this signature keeps
+     * it gone (docs/archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md). */
+    if (!caps || caps->n == 0) return strdup("0");
     char envv[300];
     snprintf(envv, sizeof envv, "__ce_%s", hname);
     ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", hname, envv, hname, hname);
-    if (k_store) ce_line(ce, "%s->__k = %s;", envv, k_store);
     for (int i = 0; i < caps->n; i++) {
         char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
         ce_line(ce, "%s->f%d = %s;", envv, i, cn);
@@ -6691,28 +6654,29 @@ static void emit_reset(CE *ce, const CTerm *t) {
     bool ok = collect_caps(t->as.reset.body, t->as.reset.x.id, &cs);
     const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
     char *rxn = cvar_cname(ce, t->as.reset.x);
-    emit_lifted(ce, hname, LH_RESET_CONT, rxn, t->as.reset.x.ty, t->as.reset.x.type,
+    emit_lifted(ce, hname, LH_RESUME_CONT, rxn, t->as.reset.x.ty, t->as.reset.x.type,
                 t->as.reset.body, NULL, caps);
     free(rxn);
 
-    char *envexpr = emit_cont_env(ce, hname, caps, ce->cur_k);
+    char *envexpr = emit_cont_env(ce, hname, caps);   /* caps-only env */
     char pchain[64];
     snprintf(pchain, sizeof(pchain), "__p%d", id);
-    /* The reset continuation frame buries the enclosing continuation in its env
-     * (`__k`) and its `next` was dk_done() -- so an effect PERFORMED inside the
-     * delimited body (handled by a handler ENCLOSING the reset) could not find
-     * its handler and aborted "unhandled" (a pre-existing miscompile, reachable
-     * now that Track A admits nested effects in more positions).  Splice a copy of
-     * cur_k's enclosing handler markers as the frame's `next`: dk_perform walks
-     * through the reset's prompt to reach them, and the reified sub still includes
-     * the prompt so a shift in the resumed computation stays delimited.  They are
-     * transparent to a returning value (the frame already delivers via
-     * dk_run(__k, v)); with no enclosing handler this is [done], i.e. unchanged.
-     * The whole chain (prompt + frame + the fresh copied handler markers + done)
-     * is self-contained and installed in tail position, so it cannot be freed
-     * here; register it for reaping at the outermost entry boundary
-     * (docs/archive/cps-delimited-dk-node-leak.md). */
-    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))));",
+    /* The reset continuation frame is a RESUME-FRAME whose `next` is the ACTUAL
+     * enclosing chain, borrowed -- the same spine unification the handle frame
+     * got (docs/archive/cps-reset-frame-pre-unification-layout.md, following
+     * docs/archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
+     * One spine serves everything the old layout split: an effect PERFORMED
+     * inside the delimited body (handled by a handler ENCLOSING the reset)
+     * walks through the prompt straight into the real enclosing handlers, its
+     * capture crosses into the real intermediate frames, and its delivery runs
+     * the real rest -- where the old baked-`__k`-env frame with marker-copy
+     * `next` truncated the capture and dead-ended delivery.  A `shift` is
+     * unaffected: its capture stops at the prompt, BEFORE this frame.  The
+     * chain (prompt + frame) is installed in tail position, so it cannot be
+     * freed here; register it for reaping at the outermost entry boundary
+     * (docs/archive/cps-delimited-dk-node-leak.md) -- borrow_next keeps that
+     * dk_free out of the enclosing chain. */
+    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(%s, %s, %s)));",
             pchain, hname, envexpr, ce->cur_k);
     free(envexpr);
 
@@ -7448,7 +7412,7 @@ static void emit_shift(CE *ce, const CTerm *t) {
     bool ok = collect_caps(t->as.shift.body, t->as.shift.k.id, &cs);
     const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
     emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL, caps);
-    char *env = emit_cont_env(ce, hname, caps, NULL);   /* k-less env */
+    char *env = emit_cont_env(ce, hname, caps);   /* k-less env */
     /* shift0 does NOT reinstall the delimiting prompt; plain shift does.  The
      * shift node is spliced onto cur_k (its ->next); after dk_run has driven the
      * captured computation to completion it is dead, so reclaim it with
@@ -7523,7 +7487,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
     emit_lifted(ce, kname, LH_RESUME_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
                 t->as.handle.body, NULL, caps);
     free(hxn);
-    char *hkenv = emit_cont_env(ce, kname, caps, NULL);   /* caps-only env */
+    char *hkenv = emit_cont_env(ce, kname, caps);   /* caps-only env */
 
     /* B3 part 2: a DYNAMIC with-handler installs the handler group from the
      * runtime handler table (dk_hgroup_from_table) instead of a static per-case
@@ -7576,7 +7540,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
         emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
                     t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], ccaps);
         ce->case_tail_resume = save_ctr;
-        cenvs[ci] = emit_cont_env(ce, cnames[ci], ccaps, NULL);   /* k-less env */
+        cenvs[ci] = emit_cont_env(ce, cnames[ci], ccaps);   /* k-less env */
     }
 
     char hchain[64];
@@ -7769,7 +7733,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
         emit_lifted(ce, pname, LH_RESUME_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
                     t->as.perform.body, NULL, caps);
         free(pxn);
-        char *envexpr = emit_cont_env(ce, pname, caps, NULL);   /* caps-only env */
+        char *envexpr = emit_cont_env(ce, pname, caps);   /* caps-only env */
         /* The dk_frame_resume node's ->next is ce->cur_k (an enclosing chain), so
          * it is a single spliced node dk_perform never frees.  Unlike the
          * straight-line perform-cont sibling above -- which dk_free_node's its
@@ -7841,12 +7805,19 @@ static void emit_await(CE *ce, const CTerm *t) {
         }
     } else {
         /* F3 gap-2: a bounded full CPS continuation (a branch or a further
-         * sequential await -- await_cont_reset_ok, checked at admission).  Lift it
-         * like a RESET continuation: the frame threads the enclosing k (__kont,
-         * carried in the env) itself and its `next` is dk_done(), so a KK_RET
-         * appcont emits `dk_run(__kont, v)`, a nested await emits its own shift
-         * against __kont, and the value is delivered exactly once.  No cps->cps
-         * tail call reaches here (that evicts), so the number of nested dk_invoke
+         * sequential await -- await_cont_reset_ok, checked at admission).  Lift
+         * it as a RESUME-FRAME whose `next` is the ACTUAL enclosing chain,
+         * borrowed -- the spine unification
+         * (docs/archive/cps-await-cont-baked-env.md): the frame receives its
+         * downstream at run time, so the shift's capture now extends past the
+         * frame into the real chain (up to the root prompt) and the parked
+         * continuation is fully self-contained -- resuming it replays a COPY of
+         * the rest instead of jumping to a baked original, and an effect
+         * performed in the resumed continuation can find the (copied) enclosing
+         * handlers where the old dk_done() `next` dead-ended.  A KK_RET appcont
+         * emits `dk_run(__kont, v)`, a nested await emits its own shift against
+         * __kont, and the value is delivered exactly once.  No cps->cps tail
+         * call reaches here (that evicts), so the number of nested dk_invoke
          * resumes is statically bounded -- no O(N) stack. */
         int id = (*ce->helper_ctr)++;
         char aname[256];
@@ -7855,13 +7826,13 @@ static void emit_await(CE *ce, const CTerm *t) {
         CapSet cs;
         bool ok = collect_caps(t->as.await.body, t->as.await.x.id, &cs);
         const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
-        emit_lifted(ce, aname, LH_RESET_CONT, axn, t->as.await.x.ty, t->as.await.x.type,
+        emit_lifted(ce, aname, LH_RESUME_CONT, axn, t->as.await.x.ty, t->as.await.x.type,
                     t->as.await.body, NULL, caps);
         free(axn);
-        char *envexpr = emit_cont_env(ce, aname, caps, ce->cur_k);
+        char *envexpr = emit_cont_env(ce, aname, caps);   /* caps-only env */
         ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, "
-                    "dk_frame(%s, %s, dk_done())), 0);",
-                fsa, aname, envexpr);
+                    "dk_frame_resume_borrow(%s, %s, %s)), 0);",
+                fsa, aname, envexpr, ce->cur_k);
         free(envexpr);
     }
     free(fsa);
