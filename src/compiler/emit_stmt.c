@@ -53,6 +53,23 @@ void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         return;
     }
 
+    /* B7b: a `^mut` the CPS backend promoted to a SHARED HEAP CELL (because a
+     * lifted body -- a handler clause, emitted as its own C function -- touches
+     * it) binds the cell POINTER, so the STORE derefs.  This is the assignment-
+     * side counterpart of the read deref in atom_var, and it must live here
+     * rather than in `name_for_binding`, which also spells the declaration.
+     * Rewriting `bn` once covers every store path below, including a `set!`
+     * nested inside a DELEGATED composite (a `while` in a clause), which never
+     * reaches the CPS emitter's own statement lowering. */
+    if (emit_binding_is_byref_cell(e->as.set_.target)) {
+        size_t n = strlen(bn) + 8;
+        char *deref = (char *)malloc(n);
+        if (!deref) { fprintf(stderr, "tur: oom\n"); abort(); }
+        snprintf(deref, n, "(*%s)", bn);
+        free(bn);
+        bn = deref;
+    }
+
     /* set-bang-rc-release: release the value being overwritten.  Only when the
      * elaborator proved this binding owns a continuous strong reference -- see
      * elab_set_rc_release for why a hand-managed binding must NOT come here.

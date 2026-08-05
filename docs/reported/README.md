@@ -55,9 +55,22 @@ does not share an investigation with the three above.
 
 ## Effect handlers
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
+*(No open reports.)*
+
+`handler-clause-setbang-enclosing-mut-undeclared` was resolved 2026-08-05 and
+moved to
+[docs/archive](../archive/handler-clause-setbang-enclosing-mut-undeclared.md).
+Two corrections are recorded there: the area was the CPS/DK backend, not
+`emit_effects.c`, and the read side the report called "fine" was in fact a
+SILENT wrong answer (a clause read the value snapshotted when the handle was
+installed -- `5` where the answer is `7`), which is why it archived at high
+rather than medium severity. Both directions had one cause: a clause is its own
+C function and saw enclosing mutables only by value. The fix widens the existing
+B7 cell promotion to any `^mut` a clause touches, types the cell (an `int64_t`
+cell truncated a `^mut` float -- `10.1` read back as `9`), and derefs at the two
+existing chokepoints (`atom_var` for reads, `emit_set_stmt` for writes) so a
+`set!` inside a delegated `while` is covered too. Pinned both-paths by
+`tests/fixtures/effect-handler-clause-setbang-enclosing-mut/`.
 
 `handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
 landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --

@@ -158,10 +158,6 @@ field dangles -- use owned `String` fields for computed text. See
 ### State threading
 
 ```turmeric
-(defn cell-new []                      : ptr<void> ```c return calloc(1, sizeof(int64_t)); ```)
-(defn cell-get [c : ptr<void>]         : int       ```c return *(int64_t *)c; ```)
-(defn cell-put [c : ptr<void> v : int] : int       ```c *(int64_t *)c = v; return v; ```)
-
 (defeffect Get []        : int)
 (defeffect Put [v : int] : nil)
 
@@ -169,19 +165,15 @@ field dangles -- use owned `String` fields for computed text. See
   (perform (Put (+ (perform (Get)) 1))))
 
 (defn main [] : int
-  (let [s (cell-new)]
+  (let [^mut s 0]
     (handle (do (counter-step) (counter-step) (counter-step))
-      (Get []  k) (resume k (cell-get s))
-      (Put [v] k) (do (cell-put s v) (resume k nil)))
-    (println (cell-get s)))
+      (Get []  k) (resume k s)
+      (Put [v] k) (do (set! s v) (resume k nil)))
+    (println s))
   0)
 ```
 
 ```sweet-exp
-defn cell-new []                      : ptr<void> ```c return calloc(1, sizeof(int64_t)); ```
-defn cell-get [c : ptr<void>]         : int       ```c return *(int64_t *)c; ```
-defn cell-put [c : ptr<void> v : int] : int       ```c *(int64_t *)c = v; return v; ```
-
 defeffect Get []        : int
 defeffect Put [v : int] : nil
 
@@ -189,28 +181,31 @@ defn counter-step [] #fx{Get Put} : nil
   perform $ Put {perform(Get()) + 1}
 
 defn main [] : int
-  let [s cell-new()]
+  let [^mut s 0]
     handle
       do
         counter-step()
         counter-step()
         counter-step()
       (Get []  k)
-      resume(k cell-get(s))
+      resume(k s)
       (Put [v] k)
       do
-        cell-put(s v)
+        set!(s v)
         resume(k nil)
-    println(cell-get(s))
+    println(s)
   0
 ```
 
 Prints `3`. This is the `State` monad as a handler: the handler *is* the
 interpretation, and callers of `counter-step` never see the threading.
 
-The state lives in a heap cell rather than a `let`-bound `^mut` because a
-handler clause is emitted as its own frame and cannot assign to a binding in the
-enclosing function -- see [Sharp edges](#sharp-edges).
+The state is an ordinary `let`-bound `^mut`. A clause is emitted as its own C
+frame, so the compiler promotes a mutable that a clause touches to a shared
+cell behind the scenes -- every view of it (the enclosing frame, each clause,
+the code after the `handle`) reads and writes the same storage, which is what
+the source says. Earlier releases required a hand-rolled heap cell here; that
+workaround still works but is no longer needed.
 
 ### Nondeterminism
 
@@ -655,8 +650,11 @@ ascription if you want a typed handle.
 A handler clause is emitted as its own frame, which constrains what can go in
 one:
 
-- It cannot `set!` a `^mut` binding from the enclosing function -- put the state
-  in a heap cell (as the state example above does).
+- Reading and `set!`-ing a `^mut` binding from the enclosing function works --
+  the compiler promotes such a mutable to a shared cell (the state example
+  above). The one shape still unsupported is writing a mutable that a `while`
+  loop *carries* while the loop also spans the `handle`; that evicts with a
+  located error rather than miscompiling.
 - `k` is type-erased inside the clause and cannot be passed to a helper
   expecting a `cont<...>`. Route the resumption strategy through the effect
   payload instead (as the nondeterminism example above does).
@@ -666,8 +664,8 @@ one:
   compiler rejects that with a located error naming the workaround (hoist the
   loop into a helper function and call it from the clause).
 
-The first two are open compiler defects tracked in `docs/reported/`; the third
-is a designed eviction with its own diagnostic.
+The second is an open compiler defect tracked in `docs/reported/`; the first
+and third are designed evictions with their own diagnostics.
 
 ## Compared to Haskell
 

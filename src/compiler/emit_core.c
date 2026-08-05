@@ -2921,6 +2921,21 @@ char *atom_var(EmitCtx *ctx, const Binding *b) {
         free(nm);
         return out;
     }
+    /* B7b: a `^mut` promoted to a SHARED HEAP CELL (the CPS backend does this for
+     * a mutable a lifted body touches -- a handler clause, which is emitted as
+     * its own C function and cannot see the enclosing frame's locals; see
+     * emit_cps_ir.c's g_byref_muts).  Its C name binds the cell POINTER, so a
+     * value-position read derefs.  Same chokepoint, and for the same reason as
+     * the two above: `name_for_binding` must stay bare because it also spells
+     * the declaration and every assignment target. */
+    if (emit_binding_is_byref_cell(b)) {
+        size_t n = strlen(nm) + 8;
+        char *out = (char *)malloc(n);
+        if (!out) { fprintf(stderr, "tur: oom\n"); abort(); }
+        snprintf(out, n, "(*%s)", nm);
+        free(nm);
+        return out;
+    }
     return nm;
 }
 char *atom_cstr(StrSlice s) {

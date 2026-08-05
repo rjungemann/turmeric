@@ -24,6 +24,9 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
 /* B7 fwd decls (defined after the CE struct). */
 static bool is_byref_mut(const Binding *b);
 static const struct Binding *byref_set_target(const Expr *e);
+static const struct Binding *set_mut_target(const Expr *e);
+static const char *byref_cell_ctype(EmitCtx *ctx, const Binding *b);
+static const char *byref_cell_ptr_ctype(EmitCtx *ctx, const Binding *b);
 
 /* B4 (CT_MATCH emit): the ADT-aggregate field-access helpers.  Declared in
  * emit_internal.h, which this file does not include; forward-declared here so
@@ -1074,8 +1077,8 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
  * else its scalar / by-value-aggregate binder type. */
 static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
     if (caps->polyfn[i]) return "tur_poly_fn_t";
-    /* B7: a by-reference mutable rides the env as its cell POINTER. */
-    if (caps->b[i] && is_byref_mut(caps->b[i])) return "int64_t *";
+    /* B7: a by-reference mutable rides the env as its (typed) cell POINTER. */
+    if (caps->b[i] && is_byref_mut(caps->b[i])) return byref_cell_ptr_ctype(ctx, caps->b[i]);
     /* E2c: a captureless-effectful fn-value param (a via_registry callee carried
      * by cap_add_fn_scalar) rides the env as a bare int64 direct-entry fn-ptr --
      * `binder_ctype_full(TY_FN)` would leak a bad spelling. */
@@ -1296,10 +1299,15 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 if (_f) cap_add(cs, b, b->type.kind, &b->type);
             }
             free(fv);
-            /* B7: `(set! m k)`'s TARGET is a WRITE, not a free-var read, so
+            /* B7/B7b: a `set!` TARGET is a WRITE, not a free-var read, so
              * collect_free_vars never surfaces it -- but the lifted body writes the
-             * shared cell `*m`, so `m` (the cell pointer) must be captured. */
-            const Binding *bref = g_opt_cps_tramp_resume ? byref_set_target(le) : NULL;
+             * shared cell `*m`, so `m` (the cell pointer) must be captured.  Keyed
+             * on the promotion itself (is_byref_mut), which covers both the
+             * continuation store (B7) and any other write a lifted body makes to
+             * an enclosing mutable (B7b).  A NON-promoted target is a mutable
+             * local to this body -- no capture, it is an ordinary local. */
+            const Binding *bref = g_opt_cps_tramp_resume ? set_mut_target(le) : NULL;
+            if (bref && !is_byref_mut(bref)) bref = NULL;
             if (bref && !bref->is_global && !binding_excluded(bref)) {
                 uint32_t _id = bref->id; bool _f = (_id != exclude);
                 for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
@@ -4855,17 +4863,212 @@ static bool is_byref_mut(const Binding *b) {
     return false;
 }
 
-/* If Expr `e` (ascribe-peeled) is `(set! <mut> <cont>)` -- a store of a
- * continuation value into a mutable -- return the mutable target, else NULL. */
-static const Binding *byref_set_target(const Expr *e) {
+/* The value-position chokepoint (atom_var, emit_core.c) derefs a cell read
+ * whichever emitter produces it -- a delegated `set!` VALUE expression goes
+ * through the direct emitter even inside a CPS-lifted body. */
+bool emit_binding_is_byref_cell(const Binding *b) { return is_byref_mut(b); }
+
+/* The ELEMENT type of a promoted mutable's cell -- the C type the binding would
+ * have as an ordinary local.  The cell must carry the mutable's real type, not a
+ * uniform int64_t: a `^mut` float stored through an int64_t cell TRUNCATES at
+ * every write (7.1 + 1.5 + 1.5 reads back 9, not 10.1), and a cstr would be
+ * punned through an integer.  A continuation-typed mutable (B7) is int64_t here,
+ * which is what its copy-on-store path already assumes. */
+static const char *byref_cell_ctype(EmitCtx *ctx, const Binding *b) {
+    return binder_ctype_full(ctx, b->type.kind, &b->type);
+}
+
+/* "<T> *" -- the cell POINTER spelling, arena-allocated so it can be printed. */
+static const char *byref_cell_ptr_ctype(EmitCtx *ctx, const Binding *b) {
+    const char *el = byref_cell_ctype(ctx, b);
+    size_t n = strlen(el) + 3;
+    char *s = (char *)arena_alloc(&g_arena, n);
+    snprintf(s, n, "%s *", el);
+    return s;
+}
+
+/* If Expr `e` (ascribe-peeled) is `(set! <mut> _)` -- a store into a mutable --
+ * return the mutable target, else NULL. */
+static const Binding *set_mut_target(const Expr *e) {
     while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
     if (!e || e->kind != EX_SET || !e->as.set_.target || !e->as.set_.target->is_mut)
         return NULL;
-    const Expr *v = e->as.set_.value;
+    return e->as.set_.target;
+}
+
+/* If Expr `e` is `(set! <mut> <cont>)` -- a store of a CONTINUATION value into a
+ * mutable -- return the mutable target, else NULL.  The continuation store takes
+ * the copy-on-store path (dk_copy_range); a plain value store does not. */
+static const Binding *byref_set_target(const Expr *e) {
+    const Binding *tgt = set_mut_target(e);
+    if (!tgt) return NULL;
+    const Expr *se = e;
+    while (se && se->kind == EX_ASCRIBE) se = se->as.ascribe_.inner;
+    const Expr *v = se->as.set_.value;
     while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
     if (v && v->kind == EX_VAR && v->as.var.binding && v->as.var.binding->is_continuation)
-        return e->as.set_.target;
+        return tgt;
     return NULL;
+}
+
+/* The bindings the native while-loop lowering carries as LOOP PARAMETERS: that
+ * lowering owns their representation (it threads each as a parameter of the
+ * emitted loop helper), so they must not also be promoted to a heap cell -- the
+ * two spellings would disagree inside the helper.  Excluding them costs nothing:
+ * a loop-carried mutable READ by a clause is already correct by value, because
+ * the handle is re-installed each iteration, so the capture snapshot IS the
+ * current iteration's value.  (A clause that WRITES a loop-carried mutable stays
+ * unsupported, exactly as before -- a `cc` error, not a silent wrong answer.) */
+static const Binding *g_loop_carried[64];
+static int            g_loop_carried_n;
+
+static bool is_loop_carried(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_loop_carried_n; i++) if (g_loop_carried[i] == b) return true;
+    return false;
+}
+
+/* Collect every CT_LOOP parameter binding in the function term.  Must run over
+ * the WHOLE term before any promotion decision: the loop that carries a mutable
+ * can enclose the handle whose clause reads it. */
+static void loop_carried_scan(const CTerm *t) {
+    if (!t) return;
+    switch (t->kind) {
+        case CT_LOOP:
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (t->as.loop.params[i].bind && g_loop_carried_n < 64
+                    && !is_loop_carried(t->as.loop.params[i].bind))
+                    g_loop_carried[g_loop_carried_n++] = t->as.loop.params[i].bind;
+            loop_carried_scan(t->as.loop.body); return;
+        case CT_LETVAL:  loop_carried_scan(t->as.letval.body);  return;
+        case CT_LETPRIM: loop_carried_scan(t->as.letprim.body); return;
+        case CT_LETCALL: loop_carried_scan(t->as.letcall.body); return;
+        case CT_LETRAW:  loop_carried_scan(t->as.letraw.body);  return;
+        case CT_LETCONT: loop_carried_scan(t->as.letcont.jbody);
+                         loop_carried_scan(t->as.letcont.body); return;
+        case CT_IF:      loop_carried_scan(t->as.if_.then_);
+                         loop_carried_scan(t->as.if_.else_); return;
+        case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                             loop_carried_scan(t->as.match.arms[i].body);
+                         return;
+        case CT_RESET:   loop_carried_scan(t->as.reset.delim);
+                         loop_carried_scan(t->as.reset.body); return;
+        case CT_SHIFT:   loop_carried_scan(t->as.shift.body); return;
+        case CT_HANDLE:
+            loop_carried_scan(t->as.handle.delim);
+            loop_carried_scan(t->as.handle.body);
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                loop_carried_scan(t->as.handle.cases[i].case_body);
+            return;
+        case CT_PERFORM: loop_carried_scan(t->as.perform.body); return;
+        case CT_AWAIT:   loop_carried_scan(t->as.await.body);   return;
+        case CT_RESUME:  loop_carried_scan(t->as.resume.body);  return;
+        case CT_CLONEABLE: loop_carried_scan(t->as.cloneable.body); return;
+        case CT_CALLCC:  loop_carried_scan(t->as.callcc.body);  return;
+        default: return;
+    }
+}
+
+/* B7b (docs/archive/handler-clause-setbang-enclosing-mut-undeclared.md): promote every
+ * ENCLOSING `^mut` a lifted handler CASE body touches -- read OR written.
+ *
+ * A clause is emitted as its own C function, so an enclosing mutable reaches it
+ * only through the capture env, BY VALUE.  That breaks in both directions: a
+ * `set!` writes a name the clause function never declared (a `cc` error naming a
+ * mangled variable), and a READ silently sees the value snapshotted when the
+ * handle was INSTALLED rather than the current one -- a wrong answer with no
+ * diagnostic at all.  Promoting the mutable to the shared cell makes every view
+ * in the function (the enclosing frame, each clause, the handle continuation)
+ * read and write the same storage, which is what the source says.
+ *
+ * `bound` tracks bindings bound WITHIN the case body -- a mutable local to the
+ * clause needs no cell (it is an ordinary local of the clause's own function). */
+static void case_mut_scan(const CTerm *t, uint32_t *bound, int nb) {
+    if (!t || nb >= CC_MAX_BOUND) return;
+    #define MUT_B(b) do { const Binding *_b = (b); \
+        if (_b && _b->is_mut && !_b->is_global && !is_byref_mut(_b) \
+            && !is_loop_carried(_b)) { \
+            bool _f = true; \
+            for (int _i = 0; _i < nb; _i++) if (bound[_i] == _b->id) { _f = false; break; } \
+            if (_f && g_byref_muts_n < 64) g_byref_muts[g_byref_muts_n++] = _b; } } while (0)
+    #define MUT_A(a) do { const CAtom *_a = (a); \
+        if (_a->kind == CA_VAR) MUT_B(_a->var); } while (0)
+    switch (t->kind) {
+        case CT_APPCONT: MUT_A(&t->as.appcont.v); return;
+        case CT_LETVAL:
+            MUT_A(&t->as.letval.v);
+            bound[nb] = t->as.letval.x.id;
+            case_mut_scan(t->as.letval.body, bound, nb + 1); return;
+        case CT_LETPRIM:
+            for (uint32_t i = 0; i < t->as.letprim.n; i++) MUT_A(&t->as.letprim.args[i]);
+            bound[nb] = t->as.letprim.x.id;
+            case_mut_scan(t->as.letprim.body, bound, nb + 1); return;
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++) MUT_A(&t->as.letcall.args[i]);
+            bound[nb] = t->as.letcall.x.id;
+            case_mut_scan(t->as.letcall.body, bound, nb + 1); return;
+        case CT_TAILCALL:
+            for (uint32_t i = 0; i < t->as.tailcall.n; i++) MUT_A(&t->as.tailcall.args[i]);
+            return;
+        case CT_CONTINUE:
+            for (uint32_t i = 0; i < t->as.cont_.n; i++) MUT_A(&t->as.cont_.args[i]);
+            return;
+        case CT_LOOP: {
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++) MUT_A(&t->as.loop.inits[i]);
+            int nnb = nb;
+            for (uint32_t i = 0; i < t->as.loop.n_params && nnb < CC_MAX_BOUND; i++)
+                if (t->as.loop.params[i].bind) bound[nnb++] = t->as.loop.params[i].bind->id;
+            case_mut_scan(t->as.loop.body, bound, nnb); return;
+        }
+        case CT_IF:
+            MUT_A(&t->as.if_.cond);
+            case_mut_scan(t->as.if_.then_, bound, nb);
+            case_mut_scan(t->as.if_.else_, bound, nb); return;
+        case CT_MATCH:
+            MUT_A(&t->as.match.scrut);
+            for (uint32_t ai = 0; ai < t->as.match.n_arms; ai++) {
+                const CMatchArm *arm = &t->as.match.arms[ai];
+                int nnb = nb;
+                for (uint32_t bi = 0; bi < arm->n_fields && nnb < CC_MAX_BOUND; bi++)
+                    if (arm->fields[bi]) bound[nnb++] = arm->fields[bi]->id;
+                case_mut_scan(arm->body, bound, nnb);
+            }
+            return;
+        case CT_LETCONT:
+            bound[nb] = t->as.letcont.param.id;
+            case_mut_scan(t->as.letcont.jbody, bound, nb + 1);
+            case_mut_scan(t->as.letcont.body, bound, nb + 1); return;
+        case CT_RESUME:
+            MUT_A(&t->as.resume.k); MUT_A(&t->as.resume.v);
+            bound[nb] = t->as.resume.x.id;
+            case_mut_scan(t->as.resume.body, bound, nb + 1); return;
+        case CT_PERFORM:
+            for (uint32_t i = 0; i < t->as.perform.n; i++) MUT_A(&t->as.perform.args[i]);
+            bound[nb] = t->as.perform.x.id;
+            case_mut_scan(t->as.perform.body, bound, nb + 1); return;
+        case CT_LETRAW: {
+            /* A delegated Expr: its READS are its free vars; its `set!` TARGET is
+             * a write, which collect_free_vars does not surface (it is not a
+             * read), so take it separately -- that target is the reported bug. */
+            uint32_t n_fv = 0;
+            Binding **fv = collect_free_vars(t->as.letraw.e, NULL, 0, NULL, 0, &n_fv);
+            for (uint32_t i = 0; i < n_fv; i++) MUT_B(fv[i]);
+            free(fv);
+            MUT_B(set_mut_target(t->as.letraw.e));
+            bound[nb] = t->as.letraw.x.id;
+            case_mut_scan(t->as.letraw.body, bound, nb + 1); return;
+        }
+        case CT_AWAIT:
+            MUT_A(&t->as.await.fut);
+            bound[nb] = t->as.await.x.id;
+            case_mut_scan(t->as.await.body, bound, nb + 1); return;
+        case CT_CALLCC:
+            bound[nb] = t->as.callcc.x.id;
+            case_mut_scan(t->as.callcc.body, bound, nb + 1); return;
+        default: return;   /* nothing else appears in a handle_case_ok body */
+    }
+    #undef MUT_A
+    #undef MUT_B
 }
 
 /* Populate g_byref_muts by scanning the whole function term for a delegated
@@ -4889,11 +5092,24 @@ static void byref_scan(const CTerm *t) {
                          return;
         case CT_RESET:   byref_scan(t->as.reset.delim); byref_scan(t->as.reset.body); return;
         case CT_SHIFT:   byref_scan(t->as.shift.body); return;
-        case CT_HANDLE:
+        case CT_HANDLE: {
             byref_scan(t->as.handle.delim); byref_scan(t->as.handle.body);
-            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
-                byref_scan(t->as.handle.cases[i].case_body);
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++) {
+                /* B7b: every enclosing `^mut` this CLAUSE touches becomes a
+                 * shared cell -- the clause is its own C function and cannot see
+                 * the enclosing frame's locals.  The clause's own params and `k`
+                 * are bound by the DKHandler signature, so seed them as bound. */
+                uint32_t cb[CC_MAX_BOUND];
+                int cnb = 0;
+                const CHandleCase *c = &t->as.handle.cases[i];
+                for (uint32_t p = 0; p < c->n_params && cnb < CC_MAX_BOUND; p++)
+                    if (c->params[p]) cb[cnb++] = c->params[p]->id;
+                if (c->k && cnb < CC_MAX_BOUND) cb[cnb++] = c->k->id;
+                case_mut_scan(c->case_body, cb, cnb);
+                byref_scan(c->case_body);
+            }
             return;
+        }
         case CT_PERFORM: byref_scan(t->as.perform.body); return;
         case CT_AWAIT:   byref_scan(t->as.await.body); return;
         case CT_RESUME:  byref_scan(t->as.resume.body); return;
@@ -4972,14 +5188,9 @@ static char *atom_str(CE *ce, const CAtom *a) {
         case CA_FLOAT: return a->ty == TY_FLOAT32 ? atom_float32(a->f) : atom_float(a->f);
         case CA_VAR:
             /* B7: a by-reference mutable's C name binds the cell POINTER; a read
-             * of its value derefs it. */
-            if (is_byref_mut(a->var)) {
-                char *nm = atom_var(ce->ctx, a->var);
-                char *r = malloc(strlen(nm) + 5);
-                sprintf(r, "(*%s)", nm);
-                free(nm);
-                return r;
-            }
+             * of its value derefs.  That happens inside atom_var -- the shared
+             * value-position chokepoint -- so it applies to a delegated read in
+             * the direct emitter too, not only to a CPS-IR atom. */
             return atom_var(ce->ctx, a->var);
         case CA_CVAR: return strdup(a->cvar_name ? a->cvar_name : "0");
         default:      return strdup("0");
@@ -5429,7 +5640,10 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * The cell is leaked with the DK nodes (reaped at the outermost
                  * entry boundary) -- a stored continuation may still be resumed
                  * after this fn's dynamic extent, so it cannot be freed here. */
-                ce_line(ce, "%s = (int64_t *)malloc(sizeof(int64_t)); *%s = %s;", bn, bn, v);
+                const Binding *cb = t->as.letval.x.bind;
+                ce_line(ce, "%s = (%s)malloc(sizeof(%s)); *%s = %s;",
+                        bn, byref_cell_ptr_ctype(ce->ctx, cb),
+                        byref_cell_ctype(ce->ctx, cb), bn, v);
                 ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
             } else {
                 ce_line(ce, "%s = %s;", bn, v);
@@ -5893,6 +6107,11 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * is deep-copied (dk_copy_range) into an independent chain that outlives the
      * handler and can be resumed later.  Bypasses the direct-emitter delegation
      * (which would write the cell POINTER name without a deref). */
+    /* A PLAIN `set!` into a by-reference mutable needs no special case here: the
+     * direct emitter's store chokepoint (emit_set_stmt) derefs the cell, which
+     * also covers a `set!` nested inside a delegated composite that never
+     * reaches this lowering.  Only the CONTINUATION store is special, for its
+     * value side. */
     const Binding *bref = g_opt_cps_tramp_resume ? byref_set_target(t->as.letraw.e) : NULL;
     if (bref && is_byref_mut(bref)) {
         const Expr *se = t->as.letraw.e;
@@ -5977,9 +6196,9 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_APPCONT: break;
         case CT_LETVAL: {
             char *bn = cvar_cname(ce, t->as.letval.x);
-            /* B7: a by-reference mutable's binder is the cell POINTER. */
+            /* B7: a by-reference mutable's binder is the (typed) cell POINTER. */
             if (is_byref_mut(t->as.letval.x.bind))
-                ce_line(ce, "int64_t *%s;", bn);
+                ce_line(ce, "%s%s;", byref_cell_ptr_ctype(ce->ctx, t->as.letval.x.bind), bn);
             else
                 ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
             free(bn);
@@ -8305,7 +8524,13 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* B7: pre-scan this function's term for escaping-continuation mutables, which
      * emit as by-reference heap cells (see g_byref_muts). */
     g_byref_muts_n = 0;
-    if (g_opt_cps_tramp_resume) byref_scan(se->term);
+    g_loop_carried_n = 0;
+    if (g_opt_cps_tramp_resume) {
+        /* Loop-carried params first: the promotion scan must know them before it
+         * decides, since a loop can enclose the handle whose clause reads one. */
+        loop_carried_scan(se->term);
+        byref_scan(se->term);
+    }
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
     buf_putc(&body_buf, '\0');
