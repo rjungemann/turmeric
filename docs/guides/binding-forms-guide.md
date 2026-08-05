@@ -146,6 +146,10 @@ synchronisation -- and its initializer may not reference another
 `^thread-local`, because per-thread initialization order would otherwise become
 observable.
 
+The concurrency story for globals -- what `^atomic` and `^thread-local` cover,
+and what they deliberately do not -- is in
+[mutable-globals-guide.md](mutable-globals-guide.md).
+
 For *scoped* ambient state -- a value a call tree should see but callers should
 be able to rebind -- prefer a dynamic variable (`defdynamic` / `binding`, see
 `stdlib/dynvar.tur`) over a mutable global. It is the same per-thread machinery

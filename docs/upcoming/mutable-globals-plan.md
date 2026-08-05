@@ -1,8 +1,8 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
 > **Status:** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see §10, §15,
-> §16, §17). **G4b LANDED** (§18), so G4 is complete. G5a (docs) and G5b
-> (graduation) remain.
+> §16, §17). **G4b LANDED** (§18) and **G5a LANDED** (§19). Only G5b
+> (graduation) remains -- a judgement wanting adoption evidence, not work.
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
@@ -398,7 +398,7 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
   initializer may not reference another `^thread-local` (§13.7); and the guide
   states plainly that `^thread-local` is a plain global under turi (§13.4), with
   a fixture asserting it parses and runs there.
-- **G5a -- docs.** The guide section §4.4 promises, a `binding-forms-guide.md`
+- **G5a -- docs. LANDED 2026-08-05; see §19.** The guide section §4.4 promises, a `binding-forms-guide.md`
   cross-reference, the dynvar-vs-global steer from §1.2, and the plain statement
   that everything past `^atomic`/`^thread-local` is the programmer's problem
   (§0.1). Independently useful and independently landable: it documents what has
@@ -407,8 +407,26 @@ know that. G1 adds the comment and the fixture; it changes no behaviour.
   bump `expires_at`. Distinct from G5a because it is a *judgement* that wants
   adoption evidence, not a writing task -- G3 in particular can reject code that
   compiles today, and that is the part worth soaking before it goes always-on.
-  Blocked on G5a (a feature should not graduate undocumented) and on whatever
-  G4b decides.
+  Blocked on G5a (a feature should not graduate undocumented).
+
+  **If it graduates, the docs are part of the graduation, not a follow-up.**
+  Every "behind `--enable=global-state`" is a statement that stops being true
+  the moment the row is retired, and a guide that still says it sends readers
+  to set a flag that no longer exists. Sweep and delete the gating language in
+  the same change that graduates the row:
+
+  | Where | What to remove |
+  |---|---|
+  | `docs/guides/mutable-globals-guide.md` | the status banner, and every per-feature "behind `--enable=global-state`" |
+  | `docs/guides/binding-forms-guide.md` | the `^atomic` / `^thread-local` gate mentions in the annotations section |
+  | `docs/guides/stateful-refinements-guide.md` | the gate mention in "A frame says nothing about globals" |
+  | `CHANGELOG.md` | nothing -- historical entries stay accurate as written |
+  | `src/runtime/experiments.c` | the row itself, moved to `GRADUATED[]` |
+
+  `grep -rn 'enable=global-state' docs/ src/` is the check; it should come back
+  empty except for `GRADUATED[]` and the plan's own history sections. The same
+  sweep applies in reverse if the row is **shelved** -- the guides would then
+  need the feature marked as withdrawn rather than merely ungated.
 
 G1 is worth doing even if nothing after it is. G2-G5 are each worth doing
 alone, in that order of confidence.
@@ -1546,3 +1564,57 @@ shares while the program believes each has its own.
 `^thread-local` is accepted and degenerate under `--interpret`, as §13.4
 specified. Recorded in the guide (G5a's first item, landed early here since it
 is one paragraph and belongs beside the annotation it describes).
+
+---
+
+## 19. G5a execution record -- docs (2026-08-05)
+
+**Landed.** Docs only; no code, no fixtures, both suites unaffected.
+
+### 19.1 A new guide rather than more sections in old ones
+
+`docs/guides/mutable-globals-guide.md`. The material had accumulated in three
+places -- the annotation table in `binding-forms-guide.md`, the frame rule in
+`stateful-refinements-guide.md`, and nothing at all for the module rule -- and a
+reader asking "what happens if I write a global" had no single page to land on.
+Indexed in `docs/guides/README.md` under Language Basics, and cross-linked from
+`binding-forms-guide.md`, `threading-guide.md`, and `dynamic-vars-guide.md`.
+
+It covers, in order: the form; **what to reach for instead** (a table whose
+first row is the dynvar steer §1.2 asked for); what the compiler checks -- that
+`#fx{}` sees nothing, that a `#writes` frame may name a global, that an exported
+global is read-only outside its module; and the concurrency story.
+
+### 19.2 §0.1's promise, kept explicitly
+
+§4.4 said "anything beyond them ... is out of scope and the guide says so
+plainly rather than implying coverage". The guide has a **What is not covered**
+section that says, in those words: nothing here makes a program data-race free;
+no compound atomic updates; no lock ordering, deadlock detection, or race
+detection; no happens-before reasoning in the type system. It closes with "the
+compiler will not check that discipline for you."
+
+That section exists because `^atomic` and `^thread-local` read as more than they
+are. The `(set! c (+ c 1))` caveat in particular now appears in four places --
+changelog, this plan, the fixture header, and twice in the guide -- which is
+proportionate to how easy it is to assume the opposite.
+
+### 19.3 Verified rather than asserted
+
+Every internal link resolves, and the two runnable examples (the module with
+`(export hits)` and the same with `(export (mut hits))`) were built and run as
+written before being pasted in. The two-gate interaction the guide describes --
+`global-state` lets a frame *name* a global, `write-frames` is what *checks* it
+-- was confirmed by running both combinations rather than inferred from the
+code.
+
+Also corrected on the way: `README.md` still described `binding-forms-guide.md`
+as covering "Internal `define`", which stopped being true when `def` and
+`define` merged (D1-D3).
+
+### 19.4 What G5b inherits
+
+Only the judgement. The docs are written, so "a feature should not graduate
+undocumented" is discharged -- and §5's G5b entry now carries the sweep table
+for deleting the gating language if and when the row is retired, because every
+"behind `--enable=global-state`" stops being true at that moment.
