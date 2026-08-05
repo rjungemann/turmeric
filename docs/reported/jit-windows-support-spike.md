@@ -1,5 +1,86 @@
 # Research spike: does the MIR JIT work on Windows?
 
+> **SPIKE RUN 2026-08-05.** Verdict: **a Windows JIT is real but the road is
+> not the one this report assumed.** Building everything was nearly trivial;
+> the wall is c2mir versus the MinGW system headers, and the recommended route
+> around it is the S2 split-runtime path, not header compatibility. Findings
+> below; the original questions follow, annotated.
+>
+> ## What was done
+>
+> `-DTUR_JIT=ON` Release build under MSYS2/UCRT64 (gcc 16.1), then
+> `tur --enable=jit jit hello.tur` on the result.
+>
+> - **MIR + c2mir compile unmodified under MinGW.** Nothing in `_deps/mir-src`
+>   failed.
+> - **`src/jit_engine.c` needed three small fixes** (landed with this update):
+>   `<dlfcn.h>` -> the tree's `platform_dl.h` (third site for that remedy);
+>   `getrusage` -> `GetProcessMemoryInfo` under `_WIN32`; and `RTLD_DEFAULT`,
+>   which `platform_dl.h` did not define -- now implemented there as a
+>   process-wide search (main module, then `EnumProcessModules` walk, the
+>   dlfcn-win32 approach). Note `ENABLE_EXPORTS` on the `tur` target already
+>   maps to `-Wl,--export-all-symbols` on MinGW, so the exported-symbols
+>   prerequisite for `dlsym(RTLD_DEFAULT)` was already in place.
+> - **c2mir had no Windows system-header path at all** (its baked-in list
+>   covers /usr/include and the macOS SDK only). Fixed at the call site, not
+>   in MIR: caller include_dirs join c2mir's *system* search, so
+>   `jit_sdk_include_dirs` now appends the toolchain include dir found by
+>   walking PATH for `cc.exe` (`<bindir>/../include`), with
+>   `TUR_JIT_SYS_INCLUDE` as an explicit override.
+> - **The engine then runs, engages, parses -- and the fallback machinery
+>   works exactly as designed**: on the header wall below it prints TUR-W0070
+>   and the cc path produces the right output.
+>
+> ## The wall: c2mir cannot digest the MinGW headers
+>
+> With the include path fixed, compilation dies *inside* the UCRT/MinGW
+> headers, three distinct ways, in the first few hundred lines:
+>
+> 1. `vadefs.h:35: #error VARARGS not implemented for this compiler` -- the
+>    MinGW headers hard-require GCC or MSVC va_list intrinsics. On Linux/macOS
+>    c2mir supplies its own `<stdarg.h>`; on Windows `corecrt.h` pulls
+>    `vadefs.h` directly, so there is no own-header route around it.
+> 2. `wrong #pragma pack: expected ')'` on `pack(push, _CRT_PACKING)` -- our
+>    fork's `#pragma pack` support does not macro-expand the pack argument.
+>    A NEW concrete c2mir fork bug, worth fixing regardless of this spike.
+> 3. Fatal: `winnt.h:1703: error in opening file x86intrin.h` -- a
+>    GCC-internal header, wall-to-wall `__builtin_ia32_*`. Supplying GCC's
+>    private include dir would only move the failure inside it. This is not
+>    fixable by include paths, and it is reached from `<winsock2.h>` ->
+>    `<windows.h>` -> `<winnt.h>` on every program, because the emitted C
+>    includes winsock/windows.h under `#ifdef _WIN32` in the preamble.
+>
+> This is the macOS-SDK class of problem
+> (docs/archive/history/jit-macos-apple-sdk-headers-force-cc-fallback.md), for
+> a second SDK, and deeper -- the macOS fixes were parse tolerance, where
+> vadefs/x86intrin need compiler *intrinsics*.
+>
+> ## Recommended route: make the emitted JIT TU windows-header-free
+>
+> The right move is to stop feeding c2mir the Windows SDK, not to teach it the
+> SDK. The tree already has the architecture for this: the S2 split-runtime
+> path replaces the fixed preamble with committed decls, and the runtime lives
+> in the HOST (tur.exe / libturi), where it is compiled by a real GCC and
+> resolved via `dlsym(RTLD_DEFAULT)` -- which now works on Windows. What
+> blocks it today:
+>
+> - The split hash-guard disengages on any divergence, and the known
+>   [jit-s2-split-disengages-on-hoisted-inline-c-include.md](jit-s2-split-disengages-on-hoisted-inline-c-include.md)
+>   plus the `_WIN32` winsock/ucontext emission mean it effectively never
+>   engages on Windows.
+> - The split TU must also drop the `#ifdef _WIN32` ucontext-shim `__asm__`
+>   block and winsock includes (host provides both) -- which incidentally
+>   retires original question 3 rather than answering it.
+>
+> ## Still unanswered
+>
+> No JIT-generated code has executed on Windows yet, so the MS x64 ABI
+> question (1) and executable memory (4) remain open. They are the next
+> things the split-runtime route would hit.
+
+---
+
+
 **Summary:** The JIT is validated on x86-64 Linux and arm64 macOS only. Windows
 has never been tried, and it is the platform that would benefit most -- a
 working JIT removes the hard requirement that every Windows *user* have MSYS2 +

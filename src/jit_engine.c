@@ -90,6 +90,15 @@ static void jit_timing_mark (const char *phase) {
 
 static void jit_timing_rss (void) {
   if (!g_jit_timing) return;
+#ifdef _WIN32
+  /* No getrusage on MinGW.  PeakWorkingSetSize is the same quantity
+   * ru_maxrss reports (peak resident set); psapi comes in via platform_dl.h,
+   * which this file already includes for dlsym. */
+  PROCESS_MEMORY_COUNTERS pmc;
+  double kb = 0.0;
+  if (GetProcessMemoryInfo (GetCurrentProcess (), &pmc, sizeof (pmc)))
+    kb = (double) pmc.PeakWorkingSetSize / 1024.0;
+#else
   struct rusage ru;
   getrusage (RUSAGE_SELF, &ru);
   /* Linux reports KB, macOS bytes; normalize to KB. */
@@ -97,6 +106,7 @@ static void jit_timing_rss (void) {
   double kb = (double) ru.ru_maxrss / 1024.0;
 #else
   double kb = (double) ru.ru_maxrss;
+#endif
 #endif
   fprintf (stderr, "TUR_JIT_TIMING\t%s\tmaxrss_kb\t%.0f\n",
            g_jit_interp_mode ? "interp" : "gen", kb);

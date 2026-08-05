@@ -3369,13 +3369,53 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     return true;
 }
 
+#ifdef _WIN32
+/* c2mir carries baked-in system-header paths for Linux and macOS
+ * (/usr/include and friends) and nothing for Windows, so on MinGW every
+ * `#include <winsock2.h>` in the emitted C fails with "error in opening
+ * file" before parsing even starts.  Caller-supplied include_dirs are added
+ * to c2mir's SYSTEM header search too, so the fix belongs here, not in MIR:
+ * hand it the UCRT include dir of the same toolchain the cc fallback would
+ * use, found by walking PATH for cc.exe and taking <bindir>/../include.
+ * TUR_JIT_SYS_INCLUDE overrides the probe outright.  Returns false when
+ * neither yields a directory -- the engine then fails to open the header and
+ * falls back to cc, exactly as before this function existed. */
+static bool jit_win_sys_include_dir(char *out, size_t cap) {
+    const char *env = getenv("TUR_JIT_SYS_INCLUDE");
+    struct stat st;
+    if (env && *env) {
+        snprintf(out, cap, "%s", env);
+        return stat(out, &st) == 0;
+    }
+    const char *path = getenv("PATH");
+    if (!path) return false;
+    while (*path) {
+        const char *sep = strchr(path, ';');
+        size_t len = sep ? (size_t)(sep - path) : strlen(path);
+        if (len > 0 && len < 3800) {
+            char probe[4096];
+            snprintf(probe, sizeof(probe), "%.*s/cc.exe", (int)len, path);
+            if (stat(probe, &st) == 0) {
+                snprintf(out, cap, "%.*s/../include", (int)len, path);
+                return stat(out, &st) == 0;
+            }
+        }
+        if (!sep) break;
+        path = sep + 1;
+    }
+    return false;
+}
+#endif
+
 /* The engine's `#include "hamt.h"` (et al.) include path: the Turmeric tree
  * (dev checkout, walking up from the executable) or the installed SDK.
- * Fills inc0/inc1 (caller-owned, >= 4096 each) and incs[0..1]; returns the
- * count (0 when no root was found). */
+ * On Windows also the toolchain's system include dir (see
+ * jit_win_sys_include_dir).  Fills inc0/inc1/inc2 (caller-owned, >= 4096
+ * each) and incs[0..2]; returns the count (0 when nothing was found). */
 static int jit_sdk_include_dirs(char *inc0, size_t cap0,
                                 char *inc1, size_t cap1,
-                                const char *incs[2]) {
+                                char *inc2, size_t cap2,
+                                const char *incs[3]) {
     int n = 0;
     char root[4096] = "";
     const char *env = getenv("TUR_SDK_ROOT");
@@ -3413,6 +3453,13 @@ static int jit_sdk_include_dirs(char *inc0, size_t cap0,
         incs[n++] = inc0;
         incs[n++] = inc1;
     }
+#ifdef _WIN32
+    if (jit_win_sys_include_dir(inc2, cap2)) {
+        incs[n++] = inc2;
+    }
+#else
+    (void)inc2; (void)cap2;
+#endif
     return n;
 }
 #endif /* TUR_HAVE_JIT */
@@ -3548,10 +3595,11 @@ static int cmd_jit(int argc, char **argv) {
     prog_argv[prog_argc] = NULL;
 
     /* Include path for `#include "hamt.h"` et al. */
-    static char jit_inc0[4096], jit_inc1[4096];
-    const char *jit_incs[2];
+    static char jit_inc0[4096], jit_inc1[4096], jit_inc2[4096];
+    const char *jit_incs[3];
     int n_jit_incs = jit_sdk_include_dirs(jit_inc0, sizeof(jit_inc0),
                                           jit_inc1, sizeof(jit_inc1),
+                                          jit_inc2, sizeof(jit_inc2),
                                           jit_incs);
 
     int prog_rc = 0;
@@ -3825,10 +3873,11 @@ static int repl_jit_build(const char *build_dir, void **out_image,
     buf_init(&split_src);
     bool split_used = jit_try_split_preamble(&csrc, &split_src);
 
-    static char jinc0[4096], jinc1[4096];
-    const char *jincs[2];
+    static char jinc0[4096], jinc1[4096], jinc2[4096];
+    const char *jincs[3];
     int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
-                                       jinc1, sizeof(jinc1), jincs);
+                                       jinc1, sizeof(jinc1),
+                                       jinc2, sizeof(jinc2), jincs);
 
     TurJitImage *img = NULL;
     const Buf *use = split_used ? &split_src : &csrc;

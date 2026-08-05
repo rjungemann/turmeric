@@ -31,6 +31,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <psapi.h>    /* EnumProcessModules -- for the RTLD_DEFAULT walk */
 
 #include <stdio.h>
 
@@ -41,6 +42,21 @@
 #define RTLD_LAZY   0x0001
 #define RTLD_LOCAL  0x0000
 #define RTLD_GLOBAL 0x0100
+
+/* dlsym(RTLD_DEFAULT, ...) means "search every image in the process, in load
+ * order".  No single Win32 handle has that meaning, so use a sentinel that
+ * cannot collide with a real HMODULE (an HMODULE is a mapped base address)
+ * and give it its own path in tur_dlsym: the main executable first -- the
+ * overwhelmingly common hit, since the JIT resolves runtime symbols linked
+ * into tur.exe -- then every other loaded module, which is how dlfcn-win32
+ * implements the same semantics.
+ *
+ * Caveat with no ELF counterpart: GetProcAddress sees only EXPORTED symbols,
+ * and an executable exports nothing by default.  A caller relying on
+ * RTLD_DEFAULT to find symbols in the main program must be linked with
+ * -Wl,--export-all-symbols, or every lookup lands in the fallback walk and
+ * misses.  (The JIT target does exactly that -- see src/CMakeLists.txt.) */
+#define RTLD_DEFAULT ((void *)(intptr_t)-1)
 
 /* Thread-local so two threads loading spices cannot scribble on each other's
  * pending error, matching dlerror()'s per-thread semantics. */
@@ -74,7 +90,28 @@ static inline void *tur_dlopen(const char *path, int flags) {
 }
 
 static inline void *tur_dlsym(void *handle, const char *symbol) {
-    FARPROC p = GetProcAddress((HMODULE)handle, symbol);
+    FARPROC p = NULL;
+    if (handle == RTLD_DEFAULT) {
+        /* Process-wide search.  Main executable first, then every loaded
+         * module.  EnumProcessModules over a fixed buffer: a truncated list
+         * (more than 1024 modules) degrades to searching the first 1024,
+         * which is already far beyond anything this process loads. */
+        p = GetProcAddress(GetModuleHandleA(NULL), symbol);
+        if (p == NULL) {
+            HMODULE mods[1024];
+            DWORD   needed = 0;
+            if (EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods),
+                                   &needed)) {
+                DWORD n = needed / sizeof(HMODULE);
+                if (n > 1024) n = 1024;
+                for (DWORD i = 0; i < n && p == NULL; i++) {
+                    p = GetProcAddress(mods[i], symbol);
+                }
+            }
+        }
+    } else {
+        p = GetProcAddress((HMODULE)handle, symbol);
+    }
     if (p == NULL) {
         tur_dl_set_error("GetProcAddress", symbol);
         return NULL;

@@ -110,11 +110,17 @@ None of these is small; pick deliberately.
    project. Two of the three are already-solved problems applied to one more
    site; the third is a one-symbol addition to `platform_dl.h`.
 
-   **What the spike did NOT establish:** that it *runs*. Building is not
-   executing -- the MS x64 ABI question, executable-memory allocation, and the
-   emitted `__asm__` block (question 3 of the Windows spike, which hits every
-   JIT compile on Windows) are all untested, because the build never completed.
-   Do not read "MIR compiles" as "the JIT works".
+   **Update, later the same session:** the build now completes and the engine
+   *runs* -- it engages c2mir, and on failure falls back to the cc path
+   cleanly. The new wall is that c2mir cannot digest the MinGW system headers
+   (`vadefs.h` `#error`, `x86intrin.h`, `#pragma pack(push, MACRO)`), which
+   the emitted C drags in via `#include <winsock2.h>` under `_WIN32`. The
+   recommended route is the S2 split-runtime path with a windows-header-free
+   TU -- see the findings block at the top of
+   [jit-windows-support-spike.md](jit-windows-support-spike.md). Still true:
+   no JIT-generated code has executed on Windows, so the MS x64 ABI and
+   executable-memory questions remain open, and "MIR compiles" is still not
+   "the JIT works".
 
 ## Note on `#mode`
 
