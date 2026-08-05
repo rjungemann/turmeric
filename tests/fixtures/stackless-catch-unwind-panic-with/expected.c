@@ -84,6 +84,7 @@ __asm__(
 ".def __tur_uctx_tramp; .scl 2; .type 32; .endef\n"
 "__tur_uctx_tramp:\n"
 "  mov %r12, %rcx\n sub $32, %rsp\n call __tur_uctx_run\n call abort\n ud2\n"
+".text\n"
 );
 static __attribute__((used)) void __tur_uctx_run(struct tur_ucontext *u) {
     if (u->entry) {

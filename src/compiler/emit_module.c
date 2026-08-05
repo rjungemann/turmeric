@@ -6090,6 +6090,13 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "\".def __tur_uctx_tramp; .scl 2; .type 32; .endef\\n\"\n");
     buf_puts(out, "\"__tur_uctx_tramp:\\n\"\n");
     buf_puts(out, "\"  mov %r12, %rcx\\n sub $32, %rsp\\n call __tur_uctx_run\\n call abort\\n ud2\\n\"\n");
+    /* Switch back to .text before handing control back to the compiler.  A
+     * file-scope asm block leaves the assembler wherever its last .section
+     * directive put it, and GCC does not re-assert .text for everything it
+     * emits afterwards -- so without this, later output lands in a
+     * `.linkonce discard` section and the linker throws it away.  That is not
+     * a hypothetical: it made every generated program segfault in main(). */
+    buf_puts(out, "\".text\\n\"\n");
     buf_puts(out, ");\n");
     /* Entry helper the trampoline calls.  `static` for the same per-TU reason as
      * the asm symbols above -- the local symbol still satisfies the assembler's
