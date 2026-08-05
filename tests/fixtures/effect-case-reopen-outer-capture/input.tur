@@ -1,14 +1,15 @@
-;; A handler case RE-OPENS an outer effect whose handler multishot-resumes.
-;; The re-opened effect's continuation spans the rest of the case, the inner
-;; handle's delivery, and every frame out to the outer handler -- so the
-;; per-resume values must include the frames BETWEEN the two handles.
-;; The interpreter's work-stack driver gets all of these right; the compiled
-;; path truncates the capture at the case's marker-copy __kont (prints 1025 /
-;; 9017, and loses the output entirely on the tail-resume variant).  This
-;; fixture pins the correct answers on the interpreter until the compiled
-;; path's case-call protocol is fixed; then fold these into a both-paths
-;; fixture next to effect-multishot-nontail-resume-inner-handle.  See
-;; docs/reported/cps-case-reopen-marker-kont-truncates-capture.md.
+;; A handler case RE-OPENS an outer effect (performs an effect its own handle
+;; does not handle).  The re-opened effect's continuation spans the rest of the
+;; case, the inner handle's delivery, and every frame out to the outer handler
+;; -- so a multishot outer resume must re-run the frames BETWEEN the two
+;; handles per resume, and a tail-resuming outer handler must not lose the
+;; pending delivery.  The compiled path used to truncate the capture at a
+;; marker-copy __kont (printing 1025/9017) and, on the tail-resume variant,
+;; lose the output entirely (silent exit 14) -- fixed by giving the case the
+;; real, borrowed enclosing chain (dk_case_enclosing_real) and moving the
+;; post-case delivery in-chain (the case_delivers protocol).  See
+;; docs/archive/cps-case-reopen-marker-kont-truncates-capture.md.
+;; Both paths must agree with hand evaluation on every line.
 (defeffect In [] : int)
 (defeffect Out [] : int)
 

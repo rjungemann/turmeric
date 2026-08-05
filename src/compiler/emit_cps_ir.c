@@ -2018,7 +2018,7 @@ static bool handle_case_ok_rec(const CTerm *t) {
              * needs-emission.md): a handler CASE body that itself performs an
              * effect handled by an ENCLOSING handler.  The interior perform
              * dispatches against the case's enclosing handler markers -- emit_lifted
-             * declares `__kont = dk_case_enclosing(...)` for a re-opening case and
+             * declares `__kont = dk_case_enclosing_real(...)` for a re-opening case and
              * emit_perform threads it as cur_k (both its straight-line LH_PERFORM_CONT
              * and Track A LH_RESUME_CONT paths).  Args must be slot atoms; the
              * continuation stays in the CASE context (it may resume the case's own
@@ -6148,6 +6148,16 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                         const CTerm *body, const CHandleCase *hcase,
                         const CapSet *caps) {
     bool has_caps = (caps && caps->n > 0);
+    /* A RE-OPENING case (its body performs an effect its own handle does not
+     * handle) runs with the REAL enclosing chain as `__kont`
+     * (dk_case_enclosing_real) and delivers its value through it on every exit
+     * -- the case_delivers protocol (emit_handle wraps its handler node in
+     * dk_case_delivers; dk_perform then returns the case's result without a
+     * second H->next delivery).  So its KK_PROMPT exits must emit
+     * dk_run(__kont, v), i.e. shift_mode OFF, unlike a plain case whose value
+     * returns to dk_perform for delivery.  See
+     * docs/archive/cps-case-reopen-marker-kont-truncates-capture.md. */
+    bool reopens = (mode == LH_HANDLER_CASE) && case_reopens(body);
     /* Emit the body into a temporary buffer first, so any nested reset/shift/
      * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
     Buf tmp; buf_init(&tmp);
@@ -6158,14 +6168,17 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.cur_k = "__kont";
     /* A perform continuation returns its value however it is delivered (KK_RET
      * or KK_PROMPT), so it sets both return modes. */
-    hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
+    hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_PERFORM_CONT
+                     || (mode == LH_HANDLER_CASE && !reopens));
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
     hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
     hc.case_tail_resume  = (mode == LH_HANDLER_CASE) ? ce->case_tail_resume : false;
     /* A RESUME_FRAME's `__kont` is the driver-owned downstream chain, freed after
      * the frame yields; a reset/handle continuation captured inside it must COPY
-     * `__kont`, not alias it (see emit_cont_env / CE.borrowed_kont). */
-    hc.borrowed_kont     = (mode == LH_RESUME_CONT);
+     * `__kont`, not alias it (see emit_cont_env / CE.borrowed_kont).  A
+     * re-opening case's `__kont` is the borrowed real enclosing chain -- same
+     * discipline. */
+    hc.borrowed_kont     = (mode == LH_RESUME_CONT) || reopens;
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding).  A reset/handle
@@ -6315,16 +6328,18 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         }
     }
     /* Effect re-opening: a case body that performs an outer-handled effect needs
-     * the ENCLOSING handler markers as `__kont`.  dk_perform set
+     * its REAL enclosing chain as `__kont`.  dk_perform set
      * g_dk_case_reopen_hnode to this case's handler node just before calling us;
      * read it (into a local, at entry, before any interior perform can overwrite
-     * the global) and derive the transparent enclosing chain.  emit_perform threads
-     * `__kont` as cur_k so the interior effect reaches the enclosing handler while
-     * this case's own value returns to the H->next boundary.  __dk_reap_keep frees
-     * the fresh copy at the outermost entry boundary. */
-    if (mode == LH_HANDLER_CASE && case_reopens(body)) {
+     * the global).  The chain is BORROWED (dk_case_enclosing_real -- no copy, no
+     * reap): the interior effect dispatches into the real enclosing handlers, its
+     * capture crosses into the real intermediate frames, and this case's exits
+     * deliver through the same chain (shift_mode off above), so the rest of the
+     * program is chain-reachable -- not a marker dead-end plus a C-stack frame
+     * that a tail-resume longjmp could discard. */
+    if (reopens) {
         indent_buf(&tmp, 4);
-        buf_puts(&tmp, "DK *__kont = __dk_reap_keep(dk_case_enclosing(g_dk_case_reopen_hnode));\n");
+        buf_puts(&tmp, "DK *__kont = dk_case_enclosing_real(g_dk_case_reopen_hnode);\n");
     }
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);
@@ -7595,9 +7610,19 @@ static void emit_handle(CE *ce, const CTerm *t) {
         if (g_opt_cps_tramp_resume && !t->as.handle.shallow
             && case_body_tail_resumes(t->as.handle.cases[ci].case_body))
             ctor = "dk_handler_tail";
+        /* A RE-OPENING case delivers its own value through the real enclosing
+         * chain (emit_lifted gave it dk_case_enclosing_real as `__kont` and
+         * turned shift_mode off), so mark its handler node: dk_perform returns
+         * the case's result verbatim instead of delivering H->next a second
+         * time.  Mutually exclusive with dk_handler_tail by construction --
+         * case_body_tail_resumes rejects any body containing an interior
+         * CT_PERFORM, which is exactly what makes case_reopens true. */
+        bool creopen = case_reopens(t->as.handle.cases[ci].case_body);
         Buf nxt; buf_init(&nxt);
+        if (creopen) buf_puts(&nxt, "dk_case_delivers(");
         buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", ctor, tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
+        if (creopen) buf_putc(&nxt, ')');
         buf_free(&chain);
         chain = nxt;
     }
@@ -7606,7 +7631,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * self-contained chain for reaping at the outermost entry boundary
      * (docs/archive/cps-delimited-dk-node-leak.md).  Under the re-opening path,
      * stamp this handle's sibling case-handlers with a shared group id (dk_hgroup)
-     * so dk_case_enclosing / dk_perform can tell them apart from an enclosing
+     * so dk_case_enclosing_real / dk_perform can tell them apart from an enclosing
      * handle's handlers once a re-install flattens the chain (else a re-opened
      * outer effect in a multi-suspension continuation escapes). */
     if (g_opt_cps_tramp_resume)

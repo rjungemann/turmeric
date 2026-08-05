@@ -1016,6 +1016,7 @@ struct DK {
     DKHandler handler; intptr_t handler_env; bool shallow;
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
     bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
+    bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */
     bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
     int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);
                         * distinguishes this handle's cases from an enclosing
@@ -1078,6 +1079,11 @@ static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
 static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
     return dk_handler_impl(tag, fn, env, true, next);
 }
+/* Mark a handler whose case delivers its own value through the real chain
+ * (a RE-OPENING case -- see the case_delivers field).  Composes with any of
+ * the dk_handler ctors: dk_case_delivers(dk_handler(...)). */
+__attribute__((unused))
+static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }
 /* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry
  * driver instead of resuming inline, keeping deep effectful recursion flat. */
 static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
@@ -1085,7 +1091,7 @@ static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
 }
 /* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at
  * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's
- * continuation frame) with a fresh, shared group id.  dk_case_enclosing and
+ * continuation frame) with a fresh, shared group id.  dk_case_enclosing_real and
  * dk_perform's re-install then skip only same-group handlers, so an enclosing
  * handle's handlers that become ADJACENT after a chain-flattening re-install are
  * no longer mistaken for this handle's siblings (they carry a different id). */
@@ -1124,6 +1130,7 @@ static DK *dk_copy_node(const DK *n) {
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
     c->tail_resume = n->tail_resume;
     c->hgroup = n->hgroup;
+    c->case_delivers = n->case_delivers;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -1137,21 +1144,29 @@ static DK *dk_copy_enclosing_handlers(const DK *from) {
     if (!head) return done;
     tail->next = done; return head;
 }
-/* Effect re-opening: the enclosing handler markers in effect at the dynamic
- * point a handler case body runs -- i.e. the handlers OUTSIDE this handle.  A
- * `perform` in a case body (the case re-opens an outer effect) dispatches
- * against this transparent (handler-marker-only, done-terminated) chain, so the
- * effect reaches the enclosing handler while the case's own value returns to the
- * H->next boundary for dk_perform to thread exactly once.  For a deep handler we
- * skip the whole dk_handler sibling group starting at H (its case shares the
- * handle's continuation context, so a sibling effect propagates OUTWARD, matching
- * dk_perform's own `ge` walk); a shallow handler skips only H itself. */
-static DK *dk_case_enclosing(const DK *H) {
-    if (!H) return dk_done();
+/* Effect re-opening: the REAL enclosing chain in effect at the dynamic point a
+ * handler case body runs -- i.e. everything past this handle's sibling group,
+ * BORROWED.  A re-opening case takes this as its `__kont`: a `perform` in the
+ * case dispatches into the real enclosing handlers, its capture crosses into
+ * the real intermediate frames (so a multishot outer resume re-runs them per
+ * resume), and the case delivers its own value through the same chain
+ * (dk_run(__kont, v) on every exit -- the case_delivers protocol; dk_perform
+ * then returns the case's result without a second H->next delivery).  This
+ * replaced a done-terminated marker COPY, which truncated the capture at the
+ * marker and left the pending delivery as a C-stack frame that a tail-resume
+ * longjmp silently discarded (cps-case-reopen-marker-kont-truncates-capture).
+ * For a deep handler we skip the whole dk_handler sibling group starting at H
+ * (its case shares the handle's continuation context, so a sibling effect
+ * propagates OUTWARD, matching dk_perform's own `ge` walk); a shallow handler
+ * skips only H itself.  The returned chain is borrowed -- the case must only
+ * read, thread, or copy it, never free it. */
+__attribute__((unused))
+static DK *dk_case_enclosing_real(const DK *H) {
+    if (!H) return NULL;
     const DK *ge = H;
     if (H->shallow) ge = H->next;
     else while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;
-    return dk_copy_enclosing_handlers(ge);
+    return (DK *)ge;
 }
 static DK *dk_copy_range(const DK *from, const DK *stop) {
     DK *head = NULL, *tail = NULL;
@@ -1399,8 +1414,8 @@ static intptr_t __dk_drive_after(void) {
 }
 /* Effect re-opening: the handler node whose case is currently running, set just
  * before dk_perform calls the case.  A re-opening case reads it (into a local, at
- * entry, before any interior perform can overwrite it) to recover its enclosing
- * handler markers via dk_case_enclosing. */
+ * entry, before any interior perform can overwrite it) to recover its real
+ * enclosing chain via dk_case_enclosing_real. */
 static const DK *g_dk_case_reopen_hnode = NULL;
 static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     DK *H = k;
@@ -1459,7 +1474,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * We reap BEFORE the handler call so a longjmp cannot skip the registration. */
     __dk_reap_keep(sub);
     intptr_t r = H->handler(H->handler_env, arg, sub);
-    return dk_run_impl(H->next, r, false);
+    return H->case_delivers ? r : dk_run_impl(H->next, r, false);
 }
 /* Phase T21: FiberBlock */
 #ifdef __clang__

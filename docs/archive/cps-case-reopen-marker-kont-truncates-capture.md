@@ -1,5 +1,5 @@
 ---
-status: open
+status: resolved 2026-08-05 (real borrowed chain as the case's __kont + the case_delivers delivery protocol)
 severity: high (silent wrong answer in one shape; silently lost output + wrong exit code in another)
 discovered: 2026-08-05
 area: compiler (CPS/DK runtime: dk_case_enclosing marker chain; dk_perform inline delivery)
@@ -133,13 +133,40 @@ case-call protocol and touches every existing re-opening fixture -- its own
 plan, but a well-scoped one: the measured experiment plus one flag and one
 emission-mode change away.
 
+## Execution (2026-08-05)
+
+Landed exactly the scoped fix the measured experiment pointed at, in the same
+change that resolved this report:
+
+1. **`dk_case_enclosing_real`** replaces `dk_case_enclosing`: the re-opening
+   case's `__kont` is the REAL enclosing chain (the same `ge` walk, minus the
+   marker copy), borrowed -- the case only reads, threads, or copies it. The
+   marker-copy variant is deleted from the runtime; one spine remains.
+2. **The `case_delivers` protocol** closes the double-delivery the experiment
+   exposed: a re-opening case is emitted with `shift_mode` off, so every exit
+   delivers its value through `__kont` (`dk_run(__kont, v)`), its handler node
+   is wrapped in `dk_case_delivers(...)`, and `dk_perform`'s inline branches
+   return the case's result verbatim instead of running `dk_run_impl(H->next,
+   r)` a second time. `dk_copy_node` carries the flag (a re-installed marker
+   copy's case still delivers for itself -- through the copy's own tail, which
+   is exactly the copy's continuation).
+3. `case_delivers` and `dk_handler_tail` are mutually exclusive by
+   construction: `case_body_tail_resumes` rejects any body containing an
+   interior `CT_PERFORM`, which is exactly what makes `case_reopens` true --
+   so the E7 queued-delivery path never sees a case-delivering handler.
+
+All four boundary rows now agree with `tur --interpret` and hand evaluation
+on the compiled path: **2025**, **1009017**, **1014** (printed, exit 0 -- the
+stranded-delivery mode gone), and 25. Preamble changed, so the 141
+`expected.c` snapshots and the `src/runtime/generated/` split artifacts were
+regenerated in the same change. Suites green: `tests/run.sh` 2572/0,
+`tests/run-turi.sh` 1759/0/705.
+
 ## Where the truth is pinned
 
-`tests/fixtures/turi-case-reopen-outer-capture/` (requires.interp-only)
-asserts 2025, 1009017, 1014, and 25 on the interpreter. There is deliberately
-no compiled fixture for the broken shapes -- it would have to assert 1025 /
-9017 / silent exit 14. When this is fixed, fold those cases into a both-paths
-fixture next to `effect-multishot-nontail-resume-inner-handle`.
+`tests/fixtures/effect-case-reopen-outer-capture/` -- the interp-only fixture
+promoted to both paths, asserting 2025, 1009017, 1014, and 25 -- next to
+`effect-multishot-nontail-resume-inner-handle` from the parent report.
 
 ## Related latent instances (checked, not currently reachable)
 

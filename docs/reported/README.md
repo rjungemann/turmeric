@@ -58,7 +58,8 @@ does not share an investigation with the three above.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [handler-clause-setbang-enclosing-mut-undeclared](handler-clause-setbang-enclosing-mut-undeclared.md) | medium | `set!` of an enclosing `^mut` from a clause emits C referencing an undeclared variable |
-| [cps-case-reopen-marker-kont-truncates-capture](cps-case-reopen-marker-kont-truncates-capture.md) | high | the remaining two-spine instance after the handle-chain unification: a case that RE-OPENS an outer effect gets a marker-copy `__kont`, so the outer effect's multishot capture truncates at the marker (prints `1025` where the answer is `2025`) and -- worse -- a tail-resuming outer handler longjmps past the inner perform's C-stack delivery, losing the program's output entirely (silent exit 14 where `1014` should print). Pre-existing, verified on the pre-unification compiler. A measured experiment (real chain as `__kont`) fixes both modes and leaves exactly one defect -- the inline path's second delivery -- so the fix is scoped: move the post-case delivery in-chain for re-opening cases |
+| [cps-reset-frame-pre-unification-layout](cps-reset-frame-pre-unification-layout.md) | low-medium | **latent**: `emit_reset` still builds the pre-unification layout (baked `__k` env + marker `next`) the handle conversion removed. Unreachable today -- perform-inside-reset under a handle evicts with a located hard error (verified single- and multi-shot) -- but it becomes the handle miscompile verbatim if that admission widens. Convert (LH_RESUME_CONT + `dk_frame_resume_borrow`) before widening, or opportunistically |
+| [cps-await-cont-baked-env](cps-await-cont-baked-env.md) | low | **latent**: `emit_await`'s bounded-continuation path bakes `__k` with `next = dk_done()`. Benign by construction (an await continuation resumes exactly once, no user `k`, no admitted perform through it); becomes real only with re-entrant awaits or a widened admission. Same mechanical conversion, as a rider on the reset one |
 
 `handler-clause-statement-if-ices-emitter` was resolved 2026-08-05 in two
 landings (statement-position `if`/`when`, then `CT_LOOP` in a handler case --
@@ -80,6 +81,18 @@ and moved to
 [docs/archive](../archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md).
 Both paths now agree on every boundary variant, pinned by
 `tests/fixtures/effect-multishot-nontail-resume-inner-handle/`.
+
+`cps-case-reopen-marker-kont-truncates-capture` (the remaining two-spine
+instance: a case that RE-OPENS an outer effect got a marker-copy `__kont`,
+truncating the outer multishot capture -- `1025` for `2025` -- and letting a
+tail-resume longjmp discard the C-stack pending delivery entirely -- silent
+exit 14 for `1014`) was resolved 2026-08-05 the same day it was filed: the
+case's `__kont` is now the real borrowed chain (`dk_case_enclosing_real`; the
+marker variant is deleted) and re-opening cases deliver their own value
+through it under the `case_delivers` protocol, so `dk_perform` no longer
+delivers `H->next` a second time. Moved to
+[docs/archive](../archive/cps-case-reopen-marker-kont-truncates-capture.md);
+pinned both-paths by `tests/fixtures/effect-case-reopen-outer-capture/`.
 
 ## Interpreter (`--interpret` / `tur repl`) divergence
 
