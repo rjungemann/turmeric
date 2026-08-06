@@ -1,6 +1,6 @@
 ;; Compiled-path regression guard for the STM TVar primitives that previously
 ;; failed to link (tvar/cas, tvar/swap) or were a no-op stub (tvar/modify):
-;; docs/reported/stm-tvar-cas-swap-modify-compiled-path-broken.md.
+;; docs/archive/history/stm-tvar-cas-swap-modify-compiled-path-broken.md.
 ;;
 ;; Values are int64 boxed as ptr<void> (unprintable), so each step is observed
 ;; through tvar/cas, which returns a printable bool.

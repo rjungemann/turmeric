@@ -1,0 +1,11 @@
+;; Basic TVar operations: the initial value survives to a later transaction, a
+;; write commits, and a swap reports the value it installed.
+;; See docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (let [tv (tvar/new 42)]
+    (println (:: (atomically (stm (tvar/read tv))) :int))            ; 42
+    (atomically (stm (tvar/write tv 100)))
+    (println (:: (atomically (stm (tvar/read tv))) :int))            ; 100
+    (atomically (stm (tvar/swap tv 7)))
+    (println (:: (atomically (stm (tvar/read tv))) :int)))           ; 7
+  0)

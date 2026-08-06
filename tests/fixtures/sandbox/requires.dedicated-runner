@@ -1,0 +1,5 @@
+Owned by the `tur_eval_sandbox` ctest target (tests/turi/sandbox-eval.c), which
+holds the fixture list and the expected outcome for each of the 17 sb-*.tur
+files -- they are evaluated through a sandboxed libturi env, not compiled, so
+this harness cannot run them.  Run them with `./build/tur_eval_sandbox` or
+`ctest -R tur_eval_sandbox`.

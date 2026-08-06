@@ -1,0 +1,5 @@
+;; Negative: a TVar write outside a transaction is rejected (TUR-E0009).
+;; See docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (tvar/write (tvar/new 0) 42)
+  0)

@@ -1,0 +1,4 @@
+A tree of spice packages, not a fixture: its subdirectories are `build.tur`
+projects consumed by tests/spice-c-sources-tests.sh (SPICES=tests/fixtures/spices)
+and referenced as :path deps by other harnesses' fixtures.  None of them is a
+standalone input.tur program.

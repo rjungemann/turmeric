@@ -1,4 +1,0 @@
-;; stm-write-outside-transaction.tur - Negative test: writing TVar outside transaction
-
-;; This should fail with error TUR-E0009
-(tvar/write (tvar/new 0) 42)

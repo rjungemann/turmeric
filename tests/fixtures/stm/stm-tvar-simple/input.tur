@@ -1,0 +1,13 @@
+;; The smallest TVar round-trip: allocate inside a transaction and read it back.
+;;
+;; This and its four siblings lived as loose `tests/fixtures/stm/*.tur` files
+;; that no harness ran -- run.sh reported the whole directory PASS without
+;; opening a file.  Each of them called a function at top level and DISCARDED
+;; the result, so even when run they asserted nothing beyond "does not crash";
+;; the values below are the assertions they were missing.  A TVar's value is an
+;; int64 boxed as ptr<void>, which `println` will not take, so it is read back
+;; through `(:: v :int)`.  See
+;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (println (:: (atomically (stm (tvar/read (tvar/new 42)))) :int))   ; 42
+  0)

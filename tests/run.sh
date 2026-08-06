@@ -385,6 +385,32 @@ stamp_write() {
 }
 # ---------------------------------------------------------------------------
 
+# A fixture directory the runner cannot run.  This used to record PASS with a
+# "(no input -- skipped)" detail while printing SKIP to the live stream, so the
+# loss was invisible in the summary line and in CI -- four directories holding
+# 30 loose `.tur` files sat that way, three of them covered by no harness at
+# all.  Every fixture dir must now declare how it runs.  See
+# docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+no_input_fail() {
+    local dir="$1" name="$2" alt="$3"
+    local log="$RESULTS_DIR/$(printf '%s' "no-input-$name" | tr '/ ' '__').log"
+    {
+        echo "FAIL $name -- no runnable input"
+        echo "    Looked for $dir/input.tur and $dir/$alt"
+        echo "    A fixture directory must declare how it runs, by holding one of:"
+        echo "      input.tur (or <dirname>.tur)  -- run by this harness"
+        echo "      hook.sh                       -- drives itself"
+        echo "      requires.dedicated-runner     -- owned by a ctest target or"
+        echo "                                       tests/run-*.sh; put the owner's"
+        echo "                                       name in the marker file"
+        echo "    Loose .tur files under other names are run by nothing: give each"
+        echo "    its own subdirectory with input.tur + expected.stdout."
+        echo "    If this dir holds only generated artifacts (actual.*, turi.stderr)"
+        echo "    left behind by a deleted fixture, delete the directory."
+    } > "$log"
+    write_result "FAIL" "$name" "no runnable input" "$log"
+}
+
 run_happy() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
@@ -429,21 +455,27 @@ run_happy() {
         return
     fi
 
+    # Skip fixtures owned by a dedicated ctest target (e.g. eval-import
+    # has its own tur_eval_import test with custom -I/-L flags).
+    #
+    # Checked BEFORE the input lookup, not after.  A dir owned by another
+    # harness legitimately has no input.tur of its own, and the lookup below now
+    # FAILS rather than reporting PASS -- so with the order reversed this marker
+    # was unreachable for exactly the directories that carry it, and the silent
+    # PASS answered for them instead.  17 dirs were in that state.
+    if [ -f "$dir/requires.dedicated-runner" ]; then
+        write_result "PASS" "$name" "(dedicated-runner-skipped)" ""
+        return
+    fi
+
     local input
     if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
-    else echo "SKIP $name (no input)" ; write_result "PASS" "$name" "(no input -- skipped)" "" ; return; fi
+    else no_input_fail "$dir" "$name" "$(basename "$dir").tur"; return; fi
 
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
         write_result "PASS" "$name" "(tsan-skipped)" ""
-        return
-    fi
-
-    # Skip fixtures owned by a dedicated ctest target (e.g. eval-import
-    # has its own tur_eval_import test with custom -I/-L flags).
-    if [ -f "$dir/requires.dedicated-runner" ]; then
-        write_result "PASS" "$name" "(dedicated-runner-skipped)" ""
         return
     fi
 
@@ -704,8 +736,15 @@ run_happy() {
 run_negative() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
+    # Same order as the happy path: a dir owned by another harness declares it
+    # with the marker, and anything else with no input.tur is a failure, not a
+    # silent PASS.
+    if [ -f "$dir/requires.dedicated-runner" ]; then
+        write_result "PASS" "$name" "(dedicated-runner-skipped)" ""
+        return
+    fi
     local input="$dir/input.tur"
-    [ -f "$input" ] || { echo "SKIP $name (no input)"; write_result "PASS" "$name" "(no input -- skipped)" "" ; return; }
+    [ -f "$input" ] || { no_input_fail "$dir" "$name" "input.tur"; return; }
 
     # Skip negative fixtures that load from the optional sibling turmeric-spices
     # repo when that directory isn't present (mirrors the happy-path guard above).
@@ -809,7 +848,7 @@ export TUR_TEST_FILTER
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
 export TUR_TSAN _tur_timeout_bin TUR_MTIME
-export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
+export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors, PLUS the

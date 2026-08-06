@@ -1,4 +1,0 @@
-;; stm-read-outside-transaction.tur - Negative test: reading TVar outside transaction
-
-;; This should fail with error TUR-E0009
-(tvar/read (tvar/new 42))

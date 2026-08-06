@@ -1,0 +1,7 @@
+;; Negative: a TVar read outside a transaction is rejected (TUR-E0009).
+;; Lived as a loose tests/fixtures/stm/*.tur that no harness ran -- run.sh
+;; reported the whole directory PASS without opening a file.  See
+;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (tvar/read (tvar/new 42))
+  0)
