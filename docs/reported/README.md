@@ -201,8 +201,25 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [reactor-fd-callback-fn-ptr-type-mismatch](reactor-fd-callback-fn-ptr-type-mismatch.md) | medium | fd callbacks are called through a mismatched fn-ptr type; benign today, fatal under CFI / UBSan / WASM `call_indirect` |
-| [struct-return-type-mismatch-unchecked-until-cc](struct-return-type-mismatch-unchecked-until-cc.md) | medium | `(defn f [x : S] : int x)` passes `tur check` and dies in the C compiler; the return-type comparison is missing its struct/ADT arm, while the same mismatch between primitives is caught |
 | [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
+
+`struct-return-type-mismatch-unchecked-until-cc` was resolved 2026-08-06 and
+moved to
+[docs/archive](../archive/struct-return-type-mismatch-unchecked-until-cc.md).
+The hole was deliberate rather than missing: every tolerance in
+`return_position_conflict` exists because both sides are `int64_t` in the
+emitted C, and the code says so -- but a by-value record ADT lowers to a real
+`tur_adt_S` aggregate, so there is no shared representation to bridge. It slots
+in as one more predicate, with membership decided by asking `type_c_name` (the
+function codegen uses) rather than re-enumerating which ADTs are by-value.
+Three things the report did not have, all recorded there: the check must NOT be
+gated on the return class the way its two neighbours are, or the instance-method
+shape that started the thread stays broken; the interpreted path must be exempt,
+since it boxes every value and two fixtures write that bridge deliberately via a
+`#?(:tur ... :turi ...)` arm; and a `:heap` ADT-app under a scalar return was
+the same defect one `-Wint-conversion` warning away from being a hard error.
+Pinned by four `errors/` negatives and
+`tests/fixtures/return-type-carrier-bridges-still-accepted/`.
 
 ## Build / CI / performance
 

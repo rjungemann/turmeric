@@ -1279,6 +1279,22 @@ bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body);
  * shape match. */
 bool return_type_bool_integer_conflict(TypeKind declared, Type body);
 
+/* carrier-aware-return-unification Phase 2c: exactly one side is an aggregate
+ * that does NOT ride the int64 carrier -- a by-value record ADT (`tur_adt_S`),
+ * or a :heap one (a typed pointer to it) -- and the other is a concrete,
+ * register-pinned scalar.  Every tolerance above exists because both sides are
+ * `int64_t` in the emitted C and the mismatch is a real bridge; here they are
+ * different C types, so the program does not compile at all.  Membership is
+ * decided by asking `type_c_name`, the function codegen itself uses, so a
+ * transparent int newtype or a carrier-swallowed ADT-app is tolerated without
+ * this predicate having to enumerate them.  Unlike the reverse-pointer-scalar
+ * and bool-vs-integer checks this is NOT gated on the return class: those
+ * tolerate a bridge between two things that are both `int64_t` in the emitted
+ * C, and a by-value aggregate is not one of them, so no carrier class makes it
+ * sound.  Only the bare, unparameterised record ADT counts -- a parametric
+ * return has a crossing that grounds it. */
+bool return_type_carrier_aggregate_conflict(Type declared, Type body);
+
 /* carrier-aware-return-unification: classify a return position so the shared
  * dispatcher knows how much to reject against the int64 carrier ABI.
  *   RET_CLASS_COMMITTED -- a genuinely committed position: a monomorphic,
@@ -1312,6 +1328,7 @@ typedef enum {
     RET_CONFLICT_POINTER_SCALAR,
     RET_CONFLICT_TYPE_REVERSE,
     RET_CONFLICT_BOOL_INTEGER,
+    RET_CONFLICT_CARRIER_AGGREGATE,
 } ReturnConflict;
 
 /* carrier-aware-return-unification: single dispatcher over the return-position

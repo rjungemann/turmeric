@@ -4575,6 +4575,16 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             "carrier to bridge them",
                             meth, want, gb.data);
                         break;
+                    case RET_CONFLICT_CARRIER_AGGREGATE:
+                        diag_emit_with_code(DIAG_ERROR, method_body->span,
+                            TUR_E0709_RETURN_TYPE_MISMATCH,
+                            "instance method '%s' declares return type '%s' but "
+                            "its body returns %s -- an aggregate is a real C "
+                            "type (a struct, or a typed pointer to one), not the "
+                            "int64 carrier, so there is no representation these "
+                            "two share and nothing to bridge them",
+                            meth, want, gb.data);
+                        break;
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
                 buf_free(&gb);

@@ -1,0 +1,11 @@
+;; The reverse direction of the same hole: an integer body under a declared
+;; struct return.  Also accepted by `tur check` and also a `cc` error.
+;; See docs/archive/struct-return-type-mismatch-unchecked-until-cc.md.
+;;
+;; requires.compiled: the interpreted path boxes every value, so this is a
+;; genuine bridge there.
+(defstruct S [a : int])
+
+(defn f [x : int] : S x)
+
+(defn main [] : int 0)

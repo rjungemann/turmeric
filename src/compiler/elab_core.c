@@ -2379,6 +2379,62 @@ bool return_type_bool_integer_conflict(TypeKind declared, Type body) {
                      : bi_is_nonbool_integer_kind(declared);
 }
 
+/* carrier-aware-return-unification Phase 2c: an aggregate that does NOT ride the
+ * int64 carrier on one side and a carrier scalar on the other.
+ *
+ * The tolerances above are all calibrated to the int64 carrier: a bare integer
+ * where a handle is declared is a real bridge, because both are `int64_t` in the
+ * emitted C.  A by-value record ADT is not -- it lowers to a real `tur_adt_S`
+ * aggregate (or, when :heap, a typed pointer to one), so there is nothing to
+ * bridge and the mismatch reaches `cc` as "incompatible types when returning".
+ *
+ * Which ADTs those are is not restated here: the question is put to
+ * `type_c_name`, the same function codegen uses to spell the C type, so this
+ * check cannot drift from what the emitter actually emits.  A transparent int
+ * newtype (`defopaque H :int`) and anything else the carrier swallows answer
+ * "int64_t" and stay tolerated.
+ *
+ * TY_APP is deliberately NOT included even though a by-value monomorph
+ * (`(Pair int float)`) has a real C name too: a parametric return position has
+ * a carrier crossing that grounds it, and `(defn f [x : (Option int)] : int x)`
+ * compiles and runs today.  Only the bare, unparameterised record ADT reaches
+ * `cc` with "incompatible types when returning". Widening this to TY_APP
+ * rejects four working shapes, so it needs the crossing story sorted out
+ * first, not a one-line change here. */
+static bool rv_is_noncarrier_aggregate(Type t) {
+    /* By-value aggregates are a property of the COMPILED path.  The tree-walking
+     * interpreter boxes every value as a handle, so there an ADT under an
+     * integer return is a genuine bridge -- and programs write exactly that
+     * deliberately, via the `:turi` arm of a `#?(:tur ... :turi ...)` reader
+     * conditional whose `:tur` arm is inline-C returning the boxed pointer
+     * (tests/fixtures/map-multiword-struct-key). */
+    if (g_interpret_mode) return false;
+    /* A :heap ADT-app (`(Vec int)`, `(Cons int)`) lowers to a typed pointer
+     * `tur_adt_Vec__int *`, which is no more the int64 carrier than a by-value
+     * aggregate is.  It compiles today only because `-Wint-conversion` is a
+     * warning rather than an error -- under `-Werror` it is the same hard
+     * failure -- so it belongs here.  A NON-heap by-value ADT-app
+     * (`(Option int)`) is left alone: its return crossing genuinely grounds it
+     * and it emits clean. */
+    if (t.kind == TY_APP) return type_is_heap_adt(t);
+    if (t.kind != TY_ADT) return false;
+    const char *cn = type_c_name(t);
+    return cn && strcmp(cn, "int64_t") != 0;
+}
+/* The other side must be a CONCRETE, register-pinned scalar for the clash to be
+ * real; a tyvar / unknown / never / any could still resolve to the aggregate. */
+static bool rv_is_pinned_scalar(Type t) {
+    if (t.kind == TY_ADT || t.kind == TY_APP) return false;
+    if (rc_is_unpinned_kind(t.kind)) return false;
+    return ps_is_integer_scalar_kind(t.kind) || t.kind == TY_CSTR ||
+           rc_is_float_kind(t.kind);
+}
+bool return_type_carrier_aggregate_conflict(Type declared, Type body) {
+    if (rv_is_noncarrier_aggregate(declared)) return rv_is_pinned_scalar(body);
+    if (rv_is_noncarrier_aggregate(body))     return rv_is_pinned_scalar(declared);
+    return false;
+}
+
 /* carrier-aware-return-unification: single dispatcher over the return-position
  * predicates -- see elab_internal.h.  Runs them in the established order
  * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)
@@ -2428,6 +2484,30 @@ ReturnConflict return_position_conflict(const AdtDef *ret_adt,
     if (cls == RET_CLASS_COMMITTED &&
         return_type_bool_integer_conflict(ret_kind, body))
         return RET_CONFLICT_BOOL_INTEGER;
+
+    /* Non-carrier aggregate vs carrier scalar.  Unlike the two checks above this
+     * is NOT gated on the return class: every tolerance the carrier classes buy
+     * is a tolerance between two things that are both `int64_t` in the emitted
+     * C, and a by-value aggregate is not one of them.  A generic defn, an
+     * `#{Unsafe}` one, and a typeclass instance method all reach `cc` with
+     * "incompatible types when returning" on this shape -- an instance method
+     * declared `: int` whose body returns a record ADT is exactly what
+     * tests/fixtures/typeclass/parametric-clone-list was sitting on -- so
+     * gating it would leave the reported case unfixed.  The declared side is
+     * reconstructed from (ret_adt, ret_kind) since the caller carries those
+     * rather than a whole Type. */
+    {
+        Type declared;
+        memset(&declared, 0, sizeof declared);
+        if (ret_adt) {
+            declared.kind = TY_ADT;
+            declared.as.adt_.def = (AdtDef *)ret_adt;
+        } else {
+            declared.kind = ret_kind;
+        }
+        if (return_type_carrier_aggregate_conflict(declared, body))
+            return RET_CONFLICT_CARRIER_AGGREGATE;
+    }
 
     return RET_CONFLICT_NONE;
 }
