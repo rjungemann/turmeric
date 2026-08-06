@@ -137,7 +137,6 @@ into a frame env again.
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
 | [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
-| [ascribe-bool-to-int-prints-differently-per-path](ascribe-bool-to-int-prints-differently-per-path.md) | low | `(:: b :int)` prints `1`/`0` compiled and `true`/`false` interpreted, so a fixture using it cannot have one `expected.stdout` both harnesses accept |
 | [turi-toplevel-expr-subforms-elaborate-in-global-scope](turi-toplevel-expr-subforms-elaborate-in-global-scope.md) | low | a bare top-level expression's subforms elaborate in the GLOBAL scope under `--interpret`, in a pushed one compiled; both paths still reject, only the diagnostic (and which binding a `def` subform creates) diverges |
 
 
@@ -163,6 +162,22 @@ particular it separates the safely-descendable forms from the ones whose
 frames carry a heap boundary `clone_ws_slice` would double-free (reset /
 catch-unwind / atomically), which remain open by design.  Executing it also
 exposed a compiled-path miscompile, filed under "Effect handlers" above.
+
+`ascribe-bool-to-int-prints-differently-per-path` was resolved 2026-08-06 and
+moved to
+[docs/archive](../archive/ascribe-bool-to-int-prints-differently-per-path.md).
+It reached all ten numeric ascription targets, not just `:int`. The archived
+note records two natural-looking fixes that are wrong: converting at the
+ascription loses the element type for later method dispatch (the elaborator
+synthesizes an int-carrier ascription for an ordinary push of a bool into a
+`(Vec bool)`, and two fixtures printed the wrong instance's answer), and
+mirroring the existing int -> float re-tag with float -> int fails 16 fixtures,
+because an `:int` ascription over a float is the CARRIER spelling in generic
+code rather than a request to expose the bits. Fixed instead at the rendering
+site: `println` is overload-resolved by static type, so the elaborated AST
+already records which shape `(:: b :int)` selected, and the interpreter's
+tag-dispatch now yields to that shape in the one case where it is strictly more
+informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 ## Surface / expressiveness
 

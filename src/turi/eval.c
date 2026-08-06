@@ -2735,6 +2735,34 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
     case BS_PRINTLN_FLOAT32: {
         /* Dispatch on runtime tag so eval mode works despite type-inference gaps. */
         TuriValue a = args[0];
+        /* ...  except when the elaborator's chosen SHAPE is strictly more
+         * informative than the tag.  `println` is overload-resolved by static
+         * type, so `(:: b :int)` selects BS_PRINTLN_INT -- the compiled path
+         * then emits `printf("%lld", (long long)(true))` and prints 1, while
+         * this switch saw a TURI_BOOL and printed `true`.  The same expression
+         * printed differently on the two paths, so a fixture using the form
+         * could not have one expected.stdout both harnesses accept.
+         *
+         * Fixed HERE, at the rendering site, and deliberately NOT at the
+         * ascription: in the tree-walker a value's TAG is its type, and the
+         * elaborator synthesizes an int-carrier ascription for an ordinary
+         * `(vec-push! vb true)` into a `(Vec bool)`.  Re-tagging the bool to an
+         * int there loses the element type and later method dispatch picks the
+         * wrong instance -- measured, `(tag vb)` selected Tag[int] and printed 1
+         * for 2.  Printing is the one place the static type can win without
+         * anything downstream depending on the tag.  See
+         * docs/archive/ascribe-bool-to-int-prints-differently-per-path.md. */
+        if (a.tag == TURI_BOOL) {
+            if (spec->shape == BS_PRINTLN_INT) {
+                printf("%lld\n", (long long)(a.as_bool ? 1 : 0)); return turi_nil();
+            }
+            if (spec->shape == BS_PRINTLN_UINT) {
+                printf("%llu\n", (unsigned long long)(a.as_bool ? 1u : 0u)); return turi_nil();
+            }
+            if (spec->shape == BS_PRINTLN_FLOAT || spec->shape == BS_PRINTLN_FLOAT32) {
+                printf("%g\n", a.as_bool ? 1.0 : 0.0); return turi_nil();
+            }
+        }
         switch (a.tag) {
         case TURI_CSTR:  puts(a.as_cstr ? a.as_cstr : ""); break;
         case TURI_BOOL:  puts(a.as_bool ? "true" : "false"); break;
