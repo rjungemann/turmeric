@@ -181,8 +181,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/set-raw [fd : int] : int
-  (term/set-mode fd true))
+(defn term/set-raw [fd : int] : int (term/set-mode fd true))
 ;;; term/set-cooked -- restore a terminal to cooked (canonical) mode.
 ;;;
 ;;; Restores the termios state that was saved by the last term/set-raw call.
@@ -201,8 +200,7 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn term/set-cooked [fd : int] : int
-  (term/set-mode fd false))
+(defn term/set-cooked [fd : int] : int (term/set-mode fd false))
 ;; -- ANSI color helpers -------------------------------------------------------
 ;; Each helper wraps s in the appropriate ANSI escape sequence when stdout is
 ;; a tty and NO_COLOR is not set; otherwise returns a plain copy of s.
