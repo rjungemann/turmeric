@@ -243,7 +243,6 @@ Pinned by four `errors/` negatives and
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [manifest-read-failure-degrades-to-module-not-found](manifest-read-failure-degrades-to-module-not-found.md) | medium | a BROKEN `build.tur` is indistinguishable from no manifest to every caller, so a one-token typo presents as N unrelated `module not found` errors and `tur check` reports at `error:` severity while exiting **0** |
-| [emitted-c-pointer-integer-warnings-unwatched](emitted-c-pointer-integer-warnings-unwatched.md) | low | `cc` warnings on the emitted C are discarded on a successful build, so a pointer/integer confusion (`-Wint-conversion`) can reappear silently. **The sweep is already done: 0 hits across 2563 fixtures** -- this is the missing ratchet, and `run.sh` already captures the stderr it would grep |
 | [mono-specs-header-comment-stale](mono-specs-header-comment-stale.md) | low | `mono_specs.h`'s header comment describes a superseded state (registry-only, carrier-box codegen, VBM2b deferred); it contradicts a later paragraph in the same block and has already produced two wrong survey conclusions |
 
 `fixture-dirs-with-loose-tur-files-pass-without-running` was resolved
@@ -262,6 +261,21 @@ them discarded its result, so they asserted nothing even in principle, and two
 did not compile at all once run. That turned up two separate defects, filed
 above and below: a return-type mismatch unchecked whenever a struct is
 involved, and a bool-to-int ascription that prints differently per path.
+
+`emitted-c-pointer-integer-warnings-unwatched` was resolved 2026-08-06 and moved
+to
+[docs/archive](../archive/emitted-c-pointer-integer-warnings-unwatched.md).
+`run.sh` now FAILs a fixture whose captured build stderr carries
+`-Wint-conversion` / `-Wincompatible-pointer-types` (one `grep` of a file it
+already writes; `TUR_SKIP_CC_WARN_CHECK=1` opts out). Two things in the archived
+note are worth reading before touching it: the check must sit AHEAD of the
+output comparisons, because a canary that trips it segfaults and was reported as
+a plain `stdout mismatch` with the real reason never reaching the log; and the
+ratchet has its own canary self-test (`tests/check-cc-warn-ratchet.sh`,
+`tur_cc_warn_ratchet`), because a grep that matches nothing looks exactly like a
+clean corpus -- which is how two passes of the original sweep produced a false
+zero. Per-platform wording is deliberately still open; the self-test is what
+will report it on a clang or Windows leg.
 
 ## Windows port
 

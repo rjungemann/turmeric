@@ -103,6 +103,17 @@ if [ "${TUR_SKIP_PARITY_CHECK:-0}" != "1" ] && command -v python3 >/dev/null 2>&
     fi
 fi
 
+# Self-test for the emitted-C pointer/integer ratchet below (the per-fixture
+# check in run_happy).  A grep that matches nothing is indistinguishable from a
+# clean corpus, so the canary asserts the pattern still fires before the suite
+# leans on it.  Skipped along with the ratchet itself via TUR_SKIP_CC_WARN_CHECK=1.
+if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
+    if ! bash tests/check-cc-warn-ratchet.sh; then
+        echo "tests: emitted-C warning ratchet self-test failed (see above); aborting." >&2
+        exit 1
+    fi
+fi
+
 # R4 (carrier-crossing-recovery-routing-plan): the audit registry is the single
 # source of truth for which carrier<->concrete crossings are routed.  A new
 # chokepoint call site that forgot its audit row (or a drifted/stale registry)
@@ -651,6 +662,44 @@ run_happy() {
     local expected_exit="0"
     if [ -f "$dir/expected.exit" ]; then
         expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
+    fi
+
+    # Ratchet: pointer/integer confusion in the EMITTED C.
+    #
+    # -Wint-conversion / -Wincompatible-pointer-types are the C compiler saying a
+    # pointer and an integer were mixed up -- exactly the boundary a language
+    # whose ABI carries handles as int64_t gets wrong, and exactly the kind of
+    # thing that is a WARNING here and a hard error under -Werror.  cc's output
+    # already lands in $actual_stderr (the build phase writes it, the run phase
+    # appends), and it used to be read only when the build FAILED; on success it
+    # was discarded, so the class could reappear with nothing watching.
+    #
+    # Checked HERE -- after the build/run, ahead of the timeout and output
+    # comparisons -- because the warning is a CAUSE and those are symptoms.
+    # Behind the stdout diff it was unreachable for the fixture that needed it
+    # most: a canary whose emitted C returns an int as a `const char *` segfaults,
+    # so it reported "stdout mismatch" and the real reason never appeared in the
+    # log.
+    #
+    # The corpus was sweep-verified at ZERO before this landed (2563 fixtures,
+    # built with these same flags), which is what makes FAIL affordable rather
+    # than a warning nobody reads.  See
+    # docs/archive/emitted-c-pointer-integer-warnings-unwatched.md.
+    #
+    # Opt out with TUR_SKIP_CC_WARN_CHECK=1 (e.g. on a toolchain that words these
+    # differently, or while landing a change that knowingly trips them).
+    if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ] && [ -s "$actual_stderr" ]; then
+        if grep -qE '\[-W(int-conversion|incompatible-pointer-types)\]' "$actual_stderr"; then
+            {
+                echo "FAIL $name -- emitted C mixes a pointer and an integer"
+                grep -E '\[-W(int-conversion|incompatible-pointer-types)\]' \
+                    "$actual_stderr" | sed 's/^/    /'
+                echo "    This is a warning to cc and a hard error under -Werror."
+                echo "    Opt out for one run with TUR_SKIP_CC_WARN_CHECK=1."
+            } > "$log_file"
+            write_result "FAIL" "$name" "emitted C pointer/integer warning" "$log_file"
+            return
+        fi
     fi
 
     # Report a run-phase timeout AS a timeout.  The emit-c and build phases
