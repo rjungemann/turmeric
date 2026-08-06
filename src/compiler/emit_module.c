@@ -7476,6 +7476,11 @@ static void emit_winsock_compat_shim(Buf *out) {
  * from.  Set only by emit_rt_split_source; never during normal emission. */
 static bool g_rt_split_all_gates = false;
 
+/* See emit_dk_runtime.h: the DK prelude asks whether it is emitting the
+ * canonical split text, because the Windows tail-resume landing has to pick a
+ * setjmp/longjmp pair that both halves of an S2 program will agree on. */
+bool rt_split_canonical_emission(void) { return g_rt_split_all_gates; }
+
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
@@ -9003,7 +9008,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * declares g_dk_driver / g_dk_meta_n; flag-off those globals do not exist and a
      * fiber program stays byte-identical. */
     if (g_opt_cps_tramp_resume) {
-        buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+        buf_puts(out, "    tur_dk_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
         buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
         buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     } else {
