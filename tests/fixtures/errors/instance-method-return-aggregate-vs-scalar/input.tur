@@ -1,0 +1,22 @@
+;; The same hole reached through a typeclass instance method -- the shape
+;; tests/fixtures/typeclass/parametric-clone-list.tur was accidentally sitting
+;; on for however long it sat unrun (it was one of 30 loose .tur files the suite
+;; reported PASS without opening; see
+;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md).
+;;
+;; A method's return position is normally carrier-tolerant, because the
+;; per-instance emit path can resolve a scalar to its real class.  It cannot
+;; resolve a `tur_adt_S` into an `int64_t`, so the aggregate check is the one
+;; return-position check that is NOT gated on the return class.
+;; See docs/archive/struct-return-type-mismatch-unchecked-until-cc.md.
+;;
+;; requires.compiled: the interpreted path boxes every value.
+(defstruct S [a : int])
+
+(defclass Clone [a]
+  (clone [x] : int))
+
+(definstance Clone [S]
+  (clone [x] x))
+
+(defn main [] : int 0)

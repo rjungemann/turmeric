@@ -1,0 +1,25 @@
+;; Multi-TVar transactions that touch the same three TVars in three different
+;; orders must all commit -- the acquisition order is the runtime's business,
+;; not the program's.  The original file ran exactly this and returned a bare
+;; `true` that nothing looked at, so a transaction that silently rolled back
+;; would have gone unnoticed; the final values below are what make it an
+;; assertion.  See
+;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (let [tv1 (tvar/new 0)
+        tv2 (tvar/new 0)
+        tv3 (tvar/new 0)]
+    (atomically (stm (tvar/write tv1 1)
+                     (tvar/write tv2 2)
+                     (tvar/write tv3 3)))
+    (atomically (stm (tvar/write tv3 30)
+                     (tvar/write tv1 10)
+                     (tvar/write tv2 20)))
+    (atomically (stm (tvar/write tv2 200)
+                     (tvar/write tv3 300)
+                     (tvar/write tv1 100)))
+    ;; one transaction reading all three sees the last writer's values
+    (println (:: (atomically (stm (tvar/read tv1))) :int))    ; 100
+    (println (:: (atomically (stm (tvar/read tv2))) :int))    ; 200
+    (println (:: (atomically (stm (tvar/read tv3))) :int)))   ; 300
+  0)

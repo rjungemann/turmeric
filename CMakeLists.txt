@@ -312,6 +312,17 @@ add_test(
   COMMAND bash tests/check-no-c-complex.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Self-test for run.sh's emitted-C pointer/integer ratchet: builds a canary whose
+# emitted C provably mixes a pointer and an integer and asserts the warning
+# pattern still fires.  A grep that matches nothing is indistinguishable from a
+# clean corpus, which is exactly how two sweeps behind
+# docs/archive/emitted-c-pointer-integer-warnings-unwatched.md reported a false
+# zero.  run.sh runs this at startup too; the target makes it visible to ctest.
+add_test(
+  NAME tur_cc_warn_ratchet
+  COMMAND bash tests/check-cc-warn-ratchet.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests
@@ -1020,7 +1031,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_collections_embed tur_stdlib_natives_embed
                      tur_reader_macro_cross_eval tur_incremental_elab_diff
                      tur_lang_switch_prelude tur_show_collection_elems
-                     tur_gc_runtime_copy_parity
+                     tur_gc_runtime_copy_parity tur_cc_warn_ratchet
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur
 )

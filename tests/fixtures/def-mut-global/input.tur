@@ -1,0 +1,21 @@
+;; D4: ^mut on a top-level def -- static storage that `set!` may write.
+;; Without it, `(set! g v)` pointed the user at "^mut at the binding site"
+;; and the binding site rejected ^mut.
+;; The float probe uses 7.1, never 7.0, so a truncation bug cannot hide.
+(def ^mut counter 0)
+(def ^mut ratio 1.5)
+(def ^mut label "start")
+
+(defn bump [] : void
+  (set! counter (+ counter 1)))
+
+(defn main [] : int
+  (bump)
+  (bump)
+  (bump)
+  (println counter)
+  (set! ratio 7.1)
+  (println ratio)
+  (set! label "done")
+  (println label)
+  0)

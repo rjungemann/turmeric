@@ -814,6 +814,12 @@ char *atom_int_typed(int64_t i, TypeKind k);
 char *atom_float32(double f);
 char *atom_float(double f);
 char *atom_var(EmitCtx *ctx, const Binding *b);
+/* B7b: is this `^mut` binding promoted to a shared heap cell for the function
+ * the CPS backend is currently emitting?  Owned by emit_cps_ir.c (g_byref_muts);
+ * exposed so the value-position chokepoint (atom_var) can deref a read no matter
+ * which emitter produces it -- a delegated `set!` value expression goes through
+ * the direct emitter even inside a CPS-lifted body. */
+bool emit_binding_is_byref_cell(const Binding *b);
 char *atom_cstr(StrSlice s);
 char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e);
 void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst);

@@ -1,0 +1,6 @@
+Asserts --dump-write-frames output, which the compiler prints during
+ELABORATION.  The compiled path runs `tur build` with stdout unredirected and
+captures only the built binary's output, so the dump would never reach
+actual.stdout; the `tur run` path this marker selects captures both.  Nothing
+here is interpreter-specific -- the frame verdict is computed in the
+elaborator, which both engines share.

@@ -1,0 +1,54 @@
+;; G4a (docs/upcoming/mutable-globals-plan.md section 4.4), behind
+;; --enable=global-state: `^atomic ^mut` on a top-level def makes every read a
+;; sequentially-consistent load and every `set!` a sequentially-consistent
+;; store.
+;;
+;; WHAT THIS BUYS, precisely:
+;;   - no torn read or write;
+;;   - no hoisting -- a bare global read in a loop is free to be cached in a
+;;     register, so a spinning reader would never observe another thread's
+;;     store however atomically that store was made.  This is the practical
+;;     one;
+;;   - sequentially-consistent ordering with other atomic operations.
+;;
+;; WHAT IT DOES NOT BUY -- and this is the part worth reading twice:
+;; `(set! c (+ c 1))` is a LOAD then a STORE, not an atomic read-modify-write.
+;; Two threads running it still lose updates.  `^atomic` makes each half
+;; indivisible; it does not fuse them.  A concurrent counter wants a CAS or a
+;; fetch-add (stdlib/atomic.tur), or a lock (stdlib/mutex.tur).
+;;
+;; EIGHT-BYTE SCALARS ONLY -- int, float, cstr, ptr.  The atomics layer's host
+;; shim is uint64_t-typed, so the emitted access is 8 bytes whatever the
+;; declaration says, and a narrower global really is declared narrower.
+;; Admitting :bool produced an 8-byte store into a 1-byte object -- an overflow
+;; of the adjacent statics that still printed the right answer.  A bool flag is
+;; spelled as an int here for exactly that reason.
+;;
+;; The float probe uses 7.1, never 7.0: a double crosses the integer-typed
+;; atomics layer through its bit pattern, so a truncation bug in that path
+;; would be invisible with a whole number.
+;;
+;; Single-threaded here on purpose.  What a fixture can assert cheaply is that
+;; the lowering is correct and round-trips every scalar kind; that two threads
+;; sharing one without tearing is *observed* rather than asserted is the nature
+;; of the property, and a racing fixture would be flaky rather than rigorous.
+(def ^atomic ^mut counter 0)
+(def ^atomic ^mut ratio   1.5)
+(def ^atomic ^mut flag    0)      ; an int flag: :bool is one byte, see below
+(def ^atomic ^mut label   "start")
+
+(defn bump [] : void
+  (set! counter (+ counter 1)))
+
+(defn main [] : int
+  (bump)
+  (bump)
+  (bump)
+  (println counter)
+  (set! ratio 7.1)
+  (println ratio)
+  (set! flag 1)
+  (println flag)
+  (set! label "done")
+  (println label)
+  0)

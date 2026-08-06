@@ -3313,6 +3313,27 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
     return t;
 }
 
+/* The implicit `else` of a one-armed `if` -- what `(when c body)` desugars to.
+ * Such an `if` is nil-typed (the type checker rejects it otherwise: a present
+ * else must match the then branch, and a nil then branch is what makes the
+ * one-armed form well-typed), so the missing arm delivers unit to the same
+ * continuation the taken arm does.
+ *
+ * Before this existed both sites below called `cps_tail(b, NULL, kont)`, which
+ * lands in the null guard and yields CT_UNSUPPORTED -- so any `when` in a
+ * position that has to stay on the CPS path evicted the whole function.  In a
+ * handler clause that eviction had no recovery: the clause's `perform` reached
+ * the direct emitter, which aborts.  See
+ * docs/reported/handler-clause-statement-if-ices-emitter.md. */
+static CTerm *cps_tail_unit(CpsB *b, CKont kont) {
+    if (kont.kind == KK_LOOP) return make_continue(b);
+    CTerm *t = new_term(b, CT_APPCONT);
+    CAtom u; memset(&u, 0, sizeof u); u.kind = CA_UNIT; u.ty = TY_NIL;
+    t->as.appcont.kont = kont;
+    t->as.appcont.v = u;
+    return t;
+}
+
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
@@ -3499,7 +3520,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             t->as.if_.then_ = cps_tail(b, e->as.if_.then_, kont);
             t->as.if_.else_ = e->as.if_.else_or_null
                 ? cps_tail(b, e->as.if_.else_or_null, kont)
-                : cps_tail(b, NULL, kont);
+                : cps_tail_unit(b, kont);
             return fold_pending(b, &p, t);
         }
         case EX_MATCH: {
@@ -3973,7 +3994,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             body->as.if_.then_ = cps_tail(b, e->as.if_.then_, kont_var(j));
             body->as.if_.else_ = e->as.if_.else_or_null
                 ? cps_tail(b, e->as.if_.else_or_null, kont_var(j))
-                : cps_tail(b, NULL, kont_var(j));
+                : cps_tail_unit(b, kont_var(j));
             CTerm *t = new_term(b, CT_LETCONT);
             t->as.letcont.j = j; t->as.letcont.param = x;
             t->as.letcont.jbody = rest; t->as.letcont.body = body;

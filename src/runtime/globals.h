@@ -88,6 +88,14 @@ extern bool g_strict_effects;
 /* ER6: --dump-effects flag — print inferred effect row for each top-level defn */
 extern bool g_dump_effects;
 
+/* G1 (docs/upcoming/mutable-globals-plan.md): --dump-write-frames flag — print
+ * the WF2 verdict for every DECLARED `#writes` frame, plus the global-write
+ * answer that can downgrade it.  A diagnostic knob, not an experiment: it
+ * reports what the checker decided and changes nothing.  Without it the only
+ * observable difference between VERIFIED and UNVERIFIED is the absence of a
+ * diagnostic, which is not something a fixture can assert on. */
+extern bool g_dump_write_frames;
+
 /* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
  * colored user-level top-level defn */
 extern bool g_dump_cps;
@@ -247,6 +255,12 @@ extern bool g_opt_sealed_opaque;
  * `#reads` lived under the `refined` experiment, but that graduated 2026-08-01,
  * so this feature needs its own lifecycle home rather than a retired one. */
 extern bool g_opt_write_frames;
+
+/* `global-state` experiment (docs/upcoming/mutable-globals-plan.md, G2):
+ * lets a `#writes` frame NAME a mutable global, so a body that maintains
+ * global state can carry a checked frame instead of being declined outright.
+ * With it off, G1's rule stands: any global write blocks VERIFIED, silently. */
+extern bool g_opt_global_state;
 
 /* lang-layers L4: true once a project manifest declared an `:experiments`
  * key (even the empty list), i.e. the project owner scoped the experiment set.

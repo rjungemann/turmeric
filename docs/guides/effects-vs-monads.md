@@ -158,10 +158,6 @@ field dangles -- use owned `String` fields for computed text. See
 ### State threading
 
 ```turmeric
-(defn cell-new []                      : ptr<void> ```c return calloc(1, sizeof(int64_t)); ```)
-(defn cell-get [c : ptr<void>]         : int       ```c return *(int64_t *)c; ```)
-(defn cell-put [c : ptr<void> v : int] : int       ```c *(int64_t *)c = v; return v; ```)
-
 (defeffect Get []        : int)
 (defeffect Put [v : int] : nil)
 
@@ -169,19 +165,15 @@ field dangles -- use owned `String` fields for computed text. See
   (perform (Put (+ (perform (Get)) 1))))
 
 (defn main [] : int
-  (let [s (cell-new)]
+  (let [^mut s 0]
     (handle (do (counter-step) (counter-step) (counter-step))
-      (Get []  k) (resume k (cell-get s))
-      (Put [v] k) (do (cell-put s v) (resume k nil)))
-    (println (cell-get s)))
+      (Get []  k) (resume k s)
+      (Put [v] k) (do (set! s v) (resume k nil)))
+    (println s))
   0)
 ```
 
 ```sweet-exp
-defn cell-new []                      : ptr<void> ```c return calloc(1, sizeof(int64_t)); ```
-defn cell-get [c : ptr<void>]         : int       ```c return *(int64_t *)c; ```
-defn cell-put [c : ptr<void> v : int] : int       ```c *(int64_t *)c = v; return v; ```
-
 defeffect Get []        : int
 defeffect Put [v : int] : nil
 
@@ -189,28 +181,31 @@ defn counter-step [] #fx{Get Put} : nil
   perform $ Put {perform(Get()) + 1}
 
 defn main [] : int
-  let [s cell-new()]
+  let [^mut s 0]
     handle
       do
         counter-step()
         counter-step()
         counter-step()
       (Get []  k)
-      resume(k cell-get(s))
+      resume(k s)
       (Put [v] k)
       do
-        cell-put(s v)
+        set!(s v)
         resume(k nil)
-    println(cell-get(s))
+    println(s)
   0
 ```
 
 Prints `3`. This is the `State` monad as a handler: the handler *is* the
 interpretation, and callers of `counter-step` never see the threading.
 
-The state lives in a heap cell rather than a `let`-bound `^mut` because a
-handler clause is emitted as its own frame and cannot assign to a binding in the
-enclosing function -- see [Sharp edges](#sharp-edges).
+The state is an ordinary `let`-bound `^mut`. A clause is emitted as its own C
+frame, so the compiler promotes a mutable that a clause touches to a shared
+cell behind the scenes -- every view of it (the enclosing frame, each clause,
+the code after the `handle`) reads and writes the same storage, which is what
+the source says. Earlier releases required a hand-rolled heap cell here; that
+workaround still works but is no longer needed.
 
 ### Nondeterminism
 
@@ -248,9 +243,27 @@ Prints `68` -- every combination of `{1, 3}` with `{10, 20}`, summed:
 continuation, and the two `perform`s compose, so the second `Choose` re-explores
 under each branch of the first.
 
-To resume a *variable* number of times, pass the resumption strategy through the
-effect payload. The receiver gets `k` as a properly typed continuation and may
-call it as often as it likes, including recursively:
+To resume a *variable* number of times, fold the continuation over the range
+with a loop in the clause -- the direct expression of bounded nondeterminism:
+
+```turmeric
+(defn main [] : int
+  (println (handle (+ 10 (perform (Choose 1 3)))
+             (Choose [lo hi] ^multishot k)
+             (let [^mut a 0 ^mut i lo]
+               (while (<= i hi) (set! a (+ a (resume k i))) (set! i (+ i 1)))
+               a)))
+  0)
+```
+
+Prints `36` -- `(10+1) + (10+2) + (10+3)`, one full run of the continuation per
+iteration.
+
+When the resumption strategy is itself recursive -- or you want it in a named
+helper -- pass it through the effect payload instead. `k` is type-erased inside
+a handler clause and cannot be handed to a helper directly, but a receiver
+carried in the payload gets it as a properly typed continuation and may call it
+as often as it likes:
 
 ```turmeric
 (defeffect ChooseE [f : (fn [multishot-effect-cont] int)] : int)
@@ -294,9 +307,7 @@ defn main [] : int
   0
 ```
 
-Prints `561` -- the sum over all 3 x 11 combinations. This indirection is
-necessary because `k` is type-erased inside a handler clause and cannot be
-handed to a helper directly.
+Prints `561` -- the sum over all 3 x 11 combinations.
 
 ### Parsing
 
@@ -639,16 +650,22 @@ ascription if you want a typed handle.
 A handler clause is emitted as its own frame, which constrains what can go in
 one:
 
-- It cannot `set!` a `^mut` binding from the enclosing function -- put the state
-  in a heap cell (as the state example above does).
+- Reading and `set!`-ing a `^mut` binding from the enclosing function works --
+  the compiler promotes such a mutable to a shared cell (the state example
+  above). The one shape still unsupported is writing a mutable that a `while`
+  loop *carries* while the loop also spans the `handle`; that evicts with a
+  located error rather than miscompiling.
 - `k` is type-erased inside the clause and cannot be passed to a helper
   expecting a `cont<...>`. Route the resumption strategy through the effect
   payload instead (as the nondeterminism example above does).
-- An `if` in statement (non-tail) position inside a clause currently ICEs the
-  compiler. Keep conditionals in tail position, or hoist the branch into a
-  helper called from the clause.
+- Loops and conditionals in a clause are supported -- including a `while` that
+  `resume`s per iteration (the multi-shot fold above). The remaining exception
+  is a `perform` of an *outer-handled effect* from inside such a loop: the
+  compiler rejects that with a located error naming the workaround (hoist the
+  loop into a helper function and call it from the clause).
 
-See `docs/reported/` for the open compiler defects behind the last two.
+The second is an open compiler defect tracked in `docs/reported/`; the first
+and third are designed evictions with their own diagnostics.
 
 ## Compared to Haskell
 

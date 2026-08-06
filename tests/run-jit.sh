@@ -294,7 +294,16 @@ run_jit_error_fixture() {
 
     [ -f "$dir/input.tur" ] || return
     [ -s "$dir/expected.diag" ] || return
+    # requires.interp-only is checked alongside requires.interp, as the happy
+    # path already does.  It was missing here, and the two markers are
+    # near-homographs that do opposite things (see CLAUDE.md), so an `errors/`
+    # fixture asserting an INTERPRETER diagnostic -- which is exactly what
+    # requires.interp-only means for a negative fixture -- was run through
+    # `tur jit` and reported `jit diagnostic mismatch` for a diagnostic no
+    # compiled path ever emits.  Caught by
+    # errors/turi-multishot-resume-past-fiber-body, the first such fixture.
     if [ -f "$dir/requires.cc" ] || [ -f "$dir/requires.interp" ] \
+       || [ -f "$dir/requires.interp-only" ] \
        || [ -f "$dir/requires.spices" ]; then return; fi
 
     if stamp_check "$name" "$dir/input.tur"; then

@@ -1,0 +1,35 @@
+;; The carrier bridges the new aggregate-vs-scalar return check must NOT reject.
+;;
+;; That check (docs/archive/struct-return-type-mismatch-unchecked-until-cc.md)
+;; rejects a by-value record ADT under a scalar return, because the two are
+;; different C types and the program cannot compile.  Everything below IS a
+;; shared representation -- both sides are `int64_t` in the emitted C -- and is
+;; the deliberate int64 carrier bridge the return position exists to tolerate.
+;; Membership is decided by asking `type_c_name`, the same function codegen uses
+;; to spell the type, so these stay accepted without the predicate enumerating
+;; them.
+;; Both paths must agree with hand evaluation on every line.
+(defopaque Handle :int)
+
+;; a transparent int newtype IS its int64 payload
+(defn unhandle [h : Handle] : int h)
+
+;; a NON-heap parametric ADT return position has a crossing that grounds it and
+;; emits clean.  A :heap one (`(Cons int)`, `(Vec int)`) does not -- it lowers to
+;; a typed pointer, and that IS rejected; see
+;; tests/fixtures/errors/return-type-heap-app-vs-scalar/.
+(defn opt-carrier [o : (Option int)] : int o)
+
+;; a generic defn may legitimately declare the carrier spelling
+(defn generic-carrier [A] [x : A] : int x)
+
+;; and the identity case is not a mismatch at all
+(defstruct S [a : int])
+(defn same [x : S] : S x)
+
+(defn main [] : int
+  (println (unhandle (:: 7 :Handle)))          ; 7
+  (println (.a (same (S 41))))               ; 41
+  (println (generic-carrier 5))              ; 5
+  (println (.a (S (unhandle (:: 3 :Handle))))) ; 3
+  0)

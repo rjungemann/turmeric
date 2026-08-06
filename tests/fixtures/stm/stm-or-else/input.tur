@@ -1,0 +1,17 @@
+;; or-else: the second alternative runs only when the first requests a retry.
+;; The original file ran or-else with two identical succeeding branches and
+;; discarded the result, so it never distinguished the two arms.
+;; See docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (let [tv (tvar/new 10)]
+    ;; first branch succeeds -- the second must NOT run
+    (println (:: (atomically (stm (or-else (stm (tvar/write tv 20) (tvar/read tv))
+                                           (stm (tvar/write tv 99) (tvar/read tv)))))
+                 :int))                                              ; 20
+    (println (:: (atomically (stm (tvar/read tv))) :int))            ; 20
+    ;; first branch retries (check false) -- the second runs, in the same tx
+    (println (:: (atomically (stm (or-else (stm (check false) (tvar/read tv))
+                                           (stm (tvar/write tv 30) (tvar/read tv)))))
+                 :int))                                              ; 30
+    (println (:: (atomically (stm (tvar/read tv))) :int)))           ; 30
+  0)

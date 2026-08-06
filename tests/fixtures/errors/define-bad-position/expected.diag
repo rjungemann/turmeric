@@ -1,1 +1,1 @@
-define is only valid as a body form
+`define` here has nothing to scope over

@@ -1,0 +1,7 @@
+;; G4b: `^thread-local` and `^atomic` do not combine.  A per-thread copy is
+;; unshared by construction, so making its accesses atomic buys nothing and
+;; would suggest a synchronisation that is not happening -- which is worse than
+;; nothing, because it reads as a safety claim.
+(def ^thread-local ^atomic ^mut n 0)
+
+(defn main [] : int 0)

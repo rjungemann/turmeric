@@ -1,0 +1,68 @@
+;; A handler clause that READS and WRITES a `^mut` binding from the enclosing
+;; function -- the canonical State-effect shape (bind the state in a `let`, read
+;; it in Get, `set!` it in Put).  A clause is emitted as its own C function, so
+;; an enclosing mutable used to reach it only through the capture env BY VALUE:
+;; the `set!` referenced a variable the clause function never declared (a `cc`
+;; error naming a mangled name), and a READ silently saw the value snapshotted
+;; when the handle was INSTALLED rather than the current one.  Fixed by promoting
+;; such a mutable to a shared, typed heap cell (B7b) so every view in the
+;; function -- enclosing frame, each clause, the handle continuation -- reads and
+;; writes the same storage.  See
+;; docs/archive/handler-clause-setbang-enclosing-mut-undeclared.md.
+;; Both paths must agree with hand evaluation on every line.
+(defeffect Get []        : int
+)
+(defeffect Put [v : int] : nil)
+(defeffect GetF []        : float)
+(defeffect PutF [v : float] : nil)
+(defeffect Note [] : int)
+
+(defn counter-step [] #fx{Get Put} : nil
+  (perform (Put (+ (perform (Get)) 1))))
+
+(defn float-step [] #fx{GetF PutF} : nil
+  (perform (PutF (+ (perform (GetF)) 1.5))))
+
+(defn ping [] #fx{Note} : int (perform (Note)))
+
+(defn main [] : int
+  ;; the canonical state handler: read in Get, write in Put
+  (let [^mut s 0]
+    (handle (do (counter-step) (counter-step) (counter-step))
+      (Get []  k) (resume k s)
+      (Put [v] k) (do (set! s v) (resume k nil)))
+    (println s))                       ; 3
+  ;; a READ-only clause still sees a write the handled BODY made after install
+  (let [^mut b 5]
+    (println (handle (do (set! b 7) (ping))
+               (Note [] k) (resume k b))))   ; 7
+  ;; the cell is TYPED: an int64 cell would truncate every float write
+  (let [^mut f 7.1]
+    (handle (do (float-step) (float-step))
+      (GetF []  k) (resume k f)
+      (PutF [v] k) (do (set! f v) (resume k nil)))
+    (println f))                       ; 10.1
+  ;; a cstr mutable rides its own pointer type, not an integer pun
+  (let [^mut msg "start"]
+    (handle (ping) (Note [] k) (do (set! msg "touched") (resume k 1)))
+    (println msg))                     ; touched
+  ;; read-modify-write inside the clause
+  (let [^mut n 10]
+    (handle (do (ping) (ping) (ping))
+      (Note [] k) (do (set! n (+ n 1)) (resume k n)))
+    (println n))                       ; 13
+  ;; a `set!` nested inside a DELEGATED composite (a while loop in the clause)
+  (let [^mut w 0]
+    (handle (ping)
+      (Note [] k) (do (let [^mut i 0]
+                        (while (< i 5) (do (set! w (+ w 2)) (set! i (+ i 1)))))
+                      (resume k w)))
+    (println w))                       ; 10
+  ;; a MULTISHOT clause writing an enclosing mutable: the clause body runs once,
+  ;; its two resumes both continue into (+ 100 _)
+  (let [^mut hits 0]
+    (println (handle (+ 100 (ping))
+               (Note [] ^multishot k) (do (set! hits (+ hits 1))
+                                          (+ (resume k 1) (resume k 10)))))  ; 211
+    (println hits))                    ; 1
+  0)

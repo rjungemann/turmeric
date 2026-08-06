@@ -136,6 +136,44 @@ struct Binding {
     bool          is_continuation;
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
+    /* G3 (mutable-globals-plan §4.3), behind `--enable=global-state`: this
+     * global was exported as `(export (mut g))`, i.e. its module explicitly
+     * permits writes from outside.  A plain `(export g)` exports it READ-ONLY:
+     * importers may read it, only the defining module may `set!` it.
+     *
+     * The permission lives at the DEFINITION site, not the use site, so the
+     * decision sits with the code that owns the invariant -- the same reason
+     * `:sealed` is declared on the opaque rather than asserted by its
+     * consumers. */
+    bool          is_export_mut;
+    /* G4a (mutable-globals-plan §4.4), behind `--enable=global-state`: a
+     * `^atomic ^mut` global.  Every read lowers to TUR_ATOMIC_LOAD_* and every
+     * `set!` to TUR_ATOMIC_STORE_*, sequentially consistent.
+     *
+     * Scalars only.  The macro layer takes a POINTER, so unlike thread-local
+     * storage this works under the JIT unchanged: atomicity is an OPERATION on
+     * storage the JIT already owns, where TLS is storage the host would have to
+     * own (see src/runtime/tur_tls.c's header for the same distinction).
+     *
+     * Does NOT imply `^mut` -- decided 2026-08-05.  `^mut` is the single gate
+     * for `set!`, and a second route would make `^atomic` the only annotation
+     * conferring write permission as a side effect. */
+    bool          is_atomic;
+    /* G4b (mutable-globals-plan §4.4, §11.4), behind `--enable=global-state`:
+     * a `^thread-local` global.  Each thread gets its own copy, materialized on
+     * first access and initialized by running the declared initializer ON THAT
+     * THREAD -- which is the whole point: `(def ^thread-local buf (make-buf))`
+     * must give each thread its OWN buffer, not share one.
+     *
+     * Not `__thread`.  C has no dynamic thread-local initialization (a
+     * non-constant `__thread` initializer is "initializer element is not
+     * constant"), and c2mir has no thread-local storage at all -- it parses
+     * `_Thread_local`, warns, and treats the variable as an ordinary global, so
+     * every thread would silently share one slot under `tur jit`.  The lowering
+     * is a `pthread_key_t` instead: a libc call needs no compiler TLS support,
+     * and the key's destructor frees the per-thread block on thread exit, which
+     * `__thread` in C would not give us.  See the plan's §11. */
+    bool          is_thread_local;
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
     /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
     const char   *c_export_name;
@@ -146,6 +184,24 @@ struct Binding {
      * variant for an effectful instance method (its exported direct entry still
      * backs the dict slot), unlike a genuine `^:export-as` symbol. */
     bool          is_instance_method;
+    /* True when the elaborator minted this binding's NAME, rather than a
+     * person writing it: a lifted anonymous lambda (`__fn_774`) or a
+     * typeclass instance method (`__inst_Eq_eq_qu_int`).  There is no source
+     * form a user could navigate to and no name they could have typed, so
+     * every surface that enumerates program symbols for a human -- LSP
+     * completion, documentSymbol, workspace/symbol -- must skip these.
+     *
+     * Deliberately its own bit rather than `is_instance_method ||
+     * is_lifted_lambda`: those two are *specific* facts consulted by the
+     * emitter and the alias rule, and a consumer asking "did a person write
+     * this?" should not have to enumerate every species of synthesized
+     * binding.  A future mint site opts in with one assignment.
+     *
+     * Not the same as a `__` prefix.  The stdlib uses that spelling for its
+     * own hand-written internal helpers (`__arrow_pair_first`), which do have
+     * a source form, are worth hovering, and belong in their own file's
+     * outline.  See docs/archive/lsp-completion-internal-symbols.md. */
+    bool          is_synthesized;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
     /* LT1: Linear type checking — whether this binding holds a linear value */
@@ -315,6 +371,12 @@ struct Binding {
      * beyond that is rejected (TUR-E0378) rather than silently dropped.
      * See docs/upcoming/checked-write-frames-plan.md (WF1/WF2). */
 #define WF_MAX_FRAME_PARAMS 32u   /* mask width; see writes_param_mask below */
+/* G2: globals in a write frame are a list, not a mask -- there is no natural
+ * index for them -- so the cap is a list length rather than a word width.
+ * Chosen to match RT_WF3_MAX_TARGETS's order of magnitude; a frame naming more
+ * than this is rejected, never truncated, for the same reason a parameter past
+ * the mask width is. */
+#define WF_MAX_FRAME_GLOBALS 16u
     uint32_t            writes_param_mask;
     bool                writes_declared;
     /* WF2: true when this function's frame was VERIFIED against its body (a
@@ -324,6 +386,51 @@ struct Binding {
      * claim, so they need it checked rather than promised.  WF3's callee-frame
      * widening and WF4's entry-check elision both gate on this bit. */
     bool                writes_checked;
+    /* G1 (docs/upcoming/mutable-globals-plan.md): does this function's body
+     * write a MUTABLE GLOBAL, directly or through a callee?
+     *
+     * The `#writes` frame's vocabulary is PARAMETERS.  A global is written by
+     * name rather than passed, so it is outside that vocabulary entirely and a
+     * frame can neither name it nor exclude it -- which meant a body declaring
+     * `#writes []` ("writes nothing") could mutate global state and still be
+     * stamped VERIFIED.  VERIFIED is what an optimization may act on, so that
+     * claim has to stop being available to a body that writes a global.
+     *
+     * Kept SEPARATE from `writes_param_mask` for the same reason
+     * `writes_declared` is separate from the mask: the two questions have
+     * different vocabularies and collapsing them would make one of the answers
+     * mean something it does not.  This bit only ever DOWNGRADES a verdict
+     * (VERIFIED -> UNVERIFIED); it never produces a diagnostic, because a
+     * global write is outside the frame's vocabulary rather than outside the
+     * declared frame -- "I cannot check this" is not "you did something
+     * wrong". */
+    enum WritesGlobal {
+        WG_UNCOMPUTED = 0,  /* memo empty; a zeroed Binding starts here */
+        WG_NO,              /* walked the body and every resolvable callee */
+        WG_YES,             /* a global assignment was seen */
+        WG_UNKNOWN,         /* something could not be vouched for */
+        WG_IN_PROGRESS,     /* on the current recursion stack (cycle guard) */
+    }                   writes_global;
+    /* G2 (mutable-globals-plan §4.2), behind `--enable=global-state`: the
+     * globals this function's `#writes` frame DECLARES, and (memoized beside
+     * the verdict above) the globals its body actually writes.
+     *
+     * Two lists rather than one because they answer the two halves of the same
+     * question the parameter mask answers for arguments: declared-but-unwritten
+     * is fine (a frame is an upper bound), written-but-undeclared is
+     * TUR-E0382.  Symbols rather than Bindings -- a global is identified by
+     * name at the frame site, and the walk that collects the written set works
+     * on forms.
+     *
+     * `writes_globals_overflow` is set when the body writes more distinct
+     * globals than the collector can record; coverage is then unanswerable and
+     * the verdict degrades to UNVERIFIED rather than silently claiming the
+     * frame holds. */
+    const struct Symbol **writes_globals_declared;
+    uint32_t              n_writes_globals_declared;
+    const struct Symbol **writes_globals_seen;
+    uint32_t              n_writes_globals_seen;
+    bool                  writes_globals_overflow;
     /* RT4: the refinement this function's RESULT satisfies -- either declared
      * (`: #refine{ r : T | q }`) or inferred by template propagation.  A call
      * appearing inside a predicate or an argument asserts it about the value
@@ -923,6 +1030,8 @@ typedef struct DefModule {
     const char *docstring;       /* optional docstring (or NULL) */
     const Symbol **exports;           /* exported symbols */
     uint32_t n_exports;
+    const Symbol **exports_mut;       /* G3: names in (export (mut g)) -- writable outside */
+    uint32_t       n_exports_mut;
     const Symbol **exported_effects;  /* PR5-3-B: effect names in (export (effect Name)) */
     uint32_t       n_exported_effects;
     ImportSpec *imports;         /* import specs */

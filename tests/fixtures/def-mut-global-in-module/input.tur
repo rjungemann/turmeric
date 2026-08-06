@@ -1,0 +1,16 @@
+;; A module-prefixed global carries ^mut through the same name mangling.
+(defmodule ctr)
+
+(def ^mut hits 0)
+
+(defn hit [] : void
+  (set! hits (+ hits 1)))
+
+(defn total [] : int
+  hits)
+
+(defn main [] : int
+  (hit)
+  (hit)
+  (println (total))
+  0)

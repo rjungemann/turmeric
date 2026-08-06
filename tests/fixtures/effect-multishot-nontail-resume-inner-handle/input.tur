@@ -1,0 +1,39 @@
+;; A ^multishot handler clause that resumes in NON-tail position, where the
+;; resumed continuation re-enters an inner `handle`.  The compiled path used to
+;; print 2 (rest of clause discarded), then 2 and 20 (outer continuation run
+;; once per resume) -- both silent wrong answers.  Fixed by scoping the
+;; tail-resume trampoline to dk_invoke (layer 1) and unifying the handle
+;; chain's two spines (layer 2: the handle-continuation frame is a RESUME-FRAME
+;; whose `next` is the actual, borrowed enclosing chain).  See
+;; docs/archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md.
+;; Both paths must agree with hand evaluation on every line.
+(defeffect Ask [] : int)
+(defeffect Log [n : int] : int)
+
+(defn main [] : int
+  ;; the repro: resume k 1 -> Log doubles -> 2; resume k 10 -> 20; 2 + 20
+  (println (handle
+             (handle (let [v (perform (Ask))] (perform (Log v)))
+                     (Log [n] k2) (resume k2 (* n 2)))
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 10))))
+  ;; weighted: pins WHERE each resume's value landed (1000*2 + 20)
+  (println (handle
+             (handle (let [v (perform (Ask))] (perform (Log v)))
+                     (Log [n] k2) (resume k2 (* n 2)))
+             (Ask [] ^multishot k) (+ (* 1000 (resume k 1)) (resume k 10))))
+  ;; inner handler resumes NON-tail: exercises dk_perform's inline path
+  (println (handle
+             (handle (let [v (perform (Ask))] (perform (Log v)))
+                     (Log [n] k2) (+ 0 (resume k2 (* n 2))))
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 10))))
+  ;; perform in arg position: same mechanism, different lowering shape
+  (println (handle
+             (handle (perform (Log (perform (Ask))))
+                     (Log [n] k2) (resume k2 (* n 2)))
+             (Ask [] ^multishot k) (+ (resume k 1) (resume k 10))))
+  ;; single resume with the inner handle: was always right, must stay right
+  (println (handle
+             (handle (let [v (perform (Ask))] (perform (Log v)))
+                     (Log [n] k2) (resume k2 (* n 2)))
+             (Ask [] ^multishot k) (resume k 7)))
+  0)

@@ -1,0 +1,14 @@
+;; G1 does NOT suppress an EXCEEDED report.  Writing a global is not an excuse
+;; for also writing outside a declared frame: that is a claim about PARAMETERS
+;; and it stands on its own.  The global write downgrades VERIFIED, it does not
+;; launder E0382.
+(def ^mut hidden 0)
+(defstruct Ctr [n : int])
+
+(defn exceeds [^mut a : Ctr ^mut b : Ctr] #writes [a] : int
+  (set! (.n a) 1)
+  (set! (.n b) 2)
+  (set! hidden 1)
+  0)
+
+(defn main [] : int 0)

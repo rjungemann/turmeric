@@ -407,3 +407,7 @@ defn start-auth-module [] :int
 | `TUR-W0600` | `defdynamic` name does not use `*earmuffs*` convention |
 
 Run `tur explain TUR-E0600` (etc.) for full explanations with examples.
+
+## See also
+
+- [mutable-globals-guide.md](mutable-globals-guide.md) -- `def ^mut`, `^atomic`, `^thread-local`, and what the concurrency annotations do not cover

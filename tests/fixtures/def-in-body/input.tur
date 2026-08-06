@@ -1,0 +1,46 @@
+;; `def` in a body position binds a name scoped over the rest of the body --
+;; the same thing `define` does.  One form, two positions.
+(defn compute [] : int
+  (def x 10)
+  (def y 32)
+  (+ x y))
+
+(defn via-fn [] : int
+  (let [f (fn [n : int] : int
+            (def offset 5)
+            (+ n offset))]
+    (f 5)))
+
+(defn via-let [] : int
+  (let [a 5]
+    (def b 3)
+    (+ a b)))
+
+(defn via-do [] : int
+  (do
+    (def p 1)
+    (def q (+ p 1))
+    q))
+
+(defn via-when [] : int
+  (let [^mut out 0]
+    (when true
+      (do (def w 7)
+          (set! out w)))
+    out))
+
+(defn via-while [] : int
+  (let [^mut n 0]
+    (while (< n 1)
+      (do (def step 1)
+          (set! n (+ n step))))
+    n))
+
+(defn main [] : int
+  (println (compute))
+  (println (via-fn))
+  (println (via-let))
+  (println (via-do))
+  (println (via-when))
+  (println (via-while))
+  0)

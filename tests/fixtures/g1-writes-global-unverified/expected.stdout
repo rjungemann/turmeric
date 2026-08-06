@@ -1,0 +1,6 @@
+write-frame sneaky: UNVERIFIED mask=0x0 frame=VERIFIED global=YES
+write-frame local-only: VERIFIED mask=0x0 frame=VERIFIED global=NO
+write-frame calls-clean: VERIFIED mask=0x0 frame=VERIFIED global=NO
+1
+7.1
+7

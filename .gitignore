@@ -59,14 +59,20 @@ tests/.stamp-cache-turi/
 tests/.stamp-cache-jit/
 tests/doctest-generated/
 /tmp/tur-build/
-tur
-hello
-debug_iter
-hamt-bench-insert
-input
-hash_map
-primes
-sort
+# Stray binaries from ad-hoc builds in the repo ROOT.  Anchored with a leading
+# slash: unanchored, each of these matches a path component of that name at ANY
+# depth, so `hello` silently ignored the whole tests/fixtures/hello/ directory
+# and its input.tur could never be committed -- which is how that fixture came
+# to have a tracked expected.stdout and nothing to produce it.  See
+# docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+/tur
+/hello
+/debug_iter
+/hamt-bench-insert
+/input
+/hash_map
+/primes
+/sort
 
 # Test/build output files
 actual_test.stderr

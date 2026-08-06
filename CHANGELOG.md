@@ -2,6 +2,125 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`^thread-local` on a top-level `def`**, behind `--enable=global-state`.
+  Each thread gets its own copy, materialized on first access and initialized by
+  running the declared initializer *on that thread* -- so
+  `(def ^thread-local buf (make-buf))` gives each thread its own buffer rather
+  than sharing one. Lowered to a `pthread_key_t` holding one per-thread block,
+  not `__thread`: C has no dynamic thread-local initialization, and the JIT's
+  c2mir has no thread-local storage at all (it would silently share one slot
+  across threads). The key's destructor frees the block on thread exit. Under
+  `tur --interpret` it is a plain global -- turi has no user-reachable thread
+  spawn, so there is no second thread for it to differ on. Does not combine with
+  `^atomic`, and its initializer may not reference another `^thread-local`.
+- **`^atomic` on a top-level `def`**, behind `--enable=global-state`. Every read
+  of a `^atomic ^mut` global lowers to a sequentially-consistent load and every
+  `set!` to a sequentially-consistent store. The practical benefit is as much
+  the *load*: a bare global read in a loop may be cached in a register, so a
+  spinning reader would never observe another thread's store however atomically
+  it was made. **It does not make `(set! c (+ c 1))` safe** -- that is a load
+  then a store, not an atomic read-modify-write, and two threads still lose
+  updates; use `stdlib/atomic.tur`'s CAS/fetch-add or a lock. Eight-byte scalars
+  only (`:int`, `:float`, `:cstr`, `:ptr`); anything else is refused with a
+  reason. `^atomic` does not imply `^mut`.
+- **An exported global is read-only outside its defining module**, behind
+  `--enable=global-state`. A module that exports a counter for reading no longer
+  thereby exports it for writing; `set!` on another module's global names the
+  owning module and both ways out. The permission is granted at the definition
+  site with `(export (mut g))` -- reusing the structured-export form
+  `(export (effect Name))` established, rather than adding an annotation -- so
+  the decision sits with the code that owns the invariant. Only bites across a
+  real module boundary: single-file programs and in-module writes are
+  untouched. `(mut ...)` on a function or an immutable global is rejected by
+  name rather than left inert.
+- **A `#writes` frame may name a mutable global**, behind
+  `--enable=global-state`. `(defn bump! [] #writes [hits] : void ...)` lets a
+  body that maintains global state carry a *checked* frame instead of being
+  declined outright, and a frame may mix the two (`#writes [a hits]`). Coverage
+  works as it does for parameters: writing a global the frame does not name is
+  `TUR-E0382` naming the global, declared-but-unwritten is fine (a frame is an
+  upper bound), and an unresolvable body is UNVERIFIED. Naming an immutable
+  global is `TUR-E0381` with its own reason. Deliberately `#writes` only --
+  `#reads` grants congruence, so a global there would let a promise about
+  mutable global state pay out in proofs.
+- **`--dump-write-frames`** prints the checked verdict for every declared
+  `#writes` frame, with the frame's own verdict and the global-write answer as
+  separate columns (`frame=VERIFIED global=YES`). A diagnostic knob, not an
+  experiment: it reports what the checker decided and changes nothing.
+
+- **`^mut` on a top-level `def` -- mutable globals.** `(def ^mut hits 0)` gives
+  static storage that `set!` may write. This closes a dead end: `set!` on a
+  global already advised "use `^mut` at the binding site", and the binding site
+  rejected `^mut`, so the only fix the diagnostic named did not exist. Without
+  the annotation a global stays immutable and `set!` on it is still an error.
+  A `^mut` global is process-wide mutable state with no synchronization --
+  nothing checks that it is shared safely across threads.
+- **`def` annotations may appear in any order**, matching `let`:
+  `(def ^mut ^persistent c ...)` and `(def ^persistent ^mut c ...)` are the
+  same declaration.
+
+### Changed
+
+- **`def` and `define` are one form; position, not spelling, selects the
+  meaning.** `def` at the top level is a global binding (unchanged, and
+  redefining is still an error); `def` in a body is a binding scoped over the
+  rest of the body -- what `define` has always done. `define` is an accepted
+  alias for `def` in both positions. Nothing that compiled before compiles
+  differently: every change is a position or spelling that used to be an error
+  becoming legal. See
+  [docs/upcoming/def-define-consolidation-plan.md](docs/upcoming/def-define-consolidation-plan.md).
+- **A name defined at the REPL prompt with `define` now survives to the next
+  turn.** `define` used to error at the top level, so the REPL worked around it
+  by wrapping each turn containing one in an implicit `(do ...)` -- which also
+  scoped the binding to that single turn. A top-level `define` is a real
+  top-level binding now, so the wrap is gone. Anyone relying on the
+  turn-scoped behaviour was relying on a workaround.
+- **A body binding takes a `: type` ascription**, in either the spaced
+  (`(def x : float 7.1)`) or fused (`(def x :float 7.1)`) spelling, matching
+  top-level `def` and `let`. It used to be an error.
+- **A `def`/`define` in an expression position gets an explanation instead of a
+  rule.** `(if c (def x 1) ...)` now says the binding has nothing to scope
+  over, and names the positions that would work.
+
+### Fixed
+
+- **A `#writes` frame is no longer VERIFIED when the body writes a mutable
+  global** (behind `--enable=write-frames`). A frame's vocabulary is
+  *parameters*; a global is written by name rather than passed, so `#writes []`
+  means "writes none of my arguments", not "writes no storage anywhere" -- and
+  a body declaring it could mutate global state and still be stamped VERIFIED,
+  which is the tier an optimization may act on. The verdict now downgrades to
+  UNVERIFIED, silently: a global write is outside the frame's vocabulary rather
+  than outside the declared frame, so no program stops compiling and no
+  diagnostic is added. The fact propagates through callees, including callees
+  that receive none of the caller's parameters. An EXCEEDED frame is still
+  reported -- a global write does not launder TUR-E0382. See
+  [docs/upcoming/mutable-globals-plan.md](docs/upcoming/mutable-globals-plan.md).
+- **Statements above the first body-level `define` are no longer silently
+  dropped.** The define splice built its `let` from the first `define` onward
+  and discarded everything before it, so in
+  `(defn main [] : int (println "before") (define x 1) (println x) 0)` the
+  first `println` never ran and the program printed only `1`. It now prints
+  both lines.
+- **`^persistent` and `^deprecated` on a body binding are rejected rather than
+  quietly ignored.** `^persistent` was accepted by the splice and demoted to an
+  ordinary `let` binding -- i.e. it silently did not do what it said. Both are
+  top-level-`def` annotations and now say so.
+- **Every `def` annotation is now either accepted or rejected by name.**
+  `^linear`, `^relevant`, `^affine`, and `^unique` on a top-level `def` used to
+  fall through to a generic arity diagnostic that never mentioned the
+  annotation. Each is now refused with its own reason: `^linear` and
+  `^relevant` are verified when a binding's scope ends and a global's never
+  does; `^affine` would count elaboration sites across the program rather than
+  uses at run time, so two functions naming the global would be rejected even
+  if only one ever ran; `^unique` asserts no aliasing, which a name every
+  function can reach cannot have. An unrecognized `^`-led annotation says
+  "unknown annotation" and lists what `def` accepts.
+
 ## [0.33.2] -- 2026-08-02
 
 ### Added

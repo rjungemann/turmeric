@@ -1,0 +1,4 @@
+(def x 1)
+(define x 2)
+
+(defn main [] : int 0)

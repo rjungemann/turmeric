@@ -174,6 +174,9 @@ typedef struct Elab {
     TypeClassEnv typeclass_env;
 
     /* Cached symbols for special-form dispatch. */
+    /* G3 (mutable-globals-plan §4.3): the head of an `(export (mut g))` entry,
+     * which marks an exported global as writable from outside its module. */
+    const Symbol *sym_export_mut;
     const Symbol *sym_def;
     const Symbol *sym_define; /* internal define -- body form only */
     const Symbol *sym_let;
@@ -202,7 +205,11 @@ typedef struct Elab {
     const Symbol *sym_caret_unique;     /* ^unique -- unique value annotation */
     /* ST0: Substructural types */
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
-    const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
+    const Symbol *sym_caret_relevant;
+    /* G4a (mutable-globals-plan §4.4): `^atomic` on a top-level `def`. */
+    const Symbol *sym_caret_atomic;
+    /* G4b (mutable-globals-plan §4.4, §11.4): `^thread-local` on a `def`. */
+    const Symbol *sym_caret_thread_local;   /* ^relevant -- relevant value annotation */
     /* LB1: ^borrow -- non-consuming parameter annotation for linear/affine handles */
     const Symbol *sym_caret_borrow;     /* ^borrow -- borrow (read without consuming) annotation */
     const Symbol *sym_caret_fat;        /* ^fat -- fat-closure-consuming parameter (A#1) */
@@ -1002,6 +1009,9 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
  * the ones that hold and emitting TUR-E0382 on the ones that do not. */
 void wf_resolve_write_frames(Elab *e);
 
+/* G4a: may this kind be loaded/stored atomically in one machine operation? */
+bool type_is_atomic_scalar(TypeKind k);
+
 /* Record that macro-call form `call` elaborated to `expansion`, so the
  * crossing path walk can traverse INTO the expansion (macro-GENERATED
  * crossings/guards are otherwise unreachable from the source caller body).
@@ -1269,6 +1279,22 @@ bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body);
  * shape match. */
 bool return_type_bool_integer_conflict(TypeKind declared, Type body);
 
+/* carrier-aware-return-unification Phase 2c: exactly one side is an aggregate
+ * that does NOT ride the int64 carrier -- a by-value record ADT (`tur_adt_S`),
+ * or a :heap one (a typed pointer to it) -- and the other is a concrete,
+ * register-pinned scalar.  Every tolerance above exists because both sides are
+ * `int64_t` in the emitted C and the mismatch is a real bridge; here they are
+ * different C types, so the program does not compile at all.  Membership is
+ * decided by asking `type_c_name`, the function codegen itself uses, so a
+ * transparent int newtype or a carrier-swallowed ADT-app is tolerated without
+ * this predicate having to enumerate them.  Unlike the reverse-pointer-scalar
+ * and bool-vs-integer checks this is NOT gated on the return class: those
+ * tolerate a bridge between two things that are both `int64_t` in the emitted
+ * C, and a by-value aggregate is not one of them, so no carrier class makes it
+ * sound.  Only the bare, unparameterised record ADT counts -- a parametric
+ * return has a crossing that grounds it. */
+bool return_type_carrier_aggregate_conflict(Type declared, Type body);
+
 /* carrier-aware-return-unification: classify a return position so the shared
  * dispatcher knows how much to reject against the int64 carrier ABI.
  *   RET_CLASS_COMMITTED -- a genuinely committed position: a monomorphic,
@@ -1302,6 +1328,7 @@ typedef enum {
     RET_CONFLICT_POINTER_SCALAR,
     RET_CONFLICT_TYPE_REVERSE,
     RET_CONFLICT_BOOL_INTEGER,
+    RET_CONFLICT_CARRIER_AGGREGATE,
 } ReturnConflict;
 
 /* carrier-aware-return-unification: single dispatcher over the return-position
@@ -1344,7 +1371,6 @@ Expr *elab_unsafe(Elab *e, const Form *call);
 
 /* elab_forms.c */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span);
-Expr *elab_define_error(Elab *e, const Form *call);
 Expr *elab_let(Elab *e, const Form *call);
 Expr *elab_letstar(Elab *e, const Form *call);
 Expr *elab_letrec(Elab *e, const Form *call);

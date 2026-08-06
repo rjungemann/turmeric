@@ -1,0 +1,31 @@
+;; A `perform` of an outer-handled effect INSIDE a `while` inside a `handle`
+;; clause is outside the CPS backend's admissible subset: the loop is emitted
+;; as a synthesized helper that, in a handler-case context, is entered with a
+;; NULL DK continuation (its result is returned, not dk_run) -- so an interior
+;; perform would hand the DK machine a null chain at run time.
+;; case_loop_body_ok therefore rejects interior control ops (perform / handle /
+;; reset / await), the enclosing function evicts, and its perform reaches the
+;; direct emitter's located error.
+;;
+;; `resume` inside the loop is fine (it targets the case's own k, not the
+;; chain) -- see tests/fixtures/effect-multishot-resume-in-loop.
+;;
+;; What this fixture pins is the diagnostic: a source location and a
+;; workaround, not an abort().  If interior performs in a case loop are ever
+;; admitted (the loop helper given a real chain to thread), delete this
+;; fixture and make the program a passing one instead.
+;;
+;; requires.compiled: turi evaluates handlers directly and runs this program
+;; fine (prints 3) -- the limitation is the compiled path's.
+(defeffect Ask [] : int)
+(defeffect Log [n : int] : int)
+
+(defn main [] : int
+  (println (handle
+             (handle (perform (Ask))
+                     (Ask [] k)
+                     (let [^mut i 0]
+                       (while (< i 3) (perform (Log i)) (set! i (+ i 1)))
+                       i))
+             (Log [n] k2) (resume k2 n)))
+  0)

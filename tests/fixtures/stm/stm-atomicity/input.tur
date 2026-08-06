@@ -1,0 +1,20 @@
+;; Atomicity: a write is buffered in the transaction's log, so the SAME
+;; transaction reads its own write (read-your-writes) while a later one sees
+;; only what was committed.  The original file claimed to "verify writes are
+;; not visible until commit" but read the TVar inside the writing transaction
+;; and threw the result away, so it could not have told the two apart.
+;; See docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (let [tv (tvar/new 1)]
+    ;; read-your-writes: inside the transaction the buffered 42 is what reads see
+    (println (:: (atomically (stm (tvar/write tv 42) (tvar/read tv))) :int))  ; 42
+    ;; and it committed, so the next transaction sees it too
+    (println (:: (atomically (stm (tvar/read tv))) :int))                     ; 42
+    ;; a cas against the committed value succeeds; against a stale one it fails.
+    ;; The bool is printed as a bool: `(:: b :int)` prints 1/0 compiled but
+    ;; true/false interpreted, which is a divergence of its own -- see
+    ;; docs/reported/ascribe-bool-to-int-prints-differently-per-path.md.
+    (println (atomically (stm (tvar/cas tv 42 43))))                          ; true
+    (println (atomically (stm (tvar/cas tv 42 99))))                          ; false
+    (println (:: (atomically (stm (tvar/read tv))) :int)))                    ; 43
+  0)

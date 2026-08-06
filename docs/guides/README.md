@@ -61,8 +61,9 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 ## Language Basics
 
-- **[binding-forms-guide.md](binding-forms-guide.md)** -- Internal `define`, `letrec`, and named-let -- the three local binding idioms that complement `let` and `defn`
+- **[binding-forms-guide.md](binding-forms-guide.md)** -- Body-level `def`, `letrec`, and named-let -- the three local binding idioms that complement `let` and `defn`
 - **[data-literals-guide.md](data-literals-guide.md)** -- Compact literal syntax for maps, vecs, and sets using `#map{...}`, `#set{...}`, and `[...]`
+- **[mutable-globals-guide.md](mutable-globals-guide.md)** -- `def ^mut`, what the compiler checks about a global write, and the concurrency story -- including what it deliberately does not cover
 - **[numeric-tower-guide.md](numeric-tower-guide.md)** -- Exact `Rational` and hand-written `Complex` arithmetic, the `#rat{...}` / `#cx{...}` literals, and `Num`-typeclass operator overloading
 - **[strings-guide.md](strings-guide.md)** -- The `cstr` vs `str` vs `String` tiering -- which string type to reach for, and when an owned `String` must replace a borrowed `cstr`
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, and exports
@@ -243,7 +244,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 **By topic:**
 - Getting Started → [quickstart.md](quickstart.md), [syntax-guide.md](syntax-guide.md), [repl.md](repl.md), [repl-tutorial.md](repl-tutorial.md), [releases-and-installation-guide.md](releases-and-installation-guide.md)
-- Language Basics → [structs-guide.md](structs-guide.md), [sum-types-guide.md](sum-types-guide.md), [strings-guide.md](strings-guide.md), [module-system-guide.md](module-system-guide.md), [binding-forms-guide.md](binding-forms-guide.md), [function-arity-guide.md](function-arity-guide.md), [currying-guide.md](currying-guide.md), [cli-args-guide.md](cli-args-guide.md)
+- Language Basics → [structs-guide.md](structs-guide.md), [sum-types-guide.md](sum-types-guide.md), [strings-guide.md](strings-guide.md), [module-system-guide.md](module-system-guide.md), [binding-forms-guide.md](binding-forms-guide.md), [mutable-globals-guide.md](mutable-globals-guide.md), [function-arity-guide.md](function-arity-guide.md), [currying-guide.md](currying-guide.md), [cli-args-guide.md](cli-args-guide.md)
 - Type System → [polymorphism-guide.md](polymorphism-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [row-types-guide.md](row-types-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md), [sized-primitives-guide.md](sized-primitives-guide.md)
 - Advanced Types → [gadts-guide.md](gadts-guide.md), [existential-types-guide.md](existential-types-guide.md), [opaques-guide.md](opaques-guide.md), [advanced-type-system-rationale.md](advanced-type-system-rationale.md)
 - Type Safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)

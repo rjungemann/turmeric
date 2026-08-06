@@ -681,6 +681,10 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     const Symbol **exp_effects = NULL;
     uint32_t n_exp_effects = 0;
     uint32_t cap_exp_effects = 0;
+    /* G3: names from `(export (mut g))` -- exported AND writable from outside. */
+    const Symbol **exp_mut = NULL;
+    uint32_t n_exp_mut = 0;
+    uint32_t cap_exp_mut = 0;
 
     /* Collect import specs */
     ImportSpec *imports = NULL;
@@ -695,7 +699,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
         if (head->tag != F_SYM) break;
 
         if (head->as.sym == e->sym_export) {
-            /* Parse (export sym1 sym2 ... (effect Name) ...) */
+            /* Parse (export sym1 sym2 ... (effect Name) ... (mut g) ...) */
             for (uint32_t j = 1; j < item->as.list.len; j++) {
                 Form *sf = item->as.list.items[j];
                 if (sf->tag == F_SYM) {
@@ -713,7 +717,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                     if (ename_f->tag != F_SYM) {
                         diag_emit(DIAG_ERROR, ename_f->span,
                                   "effect name in export list must be a symbol");
-                        free(exports); free(exp_effects); free(imports);
+                        free(exports); free(exp_effects); free(exp_mut); free(imports);
                         return NULL;
                     }
                     if (n_exp_effects >= cap_exp_effects) {
@@ -721,10 +725,34 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                         exp_effects = (const Symbol **)realloc(exp_effects, cap_exp_effects * sizeof(Symbol *));
                     }
                     exp_effects[n_exp_effects++] = ename_f->as.sym;
+                } else if (sf->tag == F_LIST && sf->as.list.len == 2
+                           && sf->as.list.items[0]->tag == F_SYM
+                           && sf->as.list.items[0]->as.sym == e->sym_export_mut) {
+                    /* G3: (mut g) -- export g AND permit writes from outside.
+                     * The name is exported normally as well, so a reader needs
+                     * no second entry. */
+                    Form *gname_f = sf->as.list.items[1];
+                    if (gname_f->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, gname_f->span,
+                                  "name in (mut ...) export must be a symbol");
+                        free(exports); free(exp_effects); free(exp_mut); free(imports);
+                        return NULL;
+                    }
+                    if (n_exports >= cap_exports) {
+                        cap_exports = cap_exports ? cap_exports * 2 : 4;
+                        exports = (const Symbol **)realloc(exports, cap_exports * sizeof(Symbol *));
+                    }
+                    exports[n_exports++] = gname_f->as.sym;
+                    if (n_exp_mut >= cap_exp_mut) {
+                        cap_exp_mut = cap_exp_mut ? cap_exp_mut * 2 : 4;
+                        exp_mut = (const Symbol **)realloc(exp_mut, cap_exp_mut * sizeof(Symbol *));
+                    }
+                    exp_mut[n_exp_mut++] = gname_f->as.sym;
                 } else {
                     diag_emit(DIAG_ERROR, sf->span,
-                              "export list entries must be symbols or (effect Name) forms");
-                    free(exports); free(exp_effects); free(imports);
+                              "export list entries must be symbols, (effect Name), "
+                              "or (mut global) forms");
+                    free(exports); free(exp_effects); free(exp_mut); free(imports);
                     return NULL;
                 }
             }
@@ -736,7 +764,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                 imports = (ImportSpec *)realloc(imports, cap_imports * sizeof(ImportSpec));
             }
             if (!parse_import_spec(e, item, &imports[n_imports])) {
-                free(exports); free(exp_effects); free(imports);
+                free(exports); free(exp_effects); free(exp_mut); free(imports);
                 return NULL;
             }
             n_imports++;
@@ -762,6 +790,14 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
         mod->n_exports = n_exports;
     }
     free(exports); exports = NULL;
+
+    /* G3: copy the writable-export list to the arena beside the exports. */
+    if (n_exp_mut > 0) {
+        mod->exports_mut = (const Symbol **)arena_alloc(e->arena, n_exp_mut * sizeof(Symbol *));
+        for (uint32_t j = 0; j < n_exp_mut; j++) mod->exports_mut[j] = exp_mut[j];
+        mod->n_exports_mut = n_exp_mut;
+    }
+    free(exp_mut); exp_mut = NULL;
 
     /* PR5-3-B: Copy exported_effects to arena */
     if (n_exp_effects > 0) {
@@ -943,6 +979,40 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
             /* Macro exports don't need is_exported flag; they're collected by elab_load_module. */
         } else {
             exp_b->is_exported = true;
+            /* G3: a global listed as `(mut g)` is writable from outside.
+             * Rejected by name on anything that cannot be written, rather than
+             * accepted and left inert -- `(export (mut some-defn))` would
+             * otherwise be a silently-meaningless annotation, which is the
+             * exact shape the `def` annotation audit exists to prevent. */
+            for (uint32_t k = 0; k < mod->n_exports_mut; k++) {
+                if (mod->exports_mut[k] != mod->exports[j]) continue;
+                /* A top-level `defn` is `is_global` too, so staticness alone
+                 * does not separate a data global from a function.  The fn type
+                 * (or a backing FnDef) is what does. */
+                if (!exp_b->is_global || exp_b->type.kind == TY_FN ||
+                    exp_b->source_fn_def != NULL) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "(export (mut %s)): '%s' is not a mutable global -- "
+                              "`(mut ...)` marks an exported global as writable "
+                              "from outside this module; export a function plainly",
+                              mod->exports[j]->name, mod->exports[j]->name);
+                    e->current_module_name = NULL;
+                    e->current_module = NULL;
+                    return NULL;
+                }
+                if (!exp_b->is_mut) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "(export (mut %s)): '%s' is an immutable global -- "
+                              "nothing can write it; declare it `^mut` or export "
+                              "it plainly",
+                              mod->exports[j]->name, mod->exports[j]->name);
+                    e->current_module_name = NULL;
+                    e->current_module = NULL;
+                    return NULL;
+                }
+                exp_b->is_export_mut = true;
+                break;
+            }
         }
     }
 

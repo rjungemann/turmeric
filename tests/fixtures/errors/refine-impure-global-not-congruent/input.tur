@@ -1,0 +1,37 @@
+;; SOUNDNESS REGRESSION FIXTURE -- the MUTABLE GLOBAL route into the congruence
+;; hole, and the one errors/refine-impure-fx-empty could not cover.
+;;
+;; That fixture's comment names three routes the effect system infers nothing
+;; from: `set!`, a mutable global, and inline C.  It pins the inline-C one with
+;; a `static` counter in a C block, because when it was written a global could
+;; not BE mutable -- `^mut` on a top-level `def` only arrived with
+;; docs/upcoming/def-define-consolidation-plan.md D4.  This is the same hole
+;; through the newly-expressible door.
+;;
+;; `m` reads a mutable global, so two calls with equal arguments can disagree.
+;; If it were treated as a congruent pure measure the two `(m x)` terms would
+;; collapse, the solver would carry "(m x) > 0" across the mutation, and the
+;; Pos crossing would be "proved" -- eliding the check that catches the real
+;; answer of -995.
+;;
+;; It is NOT congruent: rt_classify_expr's EX_VAR case answers UNKNOWN for a
+;; read of any `is_mut` binding, and `is_mut` is exactly the flag a `^mut`
+;; global carries.  So the obligation is refuted and the runtime check survives.
+;; The check firing at run time is the correct outcome; this fixture asserts the
+;; compile-time half -- that the obligation is not silently proved away.
+(load "stdlib/refine.tur")
+
+(def ^mut fudge 1)
+
+(defn m [x : int] : int (+ x fudge))
+
+(defn needs-pos [p : Pos] : int p)
+
+(defn probe [x : int] : int
+  (if (> (m x) 0)
+    (do
+      (set! fudge -1000)
+      (needs-pos (m x)))
+    0))
+
+(defn main [] : int (println (probe 5)) 0)

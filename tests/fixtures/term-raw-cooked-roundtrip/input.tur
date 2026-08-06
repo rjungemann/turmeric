@@ -1,0 +1,125 @@
+;; Regression: term/set-cooked must restore the state term/set-raw saved.
+;;
+;; The two functions used to declare a `static struct termios saved_termios`
+;; each, inside their own inline-C body.  A `static` in an inline-C body is
+;; local to the one C function that body lowers to, so those were two distinct
+;; objects: set-cooked restored a zero-initialized termios rather than the mode
+;; set-raw had read.  A zeroed termios is closer to raw than to cooked -- no
+;; ICANON, no ECHO, no OPOST -- so the terminal was left broken.
+;;
+;; Nothing in the suite could catch that, because both functions bail out early
+;; unless the fd is a terminal whose foreground process group is ours, and CI
+;; always runs with stdout redirected.  So this fixture builds a terminal: it
+;; opens a pty, forks, and in the child calls setsid + TIOCSCTTY to make the
+;; pty slave the child's controlling terminal.  The tcgetpgrp guard inside
+;; term/set-raw then passes and the real code path runs.  The parent waits and
+;; exits with the child's status, so only the child prints.
+(load "stdlib/term.tur")
+
+;; Open a pty and become a session whose controlling terminal is its slave.
+;; Only the child returns; the parent forwards the child's exit status.
+;; Returns the slave fd, or -1 if the pty could not be set up.
+(defn pty-enter-child [] : int
+  ```c
+  #include <fcntl.h>
+  #include <stdlib.h>
+  #include <sys/ioctl.h>
+  #include <sys/wait.h>
+  #include <termios.h>
+  #include <unistd.h>
+  /* Declared rather than reached via <stdlib.h>: the generated file's feature
+   * test macros are fixed at its top, before any inline-C body is spliced in,
+   * and glibc hides these behind _XOPEN_SOURCE.  The signatures are the same
+   * on glibc and on macOS. */
+  extern int posix_openpt(int);
+  extern int grantpt(int);
+  extern int unlockpt(int);
+  extern char *ptsname(int);
+  int m = posix_openpt(O_RDWR | O_NOCTTY);
+  if (m < 0) return -1;
+  if (grantpt(m) != 0 || unlockpt(m) != 0) return -1;
+  const char *sn = ptsname(m);
+  if (!sn) return -1;
+  char name[256];
+  snprintf(name, sizeof name, "%s", sn);
+  /* Flush before forking so buffered stdout is not written twice. */
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid < 0) return -1;
+  if (pid > 0) {
+    int st = 0;
+    if (waitpid(pid, &st, 0) < 0) _exit(1);
+    _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 1);
+  }
+  /* setsid() needs the caller not to be a process-group leader; the child of
+   * a fork never is.  TIOCSCTTY then attaches the slave as our controlling
+   * terminal, which is what makes tcgetpgrp(slave) == getpgrp(). */
+  if (setsid() < 0) _exit(1);
+  int s = open(name, O_RDWR);
+  if (s < 0) _exit(1);
+  if (ioctl(s, TIOCSCTTY, 0) != 0) _exit(1);
+  return (int64_t)s;
+  ```)
+
+;; ICANON off is the headline difference between raw and cooked.
+(defn tty-canonical? [fd : int] : bool
+  ```c
+  struct termios t;
+  if (tcgetattr((int)fd, &t) != 0) return false;
+  return (t.c_lflag & ICANON) != 0;
+  ```)
+
+(defn tty-echo? [fd : int] : bool
+  ```c
+  struct termios t;
+  if (tcgetattr((int)fd, &t) != 0) return false;
+  return (t.c_lflag & ECHO) != 0;
+  ```)
+
+;; FNV-1a over the four flag words and the control characters -- the fields
+;; POSIX defines.  Padding and the non-standard speed members are skipped so
+;; the digest is comparable across runs.  Two digests being equal is the whole
+;; claim: the mode after the round trip is the mode before it.
+(defn tty-mode-digest [fd : int] : int
+  ```c
+  struct termios t;
+  if (tcgetattr((int)fd, &t) != 0) return -1;
+  uint64_t h = 1469598103934665603ULL;
+  tcflag_t flags[4] = { t.c_iflag, t.c_oflag, t.c_cflag, t.c_lflag };
+  for (size_t i = 0; i < 4; i++) {
+    uint64_t v = (uint64_t)flags[i];
+    for (size_t b = 0; b < 8; b++) { h ^= (v >> (b * 8)) & 0xffu; h *= 1099511628211ULL; }
+  }
+  for (size_t i = 0; i < NCCS; i++) { h ^= (unsigned char)t.c_cc[i]; h *= 1099511628211ULL; }
+  return (int64_t)(h & 0x7fffffffffffffffLL);
+  ```)
+
+(defn main [] : int
+  (let [fd (pty-enter-child)]
+    (if (< fd 0)
+      (do
+        (println "pty setup failed")
+        1)
+      (let [before (tty-mode-digest fd)]
+        (do
+          (println "cooked canonical:")
+          (println (tty-canonical? fd))
+          (println "set-raw:")
+          (println (term/set-raw fd))
+          (println "raw canonical:")
+          (println (tty-canonical? fd))
+          (println "raw echo:")
+          (println (tty-echo? fd))
+          (println "set-cooked:")
+          (println (term/set-cooked fd))
+          (println "restored canonical:")
+          (println (tty-canonical? fd))
+          (println "restored echo:")
+          (println (tty-echo? fd))
+          (println "mode restored exactly:")
+          (println (= before (tty-mode-digest fd)))
+          ;; A second restore has nothing saved: an error, not a write of some
+          ;; default mode.
+          (println "second set-cooked:")
+          (println (term/set-cooked fd))
+          0)))))

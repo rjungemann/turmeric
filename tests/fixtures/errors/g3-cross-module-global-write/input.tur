@@ -1,0 +1,13 @@
+;; G3: writing another module's plainly-exported global is an error.  The
+;; module exported `hits` for READING; nothing about that says outsiders may
+;; assign it.  The diagnostic names the owning module and both ways out -- call
+;; a setter it exports, or have it re-export the global as `(export (mut hits))`.
+;;
+;; The positive is g3-export-mut-permits-write, which is this file writing a
+;; global that WAS exported `(mut ...)`.
+(defmodule main
+  (import g3lib/ctr :refer [bump peek hits])
+  (defn main [] : int
+    (println hits)      ; reading is fine
+    (set! hits 99)      ; writing is not
+    0))

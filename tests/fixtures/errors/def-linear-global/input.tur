@@ -1,0 +1,3 @@
+(def ^linear x 1)
+
+(defn main [] : int 0)

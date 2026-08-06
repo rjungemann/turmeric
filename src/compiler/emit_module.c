@@ -7640,6 +7640,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
     buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* G4a (mutable-globals-plan §4.4): a double crosses the integer-typed
+     * atomics layer through its bit pattern, so one code path serves both front
+     * ends instead of a double-typed shim only the GNU branch could provide.
+     * memcpy rather than a union or a pointer cast: it is the spelling every
+     * compiler folds to a register move and the only one that is not
+     * strict-aliasing UB.  Emitted after <stdint.h>/<string.h> above, which is
+     * what it needs. */
+    buf_puts(out, "static inline double __tur_bits_to_f64(uint64_t b) {\n");
+    buf_puts(out, "    double d; memcpy(&d, &b, sizeof d); return d;\n}\n");
+    buf_puts(out, "static inline uint64_t __tur_f64_to_bits(double d) {\n");
+    buf_puts(out, "    uint64_t b; memcpy(&b, &d, sizeof b); return b;\n}\n");
     /* WIN1: ucontext over Win32 Fibers.  Emitted rather than #included because
      * generated C is standalone -- it cannot reach src/platform_ucontext_win.h.
      * Kept in lockstep with that header; see it for the full rationale.
@@ -11927,6 +11938,61 @@ int emit_program(Buf *out, const Expr *program) {
         }
     }
 
+    /* G4b (mutable-globals-plan §11.4): the per-thread block for
+     * `^thread-local` globals, emitted before pass 2 so every accessor below
+     * can name it.  ONE pthread_key_t for the whole program holding ONE
+     * struct, rather than a key each: the key budget is 1024 process-wide
+     * (shared with dynvars, which spend one apiece), and a function touching
+     * several thread-locals then pays one `getspecific` rather than one each.
+     *
+     * Each global gets a value field and its own `inited` byte, so an accessor
+     * names both by mangled name and no slot-index bookkeeping is needed.
+     * calloc zeroes the block, so `inited` starts false for every slot on
+     * every new thread -- which is exactly "not yet initialized on this
+     * thread". */
+    {
+        Buf tlfields; buf_init(&tlfields);
+        uint32_t n_tl = 0;
+        for (uint32_t i = 0; i < n_items; i++) {
+            const Expr *e2 = items[i];
+            if (e2->kind != EX_DEF || !e2->as.def_.binding ||
+                !e2->as.def_.binding->is_thread_local) continue;
+            if (def_is_opaque_type_decl(e2)) continue;
+            char *bn2 = name_for_binding(&ctx, e2->as.def_.binding);
+            buf_printf(&tlfields, "    %s v_%s; unsigned char i_%s;\n",
+                       type_c_name(e2->as.def_.binding->type), bn2, bn2);
+            free(bn2);
+            n_tl++;
+        }
+        if (n_tl > 0) {
+            buf_puts(&file, "/* G4b: per-thread block for ^thread-local globals. */\n");
+            buf_puts(&file, "typedef struct {\n");
+            buf_write(&file, tlfields.data, tlfields.len);
+            buf_puts(&file, "} TurTLBlock;\n");
+            buf_puts(&file, "static pthread_key_t __tur_tl_key;\n");
+            buf_puts(&file, "static void __tur_tl_block_free(void *p) { free(p); }\n");
+            buf_puts(&file, "static void __tur_tl_key_init(void) {\n");
+            /* The one failure mode of this mechanism, checked rather than
+             * ignored -- an unchecked pthread_key_create leaves the key
+             * uninitialized and every later getspecific undefined.  (The dynvar
+             * path still ignores it; see docs/reported/.) */
+            buf_puts(&file, "    if (pthread_key_create(&__tur_tl_key, __tur_tl_block_free) != 0) {\n");
+            buf_puts(&file, "        fprintf(stderr, \"tur: pthread_key_create failed for ^thread-local globals\\n\");\n");
+            buf_puts(&file, "        abort();\n    }\n}\n");
+            buf_puts(&file, "static TurTLBlock *__tur_tl_block(void) {\n");
+            buf_puts(&file, "    TurTLBlock *b = (TurTLBlock *)pthread_getspecific(__tur_tl_key);\n");
+            buf_puts(&file, "    if (!b) {\n");
+            buf_puts(&file, "        b = (TurTLBlock *)calloc(1, sizeof *b);\n");
+            buf_puts(&file, "        if (!b) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n");
+            buf_puts(&file, "        pthread_setspecific(__tur_tl_key, b);\n");
+            buf_puts(&file, "    }\n    return b;\n}\n\n");
+            /* KEYS band: the key must exist before any accessor runs, and the
+             * DEFS band (which runs user code) is strictly later. */
+            static_init_register("__tur_tl_key_init", STATIC_INIT_KEYS);
+        }
+        buf_free(&tlfields);
+    }
+
     /* Pass 2: collect all top-level defs and fn_defs. */
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
@@ -11940,6 +12006,41 @@ int emit_program(Buf *out, const Expr *program) {
             /* slice 5: an opaque type declaration has no runtime storage. */
             if (def_is_opaque_type_decl(e)) continue;
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
+            /* G4b: a `^thread-local` has no process-wide storage and no entry
+             * in __tur_module_def_init.  Its initializer becomes a function so
+             * it can be run once per thread, on that thread -- which is the
+             * whole point of the annotation and the thing a `__thread`
+             * variable could not express (C has no dynamic TLS init). */
+            if (e->as.def_.binding->is_thread_local) {
+                const char *tcn = type_c_name(e->as.def_.binding->type);
+                if (e->as.def_.init) {
+                    Buf ib; buf_init(&ib);
+                    uint32_t saved_indent = ctx.indent;
+                    ctx.indent = 4;
+                    char *iv = emit_value(&ctx, &ib, e->as.def_.init);
+                    ctx.indent = saved_indent;
+                    buf_printf(&file, "static %s __tur_tl_initfn_%s(void) {\n", tcn, bn);
+                    if (ib.len) buf_write(&file, ib.data, ib.len);
+                    buf_printf(&file, "    return %s;\n}\n", iv);
+                    free(iv); buf_free(&ib);
+                } else {
+                    buf_printf(&file, "static %s __tur_tl_initfn_%s(void) { return (%s)0; }\n",
+                               tcn, bn, tcn);
+                }
+                buf_printf(&file, "static %s __tur_tl_get_%s(void) {\n", tcn, bn);
+                buf_puts(&file,   "    TurTLBlock *b = __tur_tl_block();\n");
+                buf_printf(&file, "    if (!b->i_%s) { b->i_%s = 1; b->v_%s = __tur_tl_initfn_%s(); }\n",
+                           bn, bn, bn, bn);
+                buf_printf(&file, "    return b->v_%s;\n}\n", bn);
+                buf_printf(&file, "static void __tur_tl_set_%s(%s v) {\n", bn, tcn);
+                buf_puts(&file,   "    TurTLBlock *b = __tur_tl_block();\n");
+                /* A write counts as initialization: it replaces the value the
+                 * initializer would have produced, so running the initializer
+                 * afterwards would clobber it. */
+                buf_printf(&file, "    b->i_%s = 1; b->v_%s = v;\n}\n\n", bn, bn);
+                free(bn);
+                continue;
+            }
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
             if (e->as.def_.init) {
