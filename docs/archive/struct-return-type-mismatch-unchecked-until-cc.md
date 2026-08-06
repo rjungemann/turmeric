@@ -160,6 +160,11 @@ was added or removed. What changed is that the return position now asks whether
 the two sides *share* a representation before tolerating a mismatch between
 them. The `(Cons int)` finding above is the one thread that does touch the
 repr campaign: that shape was relying on a C warning, and the fact that it had
-to be found by reading `cc` output rather than by any check suggests other
-`-Wint-conversion` sites may be worth a sweep. Not filed as a defect -- there is
-no known failing input now that the return position rejects it.
+to be found by reading `cc` output rather than by any check suggested other
+`-Wint-conversion` sites might be worth a sweep.
+
+**That sweep has since been run: 0 hits across 2563 fixtures**, built the way
+the suite builds them. The corpus is clean, and what remains is that nothing
+keeps it that way -- `cc` warnings are discarded on a successful build. Filed as
+[emitted-c-pointer-integer-warnings-unwatched](../reported/emitted-c-pointer-integer-warnings-unwatched.md),
+which also records the two methodology traps the first passes hit.
