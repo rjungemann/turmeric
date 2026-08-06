@@ -1,0 +1,40 @@
+;; A handler case RE-OPENS an outer effect (performs an effect its own handle
+;; does not handle).  The re-opened effect's continuation spans the rest of the
+;; case, the inner handle's delivery, and every frame out to the outer handler
+;; -- so a multishot outer resume must re-run the frames BETWEEN the two
+;; handles per resume, and a tail-resuming outer handler must not lose the
+;; pending delivery.  The compiled path used to truncate the capture at a
+;; marker-copy __kont (printing 1025/9017) and, on the tail-resume variant,
+;; lose the output entirely (silent exit 14) -- fixed by giving the case the
+;; real, borrowed enclosing chain (dk_case_enclosing_real) and moving the
+;; post-case delivery in-chain (the case_delivers protocol).  See
+;; docs/archive/cps-case-reopen-marker-kont-truncates-capture.md.
+;; Both paths must agree with hand evaluation on every line.
+(defeffect In [] : int)
+(defeffect Out [] : int)
+
+(defn main [] : int
+  ;; k_out = (fn [v] (+ 1000 (+ 7 v))): 1008 + 1017 = 2025
+  (println (handle
+             (+ 1000 (handle (+ 7 (perform (In)))
+                       (In [] k2) (resume k2 (perform (Out)))))
+             (Out [] ^multishot k) (+ (resume k 1) (resume k 10))))
+  ;; weighted: pins WHERE each resume's value landed
+  ;; 1000*(1000 + 7 + 1) + (1000 + 7 + 10) = 1009017
+  (println (handle
+             (+ 1000 (handle (+ 7 (perform (In)))
+                       (In [] k2) (resume k2 (perform (Out)))))
+             (Out [] ^multishot k) (+ (* 1000 (resume k 1)) (resume k 10))))
+  ;; single TAIL resume: 1000 + (7 + 7) = 1014 (the compiled path prints
+  ;; nothing here and exits 14 -- the stranded-delivery mode)
+  (println (handle
+             (+ 1000 (handle (+ 7 (perform (In)))
+                       (In [] k2) (resume k2 (perform (Out)))))
+             (Out [] ^multishot k) (resume k 7)))
+  ;; nothing between the handles: truncation happens to be harmless; both
+  ;; paths agree today and must keep agreeing
+  (println (handle
+             (handle (+ 7 (perform (In)))
+               (In [] k2) (resume k2 (perform (Out))))
+             (Out [] ^multishot k) (+ (resume k 1) (resume k 10))))
+  0)

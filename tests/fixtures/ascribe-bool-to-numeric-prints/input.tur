@@ -1,0 +1,40 @@
+;; `println` is overload-resolved by STATIC type, so `(:: b :int)` selects the
+;; integer println and the compiled path emits `printf("%lld", (long long)(b))`
+;; -- printing 1/0.  The interpreter's println deliberately dispatches on the
+;; runtime TAG ("so eval mode works despite type-inference gaps"), saw a bool,
+;; and printed true/false.  The same expression printed differently on the two
+;; paths, so a fixture using the form could not have one expected.stdout both
+;; harnesses accept.  It reached every numeric target, not just `:int`: the
+;; 8-bit widths take a different route (bool is one byte, so `(:: b :int8)` is a
+;; same-size ascription the elaborator rewrites to a reinterpret), which is why
+;; they are all listed below.
+;;
+;; Fixed at the RENDERING site, where the elaborator's chosen shape is allowed
+;; to beat the tag -- NOT at the ascription.  In the tree-walker a value's tag
+;; IS its type, and the elaborator synthesizes an int-carrier ascription for an
+;; ordinary push of a bool into a `(Vec bool)`; re-tagging there loses the
+;; element type and later method dispatch picks the wrong instance.  See
+;; docs/archive/ascribe-bool-to-int-prints-differently-per-path.md.
+;; Both paths must agree with hand evaluation on every line.
+(defn main [] : int
+  (println (:: true :int))       ; 1
+  (println (:: false :int))      ; 0
+  (println (:: true :int64))     ; 1
+  (println (:: true :int8))      ; 1
+  (println (:: true :int16))     ; 1
+  (println (:: true :int32))     ; 1
+  (println (:: true :uint8))     ; 1
+  (println (:: true :uint64))    ; 1
+  (println (:: true :float))     ; 1
+  (println (:: true :float32))   ; 1
+  ;; the reverse direction already agreed, and must keep agreeing
+  (println (:: 1 :bool))         ; true
+  (println (:: 0 :bool))         ; false
+  ;; an unascribed bool still renders as a bool
+  (println true)                 ; true
+  ;; `::` over an int operand stays a bit-level reinterpret, not a conversion
+  (println (:: 1 :float))        ; 4.94066e-324
+  ;; and the ascribed value is a number to everything downstream, not just print
+  (let [n (:: true :int)]
+    (println (+ n 41)))          ; 42
+  0)

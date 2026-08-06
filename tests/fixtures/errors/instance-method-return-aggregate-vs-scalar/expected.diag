@@ -1,0 +1,1 @@
+instance method 'clone' declares return type 'int' but its body returns S

@@ -1,0 +1,12 @@
+;; A macro expansion is a body window too -- the splice runs on the expanded
+;; forms, so `def` works there exactly as `define` does.
+(defmacro ct-def-test []
+  (let [result (do
+                 (def x 1)
+                 (def y 2)
+                 (+ x y))]
+    result))
+
+(defn main [] : int
+  (println (ct-def-test))
+  0)

@@ -1,0 +1,4 @@
+(defmodule g3lib/ctr
+  (export (mut total) peek)
+  (def total 99)
+  (defn peek [] : int total))

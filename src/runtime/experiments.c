@@ -208,7 +208,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * tier, which is what an optimization may act on.  Gated because the
      * CHECKING can reject a body that compiles today (TUR-E0382) and because
      * WF4 ELIDES a runtime check on the strength of the frame -- neither should
-     * arrive unasked-for.  The annotation parses either way. */
+     * arrive unasked-for.  The annotation parses either way.
+     *
+     * G1 (docs/upcoming/mutable-globals-plan.md) narrows what VERIFIED claims:
+     * a frame speaks about PARAMETERS, so a body that writes a mutable global
+     * is downgraded to UNVERIFIED rather than stamped with a fact an
+     * optimization may act on.  Silent -- a global is outside the frame's
+     * vocabulary, not outside the declared frame. */
     { "write-frames",
       "`#writes w` / `#writes [a b]` -- a checked per-argument write frame; "
       "backs frame-aware hypothesis invalidation and entry-check elision",
@@ -218,6 +224,33 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
                                   *   shelve, or bump */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_write_frames },
+    /* global-state: G2 of docs/upcoming/mutable-globals-plan.md.  A `#writes`
+     * frame's vocabulary is PARAMETERS, so a body that writes a mutable global
+     * cannot be VERIFIED (G1) -- correct, and the wrong end state: a function
+     * that legitimately maintains global state should be able to SAY so and be
+     * checked, the way it can already say it writes an argument.  This lets a
+     * frame name a global.
+     *
+     * Gated because it TIGHTENS: with it on, writing a global the frame does
+     * not name is TUR-E0382, where G1 merely declined to verify.  A body that
+     * compiles quietly today can become an error, which must not arrive
+     * unasked-for.  Off, the frame grammar rejects a non-parameter name exactly
+     * as before.
+     *
+     * Deliberately `#writes` only.  `#reads` is the annotation that GRANTS
+     * congruence, so letting it name a global would let a promise about mutable
+     * global state pay out in proofs -- see the plan's sections 12.2 and 12.4,
+     * and the fixtures refine-reads-frame-omits-global{,-no-region} that pin
+     * what a broken read-side promise costs. */
+    { "global-state",
+      "`#writes [a *cache*]` -- a write frame may name a mutable global, so a "
+      "body that maintains global state can carry a CHECKED frame",
+      "docs/upcoming/mutable-globals-plan.md",
+      "0.34.0",                  /* introduced */
+      "0.38.0",                  /* expires_at -- review at that cut: graduate,
+                                  *   shelve, or bump */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_global_state },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

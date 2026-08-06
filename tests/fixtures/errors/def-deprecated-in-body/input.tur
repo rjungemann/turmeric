@@ -1,0 +1,3 @@
+(defn main [] : int
+  (def ^deprecated x 1)
+  x)

@@ -1,0 +1,8 @@
+;; In a body, a second binding of the same name shadows -- the same as `let`.
+;; At the top level a duplicate is an error (see errors/def-redefine-toplevel).
+(defn main [] : int
+  (def x 1)
+  (println x)
+  (def x 2)
+  (println x)
+  0)

@@ -1,6 +1,0 @@
-;; Simple STM test
-
-(defn test [] : ptr
-  (atomically (stm (tvar/read (tvar/new 42)))))
-
-(test)

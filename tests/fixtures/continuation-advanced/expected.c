@@ -64,6 +64,12 @@ uint64_t tur_hamt_hash_xxh64(const void *data, size_t len);
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+static inline double __tur_bits_to_f64(uint64_t b) {
+    double d; memcpy(&d, &b, sizeof d); return d;
+}
+static inline uint64_t __tur_f64_to_bits(double d) {
+    uint64_t b; memcpy(&b, &d, sizeof b); return b;
+}
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -1010,6 +1016,8 @@ struct DK {
     DKBody body; intptr_t body_env;
     DKHandler handler; intptr_t handler_env; bool shallow;
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
+    bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
+    bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */
     bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
     int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);
                         * distinguishes this handle's cases from an enclosing
@@ -1036,6 +1044,21 @@ static DK *dk_frame_owning(DKFrame fn, intptr_t env,
 static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;
 }
+/* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
+ * chain, borrowed.  The one spine then serves every consumer: dk_perform's
+ * handler search walks straight into the real enclosing handlers, its capture
+ * boundary (dk_copy_range(k, H)) stops at the real H, and its delivery
+ * (dk_run_impl(H->next, r)) runs the real rest of the program -- exactly once,
+ * however many times the handler case resumed its sub-continuation.  The frame
+ * fn is a DKResumeFrame, so a COPY of this node threads the COPY's own next
+ * (its reified, marker-terminated tail) rather than a baked env pointer to the
+ * original chain -- which is what confined a resumed continuation to its
+ * delimiter.  borrow_next keeps dk_free out of the enclosing chain (it has its
+ * own reap owner). */
+__attribute__((unused))
+static DK *dk_frame_resume_borrow(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame_resume(fn, env, next); k->borrow_next = true; return k;
+}
 static DK *dk_prompt(int tag, DK *next) {
     DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;
 }
@@ -1057,6 +1080,11 @@ static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
 static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
     return dk_handler_impl(tag, fn, env, true, next);
 }
+/* Mark a handler whose case delivers its own value through the real chain
+ * (a RE-OPENING case -- see the case_delivers field).  Composes with any of
+ * the dk_handler ctors: dk_case_delivers(dk_handler(...)). */
+__attribute__((unused))
+static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }
 /* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry
  * driver instead of resuming inline, keeping deep effectful recursion flat. */
 static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
@@ -1064,7 +1092,7 @@ static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
 }
 /* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at
  * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's
- * continuation frame) with a fresh, shared group id.  dk_case_enclosing and
+ * continuation frame) with a fresh, shared group id.  dk_case_enclosing_real and
  * dk_perform's re-install then skip only same-group handlers, so an enclosing
  * handle's handlers that become ADJACENT after a chain-flattening re-install are
  * no longer mistaken for this handle's siblings (they carry a different id). */
@@ -1103,6 +1131,7 @@ static DK *dk_copy_node(const DK *n) {
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
     c->tail_resume = n->tail_resume;
     c->hgroup = n->hgroup;
+    c->case_delivers = n->case_delivers;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -1116,21 +1145,29 @@ static DK *dk_copy_enclosing_handlers(const DK *from) {
     if (!head) return done;
     tail->next = done; return head;
 }
-/* Effect re-opening: the enclosing handler markers in effect at the dynamic
- * point a handler case body runs -- i.e. the handlers OUTSIDE this handle.  A
- * `perform` in a case body (the case re-opens an outer effect) dispatches
- * against this transparent (handler-marker-only, done-terminated) chain, so the
- * effect reaches the enclosing handler while the case's own value returns to the
- * H->next boundary for dk_perform to thread exactly once.  For a deep handler we
- * skip the whole dk_handler sibling group starting at H (its case shares the
- * handle's continuation context, so a sibling effect propagates OUTWARD, matching
- * dk_perform's own `ge` walk); a shallow handler skips only H itself. */
-static DK *dk_case_enclosing(const DK *H) {
-    if (!H) return dk_done();
+/* Effect re-opening: the REAL enclosing chain in effect at the dynamic point a
+ * handler case body runs -- i.e. everything past this handle's sibling group,
+ * BORROWED.  A re-opening case takes this as its `__kont`: a `perform` in the
+ * case dispatches into the real enclosing handlers, its capture crosses into
+ * the real intermediate frames (so a multishot outer resume re-runs them per
+ * resume), and the case delivers its own value through the same chain
+ * (dk_run(__kont, v) on every exit -- the case_delivers protocol; dk_perform
+ * then returns the case's result without a second H->next delivery).  This
+ * replaced a done-terminated marker COPY, which truncated the capture at the
+ * marker and left the pending delivery as a C-stack frame that a tail-resume
+ * longjmp silently discarded (cps-case-reopen-marker-kont-truncates-capture).
+ * For a deep handler we skip the whole dk_handler sibling group starting at H
+ * (its case shares the handle's continuation context, so a sibling effect
+ * propagates OUTWARD, matching dk_perform's own `ge` walk); a shallow handler
+ * skips only H itself.  The returned chain is borrowed -- the case must only
+ * read, thread, or copy it, never free it. */
+__attribute__((unused))
+static DK *dk_case_enclosing_real(const DK *H) {
+    if (!H) return NULL;
     const DK *ge = H;
     if (H->shallow) ge = H->next;
     else while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;
-    return dk_copy_enclosing_handlers(ge);
+    return (DK *)ge;
 }
 static DK *dk_copy_range(const DK *from, const DK *stop) {
     DK *head = NULL, *tail = NULL;
@@ -1147,7 +1184,7 @@ static DK *dk_append(DK *a, DK *b) {
     p->next = b;
     return a;
 }
-static void dk_free(DK *k) { while (k) { DK *n = k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
+static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
  * (dk_free would walk into that continuation and risk a double free).  See
@@ -1249,17 +1286,33 @@ static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true);
 /* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke
  * consults it to know whether running the invoked chain might tail-resume out. */
 static jmp_buf *g_dk_driver;
+static size_t   g_dk_meta_n;   /* tentative defn; the E7 block below defines it */
+static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor);
 static intptr_t dk_invoke(DK *sub, intptr_t w) {
     DK *c = dk_copy_range(sub, NULL);
-    /* Under an active driver the invoked chain may tail-resume: dk_tail_resume
-     * longjmps to the driver, unwinding this frame BEFORE `dk_free(c)` runs, which
-     * would strand `c` once per such invoke -> O(N)
-     * (docs/archive/cps-reopen-perform-onode-leak.md).  Give `c` a boundary owner
-     * via the reap list so it is freed exactly once at the outermost entry whether
-     * dk_run_impl returns or longjmps.  No double free: the driver frees only the
-     * fresh sub a tail-resume yields (a copy taken from within `c`), never `c`
-     * itself.  With no driver a longjmp is impossible -- free eagerly as before. */
-    if (g_dk_driver) { __dk_reap_keep(c); return dk_run_impl(c, w, false); }
+    /* A tail-resume inside the invoked chain longjmps to whichever landing
+     * g_dk_driver names.  That landing must be THIS ONE, not the program entry:
+     * dk_invoke is how a NON-tail `resume` runs, so its caller is a handler case
+     * with more clause left to run (`(+ (resume k 1) (resume k 10))`).  Letting
+     * the yield escape to the entry driver unwinds the case, delivering the
+     * first resume's value as the whole handle's value and discarding the rest
+     * -- a silent wrong answer, `2` where the answer is `22`.  See
+     * docs/archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md.
+     *
+     * So install a landing scoped to this invoke and run the trampoline bounded
+     * by the meta-stack watermark: deliveries queued during THIS run drain here,
+     * anything an outer level queued stays for that level.  The E7 fast path is
+     * untouched -- a tail resume reached without an intervening dk_invoke still
+     * yields all the way to the entry driver, so deep effectful recursion stays
+     * flat.
+     *
+     * `c` is reaped rather than freed on every path in the bounded loop: a
+     * pending delivery may still reference it (the reason __dk_drive_after
+     * stopped eagerly freeing a yielded chain -- see
+     * docs/archive/effect-rec-nested-handler-nonterminates.md), and reaping only
+     * ever defers a free to the outermost boundary, never double-frees.
+     * With no driver a longjmp is impossible -- free eagerly as before. */
+    if (g_dk_driver) return __dk_drive_bounded(c, w, g_dk_meta_n);
     intptr_t r = dk_run_impl(c, w, false);
     dk_free(c); return r;
 }
@@ -1275,7 +1328,7 @@ static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL =
 static DK      *g_dk_resume_chain = NULL;
 static intptr_t g_dk_resume_val = 0;
 static DK     **g_dk_meta = NULL;
-static size_t   g_dk_meta_n = 0, g_dk_meta_cap = 0;
+static size_t   g_dk_meta_cap = 0;
 static void __dk_meta_push(DK *d) {
     if (g_dk_meta_n == g_dk_meta_cap) {
         g_dk_meta_cap = g_dk_meta_cap ? g_dk_meta_cap * 2 : 16;
@@ -1297,6 +1350,37 @@ static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
     g_dk_resume_chain = sub; g_dk_resume_val = v;
     longjmp(*g_dk_driver, 1);
     return 0; /* unreachable */
+}
+/* Run `first` to completion, absorbing any tail-resume yields it makes, and
+ * return its value.  Same trampoline as __dk_drive_after but SCOPED: it drains
+ * the meta-stack only down to `floor` (the depth at entry), and restores the
+ * previous landing on the way out, so a nested run cannot consume an outer
+ * level's pending deliveries or steal its yields.  dk_invoke uses it to keep a
+ * non-tail resume's tail-resume from unwinding the handler case that called it.
+ *
+ * Locals are re-read from the resume globals at the top of each iteration (and
+ * setjmp is re-armed there) rather than carried across the longjmp, which is
+ * what makes them well-defined on the yield path -- the same structure
+ * __dk_drive_after uses. */
+static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
+    jmp_buf jb; jmp_buf *saved = g_dk_driver;
+    g_dk_driver = &jb;
+    g_dk_resume_chain = first; g_dk_resume_val = firstv;
+    intptr_t r;
+    for (;;) {
+        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
+        if (setjmp(jb) == 0) {
+            r = dk_run_impl(ch, rv, false);
+            __dk_reap_keep(ch);
+            if (g_dk_meta_n <= floor) break;
+            g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
+            g_dk_resume_val = r;
+        } else {
+            __dk_reap_keep(ch);   /* a pending delivery may still reference it */
+        }
+    }
+    g_dk_driver = saved;
+    return r;
 }
 /* Run the meta-stack trampoline to completion after a tail-resume longjmp landed
  * in the entry wrapper. Owns its own jmp_buf so further yields land here. */
@@ -1331,8 +1415,8 @@ static intptr_t __dk_drive_after(void) {
 }
 /* Effect re-opening: the handler node whose case is currently running, set just
  * before dk_perform calls the case.  A re-opening case reads it (into a local, at
- * entry, before any interior perform can overwrite it) to recover its enclosing
- * handler markers via dk_case_enclosing. */
+ * entry, before any interior perform can overwrite it) to recover its real
+ * enclosing chain via dk_case_enclosing_real. */
 static const DK *g_dk_case_reopen_hnode = NULL;
 static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     DK *H = k;
@@ -1391,7 +1475,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * We reap BEFORE the handler call so a longjmp cannot skip the registration. */
     __dk_reap_keep(sub);
     intptr_t r = H->handler(H->handler_env, arg, sub);
-    return dk_run_impl(H->next, r, false);
+    return H->case_delivers ? r : dk_run_impl(H->next, r, false);
 }
 /* base-shift escape-reset context (setjmp/longjmp abort) */
 typedef struct tur_shift_reset_ctx {
@@ -7714,13 +7798,13 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static intptr_t test_hynested_hyreset_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hynested_hyreset_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
-static intptr_t test_hynested_hyreset_k1(intptr_t env, intptr_t __t1__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hynested_hyreset_k1(intptr_t env, intptr_t __t1__slot, DK *__kont) {
+    (void)env;
     int64_t __t1 = (int64_t)(__t1__slot);
     int64_t __t2;
     __t2 = (INT64_C(1)) + (__t1);
@@ -7735,8 +7819,8 @@ static intptr_t test_hynested_hyreset_s2(intptr_t env, DK *subk) {
     return (intptr_t)(__t6);
 }
 static int64_t test_hynested_hyreset__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hynested_hyreset_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
-    DK *__p1 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hynested_hyreset_k1, (intptr_t)__p0, dk_copy_enclosing_handlers(__p0))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hynested_hyreset_k0, 0, __kont)));
+    DK *__p1 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hynested_hyreset_k1, 0, __p0)));
     DK *__sd2 = dk_shift(1, test_hynested_hyreset_s2, 0, __p1);
     int64_t __sd2_r = dk_run(__sd2, 0);
     dk_free_node(__sd2);
@@ -7755,8 +7839,8 @@ __attribute__((unused)) static int64_t test_hynested_hyreset() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hyshift_hyreturn_hydifferent_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hyshift_hyreturn_hydifferent_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7769,7 +7853,7 @@ static intptr_t test_hyshift_hyreturn_hydifferent_s1(intptr_t env, DK *subk) {
     return (intptr_t)(__t2);
 }
 static int64_t test_hyshift_hyreturn_hydifferent__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hyshift_hyreturn_hydifferent_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hyshift_hyreturn_hydifferent_k0, 0, __kont)));
     DK *__sd1 = dk_shift(1, test_hyshift_hyreturn_hydifferent_s1, 0, __p0);
     int64_t __sd1_r = dk_run(__sd1, 0);
     dk_free_node(__sd1);
@@ -7788,8 +7872,8 @@ __attribute__((unused)) static int64_t test_hyshift_hyreturn_hydifferent() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hymultiple_hyshifts_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hymultiple_hyshifts_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7802,7 +7886,7 @@ static intptr_t test_hymultiple_hyshifts_s1(intptr_t env, DK *subk) {
     return (intptr_t)(__t4);
 }
 static int64_t test_hymultiple_hyshifts__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hymultiple_hyshifts_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hymultiple_hyshifts_k0, 0, __kont)));
     DK *__sd1 = dk_shift(1, test_hymultiple_hyshifts_s1, 0, __p0);
     int64_t __sd1_r = dk_run(__sd1, 0);
     dk_free_node(__sd1);
@@ -7821,8 +7905,8 @@ __attribute__((unused)) static int64_t test_hymultiple_hyshifts() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hyshift_hyignores_hyk_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hyshift_hyignores_hyk_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7835,7 +7919,7 @@ static intptr_t test_hyshift_hyignores_hyk_s1(intptr_t env, DK *subk) {
     return (intptr_t)(__t2);
 }
 static int64_t test_hyshift_hyignores_hyk__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hyshift_hyignores_hyk_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hyshift_hyignores_hyk_k0, 0, __kont)));
     DK *__sd1 = dk_shift(1, test_hyshift_hyignores_hyk_s1, 0, __p0);
     int64_t __sd1_r = dk_run(__sd1, 0);
     dk_free_node(__sd1);
@@ -7854,13 +7938,13 @@ __attribute__((unused)) static int64_t test_hyshift_hyignores_hyk() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hyreset_hyno_hyshift_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hyreset_hyno_hyshift_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
 static int64_t test_hyreset_hyno_hyshift__cps(DK *__kont) {
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hyreset_hyno_hyshift_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hyreset_hyno_hyshift_k0, 0, __kont)));
     return dk_run(__p0, (intptr_t)(INT64_C(123)));
 }
 __attribute__((unused)) static int64_t test_hyreset_hyno_hyshift() {
@@ -7876,8 +7960,8 @@ __attribute__((unused)) static int64_t test_hyreset_hyno_hyshift() {
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static intptr_t test_hydeeply_hynested_hyshift_k0(intptr_t env, intptr_t __t0__slot) {
-    DK *__kont = (DK *)env;
+static intptr_t test_hydeeply_hynested_hyshift_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
     return dk_run(__kont, (intptr_t)(__t0));
 }
@@ -7902,7 +7986,7 @@ static int64_t test_hydeeply_hynested_hyshift__cps(DK *__kont) {
     int64_t a_1350;
     int64_t b_1351;
     int64_t c_1352;
-    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame(test_hydeeply_hynested_hyshift_k0, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+    DK *__p0 = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(test_hydeeply_hynested_hyshift_k0, 0, __kont)));
     a_1350 = INT64_C(1);
     b_1351 = INT64_C(2);
     c_1352 = INT64_C(3);

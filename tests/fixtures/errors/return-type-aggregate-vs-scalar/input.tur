@@ -1,0 +1,21 @@
+;; A declared return type that disagrees with the body was unchecked whenever a
+;; by-value aggregate was on either side of the mismatch: `tur check` exited 0
+;; and the failure surfaced as a `cc` error inside generated C ("incompatible
+;; types when returning type 'tur_adt_S' but 'int64_t' was expected") -- no
+;; source span, no diagnostic code, and a message naming types the user never
+;; wrote.  The same mismatch between two primitives was caught properly, which
+;; is what kept the hole invisible.
+;;
+;; The return-position dispatcher's tolerances are all calibrated to the int64
+;; carrier -- a bare integer where a handle is declared is a real bridge because
+;; both are `int64_t` in the emitted C.  A by-value record ADT is not: it lowers
+;; to a real `tur_adt_S` aggregate, so there is no shared representation to
+;; bridge.  See docs/archive/struct-return-type-mismatch-unchecked-until-cc.md.
+;;
+;; requires.compiled: on the interpreted path every value is a boxed handle, so
+;; an ADT under an integer return IS a bridge there and is deliberately allowed.
+(defstruct S [a : int])
+
+(defn f [x : S] : int x)
+
+(defn main [] : int 0)

@@ -1,0 +1,1 @@
+typeclass constraint not satisfied: no instance of 'TC' for type 'float'

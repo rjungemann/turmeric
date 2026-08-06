@@ -1,1 +1,6 @@
-(if (define x 1) x 0)
+;; `define` in an expression position -- an `if` condition -- binds a name no
+;; later form can see.  Inside a function body so both the compiled and the
+;; interpreted path agree on the scope (see
+;; docs/reported/turi-toplevel-expr-subforms-elaborate-in-global-scope.md).
+(defn main [] : int
+  (if (define x 1) x 0))

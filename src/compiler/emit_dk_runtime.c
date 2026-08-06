@@ -296,7 +296,25 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    DKKind kind; DKFrame fn; intptr_t env; int tag;\n"
 "    DKBody body; intptr_t body_env;\n"
 "    DKHandler handler; intptr_t handler_env; bool shallow;\n"
-"    DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;\n");
+"    DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;\n"
+/* Spine unification (cps-multishot-nontail-resume-inner-handle-drops-clause-
+ * rest): a handle-continuation frame's `next` is the ACTUAL enclosing chain --
+ * one spine serves dk_perform's search, dk_copy_range's boundary, and the
+ * H->next delivery alike -- but that chain has its own reap owner, so this
+ * node's free must not walk into it.  borrow_next marks exactly that: dk_free
+ * frees this node and stops.  Copies never inherit it (dk_copy_node leaves it
+ * false): a dk_copy_range copy OWNS every node it copied, including the ones
+ * past the borrow point. */
+"    bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */\n"
+/* Re-opening delivery protocol (cps-case-reopen-marker-kont-truncates-capture):
+ * a handler whose case RE-OPENS an outer effect runs with the REAL enclosing
+ * chain as its continuation and delivers its own value through it
+ * (dk_run(__kont, v) on every exit).  dk_perform's inline branch must then
+ * return the case's result verbatim instead of delivering H->next a second
+ * time -- the measured failure of the naive real-chain conversion was exactly
+ * that double delivery.  The flag is a property of the case FN's protocol, so
+ * dk_copy_node carries it (a marker copy's case still delivers for itself). */
+"    bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */\n");
     if (tramp) buf_puts(out,
 "    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n"
 "    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);\n"
@@ -325,6 +343,21 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;\n"
 "}\n"
+"/* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing\n"
+" * chain, borrowed.  The one spine then serves every consumer: dk_perform's\n"
+" * handler search walks straight into the real enclosing handlers, its capture\n"
+" * boundary (dk_copy_range(k, H)) stops at the real H, and its delivery\n"
+" * (dk_run_impl(H->next, r)) runs the real rest of the program -- exactly once,\n"
+" * however many times the handler case resumed its sub-continuation.  The frame\n"
+" * fn is a DKResumeFrame, so a COPY of this node threads the COPY's own next\n"
+" * (its reified, marker-terminated tail) rather than a baked env pointer to the\n"
+" * original chain -- which is what confined a resumed continuation to its\n"
+" * delimiter.  borrow_next keeps dk_free out of the enclosing chain (it has its\n"
+" * own reap owner). */\n"
+"__attribute__((unused))\n"
+"static DK *dk_frame_resume_borrow(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"    DK *k = dk_frame_resume(fn, env, next); k->borrow_next = true; return k;\n"
+"}\n"
 "static DK *dk_prompt(int tag, DK *next) {\n"
 "    DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;\n"
 "}\n"
@@ -345,7 +378,12 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "}\n"
 "static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
 "    return dk_handler_impl(tag, fn, env, true, next);\n"
-"}\n");
+"}\n"
+"/* Mark a handler whose case delivers its own value through the real chain\n"
+" * (a RE-OPENING case -- see the case_delivers field).  Composes with any of\n"
+" * the dk_handler ctors: dk_case_delivers(dk_handler(...)). */\n"
+"__attribute__((unused))\n"
+"static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }\n");
     if (tramp) buf_puts(out,
 "/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry\n"
 " * driver instead of resuming inline, keeping deep effectful recursion flat. */\n"
@@ -354,7 +392,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "}\n"
 "/* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at\n"
 " * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's\n"
-" * continuation frame) with a fresh, shared group id.  dk_case_enclosing and\n"
+" * continuation frame) with a fresh, shared group id.  dk_case_enclosing_real and\n"
 " * dk_perform's re-install then skip only same-group handlers, so an enclosing\n"
 " * handle's handlers that become ADJACENT after a chain-flattening re-install are\n"
 " * no longer mistaken for this handle's siblings (they carry a different id). */\n"
@@ -401,6 +439,12 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    c->tail_resume = n->tail_resume;\n"
 "    c->hgroup = n->hgroup;\n");
     buf_puts(out,
+/* borrow_next is deliberately NOT copied: dk_copy_range crosses a borrow link
+ * like any other ->next, and the copy OWNS everything it copied -- its dk_free
+ * must walk the whole copied chain, not stop where the ORIGINAL's ownership
+ * boundary happened to sit.  case_delivers IS copied: it describes the case
+ * fn's delivery protocol, which a re-installed marker copy shares. */
+"    c->case_delivers = n->case_delivers;\n"
 "    c->rfn = n->rfn; return c;\n"
 "}\n"
 "static DK *dk_copy_enclosing_handlers(const DK *from) {\n"
@@ -414,17 +458,25 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    if (!head) return done;\n"
 "    tail->next = done; return head;\n"
 "}\n"
-"/* Effect re-opening: the enclosing handler markers in effect at the dynamic\n"
-" * point a handler case body runs -- i.e. the handlers OUTSIDE this handle.  A\n"
-" * `perform` in a case body (the case re-opens an outer effect) dispatches\n"
-" * against this transparent (handler-marker-only, done-terminated) chain, so the\n"
-" * effect reaches the enclosing handler while the case's own value returns to the\n"
-" * H->next boundary for dk_perform to thread exactly once.  For a deep handler we\n"
-" * skip the whole dk_handler sibling group starting at H (its case shares the\n"
-" * handle's continuation context, so a sibling effect propagates OUTWARD, matching\n"
-" * dk_perform's own `ge` walk); a shallow handler skips only H itself. */\n"
-"static DK *dk_case_enclosing(const DK *H) {\n"
-"    if (!H) return dk_done();\n"
+"/* Effect re-opening: the REAL enclosing chain in effect at the dynamic point a\n"
+" * handler case body runs -- i.e. everything past this handle's sibling group,\n"
+" * BORROWED.  A re-opening case takes this as its `__kont`: a `perform` in the\n"
+" * case dispatches into the real enclosing handlers, its capture crosses into\n"
+" * the real intermediate frames (so a multishot outer resume re-runs them per\n"
+" * resume), and the case delivers its own value through the same chain\n"
+" * (dk_run(__kont, v) on every exit -- the case_delivers protocol; dk_perform\n"
+" * then returns the case's result without a second H->next delivery).  This\n"
+" * replaced a done-terminated marker COPY, which truncated the capture at the\n"
+" * marker and left the pending delivery as a C-stack frame that a tail-resume\n"
+" * longjmp silently discarded (cps-case-reopen-marker-kont-truncates-capture).\n"
+" * For a deep handler we skip the whole dk_handler sibling group starting at H\n"
+" * (its case shares the handle's continuation context, so a sibling effect\n"
+" * propagates OUTWARD, matching dk_perform's own `ge` walk); a shallow handler\n"
+" * skips only H itself.  The returned chain is borrowed -- the case must only\n"
+" * read, thread, or copy it, never free it. */\n"
+"__attribute__((unused))\n"
+"static DK *dk_case_enclosing_real(const DK *H) {\n"
+"    if (!H) return NULL;\n"
 "    const DK *ge = H;\n"
 "    if (H->shallow) ge = H->next;\n");
     /* Deep skip: a flattening re-install can make an enclosing handle's handlers
@@ -437,7 +489,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
     else buf_puts(out,
 "    else while (ge && ge->kind == DKK_HANDLER) ge = ge->next;\n");
     buf_puts(out,
-"    return dk_copy_enclosing_handlers(ge);\n"
+"    return (DK *)ge;\n"
 "}\n"
 "static DK *dk_copy_range(const DK *from, const DK *stop) {\n"
 "    DK *head = NULL, *tail = NULL;\n"
@@ -454,8 +506,11 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    p->next = b;\n"
 "    return a;\n"
 "}\n"
-/* E3a: drop each frame's owning env (if any) before freeing the node. */
-"static void dk_free(DK *k) { while (k) { DK *n = k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
+/* E3a: drop each frame's owning env (if any) before freeing the node.
+ * A borrow_next node ends the walk: its ->next belongs to another chain (with
+ * its own reap entry), so following it would double-free -- and by reap time
+ * the borrowed tail may already be gone, so it must not even be read. */
+"static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
     buf_puts(out,
 "/* Free a single spliced node without following ->next -- used to reclaim the\n"
 " * one-off shift/perform node whose ->next points into an enclosing continuation\n"
@@ -568,17 +623,33 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "/* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke\n"
 " * consults it to know whether running the invoked chain might tail-resume out. */\n"
 "static jmp_buf *g_dk_driver;\n"
+"static size_t   g_dk_meta_n;   /* tentative defn; the E7 block below defines it */\n"
+"static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor);\n"
 "static intptr_t dk_invoke(DK *sub, intptr_t w) {\n"
 "    DK *c = dk_copy_range(sub, NULL);\n"
-"    /* Under an active driver the invoked chain may tail-resume: dk_tail_resume\n"
-"     * longjmps to the driver, unwinding this frame BEFORE `dk_free(c)` runs, which\n"
-"     * would strand `c` once per such invoke -> O(N)\n"
-"     * (docs/archive/cps-reopen-perform-onode-leak.md).  Give `c` a boundary owner\n"
-"     * via the reap list so it is freed exactly once at the outermost entry whether\n"
-"     * dk_run_impl returns or longjmps.  No double free: the driver frees only the\n"
-"     * fresh sub a tail-resume yields (a copy taken from within `c`), never `c`\n"
-"     * itself.  With no driver a longjmp is impossible -- free eagerly as before. */\n"
-"    if (g_dk_driver) { __dk_reap_keep(c); return dk_run_impl(c, w, false); }\n"
+"    /* A tail-resume inside the invoked chain longjmps to whichever landing\n"
+"     * g_dk_driver names.  That landing must be THIS ONE, not the program entry:\n"
+"     * dk_invoke is how a NON-tail `resume` runs, so its caller is a handler case\n"
+"     * with more clause left to run (`(+ (resume k 1) (resume k 10))`).  Letting\n"
+"     * the yield escape to the entry driver unwinds the case, delivering the\n"
+"     * first resume's value as the whole handle's value and discarding the rest\n"
+"     * -- a silent wrong answer, `2` where the answer is `22`.  See\n"
+"     * docs/archive/cps-multishot-nontail-resume-inner-handle-drops-clause-rest.md.\n"
+"     *\n"
+"     * So install a landing scoped to this invoke and run the trampoline bounded\n"
+"     * by the meta-stack watermark: deliveries queued during THIS run drain here,\n"
+"     * anything an outer level queued stays for that level.  The E7 fast path is\n"
+"     * untouched -- a tail resume reached without an intervening dk_invoke still\n"
+"     * yields all the way to the entry driver, so deep effectful recursion stays\n"
+"     * flat.\n"
+"     *\n"
+"     * `c` is reaped rather than freed on every path in the bounded loop: a\n"
+"     * pending delivery may still reference it (the reason __dk_drive_after\n"
+"     * stopped eagerly freeing a yielded chain -- see\n"
+"     * docs/archive/effect-rec-nested-handler-nonterminates.md), and reaping only\n"
+"     * ever defers a free to the outermost boundary, never double-frees.\n"
+"     * With no driver a longjmp is impossible -- free eagerly as before. */\n"
+"    if (g_dk_driver) return __dk_drive_bounded(c, w, g_dk_meta_n);\n"
 "    intptr_t r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
 "}\n");
@@ -600,7 +671,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "static DK      *g_dk_resume_chain = NULL;\n"
 "static intptr_t g_dk_resume_val = 0;\n"
 "static DK     **g_dk_meta = NULL;\n"
-"static size_t   g_dk_meta_n = 0, g_dk_meta_cap = 0;\n"
+"static size_t   g_dk_meta_cap = 0;\n"
 "static void __dk_meta_push(DK *d) {\n"
 "    if (g_dk_meta_n == g_dk_meta_cap) {\n"
 "        g_dk_meta_cap = g_dk_meta_cap ? g_dk_meta_cap * 2 : 16;\n"
@@ -622,6 +693,39 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    g_dk_resume_chain = sub; g_dk_resume_val = v;\n"
 "    longjmp(*g_dk_driver, 1);\n"
 "    return 0; /* unreachable */\n"
+"}\n"
+"");
+    if (tramp) buf_puts(out,
+"/* Run `first` to completion, absorbing any tail-resume yields it makes, and\n"
+" * return its value.  Same trampoline as __dk_drive_after but SCOPED: it drains\n"
+" * the meta-stack only down to `floor` (the depth at entry), and restores the\n"
+" * previous landing on the way out, so a nested run cannot consume an outer\n"
+" * level's pending deliveries or steal its yields.  dk_invoke uses it to keep a\n"
+" * non-tail resume's tail-resume from unwinding the handler case that called it.\n"
+" *\n"
+" * Locals are re-read from the resume globals at the top of each iteration (and\n"
+" * setjmp is re-armed there) rather than carried across the longjmp, which is\n"
+" * what makes them well-defined on the yield path -- the same structure\n"
+" * __dk_drive_after uses. */\n"
+"static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {\n"
+"    jmp_buf jb; jmp_buf *saved = g_dk_driver;\n"
+"    g_dk_driver = &jb;\n"
+"    g_dk_resume_chain = first; g_dk_resume_val = firstv;\n"
+"    intptr_t r;\n"
+"    for (;;) {\n"
+"        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;\n"
+"        if (setjmp(jb) == 0) {\n"
+"            r = dk_run_impl(ch, rv, false);\n"
+"            __dk_reap_keep(ch);\n"
+"            if (g_dk_meta_n <= floor) break;\n"
+"            g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];\n"
+"            g_dk_resume_val = r;\n"
+"        } else {\n"
+"            __dk_reap_keep(ch);   /* a pending delivery may still reference it */\n"
+"        }\n"
+"    }\n"
+"    g_dk_driver = saved;\n"
+"    return r;\n"
 "}\n"
 "/* Run the meta-stack trampoline to completion after a tail-resume longjmp landed\n"
 " * in the entry wrapper. Owns its own jmp_buf so further yields land here. */\n"
@@ -657,8 +761,8 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
     buf_puts(out,
 "/* Effect re-opening: the handler node whose case is currently running, set just\n"
 " * before dk_perform calls the case.  A re-opening case reads it (into a local, at\n"
-" * entry, before any interior perform can overwrite it) to recover its enclosing\n"
-" * handler markers via dk_case_enclosing. */\n"
+" * entry, before any interior perform can overwrite it) to recover its real\n"
+" * enclosing chain via dk_case_enclosing_real. */\n"
 "static const DK *g_dk_case_reopen_hnode = NULL;\n"
 "static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {\n"
 "    DK *H = k;\n"
@@ -681,7 +785,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "         * resumed sub-continuation.  A single-case handle copies just H (identical\n"
 "         * to the old dk_handler(tag,...) re-install). */\n"
 "        const DK *ge = H;\n");
-    /* Same sibling-group boundary fix as dk_case_enclosing: under the re-opening
+    /* Same sibling-group boundary fix as dk_case_enclosing_real: under the re-opening
      * path skip only H's own hgroup, so a prior re-install that flattened an
      * enclosing handle adjacent to H does not fold it into H's re-installed group. */
     if (tramp) buf_puts(out,
@@ -727,12 +831,17 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "     * We reap BEFORE the handler call so a longjmp cannot skip the registration. */\n"
 "    __dk_reap_keep(sub);\n"
 "    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
-"    return dk_run_impl(H->next, r, false);\n"
+/* case_delivers: a re-opening case already delivered its value through the
+ * real chain (its __kont = dk_case_enclosing_real covers H->next); `r` is the
+ * value that bubbled back from that delivery, so deliver it AGAIN and the rest
+ * of the program runs twice (the measured spurious `1000` in
+ * cps-case-reopen-marker-kont-truncates-capture).  Return it verbatim. */
+"    return H->case_delivers ? r : dk_run_impl(H->next, r, false);\n"
 "}\n");
     else buf_puts(out,
 "    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
 "    dk_free(sub);\n"
-"    return dk_run_impl(H->next, r, false);\n"
+"    return H->case_delivers ? r : dk_run_impl(H->next, r, false);\n"
 "}\n"
 "/* Abortive shift body: deliver the precomputed receiver result f(v),\n"
 " * ignoring the captured sub-continuation (Turmeric shift never resumes it). */\n"

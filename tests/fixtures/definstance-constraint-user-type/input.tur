@@ -1,0 +1,55 @@
+;; A `definstance` constraint over a user-defined type, and over a primitive
+;; the constraint parser used to be unable to name.
+;;
+;; The parser resolved the constraint's type with a hardcoded three-name chain
+;; (int/bool/cstr) after checking the instance's own type args.  Any other
+;; spelling -- `float`, `nil`, a struct name -- left the local
+;; `constrained_type` at its `TYPE_INT` initializer, so the constraint was
+;; validated against TC[int]: silently satisfied when TC[int] happened to
+;; exist, and otherwise a spurious error naming `int`, a type absent from the
+;; source, which dropped the whole definstance.  It now resolves through the
+;; same primitive set the instance head accepts plus the type namespace, so a
+;; `float` constraint means float and `[Enc Cel]` means Cel.  See
+;; docs/archive/definstance-constraint-type-defaults-to-int.md.
+;; Both paths must agree with hand evaluation on every line.
+(defclass Enc [a]
+  (enc [x] : float))
+
+(defstruct Cel [t : float])
+(definstance Enc [Cel]
+  (enc [x] (.t x)))
+
+;; constraint over a user-defined type: satisfied by Enc[Cel] above
+(defstruct Box [c : Cel])
+(definstance Enc [Box]
+  [Enc Cel]
+  (enc [x] (+ 100.0 (.enc (.c x)))))
+
+;; a `float` constraint, satisfied.  This arm was unreachable before the fix:
+;; the parser could not produce TY_FLOAT, so the PTC2 float branch was dead.
+(definstance Enc [float]
+  (enc [x] (+ x 0.5)))
+(definstance Enc [cstr]
+  [Enc float]
+  (enc [x] 1.25))
+
+;; the paren spelling of the same constraint vector
+(definstance Enc [bool]
+  [(Enc float)]
+  (enc [x] 2.5))
+
+;; the keyword spelling of a type name, accepted here as it is in the instance
+;; head.  Only a bare symbol used to be looked at, so `[Enc :cstr]` fell through
+;; to the same silent `int` default a literal did.
+(definstance Enc [int]
+  [Enc :cstr]
+  (enc [x] 3.75))
+
+(defn main [] : int
+  (println (.enc (Cel 7.1)))            ; 7.1
+  (println (.enc (Box (Cel 7.1))))      ; 107.1
+  (println (.enc 7.1))                  ; 7.6
+  (println (.enc "hi"))                 ; 1.25
+  (println (.enc true))                 ; 2.5
+  (println (.enc 3))                    ; 3.75
+  0)

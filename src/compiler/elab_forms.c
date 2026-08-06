@@ -1,5 +1,6 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
+#include "experiments.h"        /* G3: experiment_warn_if_used("global-state") */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -69,10 +70,28 @@ static bool elab_field_is_boxed_fnfield(const CtorDef *ctor, uint32_t fi) {
 
 /* ---- internal define splicing ---- */
 
-/* splice_internal_defines -- rewrite a body window that may contain
- * (define name init) forms into nested let expressions.
+/* splice_body_def_head -- is `f` a body-position binding form, and under which
+ * spelling was it written?  Returns the head symbol (`define` or `def`) so the
+ * caller's diagnostics can quote what the user actually typed, or NULL.
  *
- * Returns NULL when no define is present so callers can keep their existing
+ * def/define consolidation D1: `def` in a body position means what `define`
+ * means -- a binding scoped over the rest of the body.  At the top level `def`
+ * keeps its global-binding meaning, so a body window that IS the global scope
+ * (a top-level `(do ...)`) leaves `def` alone and lets elab_def see it. */
+static const Symbol *splice_body_def_head(Elab *e, const Form *f) {
+    if (f->tag != F_LIST || f->as.list.len < 1) return NULL;
+    Form *head = f->as.list.items[0];
+    if (head->tag != F_SYM) return NULL;
+    const Symbol *s = head->as.sym;
+    if (s == e->sym_define) return s;
+    if (s == e->sym_def && e->scope != &e->global) return s;
+    return NULL;
+}
+
+/* splice_internal_defines -- rewrite a body window that may contain
+ * (define name init) / (def name init) forms into nested let expressions.
+ *
+ * Returns NULL when no such form is present so callers can keep their existing
  * fast path unchanged (true no-op guarantee -- zero codegen drift).
  *
  * When defines are present, always returns a non-NULL Form* (a let or do)
@@ -81,43 +100,41 @@ static bool elab_field_is_boxed_fnfield(const CtorDef *ctor, uint32_t fi) {
  * which returns a typed nil (preventing double-error from fallthrough).
  *
  * Desugaring:
- *   (define x 1)       =>  (let [x 1] <rest>)
- *   (define ^mut x 1)  =>  (let [^mut x 1] <rest>)
+ *   (define x 1)         =>  (let [x 1]        <rest>)
+ *   (define ^mut x 1)    =>  (let [^mut x 1]   <rest>)
+ *   (def x : float 7.1)  =>  (let [x : float 7.1] <rest>)
  */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
     /* Pre-scan: bail out fast when no defines are present. */
     bool has_define = false;
     for (uint32_t i = 0; i < n; i++) {
-        Form *f = items[i];
-        if (f->tag == F_LIST && f->as.list.len >= 1) {
-            Form *head = f->as.list.items[0];
-            if (head->tag == F_SYM && head->as.sym == e->sym_define) {
-                has_define = true;
-                break;
-            }
-        }
+        if (splice_body_def_head(e, items[i])) { has_define = true; break; }
     }
     if (!has_define) return NULL;
 
     /* Find the first define and build (let [^ann... name init] <tail>). */
     for (uint32_t i = 0; i < n; i++) {
         Form *f = items[i];
-        bool is_define = (f->tag == F_LIST && f->as.list.len >= 1 &&
-                          f->as.list.items[0]->tag == F_SYM &&
-                          f->as.list.items[0]->as.sym == e->sym_define);
-        if (!is_define) continue;
+        const Symbol *head_sym = splice_body_def_head(e, f);
+        if (!head_sym) continue;
+        const char *kw = head_sym->name;  /* quote the spelling the user wrote */
 
-        /* Parse: (define [^ann...] name init) */
-        Form **dargs  = f->as.list.items + 1;  /* skip "define" head */
+        /* Parse: (define [^ann...] name [: type] init) */
+        Form **dargs  = f->as.list.items + 1;  /* skip the head */
         uint32_t dlen = f->as.list.len - 1;
         if (dlen < 2) {
             diag_emit(DIAG_ERROR, f->span,
-                      "define requires (define name init)");
+                      "%s requires (%s name init)", kw, kw);
             return form_nil(e->arena, f->span);
         }
 
         /* Consume annotation symbols before the binding name.
-         * Mirrors the annotation loop in elab_let (elab_forms.c). */
+         * Mirrors the annotation loop in elab_let (elab_forms.c).
+         * D3/§3.5(c): ^persistent and ^deprecated are static-storage /
+         * top-level concepts with no local meaning.  ^persistent used to be
+         * accepted here and quietly demoted to an ordinary let binding --
+         * i.e. it silently did not do what it said.  Both are now named
+         * rejections. */
         uint32_t ann_end = 0;
         {
             uint32_t j = 0;
@@ -125,8 +142,15 @@ Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
                 Form *cur = dargs[j];
                 if (cur->tag != F_SYM) break;
                 const Symbol *s = cur->as.sym;
+                if (s == e->sym_caret_persistent || s == e->sym_caret_deprecated) {
+                    diag_emit(DIAG_ERROR, cur->span,
+                              "%s: '%s' has no meaning on a body binding "
+                              "(it is a top-level `def` annotation); "
+                              "move the binding to the top level or drop the annotation",
+                              kw, s->name);
+                    return form_nil(e->arena, f->span);
+                }
                 if (s == e->sym_caret_mut       ||
-                    s == e->sym_caret_persistent ||
                     s == e->sym_caret_linear     ||
                     s == e->sym_caret_unique     ||
                     s == e->sym_caret_affine     ||
@@ -141,34 +165,48 @@ Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
         uint32_t name_idx = ann_end;
         if (name_idx >= dlen) {
             diag_emit(DIAG_ERROR, f->span,
-                      "define requires (define name init)");
+                      "%s requires (%s name init)", kw, kw);
             return form_nil(e->arena, f->span);
         }
         Form *name_form = dargs[name_idx];
         if (name_form->tag != F_SYM) {
             diag_emit(DIAG_ERROR, name_form->span,
-                      "define: binding name must be a symbol");
+                      "%s: binding name must be a symbol", kw);
             return form_nil(e->arena, f->span);
         }
 
+        /* D3/§3.5(a): optional `: type` / `:type` ascription between the name
+         * and the init, matching top-level `def` and the `[name : type init]`
+         * shape elab_let already accepts.  Only a type when something follows
+         * it -- otherwise `(define x :some-keyword)` would lose its init. */
+        Form *type_form = NULL;
         uint32_t init_idx = name_idx + 1;
+        if (init_idx + 1 < dlen) {
+            Form *maybe_ann = dargs[init_idx];
+            if (maybe_ann->tag == F_KEYWORD || maybe_ann->tag == F_TYPE_ANN) {
+                type_form = maybe_ann;
+                init_idx++;
+            }
+        }
         if (init_idx >= dlen) {
             diag_emit(DIAG_ERROR, f->span,
-                      "define requires an initial value");
+                      "%s requires an initial value", kw);
             return form_nil(e->arena, f->span);
         }
         if (init_idx != dlen - 1) {
             diag_emit(DIAG_ERROR, f->span,
-                      "define: expected (define name init); got extra forms");
+                      "%s: expected (%s name [: type] init); got extra forms",
+                      kw, kw);
             return form_nil(e->arena, f->span);
         }
 
-        /* Build the let binding vector: [^ann... name init] */
-        uint32_t bvec_len = ann_end + 2; /* annotations + name + init */
+        /* Build the let binding vector: [^ann... name [: type] init] */
+        uint32_t bvec_len = ann_end + (type_form ? 3 : 2);
         Form **bvec_items = (Form **)arena_alloc(e->arena, bvec_len * sizeof(Form *));
         uint32_t bvi = 0;
         for (uint32_t a = 0; a < ann_end; a++) bvec_items[bvi++] = dargs[a];
         bvec_items[bvi++] = name_form;
+        if (type_form) bvec_items[bvi++] = type_form;
         bvec_items[bvi++] = dargs[init_idx];
         Form *bvec = form_vec(e->arena, f->span, bvec_items, bvec_len);
 
@@ -192,25 +230,29 @@ Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
             }
         }
 
-        /* Return (let [bvec] body_form). */
+        /* (let [bvec] body_form). */
         Form *let_items[3];
         let_items[0] = form_sym(e->arena, f->span, e->sym_let);
         let_items[1] = bvec;
         let_items[2] = body_form;
-        return form_list(e->arena, f->span, let_items, 3);
+        Form *let_form = form_list(e->arena, f->span, let_items, 3);
+
+        /* Items BEFORE the first define are still part of the body and must
+         * still run.  Dropping them (the pre-D1 behaviour) silently deleted
+         * every statement above the first internal define -- e.g. the
+         * (println "before") in
+         *   (defn main [] : int (println "before") (define x 1) (println x) 0)
+         * never executed. */
+        if (i == 0) return let_form;
+        Form **pre_items = (Form **)arena_alloc(e->arena, (i + 2) * sizeof(Form *));
+        pre_items[0] = form_sym(e->arena, span, e->sym_do);
+        for (uint32_t k = 0; k < i; k++) pre_items[k + 1] = items[k];
+        pre_items[i + 1] = let_form;
+        return form_list(e->arena, span, pre_items, i + 2);
     }
 
     /* has_define was true but we processed no defines -- shouldn't happen.
      * Return NULL to take the safe caller path. */
-    return NULL;
-}
-
-/* elab_define_error -- stub handler for 'define' reached through normal call
- * dispatch, i.e. outside a body sequence.  Always errors. */
-Expr *elab_define_error(Elab *e, const Form *call) {
-    diag_emit(DIAG_ERROR, call->span,
-              "define is only valid as a body form (in defn, fn, let, or do); "
-              "use def for top-level bindings");
     return NULL;
 }
 
@@ -3087,6 +3129,27 @@ Expr *elab_set(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, target->span,
                   "set!: '%s' is immutable; use ^mut at the binding site to allow it",
                   b->name->name);
+        return NULL;
+    }
+    /* G3 (mutable-globals-plan §4.3), behind `--enable=global-state`: an
+     * exported global is READ-ONLY outside its defining module.  A module that
+     * exports a counter for reading should not thereby export it for writing --
+     * the same argument `:sealed` makes about an opaque's representation.
+     *
+     * Only bites across a real module boundary: a global with no defining
+     * module (every single-file program) and a write from inside the owning
+     * module are both untouched.  The permission lives at the definition site,
+     * `(export (mut g))`, so the decision sits with the code that owns the
+     * invariant rather than with whoever wants to write it. */
+    if (g_opt_global_state && b->is_global && !b->is_export_mut &&
+        b->defining_module_name != NULL &&
+        b->defining_module_name != e->current_module_name) {
+        experiment_warn_if_used("global-state");
+        diag_emit(DIAG_ERROR, target->span,
+                  "set!: '%s' is owned by module '%s' and is exported read-only; "
+                  "call a setter that module exports, or have it export the global "
+                  "as `(export (mut %s))`",
+                  b->name->name, b->defining_module_name->name, b->name->name);
         return NULL;
     }
     Expr *value = elab_form(e, call->as.list.items[2]);

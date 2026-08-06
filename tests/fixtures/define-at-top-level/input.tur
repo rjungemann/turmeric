@@ -1,0 +1,8 @@
+;; `define` at the top level is a spelling of `def` -- a genuine global.
+(define greeting "hi")
+(define answer 42)
+
+(defn main [] : int
+  (println greeting)
+  (println answer)
+  0)

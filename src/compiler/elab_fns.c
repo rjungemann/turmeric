@@ -939,7 +939,28 @@ static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
  * Why a plain symbol target cannot alias: turmeric passes by value, so handing
  * a local to a callee -- even `^mut` -- cannot let the callee write the
  * caller's slot.  The one channel that could is an explicit borrow, so a body
- * that borrows an assigned name keeps the full decline. */
+ * that borrows an assigned name keeps the full decline.
+ *
+ * That by-value argument is about LOCALS, and it does not extend to a mutable
+ * global -- a global is written by NAME rather than passed, so a callee can
+ * write one this body never mentions.  This scan could not tell the two apart
+ * even if it wanted to: it walks FORMS and compares symbol NAMES, and never
+ * resolves a symbol to a Binding.
+ *
+ * It is sound anyway, for a reason worth writing down because it is not the
+ * reason above.  A hypothesis is only USABLE if its terms are congruent, and
+ * `rt_classify_expr`'s EX_VAR case answers UNKNOWN for a read of any `is_mut`
+ * binding -- which is exactly the flag a `^mut` global carries.  So a
+ * hypothesis that depends on a mutable global is never believed in the first
+ * place, and there is nothing for a global write to stale.  Pinned by
+ * errors/refine-impure-global-not-congruent.
+ *
+ * The consequence for anyone widening either side: if purity is ever widened
+ * to admit a read of a global (say, "a global never written in this unit is
+ * effectively constant"), THIS scan becomes the thing standing between a
+ * callee's global write and a stale hypothesis -- and it cannot do that job as
+ * written.  Widen the two together or not at all.  See
+ * docs/upcoming/mutable-globals-plan.md §4.5. */
 #define RT_WF3_MAX_TARGETS 16
 
 static bool rt_sym_is(const Form *f, const char *name);
@@ -1294,6 +1315,330 @@ static WfVerdict wf_walk(Elab *e, const Form *f, Binding *const *params,
     return v;
 }
 
+/* G4b/§13.7: does this initializer form mention a `^thread-local` global?
+ * Returns the offending symbol, or NULL.  Form-level and resolved through the
+ * global scope, which is enough: a `^thread-local` is a global by definition,
+ * so a reference to one is a bare symbol naming it.  A local that shadows the
+ * name reads as a reference here -- pessimistic, and the safe direction. */
+static const Symbol *tl_init_references_thread_local(Elab *e, const Form *f,
+                                                     uint32_t depth) {
+    if (!f || depth >= 24) return NULL;
+    if (f->tag == F_SYM && f->as.sym) {
+        Binding *b = scope_lookup(&e->global, f->as.sym);
+        return (b && b->is_thread_local) ? f->as.sym : NULL;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return NULL;
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        const Symbol *r = tl_init_references_thread_local(e, f->as.list.items[i],
+                                                          depth + 1);
+        if (r) return r;
+    }
+    return NULL;
+}
+
+/* G4a: may a value of this kind be loaded/stored by the atomics macro layer?
+ *
+ * EIGHT-BYTE KINDS ONLY, and the width is the whole point rather than a
+ * detail.  The layer's host shim is `uint64_t`-typed (src/runtime/tur_atomics.c),
+ * so the emitted access is an 8-byte one whatever the declaration says -- and a
+ * narrower global really is declared narrower (`static bool g;` is one byte).
+ * Admitting `:bool` produced an 8-byte `__atomic_store_n` into a 1-byte object:
+ * a genuine overflow of the adjacent statics that GCC caught as
+ * `-Wstringop-overflow` and that still printed the right answer, which is how
+ * it would have shipped.
+ *
+ * A narrower kind is therefore rejected rather than silently widened.  Adding
+ * `:bool` back means a 1-byte shim on the non-GNU branch, not a change here. */
+bool type_is_atomic_scalar(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_FLOAT: case TY_CSTR: case TY_PTR_VOID:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * G1: does a body write a MUTABLE GLOBAL?
+ * docs/upcoming/mutable-globals-plan.md §4.1, §4.5.
+ *
+ * Orthogonal to the frame walk above, and deliberately so.  `#writes` speaks
+ * about PARAMETERS; a global is written by name rather than passed, so it is
+ * not a thing a frame can name or exclude.  Rather than teach wf_walk a second
+ * vocabulary, this answers its own question over the same body and the verdict
+ * is combined once, in wf_resolve_write_frames.
+ *
+ * Tri-state, because "I did not see a global write" and "I could not see" are
+ * different answers and only the first may back a VERIFIED frame.
+ *
+ * What is NOT a channel here, and why -- both proven, not assumed:
+ *
+ *   - INLINE C.  A turmeric global emits as a C `static` whose name carries the
+ *     binding id (`counter_1327`), and that suffix shifts with any unrelated
+ *     edit earlier in the unit.  An inline-C body naming the source spelling
+ *     (`counter = 99;`) is emitted verbatim and fails the C compile with
+ *     "undeclared identifier" at the definition site.  So inline C cannot
+ *     reach a turmeric global, and treating every inline-C callee as a
+ *     possible global writer would poison most bodies for no reason.  (A
+ *     sufficiently determined author could paste today's mangled spelling and
+ *     have it work until the next edit; that is not a maintainable channel,
+ *     and if they do it they get exactly the write they asked for.)
+ *   - An EXTERN-C binding, for the same reason.
+ *
+ * What IS unvouchable, and answers WG_UNKNOWN:
+ *
+ *   - A call whose head does not resolve in the global scope: a local fn value,
+ *     a typeclass method, or a builtin.  A builtin cannot write a user global
+ *     (same argument as inline C), but a fn value CAN dispatch to a turmeric
+ *     function that does, and this scan cannot tell the two apart from a bare
+ *     symbol.  Conservative, per the file's standing rule that a frame
+ *     over-declares rather than under-declares.
+ *   - An indirect call, a place expression with an unreadable root, a scan that
+ *     runs out of depth.
+ *
+ * Shadowing is resolved PESSIMISTICALLY: a `let` local spelled the same as a
+ * global reads as a global write here, because the scan matches names rather
+ * than resolved bindings.  That direction costs a verification, never a
+ * missed one. */
+typedef enum WgVerdict {
+    WG_V_NO = 0,     /* no global write anywhere reachable */
+    WG_V_UNKNOWN,    /* something could not be vouched for */
+    WG_V_YES,        /* a definite global assignment */
+} WgVerdict;
+
+static WgVerdict wg_worse(WgVerdict a, WgVerdict b) { return a > b ? a : b; }
+
+/* G2: WHICH globals a body writes, accumulated alongside the verdict.  G1 only
+ * needed the yes/no; a frame that can NAME a global needs the set, so it can
+ * ask whether every written global is covered.  `overflow` degrades coverage
+ * to unanswerable rather than letting a truncated set read as "all covered". */
+typedef struct WgSet {
+    const Symbol *names[WF_MAX_FRAME_GLOBALS];
+    uint32_t      n;
+    bool          overflow;
+} WgSet;
+
+static void wg_set_add(WgSet *s, const Symbol *sym) {
+    if (!s || !sym) return;
+    for (uint32_t i = 0; i < s->n; i++) if (s->names[i] == sym) return;
+    if (s->n >= WF_MAX_FRAME_GLOBALS) { s->overflow = true; return; }
+    s->names[s->n++] = sym;
+}
+
+static void wg_set_union(WgSet *dst, const WgSet *src) {
+    if (!dst || !src) return;
+    if (src->overflow) dst->overflow = true;
+    for (uint32_t i = 0; i < src->n; i++) wg_set_add(dst, src->names[i]);
+}
+
+static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn, WgSet *out);
+
+/* True when `sym` names a mutable global -- i.e. a `set!` through it is
+ * observable outside the assigning function.  A parameter of the enclosing
+ * function shadows: turmeric passes by value, so `(set! p 5)` rebinds this
+ * function's own slot, which is the same by-value argument wf_walk rests on. */
+static bool wg_target_is_global(Elab *e, const Form *target,
+                                Binding *const *params, uint32_t n_params) {
+    if (!target || target->tag != F_SYM || !target->as.sym) return false;
+    if (wf_param_index(target, params, n_params) >= 0) return false;
+    Binding *b = scope_lookup(&e->global, target->as.sym);
+    return b && b->is_global;
+}
+
+static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
+                         uint32_t n_params, uint32_t depth, WgSet *out) {
+    if (!f) return WG_V_NO;
+    if (depth >= WF_SCAN_MAX_DEPTH) return WG_V_UNKNOWN;
+    if (f->tag == F_CBLOCK) return WG_V_NO;   /* cannot reach a global; see above */
+    if (f->tag == F_SYM && f->as.sym) {
+        const char *n = f->as.sym->name;
+        if (strcmp(n, "set!") == 0 || strcmp(n, "swap!") == 0 ||
+            strcmp(n, "reset!") == 0)
+            return WG_V_UNKNOWN;              /* an assignment used as a value */
+        return WG_V_NO;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return WG_V_NO;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return wg_walk(e, mx, params, n_params, depth, out);
+    }
+    if (f->as.list.len == 0) return WG_V_NO;
+
+    WgVerdict v = WG_V_NO;
+
+    /* A direct assignment. */
+    if (f->as.list.len >= 2 &&
+        (rt_sym_is(f->as.list.items[0], "set!") ||
+         rt_sym_is(f->as.list.items[0], "swap!") ||
+         rt_sym_is(f->as.list.items[0], "reset!"))) {
+        const Form *target = f->as.list.items[1];
+        if (target && target->tag == F_SYM) {
+            if (wg_target_is_global(e, target, params, n_params)) {
+                v = wg_worse(v, WG_V_YES);
+                wg_set_add(out, target->as.sym);
+            }
+        } else {
+            /* A place expression: `(set! (.n g) 9)` reaches whatever `g` names,
+             * so it is a global write when its ROOT is a global. */
+            bool opaque = false;
+            const Form *root = f->as.list.items[1];
+            uint32_t guard = 0;
+            while (root && root->tag == F_LIST && root->as.list.len >= 2 &&
+                   guard++ < WF_SCAN_MAX_DEPTH)
+                root = root->as.list.items[root->as.list.len - 1];
+            if (!root || root->tag != F_SYM) opaque = true;
+            if (opaque) v = wg_worse(v, WG_V_UNKNOWN);
+            else if (wg_target_is_global(e, root, params, n_params)) {
+                v = wg_worse(v, WG_V_YES);
+                wg_set_add(out, root->as.sym);
+            }
+        }
+        for (uint32_t i = 2; i < f->as.list.len; i++)
+            v = wg_worse(v, wg_walk(e, f->as.list.items[i], params, n_params,
+                                    depth + 1, out));
+        return v;
+    }
+
+    /* A call: consult the callee, whatever its arguments -- a call that
+     * receives none of this function's parameters can still write a global,
+     * which is exactly the gap that makes this a separate walk from wf_walk's
+     * `passes_param` fast path. */
+    if (f->tag == F_LIST && f->as.list.items[0]) {
+        const Form *head_f = f->as.list.items[0];
+        if (head_f->tag == F_SYM && head_f->as.sym) {
+            if (!rt_sym_is(head_f, "set!") && !rt_sym_is(head_f, "swap!") &&
+                !rt_sym_is(head_f, "reset!")) {
+                if (wf_param_index(head_f, params, n_params) >= 0) {
+                    /* Calling a function-typed PARAMETER: a higher-order call
+                     * that dispatches to a body chosen by the caller, which
+                     * this scan cannot name.  The common fn-value shape, and
+                     * the one worth being conservative about. */
+                    v = wg_worse(v, WG_V_UNKNOWN);
+                } else {
+                    Binding *callee = scope_lookup(&e->global, head_f->as.sym);
+                    if (callee) {
+                        WgSet cset = { { 0 }, 0, false };
+                        enum WritesGlobal cw = wf_fn_writes_global(e, callee, &cset);
+                        if (cw == WG_YES)          v = wg_worse(v, WG_V_YES);
+                        else if (cw == WG_UNKNOWN) v = wg_worse(v, WG_V_UNKNOWN);
+                        wg_set_union(out, &cset);
+                    }
+                    /* Otherwise: a special form (`if`, `let`, `do` -- syntax,
+                     * whose operands the generic recursion below visits), a
+                     * builtin (compiler-emitted C written against the runtime,
+                     * which cannot name a user global for the same reason
+                     * inline C cannot), or a field accessor.  None is a channel
+                     * to a global, so none is a reason to give up.
+                     *
+                     * RESIDUAL GAP, stated rather than papered over: a `let`-
+                     * bound closure invoked by its own name lands here too, and
+                     * if it writes a global this walk misses it.  Answering
+                     * UNKNOWN instead would be sound, but it would also fire on
+                     * every `if` and every field read -- every special form
+                     * shares this shape -- and downgrade essentially every
+                     * frame, which trades a latent hole for a useless feature.
+                     * Following indirect dispatch is G2's problem, where a fn
+                     * value's own frame becomes a thing that can be asked
+                     * about. */
+                }
+            }
+        } else if (head_f->tag == F_LIST) {
+            v = wg_worse(v, WG_V_UNKNOWN);    /* indirect call */
+        }
+    }
+
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        v = wg_worse(v, wg_walk(e, f->as.list.items[i], params, n_params,
+                                depth + 1, out));
+    return v;
+}
+
+/* Memoized per-function answer.  Recursion through a cycle answers WG_NO for
+ * the back edge: a cycle contributes no global write of its own, and any real
+ * write inside it is seen on the forward edge that reached it. */
+static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn, WgSet *out) {
+    if (!fn) return WG_UNKNOWN;
+    if (fn->writes_global == WG_IN_PROGRESS) return WG_NO;
+    if (fn->writes_global != WG_UNCOMPUTED) {
+        /* G2: replay the memoized set for the caller unioning into `out`. */
+        if (out) {
+            for (uint32_t i = 0; i < fn->n_writes_globals_seen; i++)
+                wg_set_add(out, fn->writes_globals_seen[i]);
+            if (fn->writes_globals_overflow) out->overflow = true;
+        }
+        return fn->writes_global;
+    }
+
+    /* Find the body registered for this function.  A binding with no site is a
+     * global `def`, an extern-c declaration, or a builtin -- none of which can
+     * write a turmeric global by name. */
+    const WriteFrameSite *site = NULL;
+    for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
+        if (e->wf_frame_sites[i].fn == fn) { site = &e->wf_frame_sites[i]; break; }
+    }
+    if (!site || !site->defn_form) { fn->writes_global = WG_NO; return WG_NO; }
+
+    fn->writes_global = WG_IN_PROGRESS;
+    WgSet seen = { { 0 }, 0, false };
+    WgVerdict v = WG_V_NO;
+    const Form *d = site->defn_form;
+    for (uint32_t bi = site->body_start; bi < d->as.list.len; bi++)
+        v = wg_worse(v, wg_walk(e, d->as.list.items[bi], site->params,
+                                site->n_params, 0, &seen));
+    fn->writes_global = (v == WG_V_YES)     ? WG_YES
+                      : (v == WG_V_UNKNOWN) ? WG_UNKNOWN
+                                            : WG_NO;
+    /* Memoize the set beside the verdict so a second caller replays it rather
+     * than re-walking, and so the coverage check has it without a second pass. */
+    fn->writes_globals_overflow = seen.overflow;
+    fn->n_writes_globals_seen   = seen.n;
+    if (seen.n > 0) {
+        fn->writes_globals_seen = (const Symbol **)arena_alloc(
+            e->arena, seen.n * sizeof(const Symbol *));
+        for (uint32_t i = 0; i < seen.n; i++)
+            fn->writes_globals_seen[i] = seen.names[i];
+    }
+    if (out) wg_set_union(out, &seen);
+    return fn->writes_global;
+}
+
+/* The global half of a frame verdict, kept separate from wf_walk's parameter
+ * half because they speak different vocabularies (mutable-globals-plan §4.2).
+ *
+ * G1 (gate off): a frame cannot NAME a global, so any global write blocks
+ * VERIFIED.  UNVERIFIED, not EXCEEDED, and no diagnostic -- the write is
+ * outside the vocabulary rather than outside the declared frame.
+ *
+ * G2 (`--enable=global-state`): the frame CAN name globals, so the question
+ * becomes coverage, exactly as for parameters:
+ *   - every written global declared  -> VERIFIED (the frame holds)
+ *   - a written global not declared  -> EXCEEDED, and `*uncovered` names it
+ *   - cannot tell (UNKNOWN/overflow) -> UNVERIFIED
+ *
+ * Declared-but-never-written is deliberately fine: a frame is an UPPER bound on
+ * what the body may write, the same reading `#writes [a]` already has for a
+ * parameter the body happens not to touch. */
+static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovered) {
+    if (uncovered) *uncovered = NULL;
+    WgSet seen = { { 0 }, 0, false };
+    enum WritesGlobal g = wf_fn_writes_global(e, fn, &seen);
+    if (g == WG_NO)      return WF_VERIFIED;
+    if (g == WG_UNKNOWN) return WF_UNVERIFIED;
+    if (!g_opt_global_state) return WF_UNVERIFIED;   /* G1: no vocabulary */
+    if (seen.overflow)       return WF_UNVERIFIED;   /* coverage unanswerable */
+    for (uint32_t i = 0; i < seen.n; i++) {
+        bool covered = false;
+        for (uint32_t j = 0; j < fn->n_writes_globals_declared; j++) {
+            if (fn->writes_globals_declared[j] == seen.names[i]) { covered = true; break; }
+        }
+        if (!covered) {
+            if (uncovered) *uncovered = seen.names[i];
+            return WF_EXCEEDED;
+        }
+    }
+    return WF_VERIFIED;
+}
+
 void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
                         const Form *defn_form, uint32_t body_start,
                         const Form *annot) {
@@ -1331,7 +1676,9 @@ void wf_resolve_write_frames(Elab *e) {
         bool progress = false;
         for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
             WriteFrameSite *s = &e->wf_frame_sites[i];
-            if (!s->fn || s->fn->writes_checked) continue;
+            /* G1: every defn is registered so the global walk can reach any
+             * callee's body, but only a DECLARED frame has anything to check. */
+            if (!s->fn || !s->fn->writes_declared || s->fn->writes_checked) continue;
             const Form *witness = NULL;
             WfVerdict v = WF_VERIFIED;
             const Form *d = s->defn_form;
@@ -1339,6 +1686,8 @@ void wf_resolve_write_frames(Elab *e) {
                 v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
                                         s->n_params, s->fn->writes_param_mask,
                                         0, &witness));
+            if (v == WF_VERIFIED)
+                v = wf_worse(v, wf_global_verdict(e, s->fn, NULL));
             if (v == WF_VERIFIED) { s->fn->writes_checked = true; progress = true; }
         }
         if (!progress) break;
@@ -1346,7 +1695,7 @@ void wf_resolve_write_frames(Elab *e) {
     /* Final sweep: report the frames that are definitely exceeded. */
     for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
         WriteFrameSite *s = &e->wf_frame_sites[i];
-        if (!s->fn || s->fn->writes_checked) continue;
+        if (!s->fn || !s->fn->writes_declared || s->fn->writes_checked) continue;
         const Form *witness = NULL;
         WfVerdict v = WF_VERIFIED;
         const Form *d = s->defn_form;
@@ -1354,17 +1703,81 @@ void wf_resolve_write_frames(Elab *e) {
             v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
                                     s->n_params, s->fn->writes_param_mask, 0,
                                     &witness));
-        if (v != WF_EXCEEDED) continue;
+        /* G1 does NOT suppress an EXCEEDED report: writing a global is not an
+         * excuse for also writing outside a declared frame. */
+        const Symbol *uncovered = NULL;
+        if (v != WF_EXCEEDED) {
+            /* G2: an undeclared global write is the same kind of mistake as a
+             * write outside the parameter frame, so it gets the same code --
+             * but a message that names the global, because "widen the frame"
+             * is not actionable if you cannot see what to widen it with. */
+            if (wf_global_verdict(e, s->fn, &uncovered) != WF_EXCEEDED) continue;
+        }
         Span at = witness ? witness->span
                           : (s->annot ? s->annot->span : d->span);
-        diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
-                            "this writes outside the `#writes` frame declared by "
-                            "'%s'",
-                            s->fn->name ? s->fn->name->name : "<fn>");
+        if (uncovered) {
+            diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
+                                "'%s' writes the global '%s', which its `#writes` "
+                                "frame does not name",
+                                s->fn->name ? s->fn->name->name : "<fn>",
+                                uncovered->name);
+        } else {
+            diag_emit_with_code(DIAG_ERROR, at, TUR_E0382_WRITES_FRAME_EXCEEDED,
+                                "this writes outside the `#writes` frame declared by "
+                                "'%s'",
+                                s->fn->name ? s->fn->name->name : "<fn>");
+        }
         if (s->annot)
             diag_emit(DIAG_NOTE, s->annot->span,
-                      "the declared frame is here; widen it to what the body "
-                      "writes, or narrow the body");
+                      uncovered
+                        ? "the declared frame is here; add the global to it, or "
+                          "stop writing it"
+                        : "the declared frame is here; widen it to what the body "
+                          "writes, or narrow the body");
+    }
+
+    /* G1: --dump-write-frames.  One line per DECLARED frame, in source order.
+     * `global=` is the answer that can downgrade VERIFIED to UNVERIFIED, kept
+     * as its own column so a fixture can tell "the frame did not hold" from
+     * "the frame held but the body writes a global". */
+    if (g_dump_write_frames) {
+        for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
+            WriteFrameSite *s = &e->wf_frame_sites[i];
+            if (!s->fn || !s->fn->writes_declared) continue;
+            /* Recompute the FRAME-ONLY verdict so the two questions stay
+             * separable in the output: a fixture needs to tell "the frame did
+             * not hold" from "the frame held but the body writes a global". */
+            const Form *w = NULL;
+            WfVerdict fv = WF_VERIFIED;
+            const Form *d = s->defn_form;
+            for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
+                fv = wf_worse(fv, wf_walk(e, d->as.list.items[bi], s->params,
+                                          s->n_params, s->fn->writes_param_mask,
+                                          0, &w));
+            enum WritesGlobal g = wf_fn_writes_global(e, s->fn, NULL);
+            printf("write-frame %s: %s mask=0x%x frame=%s global=%s",
+                   s->fn->name ? s->fn->name->name : "<fn>",
+                   s->fn->writes_checked ? "VERIFIED" : "UNVERIFIED",
+                   s->fn->writes_param_mask,
+                   fv == WF_VERIFIED ? "VERIFIED"
+                 : fv == WF_EXCEEDED ? "EXCEEDED"
+                                     : "UNVERIFIED",
+                   g == WG_NO      ? "NO"
+                 : g == WG_YES     ? "YES"
+                 : g == WG_UNKNOWN ? "UNKNOWN"
+                                   : "?");
+            /* G2: the declared global frame, so a fixture can tell a covered
+             * write from an unchecked one. */
+            if (s->fn->n_writes_globals_declared > 0) {
+                printf(" declared=[");
+                for (uint32_t gi = 0; gi < s->fn->n_writes_globals_declared; gi++)
+                    printf("%s%s", gi ? " " : "",
+                           s->fn->writes_globals_declared[gi]->name);
+                printf("]");
+            }
+            printf("\n");
+        }
+        fflush(stdout);
     }
 }
 
@@ -4897,6 +5310,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * frame ("writes nothing"), not the absence of one -- see expr.h. */
     uint32_t writes_mask_defn     = 0;
     bool     writes_declared_defn = false;
+    /* G2: globals named in this defn's `#writes` frame. */
+    const Symbol *writes_globals_defn[WF_MAX_FRAME_GLOBALS];
+    uint32_t      n_writes_globals_defn = 0;
     const Form *writes_annot_defn = NULL;   /* for the WF2 diagnostic's span */
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
@@ -4997,11 +5413,50 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     }
                 }
                 if (!found) {
-                    diag_emit_with_code(DIAG_ERROR, psym->span,
-                                        TUR_E0381_WRITES_FRAME_INVALID,
-                                        "#writes names '%s', which is not a parameter "
-                                        "of this function",
-                                        psym->as.sym->name);
+                    /* G2 (mutable-globals-plan §4.2): a frame entry that is not
+                     * a parameter may name a MUTABLE GLOBAL, so a body that
+                     * maintains global state can carry a checked frame instead
+                     * of being declined outright (G1).  Gated: with
+                     * `global-state` off this stays the pre-G2 hard error, so
+                     * the grammar is unchanged for anyone who has not opted in.
+                     *
+                     * An IMMUTABLE global is rejected with its own reason
+                     * rather than folded into "not a parameter": naming one in
+                     * a write frame is a statement that cannot be true, and
+                     * saying so beats a message about parameters. */
+                    Binding *gb = g_opt_global_state
+                                ? scope_lookup(&e->global, psym->as.sym) : NULL;
+                    if (gb && gb->is_global && gb->is_mut) {
+                        experiment_warn_if_used("global-state");
+                        bool dup = false;
+                        for (uint32_t gi = 0; gi < n_writes_globals_defn; gi++)
+                            if (writes_globals_defn[gi] == psym->as.sym) { dup = true; break; }
+                        if (!dup) {
+                            if (n_writes_globals_defn < WF_MAX_FRAME_GLOBALS) {
+                                writes_globals_defn[n_writes_globals_defn++] = psym->as.sym;
+                            } else {
+                                diag_emit_with_code(DIAG_ERROR, psym->span,
+                                    TUR_E0381_WRITES_FRAME_INVALID,
+                                    "#writes names '%s' -- a write frame covers at "
+                                    "most %u globals",
+                                    psym->as.sym->name,
+                                    (unsigned)WF_MAX_FRAME_GLOBALS);
+                            }
+                        }
+                    } else if (gb && gb->is_global && !gb->is_mut) {
+                        diag_emit_with_code(DIAG_ERROR, psym->span,
+                                            TUR_E0381_WRITES_FRAME_INVALID,
+                                            "#writes names '%s', an immutable global -- "
+                                            "nothing can write it; declare it `^mut` or "
+                                            "drop it from the frame",
+                                            psym->as.sym->name);
+                    } else {
+                        diag_emit_with_code(DIAG_ERROR, psym->span,
+                                            TUR_E0381_WRITES_FRAME_INVALID,
+                                            "#writes names '%s', which is not a parameter "
+                                            "of this function",
+                                            psym->as.sym->name);
+                    }
                 } else if (found > WF_MAX_FRAME_PARAMS) {
                     /* The mask is 32 bits wide.  Rejected rather than dropped:
                      * a silently ignored frame member is a frame the body can
@@ -5971,6 +6426,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "bridge them",
                         name_f->as.sym->name, want, gb.data);
                     break;
+                case RET_CONFLICT_CARRIER_AGGREGATE:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- an aggregate is a real C type (a struct, or "
+                        "a typed pointer to one), not the int64 carrier, so there "
+                        "is no representation these two share and nothing to "
+                        "bridge them",
+                        name_f->as.sym->name, want, gb.data);
+                    break;
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }
             buf_free(&gb);
@@ -6558,9 +7023,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->writes_param_mask = writes_mask_defn;
     b->writes_declared   = writes_declared_defn;
     b->writes_checked    = false;
-    if (writes_declared_defn)
-        wf_note_frame_site(e, b, params, n_params, call, body_start,
-                           writes_annot_defn);
+    /* G2: copy the declared global frame into the arena beside the mask. */
+    b->n_writes_globals_declared = n_writes_globals_defn;
+    if (n_writes_globals_defn > 0) {
+        b->writes_globals_declared = (const Symbol **)arena_alloc(
+            e->arena, n_writes_globals_defn * sizeof(const Symbol *));
+        for (uint32_t gi = 0; gi < n_writes_globals_defn; gi++)
+            b->writes_globals_declared[gi] = writes_globals_defn[gi];
+    }
+    /* G1: registered for EVERY defn, not only annotated ones.  The frame walk
+     * still only ever checks a frame that was declared (both loops in
+     * wf_resolve_write_frames filter on `writes_declared`), but the
+     * global-write question has to be answerable for an ARBITRARY callee --
+     * including one that carries no frame of its own -- and the body forms are
+     * only reachable through this registry. */
+    wf_note_frame_site(e, b, params, n_params, call, body_start,
+                       writes_declared_defn ? writes_annot_defn : NULL);
     /* A declared return refinement wins -- but only when something actually
      * enforces it (see rt_ret_guaranteed).  An INFERRED one is always safe to
      * publish: RT4 only records what a backend proved. */
@@ -7780,6 +8258,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * closure-dispatch protocol on the let binding, not by a direct call to
      * __fn_N (whose C signature returns the int64 carrier, not a fn pointer). */
     b->is_lifted_lambda = true;
+    /* `__fn_%u` above is a name the elaborator made up; nothing that lists
+     * symbols for a human should offer it. */
+    b->is_synthesized = true;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 
     /* RT1: publish this lambda's contract parameters on its lifted thunk
@@ -8318,35 +8799,143 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
 }
 
 Expr *elab_def(Elab *e, const Form *call) {
-    /* Phase P3: Check for ^persistent annotation before name */
-    /* Syntax: (def ^persistent name init) */
+    /* def/define consolidation D1: `define` is a spelling of `def`, so every
+     * diagnostic below quotes the head symbol the user actually wrote rather
+     * than a fixed "def". */
+    const char *kw = "def";
+    if (call->as.list.len >= 1 && call->as.list.items[0]->tag == F_SYM)
+        kw = call->as.list.items[0]->as.sym->name;
+
+    /* Syntax: (def [^mut|^persistent|^deprecated ["msg"]]* name [: type] init)
+     *
+     * D4/§3.5(b): annotations are consumed in any order (matching `let`), and
+     * every annotation this form does NOT support is rejected by name with a
+     * reason.  Silently dropping one is the outcome D4 exists to prevent. */
     uint32_t name_idx = 1;
     bool is_persistent = false;
+    bool is_mut = false;
+    bool is_atomic = false;
+    bool is_thread_local = false;
     bool is_deprecated_attr = false;
     const char *deprecation_msg = NULL;
 
-    if (call->as.list.len > 3) {
-        Form *first = call->as.list.items[name_idx];
-        if (first->tag == F_SYM && first->as.sym == e->sym_caret_persistent) {
-            is_persistent = true;
-            name_idx++;
-        }
-    }
+    while (name_idx < call->as.list.len &&
+           call->as.list.items[name_idx]->tag == F_SYM) {
+        Form *cur = call->as.list.items[name_idx];
+        const Symbol *s = cur->as.sym;
 
-    /* F4: ^deprecated ["message"] before the name (after ^persistent) */
-    if (call->as.list.len > name_idx + 2 &&
-        call->as.list.items[name_idx]->tag == F_SYM &&
-        call->as.list.items[name_idx]->as.sym == e->sym_caret_deprecated) {
-        is_deprecated_attr = true;
-        name_idx++;
-        if (call->as.list.items[name_idx]->tag == F_STR) {
-            Form *msg_f = call->as.list.items[name_idx];
-            char *msg_buf = (char *)arena_alloc(e->arena, msg_f->as.s.len + 1);
-            memcpy(msg_buf, msg_f->as.s.p, msg_f->as.s.len);
-            msg_buf[msg_f->as.s.len] = '\0';
-            deprecation_msg = msg_buf;
-            name_idx++;
+        if (s == e->sym_caret_persistent) { is_persistent = true; name_idx++; continue; }
+
+        /* G4b: `^thread-local` -- each thread gets its own copy, initialized
+         * on first access by running the initializer on that thread. */
+        if (s == e->sym_caret_thread_local) {
+            if (!g_opt_global_state) {
+                diag_emit(DIAG_ERROR, cur->span,
+                          "%s: '^thread-local' needs --enable=global-state "
+                          "(docs/upcoming/mutable-globals-plan.md)", kw);
+                return NULL;
+            }
+            experiment_warn_if_used("global-state");
+            is_thread_local = true; name_idx++; continue;
         }
+
+        /* G4a: `^atomic` -- reads and writes of this global are sequentially
+         * consistent.  Scalars only; the type check happens below, once the
+         * initializer has been elaborated and the type is known. */
+        if (s == e->sym_caret_atomic) {
+            if (!g_opt_global_state) {
+                diag_emit(DIAG_ERROR, cur->span,
+                          "%s: '^atomic' needs --enable=global-state "
+                          "(docs/upcoming/mutable-globals-plan.md)", kw);
+                return NULL;
+            }
+            experiment_warn_if_used("global-state");
+            is_atomic = true; name_idx++; continue;
+        }
+
+        /* D4: ^mut on a global is meaningful -- static storage that `set!` may
+         * write.  Without it, `(set! g v)` told the user to "use ^mut at the
+         * binding site" and the binding site rejected ^mut: a dead end. */
+        if (s == e->sym_caret_mut) { is_mut = true; name_idx++; continue; }
+
+        /* F4: ^deprecated ["message"] */
+        if (s == e->sym_caret_deprecated) {
+            is_deprecated_attr = true;
+            name_idx++;
+            if (name_idx < call->as.list.len &&
+                call->as.list.items[name_idx]->tag == F_STR) {
+                Form *msg_f = call->as.list.items[name_idx];
+                char *msg_buf = (char *)arena_alloc(e->arena, msg_f->as.s.len + 1);
+                memcpy(msg_buf, msg_f->as.s.p, msg_f->as.s.len);
+                msg_buf[msg_f->as.s.len] = '\0';
+                deprecation_msg = msg_buf;
+                name_idx++;
+            }
+            continue;
+        }
+
+        /* D4: the substructural annotations are rejected, each for its own
+         * reason.  They are not "unsupported yet" -- they are unenforceable on
+         * a global, and a half-working check is worse than none.
+         *
+         * ^linear / ^relevant are verified at SCOPE EXIT (elab_let's ST1 pass,
+         * elab_forms.c) -- "was this consumed / used by the time its scope
+         * ended".  The global scope has no exit, so there is no point at which
+         * the obligation could be discharged or reported.
+         *
+         * ^affine is checked per use site (elab_toplevel.c), which WOULD fire
+         * on a global -- but on elaboration order across the whole program, not
+         * on anything the program does.  Two functions naming the global would
+         * be rejected even if only one is ever called.  That is the
+         * silently-half-working outcome, so it is refused outright.
+         *
+         * ^unique asserts no aliasing; a global is a name every function in the
+         * program can reach, so uniqueness is not a property it can have. */
+        if (s == e->sym_caret_linear || s == e->sym_caret_relevant) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: '%s' cannot be enforced on a top-level binding -- the "
+                      "obligation is checked when the binding's scope ends, and a "
+                      "global's scope never ends. Bind it in a body (`let`, or a "
+                      "`%s` inside a `defn`/`fn`/`do`) where the check has a "
+                      "scope exit to run at",
+                      kw, s->name, kw);
+            return NULL;
+        }
+        if (s == e->sym_caret_affine) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: '%s' cannot be enforced on a top-level binding -- "
+                      "\"used at most once\" would count elaboration sites across "
+                      "the whole program, not uses at run time, so two functions "
+                      "naming it would be rejected even if only one ever runs. "
+                      "Bind it in a body (`let`, or a `%s` inside a "
+                      "`defn`/`fn`/`do`) instead",
+                      kw, s->name, kw);
+            return NULL;
+        }
+        if (s == e->sym_caret_unique) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: '%s' has no meaning on a top-level binding -- a global "
+                      "is a name every function in the program can reach, so it "
+                      "cannot be unaliased. Bind it in a body (`let`, or a `%s` "
+                      "inside a `defn`/`fn`/`do`), or pass it as a `^unique` "
+                      "parameter",
+                      kw, s->name, kw);
+            return NULL;
+        }
+
+        /* Any other caret-led symbol in annotation position is a typo or an
+         * annotation that belongs to some other form; say so rather than
+         * falling through to the generic arity diagnostic, which never
+         * mentions the annotation at all. */
+        if (s->len > 1 && s->name[0] == '^') {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "%s: unknown annotation '%s'; %s accepts ^mut, ^persistent, "
+                      "and ^deprecated \"msg\"",
+                      kw, s->name, kw);
+            return NULL;
+        }
+
+        break;  /* not an annotation -- this is the binding name */
     }
 
     Form *init_f = NULL;
@@ -8365,24 +8954,33 @@ Expr *elab_def(Elab *e, const Form *call) {
             init_f = call->as.list.items[name_idx + 1];
         } else {
             diag_emit(DIAG_ERROR, call->span,
-                      "def takes (def [^persistent] [^deprecated [\"msg\"]] name [: type] init)");
+                      "%s takes (%s [^mut] [^persistent] [^deprecated \"msg\"] "
+                      "name [: type] init)", kw, kw);
             return NULL;
         }
     }
-    
+
     Form *name_f = call->as.list.items[name_idx];
     if (name_f->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, name_f->span, "def name must be a symbol");
+        diag_emit(DIAG_ERROR, name_f->span, "%s name must be a symbol", kw);
         return NULL;
     }
-    /* Top-level only — error if not in global scope. */
+    /* D1/§3.3: a body window was already rewritten to a `let` by
+     * splice_internal_defines, so reaching here in non-global scope means an
+     * expression position -- an `if` branch, a call argument, a `cond` test --
+     * where the binding would have nothing to scope over. */
     if (e->scope != &e->global) {
-        diag_emit(DIAG_ERROR, call->span, "def is only valid at the top level");
+        diag_emit(DIAG_ERROR, call->span,
+                  "`%s` here has nothing to scope over: a `%s` in an expression "
+                  "position binds a name no later form can see. Put it at the top "
+                  "level, or in a body (`do`, `fn`, `let`, `when`, `while`), or "
+                  "use `let` if you meant a binding local to this expression",
+                  kw, kw);
         return NULL;
     }
     if (scope_lookup(e->scope, name_f->as.sym)) {
         diag_emit(DIAG_ERROR, name_f->span,
-                  "def: '%s' is already defined", name_f->as.sym->name);
+                  "%s: '%s' is already defined", kw, name_f->as.sym->name);
         return NULL;
     }
 
@@ -8437,14 +9035,69 @@ Expr *elab_def(Elab *e, const Form *call) {
     /* Phase 5: ref<T> is scope-local only — disallow at top-level def */
     if (init->type.kind == TY_REF) {
         diag_emit(DIAG_ERROR, call->span,
-                  "def: ref<T> values must be scope-local; use let instead of def for '%s'",
-                  name_f->as.sym->name);
+                  "%s: ref<T> values must be scope-local; use let instead of %s for '%s'",
+                  kw, kw, name_f->as.sym->name);
+        return NULL;
+    }
+
+    /* G4b: `^thread-local` and `^atomic` are mutually exclusive.  A per-thread
+     * copy is unshared by construction, so making its accesses atomic buys
+     * nothing and would suggest a synchronisation that is not happening. */
+    if (is_thread_local && is_atomic) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: '^thread-local' and '^atomic' do not combine -- a "
+                  "per-thread copy is unshared, so its accesses need no "
+                  "synchronisation",
+                  kw);
+        return NULL;
+    }
+    /* G4b/§13.7: a `^thread-local` initializer may not reference another
+     * `^thread-local`.  Per-thread initialization order is source order, and
+     * allowing cross-references would make that order observable and therefore
+     * load-bearing, for no demonstrated need.  Loosenable later; rejecting is
+     * the direction that stays correct if the order ever changes. */
+    if (is_thread_local && init_f) {
+        const Symbol *bad = tl_init_references_thread_local(e, init_f, 0);
+        if (bad) {
+            diag_emit(DIAG_ERROR, init_f->span,
+                      "%s: a '^thread-local' initializer may not reference "
+                      "another '^thread-local' ('%s') -- per-thread "
+                      "initialization order would become observable; read it "
+                      "inside a function instead",
+                      kw, bad->name);
+            return NULL;
+        }
+    }
+
+    /* G4a: `^atomic` requires an explicit `^mut` (decided 2026-08-05).  An
+     * atomic global nothing may write is just a global, and making `^atomic`
+     * confer write permission would make it the only annotation in the language
+     * that does so as a side effect. */
+    if (is_atomic && !is_mut) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: '^atomic' does not by itself allow writes -- write "
+                  "`(%s ^atomic ^mut %s ...)`; without `^mut` an atomic global "
+                  "is just a global",
+                  kw, kw, name_f->as.sym->name);
+        return NULL;
+    }
+    /* G4a: scalars only.  A wider value cannot be loaded or stored in one
+     * machine operation, and pretending otherwise would ship exactly the
+     * looks-atomic-and-is-not outcome this plan keeps refusing. */
+    if (is_atomic && !type_is_atomic_scalar(init->type.kind)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "%s: '^atomic' needs an 8-byte scalar (int, float, cstr, or "
+                  "ptr); '%s' is %s -- for a bool use an int flag, and for a "
+                  "wider value use a lock (stdlib/mutex.tur)",
+                  kw, name_f->as.sym->name, type_name(init->type));
         return NULL;
     }
 
     Binding *b = binding_new(e, name_f->as.sym, init->type,
-                             /*is_mut=*/false, /*is_global=*/true, name_f->span);
-    b->is_persistent = is_persistent;
+                             /*is_mut=*/is_mut, /*is_global=*/true, name_f->span);
+    b->is_persistent    = is_persistent;
+    b->is_atomic        = is_atomic;
+    b->is_thread_local  = is_thread_local;
     /* F4: ^deprecated on def */
     b->is_deprecated = is_deprecated_attr;
     b->deprecation_message = deprecation_msg;

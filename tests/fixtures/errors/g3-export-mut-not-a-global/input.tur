@@ -1,0 +1,10 @@
+;; G3: `(export (mut f))` on a function is rejected by name.  A top-level defn
+;; is a global binding too, so staticness alone does not separate a data global
+;; from a function -- the fn type is what does.  Accepting it and leaving it
+;; inert would be a silently-meaningless annotation, the exact shape the `def`
+;; annotation audit exists to prevent.
+(defmodule main
+  (import g3lib/ctr :refer [peek])
+  (defn main [] : int
+    (println (peek))
+    0))

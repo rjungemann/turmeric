@@ -1,0 +1,10 @@
+;; Body bindings take the same `: type` ascription top-level `def` takes.
+;; The float probe uses 7.1, never 7.0, so a truncation bug cannot hide.
+(defn main [] : int
+  (define n : int 3)
+  (def f : float 7.1)
+  (def s : cstr "ok")
+  (println n)
+  (println f)
+  (println s)
+  0)

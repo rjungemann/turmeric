@@ -103,6 +103,17 @@ if [ "${TUR_SKIP_PARITY_CHECK:-0}" != "1" ] && command -v python3 >/dev/null 2>&
     fi
 fi
 
+# Self-test for the emitted-C pointer/integer ratchet below (the per-fixture
+# check in run_happy).  A grep that matches nothing is indistinguishable from a
+# clean corpus, so the canary asserts the pattern still fires before the suite
+# leans on it.  Skipped along with the ratchet itself via TUR_SKIP_CC_WARN_CHECK=1.
+if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
+    if ! bash tests/check-cc-warn-ratchet.sh; then
+        echo "tests: emitted-C warning ratchet self-test failed (see above); aborting." >&2
+        exit 1
+    fi
+fi
+
 # R4 (carrier-crossing-recovery-routing-plan): the audit registry is the single
 # source of truth for which carrier<->concrete crossings are routed.  A new
 # chokepoint call site that forgot its audit row (or a drifted/stale registry)
@@ -385,6 +396,32 @@ stamp_write() {
 }
 # ---------------------------------------------------------------------------
 
+# A fixture directory the runner cannot run.  This used to record PASS with a
+# "(no input -- skipped)" detail while printing SKIP to the live stream, so the
+# loss was invisible in the summary line and in CI -- four directories holding
+# 30 loose `.tur` files sat that way, three of them covered by no harness at
+# all.  Every fixture dir must now declare how it runs.  See
+# docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+no_input_fail() {
+    local dir="$1" name="$2" alt="$3"
+    local log="$RESULTS_DIR/$(printf '%s' "no-input-$name" | tr '/ ' '__').log"
+    {
+        echo "FAIL $name -- no runnable input"
+        echo "    Looked for $dir/input.tur and $dir/$alt"
+        echo "    A fixture directory must declare how it runs, by holding one of:"
+        echo "      input.tur (or <dirname>.tur)  -- run by this harness"
+        echo "      hook.sh                       -- drives itself"
+        echo "      requires.dedicated-runner     -- owned by a ctest target or"
+        echo "                                       tests/run-*.sh; put the owner's"
+        echo "                                       name in the marker file"
+        echo "    Loose .tur files under other names are run by nothing: give each"
+        echo "    its own subdirectory with input.tur + expected.stdout."
+        echo "    If this dir holds only generated artifacts (actual.*, turi.stderr)"
+        echo "    left behind by a deleted fixture, delete the directory."
+    } > "$log"
+    write_result "FAIL" "$name" "no runnable input" "$log"
+}
+
 run_happy() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
@@ -429,21 +466,27 @@ run_happy() {
         return
     fi
 
+    # Skip fixtures owned by a dedicated ctest target (e.g. eval-import
+    # has its own tur_eval_import test with custom -I/-L flags).
+    #
+    # Checked BEFORE the input lookup, not after.  A dir owned by another
+    # harness legitimately has no input.tur of its own, and the lookup below now
+    # FAILS rather than reporting PASS -- so with the order reversed this marker
+    # was unreachable for exactly the directories that carry it, and the silent
+    # PASS answered for them instead.  17 dirs were in that state.
+    if [ -f "$dir/requires.dedicated-runner" ]; then
+        write_result "PASS" "$name" "(dedicated-runner-skipped)" ""
+        return
+    fi
+
     local input
     if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
-    else echo "SKIP $name (no input)" ; write_result "PASS" "$name" "(no input -- skipped)" "" ; return; fi
+    else no_input_fail "$dir" "$name" "$(basename "$dir").tur"; return; fi
 
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
         write_result "PASS" "$name" "(tsan-skipped)" ""
-        return
-    fi
-
-    # Skip fixtures owned by a dedicated ctest target (e.g. eval-import
-    # has its own tur_eval_import test with custom -I/-L flags).
-    if [ -f "$dir/requires.dedicated-runner" ]; then
-        write_result "PASS" "$name" "(dedicated-runner-skipped)" ""
         return
     fi
 
@@ -621,6 +664,44 @@ run_happy() {
         expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
     fi
 
+    # Ratchet: pointer/integer confusion in the EMITTED C.
+    #
+    # -Wint-conversion / -Wincompatible-pointer-types are the C compiler saying a
+    # pointer and an integer were mixed up -- exactly the boundary a language
+    # whose ABI carries handles as int64_t gets wrong, and exactly the kind of
+    # thing that is a WARNING here and a hard error under -Werror.  cc's output
+    # already lands in $actual_stderr (the build phase writes it, the run phase
+    # appends), and it used to be read only when the build FAILED; on success it
+    # was discarded, so the class could reappear with nothing watching.
+    #
+    # Checked HERE -- after the build/run, ahead of the timeout and output
+    # comparisons -- because the warning is a CAUSE and those are symptoms.
+    # Behind the stdout diff it was unreachable for the fixture that needed it
+    # most: a canary whose emitted C returns an int as a `const char *` segfaults,
+    # so it reported "stdout mismatch" and the real reason never appeared in the
+    # log.
+    #
+    # The corpus was sweep-verified at ZERO before this landed (2563 fixtures,
+    # built with these same flags), which is what makes FAIL affordable rather
+    # than a warning nobody reads.  See
+    # docs/archive/emitted-c-pointer-integer-warnings-unwatched.md.
+    #
+    # Opt out with TUR_SKIP_CC_WARN_CHECK=1 (e.g. on a toolchain that words these
+    # differently, or while landing a change that knowingly trips them).
+    if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ] && [ -s "$actual_stderr" ]; then
+        if grep -qE '\[-W(int-conversion|incompatible-pointer-types)\]' "$actual_stderr"; then
+            {
+                echo "FAIL $name -- emitted C mixes a pointer and an integer"
+                grep -E '\[-W(int-conversion|incompatible-pointer-types)\]' \
+                    "$actual_stderr" | sed 's/^/    /'
+                echo "    This is a warning to cc and a hard error under -Werror."
+                echo "    Opt out for one run with TUR_SKIP_CC_WARN_CHECK=1."
+            } > "$log_file"
+            write_result "FAIL" "$name" "emitted C pointer/integer warning" "$log_file"
+            return
+        fi
+    fi
+
     # Report a run-phase timeout AS a timeout.  The emit-c and build phases
     # above already special-case rc 124; the run phase did not, so a killed
     # binary's partial stdout fell through to the diff below and was reported
@@ -704,8 +785,15 @@ run_happy() {
 run_negative() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
+    # Same order as the happy path: a dir owned by another harness declares it
+    # with the marker, and anything else with no input.tur is a failure, not a
+    # silent PASS.
+    if [ -f "$dir/requires.dedicated-runner" ]; then
+        write_result "PASS" "$name" "(dedicated-runner-skipped)" ""
+        return
+    fi
     local input="$dir/input.tur"
-    [ -f "$input" ] || { echo "SKIP $name (no input)"; write_result "PASS" "$name" "(no input -- skipped)" "" ; return; }
+    [ -f "$input" ] || { no_input_fail "$dir" "$name" "input.tur"; return; }
 
     # Skip negative fixtures that load from the optional sibling turmeric-spices
     # repo when that directory isn't present (mirrors the happy-path guard above).
@@ -720,6 +808,16 @@ run_negative() {
     # POSIX-API skip (mirrors the happy-path guard above).
     if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
         write_result "PASS" "$name" "(posix-apis-skipped)" ""
+        return
+    fi
+
+    # Interpreter-only skip (mirrors the happy-path guard above).  A negative
+    # fixture asserting a `--interpret` diagnostic is owned by
+    # tests/run-turi.sh's run_turi_error_fixture; the compiled path may reject
+    # the same program for an unrelated reason, so its expected.diag is not a
+    # claim about this suite.
+    if [ -f "$dir/requires.interp-only" ]; then
+        write_result "PASS" "$name" "(interp-only-skipped)" ""
         return
     fi
 
@@ -799,7 +897,7 @@ export TUR_TEST_FILTER
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
 export TUR_TSAN _tur_timeout_bin TUR_MTIME
-export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
+export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors, PLUS the

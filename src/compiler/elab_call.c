@@ -2156,8 +2156,12 @@ Expr *elab_call(Elab *e, Form *call) {
     if (sz7_static_size_violation(e, call, name)) return NULL;
 
     /* Special forms. */
-    if (name == e->sym_def)    return elab_def   (e, call);
-    if (name == e->sym_define) return elab_define_error(e, call);
+    /* def/define consolidation D1: one form, two spellings.  Position, not
+     * spelling, selects the behaviour -- a body window is rewritten to a `let`
+     * by splice_internal_defines before dispatch ever gets here, so anything
+     * reaching elab_def is either the top level (a global binding) or an
+     * expression position (the §3.3 diagnostic). */
+    if (name == e->sym_def || name == e->sym_define) return elab_def(e, call);
     if (name == e->sym_let)    return elab_let   (e, call);
     if (name == e->sym_letstar) return elab_letstar(e, call);
     if (name == e->sym_letrec) return elab_letrec(e, call);

@@ -1,0 +1,2 @@
+(defn main [] : int
+  (if true (def x 1) 2))

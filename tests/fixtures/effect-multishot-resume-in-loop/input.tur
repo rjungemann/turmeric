@@ -1,0 +1,61 @@
+;; The multi-shot fold: a `^multishot` handler clause that resumes its
+;; continuation once per loop iteration.  This is the direct expression of
+;; bounded nondeterminism -- fold the continuation over a range -- and it was
+;; the blocking case in docs/reported/handler-clause-statement-if-ices-emitter.md
+;; (the shape effects-vs-monads.md documented the payload-indirection
+;; workaround for).
+;;
+;; The loop lowers to a synthesized helper (CT_LOOP) entered from the handler
+;; case; each `(resume k i)` is a dk_invoke against the same k the
+;; straight-line double-resume already used, so the loop only changes how many
+;; times.  The assertions are sums THROUGH the continuation: the handle body's
+;; arithmetic must run once per resume, so a wrong resume count or a lost
+;; continuation changes the number, not just the timing.
+;;
+;; This also runs under `--interpret`: turi drives `while` on its work-stack
+;; (DK_WHILE), so a resume inside the loop reaches the driver with the prompt
+;; visible and each one clones the captured slice.  It briefly could not --
+;; the loop was a black box, which forced the handle onto the one-shot fiber
+;; and aborted the interpreter on the second resume; see
+;; docs/archive/turi-multishot-resume-in-while-aborts.md.
+(defeffect Choose [lo : int hi : int] : int)
+
+;; 2*(1+2+..+n), via a non-main function so the loop helper is exercised
+;; outside the entry function too.
+(defn doubled-sum [n : int] : int
+  (handle (* 2 (perform (Choose 1 n)))
+          (Choose [lo hi] ^multishot k)
+          (let [^mut a 0 ^mut i lo]
+            (while (<= i hi) (set! a (+ a (resume k i))) (set! i (+ i 1)))
+            a)))
+
+(defn main [] : int
+  ;; bare perform body: sum 1..3 = 6
+  (println (handle (perform (Choose 1 3))
+                   (Choose [lo hi] ^multishot k)
+                   (let [^mut a 0 ^mut i lo]
+                     (while (<= i hi) (set! a (+ a (resume k i))) (set! i (+ i 1)))
+                     a)))
+  ;; the continuation does work per resume: (10+1)+(10+2)+(10+3) = 36
+  (println (handle (+ 10 (perform (Choose 1 3)))
+                   (Choose [lo hi] ^multishot k)
+                   (let [^mut a 0 ^mut i lo]
+                     (while (<= i hi) (set! a (+ a (resume k i))) (set! i (+ i 1)))
+                     a)))
+  ;; 2*(1+2+3+4) = 20, twice -- the helper re-enters cleanly across calls
+  (println (doubled-sum 4))
+  (println (doubled-sum 4))
+  ;; The mirror image: the continuation is captured INSIDE a loop (the perform
+  ;; is in the handle body's loop) and resumed twice.  Under turi the captured
+  ;; work-stack slice then contains a loop frame that has to clone per resume;
+  ;; compiled, it is an ordinary two-suspension multishot.  Each resume runs
+  ;; the remaining iterations with its own value: 1+1 and 10+10 -> 22, summed
+  ;; over the two resumes of the outer suspension -> 44.
+  (println (handle
+             (let [^mut i 0 ^mut sum 0]
+               (while (< i 2)
+                 (do (let [v (perform (Choose 0 0))] (set! sum (+ sum v)))
+                     (set! i (+ i 1))))
+               sum)
+             (Choose [lo hi] ^multishot k) (+ (resume k 1) (resume k 10))))
+  0)

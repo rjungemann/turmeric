@@ -1,0 +1,18 @@
+;; A constraint form that is not a type name at all.  The constraint parser
+;; only looked inside the form when it was a symbol, so a literal fell straight
+;; through and the constraint kept the parser's `TYPE_INT` initializer -- with
+;; `TC[int]` defined below, `[TC nil]` was silently ACCEPTED as `[TC int]`.
+;; `nil` reads as a literal, not a type name, so this is an easy thing to
+;; write by accident; the type spelling is `void`.  See
+;; docs/archive/definstance-constraint-type-defaults-to-int.md.
+(defclass TC [a]
+  (method [x] : int))
+
+(definstance TC [int]
+  (method [x] 1))
+
+(definstance TC [cstr]
+  [TC nil]
+  (method [x] 2))
+
+(defn main [] : int 0)

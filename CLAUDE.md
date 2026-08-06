@@ -616,9 +616,18 @@ PASS-skip it under certain conditions:
 | --- | --- |
 | `requires.tsan` | `TUR_TSAN` is not `1` |
 | `requires.interp` | (override) forces the interpreter path even under non-TSan |
+| `requires.interp-only` | always under `run.sh` (happy path and `errors/` alike); the fixture asserts a `tur --interpret` behaviour and is owned by `tests/run-turi.sh` |
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
+| `requires.posix-apis` | the host is producing Windows binaries (`TUR_HOST_WINDOWS=1`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
 | `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
+
+Note `requires.interp` and `requires.interp-only` are near-homographs that do
+opposite things: the first keeps the fixture in `run.sh` (routing it through
+the compiling `tur run` path), the second removes it from `run.sh` entirely so
+`run-turi.sh` can assert `--interpret` behaviour the compiled path does not
+share. An `errors/` fixture whose `expected.diag` is an interpreter diagnostic
+wants `requires.interp-only`.
 
 A fixture may also carry `requires.no-leak-check` (not a skip marker): the
 compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for

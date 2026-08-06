@@ -1,0 +1,8 @@
+;; The smallest possible fixture -- kept as the canonical shape a new fixture
+;; is copied from.  Its `input.tur` had gone missing, leaving a tracked
+;; `expected.stdout` with nothing to produce it; the runner reported PASS for
+;; the directory anyway.  See
+;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defn main [] : int
+  (println "hi")
+  0)

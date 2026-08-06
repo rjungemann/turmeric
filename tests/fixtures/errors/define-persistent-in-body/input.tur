@@ -1,0 +1,3 @@
+(defn main [] : int
+  (define ^persistent x 1)
+  x)

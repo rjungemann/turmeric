@@ -8,10 +8,12 @@
 ;; bool): cas succeeds iff the current transactional value equals the expected
 ;; one.  This both probes the stored value and exercises the write log.
 ;;
-;; NOTE: this fixture is interpreter-only.  tvar/cas and tvar/swap fail to LINK
-;; on the compiled path (the emitted runtime never defines tur_tvar_cas /
-;; tur_tvar_swap -- see docs/reported/stm-tvar-cas-swap-modify-compiled-path-
-;; broken.md), so it cannot run through `tur build` / `tur run`.
+;; NOTE: this fixture is owned by tests/turi/eval-stm.sh, which runs it through
+;; `tur --interpret`.  It used to say it COULD not run compiled, because
+;; tvar/cas and tvar/swap failed to link -- that was fixed in 7b8fd8e9
+;; (docs/archive/history/stm-tvar-cas-swap-modify-compiled-path-broken.md) and
+;; `tur run` on this file now produces the same seven lines.  The compiled path
+;; has its own guard for those primitives at tests/fixtures/stm-cas/.
 
 (defn main [] : int
   (let [tv (tvar/new 5)]

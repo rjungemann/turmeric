@@ -1,0 +1,9 @@
+(defmodule g3lib/ctr
+  ;; `hits` is exported PLAIN -- readable outside, writable only in here.
+  ;; `shared` is exported `(mut ...)` -- this module explicitly permits
+  ;; outside writes.
+  (export bump peek hits (mut shared))
+  (def ^mut hits   0)
+  (def ^mut shared 0)
+  (defn bump [] : void (set! hits (+ hits 1)))
+  (defn peek [] : int hits))

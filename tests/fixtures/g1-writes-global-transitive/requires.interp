@@ -1,0 +1,6 @@
+G1 verdict fixtures assert --dump-write-frames output, which the compiler
+prints during ELABORATION.  The compiled path runs `tur build` with stdout
+unredirected and only captures the built binary's output, so the dump would
+never reach actual.stdout; the `tur run` path this marker selects captures
+both.  Nothing here is interpreter-specific -- the write-frame verdict is
+computed in the elaborator, which both engines share.

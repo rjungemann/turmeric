@@ -1,0 +1,48 @@
+;; G2 (docs/upcoming/mutable-globals-plan.md section 4.2), behind
+;; --enable=global-state: a `#writes` frame may NAME a mutable global, so a
+;; body that legitimately maintains global state can carry a CHECKED frame
+;; instead of being declined outright.
+;;
+;; G1 made any global write block VERIFIED, which is the right default and the
+;; wrong end state -- the frame had no way to SAY "I write the cache" the way
+;; it can already say "I write argument a".  Now it does, and the question
+;; becomes coverage, exactly as for parameters.
+;;
+;; The dump's `declared=[...]` column is what distinguishes a covered write
+;; from an unchecked one; `global=YES declared=[hits]` reads as "writes global
+;; state, and said so".
+;;
+;; Paired negatives: errors/g2-writes-global-undeclared (a written global the
+;; frame does not name) and errors/g2-writes-global-immutable.
+(def ^mut hits   0)
+(def ^mut misses 0)
+
+(defstruct Ctr [n : int])
+
+;; Declares the global it writes.
+(defn bump! [] #writes [hits] : void
+  (set! hits (+ hits 1)))
+
+;; Two globals in one frame.
+(defn both! [] #writes [hits misses] : void
+  (set! hits   (+ hits 1))
+  (set! misses (+ misses 1)))
+
+;; A frame is an UPPER bound: declared-but-never-written is fine, the same
+;; reading `#writes [a]` already has for a parameter the body does not touch.
+(defn quiet [] #writes [misses] : int
+  7)
+
+;; A parameter and a global in the same frame.
+(defn mixed! [^mut a : Ctr] #writes [a hits] : int
+  (set! (.n a) 1)
+  (set! hits (+ hits 1))
+  0)
+
+(defn main [] : int
+  (bump!)
+  (both!)
+  (println hits)
+  (println misses)
+  (println (quiet))
+  0)

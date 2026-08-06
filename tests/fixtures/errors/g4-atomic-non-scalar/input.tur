@@ -1,0 +1,10 @@
+;; G4a: `^atomic` is 8-byte scalars only.  The atomics layer's host shim is
+;; uint64_t-typed, so the emitted access is 8 bytes whatever the declaration
+;; says -- a wider value cannot be loaded or stored in one machine operation,
+;; and a narrower one would be overflowed.  Rejected with a pointer at the
+;; lock, rather than shipping something that looks atomic and is not.
+(defstruct P [x : int y : int])
+
+(def ^atomic ^mut p (P 1 2))
+
+(defn main [] : int 0)

@@ -1,0 +1,27 @@
+;; A constrained instance over a struct: `Clone [KV]` requires `Clone int`, and
+;; the body clones the fields through the constrained instance.
+;;
+;; Lived as a loose `tests/fixtures/typeclass/parametric-clone-pair.tur` that no
+;; harness ran -- run.sh reported the directory PASS without opening the file.
+;; When finally run it did not compile: it named its struct `Pair`, which the
+;; auto-loaded stdlib already defines, and the resulting redefinition cascaded
+;; into a spurious TUR-E0013 orphan-instance error on the instance below.  The
+;; struct is renamed here; the fixture's actual subject (a constrained instance
+;; over a user-defined struct) is unchanged and now asserts a value.  See
+;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defstruct KV [first : int second : int])
+
+(defclass Clone [a]
+  (clone [x] : int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+(definstance Clone [KV]
+  [Clone int]
+  (clone [x] (+ (.clone (.first x)) (.clone (.second x)))))
+
+(defn main [] : int
+  (println (.clone (KV 3 4)))    ; 7
+  (println (.clone 5))           ; 5
+  0)

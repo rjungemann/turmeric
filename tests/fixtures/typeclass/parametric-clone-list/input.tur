@@ -1,0 +1,26 @@
+;; The same constrained-instance shape over a cons-cell struct.
+;;
+;; Lived as a loose `tests/fixtures/typeclass/parametric-clone-list.tur` that no
+;; harness ran.  When finally run it failed in the C compiler, not the checker:
+;; its instance body was `(clone [x] x)` against a method declared `: int`, so
+;; it returned the struct where an int64 was expected.  `tur check` accepts that
+;; mismatch whenever a struct/ADT is on either side of it -- a separate hole,
+;; filed as docs/reported/struct-return-type-mismatch-unchecked-until-cc.md.
+;; Written here the way the fixture's name implies: clone the int field through
+;; the `Clone int` constraint.  See
+;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
+(defstruct Node [head : int tail : ptr<void>])
+
+(defclass Clone [a]
+  (clone [x] : int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+(definstance Clone [Node]
+  [Clone int]
+  (clone [x] (.clone (.head x))))
+
+(defn main [] : int
+  (println (.clone (Node 9 (:: 0 :ptr<void>))))   ; 9
+  0)

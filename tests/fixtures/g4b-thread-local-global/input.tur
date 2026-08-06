@@ -1,0 +1,89 @@
+;; G4b (docs/upcoming/mutable-globals-plan.md sections 4.4 and 11.4), behind
+;; --enable=global-state: `^thread-local` gives each thread its own copy of a
+;; global, materialized on first access and initialized by running the declared
+;; initializer ON THAT THREAD.
+;;
+;; Running the initializer per thread is the whole point, and it is what a
+;; `__thread` variable cannot express: C has no dynamic thread-local
+;; initialization (a non-constant `__thread` initializer is "initializer
+;; element is not constant"), and c2mir has no thread-local storage at all --
+;; it parses `_Thread_local`, warns, and treats the variable as an ordinary
+;; global, so every thread would silently share one slot under `tur jit`.  The
+;; lowering is a pthread_key_t instead: a libc call needs no compiler TLS
+;; support, and the key's destructor frees the per-thread block on thread exit.
+;;
+;; This asserts BOTH properties at once, deterministically and without a race.
+;; Each thread starts from 100 -- its own initialization -- and counts only its
+;; own increments:
+;;
+;;   worker A: 100 + 3 = 103
+;;   worker B: 100 + 5 = 105
+;;   main:     100 + 1 = 101
+;;
+;; If the copies were shared the totals would be 109-ish and order-dependent,
+;; so a shared slot cannot produce this output by luck.  Nothing here races:
+;; the only cross-thread writes go to distinct malloc'd result slots, and the
+;; thread-local is by construction touched by one thread each.
+
+(defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  ```)
+(defn thread-join [t : ptr<void>] : nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+(defn slot-new [] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t)); *p = -1; return (void *)p;
+  ```)
+(defn slot-set [p : ptr<void> v : int] : nil
+  ```c
+  *(int64_t *)p = v;
+  ```)
+(defn slot-get [p : ptr<void>] : int
+  ```c
+  return *(int64_t *)p;
+  ```)
+(defn slot-free [p : ptr<void>] : nil
+  ```c
+  free(p);
+  ```)
+
+;; Each thread gets its own copy, initialized to 100 ON THAT THREAD.
+(def ^thread-local ^mut counter 100)
+
+(defn bump-by [n : int] : void
+  (let [^mut i 0]
+    (while (< i n)
+      (do (set! counter (+ counter 1))
+          (set! i (+ i 1))))))
+
+(defn worker-a [arg : ptr<void>] : ptr<void>
+  (bump-by 3)
+  (slot-set arg counter)
+  arg)
+
+(defn worker-b [arg : ptr<void>] : ptr<void>
+  (bump-by 5)
+  (slot-set arg counter)
+  arg)
+
+(defn main [] : int
+  (let [sa (slot-new)
+        sb (slot-new)]
+    (let [ta (thread-spawn-fn worker-a sa)
+          tb (thread-spawn-fn worker-b sb)]
+      (bump-by 1)
+      (thread-join ta)
+      (thread-join tb)
+      (println (slot-get sa))
+      (println (slot-get sb))
+      (println counter)
+      (slot-free sa)
+      (slot-free sb)))
+  0)

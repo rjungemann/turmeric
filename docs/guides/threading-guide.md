@@ -1180,3 +1180,7 @@ and confirmed clean, the flag will be restored.
 - [STM Guide](stm-guide.md) -- Software transactional memory
 - [STM Tutorial](stm-tutorial.md) -- Composable transactions (alternative to locks)
 - [Effects System Guide](effects-system-guide.md) -- Dependency injection and exception handling
+
+## See also
+
+- [mutable-globals-guide.md](mutable-globals-guide.md) -- `def ^mut`, `^atomic`, `^thread-local`, and what the concurrency annotations do not cover

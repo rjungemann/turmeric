@@ -8577,13 +8577,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * handler-VALUE `with-handler` lower on the DK backend (emit_cps_ir),
              * never the direct/fiber emitter -- their fiber emitters
              * (emit_effects_perform / emit_effects_with_handler) emitted now-deleted
-             * runtime symbols and are removed.  Corpus-verified unreachable.  Reaching
-             * here is a compiler bug; ICE rather than emit an undefined reference.
+             * runtime symbols and are removed.  So there is genuinely nothing to
+             * emit here, and emitting an undefined reference would be worse.
              * (EX_HANDLE keeps its emitter: a non-effect `handle` shape -- e.g. the
-             * contract/MonadError lowering -- still has a live direct path.) */
-            fprintf(stderr, "tur: internal error: effect form (EX kind %d) reached the "
-                    "direct/fiber emitter (fiber effect runtime deleted)\n", (int)e->kind);
-            abort();
+             * contract/MonadError lowering -- still has a live direct path.)
+             *
+             * This used to `abort()` on the strength of a "corpus-verified
+             * unreachable" claim.  It is reachable: a `handle` clause whose body
+             * leaves the CPS backend's admissible subset evicts the enclosing
+             * function, and the clause's `perform` then lands here.  An ICE gives
+             * the user no location and no way to act, so report it as a located
+             * codegen error instead -- emit_program already fails the build on
+             * diag_had_error().  See
+             * docs/reported/handler-clause-statement-if-ices-emitter.md for the
+             * shapes that still reach this. */
+            diag_emit(DIAG_ERROR, e->span,
+                      "this effect operation has no lowering here: the enclosing "
+                      "function left the CPS backend's supported subset, and the "
+                      "direct emitter cannot lower `perform`. The usual cause is a "
+                      "loop inside a `handle` clause -- hoist that work into a "
+                      "helper function and call it from the clause. This is a "
+                      "compiler limitation, not a mistake in this expression.");
+            return atom_nil();
         case EX_HANDLE:          return emit_effects_handle(ctx, body, e);
         case EX_HANDLER_LIT:     return emit_effects_handler_lit(ctx, body, e);
         case EX_COMPOSE_HANDLERS: return emit_effects_compose_handlers(ctx, body, e);

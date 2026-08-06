@@ -1,0 +1,13 @@
+;; The `-Wint-conversion` corner of the same hole.  A :heap ADT application
+;; (`(Cons int)`, `(Vec int)`) lowers to a typed pointer `tur_adt_Cons__int *`,
+;; which is no more the int64 carrier than a by-value aggregate is.  Declaring
+;; `: int` and returning one compiled -- but only because the emitted C's
+;; "returning 'long int' from a function with return type 'tur_adt_Cons__int *'
+;; makes pointer from integer without a cast" is a WARNING; under -Werror it is
+;; the same hard failure as the by-value case.  Rejected at the source now.
+;; See docs/archive/struct-return-type-mismatch-unchecked-until-cc.md.
+;;
+;; requires.compiled: the interpreted path boxes every value.
+(defn carry [c : (Cons int)] : int c)
+
+(defn main [] : int 0)

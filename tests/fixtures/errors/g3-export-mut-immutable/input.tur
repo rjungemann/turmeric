@@ -1,0 +1,9 @@
+;; G3: `(export (mut g))` on an immutable global is rejected with its own
+;; reason -- nothing can write it, so permitting outside writes is a claim that
+;; cannot be true.  Same reasoning as G2's rejection of an immutable global in
+;; a `#writes` frame.
+(defmodule main
+  (import g3lib/ctr :refer [peek])
+  (defn main [] : int
+    (println (peek))
+    0))
