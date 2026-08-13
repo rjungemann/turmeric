@@ -108,3 +108,64 @@ no message at all and the summary still reads green.
 - `src/main.c:2955` -- `collect_project_src_files`, which picks the right one
 - `src/main.c:4329`, `:4511`, `:5336` -- the three `no .tur files found` sites
 - `src/compiler/elab_module.c` -- the hint recommending `tur build src/`
+
+## Resolution (2026-08-13)
+
+Fix directions 1 and 2 landed, plus a second half the report did not identify.
+
+### The blast radius (direction 2) is nil in this tree
+
+The report says to weigh `tur test <dir>` first, since recursing would start
+running test files that currently never run. Checked: every case under
+`tests/cli/` is flat, and the sibling `../turmeric-spices/` checkout is absent
+here so its trees could not be inspected. Nothing in this repo changes behaviour
+except by finding more files, which is the point. Flipped all three commands --
+`cmd_test`, `cmd_check_dir`, `cmd_build_multi` -- to a `collect_tur_files_deep`
+wrapper over the existing `collect_tur_recursive`, which already skips dot
+subtrees and manifest filenames.
+
+### Finding the files was only half of it
+
+Not in the report, and it would have shipped as a half fix: with the walk
+recursive, `tur build src/` collected `src/demo/lib.tur` and `src/app/main.tur`
+and then failed with **`module 'demo/lib' not found`**. The bare-directory build
+passed no include path at all, so the sibling that does `(import demo/lib)` had
+nothing to resolve against. `dir` now goes on the include path as its own module
+root, which is the bare-directory equivalent of what project mode already does.
+
+That matters for the report's own argument: the value of fixing this is that the
+`module not found` hint recommends `tur build src/`, and a `tur build src/` that
+finds the files and then cannot link them still does not honour the
+recommendation.
+
+Verified end to end -- the nested two-module spice builds and prints `42`.
+
+### Directions 3 and 4, deliberately not done
+
+- **3 (make the message name its search strategy).** Moot: the message no longer
+  fires for this shape, and inventing wording for a case that now works would be
+  speculative. Worth revisiting if some other empty-directory case shows up.
+- **4 (revisit the `tur build src/` hint text).** The report says it "becomes
+  correct, but only then" -- it has, and it needs no edit.
+
+### Coverage
+
+Four cases, all verified to fail against a deliberately-reverted build:
+
+- `tests/cli/tur-test-nested-dirs` -- a `cases/` tree with files at the top, one
+  level down, and two levels down; `3 tests, 3 passed` where the flat collector
+  saw one. Two levels rather than one, so a one-level-deep walk would not pass
+  it either.
+- `tests/spice-resolver-tests.sh` gains three: `tur check src/` exits 0 on the
+  nested layout; the `no .tur files found` string is **absent** (asserted
+  separately from the exit code, so a future regression names itself); and
+  `tur build src/ -o out` produces a binary printing `42`, which is the half
+  that fails if only the collector is fixed. The fixture's `main.tur` imports
+  across the nesting for exactly that reason -- a case with no cross-file import
+  would pass on a half fix.
+
+### Verification
+
+`tests/run.sh`: 2596 passed, 0 failed. `tests/run-cli.sh`: 4 passed, 0 failed.
+`tests/spice-resolver-tests.sh`: 76 passed, 0 failed. The 16 CLI/build/spice/
+repl ctest targets pass.

@@ -2947,6 +2947,27 @@ static void collect_tur_recursive(const char *dir,
     closedir(d);
 }
 
+/* Collect every `.tur` file under `dir`, recursively.
+ *
+ * `tur build <dir>`, `tur check <dir>`, and `tur test <dir>` used the FLAT
+ * collect_tur_files, which sees only files sitting directly in `dir`.  A spice
+ * whose modules live one level down -- `src/demo/lib.tur`, the layout
+ * `:exports "demo/lib"` implies and the guides use -- therefore reported
+ * `tur: no .tur files found in 'src/'`, on the invocation the `module not
+ * found` diagnostic itself recommends.  Project mode already recursed
+ * (collect_project_src_files), so the two spellings of "build this spice"
+ * disagreed, with nothing in the output to say which one you got.
+ *
+ * Same shape as free_tur_files' input, so the caller frees it unchanged.
+ * See docs/archive/tur-build-nested-src-dir-finds-no-files.md. */
+static char **collect_tur_files_deep(const char *dir, int *n_out) {
+    char **files = NULL;
+    int n = 0, cap = 0;
+    collect_tur_recursive(dir, &files, &n, &cap);
+    *n_out = n;
+    return files;
+}
+
 /* Collect a spice/library project's module files for a directory build.
  * Prefers a recursive walk of `<root>/src` (the conventional layout used by
  * every first-party spice, including nested `src/<pkg>/` trees); when there
@@ -4346,7 +4367,7 @@ static void parse_test_directives(const char *path, TestDirectives *out) {
 
 static int cmd_test(const char *dir) {
     int n_files = 0;
-    char **tur_files = collect_tur_files(dir, &n_files);
+    char **tur_files = collect_tur_files_deep(dir, &n_files);
     if (!tur_files || n_files == 0) {
         fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
         free_tur_files(tur_files, n_files);
@@ -4528,7 +4549,7 @@ static int cmd_test(const char *dir) {
  * nearest build.tur, exactly like cmd_test. Returns 0 iff all files pass. */
 static int cmd_check_dir(const char *dir) {
     int n_files = 0;
-    char **tur_files = collect_tur_files(dir, &n_files);
+    char **tur_files = collect_tur_files_deep(dir, &n_files);
     if (!tur_files || n_files == 0) {
         fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
         free_tur_files(tur_files, n_files);
@@ -5351,7 +5372,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
                            const char *manifest_path, const char *cli_build_dir) {
     int n_files;
-    char **tur_files = collect_tur_files(dir, &n_files);
+    char **tur_files = collect_tur_files_deep(dir, &n_files);
     if (!tur_files || n_files == 0) {
         fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
         free_tur_files(tur_files, n_files);
@@ -5359,8 +5380,16 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
     }
     char *build_dir = resolve_build_dir(dir, cli_build_dir);
     if (!build_dir) { free_tur_files(tur_files, n_files); return 2; }
-    int rc = cmd_build_multi_files(tur_files, n_files, n_files, dir, NULL, NULL,
-                                   out_path, shared, manifest_path, NULL, 0,
+    /* `dir` is the module root for the files just collected, so put it on the
+     * include path: now that the walk is recursive, `src/demo/lib.tur` is in
+     * the set, and the sibling that does `(import demo/lib)` has to be able to
+     * resolve it.  Finding the files and being unable to link them is only half
+     * a fix -- and `tur build src/` is what the `module not found` diagnostic
+     * tells the user to run.  Project mode passes its own resolved path here;
+     * this is the bare-directory equivalent. */
+    const char *self_inc[1] = { dir };
+    int rc = cmd_build_multi_files(tur_files, n_files, n_files, dir, dir, NULL,
+                                   out_path, shared, manifest_path, self_inc, 1,
                                    build_dir);
     free(build_dir);
     return rc;

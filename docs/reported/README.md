@@ -244,7 +244,17 @@ Pinned by four `errors/` negatives and
 | Report | Severity | One line |
 | --- | --- | --- |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
-| [tur-build-nested-src-dir-finds-no-files](tur-build-nested-src-dir-finds-no-files.md) | low-medium | `tur build src/` / `tur test <dir>` use a FLAT collector, so a normal nested `src/<pkg>/mod.tur` layout reports `no .tur files found` -- and this is the exact invocation the `module not found` hint recommends. `tur build .` (project mode) recurses correctly; the recursive collector already exists and is simply not called here |
+
+`tur-build-nested-src-dir-finds-no-files` was filed and resolved 2026-08-13,
+and moved to
+[docs/archive](../archive/tur-build-nested-src-dir-finds-no-files.md). All three
+bare-directory commands (`tur test`, `tur check`, `tur build`) now walk
+recursively, matching project mode. The half the filing missed: finding the
+files is not enough -- the bare-directory build passed no include path, so a
+recursive walk then failed with `module 'demo/lib' not found`, and `tur build
+src/` is precisely what the `module not found` hint recommends. `dir` now joins
+the include path as its own module root. The blast radius the report flags on
+`tur test <dir>` turned out to be nil here: every `tests/cli/` case is flat.
 
 `for-comprehension-pure-ambiguous-against-stdlib` was resolved 2026-08-13 and
 moved to

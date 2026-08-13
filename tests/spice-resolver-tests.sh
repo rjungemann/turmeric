@@ -1348,6 +1348,86 @@ fi
 rm -f "$MF_ERR" "$MF_OK_ERR" "$MF_NONE_ERR"
 rm -rf "$MF_DIR" "$MF_NONE"
 
+# ---------------------------------------------------------------------------
+# `tur build src/` and `tur check src/` must handle a NESTED module layout.
+# docs/archive/tur-build-nested-src-dir-finds-no-files.md
+#
+# Both used a FLAT readdir, so a spice whose modules live one level down --
+# `src/demo/lib.tur`, the layout `:exports "demo/lib"` implies -- reported
+# `tur: no .tur files found in 'src/'`.  That is the exact invocation the
+# `module not found` diagnostic recommends, so the advertised recovery from one
+# confusing error produced a second one.  Project mode (`tur build .`) already
+# recursed, so the two spellings of "build this spice" disagreed with nothing in
+# the output to say which you got.
+#
+# Finding the files is only half of it: once the walk is recursive the sibling
+# that does `(import demo/lib)` has to resolve it, so the build dir goes on the
+# include path too.  The `main.tur` below imports across the nesting for that
+# reason -- a case with no cross-file import would pass on a half fix.
+NEST=$(mktemp -d)
+mkdir -p "$NEST/src/demo" "$NEST/src/app"
+cat >"$NEST/build.tur" <<'EOF'
+(defpackage nested
+  :name    "nested"
+  :version "0.1.0"
+  :exports #map{ "demo/lib" ["answer"] })
+EOF
+cat >"$NEST/src/demo/lib.tur" <<'EOF'
+(defmodule demo/lib
+  (export answer)
+  (defn answer [] : int 42))
+EOF
+cat >"$NEST/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (export)
+  (import demo/lib :refer [answer])
+  (defn main [] : int (println (answer)) 0))
+EOF
+
+NEST_ERR=$(mktemp)
+( cd "$NEST" && "$LS6_ABS_TUR" check src/ ) >/dev/null 2>"$NEST_ERR"
+nest_check_rc=$?
+if [ "$nest_check_rc" -eq 0 ]; then
+    echo "PASS nested-src-tur-check-finds-files"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL nested-src-tur-check-finds-files -- exit $nest_check_rc"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-tur-check-finds-files")
+fi
+
+# The message that used to come out; assert it is gone rather than only
+# assert on the exit code, so a future regression names itself.
+if grep -qF "no .tur files found" "$NEST_ERR"; then
+    echo "FAIL nested-src-no-empty-dir-message"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-no-empty-dir-message")
+else
+    echo "PASS nested-src-no-empty-dir-message"
+    PASS=$((PASS + 1))
+fi
+
+NEST_BIN="$NEST/out"
+NEST_BERR=$(mktemp)
+( cd "$NEST" && "$LS6_ABS_TUR" build src/ -o "$NEST_BIN" ) >/dev/null 2>"$NEST_BERR"
+nest_build_rc=$?
+nest_out=""
+[ -x "$NEST_BIN" ] && nest_out="$("$NEST_BIN" 2>/dev/null)"
+if [ "$nest_build_rc" -eq 0 ] && [ "$nest_out" = "42" ]; then
+    echo "PASS nested-src-tur-build-resolves-intra-spice-import"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL nested-src-tur-build-resolves-intra-spice-import"
+    echo "  exit: $nest_build_rc  output: '$nest_out' (want 42)"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_BERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-tur-build-resolves-intra-spice-import")
+fi
+
+rm -f "$NEST_ERR" "$NEST_BERR"; rm -rf "$NEST"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
