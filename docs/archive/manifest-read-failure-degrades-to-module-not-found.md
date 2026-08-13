@@ -229,4 +229,4 @@ this fix.
 prints `tur: no .tur files found in 'src/'` and **exits 0** on a project whose
 sources are nested one level (`src/demo/lib.tur`). Unrelated to the manifest
 (it reproduces with a perfectly valid one) but found while verifying this fix.
-See `docs/reported/tur-build-nested-src-dir-finds-no-files.md`.
+See `docs/archive/tur-build-nested-src-dir-finds-no-files.md`.

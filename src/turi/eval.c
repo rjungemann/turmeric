@@ -4639,7 +4639,7 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
  * and the receiver-tyvar gate at the EX_CALL site cannot fire.  The elaborator's
  * baked representative then answers every call site, which is silently wrong for
  * any constrained generic that calls one (see
- * docs/reported/turi-return-directed-method-keeps-baked-instance.md: two
+ * docs/archive/turi-return-directed-method-keeps-baked-instance.md: two
  * differently-tagged Applicatives both return the second instance's answer).
  *
  * The concrete type is already on the frame.  `frame_record_abi` pins the

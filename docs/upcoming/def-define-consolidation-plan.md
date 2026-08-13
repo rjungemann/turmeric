@@ -327,7 +327,7 @@ pushed scope; the interpreter elaborates them in the global scope. So
 `(if true (def x 1) 2)` at file scope gives the §3.3 diagnostic compiled, but
 under `--interpret` mints the global and fails one level up on the `if` type
 mismatch. Filed as
-[docs/reported/turi-toplevel-expr-subforms-elaborate-in-global-scope.md](../reported/turi-toplevel-expr-subforms-elaborate-in-global-scope.md).
+[docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md](../archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md).
 
 This surfaced because the pre-existing `errors/define-bad-position` fixture is
 shared by both harnesses. Its probe moved inside a `defn` body, where the two

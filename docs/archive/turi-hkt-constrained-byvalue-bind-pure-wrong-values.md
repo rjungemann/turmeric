@@ -2,7 +2,7 @@
 
 ---
 status: NOT FIXED -- ABSORBED 2026-08-01 into
-[`turi-return-directed-method-keeps-baked-instance`](../reported/turi-return-directed-method-keeps-baked-instance.md)
+[`turi-return-directed-method-keeps-baked-instance`](../archive/turi-return-directed-method-keeps-baked-instance.md)
 ---
 
 **The defect is still open; only this file is closed.** This was a symptom

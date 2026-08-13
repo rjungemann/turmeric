@@ -234,7 +234,7 @@ No fixture expects exit 124, so the check is unambiguous.
 
 Incidentally, `hkt-constrained-byvalue-bind-pure` -- the "one real filed
 failure" this report cites as its reason to care, tracked as
-[turi-return-directed-method-keeps-baked-instance](../reported/turi-return-directed-method-keeps-baked-instance.md)
+[turi-return-directed-method-keeps-baked-instance](../archive/turi-return-directed-method-keeps-baked-instance.md)
 -- also passed in that run. Nothing here touched it; it is noted only so the
 next reader does not take this green run as evidence about that report.
 
