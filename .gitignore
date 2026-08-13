@@ -171,3 +171,4 @@ build-i4/
 # instead).  Testing/Temporary/{LastTest.log,CTestCostData.txt} were committed
 # by accident in #728 -- both stubs from a run that executed no tests.
 /Testing/
+build-clang/

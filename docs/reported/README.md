@@ -214,7 +214,7 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [reactor-fd-callback-fn-ptr-type-mismatch](reactor-fd-callback-fn-ptr-type-mismatch.md) | medium | fd callbacks are called through a mismatched fn-ptr type; benign today, fatal under CFI / UBSan / WASM `call_indirect` |
+| [emitter-thunk-type-return-mismatch](emitter-thunk-type-return-mismatch.md) | low-medium | the residue of the reactor fn-ptr report: 3 emitted-C sites whose typed-thunk ABI disagrees with a lifted lambda's RETURN type, in both directions. Caused by the `:int` closure sinks in the httpd API, not by the lowering -- the call site names the thunk from the erased sink, the lambda from its real type. **GCC cannot see this class at all** (no `-fsanitize=function`); needs clang |
 | [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
 
 `struct-return-type-mismatch-unchecked-until-cc` was resolved 2026-08-06 and
@@ -242,6 +242,21 @@ Pinned by four `errors/` negatives and
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [tur-build-nested-src-dir-finds-no-files](tur-build-nested-src-dir-finds-no-files.md) | low-medium | `tur build src/` / `tur test <dir>` use a FLAT collector, so a normal nested `src/<pkg>/mod.tur` layout reports `no .tur files found` -- and this is the exact invocation the `module not found` hint recommends. `tur build .` (project mode) recurses correctly; the recursive collector already exists and is simply not called here |
+
+`reactor-fd-callback-fn-ptr-type-mismatch` was resolved 2026-08-13 and moved to
+[docs/archive](../archive/reactor-fd-callback-fn-ptr-type-mismatch.md), closing
+29 of its 32 UBSan findings. Three corrections worth carrying: the reactor had
+**four** mismatched sites, not one (the sibling audit the report asked for found
+them); the "emitted C" instance was mostly **hand-written inline C in
+`stdlib/httpd.tur`**, the same defect in a second file, not the emitter; and
+`local_park_wake_cb` served both the 4-arg fd/chan and 3-arg timer conventions
+from one definition on the reasoning that "the differing arity is harmless",
+which is true of the ABI and false of the language. Two things block anyone
+re-checking this: **GCC cannot see this class at all** (no `-fsanitize=function`),
+and until this landing no clang build of the tree compiled -- `elab_memory.c` had
+no trailing newline and `-Werror,-Wnewline-eof` stopped it. Also note the
+affected fixtures **PASS** while emitting the UB, so the summary line is not the
+signal. The residue is `emitter-thunk-type-return-mismatch` above.
 
 `turi-toplevel-expr-subforms-elaborate-in-global-scope` was resolved
 2026-08-13 and moved to
