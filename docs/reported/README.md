@@ -187,7 +187,6 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [for-comprehension-pure-ambiguous-against-stdlib](for-comprehension-pure-ambiguous-against-stdlib.md) | medium | `for` desugars to a bare `.pure` inside a `fn`, so it is ambiguous against the auto-loaded instances -- `for` is dead surface as shipped |
 
 `lsp-completion-internal-symbols` was resolved 2026-08-05 (a
 `Binding.is_synthesized` bit filtered in the LSP collector) and moved to
@@ -246,6 +245,22 @@ Pinned by four `errors/` negatives and
 | --- | --- | --- |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [tur-build-nested-src-dir-finds-no-files](tur-build-nested-src-dir-finds-no-files.md) | low-medium | `tur build src/` / `tur test <dir>` use a FLAT collector, so a normal nested `src/<pkg>/mod.tur` layout reports `no .tur files found` -- and this is the exact invocation the `module not found` hint recommends. `tur build .` (project mode) recurses correctly; the recursive collector already exists and is simply not called here |
+
+`for-comprehension-pure-ambiguous-against-stdlib` was resolved 2026-08-13 and
+moved to
+[docs/archive](../archive/for-comprehension-pure-ambiguous-against-stdlib.md),
+by none of its four fix directions -- its root-cause section has the mechanism
+wrong. The expected type was never missing: bare `pure` in the identical
+position resolves fine, and the discriminator is `.pure` vs `pure`. `.m` means
+"dispatch on the first argument", which for a return-directed method is the
+*payload*, not the class type -- so the dot form asks the compiler to pick an
+`Applicative` by looking at `42`. Fixed in dispatch, not in the macro:
+`stdlib/macros.tur` is unchanged. Two other routes were implemented and backed
+out -- emitting bare `pure` from the macro breaks the bespoke single-instance
+fixtures (neither spelling works for both corpora), and relaxing the
+unique-instance arrow gate in return-directed dispatch breaks
+`errors/rt-return-dispatch-unascribed`, which pins that gate deliberately. Fix
+direction 4 was the load-bearing one and is done.
 
 `turi-return-directed-method-keeps-baked-instance` was resolved 2026-08-13 and
 moved to

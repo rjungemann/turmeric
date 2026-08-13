@@ -6435,6 +6435,35 @@ found_method:;
             best_inst = user_fallback_inst;
             goto resolved_user_fallback;
         }
+        /* A RETURN-directed method reached through the dot form.
+         *
+         * `.m` means "dispatch on the first argument", which is the wrong
+         * question for a method whose class variable appears only in the return
+         * type: `pure`'s first argument is the payload, not the class type, so
+         * the receiver is an erased int64 and every instance matches by name.
+         * That is what made `for` unusable against the auto-loaded stdlib -- its
+         * desugaring emits `.pure` inside a `fn` body, and with two Applicative
+         * instances loaded (Schema and Option) every use failed with the
+         * ambiguity below, from a call site inside the macro where no caller
+         * could annotate.
+         *
+         * The expected type is available here even though the receiver is not
+         * (`bind`'s signature pins the lambda's result), so ask the
+         * return-directed dispatcher instead of guessing from the receiver.
+         * Gated on an expected type being present so a genuinely
+         * unresolvable case still gets the ambiguity error below rather than
+         * "cannot infer type for return-directed method", which would be a
+         * worse message for the same program.
+         * See docs/archive/for-comprehension-pure-ambiguous-against-stdlib.md. */
+        if (e->expected_type) {
+            const Symbol *m_sym =
+                symtab_intern(e->st, strslice(method_name, method_name_len));
+            if (m_sym && elab_symbol_is_return_dispatch_method(e, m_sym)) {
+                bool rt_handled = false;
+                Expr *rt = elab_try_return_dispatch(e, call, m_sym, &rt_handled);
+                if (rt) return rt;
+            }
+        }
         /* Build a comma-separated list of matching instance names for the message,
          * and capture the typeclass name for the concrete-receiver diagnosis. */
         char inst_list[512];
