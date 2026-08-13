@@ -225,7 +225,7 @@ add_test(
 )
 # debugger Phase 1: breakpoint-span coverage gate. Every fixture's elaborated
 # AST must carry a usable source span on each breakpoint-eligible node (defn,
-# let form, call site, top-level form). See docs/upcoming/debugger-plan.md.
+# let form, call site, top-level form). See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_span_coverage
   COMMAND bash tests/check-span-coverage.sh
@@ -235,7 +235,7 @@ add_test(
 # scripted session (break / step / next / finish / backtrace / locals / print /
 # (break) builtin / continue) over a fixture and asserts the output. The fixture
 # carries requires.dedicated-runner so tests/run.sh skips it (debug is an
-# interpreter-only path). See docs/upcoming/debugger-plan.md.
+# interpreter-only path). See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_debugger
   COMMAND bash tests/run-debugger.sh
@@ -246,7 +246,7 @@ add_test(
 # handshake, breakpoints (plain + conditional), step/next/stepOut, the call
 # stack, locals/evaluate, output events, and the exit code. The fixture carries
 # requires.dedicated-runner so tests/run.sh skips it (DAP is an interpreter-only
-# path). See docs/upcoming/debugger-plan.md.
+# path). See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_dap
   COMMAND bash tests/run-dap.sh
@@ -259,7 +259,7 @@ add_test(
 # The harness asserts both the gated #line emission and a turmeric-source gdb
 # backtrace of a deliberate crash; it skips the gdb half cleanly when gdb is
 # absent. The fixture carries requires.dedicated-runner so tests/run.sh leaves
-# it to this target. See docs/upcoming/debugger-plan.md.
+# it to this target. See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_phase4_gdb
   COMMAND bash tests/run-phase4-gdb.sh
@@ -272,7 +272,7 @@ add_test(
 # `(ok 14)` and a returned Option as `(some 42)` rather than the raw C carrier.
 # Skips the gdb half cleanly when gdb is absent. The fixture carries
 # requires.dedicated-runner so tests/run.sh leaves it to this target. See
-# docs/upcoming/debugger-plan.md and docs/upcoming/debugger-native-types-plan.md.
+# docs/archive/history/debugger-plan.md and docs/archive/history/debugger-native-types-plan.md.
 add_test(
   NAME tur_phase5_gdb
   COMMAND bash tests/run-phase5-gdb.sh
@@ -288,7 +288,7 @@ add_test(
 # SF let-bind regression: a let-bound two-level closure (signal-function) whose
 # inner closure captures and calls the outer ^fat param must keep its declared
 # outer arg type (tur check guard; see
-# docs/reported/let-bound-sf-loses-outer-arg-type-when-inner-captures.md).
+# docs/archive/history/let-bound-sf-loses-outer-arg-type-when-inner-captures.md).
 add_test(
   NAME tur_sf_let_bind_inner_call
   COMMAND bash tests/check-sf-let-bind-inner-call.sh
@@ -296,7 +296,7 @@ add_test(
 )
 # WR2 stdlib ownership guard: no stored rc<T> field may land in stdlib without an
 # explicit `rc-cycle-ok` review marker, since a live strong rc<T> cycle is not
-# reclaimable today. See docs/upcoming/v1/stdlib-weak-ref-audit-plan.md and the
+# reclaimable today. See docs/archive/history/stdlib-weak-ref-audit-plan.md and the
 # "Ownership across the stdlib" section of docs/guides/gc-guide.md.
 add_test(
   NAME tur_stdlib_no_rc_cycles
@@ -342,7 +342,7 @@ add_test(
 )
 # Off-tree (load "stdlib/<file>") resolution: a freestanding script run from
 # outside the repo resolves the stdlib via the exe-relative root, not just
-# cwd-relative. See docs/reported/one-off-script-print-and-annotation-ergonomics.md
+# cwd-relative. See docs/archive/history/one-off-script-print-and-annotation-ergonomics.md
 # (Finding 3).
 add_test(
   NAME tur_offtree_load
@@ -373,7 +373,7 @@ add_test(
 # five cu-rec / cu-catch-deep / atom-rec / mutual-rec / fiber-rec shapes run at
 # 1,000,000 depth under a reduced stack (ulimit -s 256).  Slow / memory-heavy,
 # so deliberately kept out of the default `tests/run.sh` fast suite; this is the
-# dedicated target the graduation plan (docs/archive/catch-unwind-graduation-plan.md,
+# dedicated target the graduation plan (docs/archive/history/catch-unwind-graduation-plan.md,
 # Part A) calls for.  Invoke explicitly:
 #   ctest --test-dir build -R stackless_signoff_probes --output-on-failure
 add_test(
@@ -391,7 +391,7 @@ set_tests_properties(stackless_signoff_probes PROPERTIES TIMEOUT 300)
 # handler) with ASan/UBSan + LeakSanitizer ON and asserts the emitted program is
 # leak-clean: the scoped-free pass must release each non-escaping closure env at
 # scope exit. The normal suite compiles spawned programs without ASan, so this
-# leak would otherwise slip past. See docs/reported/fat-closure-env-leak.md.
+# leak would otherwise slip past. See docs/archive/history/fat-closure-env-leak.md.
 add_test(
   NAME tur_closure_env_leak
   COMMAND bash tests/run-closure-env-leak.sh
@@ -428,7 +428,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # HAMT delete-path sibling refcount regression
-# (docs/archive/hamt-delete-sibling-refcount.md).  Compiles
+# (docs/archive/history/hamt-delete-sibling-refcount.md).  Compiles
 # tests/test_hamt_del_lineage.c with ASan/UBSan (+LSan on Linux) and asserts
 # that freeing a whole persistent-map lineage containing a tur_hamt_del-derived
 # map is double-free / use-after-free clean.  Pre-fix this tripped a
@@ -479,7 +479,7 @@ add_test(
 )
 # Sweet-exp manifest support: verifies build.tur.sweet is treated as a
 # fully equivalent manifest by walk-up discovery, pkg_manifest_read, and
-# tur init --sweet.  See docs/upcoming/build-tur-sweet-manifest-plan.md.
+# tur init --sweet.  See docs/archive/history/build-tur-sweet-manifest-plan.md.
 add_test(
   NAME tur_sweet_manifest
   COMMAND bash tests/run-sweet-manifest.sh
@@ -562,7 +562,7 @@ add_test(
 )
 set_tests_properties(tur_refine_wasm PROPERTIES TIMEOUT 600)
 # UC-2: user-level experiments file reader unit test
-# (docs/upcoming/user-config-experiments-plan.md). Standalone executable
+# (docs/archive/history/user-config-experiments-plan.md). Standalone executable
 # defined in src/CMakeLists.txt as tur_experiments_user_config.
 add_test(
   NAME tur_experiments_user_config
@@ -571,7 +571,7 @@ add_test(
 )
 # UC-3: end-to-end precedence/suppression matrix for the user-level
 # experiments file, driven through the built `tur` against synthetic
-# $XDG_CONFIG_HOME homes (docs/upcoming/user-config-experiments-plan.md).
+# $XDG_CONFIG_HOME homes (docs/archive/history/user-config-experiments-plan.md).
 add_test(
   NAME tur_experiments_user_config_e2e
   COMMAND bash tests/run-experiments-user-config.sh

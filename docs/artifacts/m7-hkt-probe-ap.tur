@@ -9,12 +9,12 @@
 ;; `(f (fn [a] b))` is a fn, not a bare tyvar), where `fmap` had `(f a)` and
 ;; `bind` had a fn-RETURNING-applied continuation.
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-ap.tur; echo $?
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe-ap.tur; echo $?
 ;;   -> 42  (TARGET, REACHED 2026-06-18)
 ;;
 ;; STATUS (2026-06-18): WORKING end-to-end under TUR_M7_HKT=1 -- this probe now
 ;; exits 42 with NO ascription. Fix direction 1 of the (now archived) report
-;; docs/archive/m7-hkt-ap-fn-element-carrier-erasure.md landed. With the flag
+;; docs/archive/history/m7-hkt-ap-fn-element-carrier-erasure.md landed. With the flag
 ;; OFF the probe still errors by design (it has no ascriptions).
 ;;
 ;; What it took (three coordinated, flag-gated pieces):

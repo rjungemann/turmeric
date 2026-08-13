@@ -10,7 +10,7 @@
 # PATH in place; everything else runs as ordinary subprocess work.
 #
 # Modeled after nvm, with cues from rustup and pyenv. See
-# docs/upcoming/v1/tur-version-manager-plan.md.
+# docs/archive/tur-version-manager-plan.md.
 
 # Resolve $TVM_DIR. Default to ~/.tvm. Honor a pre-set value.
 if [ -z "${TVM_DIR-}" ]; then

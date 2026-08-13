@@ -361,7 +361,7 @@
 ;; NOTE: `(deserialize b)` CAN now dispatch on a constrained type variable --
 ;; `(:: (deserialize b) A)` inside a `(... [(Serializable A)] ...)` body
 ;; re-resolves to A's instance per monomorphization (see
-;; docs/archive/return-dispatch-tyvar-silent-misdispatch.md).  The composite
+;; docs/archive/history/return-dispatch-tyvar-silent-misdispatch.md).  The composite
 ;; bodies below still pack element carriers directly (not via recursive
 ;; `(:: (deserialize sub) A)`) for the in-process raw-carrier round-trip, so a
 ;; cstr/heap element still serializes its address; use a concrete

@@ -5,8 +5,8 @@ the Debug Adapter Protocol. All the debugging work happens in the compiler --
 this extension just declares the `turmeric` debug type and launches `tur dap`
 as the debug adapter.
 
-See [docs/upcoming/debugger-dap-phase3.md](../../docs/upcoming/debugger-dap-phase3.md)
-for the protocol details and [docs/upcoming/debugger-plan.md](../../docs/upcoming/debugger-plan.md)
+See [docs/artifacts/debugger-dap-phase3.md](../../docs/artifacts/debugger-dap-phase3.md)
+for the protocol details and [docs/archive/history/debugger-plan.md](../../docs/archive/history/debugger-plan.md)
 for the staged plan.
 
 ## Prerequisites

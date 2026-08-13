@@ -172,7 +172,7 @@ Rules and representation:
 - **Scope.** Single type-parameter classes; one output type per member; no
   arithmetic or functional dependencies. Multi-parameter classes / fundeps are
   the remaining open direction (see
-  [`docs/reported/typeclass-associated-types-missing.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-associated-types-missing.md)).
+  [`docs/archive/typeclass-associated-types-missing.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/typeclass-associated-types-missing.md)).
 
 ## See also -- the arrow / `Category` hierarchy
 
@@ -185,7 +185,7 @@ namespace rules. See [arrows-guide.md](arrows-guide.md).
 
 ## See also
 
-- [closure-returning-instance-method-codegen-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/closure-returning-instance-method-codegen-plan.md)
+- [closure-returning-instance-method-codegen-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/closure-returning-instance-method-codegen-plan.md)
   -- the plan this rule was extracted from.
 - [`docs/archive/history/nested-closure-transitive-capture.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/nested-closure-transitive-capture.md) -- an *orthogonal*
   capture-set defect (a grandchild closure's free var not threaded through the

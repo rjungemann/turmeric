@@ -192,7 +192,7 @@ result *tail* of a `:float` function infers the result type from the
 declared return -- no annotation required. The one case still left to the
 annotated form is a bare-`^fat` non-int result consumed in a **non-tail**
 position; that is tracked in
-`docs/upcoming/v1/bare-fat-result-monomorphization-plan.md` (deferred until
+`docs/archive/history/bare-fat-result-monomorphization-plan.md` (deferred until
 a real consumer exists). The annotated form remains the *checked* path in
 all positions.
 

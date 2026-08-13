@@ -11,12 +11,12 @@
 ;;; code resolved through the instance dictionary. The two surfaces share the
 ;;; method names arr / >>>: a bare call dispatches to the matching instance when
 ;;; the receiver's type selects one, and falls back to the bare combinator
-;;; otherwise (see docs/reported/typeclass-methods-share-value-namespace-with-defns.md).
+;;; otherwise (see docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).
 ;;;
 ;;; The typeclass layer was scaled back in
-;;; docs/upcoming/stdlib-arrow-scaleback-plan.md and reintroduced -- then merged
+;;; docs/archive/history/stdlib-arrow-scaleback-plan.md and reintroduced -- then merged
 ;;; back into this single module -- per
-;;; docs/upcoming/stdlib-arrow-typeclass-reintroduction-plan.md.
+;;; docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md.
 ;;;
 ;;; Since: Phase CA0
 ;; =============================================================================
@@ -30,7 +30,7 @@
 ;; environment), or by calling the closure directly in Turmeric (a :ptr<void>
 ;; direct call already fat-dispatches).  This replaces the former
 ;; __arrow_call1/__arrow_call2 thin int64 casts, which segfaulted on capturing
-;; closures.  See docs/upcoming/closure-representation-unification-plan.md.
+;; closures.  See docs/archive/history/closure-representation-unification-plan.md.
 ;;; arr -- lift a function to an arrow (identity for function arrows).
 ;;;
 ;;; Parameters:
@@ -76,7 +76,7 @@
 ;; so values produced by tuple.tur's `(tuple2 ...)` flow through these helpers
 ;; and vice versa.  This mirrors the self-contained `__ac_pair_*` helpers in the
 ;; Arrow [(->)] instance below.  See
-;; docs/reported/load-not-expanded-in-imported-or-project-modules.md.
+;; docs/archive/history/load-not-expanded-in-imported-or-project-modules.md.
 ;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap pair *p,
 ;;; return a new heap pair.  Used by arrow-first.
 
@@ -292,7 +292,7 @@
 ;;;   ident -- the identity arrow (nullary; the result is the arrow itself).
 ;;;            Resolved by return-type / unique-instance dispatch (there is no
 ;;;            argument to dispatch on); see
-;;;            docs/upcoming/return-type-dispatch-nullary-arrow-methods-plan.md.
+;;;            docs/archive/history/return-type-dispatch-nullary-arrow-methods-plan.md.
 ;;;   comp  -- left-to-right composition: run f, then g (comp f g == g . f over
 ;;;            (->)).  Distinct method name from Arrow's >>> so the two surfaces
 ;;;            coexist without an operator-mangling collision.
@@ -414,7 +414,7 @@
 ;;; function, `comp` is forward composition.  The eta-expanded `(fn [x] x)`
 ;;; (rather than a bare `identity` reference) is required so the dispatched
 ;;; nullary call keeps a concrete result type -- see
-;;; docs/reported/instance-method-returning-untyped-param-loses-result-type.md.
+;;; docs/archive/history/instance-method-returning-untyped-param-loses-result-type.md.
 
 (definstance Category [(->)]
   (ident [] (fn [x] x))

@@ -14,7 +14,7 @@
 ;;; the lens body must dispatch `fmap` on the caller-chosen functor `f`
 ;;; (`Const` for `view`, `Identity` for `set`/`over`), which needs runtime
 ;;; typeclass-dictionary passing through the poly carrier -- deferred (mode B of
-;;; `docs/upcoming/v1/constrained-hkt-forall-plan.md`).  The record encoding
+;;; `docs/archive/history/constrained-hkt-forall-plan.md`).  The record encoding
 ;;; needs none of that and composes fine via the explicit `lens-compose`
 ;;; combinator; the one thing it gives up is composing optics with ordinary
 ;;; function composition (`compose`), which the van Laarhoven form allows.

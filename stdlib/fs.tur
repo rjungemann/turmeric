@@ -25,7 +25,7 @@
 ;; they read the handle without discharging the single-consumption obligation;
 ;; a later fs/tmpfile-free is still the one legal consumption. Borrowing an
 ;; already-freed handle is a TUR-E0101. See the (now resolved) report at
-;; docs/reported/stdlib-linear-handle-borrows.md.
+;; docs/archive/history/stdlib-linear-handle-borrows.md.
 (load "stdlib/fd.tur")
 
 (load "stdlib/effects.tur")

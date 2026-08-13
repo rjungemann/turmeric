@@ -1,7 +1,7 @@
 ---
 title: M4b handoff — instance→spec backlinks shipped, dispatch-rewrite deferred to M4c
 category: Planning -- ABI / Codegen rework
-description: M4b's deliverable for `docs/upcoming/m4-typeclass-per-method-abi-plan.md`. Two backlink fields wired across elab + emit; the dispatch-site rewrite that actually generates and routes per-instantiation specs is moved into M4c, where it slots cleanly next to the dict-singleton rewrite.
+description: M4b's deliverable for `docs/archive/m4-typeclass-per-method-abi-plan.md`. Two backlink fields wired across elab + emit; the dispatch-site rewrite that actually generates and routes per-instantiation specs is moved into M4c, where it slots cleanly next to the dict-singleton rewrite.
 ---
 
 # M4b — instance→spec backlinks shipped

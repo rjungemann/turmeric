@@ -255,7 +255,7 @@ Two things the sketch left out, both discovered in the building:
   > under-declares -- so the rule itself stands unchanged. But the by-value
   > case is a silent no-op compiled and a write-through interpreted, which is
   > a live divergence:
-  > `docs/reported/struct-param-mutation-backend-divergence.md`. Resolving
+  > `docs/archive/struct-param-mutation-backend-divergence.md`. Resolving
   > that by rejecting the no-op write would narrow this branch to rc/heap
   > receivers and make it exact.
 

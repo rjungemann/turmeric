@@ -20,7 +20,7 @@
 ;;; Bound is declared `:copy`, so its endpoints are plain value types that can
 ;;; be read repeatedly (a shared range bound is destructured by many
 ;;; predicates). This relies on defgadt's `:copy` support; see
-;;; docs/reported/defgadt-copy-and-shared-bounds.md.
+;;; docs/archive/history/defgadt-copy-and-shared-bounds.md.
 ;;;
 ;;; GADTs are enabled by default (range-gadt-typeclass-migration-plan A1), so
 ;;; no flag is required to load this module.
@@ -199,7 +199,7 @@
 ;; (the orphan rule puts them in Bound's own module). The earlier blocker -- the
 ;; non-idempotent `load` of stdlib/typeclass.tur colliding with the auto-loaded
 ;; partial typeclass stubs -- is fixed (definstance is now idempotent; see
-;; docs/reported/load-not-idempotent-typeclass.md), so range.tur loads
+;; docs/archive/history/load-not-idempotent-typeclass.md), so range.tur loads
 ;; typeclass.tur to bring Show/Ord into scope. `(show b)` renders a lone
 ;; endpoint exactly like `bound->str` below.
 ;;

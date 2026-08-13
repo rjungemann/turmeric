@@ -1462,7 +1462,7 @@
 ;;;   (httpd-set-cookie! c (cookie "session" "abc123"))
 ;;;
 ;;; Since: Phase H8 (M2); requires the DS1 fix in
-;;;        docs/upcoming/defstruct-inline-c-byvalue-callsite-plan.md.
+;;;        docs/archive/history/defstruct-inline-c-byvalue-callsite-plan.md.
 
 (defn httpd-set-cookie! [conn : ptr<void> opts : CookieOpts] : nil
   ```c
@@ -1728,7 +1728,7 @@
 ;;; side-stepped a closure-capture codegen bug with by-pointer defstruct
 ;;; params (the inner closure env stored the caller's `const CorsOpts *`
 ;;; into a by-value field).  That bug is now fixed (see
-;;; docs/upcoming/stdlib-type-erasure-cleanup-plan.md A5/B5), so a future
+;;; docs/archive/history/stdlib-type-erasure-cleanup-plan.md A5/B5), so a future
 ;;; refactor may capture a `CorsOpts` directly; the primitive surface is
 ;;; retained for now to keep this change scoped to the codegen fix.
 
@@ -3288,7 +3288,7 @@
 (defmacro defroute [router method pattern handler]
   `(router-add ~router ~method ~pattern ~handler))
 ;; =============================================================================
-;; M1: mw-log -- request logging middleware (per docs/upcoming/httpd-middleware-async-plan.md)
+;; M1: mw-log -- request logging middleware (per docs/archive/history/httpd-middleware-async-plan.md)
 ;; =============================================================================
 ;;
 ;; The reference middleware on top of the H7 convention. Logs one line per
@@ -3639,7 +3639,7 @@
 ;;; `(fn [next :int] :ptr<void> ...)` -- i.e. a closure that captures at
 ;;; least one variable. A bare top-level defn name is NOT a fat closure;
 ;;; passing one will compile (thanks to the
-;;; docs/upcoming/variadic-rest-closure-cast-plan.md fix) but the fat-
+;;; docs/archive/history/variadic-rest-closure-cast-plan.md fix) but the fat-
 ;;; closure dispatch dereferences code bytes as the fn pointer and
 ;;; BUS-faults. Bridge a bare defn through a let-captured `fn` literal:
 ;;;
@@ -3664,7 +3664,7 @@
 ;;;   auto-drop so the server owns it).
 ;;;
 ;;; Since: Phase H8 (M8 core); requires the V1 cast fix in
-;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
+;;;        docs/archive/history/variadic-rest-closure-cast-plan.md.
 ;;;        Returns `Handler` since automatic R3a (closure-drop-glue).
 
 (defn compose-middleware-of [A] [^fat base :int ^borrow & mws :A] :Handler
@@ -3672,7 +3672,7 @@
     (httpd-mw-free-spine mws)
     (:: composed :Handler)))
 ;; =============================================================================
-;; MW1: mw-body-size -- Content-Length cap (per docs/upcoming/httpd-middleware-plan.md)
+;; MW1: mw-body-size -- Content-Length cap (per docs/archive/httpd-middleware-plan.md)
 ;; =============================================================================
 ;;
 ;; Pre-handler middleware that consults the request's `Content-Length` header
@@ -3742,7 +3742,7 @@
             (httpd-resp-body! c "Payload Too Large"))
           (httpd-call _n c))))))
 ;; =============================================================================
-;; MW2: Request attributes (per docs/upcoming/httpd-middleware-plan.md)
+;; MW2: Request attributes (per docs/archive/httpd-middleware-plan.md)
 ;; =============================================================================
 ;;
 ;; A small per-request key/value side-channel attached to httpd_conn.

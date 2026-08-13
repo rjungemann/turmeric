@@ -303,7 +303,7 @@ always-on at their current level. See
 reader (slash-namespaced: `turmeric`, `turmeric/curly-infix`,
 `turmeric/neoteric`, `turmeric/sweet`) plus an order-independent **set** of
 additive layers (the space-separated trailing tokens). See
-[docs/upcoming/lang-layers-plan.md](docs/upcoming/lang-layers-plan.md).
+[docs/archive/lang-layers-plan.md](docs/archive/lang-layers-plan.md).
 
 A `#lang` layer token is legal **only** if it has a row in `LANG_LAYERS[]`.
 Adding a layer means:

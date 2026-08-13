@@ -274,7 +274,7 @@ and wraps back:
 `defopaque` does not currently accept type parameters --
 `(defopaque Box[T] :int)` is rejected. The same effect can be achieved
 with a phantom-typed `defstruct` today; the open ticket is
-[`docs/reported/parameterized-defopaque.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/parameterized-defopaque.md).
+[`docs/archive/history/parameterized-defopaque.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/parameterized-defopaque.md).
 
 ## Real-world examples
 

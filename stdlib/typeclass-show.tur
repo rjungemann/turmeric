@@ -257,7 +257,7 @@
 ;; `#map{:a 1}`, `#set{:x :y}` -- renders each key through Show[Sym].  Without
 ;; this instance the map/set show loop had no Show for the key type and the
 ;; interpreter fell through to the raw carrier integer (`#map{32696212 1}`
-;; instead of `#map{:a 1}`); see docs/reported/map-show-keyword-key-raw-int.md.
+;; instead of `#map{:a 1}`); see docs/archive/map-show-keyword-key-raw-int.md.
 ;;
 ;; The instance lives here (Show's own module) rather than in sym.tur because
 ;; the Show class is defined here and sym.tur loads before it -- an instance in

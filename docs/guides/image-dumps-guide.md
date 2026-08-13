@@ -89,7 +89,7 @@ if you expect whole-heap Lisp-image semantics.
 > `TUR-W0706` lint for unregistered mutation reachable from a cache body, are
 > **not yet implemented**. Until then, thread any post-init mutable state you
 > need *through the captured continuation* (as a frame env), so it rides in the
-> image. See `docs/upcoming/application-image-dumps-plan.md` AI3.
+> image. See `docs/archive/history/application-image-dumps-plan.md` AI3.
 
 ## Resources: the reload-hook pattern
 
@@ -235,7 +235,7 @@ cross the boundary.
 ## See also
 
 - `docs/guides/serializable-continuations-guide.md` -- the Phase 21 substrate.
-- `docs/upcoming/application-image-dumps-plan.md` -- the full plan (AI0--AI8),
+- `docs/archive/history/application-image-dumps-plan.md` -- the full plan (AI0--AI8),
   including the phases not yet implemented (AI3 globals, AI5 reload hooks,
   AI6.1 `tur run --image`, perf benchmarks).
 - `src/runtime/image.h` -- the canonical header layout; `tests/image_unit.c`

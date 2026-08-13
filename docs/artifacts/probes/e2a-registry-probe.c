@@ -1,4 +1,4 @@
-/* E2a REGISTRY PROBE (docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md)
+/* E2a REGISTRY PROBE (docs/archive/cps-dk-sole-effect-lowering-plan.md)
  *
  * Proves the tier-`now` threading mechanism the E2 coloring identified: a
  * captureless effectful fn-value carried as a BARE int64 direct-entry fn-ptr
@@ -18,7 +18,7 @@
  * bare `static void __fn_1282(int64_t s)` and is passed as `(int64_t)__fn_1282`.
  * So the threaded call site cannot read a slot -- it must look the pointer up.
  *
- * Build/run: cc -O2 -o /tmp/e2a docs/upcoming/v2/probes/e2a-registry-probe.c && /tmp/e2a
+ * Build/run: cc -O2 -o /tmp/e2a docs/artifacts/probes/e2a-registry-probe.c && /tmp/e2a
  * Expected: prints the callback string ONCE, and result == 0 (main's handle value).
  */
 #include <stdio.h>

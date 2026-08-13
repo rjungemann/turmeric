@@ -15,7 +15,7 @@
 ;;; (The plan's ideal `schan-recv : SChan<SRecv T R> -> Pair<T SChan<R>>` is
 ;;; blocked by a monomorphizer limitation around parametric aggregates whose
 ;;; element type is a phantom carried inside an opaque -- see schan-recv's
-;;; docstring and docs/reported/generic-struct-opaque-element-miscompile.md.
+;;; docstring and docs/archive/history/generic-struct-opaque-element-miscompile.md.
 ;;; recv therefore returns the typed continuation directly and delivers the
 ;;; received value through a caller-provided cell, which keeps the continuation
 ;;; protocol fully checked.)
@@ -134,7 +134,7 @@
   ;;;   type parameter carried only inside an opaque argument -- the type
   ;;;   variable is not recoverable from the opaque, so the aggregate result
   ;;;   never specializes and the generic carrier fallback miscompiles (see
-  ;;;   docs/reported/generic-struct-opaque-element-miscompile.md).  Returning the
+  ;;;   docs/archive/history/generic-struct-opaque-element-miscompile.md).  Returning the
   ;;;   continuation as a bare opaque (SChan R) keeps it *fully typed* -- the
   ;;;   protocol-ordering guarantee is intact on every step -- and the value rides
   ;;;   out through the cell.

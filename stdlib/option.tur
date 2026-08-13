@@ -98,7 +98,7 @@
 ;;; value from the int64 carrier Option, or return dflt.  Temporary surface
 ;;; for producers that still return the carrier Option (e.g. zipper / kleisli);
 ;;; retired once those producers move to by-value `(Option A)`.  See
-;;; docs/reported/unwrap-or-byvalue-cascade.md.
+;;; docs/archive/history/unwrap-or-byvalue-cascade.md.
 
 (defn unwrap-or-carrier [o : int dflt : int]
   #fx{}
@@ -148,7 +148,7 @@
 ;;;   Mapping over a *literal* `(none)` with an *unannotated* lambda leaves the
 ;;;   element type under-determined (`(none)` carries no element type) and fails
 ;;;   to compile -- annotate the lambda or map over a typed Option value. See
-;;;   docs/reported/option-map-literal-none-unannotated-fn-no-A-inference.md.
+;;;   docs/archive/history/option-map-literal-none-unannotated-fn-no-A-inference.md.
 ;;;
 ;;; Since: Phase TC1
 
@@ -184,7 +184,7 @@
 ;; M4c-pre-ext: rewrite to consult by-value fields directly via Eq A,
 ;; mirroring Eq Result/Tuple2/Pair.  `option-eq?` itself stays as a free
 ;; helper for callers that consult it directly via the carrier ABI.  See
-;; docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+;; docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
 
 (definstance Eq [Option]
   [(Eq A)]

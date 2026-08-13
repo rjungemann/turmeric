@@ -477,5 +477,5 @@ Build with `./build/tur build src/app.tur -o app`.
   other-module foo bar)` form is planned.
 - **Hot reload / dynamic loading**: not supported in v1.
 
-See `docs/archive/module-system-plan.md` for the full design history and
-deferred work items.
+The deferred items above are the full list; there is no separate design-history
+document for them.

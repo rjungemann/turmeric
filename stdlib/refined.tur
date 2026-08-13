@@ -22,7 +22,7 @@
 ;;; ne-of are typed in terms of the element type instead of a bare :int.
 ;;; BoundedIdx stays a bare carrier (its length n is a value-level fact the
 ;;; smart constructor checks, not a type the checker can track). See
-;;; docs/reported/parameterized-defopaque.md.
+;;; docs/archive/history/parameterized-defopaque.md.
 ;;;
 ;;; Since: stdlib-refinement-collections-plan (R1, R2)
 ;; Refinement newtypes: NonEmpty (R1) and BoundedIdx (R2).

@@ -4,7 +4,7 @@
 
 **Speculative.** This is a design-comparison note, not a plan. It
 contrasts the approach sketched in
-`docs/upcoming/tuple-variadic-type-plan.md` (Option B: a primitive
+`docs/archive/tuple-variadic-type-plan.md` (Option B: a primitive
 variadic `TY_TUPLE` kind) with a hypothetical HList-style approach
 (kind-level list of types, in the Haskell `HList` tradition).
 
@@ -26,7 +26,7 @@ system is unchanged: `Tuple` is "the variadic constructor that, given
 N type arguments, yields a type." Partial application
 (`Tuple[int, _]`) is most likely rejected as a kind error.
 
-See `docs/upcoming/tuple-variadic-type-plan.md` for the full sketch.
+See `docs/archive/tuple-variadic-type-plan.md` for the full sketch.
 
 ## HList in one paragraph
 
@@ -201,7 +201,7 @@ optimising for.
 ## See also
 
 - `docs/tuple-type-plan.md` -- Option A, the shipped/shippable plan.
-- `docs/upcoming/tuple-variadic-type-plan.md` -- Option B, deferred.
+- `docs/archive/tuple-variadic-type-plan.md` -- Option B, deferred.
 - `MEMORY.md` entries on HKT (S1-S8) and sized types -- the closest
   prior art for "we extended the type system and it cost what we
   thought it would cost."

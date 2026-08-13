@@ -37,7 +37,7 @@ one, and falls back to the bare combinator otherwise -- so a single `(load
 "stdlib/arrow.tur")` gives you both. (This unification became possible once a
 free `defn` and a typeclass method of the same name were allowed to coexist;
 see
-[`docs/reported/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-methods-share-value-namespace-with-defns.md).)
+[`docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).)
 
 For the function arrow, `arr` lifts a function (the identity up to eta), and
 `>>>` is left-to-right composition; both surfaces compute identical values --
@@ -197,7 +197,7 @@ function:
 
 `arr` is eta-expanded in the instance (`(fn [x] (f x))`, not the bare `f`) so
 the dispatched result carries a concrete arrow type and is directly callable;
-see `docs/reported/instance-method-returning-untyped-param-loses-result-type.md`.
+see `docs/archive/history/instance-method-returning-untyped-param-loses-result-type.md`.
 
 ### `Category` -- identity and composition
 
@@ -305,7 +305,7 @@ flowing through the instance dictionary.
 
 > **Where the Signal/SF library lives:** the worked example is the
 > `tur-signal` spice in `../turmeric-spices/spices/signal/` (see
-> `docs/upcoming/tur-signal-rebuild-plan.md` for the rebuild plan and
+> `docs/archive/history/tur-signal-rebuild-plan.md` for the rebuild plan and
 > current acceptance state). The code samples below use the
 > `stdlib/signal/core.tur` paths from the original placement; treat
 > them as the conceptual surface -- the same names are exported by

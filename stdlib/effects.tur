@@ -14,7 +14,7 @@
 ;; value, struct, loop-local, and nested-handler captures are threaded through
 ;; a per-handle env. Caveat: a `(fn ...)` constructed inside a handler body
 ;; leaks its closure env per construction (general fat-closure lifetime gap --
-;; see docs/reported/fat-closure-env-leak.md), so prefer fixed-arity helpers
+;; see docs/archive/history/fat-closure-env-leak.md), so prefer fixed-arity helpers
 ;; over inline capturing lambdas in hot handler paths.
 ;; -- IO (parent of Write, Read) -------------------------------------------
 ;;; IO -- base effect for all I/O operations.

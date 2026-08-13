@@ -521,7 +521,7 @@ defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
 ### `stdlib/workflow.tur`
 
 **Stable API surface (Phase 21).** Downstream code -- including the
-application-image-dumps plan (`docs/upcoming/application-image-dumps-plan.md`,
+application-image-dumps plan (`docs/archive/history/application-image-dumps-plan.md`,
 AI2) -- builds on exactly these four entry points; treat their signatures as
 the SemVer contract:
 
@@ -539,7 +539,7 @@ whenever a program contains serial syntax. **Capture scope:** the continuation
 must be a *supported delimited context* (a single-scalar-hole chain of `let`
 prelude + `+ - * /` + 2-arg calls + one `if`); contexts outside that grammar do
 not capture (see
-`docs/reported/serial-shift-unsupported-context-miscompile.md`).
+`docs/archive/history/serial-shift-unsupported-context-miscompile.md`).
 
 A higher-level API for persistent workflows:
 

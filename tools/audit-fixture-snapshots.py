@@ -43,7 +43,7 @@ SEMANTIC_NAME_PATTERNS = re.compile(
 # arrow-composition miscompile (#318 -- "works by luck because the register
 # classes happen to match"). The runtime output was correct by luck with the
 # buggy int64 carrier, so deleting the snapshot would silently drop the only
-# reliable detector. See docs/reported/sf-compose-typed-arrow-prints-garbage-floats.md.
+# reliable detector. See docs/archive/history/sf-compose-typed-arrow-prints-garbage-floats.md.
 CODEGEN_REGRESSION_GUARDS = frozenset({
     'arrow-compose-float',
     'sf-compose-typed',

@@ -47,7 +47,7 @@
 ;; Promise is :linear and Future is :affine. The shared FutureCell now carries a
 ;; reference count (see the `refcount` field below), which untangles the
 ;; Promise/Future aliasing that previously blocked promoting the read end (see
-;; docs/reported/stdlib-future-linearity-aliasing.md, RESOLVED):
+;; docs/archive/history/stdlib-future-linearity-aliasing.md, RESOLVED):
 ;;
 ;;   * promise-new mints a cell with refcount = 1, handed out as a Promise.
 ;;   * future-handle BORROWS a Promise (^borrow) and mints an additional Future

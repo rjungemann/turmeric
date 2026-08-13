@@ -6,7 +6,7 @@
 ;;; A type implements Drop when it OWNS a resource that must be released when the
 ;;; value dies -- a refcounted handle (decrement), a unique heap pointer (free),
 ;;; a nested owning aggregate (walk).  The closure drop-glue
-;;; (docs/upcoming/closure-drop-glue-plan.md, Model R) dispatches through a
+;;; (docs/archive/closure-drop-glue-plan.md, Model R) dispatches through a
 ;;; capture's Drop instance to release it when the capturing env is freed, so an
 ;;; owned value captured into an escaping closure no longer leaks.
 ;;;

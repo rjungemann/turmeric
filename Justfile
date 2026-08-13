@@ -570,7 +570,7 @@ perf: perf-run perf-aggregate perf-analyze perf-docs perf-viz perf-open
 # with no wrapper.
 #
 # STATUS: the Windows port is not finished -- see
-# docs/upcoming/v1/windows-support-plan.md.  `configure-windows` currently stops
+# docs/archive/windows-support-plan.md.  `configure-windows` currently stops
 # at the architecture dispatch in src/CMakeLists.txt (CMAKE_SYSTEM_PROCESSOR is
 # empty under MSYS2).  The toolchain above is correct; the build is what still
 # needs work.

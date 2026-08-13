@@ -8,11 +8,11 @@
 ;; err arm (B) and maps over the ok arm, so `(f a)` = `(Result a B)` and the
 ;; result `(f b)` = `(Result b B)` -- b fills the FIRST (hole) slot.
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-partialapp.tur; echo $?
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe-partialapp.tur; echo $?
 ;;   (by-value HKT is now default-on, so the env var is optional)
 ;;   -> 42  (TARGET)
 ;;
-;; STATUS: see docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md
+;; STATUS: see docs/archive/history/m7-hkt-bimap-twoparam-struct-tyvar-leak.md
 ;; (the partial-app wildcard remains; the full-two-param bimap is fixed).
 
 (defclass MyFunctorP [^f]

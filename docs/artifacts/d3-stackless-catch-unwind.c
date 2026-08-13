@@ -1,11 +1,11 @@
 /* D3 prototype -- stackless (trampolined) lowering of nested catch-unwind.
  *
- * Reference artifact for docs/upcoming/compiled-catch-unwind-stackless-plan.md.
+ * Reference artifact for docs/archive/history/compiled-catch-unwind-stackless-plan.md.
  * This is NOT compiled into tur or the test suite; it is a hand-lowered model of
  * what a selective-CPS lowering (direction (a) in the D3 plan) would emit, used
  * to de-risk the codegen work the way the D1a hand-prototypes did.  Build:
  *
- *     gcc -O2 docs/upcoming/prototypes/d3-stackless-catch-unwind.c -o /tmp/d3proto
+ *     gcc -O2 docs/artifacts/d3-stackless-catch-unwind.c -o /tmp/d3proto
  *     /tmp/d3proto 1000000
  *     ( ulimit -s 64; /tmp/d3proto 1000000 )   # proves C-stack independence
  *

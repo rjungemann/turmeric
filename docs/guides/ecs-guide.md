@@ -16,7 +16,7 @@ systems.
 
 For the long-form plan, prerequisites, and where each piece of the
 surface came from, see
-[`docs/upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md).
+[`docs/archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
 
 ## TL;DR
 

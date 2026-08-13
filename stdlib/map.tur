@@ -662,7 +662,7 @@
 ;; NOTE (Phase 4.1/4.3): carrier-essential -- walks a heterogeneous HAMT via
 ;; tur_hamt_* with no element type available, so it stays inline-C on the int64
 ;; carrier and is an allowed Phase 5 bridge crossing.  See
-;; docs/upcoming/v2/phase4-carrier-helper-inventory.md.
+;; docs/archive/phase4-carrier-helper-inventory.md.
 
 (defn map-eq-raw? [m1 : int m2 : int ^fat val-cmp]
   #fx{}

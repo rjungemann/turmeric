@@ -493,7 +493,7 @@ for callers that do not want the protocol discipline.
 > `SChan<SRecv T R> -> Pair<T SChan<R>>`. That is currently blocked by a
 > monomorphizer limitation around parametric aggregates whose element is an
 > opaque/phantom type (see
-> `docs/reported/generic-struct-opaque-element-miscompile.md`). Until it is
+> `docs/archive/history/generic-struct-opaque-element-miscompile.md`). Until it is
 > fixed, `schan-recv` returns the *typed* continuation directly and delivers the
 > received value through a caller-provided cell -- which keeps the continuation
 > protocol fully checked.
