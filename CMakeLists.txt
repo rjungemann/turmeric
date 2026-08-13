@@ -397,6 +397,16 @@ add_test(
   COMMAND bash tests/run-closure-env-leak.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Sibling gate for the fat-sink shim box: a bare fn passed to a `^fat` parameter
+# used to malloc a { shim, orig } box per CALL that nothing ever freed (109 MiB
+# over 4e6 iterations).  Same reason for a dedicated runner -- the normal suite
+# compiles the spawned program without ASan.  See
+# docs/archive/fat-sink-shim-box-leaks-per-call.md.
+add_test(
+  NAME tur_fat_shim_leak
+  COMMAND bash tests/run-fat-shim-leak.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # WKC2: boxed-key ownership gate. Compiles the HAMT runtime + a C unit test
 # with ASan/UBSan (+LSan on Linux) and asserts that a wide-keyed map
 # build+drop is leak-clean and double-free/use-after-free clean: a boxed key

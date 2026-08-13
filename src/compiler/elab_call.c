@@ -5611,10 +5611,35 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     shim->as.fn_to_fat_.inner = args[i];
                     /* A normalized NOMINAL param never drops its argument --
                      * which is precisely why this shim leaked a box per call --
-                     * so its box may be the shared file-scope one.  A ^fat sink
-                     * (slot_fat_decl) may drop, so it keeps the heap box.  See
-                     * the static_ok comment in expr.h. */
-                    shim->as.fn_to_fat_.static_ok = slot_nominal && !slot_fat_decl;
+                     * so its box may be the shared file-scope one.
+                     *
+                     * A `^fat` sink (slot_fat_decl) used to be excluded outright,
+                     * on the grounds that such a callee MAY take ownership and
+                     * drop, and its droppedness is not visible at the call site.
+                     * The first half is true; the second is not, because the
+                     * only way to drop is `TUR_CLOSURE_DROP`, which is a C macro
+                     * and so reachable only from an inline-C body -- and a body
+                     * containing any inline-C has `nonretain_param_mask == 0` by
+                     * construction (elab_fns.c zeroes it there, precisely because
+                     * a C body can stash a param where no AST walk can see it).
+                     *
+                     * So a set nonretain bit already implies the callee neither
+                     * retains NOR drops this argument, which is exactly the
+                     * ownership fact the shared box needs.  It also sidesteps the
+                     * -Wfree-nonheap-object problem that ruled the static box out
+                     * before: no free is emitted for a callee that cannot drop.
+                     *
+                     * Without this, every `^fat` call site mallocs a fresh
+                     * {shim, orig} box that nothing ever frees -- ~205 bytes per
+                     * call, 822 MiB over 4e6 iterations.  See the static_ok
+                     * comment in expr.h and
+                     * docs/archive/fat-sink-shim-box-leaks-per-call.md. */
+                    bool sink_is_nonretaining =
+                        fn_binding && i < 32 &&
+                        (fn_binding->nonretain_param_mask & (1u << i)) != 0;
+                    shim->as.fn_to_fat_.static_ok =
+                        (slot_nominal && !slot_fat_decl) ||
+                        (slot_fat_decl && sink_is_nonretaining);
                     args[i] = shim;
                 } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
                            ak == TY_NIL ||

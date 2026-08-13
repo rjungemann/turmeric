@@ -45,13 +45,23 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
-| [fat-sink-shim-box-leaks-per-call](fat-sink-shim-box-leaks-per-call.md) | medium | a bare fn passed to a `^fat` sink mallocs a `{shim, orig}` box per CALL and never frees it -- 1002 MiB over 5e6 iterations. Pre-existing; the same leak at a normalized nominal param is fixed (static box), but `^fat` has no ownership contract so the caller cannot choose |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
 
-The first three are one campaign but **not** duplicates -- each has its own
+The two remaining are one campaign but **not** duplicates -- each has its own
 pinned investigation and its own fix (a calling-convention change; a generic
-instantiation + ctor-emission bug; a per-call box with no ownership contract).
-Do not merge them; the investigations are the expensive part. Two others have
+instantiation + ctor-emission bug). Do not merge them; the investigations are
+the expensive part.
+
+`fat-sink-shim-box-leaks-per-call` was resolved 2026-08-13 and moved to
+[docs/archive](../archive/fat-sink-shim-box-leaks-per-call.md). It needed no
+ownership annotation after all: dropping a fat handle goes through
+`TUR_CLOSURE_DROP`, a C macro reachable only from inline-C, and any body with
+inline-C already has `nonretain_param_mask == 0` -- so a set bit already means
+"neither retains nor drops", which is exactly the fact the proposed annotation
+was to supply. Note the report's own measurement conflates two allocations: its
+recursive repro also allocates a CPS continuation env per call, so the fix looks
+like ~15% there. The `while`-loop form isolates the shim and goes 109 MiB ->
+1.3 MiB flat over 4e6 iterations. Two others have
 since been resolved and moved to [docs/archive](../archive/):
 `macos-int-conversion-carrier-pointer-straddles` (2026-08-01) and
 `contract-type-arg-not-peeled-to-base` (2026-08-01, fixed by
