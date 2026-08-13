@@ -320,7 +320,7 @@ static Form *build_mapkey_cmp_form(Elab *e, const Type *key_type, Span span) {
  * directly, bypassing elab_call's ^fat auto-shim -- so a captureless comparator
  * lambda would reach the (now ^fat) *-eq? value-comparator parameter as a bare
  * function pointer and be misread as a fat box (segfault, per
- * docs/reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md).
+ * docs/archive/history/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md).
  * Wrapping it in EX_FN_TO_FAT here boxes a captureless lambda via the
  * per-signature __tur_fatshim_*, and is a pass-through for an already-fat
  * (capturing) closure -- matching the fat dispatch the helper bodies now use.
@@ -665,7 +665,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * trips type_app's kind check (TUR-E0012).  The fmap shape (fn returns a
      * bare element `b`) never builds `(m _)` so it was unaffected; only the
      * monadic shapes (fn returning an applied HKT type) hit it.  See
-     * docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
+     * docs/archive/history/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
     Kind *eff_kinds = (Kind *)class_type_param_kinds;
     /* M7: collecting method-level element tyvars is a PARSE concern.  A typed
      * HKT class signature (`(foldr [ta : (t a) ...] : b)`) parses and the
@@ -2023,7 +2023,7 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
  * un-grounded element tyvar?  When the HKT by-value monomorphization cannot
  * recover a result element tyvar from the call args -- the Applicative `ap`
  * shape, whose result element `b` lives only inside a wrapped function value
- * that erases to `ptr<void>` (docs/reported/m7-hkt-ap-fn-element-carrier-
+ * that erases to `ptr<void>` (docs/archive/history/m7-hkt-ap-fn-element-carrier-
  * erasure.md) -- the substituted result `(Option b)` keeps `b` free.  Emitting
  * a by-value spec for it mints a half-by-value method (carrier `int64_t`
  * return) while the dispatch dict references a dropped carrier base, a hard cc
@@ -2376,7 +2376,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * carrier, so downstream only needs the constructor identity
                          * (dispatch + orphan check) and a valid (* -> *) head, which
                          * is exactly what fixing the named arm produces.  See
-                         * docs/reported/result-param-order-blocks-functor-monad.md. */
+                         * docs/archive/history/result-param-order-blocks-functor-monad.md. */
                         Form *ctor_form = arg->as.list.items[0];
                         Form *aarg_form;
                         if (arg->as.list.len == 2) {
@@ -2400,7 +2400,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                              * against the concrete receiver).  This is the kind-*
                              * counterpart to the single-`_` partial-application
                              * path below, which serves kind-(* -> *) classes.  See
-                             * docs/reported/kind-star-instance-two-param-type-cannot-bind-constraint-var.md */
+                             * docs/archive/history/kind-star-instance-two-param-type-cannot-bind-constraint-var.md */
                             if (!h1_hole && !h2_hole) {
                                 if (ctor_form->tag != F_SYM &&
                                     ctor_form->tag != F_KEYWORD) {
@@ -2700,7 +2700,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      * the instance method bodies so that a bare `A` in an ascription such as
      * `(:: t1 (Cons A))` resolves to the constraint tyvar rather than a
      * same-named global type.  Pushed onto e->sig_tyvars for pass 2.  See
-     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
+     * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
     const Symbol *constraint_tyvar_syms[32];
     uint8_t n_constraint_tyvar_syms = 0;
 
@@ -3095,7 +3095,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      * while an auto-loaded partial typeclass stub (typeclass-clone.tur, ...)
      * already supplied the same primitive instance.  The first definition wins;
      * the redundant one is a silent no-op, matching the include-guard mental
-     * model for repeated loads.  See docs/reported/load-not-idempotent-typeclass.md. */
+     * model for repeated loads.  See docs/archive/history/load-not-idempotent-typeclass.md. */
     for (TypeClassInstance *prev = e->typeclass_env.instances; prev; prev = prev->next) {
         if (prev->typeclass != tc || prev->n_type_args != n_type_args) continue;
         char prev_suffix[64];
@@ -4310,7 +4310,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         /* M4a: backlink the method FnDef to its owning instance so emit_module
          * can identify instance methods in O(1) and (when the class is non-HKT)
          * route them through the per-instantiation emit path.  See
-         * docs/upcoming/m4-typeclass-per-method-abi-plan.md. */
+         * docs/archive/m4-typeclass-per-method-abi-plan.md. */
         method_fd->owner_instance = inst;
 
         /* Stash what pass 2 needs to elaborate this method's body. */
@@ -5036,7 +5036,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                       name->name);
             return NULL;
         }
-        /* return-dispatch-tyvar (docs/reported/return-dispatch-tyvar-silent-
+        /* return-dispatch-tyvar (docs/archive/history/return-dispatch-tyvar-silent-
          * misdispatch.md): when the ascription pins the result to an *abstract*
          * type variable -- e.g. `(:: (deserialize b) A)` inside a constrained
          * `(defn round [A] [(Serializable A)] ...)` -- `bound` is a TY_TYVAR
@@ -5174,7 +5174,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     out->as.call_.args       = args;
     out->as.call_.n_args     = n_args;
     /* M4c Path A return-side
-     * (docs/reported/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
+     * (docs/archive/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
      * mirror the receiver-dispatch path's abi_bindings population (around
      * line 4047) so emit_abi_register_call mints a per-instantiation spec
      * for return-dispatch typeclass methods too.  `bound` here is the
@@ -5381,7 +5381,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
      * (struct field access, function-typed field call-through, typeclass
      * dispatch) all apply uniformly.  Without this rewrite the head `.` yields
      * an empty method name and dispatch fails with "no typeclass method found
-     * for ''" (docs/reported/dot-method-call-misroutes-to-typeclass.md). */
+     * for ''" (docs/archive/history/dot-method-call-misroutes-to-typeclass.md). */
     if (call->as.list.items[0]->tag == F_SYM &&
         call->as.list.items[0]->as.sym->len == 1 &&
         call->as.list.items[0]->as.sym->name[0] == '.') {
@@ -6020,7 +6020,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
      * Without this the old KIND_ARROW path spuriously matched the first instance
      * whose type_args[0] failed the (incomplete) primitive test -- typically
      * Hash[float32] -- baking a wrong, type-incompatible callee into the body. */
-    /* M5 (docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
+    /* M5 (docs/archive/history/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
      * An EX_ASCRIBE-to-tyvar receiver (`(:: v A)`) elaborates to a
      * TY_STRUCT with NULL def -- the "abstract tyvar" representation
      * the elaborator uses when ascribing a concrete value to a class-
@@ -6143,7 +6143,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                      * (typically Eq[Set]) and we silently dispatch through
                      * the wrong vtable. */
                     TypeKind itk = inst->type_args[0].kind;
-                    /* M5 fix (docs/reported/m5-constrained-poly-spec-wrong-
+                    /* M5 fix (docs/archive/history/m5-constrained-poly-spec-wrong-
                      * dispatch-for-parametric-receiver.md): the sized numeric
                      * variants are primitives too -- without listing them, an
                      * `Eq float32` (or `Eq int32` / `uint8` / etc.) instance
@@ -7077,7 +7077,7 @@ resolved_user_fallback:;
     out->as.call_.args    = call_args;
     out->as.call_.n_args  = n_args + 1;
     out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
-    /* M4c Path A step 1 (docs/upcoming/m4c-execution-plan.md): bind the
+    /* M4c Path A step 1 (docs/archive/m4c-execution-plan.md): bind the
      * class variable to the CALL SITE'S receiver type so
      * emit_abi_register_call mints a per-instantiation spec.  HKT carve-out
      * stays — those keep the uniform-carrier dispatch per Plan M6/M7. */

@@ -1,6 +1,6 @@
 /* span_audit.c -- breakpoint-span coverage audit (debugger Phase 1).
  *
- * See span_audit.h and docs/upcoming/debugger-plan.md (Phase 1).
+ * See span_audit.h and docs/archive/history/debugger-plan.md (Phase 1).
  *
  * The traversal mirrors the per-kind child extraction used by the effect-row
  * pass (src/passes/effect_check.c) so coverage of the Expr union stays in

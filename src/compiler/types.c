@@ -208,7 +208,7 @@ int type_eq(Type a, Type b) {
      * pointer equality is name equality).  Two unnamed tyvars are still equal
      * (the historical default); but two distinctly-named tyvars are NOT.  This
      * is load-bearing for Direction A of
-     * docs/reported/open-binder-skolems-not-distinguishable.md, where each
+     * docs/archive/history/open-binder-skolems-not-distinguishable.md, where each
      * `open` mints a fresh skolem-named tyvar and the call-side unifier must
      * reject mismatches across nested opens. */
     if (a.kind == TY_TYVAR) {
@@ -906,7 +906,7 @@ static void append_type_mangle(Buf *b, Type t) {
             }
             break;
         }
-        /* docs/archive/concrete-codegen-layout-kind-enumerations-drift.md:
+        /* docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md:
          * this switch used to end in `default: "opaque"`, which did not drop an
          * unlisted kind but MERGED it -- every kind without a case mangled to
          * the single token `opaque`, so two distinct instantiations claimed one
@@ -1127,7 +1127,7 @@ void free_struct_app_type(Type t) {
  * TY_APP whose copy_kind / substruct reflect the head's :linear (or :affine)
  * qualifier; otherwise the linear-discipline checker silently treats the
  * applied value as a plain copyable handle.  See
- * docs/reported/parametric-linear-opaque-not-enforced.md.
+ * docs/archive/history/parametric-linear-opaque-not-enforced.md.
  * Walks the `fn` spine down to its head; if the head is a :linear / :affine
  * opaque/struct, lifts the discipline onto the TY_APP node in place. */
 void propagate_app_discipline(Type *app, const Type *fn) {
@@ -2423,7 +2423,7 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_TYVAR:
             /* Include the binder name in the printed form so cross-skolem
              * mismatches (Direction A of
-             * docs/reported/open-binder-skolems-not-distinguishable.md) show
+             * docs/archive/history/open-binder-skolems-not-distinguishable.md) show
              * which tyvar is which: "tyvar 'n'" vs "tyvar '__open_skolem_3_0'". */
             if (t.as.tyvar_.name) {
                 buf_puts(b, "tyvar '");
@@ -3117,7 +3117,7 @@ bool type_is_byvalue_adt_product(Type t) {
 }
 
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
- * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).
+ * graduation; see docs/archive/parametric-adt-byvalue-plan.md).
  *
  * A concrete monomorphisation of a single-variant, non-GADT, parametric flat
  * product -- e.g. `(Pair2 int float)` from `(defdata Pair2 [A B] (Pair2 [a:A

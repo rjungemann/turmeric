@@ -243,7 +243,20 @@ Pinned by four `errors/` negatives and
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [manifest-read-failure-degrades-to-module-not-found](manifest-read-failure-degrades-to-module-not-found.md) | medium | a BROKEN `build.tur` is indistinguishable from no manifest to every caller, so a one-token typo presents as N unrelated `module not found` errors and `tur check` reports at `error:` severity while exiting **0** |
-| [mono-specs-header-comment-stale](mono-specs-header-comment-stale.md) | low | `mono_specs.h`'s header comment describes a superseded state (registry-only, carrier-box codegen, VBM2b deferred); it contradicts a later paragraph in the same block and has already produced two wrong survey conclusions |
+
+`mono-specs-header-comment-stale` was resolved 2026-08-13 and moved to
+[docs/archive](../archive/mono-specs-header-comment-stale.md). The header
+comment was rewritten to the post-graduation reality, and the report's item 4
+(the general sweep) was carried out: **255 dead `docs/` citations across 88
+files in `src/`** were repointed at their real locations. Three of them named
+reports that were never filed *and* asserted defects that do not exist -- a
+`tvar/modify` codegen no-op (the arm is dead; elab lowers the form) and a
+`task-group-new` layout overflow (both layouts carry `cancel_reason`) -- so
+those comments were corrected rather than backfilled with reports. Note for the
+next sweep: citing `docs/archive/` up front does **not** immunise a comment (42
+of the 255 already did, and rotted when the file moved on to
+`docs/archive/history/`), and a single-line grep silently misses the ~6% of
+citations that wrap across a `*` comment continuation.
 
 `fixture-dirs-with-loose-tur-files-pass-without-running` was resolved
 2026-08-05 and moved to

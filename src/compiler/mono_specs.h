@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-/* VBM1/VBM2 (docs/upcoming/van-laarhoven-monomorphization-plan.md): the by-value
+/* VBM1/VBM2 (docs/archive/history/van-laarhoven-monomorphization-plan.md): the by-value
  * HKT monomorphization spec registry.
  *
  * VBM1: elab_poly_call registers one ABSTRACT specialization key per van
@@ -22,16 +22,26 @@
  * call of its enclosing fn (e.g. `(set-px point-x ...)` in `main` resolves the
  * abstract `l` to the concrete lens `point-x`), recording a CONCRETE spec keyed
  * `(lens_fn, functor_name, focus_ty, whole_ty)` -- at most one emitted body per
- * concrete key.  Still registry-only: codegen keeps the Path A carrier-box path;
- * the per-spec by-value body emit (VBM2b) is tracked separately (see the plan and
- * docs/reported/vbm2-byvalue-lens-body-emit.md -- it depends on closing the
- * documented "M7-by-value gap" the MB2.5 carve-out at emit_module.c leaves open).
- * `--dump-mono-specs` prints both the abstract keys and the resolved concrete
- * keys so the keying can be reviewed by eye.
+ * concrete key.  `--dump-mono-specs` prints both the abstract keys and the
+ * resolved concrete keys so the keying can be reviewed by eye (gated on
+ * `g_dump_mono_specs`).
  *
- * Registration is unconditional since the vl-wide-mono graduation (2026-07-05);
- * COMPOSED lenses are gated back to Path A in mono_specs.c
- * (lens_is_simple_for_pathb).  The dump is gated on `g_dump_mono_specs`. */
+ * CURRENT STATE -- the registry is NO LONGER registry-only.  Registration is
+ * unconditional since the vl-wide-mono graduation (2026-07-05), and the by-value
+ * body emit is LIVE for both lens shapes:
+ *
+ *   - SIMPLE lenses (direct `fmap` tail) redirect to a by-value
+ *     `<lens>__mono_<hash>` body -- no carrier box, no dict dispatch.  VBM2b
+ *     (docs/archive/history/vbm2-byvalue-lens-body-emit.md) and VBM3 landed
+ *     2026-07-04.
+ *   - COMPOSED lenses thread `(f a)` by value end to end too, since CB1-CB5
+ *     (docs/archive/history/van-laarhoven-composed-byvalue-plan.md, 2026-07-05).
+ *
+ * Path A (the carrier box) is now a narrow BACKSTOP, not the default: it handles
+ * only the shapes CB2/CB3 cannot lower -- runtime-selected nested lens, non-lens
+ * tail, missing composition adapter, nesting past the depth cap.  The
+ * `has_composed_lens` poison in mono_specs.c survives only to select that
+ * backstop (see composed_lens_byvalueable); `g_opt_vl_wide_mono` is retired. */
 
 /* VBM1: register (dedup by content hash) one ABSTRACT lens spec key.  NULL
  * fields are recorded as "?".  Strings are snapshotted, so callers may pass

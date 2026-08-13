@@ -1,7 +1,7 @@
 /* experiments.c -- the experimental-feature-flag registry.
  *
  * Successor to the retired `-X<name>` surface.  See experiments.h and
- * docs/upcoming/v1/experimental-flag-mechanism-plan.md.
+ * docs/archive/history/experimental-flag-mechanism-plan.md.
  *
  * The EXPERIMENTS[] table below is the single source of truth: `tur
  * experiments`, `tur --help`, the docs site, and the release-cut script all
@@ -34,12 +34,12 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* defstruct-as-defadt GRADUATED 2026-06-28 -- a `defstruct` now lowers to a
      * single-variant record `defadt` unconditionally (always-on; the gate lives
      * in defstruct_lowers_to_adt, elab_structs.c).  See
-     * docs/upcoming/defstruct-as-defadt-plan.md. */
+     * docs/archive/defstruct-as-defadt-plan.md. */
     /* B4 byvalue-recursive-carrier GRADUATED 2026-06-25 -- the recursive carrier
      * wrappers (Re/Expr, and wider products carrying an (F Self) field) now flow
      * by value through the fat-closure ABI unconditionally; the gate lives in
      * adt_is_byvalue_product_d (types.c).  See
-     * docs/upcoming/v2/b4-fat-closure-byvalue-adt-abi-plan.md. */
+     * docs/archive/history/b4-fat-closure-byvalue-adt-abi-plan.md. */
     /* forall-kinds GRADUATED 2026-07-06 -- explicit kind annotations on
      * forall/exists bound variables (e.g. (f :: * -> *)) are always accepted;
      * the pre-elaboration gate at elab_types.c is removed.  See
@@ -61,7 +61,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * dispatches through the dict for its own class.  The one residual shape --
      * a constraint method dispatched from inside a nested lambda -- is rejected
      * with TUR-E0311 (never miscompiled) and tracked in
-     * docs/reported/forall-dict-pass-nested-lambda-method.md.  See
+     * docs/archive/history/forall-dict-pass-nested-lambda-method.md.  See
      * docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md. */
     /* hrt-curried-result GRADUATED 2026-07-06 -- a curried rank-2 poly fn whose
      * forall body result is itself a function (e.g. (forall [a] (-> a (-> a a))))
@@ -77,10 +77,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* vl-wide-mono GRADUATED 2026-07-05 (CM4 of van-laarhoven-consumer-mono-plan)
      * -- by-value HKT monomorphization across the van Laarhoven lens boundary
      * (Path B) is now unconditional: SIMPLE lenses (direct `fmap` tail) redirect
-     * to a by-value mono body with no carrier box; COMPOSED lenses fall back to
-     * the always-on Path A carrier bridge (the residual by-value-propagation fix
-     * is tracked in docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
-     * The `g_opt_vl_wide_mono` bit is retired. */
+     * to a by-value mono body with no carrier box.  COMPOSED lenses fell back to
+     * the always-on Path A carrier bridge at graduation; that residual was closed
+     * the same day by CB1-CB5
+     * (docs/archive/history/van-laarhoven-composed-byvalue-plan.md), so composed
+     * lenses now thread `(f a)` by value too and Path A is only the CB5 backstop
+     * for shapes that cannot be lowered.  The `g_opt_vl_wide_mono` bit is
+     * retired. */
     /* panic-return-signal + stackless-catch-unwind GRADUATED 2026-07-07 -- the
      * compiled backend now always lowers panic propagation via the thread-local
      * `tur_panicking` return-path signal (no setjmp/longjmp on the catch-unwind
@@ -103,7 +106,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * F3 closed every admissibility gap (await-as-shift, deferred pending drive,
      * bounded multi-await; docs/archive/compiled-async-heap-continuations-plan.md);
      * a recursive await evicting to the direct emitter is by-design (F4 declined;
-     * docs/archive/compiled-stackless-recursive-await-plan.md).  The 2026-07-19
+     * docs/archive/history/compiled-stackless-recursive-await-plan.md).  The 2026-07-19
      * graduation attempt surfaced two fiber-interop gaps, both now closed so the
      * heap path is a strict superset of the fiber path:
      *   1. A pending future backed by a runnable scheduler fiber (manual spawn /
@@ -115,7 +118,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      *      `async-effect-spawn` colors natively instead of evicting.
      * The gate did its job; the row is retired and the name moved to GRADUATED[]
      * below (a lingering --enable is a TUR-W0063 no-op).  See
-     * docs/archive/cps-async-graduation-plan.md. */
+     * docs/archive/history/cps-async-graduation-plan.md. */
     /* cps-tramp-resume GRADUATED 2026-07-19 -- the CPS/DK trampolined tail-resume
      * path is now the DEFAULT and SOLE lowering for effectful colored code
      * (g_opt_cps_tramp_resume defaults true).  The full corpus DK-lowers every
@@ -131,7 +134,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * leak-clean in the base language is covered; the remaining rejections are
      * bounded by the base drop's shallowness, not this gate.  The name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
-     * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+     * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
     /* closure-drop-glue GRADUATED 2026-07-22 -- Model R (runtime drop-glue header
      * on every heap fat-closure env, walked on release via TUR_CLOSURE_DROP) is
      * now unconditional: the header ABI is emitted in every build and every
@@ -139,7 +142,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * fn-field drop, httpd/reactor teardown) routes through it.  The whole corpus
      * is crash- and leak-clean under the always-on ABI (forced-on suite verified
      * before graduation).  The name moves to GRADUATED[] below (a lingering
-     * --enable is a TUR-W0063 no-op).  See docs/upcoming/closure-drop-glue-plan.md. */
+     * --enable is a TUR-W0063 no-op).  See docs/archive/closure-drop-glue-plan.md. */
     /* CG5: automatic, allocation-driven cycle collection -- `(gc-auto!)`.
      * Gated because it changes runtime TIMING rather than accepting new syntax:
      * with it on, collections happen at allocation checkpoints the program

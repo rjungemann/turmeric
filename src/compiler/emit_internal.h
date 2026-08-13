@@ -180,7 +180,7 @@ typedef struct EmitAbiSpecialization {
      * its outer (so the suffixed env struct lands at file scope) without
      * double-emitting it. */
     bool emitted;
-    /* M4a (docs/upcoming/m4-typeclass-per-method-abi-plan.md): when this spec
+    /* M4a (docs/archive/m4-typeclass-per-method-abi-plan.md): when this spec
      * is for a *typeclass instance method* (not an ordinary defn), the M4b/M4c
      * emit paths route it through the per-instantiation dict singleton path
      * instead of the uniform-carrier dict.  Set by emit_abi_intern_spec when
@@ -516,7 +516,7 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
  * element).  The default bridge spills a by-value aggregate to a stack local
  * and carries (int64_t)(intptr_t)(&tmp) -- a DANGLING address once the
  * producing frame returns (see
- * docs/archive/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md).
+ * docs/archive/history/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md).
  * Here the aggregate is instead heap-promoted: a malloc'd copy is made and the
  * heap pointer is carried, matching how :heap structs are already carried (the
  * reader reconstructs by deref, unchanged).  Every other crossing -- inline

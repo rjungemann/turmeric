@@ -9,7 +9,7 @@
  * On every non-Windows platform this header is empty, so it is safe (and cheap)
  * to include unconditionally.
  *
- * See docs/upcoming/v1/windows-support-plan.md (WIN0).
+ * See docs/archive/windows-support-plan.md (WIN0).
  */
 
 #ifndef TUR_PLATFORM_FS_H

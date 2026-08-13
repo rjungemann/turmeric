@@ -2694,7 +2694,7 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
      * Skipped when `include_workspace_siblings` is false (the `tur build .`
      * caller), since `tur build` does not transparently link in workspace
      * siblings the way `tur run` does -- it sticks to the declared :spices
-     * closure.  See docs/archive/tur-build-cmake-deps-workspace-overreach.md. */
+     * closure.  See docs/archive/history/tur-build-cmake-deps-workspace-overreach.md. */
     if (include_workspace_siblings) {
         int    n_sib   = 0;
         char **sib_dirs = collect_workspace_sibling_dirs(root_project_dir,

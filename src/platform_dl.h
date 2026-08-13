@@ -13,7 +13,7 @@
  *
  * On non-Windows this header is empty; include <dlfcn.h> there as usual.
  *
- * See docs/upcoming/v1/windows-support-plan.md.
+ * See docs/archive/windows-support-plan.md.
  */
 
 #ifndef TUR_PLATFORM_DL_H

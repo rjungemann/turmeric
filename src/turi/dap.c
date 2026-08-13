@@ -19,8 +19,8 @@
  *   program exit      -> `exited` + `terminated`
  *   disconnect        -> tear down
  *
- * See docs/upcoming/debugger-plan.md (Phase 3) and
- * docs/upcoming/debugger-dap-phase3.md.
+ * See docs/archive/history/debugger-plan.md (Phase 3) and
+ * docs/artifacts/debugger-dap-phase3.md.
  */
 
 #include "dap.h"

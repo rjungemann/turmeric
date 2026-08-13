@@ -63,7 +63,7 @@ typedef enum SubstructKind {
  *              (KIND_ARROW=1 means * -> *, KIND_ARROW2=2 means * -> * -> *, ...)
  *   0xFFFE  -- KIND_TYPEROW (kind-level `List Type`; a row of types, e.g.
  *              the `[Pos Vel]` component row of an ECS Query -- see
- *              docs/reported/variadic-hkt-rows-missing.md). A sentinel, not
+ *              docs/archive/history/variadic-hkt-rows-missing.md). A sentinel, not
  *              an arrow kind: a row is a first-class kind, not a constructor
  *              you apply, so kind_apply_one is the identity on it.
  *   0xFFFF  -- KIND_ROW (effect row variable; sentinel, not an arrow kind)
@@ -178,7 +178,7 @@ typedef enum TypeKind {
      * Two keywords with the same name are pointer-identical; eq is `==` and
      * hashing reads a precomputed field. */
     TY_SYM,          /* :Sym -- interned runtime symbol (const struct __tur_sym *) */
-    /* Variadic HKT rows (docs/reported/variadic-hkt-rows-missing.md, Layer 2):
+    /* Variadic HKT rows (docs/archive/history/variadic-hkt-rows-missing.md, Layer 2):
      * a compile-time-only *row of types* -- an ordered list of element types,
      * surface-spelled `#row{T1 T2 ...}`.  hkt_kind == KIND_TYPEROW.  Used as a
      * type argument to a row-parameterised constructor (e.g. an ECS Query over
@@ -423,7 +423,7 @@ static inline bool adt_uses_named_layout(const AdtDef *def) {
  *
  * Defined in types.c (needs the complete `struct Type` to inspect ctor field
  * full_types, which are only forward-declared here).  See the definition and
- * docs/upcoming/struct-adt-convergence-s1-bridging-findings.md for the gate. */
+ * docs/archive/history/struct-adt-convergence-s1-bridging-findings.md for the gate. */
 bool adt_is_byvalue_product(const AdtDef *def);
 /* B4 (byvalue-recursive-carrier): true when `def` is a single-variant,
  * single-field recursive carrier wrapper whose sole field is an (F Self)
@@ -688,7 +688,7 @@ typedef struct Type {
              * protocol (thunk = slot 0, env = the box) for all arities; a bare
              * TY_FN coerces to a boxed one of the same signature via the
              * EX_FN_TO_FAT auto-shim, never the reverse.  See
-             * docs/upcoming/closure-first-class-type-plan.md.  B-0 only plumbs
+             * docs/archive/history/closure-first-class-type-plan.md.  B-0 only plumbs
              * the bit; nothing sets it true yet. */
             bool boxed;
             /* typed-c-abi-function-pointers: true when this TY_FN denotes a
@@ -701,7 +701,7 @@ typedef struct Type {
              * (a boxed fat box) cannot satisfy a cfnptr parameter, while a
              * *captureless* bare fn of the same signature coerces in (a
              * captureless fn IS a bare code pointer at the C ABI).  See
-             * docs/reported/typed-c-abi-function-pointers.md. */
+             * docs/archive/history/typed-c-abi-function-pointers.md. */
             bool cfnptr;
             /* sized-types-cross-param-unification: per-parameter raw type
              * annotation Form*, retained so call-site elaboration can
@@ -1467,7 +1467,7 @@ Type type_app_fill_hole(Arena *a, Type head, Type elem, Span span);
  * `fn` carries an opaque/struct head -- without this, the application inherits
  * the default CK_COPY and the linear-discipline checker silently treats a
  * value of type `(WriteCap T)` as plain copyable.  See
- * docs/reported/parametric-linear-opaque-not-enforced.md. */
+ * docs/archive/history/parametric-linear-opaque-not-enforced.md. */
 void propagate_app_discipline(Type *app, const Type *fn);
 
 /* IT0: Union type constructor.
@@ -1754,7 +1754,7 @@ char        *type_adt_app_ctor_suffix(Type t);
 const char  *adt_byval_c_name(const AdtDef *def);
 const char  *adt_heap_ptr_c_name(const AdtDef *def);
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
- * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).  True when t is
+ * graduation; see docs/archive/parametric-adt-byvalue-plan.md).  True when t is
  * a concrete monomorphisation of a single-variant non-GADT parametric flat
  * product whose every monomorphised field is by-value-able.  LIVE (P2-P4) --
  * both crossings (match/field-access and ctor-field box/unbox) are wired. */

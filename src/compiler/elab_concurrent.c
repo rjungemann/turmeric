@@ -405,7 +405,7 @@ static Type catch_unwind_result_type(Elab *e, Expr *thunk, Span span) {
  * unchanged so TUR_APPLY0 dispatches to the lifted thunk with the env box
  * as its first argument.  Double-boxing a capturing closure through
  * EX_FN_TO_FAT here previously dropped the env and segfaulted -- see
- * docs/reported/catch-unwind-drops-captures-segv.md. */
+ * docs/archive/history/catch-unwind-drops-captures-segv.md. */
 static Expr *catch_thunk_to_fat(Elab *e, Expr *thunk) {
     if (thunk && thunk->type.kind == TY_FN && !thunk->type.as.fn.boxed) {
         Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, thunk->span);

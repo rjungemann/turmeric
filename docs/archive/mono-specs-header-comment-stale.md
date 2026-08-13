@@ -5,8 +5,8 @@ severity: LOW (documentation / comment accuracy). No runtime, codegen, or
   type-checking defect. Filed because the comment actively misleads readers
   about which code path is live, and has already caused at least two incorrect
   survey conclusions.
-status: OPEN. Fix is a comment edit in src/compiler/mono_specs.h:25-28 plus two
-  stale doc paths. Filed 2026-07-28.
+status: RESOLVED 2026-08-13. All four fix directions landed; see "Resolution"
+  at the bottom. Filed 2026-07-28.
 ---
 
 # `mono_specs.h` header comment describes a superseded state
@@ -126,3 +126,87 @@ either they should cite the archive path from the start or cite nothing.
 - `docs/archive/history/van-laarhoven-composed-byvalue-plan.md` -- CB1-CB5
 - `docs/archive/history/van-laarhoven-consumer-mono-plan.md` -- CM1-CM4
 - `docs/guides/monomorphization-abi-guide.md`
+
+## Resolution (2026-08-13)
+
+All four fix directions landed together.
+
+**1. The header comment.** `src/compiler/mono_specs.h` no longer carries two
+paragraphs that disagree. The "still registry-only / codegen keeps the Path A
+carrier-box path / VBM2b tracked separately" text is gone, replaced by a
+`CURRENT STATE` block stating the post-graduation reality directly: by-value
+body emit is live for SIMPLE lenses (VBM2b/VBM3, 2026-07-04) and for COMPOSED
+lenses (CB1-CB5, 2026-07-05), and Path A is a narrow backstop for the shapes
+CB2/CB3 cannot lower. The accurate `:32-34` paragraph is folded in rather than
+left as a trailing correction.
+
+**2/3. The dead doc paths.** Fixed as part of the general sweep below, which
+subsumed both named cases (`vbm2-byvalue-lens-body-emit.md`,
+`van-laarhoven-monomorphization-plan.md`, and `experiments.c`'s
+`docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md`).
+
+**4. The general sweep.** Every `docs/{reported,upcoming,archive}/` path cited
+from `src/` was checked against the tree and repointed at its real location --
+**255 citations across 88 files**, resolved by basename against `docs/`:
+
+- 213 substitutions: `docs/reported/...` and `docs/upcoming/...` citations of
+  reports and plans that had since been archived.
+- 42 substitutions: citations that already said `docs/archive/` but named the
+  wrong half of the split -- the file had moved on to `docs/archive/history/`.
+  This class was invisible until the first pass ran, and is the one most likely
+  to recur.
+- 16 line-wrapped citations, where the path straddles a `*` comment
+  continuation and so is invisible to a single-line grep. These need a
+  multi-line match; a naive sweep silently skips them.
+
+Two ambiguous basenames (present in both `docs/archive/` and
+`docs/archive/history/`) were resolved to `docs/archive/` on the rule that a
+source comment citing a *report* means the report, not its paper trail.
+
+**Three citations named docs that were never filed at all** -- and each turned
+out to be describing a state that is no longer true, so the fix was to correct
+the claim rather than to file the missing report:
+
+| Citation | Claim | Reality |
+|---|---|---|
+| `match-int-scrutinee-guard-null-adt.md` | guard needed | the guard is present -- the `!_scrut_is_adt` disjunct at `emit_expr.c`. Comment now points at the guard instead of a phantom report. |
+| `stm-tvar-modify-codegen-stub.md` | "compiled path emits a no-op stub -- latent bug" | **false.** `elab_tvar_modify` (`elab_concurrent.c:743`) lowers `(tvar/modify tv f)` to `(let [g tv] (tvar/swap g (f (tvar/read g))))`, so the `EX_TVAR_MODIFY` arm in `emit_expr.c:8342` is a dead defensive arm, exactly as its own comment says. `eval.c` was warning about a bug that cannot fire. |
+| `taskgroup-block-cancel-reason-layout-overflow.md` | "compiled `task-group-new` omits `cancel_reason` -- latent OOB write" | **false.** `stdlib/taskgroup.tur:85` declares `int64_t cancel_reason` and line 87 allocates `sizeof(TaskGroupBlock)`. Both layouts agree; the comment is stale. |
+
+That last row is the interesting one. This report's thesis was that a stale
+comment misleads readers -- and these two were worse than stale, they were
+*inventing* defects. A reader auditing STM or task-group cancellation would
+have found a comment asserting a live memory-safety bug, with a report path to
+go read, and no report at either end of it.
+
+**Also corrected while in the file** (same stale-comment failure mode, found by
+following the citations):
+
+- `mono_specs.c`'s `has_composed_lens` field comment still described the CM4
+  gate ("a composed lens ... which the by-value mono body cannot yet emit").
+  CB1-CB5 superseded that; the flag now marks only the CB5 backstop residue.
+  The `resolve_walk` comment 600 lines below already said so, so this was the
+  same two-paragraphs-disagree shape as the header itself.
+- `experiments.c`'s vl-wide-mono graduation note said composed lenses "fall
+  back to the always-on Path A carrier bridge" with the fix "tracked in" the
+  composed-byvalue plan. True on 2026-07-05, closed the same day.
+
+One citation was deliberately left alone: `docs/upcoming/v1/fancy-rows-plan.md`
+in `experiments.c`'s header is inside a block explicitly marked "do not
+uncomment -- illustrative only", showing the shape of an `EXPERIMENTS[]` row.
+It is a fictional example, not a citation, and `fancy-rows` is not a real row.
+
+### The general lesson, restated
+
+The report's item 4 called this out and it holds: **a source comment citing a
+`docs/reported/` path is guaranteed to rot**, because the archiving rule moves
+every resolved report by design. 255 rotted citations is what one repo
+accumulates. Two follow-ons worth knowing for the next sweep:
+
+- Citing `docs/archive/` up front is not sufficient -- 42 of these already did,
+  and rotted anyway when the file moved to `docs/archive/history/`.
+- A grep that does not handle `*`-continuation line wrapping misses ~6% of the
+  citations, and they are silently missed.
+
+`git grep -n 'docs/\(reported\|upcoming\|archive\)/'` piped through an
+existence check reproduces the audit in one pass; it now comes back clean.

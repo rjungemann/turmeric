@@ -9,7 +9,7 @@
  * filled in, including an `expires_at` soft deadline: on that version's cut,
  * review the row and either graduate, shelve, or bump it.
  *
- * See docs/upcoming/v1/experimental-flag-mechanism-plan.md and
+ * See docs/archive/history/experimental-flag-mechanism-plan.md and
  * docs/guides/experimental-flags-guide.md. */
 #include <stdbool.h>
 #include <stddef.h>

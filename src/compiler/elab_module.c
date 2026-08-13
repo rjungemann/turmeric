@@ -17,7 +17,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
  * self-recursive defn like typeclass-show.tur's `vec-show-loop`) get the same
  * forward declarations.  Without it, a self-recursive spliced defn's own
  * recursive call resolved to "unknown function or operator"; see
- * docs/reported/compiled-string-return-int-conversion.md (secondary blocker). */
+ * docs/archive/compiled-string-return-int-conversion.md (secondary blocker). */
 static void elab_forward_declare_defns(Elab *e, Form *const *items,
                                        uint32_t start, uint32_t end) {
     for (uint32_t j = start; j < end; j++) {
@@ -61,7 +61,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
              * any spaced scalar) falls through to the TY_INT placeholder, so
              * the recursive call site is typed `int` and the if-branch
              * unifier rejects the body.  See
-             * docs/reported/recursion-return-type-widens-to-int-inside-defmodule.md */
+             * docs/archive/history/recursion-return-type-widens-to-int-inside-defmodule.md */
             if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
                 (ret_f->as.list.items[0]->tag == F_SYM ||
                  ret_f->as.list.items[0]->tag == F_KEYWORD)) {
@@ -92,7 +92,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
          * the arity is not over-stated -- counting `^fat` as a slot made a
          * sibling forward-reference call look under-saturated and synthesised
          * a bogus extra-arg PAP wrapper.  See
-         * docs/reported/pap-defmodule-fat-fn-too-many-args.md */
+         * docs/archive/history/pap-defmodule-fat-fn-too-many-args.md */
         TypeKind *arg_kinds = NULL;
         uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
             ? fwd_decl_scan_params(e->arena, f->as.list.items[name_idx + 1], &arg_kinds)

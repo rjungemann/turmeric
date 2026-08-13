@@ -17,7 +17,7 @@
  * carrier unchanged; a by-value *aggregate* product container does not fit the
  * carrier and would emit broken C, so it is rejected here as not-yet-supported
  * rather than miscompiled (deferred; see
- * docs/reported/hrt-hkt-aggregate-container-carrier.md). */
+ * docs/archive/history/hrt-hkt-aggregate-container-carrier.md). */
 
 /* Does this forall quantify a higher-kinded (arrow-kind) bound variable?
  * KIND_STAR (plain type var) and KIND_ROW/KIND_TYPEROW (effect/type rows) do
@@ -146,7 +146,7 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
     return tur_stdlib_load_hint(name->name);
 }
 
-/* docs/archive/defn-shadows-return-special-form.md: head-position dispatch in
+/* docs/archive/history/defn-shadows-return-special-form.md: head-position dispatch in
  * elab_call (below) matches special forms by symbol identity *before* any
  * binding, macro, or typeclass-method lookup.  A user `(defn return ...)` is
  * therefore accepted, bound, and then never consulted: every bare
@@ -1920,7 +1920,7 @@ static Expr *elab_try_num_operator_dispatch(Elab *e, const Form *call,
  * its result.  Used to keep float-carrier function composition (e.g. a float
  * `>>>` pipeline) on the register-class-correct free defn instead of the
  * type-erased (->) typeclass instance method -- see
- * docs/reported/sf-compose-typed-arrow-prints-garbage-floats.md.  The
+ * docs/archive/history/sf-compose-typed-arrow-prints-garbage-floats.md.  The
  * (->) instance body is emitted once with an int64 carrier thunk (rax), so a
  * float carrier (xmm0) would be a register-class miscompile that only works by
  * luck; the free typed combinator specializes per-carrier and is correct. */
@@ -1936,7 +1936,7 @@ static bool fn_type_has_float_carrier(const Type *t) {
 }
 
 /* Method/defn namespace separation (fix (1) of
- * docs/reported/typeclass-methods-share-value-namespace-with-defns.md).
+ * docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).
  *
  * True when `name` is a method of a *user-defined* (non-stdlib) typeclass AND
  * some instance of that class matches the receiver type `recv`.  When this
@@ -2081,7 +2081,7 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
 
-    /* docs/reported/list-macro-quote-vs-syntactic-symbol.md: a macro that
+    /* docs/archive/history/list-macro-quote-vs-syntactic-symbol.md: a macro that
      * builds an expansion via `(list 'foo args...)` lands here with the head
      * shaped as F_QUOTE wrapping F_SYM(foo) -- the same `'foo` literal the
      * macro body wrote. Without this unwrap the head elaborates to an
@@ -2328,7 +2328,7 @@ Expr *elab_call(Elab *e, Form *call) {
      * path below resolves it from the expected-type channel.  Stdlib never
      * declares a `default-of` class, so its `(default-of A)` make-struct payload
      * fills still hit the builtin.  See root cause B of
-     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md. */
+     * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md. */
     if (name == e->sym_default_of && !elab_name_is_typeclass_method(e, name))
         return elab_default_of(e, call);
     /* SI4-C: defopaque */
@@ -2618,7 +2618,7 @@ Expr *elab_call(Elab *e, Form *call) {
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
 
-    /* constrained-generic-as-value (docs/reported/constrained-generic-as-value-
+    /* constrained-generic-as-value (docs/archive/history/constrained-generic-as-value-
      * bakes-representative.md): a call through an immutable let-bound alias of a
      * global function -- `(let [g count-it] (g box))` -- was elaborated as an
      * indirect call through `g`, so the emit-side per-call-site generic-dict
@@ -2682,7 +2682,7 @@ Expr *elab_call(Elab *e, Form *call) {
      * stdlib classes (Eq/Hash/Show/Num/Functor/...).
      *
      * Namespace separation (fix (1) of
-     * docs/reported/typeclass-methods-share-value-namespace-with-defns.md):
+     * docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md):
      * when a free `defn` *and* a user-defined typeclass method share the name,
      * the `!fn_binding` gate alone would make the defn shadow the method at
      * every bare call site.  Instead, when an instance of the user class
@@ -2840,7 +2840,7 @@ Expr *elab_call(Elab *e, Form *call) {
              * function return type, a match arm's peer type, an ascription,
              * etc.), use it as the result type so bare `(PFail)` unifies
              * with concrete `(POK v rest)` peers.  See
-             * docs/reported/defdata-parametric-inference-and-elab-match-segv.md. */
+             * docs/archive/history/defdata-parametric-inference-and-elab-match-segv.md. */
             Type result_type = fn_binding->type;
             if (ctor->adt->n_type_params > 0 && e->expected_type &&
                 e->expected_type->kind == TY_APP) {
@@ -3147,7 +3147,7 @@ Expr *elab_call(Elab *e, Form *call) {
          * stays the named tyvar.  In that case elab_call_fn already produced the
          * instantiated result type; overwriting it with the bare tyvar would
          * discard the per-call-site substitution.  See
-         * docs/reported/parameterized-defopaque.md. */
+         * docs/archive/history/parameterized-defopaque.md. */
         /* struct-return-through-closure-loses-type: gate on the call result
          * actually being the struct carrier.  An under-applied call returns a
          * closure value (TY_PTR_VOID); patching it to the struct result type
@@ -3311,7 +3311,7 @@ Expr *elab_call(Elab *e, Form *call) {
              * record their return type in the process-global signature registry;
              * consult it so a curated typed wrapper over a non-:int native
              * elaborates correctly.  See
-             * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+             * docs/archive/history/untyped-native-registration-blocks-curated-facades.md. */
             Type dispatch_result = TYPE_INT;
             const char *nm = name->name;
             bool native_registered = false;
@@ -3342,7 +3342,7 @@ Expr *elab_call(Elab *e, Form *call) {
              * run).  When the name is neither bound nor in the typed-native
              * registry, warn so embedders consuming the diag sink surface it at
              * load time.  See
-             * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
+             * docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md. */
             if (!native_registered) {
                 diag_emit_with_code(DIAG_WARNING, head->span,
                                     TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
@@ -3365,7 +3365,7 @@ Expr *elab_call(Elab *e, Form *call) {
      * value for head and tail -- ints, cstrs, opaque handles, pointers --
      * since cells are pointer-as-int64.  Bypass the strict per-arg check for
      * it; codegen casts the args through intptr_t.  See
-     * docs/reported/cons-builtin-rejects-cstr-head.md. */
+     * docs/archive/history/cons-builtin-rejects-cstr-head.md. */
     bool cons_wildcard = (spec->shape == BS_FUNC_CALL && spec->c_op &&
                           strcmp(spec->c_op, "cons") == 0);
     /* All args must match the spec's arg type. */
@@ -3466,8 +3466,8 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
          *   - nominal-identity: a :B captured at a :A slot -- same kind,
          *     different nominal.  The saturated path only re-checks the
          *     *remaining* params, so the captured slot must be validated here.
-         * See docs/reported/partial-application-skips-captured-arg-type-check.md
-         * and docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+         * See docs/archive/history/partial-application-skips-captured-arg-type-check.md
+         * and docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
         {
             Type *cap_full_chk = PAP_SLOT_FULL(i);
             bool slot_is_nominal =
@@ -3507,7 +3507,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
          * as int64_t (type_c_name of a nameless struct kind), the let-binding
          * init truncates the struct value, and the inner call passes an int64_t
          * where the callee expects the nominal struct -- a hard C compile error.
-         * See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (A5). */
+         * See docs/archive/history/stdlib-type-erasure-cleanup-plan.md (A5). */
         {
             Type *cap_full_t = PAP_SLOT_FULL(i);
             if (cap_full_t &&
@@ -3779,7 +3779,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
 }
 
 /* bare-fat-result-monomorphization (Phase B) -------------------------------
- * See docs/upcoming/bare-fat-result-monomorphization-plan.md. */
+ * See docs/archive/history/bare-fat-result-monomorphization-plan.md. */
 
 /* Recover the result kind of a closure passed into a bare-^fat slot, from any
  * of its surface forms: a bare/auto-shimmed function value (TY_FN, possibly
@@ -4710,7 +4710,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * arg_full_types (Phase 1).  Placed before the escape hatches: those only
          * ever set arg_ok from false->true for cross-kind coercions, so demoting a
          * spurious same-kind match here cannot resurrect a real coercion.
-         * See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+         * See docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
         if (arg_ok && (expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
             uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
@@ -4752,7 +4752,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * than the opaque `ptr<void>` carrier.  This lets the HKT
                      * by-value monomorphization recover the result element of the
                      * Applicative `ap` shape
-                     * (docs/reported/m7-hkt-ap-fn-element-carrier-erasure.md).
+                     * (docs/archive/history/m7-hkt-ap-fn-element-carrier-erasure.md).
                      * The runtime value is still a fat box (EX_FN_TO_FAT emits a
                      * `void *` regardless, reading inner->type); only the static
                      * type changes.  The clone is marked `boxed` so downstream
@@ -5390,7 +5390,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * function whose signature has a float-class argument or result
                  * cannot round-trip through it without a register-class miscompile
                  * (xmm vs gp); reject the coercion rather than miscompile.  See
-                 * docs/reported/fn-first-class-float-carrier-gap.md. */
+                 * docs/archive/history/fn-first-class-float-carrier-gap.md. */
                 if (!param_typed_carrier && inner_fn_b && inner_fn_b->type.kind == TY_FN) {
                     const Type *ft = &inner_fn_b->type;
                     bool has_float = (kind_is_non_int_register_class(ft->as.fn.result_kind) ||
@@ -5570,7 +5570,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * sink selects __tur_poly_to_fat<N>: the carrier's slot 1
                      * holds the method's real N-ary thunk (make_poly_wrapper), so
                      * every argument is forwarded.  (See
-                     * docs/reported/poly-to-fat-drops-args-beyond-first-multiarg-method.md.) */
+                     * docs/archive/history/poly-to-fat-drops-args-beyond-first-multiarg-method.md.) */
                     const Type *eft = (fn_type.as.fn.arg_full_types &&
                                        fn_arg_idx_fat < fn_type.as.fn.arity)
                         ? fn_type.as.fn.arg_full_types[fn_arg_idx_fat] : NULL;
@@ -5712,7 +5712,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * here means the borrow is legal, so roll back the consumption: the
          * single-consumption obligation is preserved for a later consuming op
          * (fs/tmpfile-free, mutex-free, ...).  This is the call-site half of
-         * the borrow form -- see docs/reported/stdlib-linear-handle-borrows.md. */
+         * the borrow form -- see docs/archive/history/stdlib-linear-handle-borrows.md. */
         if (args[i]->kind == EX_VAR && fn_type.kind == TY_FN) {
             uint32_t fn_borrow_idx = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_borrow_idx < fn_type.as.fn.arity &&
@@ -5949,7 +5949,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * reinterpret cannot carry a composite anyway -- type_size_bytes is 0
          * for TY_APP/struct/ADT, so call_wrap_reinterpret would no-op and the
          * collapse to int would be pure loss.  See
-         * docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md
+         * docs/archive/history/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md
          *
          * vec-get-existential-element-erased-to-int: an existential (or its
          * dual forall) is the same shape of carrier-ABI structural type -- a
@@ -5996,7 +5996,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * elaborated body, so the clone cannot recover their float register class --
      * a hard error is correct, not a silent miscompile.  Generalizing this
      * (per-spec re-elaboration of the inner body) is the remaining Stage E work;
-     * see docs/reported/poly-closure-inner-dispatch-result-erased.md. */
+     * see docs/archive/history/poly-closure-inner-dispatch-result-erased.md. */
     /* poly-closure-inner-dispatch-result-erased: fire E0705 only when the
      * dispatching inner body has untyped fat-calls that Direction 3 cannot
      * handle.  When all dispatches are through typed (fn [..] R) bindings with
@@ -6834,7 +6834,7 @@ static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
  * captures the dict.  Beta-reduction is semantically neutral here (single
  * application, each argument bound once) and idempotent (the rewritten EX_LET no
  * longer matches).  See
- * docs/reported/forall-dict-direct-applied-nested-lambda-dispatch.md. */
+ * docs/archive/history/forall-dict-direct-applied-nested-lambda-dispatch.md. */
 typedef struct { const Binding *v; FnDef *fd; } LiftAlias;
 
 /* Resolve a callee binding to the captureless lifted-lambda FnDef it names --
@@ -7432,7 +7432,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * it through the int64 carrier is a silent register-class miscompile.  Reject
      * it with a hard error rather than miscompile -- a typed `:fn` signature
      * (the F5 phase of the plan) is the proper fix.  See
-     * docs/reported/fn-first-class-float-carrier-gap.md. */
+     * docs/archive/history/fn-first-class-float-carrier-gap.md. */
     if (fn_binding->poly_type == NULL) {
         for (uint32_t i = 0; i < n_args; i++) {
             if (kind_is_non_int_register_class(args[i]->type.kind) ||
@@ -7750,7 +7750,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * (The legacy anonymous TY_STRUCT{def=NULL} placeholder no longer
                  * exists; a bare-tyvar result is always the named TY_TYVAR from
                  * Direction A step 2a --
-                 * see docs/reported/open-binder-skolems-not-distinguishable.md.) */
+                 * see docs/archive/history/open-binder-skolems-not-distinguishable.md.) */
                 result_kind = (n_args > 0 && args[0]) ? args[0]->type.kind : TY_INT;
                 /* Slice 3 (constrained-hkt-forall codegen): when the result
                  * tyvar is instantiated to a by-value aggregate (e.g. `(Option

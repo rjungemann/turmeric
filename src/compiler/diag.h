@@ -114,13 +114,13 @@ typedef enum DiagCode {
     TUR_W0038_LINT_PANIC_SITE,
     /* A free top-level defn shares its name with a user-defined typeclass
      * method, silently shadowing the method at every bare call site.
-     * See docs/reported/typeclass-methods-share-value-namespace-with-defns.md. */
+     * See docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md. */
     TUR_W0039_METHOD_DEFN_CLASH,
     /* Eval-mode unknown call head deferred to runtime-dispatch -- the name is
      * not bound at elaboration time and not in the typed-native registry, so
      * it will fail at runtime if no native is registered for it before the
      * call runs.  Likely a typo.  See
-     * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
+     * docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md. */
     TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
     /* arbitrary-fn-arity Phase 6: a defn/fn declares more positional parameters
      * than the historical soft ceiling of 16.  Not an error -- the mechanical
@@ -132,7 +132,7 @@ typedef enum DiagCode {
      * by symbol identity *before* any binding or macro lookup, so the
      * definition is accepted but every bare `(name ...)` call site elaborates
      * as the special form and the definition is unreachable by its bare name.
-     * See docs/archive/defn-shadows-return-special-form.md. */
+     * See docs/archive/history/defn-shadows-return-special-form.md. */
     TUR_W0042_SHADOWS_SPECIAL_FORM,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */

@@ -768,7 +768,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             for (uint8_t i = 0; i < n_type_params; i++) {
                 if (type_params[i] && type_params[i] == sym) {
                     /* Direction A step 2a of
-                     * docs/reported/open-binder-skolems-not-distinguishable.md:
+                     * docs/archive/history/open-binder-skolems-not-distinguishable.md:
                      * return a NAMED TY_TYVAR so binder identity survives down
                      * to the call-site unifier.  Previously this returned an
                      * anonymous TY_STRUCT{def=NULL}, which made every type-param
@@ -2916,7 +2916,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * the `A` in stdlib ascriptions such as `(:: t1 (Cons A))` in the `Eq Cons`
      * instance body -- the `(Eq A)` constraint stops behaving as a dictionary
      * tyvar and `.eq?` dispatch goes ambiguous.  See
-     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
+     * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
     const Symbol **scope_tyvars = NULL;
     uint8_t n_scope_tyvars = e->n_sig_tyvars;
     if (n_scope_tyvars > 0) {
@@ -3003,7 +3003,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * alone; only a bare, unboxed TY_FN is shimmed via EX_FN_TO_FAT.  Without
      * this, `(:: (fn [s] ...) :Goal)` on a captureless lambda stores a raw code
      * address that a later slot-0 fat-dispatch reads as a thunk -> SIGSEGV
-     * (docs/reported/logic-port-language-gaps.md GAP 1). */
+     * (docs/archive/history/logic-port-language-gaps.md GAP 1). */
     if ((ascribed->kind == TY_PTR_VOID || ascribe_type_is_opaque_handle(ascribed)) &&
         inner->type.kind == TY_FN && !inner->type.as.fn.boxed) {
         uint32_t box_ar = inner->type.as.fn.arity;
@@ -3071,7 +3071,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      *
      *   anything -> OWNING is rejected EXCEPT for the literal 0.  That one form
      *   is a null handle -- the only way to write an empty rc without inline-C
-     *   (see docs/reported/inline-c-rc-return-misses-carrier-bridge.md), and
+     *   (see docs/archive/inline-c-rc-return-misses-carrier-bridge.md), and
      *   what stdlib/rcchain.tur's `rcchain-nil` uses.  Any other integer
      *   fabricates a control-block pointer out of arithmetic. */
     {
@@ -3130,7 +3130,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * of the same signature, and boxed-TY_FN is interchangeable with
      * TY_PTR_VOID, so this is invisible to ordinary type-checking; it only
      * flips the ^fat arg classifier from shim to pass-through.  See
-     * docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
+     * docs/archive/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
     if (ascribed->kind == TY_FN &&
         (src_kind == TY_INT || src_kind == TY_PTR_VOID ||
          ascribe_type_is_opaque_handle(&inner->type) ||
@@ -3248,7 +3248,7 @@ Expr *elab_pack(Elab *e, const Form *call) {
          * EX_EXISTS_OPEN in emit_expr.c).  Witness-dispatch on a by-value-struct
          * receiver is the remaining gap -- the dispatch site assumes the int64
          * carrier ABI; see
-         * docs/reported/constrained-exists-open-dispatch-byval-struct-receiver.md. */
+         * docs/archive/history/constrained-exists-open-dispatch-byval-struct-receiver.md. */
     }
 
     /* F1-2-3: move-at-pack for RC-payload existentials.  If the packed
@@ -3355,7 +3355,7 @@ static bool ex1d_tail_leaks(ExistsEscapeCtx *ctx, const Expr *e) {
 }
 
 /* Direction A step 2b of
- * docs/reported/open-binder-skolems-not-distinguishable.md: walk a Type and
+ * docs/archive/history/open-binder-skolems-not-distinguishable.md: walk a Type and
  * rename every TY_TYVAR whose name matches `from` (interned-pointer compare,
  * with strcmp fallback) to `to`.  Allocates new Type nodes for the renamed
  * branches; leaves the rest of the tree intact.  Used by elab_open to mint
@@ -3518,7 +3518,7 @@ Expr *elab_open(Elab *e, const Form *call) {
                  * applied form so signatures declared as `(Op n)` can
                  * unify their `n` against the open's bound binder -- this
                  * is the SizedBuf path and the eventual sized-world `(World n)`
-                 * path.  See docs/reported/pack-open-phantom-opaque-body-type-collapses.md. */
+                 * path.  See docs/archive/history/pack-open-phantom-opaque-body-type-collapses.md. */
                 Type head = ex2_peel_phantom_app(T);
                 /* structdef-retirement slice 5: a `defopaque` head is now an
                  * opaque TY_ADT (it was a real-def TY_STRUCT before).  Keep the

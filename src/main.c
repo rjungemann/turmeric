@@ -768,7 +768,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     /* Phase 7: prepend stdlib autoload forms.  Shared with compile_to_h via
      * prepend_stdlib_forms so project-mode builds see the same stdlib API
      * (Cons / Option / Result / typeclass stubs / etc.) that single-file
-     * builds do.  See docs/archive/project-mode-no-stdlib-autoload.md. */
+     * builds do.  See docs/archive/history/project-mode-no-stdlib-autoload.md. */
     uint8_t file_id = 1;
     uint32_t total_stdlib_forms = prepend_stdlib_forms(&arena, &st, path,
                                                        &forms, &nforms,
@@ -848,7 +848,7 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
      * preloaded here in the same order, so `(Cons A)` / `tnil?` /
      * `Option`/`Result` etc. are visible inside spice defmodule bodies
      * built via `tur build .` without explicit imports.  See
-     * docs/archive/project-mode-no-stdlib-autoload.md.
+     * docs/archive/history/project-mode-no-stdlib-autoload.md.
      *
      * Codegen note: bindings created during this prelude window are
      * marked `is_from_stdlib`. emit_implementation skips non-exported
@@ -1621,7 +1621,7 @@ static void hoist_tur_include_directives(Buf *csrc) {
      * any feature-test `#define` ahead of the include it conditions), then all
      * code payloads (likewise in source order).  Relative order within each
      * bucket is preserved; only the two kinds are separated.
-     * See docs/reported/hoisted-inline-c-precedes-includes.md. */
+     * See docs/archive/history/hoisted-inline-c-precedes-includes.md. */
     Buf hdr, code;
     buf_init(&hdr);
     buf_init(&code);
@@ -3004,7 +3004,7 @@ static char **collect_project_src_files(const char *root, int *n_out) {
  *   - VisitedRoots below dedupes the WALK, so a cycle terminates.
  * This comment used to claim the first also did the second; it does not, and
  * a manifest cycle recursed until something else gave out.  See
- * docs/archive/spice-cycle-include-path-blowup.md. */
+ * docs/archive/history/spice-cycle-include-path-blowup.md. */
 static bool include_dir_seen(const char **dirs, int n, const char *cand) {
     for (int i = 0; i < n; i++)
         if (dirs[i] && strcmp(dirs[i], cand) == 0) return true;
@@ -4197,7 +4197,7 @@ static int cmd_run(int argc, char **argv) {
     /* CMake dependency handling: generate and build if cmake-deps present.
      * Walk the enclosing manifest's :spices block transitively so a
      * workspace sibling's :cmake-deps participate in this TU's build --
-     * see docs/upcoming/transitive-cmake-deps-plan.md. */
+     * see docs/archive/history/transitive-cmake-deps-plan.md. */
     PkgCmakeDep *closure_deps = NULL;
     int          n_closure_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(root, &m,
@@ -5231,7 +5231,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     /* GCC 14 / Apple clang 15+ promoted -Wincompatible-pointer-types and
      * -Wint-conversion from warnings to hard errors.  The generated C used to
      * trip both -- carrier<->concrete representation straddles (void*<->int64_t)
-     * -- tracked under docs/archive/codegen-gcc14-permerrors.md and
+     * -- tracked under docs/archive/history/codegen-gcc14-permerrors.md and
      * docs/archive/macos-clang-int-conversion-hard-error.md.  Every straddle is
      * now bridged at emit time (String returns, cloneable-frame call args,
      * cps->direct spawn/void* params, closure-env void* fields, and __ps_N
@@ -5255,7 +5255,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * output or a plain `tests/run.sh`: neither exercises the hoist path, and
      * both reported a false all-clear on exactly this question.  Use
      * tools/jit-spike/sweep-turjit.sh.  See findings 21.2/21.3 and
-     * docs/archive/hoisted-inline-c-precedes-includes.md. */
+     * docs/archive/history/hoisted-inline-c-precedes-includes.md. */
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -5399,7 +5399,7 @@ static int cmd_build_project(const char *root_in, const char *out_path,
 
     /* Transitive cmake-deps autobuild.  Walks the manifest's `:spices`
      * closure (but NOT every workspace sibling -- see
-     * docs/archive/tur-build-cmake-deps-workspace-overreach.md) and gen +
+     * docs/archive/history/tur-build-cmake-deps-workspace-overreach.md) and gen +
      * builds the union of their `:cmake-deps` into `<root>/cmake/`, mirroring
      * what cmd_run does for `tur run`.  Without this, a spice that imports
      * the json modules (which pull in yyjson) generates headers fine but
@@ -6781,8 +6781,8 @@ static int cmd_eval_h(const char *path, bool use_color,
      * site).  The inline-C bodies of these modules (map/set ops, contract
      * checks, mutmap, ...) are overridden by the native_* shims registered below
      * (wk_register_stdlib_natives et al.), which is why this preload runs BEFORE
-     * that registration.  See docs/reported/turi-map-set-hamt-interpreter-gap.md
-     * and docs/reported/web-repl-missing-stdlib-preload.md. */
+     * that registration.  See docs/archive/history/turi-map-set-hamt-interpreter-gap.md
+     * and docs/archive/history/web-repl-missing-stdlib-preload.md. */
     turi_env_preload_collections(env, resolve_stdlib_root());
     /* JR0/RD (turi-json-schema-interpreter-plan, Layers 1-2): auto-load
      * json.tur, then schema.tur on top of it, so the #json(...) reader-macro
@@ -9655,7 +9655,7 @@ int main(int argc, char **argv) {
     /* Debugger Phase 2: `tur debug <file.tur> [args...]` -- run a file through
      * the tree-walking interpreter under the interactive debugger.  Drops into
      * a command REPL at program entry; commands are read from stdin (so a
-     * script can drive it).  See docs/upcoming/debugger-plan.md (Phase 2). */
+     * script can drive it).  See docs/archive/history/debugger-plan.md (Phase 2). */
     if (strcmp(cmd, "debug") == 0) {
         if (argc < 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
             fprintf(stderr,

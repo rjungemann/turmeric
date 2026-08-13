@@ -10,7 +10,7 @@
  *
  * Why this exists: the old per-site loops collapsed *every* non-id char to a
  * single `_`, so `>>>` and `<<<` both mangled to `___` -- a C redefinition.
- * See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (section A3).
+ * See docs/archive/history/stdlib-type-erasure-cleanup-plan.md (section A3).
  *
  * Scheme (injective, self-delimiting):
  *   - [A-Za-z0-9]       -> itself
@@ -107,7 +107,7 @@ int tur_name_collides_libc(const char *name, size_t len);
  * rest of the translation unit, so the user sees hundreds of cc errors with no
  * relation to their source.  Callers prefix a hit with TUR_NAME_GUARD_PREFIX,
  * exactly as they do for tur_name_collides_libc.  See
- * docs/archive/c-keyword-function-names-not-mangled.md. */
+ * docs/archive/history/c-keyword-function-names-not-mangled.md. */
 int tur_name_is_c_keyword(const char *name, size_t len);
 
 /* Prefix applied to a source name whose C spelling would collide with something

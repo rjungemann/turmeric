@@ -3914,9 +3914,10 @@ static void wk_register_bytes_natives(TuriEnv *env) {
  * R1 (turi-interpret-flip-residual-plan): taskgroup.tur TaskGroupBlock shims.
  *
  * Replica of taskgroup.tur's TaskGroupBlock.  We include cancel_reason in the
- * allocation (the canonical documented layout) so cancel-with-reason is safe --
- * note the compiled task-group-new omits it, a latent OOB write tracked in
- * docs/reported/taskgroup-block-cancel-reason-layout-overflow.md.
+ * allocation (the canonical documented layout) so cancel-with-reason is safe;
+ * taskgroup.tur's own `task-group-new` inline-C declares and allocates the same
+ * trailing field, so the two layouts agree -- keep them in step when either
+ * side gains a field.
  *
  * The cancel native does NOT touch the per-fiber thread-local cancelled flag
  * (tur_fiber_set_cancelled) that the inline-C body sets: under --interpret no

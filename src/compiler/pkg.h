@@ -93,7 +93,7 @@ typedef struct PkgManifest {
     /* `:tur-version "<range>"` -- which COMPILER versions this spice is valid
      * under, as opposed to `version` above, which is the spice's own version.
      * NULL when unconstrained (the overwhelming majority today).  See
-     * docs/reported/no-compiler-version-constraint-in-manifest.md. */
+     * docs/archive/history/no-compiler-version-constraint-in-manifest.md. */
     char        *tur_version;
     char        *description;
     char        *license;
@@ -357,7 +357,7 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * manifest's own `:spices` closure contributes -- the narrower semantic
  * `tur build .` wants so it doesn't accidentally try to configure cmake-deps
  * from unrelated workspace members.  See
- * docs/archive/tur-build-cmake-deps-workspace-overreach.md. */
+ * docs/archive/history/tur-build-cmake-deps-workspace-overreach.md. */
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,
                                        bool               include_workspace_siblings,

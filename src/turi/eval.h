@@ -253,7 +253,7 @@ void turi_env_register_native(TuriEnv *env, const char *name,
  * elaborator, which has no env at the eval-mode call site), so a later
  * registration of the same name -- on any env -- replaces the recorded type.
  * Pass TUR_NRT_INT for the historical untyped behavior.  See
- * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+ * docs/archive/history/untyped-native-registration-blocks-curated-facades.md. */
 void turi_env_register_native_typed(TuriEnv *env, const char *name,
                                     TuriNativeFn fn, void *ud,
                                     TurNativeRetType ret);
@@ -387,7 +387,7 @@ TuriValue turi_future_poll_val(TuriFuture *f);
 TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms);
 
 /* DEPR-D0: turi_native_throw deleted with the (throw)/(try)/(catch) front
- * end; no callers remain.  See docs/upcoming/throw-deprecation-plan.md. */
+ * end; no callers remain.  See docs/archive/history/throw-deprecation-plan.md. */
 
 /* Fire all remaining top-level/module-level deferred actions.
  * Call after turi_call(main) to honour module-level (defer ...) forms. */

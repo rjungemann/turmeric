@@ -233,7 +233,7 @@ bool g_opt_cps_tramp_resume = true;
  * lingering --enable is a TUR-W0063 no-op.  The bit stays defined and true so
  * the admission predicates that read it stay always-on (mirrors g_gadt_enabled /
  * g_opt_cps_tramp_resume).  See
- * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+ * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
 bool g_opt_owning_cloneable_capture = true;
 
 /* CG5 (cycle-gc experiment): admit `(gc-auto!)` -- automatic, allocation-driven
@@ -247,7 +247,7 @@ bool g_opt_jit = false;
 
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI is
  * unconditional; the enable bit and its codegen gates are gone.  See
- * docs/upcoming/closure-drop-glue-plan.md. */
+ * docs/archive/closure-drop-glue-plan.md. */
 
 /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}` is
  * unconditional; the g_opt_refined enable bit and its elaboration gates are

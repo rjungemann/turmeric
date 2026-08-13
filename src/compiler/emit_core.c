@@ -52,7 +52,7 @@ static void flatten_emit(const Expr *e, const Expr **flat, uint32_t *k) {
  * expansion and have both top-level forms land in the items array as
  * siblings. Without it, the do flows through emit_stmt() and aborts with
  * "EX_FN_DEF in stmt position" the moment a defn appears inside. See
- * docs/reported/macro-cannot-emit-multiple-top-level-forms.md.
+ * docs/archive/history/macro-cannot-emit-multiple-top-level-forms.md.
  *
  * The returned array is malloc'd and must be freed by the caller. */
 const Expr **flatten_program_items(const Expr *program, uint32_t *out_n) {
@@ -161,7 +161,7 @@ void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
             "  type kind   : %d (a recovery chokepoint returned a non-concrete "
             "type)\n"
             "This is a 'forgot to route' routing hole "
-            "(docs/archive/carrier-crossing-recovery-routing-plan.md, R3).\n"
+            "(docs/archive/history/carrier-crossing-recovery-routing-plan.md, R3).\n"
             "Set TUR_ABI_NO_ROUTE_ICE=1 to downgrade to a warning while fixing.\n",
             site, spec_name, (int)recovered->kind);
     abort();
@@ -612,7 +612,7 @@ bool expr_subtree_has_inline_c(const Expr *e) {
 }
 
 /* Fat-closure-env scoped-free escape analysis
- * (docs/reported/fat-closure-env-leak.md).
+ * (docs/archive/history/fat-closure-env-leak.md).
  *
  * Returns true if the binding `b` -- which holds a freshly-constructed fat
  * closure value (the heap env `malloc`'d by the EX_CLOSURE emitter) -- is used
@@ -4243,7 +4243,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
             fprintf(stderr,
                 "[m3-audit] WARNING non-essential carrier crossing type=%s "
                 "(expected floor is Option/Result/heap/inline-scalar only; see "
-                "docs/upcoming/v2/m7-phase5-carrier-bridge-audit.md)\n",
+                "docs/archive/m7-phase5-carrier-bridge-audit.md)\n",
                 type_name(concrete_ty));
         }
     }

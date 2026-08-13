@@ -287,7 +287,7 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * `arrow` (`->`), `handler`, the borrow family, and the value-carrying
          * session heads `Session`/`project`/`Role` (EF-4) DO lower and are handled
          * below.  Tracked in
-         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
+         * docs/archive/history/structdef-exotic-field-forms-plan.md. */
         if (head == e->sym_forall || head == e->sym_forall_u ||
             head == e->sym_session_Send ||
             head == e->sym_session_Recv || head == e->sym_session_Choose ||
@@ -301,7 +301,7 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
                       "is only meaningful nested inside `(Session ...)`; `Global` "
                       "is a compile-time-only choreography type; `forall` is the "
                       "EF-3 gate).  See "
-                      "docs/upcoming/structdef-exotic-field-forms-plan.md",
+                      "docs/archive/history/structdef-exotic-field-forms-plan.md",
                       (int)head->len, head->name);
             return NULL;
         }
@@ -681,7 +681,7 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
          * legacy StructDef path.  Returning true here is what makes the residual
          * StructDef producer path unreachable (the deletion precondition); the
          * eventual lowering of those forms is tracked in
-         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
+         * docs/archive/history/structdef-exotic-field-forms-plan.md. */
         return true;
     }
     if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
@@ -1016,7 +1016,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
      *     (defstruct Box [A] (val A))           -> (defdata Box [A] (Box [val : A]))
      * and dispatch to elab_defdata, reusing all the AdtDef machinery.  Anything
      * the gate rejects (:heap / :linear outer structs) still elaborates as a
-     * struct.  See docs/upcoming/defstruct-as-defadt-plan.md. */
+     * struct.  See docs/archive/defstruct-as-defadt-plan.md. */
     if (defstruct_lowers_to_adt(e, call)) {
         /* Redefinition guard -- must run BEFORE dispatching into elab_defdata.
          * A `defstruct` that redefines a fully-defined name (commonly an
@@ -2771,7 +2771,7 @@ ctor_parse_error:
      * scope. The slots `[ci, n_ctors)` are still NULL, but `def->n_ctors`
      * advertises the full declared count, so a later `(match ...)` on this
      * type would dereference a NULL CtorDef and crash (see
-     * docs/reported/defgadt-malformed-pattern-segfault.md). Truncate the
+     * docs/archive/history/defgadt-malformed-pattern-segfault.md). Truncate the
      * count to the slots we actually filled. Compilation has already failed
      * (a diagnostic was emitted), so this only prevents the crash. */
     def->n_ctors = ci;

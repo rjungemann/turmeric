@@ -2,7 +2,7 @@
  *
  * The LANG_LAYERS[] table below is the single source of truth for which
  * space-separated `#lang` trailing tokens are legal layers.  See
- * lang_layers.h for the model, docs/upcoming/lang-layers-plan.md for the
+ * lang_layers.h for the model, docs/archive/lang-layers-plan.md for the
  * design, and the "`#lang` Layers -- curated only" section of CLAUDE.md for
  * the anti-proliferation process.
  *

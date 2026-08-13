@@ -1119,7 +1119,7 @@ static bool rt_form_borrows_name(const Elab *e, const Form *f,
  * under-declares), so the rule stands.  But the by-value case is a silent
  * no-op in the compiled backend and a write-through in the turi interpreter,
  * which is a live divergence -- see
- * docs/reported/struct-param-mutation-backend-divergence.md.  If that is
+ * docs/archive/struct-param-mutation-backend-divergence.md.  If that is
  * resolved by rejecting the no-op write, this branch narrows to the rc/heap
  * receivers and stops being an over-approximation at all. */
 #define WF_SCAN_MAX_DEPTH 24   /* matches RT_SET_SCAN_MAX_DEPTH; same tradeoff */
@@ -2617,7 +2617,7 @@ void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
  * different pointer than the crossing node reachable in `cs->caller_body` (the
  * source defn body), and a pointer-only match reports 0 occurrences -- the guard
  * on the path is then dropped and a perfectly good `(if (alive? w e) ...)` no
- * longer discharges its read (see docs/reported/frozen-macro-breaks-refinement-
+ * longer discharges its read (see docs/archive/history/frozen-macro-breaks-refinement-
  * guard-discharge.md).
  *
  * The copy preserves the source SPAN, so we fall back to matching a real
@@ -2834,7 +2834,7 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
  * checked without the branch that guards it.  A zero-parameter caller showed
  * it plainly: `main`'s last form is the literal `0`, and the walk searched `0`
  * for the call.  See
- * docs/archive/refine-callsite-path-conds-lost-multi-form-body.md.
+ * docs/archive/history/refine-callsite-path-conds-lost-multi-form-body.md.
  *
  * A single-form body is passed through unwrapped, so the common case allocates
  * nothing and the resulting tree is byte-identical to before.  A multi-form
@@ -3105,7 +3105,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
  * passes. Internal self-calls below go through this wrapper too, so a row is
  * rejected in every value-type sub-position (e.g. an arrow argument). The
  * innermost offender emits once and returns NULL, which propagates without a
- * second diagnostic. See docs/reported/row-type-in-value-position-loses-elements.md. */
+ * second diagnostic. See docs/archive/history/row-type-in-value-position-loses-elements.md. */
 Type *fn_type_from_form(Elab *e, const Form *form,
                         const Symbol **type_params,
                         Kind *type_param_kinds,
@@ -3607,7 +3607,7 @@ static uint8_t collect_implicit_fn_type_params(const Form *params_f, const Form 
 }
 
 /* bare-fat-param-non-int-result inference
- * (docs/upcoming/bare-fat-result-type-inference-plan.md, Phase A):
+ * (docs/archive/history/bare-fat-result-type-inference-plan.md, Phase A):
  * A bare `^fat g` parameter (TY_PTR_VOID + is_fat, no fn-type annotation) has
  * no recorded result type, so a direct call (g x) is elaborated with an
  * int64_t result (elab_call.c, the bare-^fat dispatch path).  When such a call
@@ -4156,7 +4156,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, name_f->span, "defn name must be a symbol");
         return NULL;
     }
-    /* TUR-W0042 (docs/archive/defn-shadows-return-special-form.md): defining a
+    /* TUR-W0042 (docs/archive/history/defn-shadows-return-special-form.md): defining a
      * function whose name is a reserved special form (`return`, `match`, ...)
      * is accepted and bound, but every bare call site dispatches to the special
      * form instead.  Warn HERE, at the definition, rather than leaving the
@@ -4816,7 +4816,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                  * (see elab_poly_call + emit_expr.c is_poly_call).  Fat (^fat)
                  * and substructural params keep their nominal TY_FN type -- they
                  * have their own calling conventions/discipline checks.
-                 * See docs/reported/fn-first-class-float-carrier-gap.md. */
+                 * See docs/archive/history/fn-first-class-float-carrier-gap.md. */
                 bool plain = !pb->is_fat && !pb->is_borrow && !pb->is_unique &&
                              !pb->is_mut && !pb->is_linear && !pb->is_affine &&
                              !pb->is_relevant;
@@ -6345,7 +6345,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * non-int register-class return, infer the closure's result type from the
      * declared return and re-stamp the tail call(s) so codegen reads the right
      * register.  Tail-precise; sound under an honest signature (see
-     * docs/upcoming/bare-fat-result-type-inference-plan.md). */
+     * docs/archive/history/bare-fat-result-type-inference-plan.md). */
     if (kind_is_non_int_register_class(return_kind)) {
         if (retype_bare_fat_tail_calls(body, return_kind) &&
             body->type.kind == TY_INT) {
@@ -6780,7 +6780,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * type identity for struct/opaque/ADT args. For a non-poly param we fall
      * back to the param binding's own full type. &params[i]->type is
      * arena-stable (each binding is arena-allocated), so the pointer outlives
-     * the call. See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+     * the call. See docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
     {
         Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
         for (uint32_t i = 0; i < n_params; i++)
@@ -8514,7 +8514,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
          * :ptr<void> closure sink unchanged; the only new behavior is that a
          * direct call on a value statically typed boxed TY_FN dispatches
          * through the fat protocol for all arities (emit_expr.c).  See
-         * docs/upcoming/closure-first-class-type-plan.md. */
+         * docs/archive/history/closure-first-class-type-plan.md. */
         TypeKind *clo_arg_kinds = (TypeKind *)arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(TypeKind));
         for (uint32_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
         Type clo_ty = type_fn(clo_arg_kinds, n_params, return_kind);

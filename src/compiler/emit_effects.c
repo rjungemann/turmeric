@@ -507,7 +507,7 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Env struct: captures the dispatch context + fiber, plus a snapshot of
          * the fiber's suspended-at-perform stack image so each resume re-runs an
          * INDEPENDENT copy of the continuation (true multishot).  See
-         * docs/reported/turi-effect-multishot-degenerate-resume.md. */
+         * docs/archive/history/turi-effect-multishot-degenerate-resume.md. */
         buf_printf(hbuf, "struct __ms_env_%d_%d { void *__ctx; int64_t __k_int; "
                          "FiberBlock *__fiber; char *__stack_image; size_t __image_size; "
                          "ucontext_t __saved_ctx; };\n",

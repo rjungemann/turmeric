@@ -541,7 +541,7 @@ Expr *elab_form(Elab *e, Form *f) {
              * `:foo`. This lets DSL helpers in defns construct AST
              * nodes without TUR-E0003 chasing the inner symbol against
              * scope. See
-             * docs/reported/defgodot-script-macro-vec-quote-semantics.md. */
+             * docs/archive/history/defgodot-script-macro-vec-quote-semantics.md. */
             if (quoted->tag == F_SYM) {
                 Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, f->span);
                 out->as.sym_lit_.sym = quoted->as.sym;
@@ -725,7 +725,7 @@ typedef struct {
      * this, the post-load stdlib boundary stays at the stale input count, and
      * the last auto-loaded defmodule's members fall past it (so the
      * stdlib macro-promotion sweep never reaches them).  See
-     * docs/reported/autoload-defmodule-macro-not-promoted.md. */
+     * docs/archive/history/autoload-defmodule-macro-not-promoted.md. */
     bool           track_boundary;
     uint32_t       boundary_in;
     uint32_t       boundary_out;
@@ -801,7 +801,7 @@ static void load_expand_emit(LoadExpandCtx *lx, Arena *arena, Form *f) {
  * when a sibling file later loads typeclass.tur explicitly. (The old
  * multi-pass fixpoint deferred transitive loads a pass behind sibling
  * explicit loads, letting the later one claim the path and relocate the
- * expansion; see docs/reported/load-not-idempotent-typeclass.md.) */
+ * expansion; see docs/archive/history/load-not-idempotent-typeclass.md.) */
 static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
                               SymbolTable *st, Form *const *forms, uint32_t nforms) {
     for (uint32_t i = 0; i < nforms; i++) {
@@ -1292,7 +1292,7 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                          * recursion) types the call as `int`, and a `match`
                                          * arm returning the ADT then reports a spurious
                                          * "arm types incompatible -- expected int, got adt".
-                                         * (docs/reported/logic-port-language-gaps.md GAP 2.) */
+                                         * (docs/archive/history/logic-port-language-gaps.md GAP 2.) */
                                         for (uint32_t ai = 0; ai < ep->n_adt_defs; ai++) {
                                             if (strcmp(ep->adt_defs[ai]->name, kw->name) == 0) {
                                                 Type adt_ty = type_adt(ep->adt_defs[ai]);
@@ -1382,7 +1382,7 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                              * params vector.  fwd_decl_scan_params skips
                              * `^`-prefixed markers (^fat/^mut/...) so the
                              * forward-declared arity is not over-stated (see
-                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md). */
+                             * docs/archive/history/pap-defmodule-fat-fn-too-many-args.md). */
                             TypeKind *arg_kinds = NULL;
                             uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
                                 ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
@@ -1676,7 +1676,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * emitted into a synthesized `int main()` that never reaches the CPS
      * classifier, so the top-level handle stays on the fiber, base_taints its
      * effect, and every performer of that effect is forced onto the fiber
-     * (SIG-TAINT).  See docs/reported/cps-toplevel-synthesized-main-bypasses-dk.md.
+     * (SIG-TAINT).  See docs/archive/cps-toplevel-synthesized-main-bypasses-dk.md.
      *
      * CONSERVATIVE + macro-safe: only fires when there is NO user `main` and
      * every user-region top-level form is cleanly classifiable WITHOUT expanding
@@ -2091,7 +2091,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      *
      * A typeclass method and a free top-level `defn` share the same value
      * namespace.  The two now coexist (fix (1) of
-     * docs/reported/typeclass-methods-share-value-namespace-with-defns.md): a
+     * docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md): a
      * bare `(name x ...)` dispatches to the matching instance when the
      * receiver's static type selects one, and falls back to the free defn
      * otherwise (see the `prefer_method_dispatch` gate in elab_call.c).  The

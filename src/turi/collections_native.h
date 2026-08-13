@@ -10,7 +10,7 @@
  * `tur` CLI (main.c) into tur_core so that every consumer of libturi -- the
  * `tur` binary, turi_eval C-API embedders, the WASM REPL, and the interpreter
  * test harnesses -- resolves the same native overrides.  See
- * docs/upcoming/turi-interp-collections-libturi-plan.md.
+ * docs/archive/history/turi-interp-collections-libturi-plan.md.
  * ---------------------------------------------------------------------- */
 
 #include "eval.h"   /* TuriEnv, TuriValue, turi_env_register_native */

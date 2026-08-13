@@ -462,7 +462,7 @@ static const char *cps_binding_c_symbol(const Binding *b) {
  * fallback resolves a real edge rather than widening anything: the callee's own
  * seed still colors it if it uses control, and the fixpoint still propagates
  * that to callers.  See
- * docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md. */
+ * docs/archive/history/cps-colored-noncapture-named-let-recurses-through-entry.md. */
 static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
     if (!b) return -1;
     for (uint32_t i = 0; i < n; i++)
@@ -1228,7 +1228,7 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
              * dropping abi_bindings: any call inside a CPS-transformed function
              * lost its by-value specialization (carrier base called with a
              * by-value struct -> cc type error).  See
-             * docs/reported/m5-eq-vec-byval-rewrite-drops-sibling-specs.md. */
+             * docs/archive/history/m5-eq-vec-byval-rewrite-drops-sibling-specs.md. */
             out->as.call_ = e->as.call_;
             out->as.call_.fn_expr = e->as.call_.fn_expr
                 ? cps_mark_expr(a, e->as.call_.fn_expr) : NULL;
