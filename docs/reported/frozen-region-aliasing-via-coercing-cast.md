@@ -115,3 +115,35 @@ has shipped on it and no legitimate in-module pattern has needed an escape").
 The remaining half is the "moduleless top level" limitation in the plan's
 semantics (2), which must be closed or explicitly accepted in the guide before
 the row can be deleted.
+
+## Documentation blocker closed (2026-08-13)
+
+This report has no defect left in it. The hole was closed by `:sealed`
+(2026-07-29) and the ECS spice shipped on it; the report has stayed open only
+on the plan's second graduation criterion -- "the 'moduleless top level'
+limitation in semantics (2) is either closed or explicitly accepted in the
+guide."
+
+That is now closed, by **accepting** it rather than fixing it.
+[opaques-guide.md](../guides/opaques-guide.md#sealing-an-opaque-sealed) already
+mentioned the limitation but read as a known gap awaiting work; it now states
+the behavior as intended and says why. Separating two moduleless files would
+mean inventing a per-file notion of module that exists for this one check and
+nothing else, and a library with something worth sealing already lives in a
+`defmodule`. `sealed-opaque-plan.md`'s graduation checklist records the criterion
+as met.
+
+**Both graduation criteria are therefore satisfied**, and the only thing left is
+the release-time call -- graduate or shelve -- which belongs to a release cut,
+not to this report. One observation for whoever makes it: this graduation is
+unusually low-risk. With the experiment off, `:sealed` parses and imposes
+nothing, so making it unconditional reaches only code that already *wrote*
+`:sealed` -- today, the ECS spice that adopted it deliberately. It is not a
+change that touches programs which never opted in. The row's `expires_at` is
+`0.35.0` and the tree is at v0.33.2, so there is no deadline pressure either
+way; graduating early is routine.
+
+The severity stays low and the scope-of-claim paragraph above stands unchanged:
+`:sealed` is a compile-time discipline over the `::` surface, inline-C can still
+cast an `int64_t` to anything, and the `frozen` region remains a trust boundary
+rather than an adversarial guarantee.

@@ -141,8 +141,21 @@ Graduate (delete the row, behavior unconditional) when:
 
 - the ECS spice has shipped on it and no legitimate in-module pattern has
   needed an escape, and
-- the "moduleless top level" limitation in semantics (2) is either closed or
-  explicitly accepted in the guide.
+- ~~the "moduleless top level" limitation in semantics (2) is either closed or
+  explicitly accepted in the guide.~~ **DONE 2026-08-13** -- accepted, not
+  closed. [opaques-guide.md](../guides/opaques-guide.md#sealing-an-opaque-sealed)
+  now states it as the intended behavior rather than a known gap: separating
+  moduleless files would mean inventing a per-file notion of module that exists
+  only for this check, and a library with something worth sealing already lives
+  in a `defmodule`.
+
+**Both graduation criteria are therefore met**, and what remains is the
+release-time call itself -- graduate (delete the row, make `:sealed` always
+enforced) or shelve. Note this graduation is unusually low-risk for one: with
+the experiment off `:sealed` parses and imposes nothing, so making it
+unconditional affects only code that already *wrote* `:sealed`, which today is
+the ECS spice that adopted it deliberately. It is not a change that reaches
+programs which never opted in.
 
 Shelve if it turns out that real spices routinely need to unwrap a sealed
 handle across a module boundary -- that would mean the two-direction rule is

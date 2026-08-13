@@ -191,9 +191,15 @@ code" to "requires deliberate inline-C" -- which is a real improvement,
 and is the honest claim to make in your module's docs. If you document a
 sealed handle as an adversarial guarantee, you are overselling it.
 
-One limitation: a `defopaque` outside any `defmodule` belongs to the
-implicit top-level module, so two moduleless files are not separated by
-this check. Single-file programs are where sealing has the least to
+**Moduleless code is not separated, and that is the accepted behavior --
+not a gap waiting to be closed.** A `defopaque` outside any `defmodule`
+belongs to the implicit top-level module, so two moduleless files both
+count as "the declaring module" and `::` is allowed between them. This
+matches how the rest of the module system treats moduleless code, and
+changing it would mean inventing a per-file notion of module that exists
+only for this one check. If you want a handle sealed, put it in a
+`defmodule` -- which is where a library that has something worth sealing
+already lives. Single-file programs are where sealing has the least to
 offer anyway.
 
 ## Inline-C and the ABI
