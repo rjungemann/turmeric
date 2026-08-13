@@ -10,7 +10,7 @@
 ;; `.tag`, and never re-run -- so there is no duplication into a multi-shot env
 ;; and no double-drop.  Ownership matches the direct path: neither path drops the
 ;; by-value ADT local (the shared leak tracked in
-;; docs/reported/byvalue-struct-local-owning-field-leak.md), but there is no
+;; docs/archive/byvalue-struct-local-owning-field-leak.md), but there is no
 ;; double-free, and the *value* is exact.
 ;;
 ;; The capture also exercises the delegated-op free-var scan: `(.tag o)` inside

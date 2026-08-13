@@ -1,4 +1,4 @@
-; Regression: docs/reported/defstruct-byvalue-struct-field-stored-as-int-carrier.md
+; Regression: docs/archive/history/defstruct-byvalue-struct-field-stored-as-int-carrier.md
 ;
 ; A defstruct field typed by a bare (nullary) by-value struct must be stored
 ; INLINE as that aggregate, so that `make-struct` initializes the nested struct

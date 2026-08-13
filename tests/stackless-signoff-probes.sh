@@ -11,7 +11,7 @@
 #     native (non-trampolined) lowering exhausts the C stack for the
 #     catch-nesting shapes; the flat-stack trampoline is what lets them finish.
 #   - effect-rec is the Phase F4 probe from
-#     docs/upcoming/v1/compiled-first-class-continuations-plan.md: a nested
+#     docs/archive/compiled-first-class-continuations-plan.md: a nested
 #     effect handler around a deep perform/resume loop.  On the fiber-based
 #     effect runtime it already completes in bounded C stack (each handle body
 #     is its own fiber; resume re-enters it iteratively); it is the standing

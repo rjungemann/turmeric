@@ -2,7 +2,7 @@
 ;; defined LATER in the same instance, and two methods are mutually recursive.
 ;;
 ;; Regression for the "forward references" limitation noted in
-;; docs/reported/intra-instance-method-dispatch-unsupported.md.  definstance
+;; docs/archive/history/intra-instance-method-dispatch-unsupported.md.  definstance
 ;; elaboration is split into two passes: pass 1 wires up every method's FnDef
 ;; shell and method_impls slot, pass 2 elaborates the bodies.  A call to a
 ;; sibling defined later (or a mutually recursive pair) now resolves because

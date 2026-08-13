@@ -1,5 +1,5 @@
 ;; Regression fixture for the formerly-OPEN report
-;; docs/archive/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md.
+;; docs/archive/history/option-map-byvalue-result-into-carrier-consumer-let-inside-arg.md.
 ;;
 ;; After PR #421 retyped `option-map` to a pure-Turmeric by-value body,
 ;; passing its `Option__int` result into the carrier-`int` consumer slot

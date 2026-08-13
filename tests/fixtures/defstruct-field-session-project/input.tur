@@ -4,7 +4,7 @@
 ;; `Session[Send int (Recv int Close)]` -- a TY_SESSION endpoint value.  It
 ;; lowers exactly like a `(Session P)` field (same TY_SESSION storage case);
 ;; previously it hit the DS-A4 "not supported as a struct/ADT field" hard error
-;; (docs/upcoming/structdef-exotic-field-forms-plan.md).
+;; (docs/archive/history/structdef-exotic-field-forms-plan.md).
 ;;
 ;; Role A's endpoint is stored in an AEnd struct; role B runs on a thread.
 ;; Main reads the projected endpoint back out of the field, sends 42, recvs the

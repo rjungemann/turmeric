@@ -14,7 +14,7 @@
 ;; emitter and the delegated body (`fnv.fn` / `fnv.env`) use; and (2) emit a
 ;; rank-2 poly fn param as `tur_poly_fn_t`, not the `void *` its scalar-pointer
 ;; type kind would pick.  See
-;; docs/reported/cps-backend-indirect-call-fatclosure-param-divergence.md.
+;; docs/archive/history/cps-backend-indirect-call-fatclosure-param-divergence.md.
 ;;
 ;; A lifted-position indirect call (callee captured into a continuation env) still
 ;; falls back -- a fat closure is wider than the scalar env slot -- so collect_caps

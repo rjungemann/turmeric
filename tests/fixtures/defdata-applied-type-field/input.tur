@@ -3,7 +3,7 @@
 ;; HKT self-application (f (Fix f)) -- not just a keyword or bare type
 ;; variable. Before the fix these were rejected outright with
 ;;   "defdata: constructor field type must be a keyword like :int, :bool, :cstr"
-;; See docs/archive/defdata-constructor-field-applied-type-rejected.md.
+;; See docs/archive/history/defdata-constructor-field-applied-type-rejected.md.
 
 ;; Parametric applied-type field: N carries a (Box a) by value.
 (defdata Box [a] (MkBox a))

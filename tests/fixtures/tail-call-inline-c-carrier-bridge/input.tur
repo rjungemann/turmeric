@@ -5,7 +5,7 @@
 ;; bridge at the return site.  Before the fix, the wrapper's signature was the
 ;; by-value struct but the inline-C callee returned int64_t and the generated
 ;; `return helper(...)` failed to type-check.  See
-;; docs/archive/tail-call-inline-c-carrier-bridge.md.
+;; docs/archive/history/tail-call-inline-c-carrier-bridge.md.
 
 (defn captures-get [caps : int key : cstr] : (Result cstr cstr)
   ```c return tur_box_ok((int64_t)(intptr_t)"ok-val"); ```)

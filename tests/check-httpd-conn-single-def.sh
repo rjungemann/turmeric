@@ -7,7 +7,7 @@
 # blocks. Those copies drifted into 7 divergent layouts; reading a late
 # field (e.g. attr_list) through a stale, shorter copy overflowed the
 # stack object and crashed (see
-# docs/upcoming/httpd-conn-struct-consolidation-plan.md).
+# docs/archive/history/httpd-conn-struct-consolidation-plan.md).
 #
 # They are now defined exactly once at file scope, hoisted via the
 # __tur_include__ directives in httpd/autolink-hint. This guard fails the

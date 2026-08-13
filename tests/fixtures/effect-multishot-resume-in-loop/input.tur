@@ -1,7 +1,7 @@
 ;; The multi-shot fold: a `^multishot` handler clause that resumes its
 ;; continuation once per loop iteration.  This is the direct expression of
 ;; bounded nondeterminism -- fold the continuation over a range -- and it was
-;; the blocking case in docs/reported/handler-clause-statement-if-ices-emitter.md
+;; the blocking case in docs/archive/handler-clause-statement-if-ices-emitter.md
 ;; (the shape effects-vs-monads.md documented the payload-indirection
 ;; workaround for).
 ;;

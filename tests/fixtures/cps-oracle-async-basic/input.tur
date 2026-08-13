@@ -1,5 +1,5 @@
 ;; CPS regression oracle (cps-backend-unification): pins the runtime value.
-;; See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;; See docs/archive/cps-backend-unification-u0-inventory.md.
 ;;
 ;; T21-F: async/await basic test
 ;; (async fn) launches fn in a background thread and returns a future (ptr<void>)

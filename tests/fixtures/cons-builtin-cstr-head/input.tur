@@ -1,7 +1,7 @@
 ;; cons-builtin-cstr-head: the user-callable `cons` builtin accepts any
 ;; 64-bit-sized head, not just :int.  Regression for the spices-side paydown
 ;; (c-dsl/glsl use (cons cstr 0) for include/fragment lists).  See
-;; docs/reported/cons-builtin-rejects-cstr-head.md.
+;; docs/archive/history/cons-builtin-rejects-cstr-head.md.
 (defmodule cons-builtin-cstr-head
   (defn first-byte [lst : int] : int
     ```c struct __cell { int64_t head; int64_t tail; } *c =

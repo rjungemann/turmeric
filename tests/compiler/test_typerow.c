@@ -1,5 +1,5 @@
 /* test_typerow.c -- unit tests for the TY_TYPEROW type variant (Layer 2 of the
- * variadic-HKT-rows work, docs/reported/variadic-hkt-rows-missing.md).
+ * variadic-HKT-rows work, docs/archive/history/variadic-hkt-rows-missing.md).
  *
  * A TY_TYPEROW is a compile-time-only *row of types* -- an ordered list of
  * element types, surface-spelled `#row{T1 T2 ...}`. These tests build rows

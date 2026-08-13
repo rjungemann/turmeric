@@ -16,7 +16,7 @@
 #   2  file error  -- input unreadable                                       -> SKIP
 #
 # This is the gate for the Phase 1 exit criterion in
-# docs/upcoming/debugger-plan.md.  See docs/upcoming/debugger-spans-audit.md
+# docs/archive/history/debugger-plan.md.  See docs/artifacts/debugger-spans-audit.md
 # for the audit write-up.
 
 set -uo pipefail

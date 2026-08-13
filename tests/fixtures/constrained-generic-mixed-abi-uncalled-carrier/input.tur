@@ -7,7 +7,7 @@
 ;; PngBackend(b, ...)`, passing an `int64_t` into a by-value `PngBackend self`
 ;; formal: a hard cc error (`incompatible type for argument 1`).
 ;;
-;; Regression for docs/archive/constrained-generic-mixed-abi-carrier-base.md.
+;; Regression for docs/archive/history/constrained-generic-mixed-abi-carrier-base.md.
 ;; Crucially `render` is DEFINED BUT NEVER CALLED here: merely defining it
 ;; emitted the ill-typed carrier base, so this fixture reproduces the break
 ;; without monomorphizing the generic.  The concrete `render-to` call sites are

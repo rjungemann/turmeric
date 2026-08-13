@@ -4,7 +4,7 @@
 ;; the inner field bindings -- WITHOUT any `::` ascription -- so an arithmetic
 ;; use on them resolves the operator overload.  Before the fix the inner x/y
 ;; surfaced as <struct>/tyvar and `(+ x y)` failed operator lookup (TUR-E0006).
-;; See docs/archive/nested-carrier-match-loses-concrete-element.md.
+;; See docs/archive/history/nested-carrier-match-loses-concrete-element.md.
 
 (defdata Pair2 [a b] (MkPair2 a b))
 (defdata Nest  [a]   (N (Pair2 a a)))

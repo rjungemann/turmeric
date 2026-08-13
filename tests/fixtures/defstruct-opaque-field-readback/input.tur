@@ -1,4 +1,4 @@
-; Regression: docs/reported/defstruct-bare-user-type-field-reads-back-as-int-carrier.md
+; Regression: docs/archive/history/defstruct-bare-user-type-field-reads-back-as-int-carrier.md
 ;
 ; A defstruct field typed by a bare (nullary) defopaque must read back as the
 ; declared opaque type, not its int64 carrier.  Previously `(.tag w)` was typed

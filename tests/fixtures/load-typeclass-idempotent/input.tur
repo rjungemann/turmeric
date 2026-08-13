@@ -10,7 +10,7 @@
 ;; no program could load typeclass.tur at all. Now the redundant instance is a
 ;; silent no-op (first definition wins).
 ;;
-;; See docs/reported/load-not-idempotent-typeclass.md.
+;; See docs/archive/history/load-not-idempotent-typeclass.md.
 (load "stdlib/typeclass.tur")
 (load "stdlib/typeclass.tur")
 

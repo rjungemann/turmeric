@@ -13,7 +13,7 @@
 #
 # Plus two cases for the *include-path* walk, which is a separate traversal
 # over the same :spices graph and needed its own visited set
-# (docs/archive/spice-cycle-include-path-blowup.md):
+# (docs/archive/history/spice-cycle-include-path-blowup.md):
 #   4. spice-cycle-three-hop          -- a -> b -> c -> a; terminates, and
 #                                        every src/ on the ring still lands on
 #                                        the include path.

@@ -4,7 +4,7 @@
 ; reinterprets correctly) to prove 1.5 survives collection without truncation.
 ;
 ; Regression for the EX_CONS_LIST float-head truncation surfaced in
-; docs/archive/end-to-end-monomorphization-plan-2.md Phase 1.1.
+; docs/archive/history/end-to-end-monomorphization-plan-2.md Phase 1.1.
 
 (load "stdlib/list-typed.tur")
 

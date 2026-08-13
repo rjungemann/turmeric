@@ -1,7 +1,7 @@
 ;; Turmeric passes structs BY VALUE: a callee gets its own copy, so a write
 ;; through a struct parameter is invisible to the caller.  This fixture pins
 ;; that, and it pins it under BOTH harnesses -- it is the regression test for
-;; docs/reported/struct-param-mutation-backend-divergence.md, where the
+;; docs/archive/struct-param-mutation-backend-divergence.md, where the
 ;; compiled backend said 0 and the turi interpreter said 3 for the same
 ;; program because turi bound the struct pointer straight through.
 ;;

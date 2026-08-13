@@ -8,14 +8,14 @@
 ;;     IS registered under `(intptr_t)logit`, and the fat record's direct-entry
 ;;     slot holds exactly `logit` -- but a `^fat` param carries the record, not
 ;;     the entry, so the lookup missed and the miss was called through NULL.
-;;     See docs/archive/effectful-fn-typed-param-call-segfaults.md.
+;;     See docs/archive/history/effectful-fn-typed-param-call-segfaults.md.
 ;;
 ;;  2. Boxing `logit` into that fat record was counted as *performing* its
 ;;     effect, so the handled body containing the box construction was refused
 ;;     by the CPS admission -- evicting the handler, tainting the effect,
 ;;     co-evicting `logit`, and landing its `perform` in the direct emitter,
 ;;     an ICE.  Taking a function's address runs nothing; only the call does.
-;;     See docs/archive/named-effectful-defn-as-fat-fn-value-ices.md.
+;;     See docs/archive/history/named-effectful-defn-as-fat-fn-value-ices.md.
 ;;
 ;; Defect 2 is why the call's POSITION matters here: before it was fixed, only
 ;; the sole-`handle`-body shape reached codegen at all.  Each position below

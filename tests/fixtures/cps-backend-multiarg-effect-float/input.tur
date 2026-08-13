@@ -8,7 +8,7 @@
 ;;
 ;; NOTE: the direct/fiber emitter has a SEPARATE, pre-existing bug that truncates
 ;; a float effect argument to an int (both single- and multi-arg) -- see
-;; docs/reported/direct-fiber-float-effect-arg-truncation.md.  So the *direct*
+;; docs/archive/direct-fiber-float-effect-arg-truncation.md.  So the *direct*
 ;; build of this program prints a wrong (truncated) 10, while the CPS backend
 ;; prints the correct 10.6.  This fixture runs the CPS path (--enable=cps-backend)
 ;; and asserts the correct value; it is a guard that the CPS multi-arg path does

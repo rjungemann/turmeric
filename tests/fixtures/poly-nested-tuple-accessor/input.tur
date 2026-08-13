@@ -1,5 +1,5 @@
 ;; Regression for the polymorphic-return-type instantiation bug
-;; (docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md):
+;; (docs/archive/history/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md):
 ;; `tuple2-2nd : [A B] (Tuple2 A B) -> B` collapsed its result to the int
 ;; carrier (losing the full type) when the declared return is a bare tyvar and
 ;; the instantiation is a *concrete composite* (here B = (Tuple2 cstr int)).

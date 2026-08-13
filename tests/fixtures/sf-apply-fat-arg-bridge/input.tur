@@ -5,7 +5,7 @@
 ;; into it must emit the (int64_t)(intptr_t) carrier bridge -- without it the
 ;; void* flows into the int64_t slot uncast (-Wint-conversion; a hard error
 ;; under clang, and a latent "works only because the widths match" defect).
-;; See docs/reported/vec-typed-fat-closure-readback-fixture-regressed-codegen.md
+;; See docs/archive/history/vec-typed-fat-closure-readback-fixture-regressed-codegen.md
 ;; (the "any caller of an ^fat-taking SF" update).
 
 (defn sine [freq : float]

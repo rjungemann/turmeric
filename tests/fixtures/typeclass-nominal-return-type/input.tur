@@ -10,7 +10,7 @@
 ;; return. The F_KEYWORD else-branch now falls back to type_expr_from_form
 ;; (the same resolver the applied-form path uses) before erroring.
 ;;
-;; See docs/archive/typeclass-nominal-return-type.md.
+;; See docs/archive/history/typeclass-nominal-return-type.md.
 (defopaque Resp :int)
 (defstruct BBox [lo : int hi : int])
 

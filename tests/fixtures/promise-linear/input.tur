@@ -10,7 +10,7 @@
 ;; Here promise-free is the single, leak-clean consumption: it releases the
 ;; shared FutureCell. (A Promise that is fulfilled instead hands ownership of
 ;; the cell to whoever holds the Future read-end; see
-;; docs/reported/stdlib-future-linearity-aliasing.md for why the checker cannot
+;; docs/archive/history/stdlib-future-linearity-aliasing.md for why the checker cannot
 ;; yet track that producer/consumer alias, which is why Future stays non-linear.)
 ;;
 ;; Expected output: promise ok

@@ -18,7 +18,7 @@
 ; member of a self-sustaining cycle has strong_count>0 via its own back-edge, so
 ; a cycle was unconditionally marked live. Measured leak: 192 bytes per cycle,
 ; identical whether the collector was on or off
-; (docs/reported/gc-strong-cycles-not-collected.md).
+; (docs/archive/history/gc-strong-cycles-not-collected.md).
 ;
 ; Real trial deletion subtracts the internal edges first, so a block referenced
 ; only from within the candidate subgraph falls to a zero trial count and is
@@ -52,7 +52,7 @@
      whatever zone ASan installs, and the quarantine keeps freed blocks
      accounted as in-use, so this prints ~800000 (160 B/iteration of quarantined
      frees, not a leak).  See
-     docs/archive/gc-leak-gate-darwin-sanitized-probe-drift.md. */
+     docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md. */
   #if defined(__APPLE__)
   #include <malloc/malloc.h>
   malloc_statistics_t ms;

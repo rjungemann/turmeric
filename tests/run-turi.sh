@@ -293,7 +293,7 @@ run_turi_fixture() {
     # those few keep a presence in the suite via the dedicated paths.  Note: some
     # inline-C fixtures silently miscompile under the simple inline-C evaluator --
     # a real bug the carve hides; see
-    # docs/reported/turi-inline-c-silent-miscompiles.md.  Every other fixture is
+    # docs/archive/history/turi-inline-c-silent-miscompiles.md.  Every other fixture is
     # now run for real under --interpret (no allowlist gate).
     if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
         printf 'SKIP %s (inline-c carve-out)\n' "$name"

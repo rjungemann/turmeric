@@ -5,7 +5,7 @@
 ;; -- now monomorphises end-to-end at two distinct carrier backends.
 ;;
 ;; Two failures used to bite (see
-;; docs/archive/bounded-storageops-wrapper-heterogeneous-monomorphisation-gap.md):
+;; docs/archive/history/bounded-storageops-wrapper-heterogeneous-monomorphisation-gap.md):
 ;;
 ;;   1. Name desync: the bounded body emitted a call to the *unspecialised*
 ;;      instance symbol (`__inst_StorageOps_sop_hyget_Dense`) while the instance

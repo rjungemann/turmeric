@@ -1,5 +1,5 @@
 ;; Regression for the TupleN (N>=3) by-parameter ABI bug
-;; (docs/reported/tuplen-struct-param-passed-by-pointer-codegen-mismatch.md):
+;; (docs/archive/history/tuplen-struct-param-passed-by-pointer-codegen-mismatch.md):
 ;; structs > 16 bytes are passed to user defns by pointer (const T*), but
 ;; ABI-specialized accessors and inline-C callees take them BY VALUE. The
 ;; call site must deref the pbp-param pointer so the conventions agree.

@@ -1,4 +1,4 @@
-; Regression: docs/reported/defopaque-struct-payload-fails-through-unsafe-helper.md
+; Regression: docs/archive/history/defopaque-struct-payload-fails-through-unsafe-helper.md
 ;
 ; A parametric `(Dense A)` storage built from generic inline-C helpers must
 ; work when A is a by-value struct (e.g. Pos), threaded through `(unsafe ...)`

@@ -1,6 +1,6 @@
 ; range-gadt-typeclass-migration-plan B2: the deferred Show [Bound] and
 ; Ord [Bound] instances now live in range.tur (alongside Eq [Bound]), enabled by
-; the idempotent-definstance fix (docs/reported/load-not-idempotent-typeclass.md)
+; the idempotent-definstance fix (docs/archive/history/load-not-idempotent-typeclass.md)
 ; plus range.tur loading the full typeclass.tur for the Show/Ord classes.
 ;
 ; This also exercises the depth-first load expander: range.tur self-loads

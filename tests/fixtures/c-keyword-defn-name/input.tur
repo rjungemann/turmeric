@@ -1,5 +1,5 @@
 ;; A top-level defn whose name is a C reserved word must still emit valid C.
-;; Regression for docs/archive/c-keyword-function-names-not-mangled.md: the
+;; Regression for docs/archive/history/c-keyword-function-names-not-mangled.md: the
 ;; mangler passed a pure-alnum name through unchanged, so `(defn double ...)`
 ;; lowered to `static int64_t double(int64_t);` -- a syntax error that derailed
 ;; the whole translation unit (533 cc errors for `char`/`void`/`float`).

@@ -12,7 +12,7 @@
 ;; alone (it is loop-invariant: a closure's own self-call threads the env it
 ;; was called with).  5,000,000 iterations complete without stack growth.
 ;;
-;; See docs/archive/named-let-self-tail-not-tco.md.
+;; See docs/archive/history/named-let-self-tail-not-tco.md.
 
 (defn sum-to [n : int] : int
   (let go [i   :int 0

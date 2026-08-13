@@ -1,4 +1,4 @@
-; Regression: docs/reported/struct-field-byvalue-parametric-struct-layout.md
+; Regression: docs/archive/history/struct-field-byvalue-parametric-struct-layout.md
 ;
 ; A defstruct field whose type is a BY-VALUE PARAMETRIC struct (e.g.
 ; `(Option cstr)`) must be laid out INLINE as the monomorphized aggregate

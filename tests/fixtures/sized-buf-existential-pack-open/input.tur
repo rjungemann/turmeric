@@ -1,5 +1,5 @@
 ; Closes the T5 fix in
-; docs/reported/pack-open-phantom-opaque-body-type-collapses.md:
+; docs/archive/history/pack-open-phantom-opaque-body-type-collapses.md:
 ; (pack v (exists [n] (SizedBuf n))) then (open ... [n buf] ...) now
 ; binds buf at (SizedBuf n) (the applied form), so call sites whose
 ; param type mentions (SizedBuf n) -- e.g. sized-buf-len -- unify n

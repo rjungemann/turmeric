@@ -3,7 +3,7 @@
 ;;
 ;; Owning pointers (rc/ref/weak/lref) are never bare slot values -- they cannot be
 ;; a function result or continuation payload in the source language (see
-;; docs/upcoming/v1/cps-backend-owning-pointers-plan.md).  They appear only as
+;; docs/archive/cps-backend-owning-pointers-plan.md).  They appear only as
 ;; LOCALS inside a function.  This program creates an rc, clones it, then drops
 ;; both, all inside a colored function's delimited body, and delivers a plain
 ;; scalar through the shift.  The rc never crosses the DK slot.

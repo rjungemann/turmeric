@@ -2,7 +2,7 @@
 # tests/check-monomorph-name-collision.sh
 #
 # Behavioural half of the guard for
-# docs/archive/concrete-codegen-layout-kind-enumerations-drift.md.
+# docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md.
 #
 # tests/check-typekind-mangle-exhaustive.sh reads the SOURCE of the two
 # TypeKind switches. This one reads what they actually EMIT: it compiles a
@@ -172,6 +172,6 @@ echo
 if [ "$FAIL" -eq 0 ]; then
     echo "monomorph-name-collision: all checks passed"
 else
-    echo "monomorph-name-collision: FAILED -- see docs/archive/concrete-codegen-layout-kind-enumerations-drift.md"
+    echo "monomorph-name-collision: FAILED -- see docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md"
 fi
 exit "$FAIL"

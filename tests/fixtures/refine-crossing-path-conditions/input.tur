@@ -45,8 +45,8 @@
     _ 0))
 
 ;; The guard is on an ADT scrutinee: a guarded WILDCARD arm over a non-ADT
-;; scrutinee emits invalid C, unrelated to refinements -- see
-;; docs/reported/match-int-scrutinee-guard-null-adt.md.
+;; scrutinee emits invalid C, unrelated to refinements.  (The guard for that
+;; is the `!_scrut_is_adt` disjunct in emit_expr.c's literal-match arm.)
 (defdata Val (Num [v : int]))
 
 (defn via-guard [t : Val] : int

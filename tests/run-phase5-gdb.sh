@@ -17,8 +17,8 @@
 # harness.  The fixture carries requires.dedicated-runner so tests/run.sh leaves
 # it to this harness.
 #
-# See docs/upcoming/debugger-plan.md (Phase 5) and
-# docs/upcoming/debugger-native-types-plan.md.
+# See docs/archive/history/debugger-plan.md (Phase 5) and
+# docs/archive/history/debugger-native-types-plan.md.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."

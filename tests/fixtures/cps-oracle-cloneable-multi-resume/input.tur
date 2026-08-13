@@ -1,5 +1,5 @@
 ;; CPS regression oracle (cps-backend-unification): pins the runtime value.
-;; See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;; See docs/archive/cps-backend-unification-u0-inventory.md.
 ;;
 ;; CPS-CL9: Resume the same continuation twice.
 ;; The continuation captures the "rest of the reset body" after the shift.

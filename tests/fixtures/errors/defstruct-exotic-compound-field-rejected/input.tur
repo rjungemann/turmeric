@@ -8,7 +8,7 @@
 ;; `Session`/`project`/`Role` (EF-4) now lower.  The still-rejected forms are the
 ;; session PROTOCOL DESCRIPTORS (Send/Recv/Choose/Branch/Rec/Timeout -- type-level
 ;; only), `Global` (compile-time-only choreography), and `forall` (the EF-3 gate).
-;; See docs/upcoming/structdef-exotic-field-forms-plan.md.
+;; See docs/archive/history/structdef-exotic-field-forms-plan.md.
 
 (defstruct Cap [h (forall [a] a)])
 

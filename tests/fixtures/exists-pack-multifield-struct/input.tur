@@ -6,7 +6,7 @@
 ;; emitted `(tur_exists_t)(intptr_t)((int64_t)(world_struct))`, which cc
 ;; rejected with "aggregate value used where an integer was expected".
 ;;
-;; See docs/reported/world-resize-existential-multifield-struct-payload.md.
+;; See docs/archive/history/world-resize-existential-multifield-struct-payload.md.
 
 (defopaque Dense [n A] :int)
 

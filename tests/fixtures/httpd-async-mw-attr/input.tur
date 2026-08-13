@@ -21,7 +21,7 @@
 ;; closure that captures nothing, because such a closure is lowered to a
 ;; bare function pointer rather than the [code, env] fat layout the
 ;; dispatcher assumes. That bug is independent of this struct work and is
-;; tracked in docs/upcoming/noncapturing-closure-inline-c-dispatch-plan.md.
+;; tracked in docs/archive/history/noncapturing-closure-inline-c-dispatch-plan.md.
 ;; Setting the attribute directly keeps this fixture focused on the struct
 ;; consolidation it is meant to guard.
 ;;

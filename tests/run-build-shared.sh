@@ -129,7 +129,7 @@ fi
 
 # Default output name for a cwd-relative target ("." / "./") must derive the
 # basename from the resolved directory, NOT produce "lib..so" / "lib.so".
-# Regression guard for docs/reported/tur-build-shared-cwd-lib-double-dot.md.
+# Regression guard for docs/archive/history/tur-build-shared-cwd-lib-double-dot.md.
 # build-output-directory-plan: artifacts now land in <root>/build/lib/, so the
 # assertion checks that path instead of the cwd.  We copy the module into a
 # freshly named subdir so the expected artifact name is predictable, then run

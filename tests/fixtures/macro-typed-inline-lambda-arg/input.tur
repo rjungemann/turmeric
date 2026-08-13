@@ -1,7 +1,7 @@
 ;; Regression: a typed inline lambda `(fn [x : int] : void ...)` passed as a
 ;; macro argument must be spliced verbatim, not validated under compile-time
 ;; fn rules (which require bare-symbol params).
-;; docs/archive/macro-typed-inline-lambda-arg.md
+;; docs/archive/history/macro-typed-inline-lambda-arg.md
 
 (defmacro with-thing [binding & body]
   `(let [~(first binding) ~(first (rest binding))]

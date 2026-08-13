@@ -1,4 +1,4 @@
-;; M5 D.4 (end-to-end-monomorphization, docs/upcoming/m5-residual-straddle-retirement.md):
+;; M5 D.4 (end-to-end-monomorphization, docs/artifacts/m5-residual-straddle-retirement.md):
 ;; Pins the Option C by-value twin redirect for a constrained-poly defn spec
 ;; body whose carrier-helper result carries the element type in RETURN
 ;; position.  `(vec-get x i)` calls the carrier stdlib accessor

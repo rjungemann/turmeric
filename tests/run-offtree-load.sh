@@ -3,7 +3,7 @@
 # the repo and does `(load "stdlib/<file>")` must resolve the stdlib via the
 # exe-relative stdlib root, not just cwd-relative.
 #
-# Finding 3 of docs/reported/one-off-script-print-and-annotation-ergonomics.md:
+# Finding 3 of docs/archive/history/one-off-script-print-and-annotation-ergonomics.md:
 # before the fix, `(load "stdlib/math.tur")` only opened the file when run from
 # the repo root (cwd-relative). A `/tmp/foo.tur` run from elsewhere failed with
 # "load: cannot open 'stdlib/math.tur'", so the load-line suggested by the

@@ -5,7 +5,7 @@
 ;; pointer -- a jump into the env struct, i.e. a segfault.  It must instead
 ;; dispatch through slot 0 (read __fn, pass the box as env) and reconstitute
 ;; the by-value Pair return.
-;; See docs/reported/vec-typed-fat-closure-readback-fixture-regressed-codegen.md
+;; See docs/archive/history/vec-typed-fat-closure-readback-fixture-regressed-codegen.md
 ;; (the "Remaining gap" / third pattern).
 
 (defn mk-fpair [a : float b : float] : ptr<void>

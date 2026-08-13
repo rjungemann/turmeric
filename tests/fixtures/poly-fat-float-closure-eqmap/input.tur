@@ -5,7 +5,7 @@
 ;; a ^fat typed-fn parameter, an inline-C helper, and a `.eq?` over a Map
 ;; tripped the broken path, producing
 ;;   call to undeclared function 'm1'; use of undeclared identifier 'x'
-;; See docs/reported/stdlib-poly-codegen-undeclared-identifier.md.
+;; See docs/archive/history/stdlib-poly-codegen-undeclared-identifier.md.
 
 (defn invoke-float [^fat f : (fn [float] float)] :float
   (f 7.1))

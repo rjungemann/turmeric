@@ -3,7 +3,7 @@
 ;; fat { thunk, env } record directly -- NOT wrap it in a __tur_fatshim adapter
 ;; (which would call the record pointer as code and BUS/SEGV-fault).
 ;;
-;; See docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md.
+;; See docs/archive/ascribing-fat-closure-value-to-fn-type-double-shims.md.
 ;;
 ;; Each list cell holds a fat closure of shape (fn [int] :ptr<void>) that
 ;; captures a runtime value; fold applies them right-to-left over a base int.

@@ -13,7 +13,7 @@
 ;; The public raw map-*-eq API takes a captureless comparator function typed
 ;; (c-fn [K K] bool), so pass tur-int-carrier-eq? directly rather than mk-cmp's
 ;; erased :int address (see
-;; docs/reported/raw-map-eq-api-segfaults-on-capturing-comparator.md).
+;; docs/archive/history/raw-map-eq-api-segfaults-on-capturing-comparator.md).
 
 (defn run [] : int
   (let [cmp tur-int-carrier-eq?

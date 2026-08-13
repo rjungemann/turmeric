@@ -7,7 +7,7 @@
 ;; `tur_option_t *` carrier cast.
 ;;
 ;; Gap G9 of docs/carrier-concrete-abi-crossing-audit-plan.md
-;; (docs/archive/constrained-instance-dispatch-parametric-container-element-collapse.md).
+;; (docs/archive/history/constrained-instance-dispatch-parametric-container-element-collapse.md).
 ;; The G2 fix already minted the `Cons__Option__int` cell + the inner Option
 ;; by-value spec; the remaining defect was the dispatch ARG: `(.head xs)` is an
 ;; embedded `Option__int` aggregate but its elaborated type is the erased int64

@@ -2,7 +2,7 @@
 ;; element A is a by-value aggregate (Option is a multi-word struct) through the
 ;; element-aware typed walker `tlength`.
 ;;
-;; Gap G4 (docs/archive/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md):
+;; Gap G4 (docs/archive/history/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md):
 ;; `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))`. The generic
 ;; int-carrier list helpers (`list-length`, `list-head`, ...) walk the chain as a
 ;; fixed `struct { int64_t head; int64_t tail; }`. When A is a by-value aggregate

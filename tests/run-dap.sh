@@ -10,8 +10,8 @@
 # breakpoint that fires only when its predicate holds, program stdout forwarded
 # as an output event, and the exit code.
 #
-# See docs/upcoming/debugger-plan.md (Phase 3) and
-# docs/upcoming/debugger-dap-phase3.md.
+# See docs/archive/history/debugger-plan.md (Phase 3) and
+# docs/artifacts/debugger-dap-phase3.md.
 #
 # The interpreter intentionally never frees its process-lifetime closures, so
 # the driver runs the server with LeakSanitizer off (it sets ASAN_OPTIONS).

@@ -1,5 +1,5 @@
 ;; CPS regression oracle (cps-backend-unification): pins the runtime value.
-;; See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;; See docs/archive/cps-backend-unification-u0-inventory.md.
 ;;
 ;; CPS-IR-to-C backend, N6: a delegated *composite* (while / set! / for / match /
 ;; do / let) in a lifted continuation, capturing an enclosing local.  Built with

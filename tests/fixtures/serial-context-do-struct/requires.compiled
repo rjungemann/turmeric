@@ -1,4 +1,4 @@
 serial-context-do-struct: struct-env routes through a Serializable instance
 over inline-C struct accessors (malloc+field stores, p[0]+p[1]) that the
 tree-walking interpreter cannot execute. Tracked in
-docs/reported/turi-capturing-shift-unimplemented.md.
+docs/archive/history/turi-capturing-shift-unimplemented.md.

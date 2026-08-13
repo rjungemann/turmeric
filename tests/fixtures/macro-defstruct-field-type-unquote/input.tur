@@ -18,7 +18,7 @@
 ;; unquotes inside defstruct field types participate in the same
 ;; substitution pass as everywhere else.
 ;;
-;; See docs/reported/history/quasi-quote-defstruct-field-type-unquote-rejected.md.
+;; See docs/archive/history/quasi-quote-defstruct-field-type-unquote-rejected.md.
 
 (defstruct Box [A] (val A))
 

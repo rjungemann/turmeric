@@ -2,7 +2,7 @@
 ;;; thunk that captures a local must observe the captured value after the
 ;;; boundary returns. Locks in that catch_thunk_to_fat does NOT auto-shim a
 ;;; capturing closure (boxed TY_FN) -- doing so double-boxed the env and
-;;; SEGV'd the program. See docs/reported/catch-unwind-drops-captures-segv.md
+;;; SEGV'd the program. See docs/archive/history/catch-unwind-drops-captures-segv.md
 ;;; (resolved).
 (defn report [n : int] : int
   (if (= n 42)

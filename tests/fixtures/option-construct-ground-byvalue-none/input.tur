@@ -12,7 +12,7 @@
 ;; `(Option int)` stays on the existing carrier+bridge path (excluded by the
 ;; struct-element gate), so this is scoped to struct/opaque payloads.
 ;;
-;; See docs/archive/zero-arg-construct-ground-byvalue-return.md.
+;; See docs/archive/history/zero-arg-construct-ground-byvalue-return.md.
 
 (defopaque BoundedIdx :int)
 

@@ -2,7 +2,7 @@
 ;; concrete nominal type (struct Pt) than its declared return (struct Other) is
 ;; a genuine, carrier-independent return-type error.  Distinct nominal defs can
 ;; never share a carrier representation.
-;; See docs/reported/instance-method-return-not-unified.md.
+;; See docs/archive/history/instance-method-return-not-unified.md.
 (defstruct Pt    [x : int y : int])
 (defstruct Other [a : int])
 (defn f [n : int] : Other (make-struct Pt n n))

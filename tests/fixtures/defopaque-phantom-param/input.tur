@@ -2,7 +2,7 @@
 ;; newtype a type constructor.  The carrier stays int64_t, but `(NonEmpty A)`
 ;; can be spelled in annotations and the accessor return type is the element
 ;; type A -- so (ne-head (ne-of 7 (tnil))) is typed :int and round-trips.
-;; See docs/reported/parameterized-defopaque.md.
+;; See docs/archive/history/parameterized-defopaque.md.
 
 (defopaque NonEmpty [A] :int)
 

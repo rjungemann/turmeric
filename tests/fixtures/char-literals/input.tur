@@ -1,5 +1,5 @@
 ;; Legible character literals (#\a) -- reader emits a plain :int byte code.
-;; See docs/upcoming/v1/legible-char-literals-plan.md.
+;; See docs/archive/legible-char-literals-plan.md.
 
 (defn main [] : int
   ;; Base form: printable ASCII.

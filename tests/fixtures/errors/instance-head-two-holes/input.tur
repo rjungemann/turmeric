@@ -1,7 +1,7 @@
 ;; stdlib-hkt-consolidation T4: an instance head may leave exactly one
 ;; parameter free with `_`.  Two holes (`(Box _ _)`) is rejected -- it would
 ;; require multi-parameter abstraction, which is out of scope.  See
-;; docs/reported/result-param-order-blocks-functor-monad.md.
+;; docs/archive/history/result-param-order-blocks-functor-monad.md.
 (defstruct Box [A B] (a :int) (b :int))
 (defclass BoxFunctor [^f] (boxmap [c [fn :fn]] : int))
 (definstance BoxFunctor [(Box _ _)]

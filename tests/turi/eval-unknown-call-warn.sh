@@ -7,7 +7,7 @@
 # bound nor in the typed-native registry is almost always a typo. The
 # elaborator must emit TUR-W0040 at elaboration time so the diag sink surfaces
 # it before the offending line ever runs.
-# See docs/archive/eval-mode-unknown-call-deferred-to-runtime.md.
+# See docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

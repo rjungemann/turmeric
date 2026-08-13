@@ -1,7 +1,7 @@
 ;; instance-method-return-nominal-conflict -- an instance method body whose
 ;; actual type is a DIFFERENT concrete nominal type than the method's declared
 ;; return is rejected, the same as the ordinary defn case.
-;; See docs/reported/instance-method-return-not-unified.md.
+;; See docs/archive/history/instance-method-return-not-unified.md.
 (defstruct Pt    [x : int y : int])
 (defstruct Other [a : int])
 (defclass Mk [W] (mk [^borrow w] : Other))

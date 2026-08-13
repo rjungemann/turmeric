@@ -3,4 +3,4 @@ it only runs under the cooperative session-channel runtime of `tur --interpret`
 (tests/run-turi.sh).  The compiled suite (tests/run.sh) skips it: under the
 compiled pthread session runtime a session recv inside a cooperative async
 fiber has no separate thread to rendezvous with.  See
-docs/upcoming/turi-session-types-plan.md (Slice B).
+docs/archive/turi-session-types-plan.md (Slice B).

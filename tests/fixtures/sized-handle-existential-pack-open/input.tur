@@ -1,4 +1,4 @@
-; P4 of docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md:
+; P4 of docs/archive/history/ecs-e2c-sized-dense-needs-bounded-world.md:
 ; stdlib/sized-handle-existential.tur provides generic pack-sized /
 ; open-sized macros that wrap native pack/open for any phantom-indexed
 ; sized handle.  Exercising the pattern on (SizedVec n int): a fresh
@@ -8,7 +8,7 @@
 ; SizedVec is the validated path today; the same macros on a phantom
 ; defopaque like (SizedBuf n) currently trip an open-projection gap
 ; tracked in
-; docs/reported/pack-open-phantom-opaque-body-type-collapses.md.
+; docs/archive/history/pack-open-phantom-opaque-body-type-collapses.md.
 
 (load "stdlib/sized.tur")
 (load "stdlib/sized-handle-existential.tur")

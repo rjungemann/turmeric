@@ -4,7 +4,7 @@
 ;; PER-INSTANTIATION by-value spec, not the generic int64 carrier shim.
 ;;
 ;; Gap G2 of docs/carrier-concrete-abi-crossing-audit-plan.md
-;; (docs/archive/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md):
+;; (docs/archive/history/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md):
 ;; in the body of `(definstance Enc [Option] [(Enc A)] (enc (.value x)))`, when
 ;; the concrete element `A` is `(Cons B)`, `(.value x)` is a concrete `Cons__B *`
 ;; but the inner `(enc (.value x))` baked the generic carrier shim

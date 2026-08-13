@@ -5,5 +5,5 @@ interpreter cannot execute (eval: inline-C not supported in interpreter
 mode). Passes the compiled path (bash tests/run.sh). The turi inline-C
 carve-out (fixture_has_inline_c) only greps the fixture body for a ```c
 block, so it does not catch the transitive dependency -- hence the explicit
-marker. Tracked in docs/reported/monomorphization-wip-fixture-failures.md
+marker. Tracked in docs/archive/monomorphization-wip-fixture-failures.md
 (Group E).

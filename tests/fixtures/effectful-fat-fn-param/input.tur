@@ -7,7 +7,7 @@
 ;; { shim, direct-entry } fat record -- so the lookup missed every time, and the
 ;; miss was called unguarded, i.e. a call through NULL.  The key now reads the
 ;; record's direct-entry slot, which is what the fat shim itself dispatches
-;; through.  See docs/archive/effectful-fn-typed-param-call-segfaults.md.
+;; through.  See docs/archive/history/effectful-fn-typed-param-call-segfaults.md.
 ;;
 ;; Pinned across the inline-lambda shapes: performing and not performing, in
 ;; tail and non-tail position, with a `nil` and an `int` result.  The empty-row

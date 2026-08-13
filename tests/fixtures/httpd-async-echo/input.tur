@@ -37,7 +37,7 @@
 ;; line-ordering failure under parallel suite load (the two lines swapped).
 ;; main reads the buffer and prints it in a fixed order after join-thread,
 ;; whose pthread_join provides the happens-before. See
-;; docs/reported/httpd-async-echo-flaky-stdout-ordering.md.
+;; docs/archive/history/httpd-async-echo-flaky-stdout-ordering.md.
 (defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
   #include <time.h>

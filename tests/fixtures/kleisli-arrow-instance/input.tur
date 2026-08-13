@@ -5,7 +5,7 @@
 ;;
 ;; The ascription-disambiguated arrows are reused across multiple applications --
 ;; a regression guard for the now-fixed
-;; docs/reported/opaque-ascription-cast-marks-value-move-once.md (an unrestricted
+;; docs/archive/history/opaque-ascription-cast-marks-value-move-once.md (an unrestricted
 ;; opaque ascribed via (:: ... :Kleisli) must stay freely copyable).
 (load "stdlib/kleisli.tur")
 

@@ -6,7 +6,7 @@
 ;; dropped, spurious TUR-W0372). Fixed by recording each macro call's expansion
 ;; (refine_note_macro_expansion) and letting the crossing path walk traverse
 ;; INTO it. Regression guard for
-;; docs/archive/macro-generated-refined-crossings-do-not-discharge.md.
+;; docs/archive/history/macro-generated-refined-crossings-do-not-discharge.md.
 ;;
 ;; All three shapes from that report, plus a nested macro-in-macro chain.
 ;; Under --strict-refine this compiles (and prints 42 43 44 45) ONLY if every

@@ -1,7 +1,7 @@
 ;; Module A: defines a parametric opaque `Box` (erases to int64) and two
 ;; generic accessors over it.  `box-get` is the inner generic that, pre-fix,
 ;; was never emitted when its only caller was another generic in module B.
-;; See docs/reported/cross-module-generic-of-generic-instantiation-missing.md.
+;; See docs/archive/history/cross-module-generic-of-generic-instantiation-missing.md.
 (defmodule mod-a
   (export Box box-make box-get)
   (defopaque Box [A] :int)

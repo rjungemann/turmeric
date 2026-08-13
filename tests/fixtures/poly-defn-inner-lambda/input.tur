@@ -3,7 +3,7 @@
 ;; to be dropped in codegen -- it is generic-unsafe (its signature names the
 ;; enclosing tyvar `A`), so it was skipped as "emitted only via spec clones",
 ;; yet the carrier-emitted `or-parser` takes its address, leaving a dangling
-;; `__fn_N` reference.  See docs/archive/poly-defn-inner-lambda-codegen.md.
+;; `__fn_N` reference.  See docs/archive/history/poly-defn-inner-lambda-codegen.md.
 
 (defdata PRes [a]
   (PFail)

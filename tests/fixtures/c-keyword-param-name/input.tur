@@ -2,7 +2,7 @@
 ;; (they are referenced by inline-C under their source spelling), which also
 ;; passed a pure-alnum name straight through -- so `(defn f [double : int] ...)`
 ;; emitted `static int64_t f(int64_t double)`.
-;; Regression for docs/archive/c-keyword-function-names-not-mangled.md.
+;; Regression for docs/archive/history/c-keyword-function-names-not-mangled.md.
 
 (defn scale [double : int register : int] : int
   (* double register))

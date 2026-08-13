@@ -1,5 +1,5 @@
 ;; fn-value-matrix-ok-rows -- the OK rows of the boundary matrix in
-;; docs/reported/fn-typed-value-return-ascribe-miscompiles.md, pinned BEFORE
+;; docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md, pinned BEFORE
 ;; the fat-normalization fix lands (meta-plan landing checklist item 3: the
 ;; working boundary must not regress while the broken rows flip).  The
 ;; broken rows join this fixture when fn-value-fat-normalization-plan
