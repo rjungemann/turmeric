@@ -4526,6 +4526,33 @@ static TuriValue gde_method_closure(TuriEnv *env, const Expr *dict_arg,
     return turi_nil();
 }
 
+/* True when `tc` is still a class object of the LIVE registry.
+ *
+ * After a `#lang` reader switch the REPL calls turi_env_reset_to_prelude, which
+ * drops the ElabSession and re-elaborates the pinned prelude WITHOUT
+ * re-evaluating it.  So every generic body still bound in env->globals keeps a
+ * `dict_arg` baked against the OLD TypeClassEnv, while env->last_tc_env now
+ * points at the rebuilt one -- same classes, different allocations.  The
+ * pointer compare in gde_reresolve_method then matches nothing at all, and for
+ * a PRIMITIVE element type the by-name retry below is deliberately skipped, so
+ * the baked int-carrier representative answers every call: `(show #map{:a 1})`
+ * renders its Sym key as a raw carrier integer, permanently, and switching the
+ * reader back does not restore it.
+ *
+ * Distinguishing "this class object is dead" from "this class object is live
+ * but has no instance for the concrete" is what lets the retry open up for
+ * primitives in the reset case only.  The restriction exists to stop a primitive
+ * from mis-matching a stale DUPLICATE class's instance while its own class is
+ * still live and simply has nothing better -- that case is untouched here,
+ * because `tc` is live in it.
+ * See docs/archive/lang-switch-breaks-generic-instance-resolution.md. */
+static bool gde_tc_is_live(const TypeClassEnv *tc_env, const TypeClass *tc) {
+    if (!tc_env || !tc) return false;
+    for (const TypeClassInstance *i = tc_env->instances; i; i = i->next)
+        if (i->typeclass == tc) return true;
+    return false;
+}
+
 static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
                                       const Type *concrete) {
     if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
@@ -4566,7 +4593,12 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
      * concrete keeps its exact prior dispatch (a primitive that finds no by-name
      * instance under its own tc pointer must keep the baked representative, never
      * a stale duplicate's copy). */
-    if (!match && !concrete_is_primitive && head && tc->name) {
+    /* A dict baked against a registry that no longer exists (session reset)
+     * can never match by pointer, so the primitive restriction below would
+     * pin it to the baked representative forever.  Treat a dead class object
+     * as licence to retry by name even for a primitive concrete. */
+    bool tc_stale = !gde_tc_is_live(tc_env, tc);
+    if (!match && (!concrete_is_primitive || tc_stale) && head && tc->name) {
         const char *tc_name = tc->name->name;
         for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
             if (inst->n_type_args == 0 || inst == rep) continue;
@@ -4576,6 +4608,12 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
             const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
                                 ? inst->type_arg_syms[0]->name : NULL;
             if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+            /* The precise loop above spells a primitive instance head via
+             * gde_primitive_type_name; this retry must too, or an instance over
+             * a primitive (`Show [Sym]`, `Show [cstr]`) has no name to compare
+             * and is skipped -- which is exactly the set of element types the
+             * reset case needs to find. */
+            if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
             if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
         }
     }

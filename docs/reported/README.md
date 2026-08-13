@@ -135,7 +135,6 @@ into a frame env again.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
-| [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
 
 
@@ -241,6 +240,24 @@ Pinned by four `errors/` negatives and
 | --- | --- | --- |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [tur-build-nested-src-dir-finds-no-files](tur-build-nested-src-dir-finds-no-files.md) | low-medium | `tur build src/` / `tur test <dir>` use a FLAT collector, so a normal nested `src/<pkg>/mod.tur` layout reports `no .tur files found` -- and this is the exact invocation the `module not found` hint recommends. `tur build .` (project mode) recurses correctly; the recursive collector already exists and is simply not called here |
+
+`lang-switch-breaks-generic-instance-resolution` was resolved 2026-08-13 and
+moved to
+[docs/archive](../archive/lang-switch-breaks-generic-instance-resolution.md).
+Its candidate 1 (stale vs fresh `TypeClassEnv` identity) was right but only half
+the cause: the by-name retry that should have absorbed it was gated
+`!concrete_is_primitive` -- and `Sym` and `cstr`, the two element types in the
+report's own repros, are both primitive -- **and** the retry could not have
+matched anyway, because it never spelled a primitive instance's head via
+`gde_primitive_type_name` the way the precise loop above it does. Either alone
+leaves the bug. The report's open blast-radius question is answered: `Eq` was
+not spared by surviving the reset, it simply never reaches that path with a
+primitive concrete. Three notes for whoever writes a similar test: the defect
+does **not** reproduce from C via `turi_try_show_by_tag` (that is the auto-show
+tier, not the broken path), `(load "stdlib/str.tur")` first **masks** it
+entirely, and the harness's `check` uses `grep -qF`, which treats a multi-line
+pattern as alternatives -- a before/after expectation there passes on a broken
+compiler.
 
 `jit-s2-split-disengages-on-hoisted-inline-c-include` was resolved 2026-08-13
 and moved to
