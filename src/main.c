@@ -726,6 +726,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
     pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
@@ -931,6 +932,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
     pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
@@ -1033,6 +1035,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
     pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};

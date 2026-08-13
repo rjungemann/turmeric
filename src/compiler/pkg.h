@@ -189,9 +189,48 @@ typedef struct PkgLockFile {
 /* Manifest read / write                                               */
 /* ------------------------------------------------------------------ */
 
+/* The outcome of a manifest read.  ABSENT and MALFORMED are very different
+ * situations that a plain `false` used to collapse into one:
+ *
+ *   ABSENT     -- no manifest here (or it could not be opened).  Normal; the
+ *                 caller should carry on with whatever resolution it had.
+ *   OK         -- read and parsed.
+ *   MALFORMED  -- a manifest EXISTS and is broken.  The caller is about to
+ *                 silently drop everything the manifest was going to provide
+ *                 (most damagingly, the spice root's `src/` never joins the
+ *                 module search path), so every intra-spice import then fails
+ *                 with `module not found` naming the import, not the manifest.
+ *
+ * See docs/archive/manifest-read-failure-degrades-to-module-not-found.md. */
+typedef enum {
+    PKG_MANIFEST_ABSENT = 0,
+    PKG_MANIFEST_OK,
+    PKG_MANIFEST_MALFORMED,
+} PkgManifestStatus;
+
 /* Parse a build.tur file.  All returned strings are heap-allocated.
- * Returns true on success; prints diagnostics to stderr on failure. */
+ * Returns true on success; prints diagnostics to stderr on failure.
+ *
+ * On failure `*out` is freed and zeroed before returning, so a caller taking
+ * the `if (!pkg_manifest_read(...)) continue;` branch leaks nothing and never
+ * sees a partially-parsed manifest. */
 bool pkg_manifest_read(const char *path, PkgManifest *out);
+
+/* Same, reporting WHICH failure occurred.  `status` may be NULL. */
+bool pkg_manifest_read_status(const char *path, PkgManifest *out,
+                              PkgManifestStatus *status);
+
+/* True if any manifest read in this process found a manifest and rejected it.
+ * Sticky across diag_reset() -- see pkg_manifest_reassert().  When true,
+ * `pkg_manifest_malformed_path()` is the offending manifest (NULL if none). */
+bool        pkg_manifest_malformed(void);
+const char *pkg_manifest_malformed_path(void);
+
+/* Re-assert a malformed-manifest verdict after diag_reset(), so the command
+ * actually FAILS rather than printing `error:` and exiting 0.  Same shape and
+ * same reason as pkg_tur_version_reassert(); call the two together. */
+void pkg_manifest_reassert(void);
+void pkg_manifest_malformed_reset(void);
 
 /* Resolve a manifest filename in `dir`. Writes the full path into `out`
  * (size `cap`). Probes `build.tur` first, then `build.tur.sweet`.

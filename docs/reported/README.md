@@ -242,7 +242,23 @@ Pinned by four `errors/` negatives and
 | --- | --- | --- |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
-| [manifest-read-failure-degrades-to-module-not-found](manifest-read-failure-degrades-to-module-not-found.md) | medium | a BROKEN `build.tur` is indistinguishable from no manifest to every caller, so a one-token typo presents as N unrelated `module not found` errors and `tur check` reports at `error:` severity while exiting **0** |
+| [tur-build-nested-src-dir-finds-no-files](tur-build-nested-src-dir-finds-no-files.md) | low-medium | `tur build src/` / `tur test <dir>` use a FLAT collector, so a normal nested `src/<pkg>/mod.tur` layout reports `no .tur files found` -- and this is the exact invocation the `module not found` hint recommends. `tur build .` (project mode) recurses correctly; the recursive collector already exists and is simply not called here |
+
+`manifest-read-failure-degrades-to-module-not-found` was resolved 2026-08-13
+and moved to
+[docs/archive](../archive/manifest-read-failure-degrades-to-module-not-found.md).
+`pkg_manifest_read` now distinguishes ABSENT from MALFORMED, and a malformed
+manifest is recorded in a sticky verdict that survives `diag_reset()` --
+re-asserted as TUR-E0624 at each compile entry point, exactly like the
+`:tur-version` floor next to it. The command now fails *before* elaboration, so
+the `module not found` cascade does not happen at all rather than being
+annotated (the report's fix direction 3 was conditional on deferring direction
+1, which was not deferred; the prototype was confirmed unreachable and removed).
+Two notes for anyone re-checking this: the report's open question about where
+the error state was cleared is answered in a comment 30 lines below the code it
+was reading, and **the Debug build masks the bug** -- the repro exits 1 there
+because LeakSanitizer catches the partial-manifest leak (also fixed), not
+because the manifest error was honoured.
 
 `mono-specs-header-comment-stale` was resolved 2026-08-13 and moved to
 [docs/archive](../archive/mono-specs-header-comment-stale.md). The header

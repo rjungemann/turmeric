@@ -293,6 +293,15 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                  * When no -I paths were passed, this is almost always an
                  * intra-spice import that needs the spice's src/ on the
                  * search path -- point at that explicitly. */
+                /* NOTE: a malformed build.tur used to reach here as a cascade
+                 * of `module not found` -- the manifest was discarded, the
+                 * spice's src/ never joined the search path, and the -I src
+                 * hint below actively sent readers away from the real cause.
+                 * That no longer happens: TUR-E0624 (pkg_manifest_reassert)
+                 * fails the compile before elaboration, so this diagnostic is
+                 * reached only when the manifest is fine and the import really
+                 * is unresolvable.  See
+                 * docs/archive/manifest-read-failure-degrades-to-module-not-found.md. */
                 const char *hint;
                 if (e->n_module_include_dirs > 0) {
                     hint = "  hint: check the -I paths you passed, "
