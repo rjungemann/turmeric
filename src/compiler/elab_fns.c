@@ -8798,6 +8798,46 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     return out;
 }
 
+/* True when `def_form` sits in STATEMENT position at file scope: it is the
+ * top-level form itself, or an item of a top-level `do` chain.
+ *
+ * `e->scope == &e->global` cannot answer this on its own -- it is equally true
+ * of a `def` buried in a top-level expression, e.g. `(if c (def x 1) (def y 2))`
+ * or `(when c (def x 1))`.  Those elaborate as GLOBALS and pass the type
+ * checker, but codegen emits them as locals of the enclosing statement, so any
+ * later reference dies in the emitted C with `'x_1326' undeclared`.  Nothing
+ * caught that: the "nothing to scope over" diagnostic below fired for these
+ * only when the synthesized-main fold happened to relocate the statement into a
+ * function body, which in turn happened only when the file declared no `main`
+ * of its own.  Adding `(defn main [] : int 0)` to the same file made the error
+ * disappear and the miscompile reappear.
+ *
+ * `do` is threaded through because it is a statement sequence, not an
+ * expression context, and the diagnostic below advertises it as a valid body.
+ *
+ * When e->toplevel_stmt is NULL we are not in file-scope elaboration at all
+ * (an imported module, a REPL form, an interpreter session); return true so the
+ * scope test alone decides, exactly as before.
+ * See docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md. */
+static bool def_form_reachable_as_stmt(const Elab *e, const Form *from,
+                                       const Form *target, int depth) {
+    if (!from || depth > 32) return false;
+    if (from == target) return true;
+    if (from->tag != F_LIST || from->as.list.len == 0) return false;
+    const Form *head = from->as.list.items[0];
+    if (!head || head->tag != F_SYM || head->as.sym != e->sym_do) return false;
+    for (uint32_t i = 1; i < from->as.list.len; i++)
+        if (def_form_reachable_as_stmt(e, from->as.list.items[i], target,
+                                       depth + 1))
+            return true;
+    return false;
+}
+
+static bool def_form_is_statement_position(const Elab *e, const Form *def_form) {
+    if (!e->toplevel_stmt) return true;
+    return def_form_reachable_as_stmt(e, e->toplevel_stmt, def_form, 0);
+}
+
 Expr *elab_def(Elab *e, const Form *call) {
     /* def/define consolidation D1: `define` is a spelling of `def`, so every
      * diagnostic below quotes the head symbol the user actually wrote rather
@@ -8975,6 +9015,21 @@ Expr *elab_def(Elab *e, const Form *call) {
                   "position binds a name no later form can see. Put it at the top "
                   "level, or in a body (`do`, `fn`, `let`, `when`, `while`), or "
                   "use `let` if you meant a binding local to this expression",
+                  kw, kw);
+        return NULL;
+    }
+    /* Same defect, different advice: at file scope the user DID put it at the
+     * top level, just inside an expression there.  Telling them to "put it at
+     * the top level" would be nonsense, so name the enclosing expression as the
+     * problem and point at the `do` form that actually works. */
+    if (!def_form_is_statement_position(e, call)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "`%s` is inside a top-level expression, which cannot bind a "
+                  "global: it elaborates as one but is emitted as a local, so a "
+                  "later reference fails to compile. Lift it out to its own "
+                  "top-level form, or wrap the statements in `(do ...)` -- a "
+                  "top-level `do` is a statement sequence and a `%s` inside one "
+                  "does bind a global",
                   kw, kw);
         return NULL;
     }

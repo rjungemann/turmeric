@@ -1120,6 +1120,41 @@ static bool form_has_toplevel_unhandled_perform(const Elab *e, const Form *f) {
     return false;
 }
 
+/* True when `f` contains a `def`/`define` SUBFORM -- a `def` nested inside a
+ * top-level statement rather than heading a top-level form of its own.
+ *
+ * Such a `def` binds a GLOBAL: at file scope `(when true (def x 1))` and
+ * `(if c (def x 1) (def y 2))` both mint globals that later forms can see, and
+ * that is how the interpreter and the no-fold compiled path behave.  Folding
+ * the statement into the synthesized main body relocates the `def` INSIDE a
+ * function, where `e->scope != &e->global` makes elab_def emit "`def` here has
+ * nothing to scope over: ... binds a name no later form can see" -- a claim
+ * that is false about the code the user actually wrote.  So the fold turned a
+ * working program into a compile error, and only when no user `main` existed:
+ * adding `(defn main [] : int 0)` to the same file made the error disappear.
+ *
+ * This is the same hazard the `?`/`return` carve-out above guards, in the
+ * opposite direction (there, folding SUPPRESSES a correct rejection; here it
+ * CREATES a spurious one), so it takes the same remedy -- abort the fold and
+ * leave the form at top level, where it keeps its real meaning.
+ *
+ * A `def` inside a nested `fn`/lambda is a function-local binding either way
+ * and is genuinely rejected in both paths, so it does not block the fold.
+ * See docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md. */
+static bool form_has_nested_def(const Elab *e, const Form *f, bool nested) {
+    if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head && head->tag == F_SYM) {
+        const Symbol *hs = head->as.sym;
+        if (nested && (hs == e->sym_def || hs == e->sym_define)) return true;
+        /* a nested fn/lambda body is its own scope, not file scope */
+        if (hs == e->sym_fn || hs == e->sym_lambda) return false;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (form_has_nested_def(e, f->as.list.items[i], true)) return true;
+    return false;
+}
+
 /* Classify a `(defmacro name [params] TEMPLATE)` form: does its expansion
  * produce a STATEMENT (fold-safe) rather than a top-level definition/directive?
  *
@@ -1771,6 +1806,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
              * top-level and keeps its correct diagnostic -- such a program is a
              * compile error either way, so the historical path is exactly right. */
             if (hs == e.sym_question || hs == e.sym_return) { ambiguous = true; break; }
+            /* A `def`/`define` nested inside the statement binds a global at
+             * file scope; folding it into main would relocate it into a
+             * function body and reject it.  Keep the form top-level. */
+            if (form_has_nested_def(&e, f, false)) { ambiguous = true; break; }
             int macro_idx = -1;
             for (uint32_t m = 0; m < n_macro; m++)
                 if (macro_names[m] == hs) { macro_idx = (int)m; break; }
@@ -1927,7 +1966,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
+        /* Statement position for the def-position check: this form, and any
+         * form reachable from it through `do` chains, is a statement.  Anything
+         * deeper is an expression subform.  See def_form_is_statement_position. */
+        e.toplevel_stmt = forms[i];
         items[i] = elab_form(&e, forms[i]);
+        e.toplevel_stmt = NULL;
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
 
         /* Phase M7+: Each (load ...)-spliced file is conceptually its own

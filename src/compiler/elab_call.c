@@ -2605,7 +2605,18 @@ Expr *elab_call(Elab *e, Form *call) {
          * walk, so the crossing path walk can traverse macro-GENERATED
          * guards/crossings (see rt_macro_expansion in elab_fns.c). */
         refine_note_macro_expansion(e, call, expanded);
+        /* The expansion REPLACES this call, so it inherits its statement
+         * position: a top-level macro emitting `(do (defn ..) (def ..))` --
+         * the ECS defsystem shape -- is a top-level statement list, not an
+         * expression.  Without this hand-off the expanded Forms are fresh
+         * allocations unreachable from `e->toplevel_stmt` (still the macro
+         * CALL), and every `def` they emit is rejected as expression-position.
+         * Only re-point when this call IS the current statement; a macro
+         * called from inside an expression stays inside one. */
+        const Form *saved_tl_stmt = e->toplevel_stmt;
+        if (e->toplevel_stmt == call) e->toplevel_stmt = expanded;
         Expr *out = elab_form(e, expanded);
+        e->toplevel_stmt = saved_tl_stmt;
         e->macro_expansion_module = saved_expansion;
         if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--;
         e->macro_expand_depth--;

@@ -137,7 +137,6 @@ into a frame env again.
 | [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
 | [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
 | [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
-| [turi-toplevel-expr-subforms-elaborate-in-global-scope](turi-toplevel-expr-subforms-elaborate-in-global-scope.md) | low | a bare top-level expression's subforms elaborate in the GLOBAL scope under `--interpret`, in a pushed one compiled; both paths still reject, only the diagnostic (and which binding a `def` subform creates) diverges |
 
 
 The first absorbed two symptom reports on 2026-08-01
@@ -243,6 +242,22 @@ Pinned by four `errors/` negatives and
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [tur-build-nested-src-dir-finds-no-files](tur-build-nested-src-dir-finds-no-files.md) | low-medium | `tur build src/` / `tur test <dir>` use a FLAT collector, so a normal nested `src/<pkg>/mod.tur` layout reports `no .tur files found` -- and this is the exact invocation the `module not found` hint recommends. `tur build .` (project mode) recurses correctly; the recursive collector already exists and is simply not called here |
+
+`turi-toplevel-expr-subforms-elaborate-in-global-scope` was resolved
+2026-08-13 and moved to
+[docs/archive](../archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md).
+Three corrections to the filing are worth carrying forward. The discriminator
+was never the engine -- it was the **synthesized-main fold**, which runs only
+when a file declares no `main`, so the *compiled path disagreed with itself*
+depending on an unrelated line elsewhere in the file. The divergence was
+accept/reject, not just diagnostic wording: the report's repro happens to have
+mismatched `if` branch types, which is the only reason the interpreter rejected
+it too. And the accepting path **miscompiles** -- the `def` elaborates as a
+global but codegen emits a local, so a later reference dies in the emitted C
+with `'answer_1326' undeclared`. The filed severity of low rested on "both paths
+still reject"; it should have been medium. Both engines now reject, via the
+report's *narrower* alternative (a statement-position bit on `Elab`), which
+turned out to be the primary fix rather than the fallback.
 
 `manifest-read-failure-degrades-to-module-not-found` was resolved 2026-08-13
 and moved to

@@ -1,0 +1,17 @@
+;; The legal file-scope `def` positions, pinned against the expression-position
+;; rejection in errors/toplevel-def-in-expr-position.  Both must hold at once:
+;; a `def` heading a top-level form, and a `def` inside a top-level `do`, bind
+;; globals that later forms can see -- on the compiled AND the interpreted path.
+;;
+;; The `do` case is the one at risk: it is a statement sequence, not an
+;; expression context, so the position check threads through it.
+;; See docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md
+
+(def answer 42)
+
+(do (def greeting "hello")
+    (def second 8))
+
+(defn main [] : int
+  (println greeting)
+  (+ answer second))

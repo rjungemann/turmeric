@@ -422,8 +422,15 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
      * blocker). */
     elab_forward_declare_defns(e, forms, 0, nforms);
 
+    const Form *saved_import_tl_stmt = e->toplevel_stmt;
     for (uint32_t i = 0; i < nforms; i++) {
+        /* An imported module's forms are its own file-scope statement list, so
+         * each is a statement for the def-position check.  Left unset, a plain
+         * top-level `(def ...)` in an imported file (stdlib/math.tur) would be
+         * measured against the IMPORTER's current form and rejected. */
+        e->toplevel_stmt = forms[i];
         Expr *ex = elab_form(e, forms[i]);
+        e->toplevel_stmt = saved_import_tl_stmt;
         if (!ex) {
             e->has_defmodule       = saved_has_defmodule;
             e->current_module_name = saved_module_name;
@@ -941,8 +948,17 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     uint32_t actual_n_body = 0;
     bool body_had_error = false;
 
+    const Form *saved_tl_stmt = e->toplevel_stmt;
     for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        /* A defmodule body is its own file-scope statement list, so each form
+         * here is a statement for the def-position check -- exactly as in
+         * elaborate_program's Pass 2.  Without this, `e->toplevel_stmt` would
+         * still name the enclosing `(defmodule ...)` form and every `def` in
+         * the module would be reported as sitting inside a top-level
+         * expression. */
+        e->toplevel_stmt = call->as.list.items[j];
         Expr *be = elab_form(e, call->as.list.items[j]);
+        e->toplevel_stmt = saved_tl_stmt;
         if (!be) {
             body_had_error = true;
             continue;  /* keep going to surface more diagnostics */

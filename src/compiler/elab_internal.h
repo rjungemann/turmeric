@@ -623,6 +623,18 @@ typedef struct Elab {
      * user code that later shadows them gets a hard diagnostic instead
      * of broken C output. */
     bool             in_stdlib_load;
+    /* The top-level form currently being elaborated by elaborate_program's
+     * Pass 2, or NULL when not at file scope.
+     *
+     * `e->scope == &e->global` is true both for a `def` that IS a top-level
+     * form and for a `def` buried in a top-level EXPRESSION's subforms
+     * (`(if c (def x 1) (def y 2))`), so the scope pointer alone cannot tell
+     * statement position from expression position.  elab_def needs that
+     * distinction: the second shape elaborates as a global but codegen emits
+     * it as a local, so a later reference fails in the emitted C with an
+     * `undeclared identifier`.  See def_form_is_statement_position() and
+     * docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md. */
+    const Form      *toplevel_stmt;
     /* Phase M4: During macro expansion, the defining module of the currently
      * expanding macro (so private helper macros from that module are visible).
      * Cross-module wrapper-macro bug fix: when an outer macro M (defined in
