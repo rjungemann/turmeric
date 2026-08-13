@@ -4766,6 +4766,55 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
     }
 }
 
+/* Pin a callee's HKT tyvar from the STATIC type of the argument passed to it,
+ * for a call that pins nothing of its own.
+ *
+ * A constrained generic reached through a rank-2 `forall` parameter carries no
+ * abi_bindings: `(defn at-t1 [g (forall [(m :: * -> *)] ...)])` invokes it as
+ * `(g (mk-t1 0))`, and the elaborator has no call-site substitution to record
+ * because the callee is a parameter, not a named generic.  So nothing reaches
+ * the frame, gde_reresolve_return_directed finds no concrete tyvar, and the
+ * baked representative answers -- two differently-tagged Applicatives both
+ * returning the second instance's `pure`.
+ *
+ * The substitution is nonetheless right there in the types: the callee declares
+ * `x : (m int)` and the call site's argument has static type `(T1 int)`.  Match
+ * the two type applications and `m -> T1` follows.
+ *
+ * Deliberately narrow.  Only a declared `(tyvar arg)` against a concrete-headed
+ * `(Ctor arg)` is matched -- the higher-kinded shape this is about -- rather
+ * than general structural unification, whose extra reach would be untested and
+ * whose failure mode is a WRONG instance rather than today's conservative one.
+ * Only called when the call recorded no abi_bindings, so every call that pins
+ * something keeps its exact prior behaviour.
+ * See docs/archive/turi-return-directed-method-keeps-baked-instance.md. */
+static void frame_pin_hkt_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
+                                           const FnDef *fn,
+                                           uint32_t param_offset,
+                                           uint32_t effective_params,
+                                           const Expr *call, uint32_t arg_base) {
+    if (!fn || !fn->params || !call || call->kind != EX_CALL) return;
+    for (uint32_t i = 0; i < effective_params; i++) {
+        uint32_t ai = arg_base + i;
+        if (ai >= call->as.call_.n_args || !call->as.call_.args[ai]) continue;
+        const Type *pt = &fn->params[param_offset + i]->type;
+        const Type *at = &call->as.call_.args[ai]->type;
+        if (pt->kind != TY_APP || at->kind != TY_APP) continue;
+        const Type *pf = pt->as.app.fn;
+        const Type *af = at->as.app.fn;
+        if (!pf || !af) continue;
+        if (pf->kind != TY_TYVAR || !pf->as.tyvar_.name) continue;
+        if (af->kind == TY_TYVAR) continue;   /* argument still abstract */
+        Type existing;
+        if (frame_lookup_tyvar(callee, pf->as.tyvar_.name, &existing)) continue;
+        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        tb->name = pf->as.tyvar_.name;
+        tb->type = *af;
+        tb->next = callee->tyvars;
+        callee->tyvars = tb;
+    }
+}
+
 /* Bind a bare-head constrained instance's constraint tyvars onto the instance
  * body frame.  A `(definstance C [Cons] [(C A)] ...)` head pins only the class
  * param `a = Cons`; its element tyvar `A` lives solely in the `[(C A)]`
@@ -7244,6 +7293,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * method call inside the body can re-resolve its instance. */
                 if (top->expr->as.call_.n_abi_bindings > 0)
                     frame_record_abi(env, call_frame, top->frame, top->expr);
+                else
+                    frame_pin_hkt_tyvars_from_args(env, call_frame, fn,
+                                                   param_offset, effective_params,
+                                                   top->expr, arg_base);
                 /* Bare-head constrained instance: bind its constraint tyvars
                  * (`(C A)`'s `A`) from the receiver arg's static type so a nested
                  * dispatch inside the body resolves the element's real instance

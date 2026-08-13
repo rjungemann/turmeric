@@ -1,0 +1,44 @@
+;; turi-return-directed-method-keeps-baked-instance, the rank-2 forall half.
+;;
+;; `make` calls the RETURN-directed method `pure`, whose class variable appears
+;; only in the result type, so the call carries no receiver and pins no
+;; abi_bindings.  Reached through a rank-2 `forall` PARAMETER -- `(g (mk-1 0))`
+;; rather than a direct call to `make` -- there is also no call-site
+;; substitution for the elaborator to record, so nothing at all reached the
+;; interpreter's frame and the baked representative answered both call sites:
+;; two differently-tagged Applicatives both printed 207.
+;;
+;; The substitution is recoverable from the types even so: `make` declares
+;; `x : (m int)` and the argument's static type is `(B1 int)` / `(B2 int)`.
+;;
+;; This is a deliberate inline-C-free restatement of
+;; hkt-constrained-pure-two-instances.  That fixture and its sibling
+;; hkt-constrained-continuation-dict both carry inline-C and are PASS-skipped by
+;; the TI7 carve-out in tests/run-turi.sh, so the interpreter never ran either
+;; one -- the family reported green while executing none of it, which is how the
+;; gap survived.  Parametric ADTs give the same two-instance discrimination with
+;; no inline-C, so run-turi actually executes this.
+
+;; Each constructor carries its instance's tag alongside the payload.  The tag
+;; is a literal in `pure`'s body rather than arithmetic on `x`, because `x` is
+;; the class variable's payload and still a tyvar there.
+(defdata B1 [a] (Mk1 :int a))
+(defdata B2 [a] (Mk2 :int a))
+
+(definstance Applicative [B1] (pure [x] (Mk1 100 x)) (ap [ff fa] fa))
+(definstance Applicative [B2] (pure [x] (Mk2 200 x)) (ap [ff fa] fa))
+
+(defn un-1 [b : (B1 int)] : int (match b (Mk1 t v) (+ t v)))
+(defn un-2 [b : (B2 int)] : int (match b (Mk2 t v) (+ t v)))
+
+(defn make [^m] [^Applicative m x : (m int)] : (m int) (pure 7))
+
+(defn at-1 [g (forall [(m :: * -> *)] [(Applicative m)] (-> (m int) (m int)))] : int
+  (un-1 (g (Mk1 0 0))))
+(defn at-2 [g (forall [(m :: * -> *)] [(Applicative m)] (-> (m int) (m int)))] : int
+  (un-2 (g (Mk2 0 0))))
+
+(defn main [] : int
+  (println (at-1 make))   ; want 107
+  (println (at-2 make))   ; want 207
+  0)
