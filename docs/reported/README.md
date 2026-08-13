@@ -141,7 +141,6 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
 
 
 The first absorbed two symptom reports on 2026-08-01
@@ -244,6 +243,24 @@ Pinned by four `errors/` negatives and
 | Report | Severity | One line |
 | --- | --- | --- |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
+
+`incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved
+to
+[docs/archive](../archive/incremental-elab-loses-span-file-provenance.md). Its
+remaining (DAP) half was **not** what the root-cause section said: no span ever
+lost provenance. `diag_reset()` clears the whole SourceFile registry every eval
+turn, and the incremental path reuses previously-parsed Forms rather than
+re-running their `(load ...)` splices -- so the 40 loaded files are never
+re-registered while the reused Forms still carry their ids, and every later
+`diag_file_path()` misses. Hence `?:19` (a frame with NO path) rather than one
+attributed to `<eval>`. Fixed with a save/restore of the registry around that
+reset, far smaller than the report's "neither is small" estimate -- no span
+remapping and no offset table, because nothing moved. The `cmd_eval_h`
+workaround is removed and `tests/run-dap.sh` is now a real guard; with the
+workaround in place it passed whether or not the bug existed. This does **not**
+retire the two sibling `elab_lookup_*` workarounds the report groups it with --
+those are name visibility across the moved stdlib/user boundary, a different
+mechanism.
 
 `tur-build-nested-src-dir-finds-no-files` was filed and resolved 2026-08-13,
 and moved to

@@ -10797,7 +10797,21 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     size_t      src_len  = combined->len;
     const char *src_copy = combined->data;
 
-    /* 4. Reset diagnostics; register the eval source file. */
+    /* 4. Reset diagnostics; register the eval source file.
+     *
+     * Snapshot the file registry first.  diag_reset() clears it, and on the
+     * incremental path the `(load ...)`ed files registered by an EARLIER turn
+     * are never re-registered -- that turn's Forms are reused rather than
+     * re-parsed, so the load splicing does not run again -- while those Forms
+     * still carry their file ids.  Without the restore below, every later
+     * diag_file_path() on such an id misses and the DAP debugger reports a
+     * frame as `?:19` with no `source` object.  Sound here because the
+     * interpreter retains its eval arenas for the life of the env, so the saved
+     * SourceFile pointers stay valid.
+     * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
+    const SourceFile *saved_files[64];
+    size_t n_saved = diag_files_save(saved_files,
+                                     sizeof(saved_files) / sizeof(saved_files[0]));
     diag_reset();
 
     SourceFile *sfile = (SourceFile *)arena_alloc(eval_arena, sizeof(SourceFile));
@@ -10817,6 +10831,9 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     sfile->reader_type = env->reader_type;
     sfile->lang_layers = env->lang_layers;   /* lang-layers-plan L1 */
     diag_register_file(sfile);
+    /* Re-register the previous turn's loaded files (id 0, this turn's blob,
+     * is skipped) so spans in reused Forms still resolve to their real path. */
+    diag_files_restore(saved_files, n_saved);
 
     /* 5. Parse. RM Q#5: pass env->reader_macros so reader-macros defined
      * in earlier eval calls remain visible.

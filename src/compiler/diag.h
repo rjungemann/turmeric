@@ -463,6 +463,35 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
 bool diag_had_error(void);
 void diag_reset(void);
 
+/* Save / restore the registered-SourceFile table across a diag_reset().
+ *
+ * diag_reset() clears the file registry, which is right for a compiler driver
+ * looping over files: the SourceFiles live in a per-file arena that is about to
+ * go away, so keeping them registered would leave dangling pointers.
+ *
+ * It is wrong for the interpreter's incremental path.  There, turn N-1 splices
+ * `(load ...)`ed files in and registers each one; turn N reuses the Forms it
+ * already parsed, so those loads never re-run and the files are never
+ * re-registered -- but the reused Forms still carry their file ids.  Every
+ * later diag_file_path() on one of those ids misses, and everything downstream
+ * that needs to know WHICH FILE a form came from degrades: the DAP debugger
+ * reports a frame as `?:19` with no `source` object, and file-scoped
+ * breakpoints stop matching.
+ *
+ * The interpreter's eval arenas are retained for the life of the env, so its
+ * SourceFile pointers stay valid across turns and restoring them is sound.
+ * A caller that frees per-turn arenas must NOT use these.
+ *
+ * `diag_files_save` writes up to `cap` entries and returns how many slots the
+ * table holds (indices are file ids, and NULL slots are preserved so ids stay
+ * stable).  `diag_files_restore` re-registers every non-NULL entry EXCEPT id 0,
+ * which the caller has just re-registered with the current turn's blob.
+ * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
+size_t diag_files_save(const SourceFile **out, size_t cap);
+void   diag_files_restore(const SourceFile **in, size_t n);
+/* Slots the registry can hold, so callers can size their snapshot buffer. */
+size_t diag_files_capacity(void);
+
 /* Speculative-elaboration capture (bare-fat-result-monomorphization-plan).
  * While a capture frame is active, every diag_emit* call is suppressed
  * (nothing is rendered to stderr) and DIAG_ERROR emissions are counted into

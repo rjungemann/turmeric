@@ -151,3 +151,87 @@ nothing. Diagnostic locations under plain `--interpret` are still affected.
 (Superseded 2026-07-29: the `--interpret` sentence no longer holds -- see
 [The `--interpret` half was not incremental](#the---interpret-half-was-not-incremental).
 The workaround itself is still required.)
+
+## RESOLVED 2026-08-13 -- the DAP half
+
+The remaining half is fixed, the `cmd_eval_h` workaround is removed, and debug
+sessions keep the incremental path.
+
+### It was the file REGISTRY, not the spans
+
+The root-cause section above says the incremental session "elaborates that blob,
+so the spans it produces carry the blob's file id, not the id registered for
+`input.tur`". That is not what happens. Instrumenting `diag_register_file` /
+`diag_reset` / `diag_file_path` across a DAP session shows the spans are fine and
+the registry is not:
+
+```
+[files] RESET (dropping 41)
+[files] register id=0 path=<eval>
+[files] MISS id=40 (count=1)        <- x18, every frame and breakpoint query
+```
+
+Turn 1 registers 41 files -- the blob plus 40 `(load ...)`ed ones, with the
+user's `input.tur` last at id 40. `diag_reset()` then clears the whole table
+every turn (`files_[i] = NULL`, `file_count_ = 0`). Turn 2 re-registers **only**
+id 0, because the incremental path reuses the Forms it already parsed and so
+never re-runs their load splices -- while those Forms still carry id 40.
+
+So the spans keep correct provenance throughout. The id they name simply stops
+resolving. That is why the symptom is `?:19` (a frame with no path) rather than
+a frame attributed to `<eval>`.
+
+This also explains why the report's two halves behaved so differently, and why
+the `--interpret` half turned out not to be incremental at all: that one was
+about which file the source *went into*, this one is about whether the registry
+still knows the file at lookup time.
+
+### Fix
+
+`diag_files_save` / `diag_files_restore` (`src/compiler/diag.c`), called around
+the `diag_reset()` in `turi_eval_impl`: snapshot the table, reset, register this
+turn's blob at id 0, then re-register every saved entry from id 1 up that the
+new turn has not already claimed. Id 0 is deliberately skipped -- the saved
+entry there is the *previous* blob and would clobber the current one.
+
+Sound because the interpreter retains its eval arenas for the life of the env,
+so the saved `SourceFile` pointers stay valid across turns. `diag_reset()`
+itself is unchanged, because clearing the registry is correct for a compiler
+driver looping over files whose per-file arenas are about to go away; the header
+says so at the new declarations, so the next reader does not "simplify" this by
+making `diag_reset()` keep files globally.
+
+This is much smaller than the report's estimate ("either by registering the
+originating file for each spliced region and remapping span file ids ... or by
+giving the session a span-offset table it can invert. Neither is small.") -- no
+remapping and no offset table, because no span ever moved.
+
+### The workaround is gone
+
+`cmd_eval_h`'s `turi_env_set_incremental_elab(env, false)` for debug sessions is
+removed; the comment there now records what the cause actually was. Debug
+sessions get the incremental path like everything else.
+
+### `tests/run-dap.sh` is now a real regression guard
+
+It was not one before: with the workaround in place it passed whether or not
+this bug existed. Verified both directions -- with the workaround removed and
+the fix reverted it reproduces the reported transcript verbatim
+(`FRAME out #0 main ?:19` then `FAIL: timeout waiting for event stopped`), and
+with the fix it is 20/20.
+
+### Does this retire the other two workarounds?
+
+The report notes two sibling lookup-time workarounds for "the incremental path
+moves the stdlib/user boundary" (`elab_lookup_macro` in `elab_core.c`,
+`elab_lookup_sym` in `elab_module.c`) and suggests a general fix would retire all
+three. It does not: those are about *name visibility* across the moved boundary,
+whereas this was the diagnostic file registry being cleared out from under
+reused Forms. Same incremental path, unrelated mechanisms. They stay.
+
+### Verification
+
+`tests/run-dap.sh` 20/20. `tests/run-debugger.sh` 17/17. `tests/run.sh` 2596
+passed, 0 failed. `tests/run-turi.sh` 1782 passed, 0 failed.
+`tests/run-flags.sh` 78 passed, 0 failed. `tests/run-offtree-load.sh` 3 passed,
+0 failed.
