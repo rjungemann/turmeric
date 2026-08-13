@@ -47,7 +47,6 @@ the plan links. File a new repr cell there as well as here.
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
 | [fat-sink-shim-box-leaks-per-call](fat-sink-shim-box-leaks-per-call.md) | medium | a bare fn passed to a `^fat` sink mallocs a `{shim, orig}` box per CALL and never frees it -- 1002 MiB over 5e6 iterations. Pre-existing; the same leak at a normalized nominal param is fixed (static box), but `^fat` has no ownership contract so the caller cannot choose |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
-| [borrow-param-passed-as-unique-mut-undiagnosed](borrow-param-passed-as-unique-mut-undiagnosed.md) | medium-high | a `^borrow` PARAMETER can be handed to a `^unique ^mut` parameter with no diagnostic; the exclusive mutation is observable through the shared borrow. `(& x)` in-frame is caught, the parameter mode is not |
 
 The first three are one campaign but **not** duplicates -- each has its own
 pinned investigation and its own fix (a calling-convention change; a generic
@@ -60,10 +59,18 @@ since been resolved and moved to [docs/archive](../archive/):
 joining `type_has_concrete_codegen_layout`); both resolution notes are
 closed-cells rows in the guide.
 
-`borrow-param-passed-as-unique-mut-undiagnosed` is **not** part of that
-campaign -- it is a uniqueness/borrow-checking gap, not a representation one,
-and it is listed here only because this table is the repr-adjacent index. It
-does not share an investigation with the three above.
+`borrow-param-passed-as-unique-mut-undiagnosed` was resolved 2026-08-13 and
+moved to
+[docs/archive](../archive/borrow-param-passed-as-unique-mut-undiagnosed.md). It
+was never part of that campaign -- a uniqueness/borrow-checking gap, not a
+representation one. Root cause, which the report left open: the UT2 check reads
+`scope_borrow_conflicts`, which sees only borrows registered in THIS frame by an
+explicit `(& v)`; a `^borrow` parameter registers nothing there and correctly so,
+since its aliasing happened one frame up. Fixed by the narrower of the two
+options it weighs -- reject the `^unique ^mut` crossing on a `^borrow`-moded
+binding directly, rather than registering `^borrow` params as frame-live borrows,
+which would have fed every other borrow check too. No existing fixture changed,
+so the rejected shape was not in use anywhere in the corpus.
 
 ## Effect handlers
 

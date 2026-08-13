@@ -1,0 +1,36 @@
+;; The shapes the ^borrow -> ^unique ^mut rejection must NOT break, pinned
+;; alongside errors/borrow-param-to-unique-mut.
+;;
+;; The new check is deliberately narrow -- a `^borrow` parameter reaching a
+;; `^unique ^mut` parameter, and nothing else -- so an over-fire would show up
+;; here rather than as a silently rejected program somewhere downstream.
+;;
+;; See docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md
+(load "stdlib/vec.tur")
+
+(defn bump! [^unique ^mut v : (Vec int)] : int
+  (vec-push! v 7)
+  0)
+
+;; 1. An OWNER may still be passed as ^unique ^mut.  This is the ordinary use.
+(defn via-owner [] : int
+  (let [^mut v (vec-new)]
+    (vec-push! v 1)     ; grounds the element type; (vec-new) alone is (Vec 'A)
+    (bump! v)
+    (vec-len v)))
+
+;; 2. A ^borrow parameter may still be READ, and passed on to another ^borrow
+;;    parameter.  Sharing a shared reference is exactly what ^borrow is for;
+;;    only the exclusive crossing is rejected.
+(defn peek [^borrow v : (Vec int)] : int (vec-len v))
+
+(defn reader [^borrow v : (Vec int)] : int
+  (+ (vec-len v) (peek v)))
+
+(defn main [] : int
+  (println (via-owner))     ; 1
+  (let [^mut w (vec-new)]
+    (vec-push! w 5)
+    (vec-push! w 6)
+    (println (reader w)))   ; 2 + 2 = 4
+  0)

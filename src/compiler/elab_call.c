@@ -5684,6 +5684,33 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                     arg_b->name->name);
                 return NULL;
             }
+            /* The binding is itself a `^borrow` PARAMETER.
+             *
+             * scope_borrow_conflicts only sees borrows registered in THIS frame
+             * by an explicit `(& x)`, and a `^borrow` parameter registers
+             * nothing -- the aliasing happened in the caller.  So a shared
+             * reference could be handed straight to an exclusive parameter with
+             * no diagnostic at all, and the callee's mutation was observable
+             * through the caller's borrow: exactly what ^unique ^mut exists to
+             * rule out.  A by-value struct hides it (the callee mutates a copy);
+             * a heap-backed carrier like `(Vec int)` shows it.
+             *
+             * Rejecting the crossing directly, rather than registering ^borrow
+             * params as frame-live borrows, is the narrower of the two fixes the
+             * report weighs: it says only "a shared reference cannot become an
+             * exclusive one", which is true independent of what the frame knows,
+             * and it cannot make any other borrow check noisier.
+             * See docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md. */
+            if (arg_b->is_borrow) {
+                diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                    TUR_E0200_UNIQUE_ALIASED,
+                                    "cannot pass '%s' as ^unique ^mut -- it is a "
+                                    "^borrow parameter, so the caller still holds "
+                                    "it as a shared reference and the callee's "
+                                    "mutation would be visible through it",
+                                    arg_b->name->name);
+                return NULL;
+            }
         }
 
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.

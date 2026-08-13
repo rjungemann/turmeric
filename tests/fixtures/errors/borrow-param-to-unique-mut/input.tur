@@ -1,0 +1,31 @@
+;; A `^borrow` parameter must not be passable to a `^unique ^mut` parameter.
+;;
+;; This used to `tur check` clean and RUN, printing 2 then 2: the push inside
+;; `wreck!` was visible both through `reader`'s own shared borrow and through
+;; `main`'s owner, which is precisely what `^unique ^mut` promises cannot
+;; happen.  The borrow checker tracked only in-frame borrows -- an explicit
+;; `(& v)` registers one and is correctly rejected -- while a `^borrow`
+;; PARAMETER registers nothing, because the aliasing happened in the caller.
+;;
+;; Pick a heap-backed carrier.  A by-value `defstruct` argument is copied, so
+;; the callee mutates a copy and the caller still reads the old value -- which
+;; is why the first probe of this looked clean.
+;;
+;; See docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md
+(load "stdlib/vec.tur")
+
+(defn wreck! [^unique ^mut v : (Vec int)] : int
+  (vec-push! v 999)
+  0)
+
+(defn reader [^borrow v : (Vec int)] : int
+  (do
+    (wreck! v)
+    (vec-len v)))
+
+(defn main [] : int
+  (let [^mut v (vec-new)]
+    (vec-push! v 1)
+    (println (reader v))
+    (println (vec-len v)))
+  0)
