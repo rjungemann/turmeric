@@ -169,9 +169,6 @@ static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {
 #include <io.h>
 #include <fcntl.h>
 #endif /* _WIN32 */
-#if __has_include(<stdlib.h>)
-#include <stdlib.h>
-#endif
 /* Phase X3: tur_set_t — sorted int64_t array */
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
 static int __tur_set_cmp(const void *a, const void *b) {
@@ -3601,6 +3598,9 @@ static void tur_role_close(void *role_ptr) {
 }
 
 /* ==== tur: end of fixed runtime preamble ==== */
+#if __has_include(<stdlib.h>)
+#include <stdlib.h>
+#endif
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;

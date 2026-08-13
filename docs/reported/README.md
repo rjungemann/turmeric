@@ -239,9 +239,23 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [tur-build-nested-src-dir-finds-no-files](tur-build-nested-src-dir-finds-no-files.md) | low-medium | `tur build src/` / `tur test <dir>` use a FLAT collector, so a normal nested `src/<pkg>/mod.tur` layout reports `no .tur files found` -- and this is the exact invocation the `module not found` hint recommends. `tur build .` (project mode) recurses correctly; the recursive collector already exists and is simply not called here |
+
+`jit-s2-split-disengages-on-hoisted-inline-c-include` was resolved 2026-08-13
+and moved to
+[docs/archive](../archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md).
+Two corrections to its fix directions. Emitting the hoisted includes "above the
+split marker" as direction 1 proposes is **not safe** -- `#define
+_DEFAULT_SOURCE 1` sits immediately below that marker and its own comment says
+it must precede every `#include`; they went below the END marker instead, which
+is still ahead of every inline-C function. And moving the loop *within*
+`emit_runtime_preamble` does not fix anything, because the probe calls that same
+function after elaboration and so emits the includes too -- the loop had to move
+out of it entirely. Direction 3 (a `TUR_JIT_TIMING`-gated reason for the
+disengage) paid for itself inside one edit-compile cycle by catching that failed
+first attempt. Verified: the report's program B went from 7208 preamble lines
+(never engaging) to 5538, and every in-tree instance it names now engages.
 
 `reactor-fd-callback-fn-ptr-type-mismatch` was resolved 2026-08-13 and moved to
 [docs/archive](../archive/reactor-fd-callback-fn-ptr-type-mismatch.md), closing
