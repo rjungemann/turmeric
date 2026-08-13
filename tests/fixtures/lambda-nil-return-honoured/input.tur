@@ -1,0 +1,38 @@
+;; A lambda declared `: nil` must stay nil-returning even when its body tails
+;; into a value-returning call.
+;;
+;; `return_kind` starts at TY_NIL in the lambda elaborator, so an explicit
+;; `: nil` was indistinguishable from "unannotated" and the infer-from-body step
+;; overrode the declaration with the tail's type.  The emitted function then
+;; disagreed with the typed-thunk pointer built from the same declaration:
+;;
+;;   static int64_t __fn_N(void *, void *)      <- emitted body
+;;   typedef void (*tur_thunk_void_void___t)(void *, void *);   <- call site
+;;
+;; which is an indirect call through mismatched function-pointer types --
+;; undefined behavior that -fsanitize=function reports and that CFI,
+;; CET/BTI-hardened builds, and WASM's call_indirect reject outright.  It was
+;; benign on x86-64/arm64 only because the two returns share an ABI slot.
+;;
+;; The capture is deliberate: it forces the heap-env two-parameter shape
+;; (void *env, void *arg), which is the one the thunk typedef describes.
+;;
+;; See docs/reported/emitter-thunk-type-return-mismatch.md
+(defn bump [x : int] : int (+ x 1))
+
+(defn make-nil-tailing-into-int [] : ptr<void>
+  (let [_b 7]
+    (fn [c : ptr<void>] : nil (bump _b))))
+
+;; Control: the same shape whose tail is ALREADY nil-typed. It was always
+;; emitted `void`, so a regression that broke this instead would mean the
+;; annotation is now being honoured too aggressively.
+(defn make-nil-tailing-into-nil [] : ptr<void>
+  (let [_b 7]
+    (fn [c : ptr<void>] : nil (println _b))))
+
+(defn main [] : int
+  (let [f (make-nil-tailing-into-int)
+        g (make-nil-tailing-into-nil)]
+    (println "built"))
+  0)

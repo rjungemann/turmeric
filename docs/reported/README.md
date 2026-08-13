@@ -227,7 +227,7 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [emitter-thunk-type-return-mismatch](emitter-thunk-type-return-mismatch.md) | low-medium | the residue of the reactor fn-ptr report: 3 emitted-C sites whose typed-thunk ABI disagrees with a lifted lambda's RETURN type, in both directions. Caused by the `:int` closure sinks in the httpd API, not by the lowering -- the call site names the thunk from the erased sink, the lambda from its real type. **GCC cannot see this class at all** (no `-fsanitize=function`); needs clang |
+| [emitter-thunk-type-return-mismatch](emitter-thunk-type-return-mismatch.md) | low-medium | **2 findings left, down from 3 (2026-08-13).** The `void`/`int64_t` half is fixed -- an explicit `: nil` on a lambda was indistinguishable from unannotated, so the infer-from-body step retyped it to the tail's type and the emitted fn disagreed with the thunk pointer built from the same declaration. What remains is the `:int` closure sinks in the httpd API: the call site names the thunk from the erased sink, the lambda from its real type. **GCC cannot see this class at all** (no `-fsanitize=function`); needs clang |
 | [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
 
 `struct-return-type-mismatch-unchecked-until-cc` was resolved 2026-08-06 and

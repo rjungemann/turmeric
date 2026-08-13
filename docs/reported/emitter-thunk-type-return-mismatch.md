@@ -8,10 +8,11 @@ that `-fsanitize=function` reports and that CFI (`-fsanitize=cfi-icall`),
 CET/BTI-hardened builds, and WASM's `call_indirect` type check turn into a hard
 failure.
 
-**Status:** open. This is the residue of that report's fix direction 2, filed
-2026-08-13 after its directions 1 and 3 landed and closed 29 of the 32 findings.
-The remaining 3 have a different cause than the report guessed, which is the
-point of this filing.
+**Status:** open, **narrowed 2026-08-13 from 3 findings to 2** -- see
+[Fix direction 2 is done](#fix-direction-2-is-done-2026-08-13). Originally the
+residue of the parent report's fix direction 2, filed after its directions 1
+and 3 landed and closed 29 of the 32 findings. The remaining 2 have a different
+cause than the parent guessed, which is the point of this filing.
 
 ## What is left
 
@@ -127,3 +128,61 @@ anyone following the repro will hit them:
 - `stdlib/httpd.tur:667,772,811,2752,2829,3058` -- the `^fat ... : int` sinks
 - `tests/fixtures/httpd-mw-fold-many`, `tests/fixtures/httpd-mw-compose-of`
 - [docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md](../archive/reactor-fd-callback-fn-ptr-type-mismatch.md) -- the parent
+
+
+## Fix direction 2 is done (2026-08-13)
+
+The `void` vs `int64_t` case is fixed, taking the residue from 3 findings to 2.
+It was self-contained, as this report guessed it might be, and it is worth
+recording that it was *not* the type-erasure story the other two are.
+
+### Cause
+
+`elab_fns.c`'s lambda elaborator starts `return_kind = TY_NIL` and then, after
+the body is elaborated, runs "infer return type from body if not specified":
+
+```c
+if (return_kind == TY_NIL && body->type.kind != TY_NIL) return_kind = body->type.kind;
+```
+
+An **explicit** `: nil` also leaves `return_kind == TY_NIL`, so it is
+indistinguishable from unannotated and the inference overrides the declaration
+with the body's tail type. Hence
+
+```turmeric
+(fn [c : ptr<void>] : nil (bump _b))     ; bump returns int
+```
+
+emitting `static int64_t __fn_N(void *, void *)` while the typed-thunk pointer
+built from the *same* declaration says `void (*)(void *, void *)`. The typedef
+was right all along; the function was retyped out from under it.
+
+Note this is only reachable when the body's tail is value-returning -- a `: nil`
+lambda tailing into a nil-typed call was always emitted `void`, which is why
+most of the corpus was unaffected and only one site showed up.
+
+### Fix
+
+A `return_annotated` flag, set where the `: T` annotation is consumed (both the
+`F_KEYWORD` and `F_TYPE_ANN` branches), gating the inference. One flag, two
+setters, one condition.
+
+### Coverage, stated honestly
+
+`tests/fixtures/lambda-nil-return-honoured` carries the shape and its control
+(the same lambda tailing into a nil-typed call, which must stay `void` -- a
+regression that broke *that* would mean the annotation is now honoured too
+aggressively). It runs on both engines.
+
+It does **not** pin the emitted signature: the fixture has no `expected.c`
+snapshot, so the assertion is behavioural. The signature itself is checked only
+by a clang `-fsanitize=function` sweep, which GCC cannot perform at all. Adding
+a 142nd codegen snapshot to pin one line was judged not worth its regen cost;
+if that trade looks wrong later, the snapshot is the mechanism.
+
+### What is left
+
+The two remaining findings are the return-type-only mismatches whose cause is
+the `:int`-typed closure sinks in the httpd API -- fix direction 1. They are
+unaffected by this change, and direction 3 (a UBSan-clean gate) still cannot
+pass until they are fixed. This report stays open for them.

@@ -7722,6 +7722,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     /* Parse return type annotation and body */
     TypeKind return_kind = TY_NIL;
+    /* Whether the lambda DECLARED its return type.  `return_kind` starts at
+     * TY_NIL, so an explicit `: nil` is indistinguishable from "unannotated"
+     * without this -- and the inference below would then override the
+     * declaration with the body's tail type.  That is how
+     * `(fn [c : ptr<void>] : nil (bump _b))` came out of the emitter as
+     * `static int64_t __fn_N(void *, void *)` while the typed-thunk ABI built
+     * from the same declaration said `void (*)(void *, void *)` -- an indirect
+     * call through mismatched function-pointer types, which
+     * -fsanitize=function reports and CFI / CET-BTI / WASM call_indirect
+     * reject outright.
+     * See docs/reported/emitter-thunk-type-return-mismatch.md. */
+    bool return_annotated = false;
     Type *return_full_type = NULL;
     Type *return_fn_type = NULL; /* Preserve full TY_FN returns for higher-order calls. */
     uint32_t body_start = params_idx + 1;
@@ -7861,6 +7873,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                     *return_full_type = type_tyvar_named(kw->name);
                 }
             }
+            return_annotated = true;   /* an explicit `: T`, including `: nil` */
             body_start++;
         } else if (ret_f->tag == F_TYPE_ANN) {
             /* Compound return type via `: type-expr` syntax: `: (-> a b)`, `: (vec int)`, etc. */
@@ -7893,6 +7906,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                     }
                 }
             }
+            return_annotated = true;   /* an explicit `: T`, including `: nil` */
             body_start++;
         }
     }
@@ -8102,8 +8116,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
     e->scope = inner.parent;
     scope_free(&inner);
 
-    /* Infer return type from body if not specified */
-    if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
+    /* Infer return type from body if not specified.
+     *
+     * Gated on `!return_annotated` so an explicit `: nil` is honoured: without
+     * that, a lambda declared `: nil` whose body tails into a value-returning
+     * call was silently retyped to that call's result, and the emitted function
+     * disagreed with the typed-thunk pointer built from its declaration. */
+    if (!return_annotated && return_kind == TY_NIL && body->type.kind != TY_NIL) {
         return_kind = body->type.kind;
         if (body->type.kind == TY_FN) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
