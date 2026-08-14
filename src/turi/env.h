@@ -530,7 +530,7 @@ void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
  * When enabled, turi_eval parses only the newly appended source each turn and
  * reuses the Forms parsed by earlier evals, instead of re-parsing the entire
  * accumulated session source every time (which is O(N^2) in both time and
- * retained AST over a session -- see docs/reported/turi-repl-quadratic-reparse.md).
+ * retained AST over a session -- see docs/archive/history/turi-repl-quadratic-reparse.md).
  * The full accumulated blob is still handed to diagnostics, so spans and error
  * snippets render exactly as before.
  *

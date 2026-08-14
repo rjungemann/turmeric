@@ -17,7 +17,7 @@
  * wrong: `^0.32.2` bounds the next MINOR (`<0.33.0`) because pre-1.0 minors are
  * breaking by convention, while `^1.2.3` bounds the next MAJOR.
  *
- * See docs/reported/no-compiler-version-constraint-in-manifest.md.
+ * See docs/archive/history/no-compiler-version-constraint-in-manifest.md.
  * Built via the tur_semver_range_unit CMake target.
  */
 #include <stdio.h>

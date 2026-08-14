@@ -114,13 +114,13 @@ typedef enum DiagCode {
     TUR_W0038_LINT_PANIC_SITE,
     /* A free top-level defn shares its name with a user-defined typeclass
      * method, silently shadowing the method at every bare call site.
-     * See docs/reported/typeclass-methods-share-value-namespace-with-defns.md. */
+     * See docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md. */
     TUR_W0039_METHOD_DEFN_CLASH,
     /* Eval-mode unknown call head deferred to runtime-dispatch -- the name is
      * not bound at elaboration time and not in the typed-native registry, so
      * it will fail at runtime if no native is registered for it before the
      * call runs.  Likely a typo.  See
-     * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
+     * docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md. */
     TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
     /* arbitrary-fn-arity Phase 6: a defn/fn declares more positional parameters
      * than the historical soft ceiling of 16.  Not an error -- the mechanical
@@ -132,7 +132,7 @@ typedef enum DiagCode {
      * by symbol identity *before* any binding or macro lookup, so the
      * definition is accepted but every bare `(name ...)` call site elaborates
      * as the special form and the definition is unreachable by its bare name.
-     * See docs/archive/defn-shadows-return-special-form.md. */
+     * See docs/archive/history/defn-shadows-return-special-form.md. */
     TUR_W0042_SHADOWS_SPECIAL_FORM,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
@@ -462,6 +462,35 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
 
 bool diag_had_error(void);
 void diag_reset(void);
+
+/* Save / restore the registered-SourceFile table across a diag_reset().
+ *
+ * diag_reset() clears the file registry, which is right for a compiler driver
+ * looping over files: the SourceFiles live in a per-file arena that is about to
+ * go away, so keeping them registered would leave dangling pointers.
+ *
+ * It is wrong for the interpreter's incremental path.  There, turn N-1 splices
+ * `(load ...)`ed files in and registers each one; turn N reuses the Forms it
+ * already parsed, so those loads never re-run and the files are never
+ * re-registered -- but the reused Forms still carry their file ids.  Every
+ * later diag_file_path() on one of those ids misses, and everything downstream
+ * that needs to know WHICH FILE a form came from degrades: the DAP debugger
+ * reports a frame as `?:19` with no `source` object, and file-scoped
+ * breakpoints stop matching.
+ *
+ * The interpreter's eval arenas are retained for the life of the env, so its
+ * SourceFile pointers stay valid across turns and restoring them is sound.
+ * A caller that frees per-turn arenas must NOT use these.
+ *
+ * `diag_files_save` writes up to `cap` entries and returns how many slots the
+ * table holds (indices are file ids, and NULL slots are preserved so ids stay
+ * stable).  `diag_files_restore` re-registers every non-NULL entry EXCEPT id 0,
+ * which the caller has just re-registered with the current turn's blob.
+ * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
+size_t diag_files_save(const SourceFile **out, size_t cap);
+void   diag_files_restore(const SourceFile **in, size_t n);
+/* Slots the registry can hold, so callers can size their snapshot buffer. */
+size_t diag_files_capacity(void);
 
 /* Speculative-elaboration capture (bare-fat-result-monomorphization-plan).
  * While a capture frame is active, every diag_emit* call is suppressed

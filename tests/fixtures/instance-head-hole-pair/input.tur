@@ -3,7 +3,7 @@
 ;; Here a binary `Box` struct gets a right-biased `BoxFunctor` that fixes the
 ;; second arm B and maps over the first.  Validates the mechanism independently
 ;; of stdlib Result.  See
-;; docs/reported/result-param-order-blocks-functor-monad.md.
+;; docs/archive/history/result-param-order-blocks-functor-monad.md.
 
 (defstruct Box [A B] (a :int) (b :int))
 (defclass BoxFunctor [^f] (boxmap [c [fn :fn]] : int))

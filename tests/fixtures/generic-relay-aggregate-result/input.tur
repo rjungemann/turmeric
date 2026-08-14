@@ -6,7 +6,7 @@
 ;; the forwarder's T,R) through the forwarder's concrete bindings.  Before the
 ;; fix the inner `recv` call fell back to the broken int64 carrier template
 ;; `(int64_t){.fst = ...}` (invalid C).  Variant 2 of
-;; docs/reported/generic-struct-opaque-element-miscompile.md.
+;; docs/archive/history/generic-struct-opaque-element-miscompile.md.
 
 (defopaque SChan [P] :ptr<void>)
 (defopaque SRecv [T R] :ptr<void>)

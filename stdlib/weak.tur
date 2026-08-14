@@ -31,7 +31,7 @@
 ;;; It is a separate module rather than part of stdlib/rc.tur, deliberately.
 ;;; Originally it had to be: rc.tur did not compile at all, so an API placed
 ;;; there would have been unusable (fixed 2026-07-26, see
-;;; docs/archive/rc-tur-legacy-instances-do-not-compile.md).  It stays separate
+;;; docs/archive/history/rc-tur-legacy-instances-do-not-compile.md).  It stays separate
 ;;; now because the split is the better shape -- reaching for a weak reference
 ;;; should not drag in rc.tur's Functor/Foldable/Clone instances and the
 ;;; typeclass surface behind them.  Same reasoning as stdlib/rcchain.tur: one

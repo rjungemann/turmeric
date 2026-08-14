@@ -18,7 +18,7 @@
 ;; half -- an ADAPTER lambda `(fn [p] : (f Point) (point-x g p))` handed to another
 ;; constrained rank-2 lens -- additionally needs the lifted lambda to capture the
 ;; ambient dict and rank-2 arg-type preservation; see
-;; docs/reported/van-laarhoven-lens-composition.md.
+;; docs/archive/history/van-laarhoven-lens-composition.md.
 
 (defopaque Const [r a] :int)
 (defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)

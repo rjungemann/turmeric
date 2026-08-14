@@ -36,7 +36,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Warnings-as-errors, except during the Windows bring-up.
 #
-# The Windows port is in progress (docs/upcoming/v1/windows-support-plan.md).
+# The Windows port is in progress (docs/archive/windows-support-plan.md).
 # A first-time portability warning on a platform nobody has compiled for yet is
 # information, not a defect to halt on -- promoting it to a hard error just
 # hides the next twenty behind it.  Restore -Werror here once the port is warning
@@ -244,7 +244,7 @@ set(TUR_CORE_SOURCES
     # archive only contributes members that resolve an undefined symbol, so
     # the duplicate definition costs an existing link nothing -- but a
     # whole-archive consumer (the JIT, which resolves runtime symbols by NAME
-    # at run time) needs it present.  docs/archive/libturi-symbols-basename-collision.md.
+    # at run time) needs it present.  docs/archive/history/libturi-symbols-basename-collision.md.
     runtime/symbols.c
     runtime/tur_string.c
     # S2 (jit-engine-plan, findings 19.4 item 2 / seam 3): the generated
@@ -328,7 +328,7 @@ endif()
 if(WIN32)
     # Windows -- IOCP backend (io.h already selects IO_BACKEND_IOCP here).
     # Currently a stub: every entry point fails cleanly rather than silently
-    # pretending to poll.  See docs/upcoming/v1/windows-support-plan.md (WIN3).
+    # pretending to poll.  See docs/archive/windows-support-plan.md (WIN3).
     list(APPEND TUR_CORE_SOURCES async/io_iocp.c)
 elseif(UNIX AND NOT APPLE AND NOT FREEBSD AND NOT OPENBSD AND NOT NETBSD)
     # Linux - use epoll
@@ -992,7 +992,7 @@ endif()  # NOT WIN32
 
 # ---------------------------------------------------------------------------
 # UC-2: user-level experiments file reader unit test
-# (docs/upcoming/user-config-experiments-plan.md).  Exercises
+# (docs/archive/history/user-config-experiments-plan.md).  Exercises
 # experiments_read_user_config against a temp $XDG_CONFIG_HOME.
 # ---------------------------------------------------------------------------
 add_executable(tur_experiments_user_config

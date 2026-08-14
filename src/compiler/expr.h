@@ -219,7 +219,7 @@ struct Binding {
      * its linear/affine argument.  A non-consuming accessor (fs/tmpfile-path,
      * mutex-lock, ...) declares its handle param ^borrow so a later consuming
      * op (fs/tmpfile-free) remains the single legal consumption.  See
-     * docs/reported/stdlib-linear-handle-borrows.md. */
+     * docs/archive/history/stdlib-linear-handle-borrows.md. */
     bool          is_borrow;
     /* UT0: Uniqueness type -- whether this binding holds a unique value */
     bool          is_unique;
@@ -262,7 +262,7 @@ struct Binding {
      * carrier-return contexts where the call site genuinely wants an int64
      * handle. Generalizes the by-name `ok`/`err` synthesis from Prereq 6. */
     bool          is_construct_template;
-    /* M5 residual-straddle retirement (docs/upcoming/m5-residual-straddle-
+    /* M5 residual-straddle retirement (docs/artifacts/m5-residual-straddle-
      * retirement.md): true if this binding's defn was annotated with
      * `#{ByVal}`. Forces emit_abi_intern_spec to mint by-value specs for
      * TY_APP arg types that would otherwise be rejected by the
@@ -491,7 +491,7 @@ struct Binding {
      * (EX_VAR / EX_GET_FIELD args), not just a direct call.  NULL when no form
      * is recoverable. */
     const struct Form  *decl_type_form;
-    /* pr-386 regression fix (docs/reported/pr-386-source-binding-alias-breaks-
+    /* pr-386 regression fix (docs/archive/history/pr-386-source-binding-alias-breaks-
      * closure-and-with-resource.md): true when this binding is the global
      * `__fn_N` helper minted for a captureless lifted lambda (elab_fns.c).
      * The source_binding alias rule in elab_forms.c must NOT chain a let
@@ -535,7 +535,7 @@ struct Binding {
      * classes, in witness order).  A method call on `v` consults it to resolve
      * dispatch through the runtime witness vtable rather than failing as
      * ambiguous over the erased int64 carrier type.  NULL for ordinary
-     * bindings.  See docs/archive/existential-open-witness-dispatch.md. */
+     * bindings.  See docs/archive/history/existential-open-witness-dispatch.md. */
     const struct Type  *exists_open_type;
     /* van-laarhoven-lens-composition (Gap B2): a synthetic binding standing for
      * the ENCLOSING constrained rank-2 fn's own `Functor f` dictionary.  Emitting
@@ -759,7 +759,7 @@ struct FnDef {
     /* CT0: Contract pre/post-conditions — NULL if not specified */
     const struct Form *pre_cond;   /* :pre predicate form, or NULL */
     const struct Form *post_cond;  /* :post predicate form, or NULL */
-    /* M4a (docs/upcoming/m4-typeclass-per-method-abi-plan.md): when this
+    /* M4a (docs/archive/m4-typeclass-per-method-abi-plan.md): when this
      * FnDef is a typeclass-instance method (i.e. the implementation behind
      * `__inst_<Class>_<method>__…`), `owner_instance` points back at the
      * `TypeClassInstance` that owns it.  NULL for ordinary defns and for
@@ -1272,7 +1272,7 @@ struct Expr {
          * reference (a collection taking ownership of a pushed element, or a
          * read handing the caller its own count), false means the existing
          * reference merely moves (a borrow, or a pop transferring the slot's
-         * count out).  See docs/archive/collections-cannot-hold-rc-values.md. */
+         * count out).  See docs/archive/history/collections-cannot-hold-rc-values.md. */
         struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; bool retain; } reinterpret_;
         /* Phase H §1: dictionary passing */
         struct {

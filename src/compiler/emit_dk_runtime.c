@@ -8,7 +8,7 @@
  * byte-identical to the pre-relocation emitters -- this is a pure code move.
  *
  * See emit_dk_runtime.h for the model and
- * docs/upcoming/v2/cps-backend-unification-u7-readiness-plan.md for the cut
+ * docs/archive/cps-backend-unification-u7-readiness-plan.md for the cut
  * sequence this is the first step of.
  */
 
@@ -666,7 +666,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 " * deliveries (what dk_run_impl(H->next,r) would run) ride a heap meta-stack in\n"
 " * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is\n"
 " * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at\n"
-" * N=1e6 by docs/upcoming/v2/probes/e7-fidelity-probe.c. */\n"
+" * N=1e6 by docs/artifacts/probes/e7-fidelity-probe.c. */\n"
 "static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */\n"
 "static DK      *g_dk_resume_chain = NULL;\n"
 "static intptr_t g_dk_resume_val = 0;\n"

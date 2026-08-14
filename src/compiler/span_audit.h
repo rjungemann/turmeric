@@ -4,7 +4,7 @@
  * (top-level forms, defns, let forms, and call sites) that carry no usable
  * source span -- i.e. a SPAN_UNKNOWN sentinel or a span with line == 0.
  *
- * This is the Phase 1 deliverable of docs/upcoming/debugger-plan.md: a real
+ * This is the Phase 1 deliverable of docs/archive/history/debugger-plan.md: a real
  * debugger needs every breakpoint target and stack frame to resolve back to a
  * {file, line} location, so the spans that already power diagnostics must also
  * survive elaboration intact on these node kinds.  The audit makes the holes

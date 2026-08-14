@@ -111,7 +111,7 @@ typedef enum CTermKind {
                       * normal CT_HANDLE inside the body; its continuation carries the
                       * back-edge, which is why a same-function join is impossible and
                       * the loop must be a real recursive fn (see
-                      * docs/reported/cps-while-loop-with-interior-handle-no-native-lowering.md). */
+                      * docs/archive/cps-while-loop-with-interior-handle-no-native-lowering.md). */
     CT_CONTINUE,     /* the CT_LOOP back-edge: re-enter the loop helper with the
                       * next-iteration argument atoms (the pre-created `$next` CVars
                       * a `set!` binds), threading the helper's own continuation. */

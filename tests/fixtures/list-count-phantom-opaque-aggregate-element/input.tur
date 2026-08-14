@@ -2,7 +2,7 @@
 ;; list whose element A is a by-value aggregate through `list-count`, exercising
 ;; phantom-opaque element specialization.
 ;;
-;; Gap G4 follow-up (docs/archive/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md):
+;; Gap G4 follow-up (docs/archive/history/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md):
 ;; `(defopaque List [A] :int)` lowers to the int64 carrier regardless of A, so a
 ;; helper typed `[A] [xs : (List A)]` has the SAME C lowering for every element
 ;; and used to be emitted ONCE with A erased -- a layout-dependent body

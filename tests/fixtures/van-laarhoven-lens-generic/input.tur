@@ -12,7 +12,7 @@
 ;; at the outer-type-param binding site -- shadowing the forall's own bound var
 ;; `f` -- so `A` binds (`:= int`) while the quantified `f` is left alone; the
 ;; lifted inner lambda's carrier base is then kept alive across the fat-box
-;; crossing.  See docs/archive/van-laarhoven-generic-inference-gap.md.
+;; crossing.  See docs/archive/history/van-laarhoven-generic-inference-gap.md.
 
 ;; Const r a -- phantom second index; fmap ignores the function.
 (defopaque Const [r a] :int)

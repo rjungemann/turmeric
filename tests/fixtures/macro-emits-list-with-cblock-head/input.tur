@@ -8,7 +8,7 @@
 ;; wraps any backquoted list whose head is an F_CBLOCK with `do`, so
 ;; the CBLOCK sits in a body position and elaborates as a statement.
 ;; Matches Clojure's "leaves self-evaluate in quasiquote" model.
-;; See docs/reported/macro-cannot-emit-inline-c-block.md.
+;; See docs/archive/history/macro-cannot-emit-inline-c-block.md.
 ;;
 ;; This fixture exercises the three known shapes:
 ;;   A: bare CBLOCK as the macro body (was already working)

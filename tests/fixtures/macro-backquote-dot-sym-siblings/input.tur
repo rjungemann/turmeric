@@ -2,7 +2,7 @@
 ;; emit every sibling form, not silently drop the forms before the computed
 ;; dot-sym call. A computed `dot-sym` in an outer macro `let` must likewise not
 ;; corrupt the surrounding quasiquote template.
-;; docs/archive/macro-backquote-dot-sym-drops-siblings.md
+;; docs/archive/history/macro-backquote-dot-sym-drops-siblings.md
 
 (defstruct W [Pos : int])
 

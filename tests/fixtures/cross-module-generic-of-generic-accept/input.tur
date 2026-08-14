@@ -1,5 +1,5 @@
 ;; Regression fixture for
-;; docs/reported/cross-module-generic-of-generic-instantiation-missing.md
+;; docs/archive/history/cross-module-generic-of-generic-instantiation-missing.md
 ;;
 ;; A generic function `use-box` (module B) calls a generic function `box-get`
 ;; (module A).  `main` reaches `box-get` only transitively through `use-box`

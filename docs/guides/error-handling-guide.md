@@ -680,7 +680,7 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 > 4. On the WASM target, panics lower to the WebAssembly `unreachable`
 >    instruction.
 
-> See [docs/upcoming/cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md)
+> See [docs/archive/history/cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md)
 > for the fiber-based async runtime these v2 semantics depend on.
 
 ---

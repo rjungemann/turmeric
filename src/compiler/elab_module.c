@@ -17,7 +17,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
  * self-recursive defn like typeclass-show.tur's `vec-show-loop`) get the same
  * forward declarations.  Without it, a self-recursive spliced defn's own
  * recursive call resolved to "unknown function or operator"; see
- * docs/reported/compiled-string-return-int-conversion.md (secondary blocker). */
+ * docs/archive/compiled-string-return-int-conversion.md (secondary blocker). */
 static void elab_forward_declare_defns(Elab *e, Form *const *items,
                                        uint32_t start, uint32_t end) {
     for (uint32_t j = start; j < end; j++) {
@@ -61,7 +61,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
              * any spaced scalar) falls through to the TY_INT placeholder, so
              * the recursive call site is typed `int` and the if-branch
              * unifier rejects the body.  See
-             * docs/reported/recursion-return-type-widens-to-int-inside-defmodule.md */
+             * docs/archive/history/recursion-return-type-widens-to-int-inside-defmodule.md */
             if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
                 (ret_f->as.list.items[0]->tag == F_SYM ||
                  ret_f->as.list.items[0]->tag == F_KEYWORD)) {
@@ -92,7 +92,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
          * the arity is not over-stated -- counting `^fat` as a slot made a
          * sibling forward-reference call look under-saturated and synthesised
          * a bogus extra-arg PAP wrapper.  See
-         * docs/reported/pap-defmodule-fat-fn-too-many-args.md */
+         * docs/archive/history/pap-defmodule-fat-fn-too-many-args.md */
         TypeKind *arg_kinds = NULL;
         uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
             ? fwd_decl_scan_params(e->arena, f->as.list.items[name_idx + 1], &arg_kinds)
@@ -293,6 +293,15 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                  * When no -I paths were passed, this is almost always an
                  * intra-spice import that needs the spice's src/ on the
                  * search path -- point at that explicitly. */
+                /* NOTE: a malformed build.tur used to reach here as a cascade
+                 * of `module not found` -- the manifest was discarded, the
+                 * spice's src/ never joined the search path, and the -I src
+                 * hint below actively sent readers away from the real cause.
+                 * That no longer happens: TUR-E0624 (pkg_manifest_reassert)
+                 * fails the compile before elaboration, so this diagnostic is
+                 * reached only when the manifest is fine and the import really
+                 * is unresolvable.  See
+                 * docs/archive/manifest-read-failure-degrades-to-module-not-found.md. */
                 const char *hint;
                 if (e->n_module_include_dirs > 0) {
                     hint = "  hint: check the -I paths you passed, "
@@ -413,8 +422,15 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
      * blocker). */
     elab_forward_declare_defns(e, forms, 0, nforms);
 
+    const Form *saved_import_tl_stmt = e->toplevel_stmt;
     for (uint32_t i = 0; i < nforms; i++) {
+        /* An imported module's forms are its own file-scope statement list, so
+         * each is a statement for the def-position check.  Left unset, a plain
+         * top-level `(def ...)` in an imported file (stdlib/math.tur) would be
+         * measured against the IMPORTER's current form and rejected. */
+        e->toplevel_stmt = forms[i];
         Expr *ex = elab_form(e, forms[i]);
+        e->toplevel_stmt = saved_import_tl_stmt;
         if (!ex) {
             e->has_defmodule       = saved_has_defmodule;
             e->current_module_name = saved_module_name;
@@ -932,8 +948,17 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     uint32_t actual_n_body = 0;
     bool body_had_error = false;
 
+    const Form *saved_tl_stmt = e->toplevel_stmt;
     for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        /* A defmodule body is its own file-scope statement list, so each form
+         * here is a statement for the def-position check -- exactly as in
+         * elaborate_program's Pass 2.  Without this, `e->toplevel_stmt` would
+         * still name the enclosing `(defmodule ...)` form and every `def` in
+         * the module would be reported as sitting inside a top-level
+         * expression. */
+        e->toplevel_stmt = call->as.list.items[j];
         Expr *be = elab_form(e, call->as.list.items[j]);
+        e->toplevel_stmt = saved_tl_stmt;
         if (!be) {
             body_had_error = true;
             continue;  /* keep going to surface more diagnostics */

@@ -1,4 +1,4 @@
-; Regression: docs/reported/byvalue-field-access-through-ascribed-carrier-receiver.md
+; Regression: docs/archive/history/byvalue-field-access-through-ascribed-carrier-receiver.md
 ;
 ; A by-value parametric struct instance method that reads a field through an
 ; *ascribed* receiver -- `(.snd (:: x (Duo cstr int)))` -- must cast the int64

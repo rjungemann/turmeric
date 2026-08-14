@@ -724,7 +724,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * binding whose init's tail is a bare-^fat int64 call carries no
                  * recorded result type; infer it from the annotation and re-stamp
                  * the call before the kind-match check below.  See
-                 * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+                 * docs/archive/history/bare-fat-result-type-inference-plan.md. */
                 if (kind_is_non_int_register_class(ann_ty->kind) &&
                     retype_bare_fat_tail_calls(init, ann_ty->kind) &&
                     init->type.kind == TY_INT) {
@@ -1006,7 +1006,7 @@ Expr *elab_let(Elab *e, const Form *call) {
             } else if (init_b->type.kind == TY_FN) {
                 /* Follow any existing source chain to the root global fn. */
                 Binding *root = init_b->source_binding ? init_b->source_binding : init_b;
-                /* pr-386 regression fix (docs/reported/pr-386-source-binding-
+                /* pr-386 regression fix (docs/archive/history/pr-386-source-binding-
                  * alias-breaks-closure-and-with-resource.md): never chain to a
                  * lifted-lambda __fn_N helper.  source_binding means "the user
                  * typed a global function name as the init"; a captureless

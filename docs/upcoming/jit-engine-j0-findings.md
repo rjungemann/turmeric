@@ -1097,7 +1097,7 @@ since it resolves by name at runtime, meets that edge.)
 
 The reactor aborts are now filed as their own open finding with what has
 actually been ruled out:
-[docs/reported/jit-reactor-fixtures-abort-under-mir.md](../archive/jit-reactor-fixtures-abort-under-mir.md).
+[docs/archive/jit-reactor-fixtures-abort-under-mir.md](../archive/jit-reactor-fixtures-abort-under-mir.md).
 The established fact is that the emitted preamble carries its own `static`
 ucontext fiber runtime and uses a **JIT-generated function as a `makecontext`
 entry point**; the same split exists on the `cc` path, where it works. Settling
@@ -1209,7 +1209,7 @@ stands at:
   identical string literals -- unspecified behavior (C11 6.4.5p7) that c2mir
   does not provide. Reproduced on the plain `cc` path with runtime-built keys,
   no JIT involved. Filed:
-  [docs/reported/persistent-map-cstr-keys-identity-compared.md](../archive/history/persistent-map-cstr-keys-identity-compared.md).
+  [docs/archive/history/persistent-map-cstr-keys-identity-compared.md](../archive/history/persistent-map-cstr-keys-identity-compared.md).
   **`self-recursive-carrier-struct-return` is also explained, in the opposite
   direction: a genuine upstream MIR miscompilation** -- a two-word by-value
   struct return inside an `if/else + goto-backedge` CFG (the emitted tail-loop

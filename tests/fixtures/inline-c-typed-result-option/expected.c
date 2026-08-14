@@ -169,9 +169,6 @@ static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {
 #include <io.h>
 #include <fcntl.h>
 #endif /* _WIN32 */
-#if __has_include(<stdlib.h>)
-#include <stdlib.h>
-#endif
 /* Phase X3: tur_set_t — sorted int64_t array */
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
 static int __tur_set_cmp(const void *a, const void *b) {
@@ -1322,7 +1319,7 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
  * deliveries (what dk_run_impl(H->next,r) would run) ride a heap meta-stack in
  * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is
  * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at
- * N=1e6 by docs/upcoming/v2/probes/e7-fidelity-probe.c. */
+ * N=1e6 by docs/artifacts/probes/e7-fidelity-probe.c. */
 static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
 static DK      *g_dk_resume_chain = NULL;
 static intptr_t g_dk_resume_val = 0;
@@ -3601,6 +3598,9 @@ static void tur_role_close(void *role_ptr) {
 }
 
 /* ==== tur: end of fixed runtime preamble ==== */
+#if __has_include(<stdlib.h>)
+#include <stdlib.h>
+#endif
 typedef struct tur_adt_Map {
     void * hamt;
 } tur_adt_Map;

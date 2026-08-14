@@ -513,7 +513,7 @@ breaks the round-trips that rely on tag preservation (it would corrupt a
 `Cons[float]`'s `.head` to its integer bit pattern).  Fully value-preserving is
 the only self-consistent choice for the tagged model; closing the gap would
 require a typed-carrier value representation.  See
-[docs/reported/turi-map-nonint-value-carrier-ascription.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-map-nonint-value-carrier-ascription.md).
+[docs/archive/history/turi-map-nonint-value-carrier-ascription.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/turi-map-nonint-value-carrier-ascription.md).
 
 **Practical guidance.** Code that uses `::` for its bit pattern (bit-level float
 hashing, representation-exact serialization, manual IEEE/NaN-boxing) must run on

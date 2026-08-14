@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/set-bang-rc-release-check.sh -- set-bang-rc-release
-# (docs/archive/set-bang-does-not-release-old-rc-value.md).
+# (docs/archive/history/set-bang-does-not-release-old-rc-value.md).
 #
 # Every ownership shape of `(set! b v)` and `(set! (.f b) v)` on an rc binding,
 # built under AddressSanitizer and checked for BOTH leaks (live rc blocks once

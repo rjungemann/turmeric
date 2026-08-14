@@ -87,7 +87,7 @@ void turi_wasm_free(void *p) {
  * underlying Vec/Set/Map/HAMT runtime ops are already registered as natives by
  * turi_env_new (turi_register_collection_natives).  Shares the load list with
  * src/main.c via src/turi/preload.c so the two entry points cannot drift.
- * See docs/reported/web-repl-missing-stdlib-preload.md. */
+ * See docs/archive/history/web-repl-missing-stdlib-preload.md. */
 static void wasm_preload_stdlib(TuriEnv *env) {
     if (!env) return;
     turi_env_preload_macros(env, WASM_STDLIB_ROOT);

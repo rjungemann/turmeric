@@ -1,5 +1,5 @@
 ;; Regression fixture for
-;; docs/reported/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
+;; docs/archive/history/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
 ;;
 ;; A row-polymorphic defn called from another row-polymorphic defn used
 ;; to be dropped from C emission because emit_abi_call_is_generic_relay

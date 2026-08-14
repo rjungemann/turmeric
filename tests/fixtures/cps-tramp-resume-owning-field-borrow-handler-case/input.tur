@@ -9,7 +9,7 @@
 ;;
 ;; g performs E once; the case resumes with o.r's strong count (1); f adds
 ;; o.tag (9): 1 + 9 = 10.  Regression guard for
-;; docs/reported/cps-owning-field-borrow-in-handler-case-not-admitted.md
+;; docs/archive/cps-owning-field-borrow-in-handler-case-not-admitted.md
 ;; (expr_is_pure_borrow_of now peels a field-read chain in the rc/weak arms).
 (defstruct Own [r : rc<int> tag : int])
 

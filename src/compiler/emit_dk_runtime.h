@@ -21,7 +21,7 @@
  * / ...). When U7 eventually deletes emit_cps.c's *lowering* functions, this
  * runtime must survive -- relocating it here decouples the runtime's lifetime
  * from the lowering's, so the delete does not take the load-bearing runtime
- * with it. See docs/upcoming/v2/cps-backend-unification-u7-readiness-plan.md.
+ * with it. See docs/archive/cps-backend-unification-u7-readiness-plan.md.
  *
  * The whole-program prelude gates that decide whether each prelude is emitted
  * are the `preamble_uses_*` presence scans local to emit_module.c (D5 relocated

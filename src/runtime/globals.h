@@ -189,7 +189,7 @@ extern bool g_werror_inline_c_narrow_params;
  * The former `g_opt_vl_wide_functor` bool is gone; its guards are now
  * unconditional. */
 
-/* VBM1-CM4 (docs/upcoming/van-laarhoven-monomorphization-plan.md +
+/* VBM1-CM4 (docs/archive/history/van-laarhoven-monomorphization-plan.md +
  * van-laarhoven-consumer-mono-plan.md): the by-value HKT monomorphization path
  * (Path B) GRADUATED 2026-07-05 -- the former `vl-wide-mono` experiment is
  * retired and its registration/redirect/clone emit are unconditional.
@@ -207,7 +207,7 @@ extern bool g_dump_mono_specs;
  * MONOMORPH the direct emitter specializes, whether that monomorph's body +
  * concrete signature would land in the CPS-backend subset (its generic template
  * sig-rejects on the tyvar TY_APP, so the template is never a candidate).  See
- * docs/upcoming/v1/cps-backend-generic-monomorph-classification-plan.md (G1).
+ * docs/archive/cps-backend-generic-monomorph-classification-plan.md (G1).
  * Analysis only -- it changes no emitted code. */
 extern bool g_dump_cps_mono;
 
@@ -232,7 +232,7 @@ extern bool g_opt_jit;
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI
  * (env[-1] -> drop_glue_env_N, released via TUR_CLOSURE_DROP) is now
  * unconditional; the g_opt_closure_drop_glue enable bit and its codegen gates are
- * gone.  See docs/upcoming/closure-drop-glue-plan.md. */
+ * gone.  See docs/archive/closure-drop-glue-plan.md. */
 
 /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
  * predicates is unconditional; the g_opt_refined enable bit and its
@@ -292,7 +292,7 @@ extern bool g_strict_refine;
  * a curated typed wrapper see the right return type.  The enum lives here --
  * in the neutral runtime layer shared by the compiler and the embedder API --
  * so neither side has to include the other's headers.  See
- * docs/archive/untyped-native-registration-blocks-curated-facades.md.
+ * docs/archive/history/untyped-native-registration-blocks-curated-facades.md.
  * --------------------------------------------------------------------------- */
 typedef enum TurNativeRetType {
     TUR_NRT_INT = 0,   /* default; matches the historical untyped behavior */

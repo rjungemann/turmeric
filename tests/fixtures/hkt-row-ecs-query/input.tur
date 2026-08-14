@@ -1,6 +1,6 @@
 ;; Variadic HKT rows -- Layer 6 capstone (the ECS query the whole feature was
-;; built for; see docs/upcoming/v1/ecs-spice-plan.md E1 and
-;; docs/reported/variadic-hkt-rows-missing.md).
+;; built for; see docs/archive/ecs-spice-plan.md E1 and
+;; docs/archive/history/variadic-hkt-rows-missing.md).
 ;;
 ;; A Query is parameterised by its component ROW (a #row{...} of component
 ;; types). The row lives entirely at the TYPE level -- it records which

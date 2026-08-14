@@ -241,7 +241,7 @@ would land -- the scheduler becomes "the global reactor's fiber driver"
 without an API break. The driver itself shipped via
 `docs/archive/history/reactor-run-fibers-plan.md`; that scheduler migration is
 tracked separately in
-`docs/upcoming/scheduler-on-local-fiber-group-plan.md`.
+`docs/archive/scheduler-on-local-fiber-group-plan.md`.
 
 ## API reference
 

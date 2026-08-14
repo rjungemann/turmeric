@@ -1,5 +1,5 @@
 /* E7 FULL-FIDELITY PROBE -- trampolined tail-resume against the REAL dk_perform
- * handle-chain layout (docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md E7).
+ * handle-chain layout (docs/archive/cps-dk-sole-effect-lowering-plan.md E7).
  *
  * The e2-killprobe proved the core mechanism but simplified the chain (handler on
  * dk_done, no handle-continuation frame). This probe reproduces the ACTUAL layout

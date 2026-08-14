@@ -287,15 +287,15 @@ module is the prelude, fall back to `static`.
 
 ## Where to look next
 
-- `docs/archive/end-to-end-monomorphization-plan.md` -- the original
+- `docs/archive/history/end-to-end-monomorphization-plan.md` -- the original
   rationale and "why-monomorphization" framing.
-- `docs/archive/end-to-end-monomorphization-plan-2.md` -- the
+- `docs/archive/history/end-to-end-monomorphization-plan-2.md` -- the
   remaining-work plan, archived complete 2026-06-19. Has the detailed
   per-phase progress.
 - `docs/archive/m4-typeclass-per-method-abi-plan.md` and
   `docs/archive/m5-scope-audit-2026-06-18.md` -- the per-method ABI
   and constrained-poly HOF sub-plans.
-- `docs/archive/m7-stdlib-migration-execution.md` -- the by-value HKT
+- `docs/archive/history/m7-stdlib-migration-execution.md` -- the by-value HKT
   stdlib migration log.
 - `docs/guides/hkt-guide.md` -- the user-facing HKT story; this
   guide is the ABI underneath it.

@@ -108,7 +108,7 @@
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.
 ;; M4c-pre: rewrite to consult by-value fields directly via Eq A / Eq B,
 ;; mirroring the Eq Tuple2 change.  See
-;; docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+;; docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
 
 (definstance Eq [Pair]
   [(Eq A) (Eq B)]

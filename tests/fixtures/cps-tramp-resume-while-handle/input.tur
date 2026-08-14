@@ -1,7 +1,7 @@
 ;; cps-while-native: a `while` with an interior per-iteration `handle` lowers to a
 ;; synthesized tail-recursive __cps loop under --enable=cps-tramp-resume (run emits
 ;; run__cps, zero eff=1 -- see
-;; docs/reported/cps-while-loop-with-interior-handle-no-native-lowering.md).
+;; docs/archive/cps-while-loop-with-interior-handle-no-native-lowering.md).
 ;;
 ;; total starts at 7 (tests the loop-param entry value threads in); each iteration
 ;; installs a fresh Ask handler closing over the per-iteration snapshot `cur`, which

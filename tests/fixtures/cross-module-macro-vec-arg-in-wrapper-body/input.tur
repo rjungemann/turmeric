@@ -1,5 +1,5 @@
 ;; Regression fixture for
-;; docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md
+;; docs/archive/history/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md
 ;;
 ;; The bug: a macro M defined in module A emits a form that wraps a
 ;; helper macro (also in A) in a stdlib wrapper like `when`. When M is

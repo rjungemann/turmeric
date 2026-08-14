@@ -1,7 +1,7 @@
 ;; Regression: invoking an already-fat closure that lives in an :int carrier
 ;; via (:: handle (fn ...)) -- the spelling that previously double-shimmed the
 ;; already-fat record and BUS/SEGV-faulted. See
-;; docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md.
+;; docs/archive/ascribing-fat-closure-value-to-fn-type-double-shims.md.
 ;;
 ;; The ascription of a one-word carrier (:int / :ptr<void>) to a function type
 ;; now marks the result as an already-boxed fat handle, so the call

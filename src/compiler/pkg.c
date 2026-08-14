@@ -534,12 +534,87 @@ bool pkg_resolve_manifest_cwd(char *out, size_t cap) {
 /* pkg_manifest_read                                                    */
 /* ================================================================== */
 
+/* Sticky record that SOME manifest was found and rejected this process.
+ *
+ * Same problem and same shape as g_tv_rejected below: the manifest is read
+ * before compilation, and every compile entry point then calls diag_reset() to
+ * clear `had_error_`, which wiped the manifest's own error.  TUR-E0620 (and
+ * friends) therefore printed at `error:` severity and the command exited 0.
+ * The verdict is recorded here and re-asserted after each diag_reset(). */
+static bool g_manifest_malformed = false;
+static char g_manifest_malformed_path[4096];
+static char g_manifest_malformed_slot[64];   /* ":spices", ... or "" */
+/* Report at most once per process: a manifest is read several times per
+ * invocation (walk-up for build-dir, again for reader macros, again per
+ * dependency), and repeating one verdict per read is pure noise. */
+static bool g_manifest_malformed_reported = false;
+
+bool        pkg_manifest_malformed(void) { return g_manifest_malformed; }
+const char *pkg_manifest_malformed_path(void) {
+    return g_manifest_malformed ? g_manifest_malformed_path : NULL;
+}
+
+void pkg_manifest_reassert(void) {
+    if (!g_manifest_malformed) return;
+    /* Re-emitted per compile, deliberately: had_error_ must be set for THIS
+     * compile to fail, and there is no diag API to mark an error without
+     * printing.  The brief form keeps the repeat cheap to read. */
+    if (g_manifest_malformed_slot[0])
+        diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                  "TUR-E0624: refusing to continue: '%s' could not be read -- "
+                  "its %s is malformed (see the error above).  Nothing the "
+                  "manifest declares is in effect, including this spice's own "
+                  "src/ on the module search path.",
+                  g_manifest_malformed_path, g_manifest_malformed_slot);
+    else
+        diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                  "TUR-E0624: refusing to continue: '%s' could not be read "
+                  "(see the error above).  Nothing the manifest declares is in "
+                  "effect, including this spice's own src/ on the module "
+                  "search path.",
+                  g_manifest_malformed_path);
+}
+
+void pkg_manifest_malformed_reset(void) {
+    g_manifest_malformed = false;
+    g_manifest_malformed_reported = false;
+    g_manifest_malformed_path[0] = '\0';
+    g_manifest_malformed_slot[0] = '\0';
+}
+
+/* Record a found-but-broken manifest.  Idempotent per process: the FIRST
+ * rejection is the one reported, since later reads are usually of the same
+ * file (walk-up probes) or of deps that failed because of it. */
+static void pkg_manifest_mark_malformed_slot(const char *path,
+                                             const char *slot) {
+    if (!g_manifest_malformed_reported) {
+        snprintf(g_manifest_malformed_path, sizeof(g_manifest_malformed_path),
+                 "%s", path ? path : "build.tur");
+        snprintf(g_manifest_malformed_slot, sizeof(g_manifest_malformed_slot),
+                 "%s", slot ? slot : "");
+        g_manifest_malformed_reported = true;
+    }
+    g_manifest_malformed = true;
+}
+
+static void pkg_manifest_mark_malformed(const char *path) {
+    pkg_manifest_mark_malformed_slot(path, NULL);
+}
+
 bool pkg_manifest_read(const char *path, PkgManifest *out) {
+    return pkg_manifest_read_status(path, out, NULL);
+}
+
+bool pkg_manifest_read_status(const char *path, PkgManifest *out,
+                              PkgManifestStatus *status) {
     memset(out, 0, sizeof(*out));
+    if (status) *status = PKG_MANIFEST_ABSENT;
 
     /* Read the file into memory */
     FILE *f = fopen(path, "rb");
     if (!f) {
+        /* ABSENT, not malformed: "there is no manifest here" is the normal
+         * case for every walk-up probe, and must stay quiet. */
         fprintf(stderr, "spice: cannot open '%s': %s\n", path, strerror(errno));
         return false;
     }
@@ -547,9 +622,19 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
     long sz = ftell(f);
     rewind(f);
     char *src = (char *)malloc(sz + 1);
-    if (!src) { fclose(f); return false; }
+    /* Past this point the file EXISTS, so any failure is MALFORMED (or a
+     * read error on a real file) -- never "no manifest here". */
+    if (!src) {
+        fclose(f);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+        pkg_manifest_mark_malformed(path);
+        return false;
+    }
     if (fread(src, 1, sz, f) != (size_t)sz) {
-        fclose(f); free(src); return false;
+        fclose(f); free(src);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+        pkg_manifest_mark_malformed(path);
+        return false;
     }
     fclose(f);
     src[sz] = '\0';
@@ -626,6 +711,7 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         out->name = ss_dup(name_form->as.s);
 
     /* Walk keyword-value pairs starting at index 2 */
+    const char *bad_slot = NULL;   /* first slot whose parser reported failure */
     const FormList *fl = &dp->as.list;
     for (uint32_t i = 2; i + 1 < fl->len; i += 2) {
         const Form *kf = fl->items[i];
@@ -652,13 +738,23 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         } else if (strcmp(kw, "homepage") == 0) {
             out->homepage = form_str_dup(vf);
         } else if (strcmp(kw, "authors") == 0) {
-            parse_str_vec(vf, &out->authors, &out->n_authors);
+            if (!parse_str_vec(vf, &out->authors, &out->n_authors))
+                bad_slot = bad_slot ? bad_slot : ":authors";
         } else if (strcmp(kw, "spices") == 0) {
-            parse_spices(vf, out);
+            /* The slot parsers all return bool and none of these used to be
+             * checked, so a broken slot was visible only in the trailing
+             * diag_had_error() sweep -- all-or-nothing, with no record of WHICH
+             * slot broke.  Keep the first failing slot name for the sticky
+             * verdict; parsing still continues so the user sees every slot's
+             * diagnostic in one pass rather than one per edit-compile cycle. */
+            if (!parse_spices(vf, out))
+                bad_slot = bad_slot ? bad_slot : ":spices";
         } else if (strcmp(kw, "cmake-deps") == 0) {
-            parse_cmake_deps(vf, out);
+            if (!parse_cmake_deps(vf, out))
+                bad_slot = bad_slot ? bad_slot : ":cmake-deps";
         } else if (strcmp(kw, "exports") == 0) {
-            parse_exports(vf, &out->exports, &out->n_exports);
+            if (!parse_exports(vf, &out->exports, &out->n_exports))
+                bad_slot = bad_slot ? bad_slot : ":exports";
         } else if (strcmp(kw, "members") == 0) {
             /* LS2: workspace member spice directories, relative to this
              * manifest. A non-empty list makes this manifest a workspace
@@ -737,6 +833,26 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
     bool ok = !diag_had_error();
     symtab_free(&st);
     arena_free(&arena);
+
+    if (!ok) {
+        /* A manifest that EXISTS and failed to parse.  Two things follow.
+         *
+         * First, never hand back a partially-parsed manifest: the slot parsers
+         * run to completion past a broken slot, so `out` is populated with
+         * whatever DID parse.  Every caller takes the `if (!read) continue;`
+         * branch and drops it on the floor, which leaked (ASan caught
+         * parse_exports/ss_dup allocations escaping this way).  Free and zero
+         * so the failure branch owns nothing. */
+        pkg_manifest_free(out);
+        memset(out, 0, sizeof(*out));
+        /* Second, remember it.  diag_reset() at the next compile entry point
+         * would otherwise erase the only evidence, leaving an `error:` on
+         * stderr and a 0 exit status. */
+        pkg_manifest_mark_malformed_slot(path, bad_slot);
+        if (status) *status = PKG_MANIFEST_MALFORMED;
+    } else if (status) {
+        *status = PKG_MANIFEST_OK;
+    }
     return ok;
 }
 
@@ -2694,7 +2810,7 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
      * Skipped when `include_workspace_siblings` is false (the `tur build .`
      * caller), since `tur build` does not transparently link in workspace
      * siblings the way `tur run` does -- it sticks to the declared :spices
-     * closure.  See docs/archive/tur-build-cmake-deps-workspace-overreach.md. */
+     * closure.  See docs/archive/history/tur-build-cmake-deps-workspace-overreach.md. */
     if (include_workspace_siblings) {
         int    n_sib   = 0;
         char **sib_dirs = collect_workspace_sibling_dirs(root_project_dir,

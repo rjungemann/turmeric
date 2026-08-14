@@ -3,7 +3,7 @@
 ;; The fix splices top-level (do ...) into the program-items array during
 ;; flatten_program_items (src/compiler/emit_core.c), matching Common
 ;; Lisp's top-level-progn semantics. See
-;; docs/reported/macro-cannot-emit-multiple-top-level-forms.md.
+;; docs/archive/history/macro-cannot-emit-multiple-top-level-forms.md.
 ;;
 ;; This fixture exercises the three shapes that mattered for the ECS
 ;; spice's defsystem macro:

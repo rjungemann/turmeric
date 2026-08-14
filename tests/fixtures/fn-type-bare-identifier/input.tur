@@ -18,7 +18,7 @@
 ;; ((f 1) 2) -- now type-checks and runs (a fn-typed parameter carries a
 ;; thin function pointer, so the passed function must itself return a thin
 ;; captureless function; mk-inc does). Fixed in
-;; docs/reported/curried-fn-typed-param-second-application-not-callable.md.
+;; docs/archive/history/curried-fn-typed-param-second-application-not-callable.md.
 
 (defalias Sample :int)
 
@@ -54,7 +54,7 @@
 
 ;; nested (fn ...) result type -- bare, curried.  The second application
 ;; ((f 1) 2) now type-checks and runs (see
-;; docs/reported/curried-fn-typed-param-second-application-not-callable.md).
+;; docs/archive/history/curried-fn-typed-param-second-application-not-callable.md).
 ;; A fn-typed parameter carries a *thin* function pointer, so the function
 ;; passed must itself return a thin (captureless) function -- mk-inc does.
 (defn apply-curried [f : (fn [int] (fn [int] int))] : int

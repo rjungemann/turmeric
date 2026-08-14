@@ -1,7 +1,7 @@
 ;; stdlib-hkt-consolidation T4: ok-biased kind-(* -> *) instances for Result,
 ;; made expressible by the trailing-parameter instance head `(Result _ B)`
 ;; (fixes the err arm B, varies the ok arm).  Closes
-;; docs/reported/result-param-order-blocks-functor-monad.md.
+;; docs/archive/history/result-param-order-blocks-functor-monad.md.
 ;;
 ;; Result and the Functor / Monad / MonadError class stubs are auto-preloaded,
 ;; so no explicit (load ...) is needed.

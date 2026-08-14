@@ -45,14 +45,23 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
-| [fat-sink-shim-box-leaks-per-call](fat-sink-shim-box-leaks-per-call.md) | medium | a bare fn passed to a `^fat` sink mallocs a `{shim, orig}` box per CALL and never frees it -- 1002 MiB over 5e6 iterations. Pre-existing; the same leak at a normalized nominal param is fixed (static box), but `^fat` has no ownership contract so the caller cannot choose |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
-| [borrow-param-passed-as-unique-mut-undiagnosed](borrow-param-passed-as-unique-mut-undiagnosed.md) | medium-high | a `^borrow` PARAMETER can be handed to a `^unique ^mut` parameter with no diagnostic; the exclusive mutation is observable through the shared borrow. `(& x)` in-frame is caught, the parameter mode is not |
 
-The first three are one campaign but **not** duplicates -- each has its own
+The two remaining are one campaign but **not** duplicates -- each has its own
 pinned investigation and its own fix (a calling-convention change; a generic
-instantiation + ctor-emission bug; a per-call box with no ownership contract).
-Do not merge them; the investigations are the expensive part. Two others have
+instantiation + ctor-emission bug). Do not merge them; the investigations are
+the expensive part.
+
+`fat-sink-shim-box-leaks-per-call` was resolved 2026-08-13 and moved to
+[docs/archive](../archive/fat-sink-shim-box-leaks-per-call.md). It needed no
+ownership annotation after all: dropping a fat handle goes through
+`TUR_CLOSURE_DROP`, a C macro reachable only from inline-C, and any body with
+inline-C already has `nonretain_param_mask == 0` -- so a set bit already means
+"neither retains nor drops", which is exactly the fact the proposed annotation
+was to supply. Note the report's own measurement conflates two allocations: its
+recursive repro also allocates a CPS continuation env per call, so the fix looks
+like ~15% there. The `while`-loop form isolates the shim and goes 109 MiB ->
+1.3 MiB flat over 4e6 iterations. Two others have
 since been resolved and moved to [docs/archive](../archive/):
 `macos-int-conversion-carrier-pointer-straddles` (2026-08-01) and
 `contract-type-arg-not-peeled-to-base` (2026-08-01, fixed by
@@ -60,10 +69,18 @@ since been resolved and moved to [docs/archive](../archive/):
 joining `type_has_concrete_codegen_layout`); both resolution notes are
 closed-cells rows in the guide.
 
-`borrow-param-passed-as-unique-mut-undiagnosed` is **not** part of that
-campaign -- it is a uniqueness/borrow-checking gap, not a representation one,
-and it is listed here only because this table is the repr-adjacent index. It
-does not share an investigation with the three above.
+`borrow-param-passed-as-unique-mut-undiagnosed` was resolved 2026-08-13 and
+moved to
+[docs/archive](../archive/borrow-param-passed-as-unique-mut-undiagnosed.md). It
+was never part of that campaign -- a uniqueness/borrow-checking gap, not a
+representation one. Root cause, which the report left open: the UT2 check reads
+`scope_borrow_conflicts`, which sees only borrows registered in THIS frame by an
+explicit `(& v)`; a `^borrow` parameter registers nothing there and correctly so,
+since its aliasing happened one frame up. Fixed by the narrower of the two
+options it weighs -- reject the `^unique ^mut` crossing on a `^borrow`-moded
+binding directly, rather than registering `^borrow` params as frame-live borrows,
+which would have fed every other borrow check too. No existing fixture changed,
+so the rejected shape was not in use anywhere in the corpus.
 
 ## Effect handlers
 
@@ -134,10 +151,6 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-return-directed-method-keeps-baked-instance](turi-return-directed-method-keeps-baked-instance.md) | medium | `--interpret` keeps the elaboration-baked instance for a return-directed method (`pure`); one instance answers every call site |
-| [lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md) | medium | a `#lang` reader switch permanently breaks constrained-instance resolution in a live REPL; does not recover on switch-back |
-| [incremental-elab-loses-span-file-provenance](incremental-elab-loses-span-file-provenance.md) | medium | **partially** fixed -- the `--interpret` diagnostic half is done; the DAP half still needs the `turi_env_set_incremental_elab(env,false)` workaround |
-| [turi-toplevel-expr-subforms-elaborate-in-global-scope](turi-toplevel-expr-subforms-elaborate-in-global-scope.md) | low | a bare top-level expression's subforms elaborate in the GLOBAL scope under `--interpret`, in a pushed one compiled; both paths still reject, only the diagnostic (and which binding a `def` subform creates) diverges |
 
 
 The first absorbed two symptom reports on 2026-08-01
@@ -183,7 +196,6 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [for-comprehension-pure-ambiguous-against-stdlib](for-comprehension-pure-ambiguous-against-stdlib.md) | medium | `for` desugars to a bare `.pure` inside a `fn`, so it is ambiguous against the auto-loaded instances -- `for` is dead surface as shipped |
 
 `lsp-completion-internal-symbols` was resolved 2026-08-05 (a
 `Binding.is_synthesized` bit filtered in the LSP collector) and moved to
@@ -215,7 +227,7 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [reactor-fd-callback-fn-ptr-type-mismatch](reactor-fd-callback-fn-ptr-type-mismatch.md) | medium | fd callbacks are called through a mismatched fn-ptr type; benign today, fatal under CFI / UBSan / WASM `call_indirect` |
+| [emitter-thunk-type-return-mismatch](emitter-thunk-type-return-mismatch.md) | low-medium | **2 findings left, down from 3 (2026-08-13).** The `void`/`int64_t` half is fixed -- an explicit `: nil` on a lambda was indistinguishable from unannotated, so the infer-from-body step retyped it to the tail's type and the emitted fn disagreed with the thunk pointer built from the same declaration. What remains is the `:int` closure sinks in the httpd API: the call site names the thunk from the erased sink, the lambda from its real type. **GCC cannot see this class at all** (no `-fsanitize=function`); needs clang |
 | [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
 
 `struct-return-type-mismatch-unchecked-until-cc` was resolved 2026-08-06 and
@@ -240,10 +252,164 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
-| [manifest-read-failure-degrades-to-module-not-found](manifest-read-failure-degrades-to-module-not-found.md) | medium | a BROKEN `build.tur` is indistinguishable from no manifest to every caller, so a one-token typo presents as N unrelated `module not found` errors and `tur check` reports at `error:` severity while exiting **0** |
-| [mono-specs-header-comment-stale](mono-specs-header-comment-stale.md) | low | `mono_specs.h`'s header comment describes a superseded state (registry-only, carrier-box codegen, VBM2b deferred); it contradicts a later paragraph in the same block and has already produced two wrong survey conclusions |
+
+`incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved
+to
+[docs/archive](../archive/incremental-elab-loses-span-file-provenance.md). Its
+remaining (DAP) half was **not** what the root-cause section said: no span ever
+lost provenance. `diag_reset()` clears the whole SourceFile registry every eval
+turn, and the incremental path reuses previously-parsed Forms rather than
+re-running their `(load ...)` splices -- so the 40 loaded files are never
+re-registered while the reused Forms still carry their ids, and every later
+`diag_file_path()` misses. Hence `?:19` (a frame with NO path) rather than one
+attributed to `<eval>`. Fixed with a save/restore of the registry around that
+reset, far smaller than the report's "neither is small" estimate -- no span
+remapping and no offset table, because nothing moved. The `cmd_eval_h`
+workaround is removed and `tests/run-dap.sh` is now a real guard; with the
+workaround in place it passed whether or not the bug existed. This does **not**
+retire the two sibling `elab_lookup_*` workarounds the report groups it with --
+those are name visibility across the moved stdlib/user boundary, a different
+mechanism.
+
+`tur-build-nested-src-dir-finds-no-files` was filed and resolved 2026-08-13,
+and moved to
+[docs/archive](../archive/tur-build-nested-src-dir-finds-no-files.md). All three
+bare-directory commands (`tur test`, `tur check`, `tur build`) now walk
+recursively, matching project mode. The half the filing missed: finding the
+files is not enough -- the bare-directory build passed no include path, so a
+recursive walk then failed with `module 'demo/lib' not found`, and `tur build
+src/` is precisely what the `module not found` hint recommends. `dir` now joins
+the include path as its own module root. The blast radius the report flags on
+`tur test <dir>` turned out to be nil here: every `tests/cli/` case is flat.
+
+`for-comprehension-pure-ambiguous-against-stdlib` was resolved 2026-08-13 and
+moved to
+[docs/archive](../archive/for-comprehension-pure-ambiguous-against-stdlib.md),
+by none of its four fix directions -- its root-cause section has the mechanism
+wrong. The expected type was never missing: bare `pure` in the identical
+position resolves fine, and the discriminator is `.pure` vs `pure`. `.m` means
+"dispatch on the first argument", which for a return-directed method is the
+*payload*, not the class type -- so the dot form asks the compiler to pick an
+`Applicative` by looking at `42`. Fixed in dispatch, not in the macro:
+`stdlib/macros.tur` is unchanged. Two other routes were implemented and backed
+out -- emitting bare `pure` from the macro breaks the bespoke single-instance
+fixtures (neither spelling works for both corpora), and relaxing the
+unique-instance arrow gate in return-directed dispatch breaks
+`errors/rt-return-dispatch-unascribed`, which pins that gate deliberately. Fix
+direction 4 was the load-bearing one and is done.
+
+`turi-return-directed-method-keeps-baked-instance` was resolved 2026-08-13 and
+moved to
+[docs/archive](../archive/turi-return-directed-method-keeps-baked-instance.md).
+Its remaining half -- the rank-2 forall shape -- is fixed: reached through a
+`forall` PARAMETER there is no named generic for the elaborator to record a
+substitution against, but the callee declares `x : (m int)` and the argument's
+static type is `(T1 int)`, so matching the two type applications recovers
+`m -> T1`. `frame_pin_hkt_tyvars_from_args` does that, only when the call
+recorded no `abi_bindings`. The coverage note in that report was the important
+part and applied to the fix as much as the bug: both rank-2 fixtures carry
+inline-C and are PASS-skipped by the TI7 carve-out, so a fix verified against
+only them would have been as invisible as the defect.
+`tests/fixtures/hkt-rank2-forall-pure-two-instances` restates one with
+parametric ADTs and no inline-C, so `run-turi` actually runs it. Fix direction 2
+(turi dict passing) is still open and still the principled end of this family --
+both halves are run-time heuristics recovering a type the compiled path carries
+in a dict, each added after a shape escaped the last.
+
+`lang-switch-breaks-generic-instance-resolution` was resolved 2026-08-13 and
+moved to
+[docs/archive](../archive/lang-switch-breaks-generic-instance-resolution.md).
+Its candidate 1 (stale vs fresh `TypeClassEnv` identity) was right but only half
+the cause: the by-name retry that should have absorbed it was gated
+`!concrete_is_primitive` -- and `Sym` and `cstr`, the two element types in the
+report's own repros, are both primitive -- **and** the retry could not have
+matched anyway, because it never spelled a primitive instance's head via
+`gde_primitive_type_name` the way the precise loop above it does. Either alone
+leaves the bug. The report's open blast-radius question is answered: `Eq` was
+not spared by surviving the reset, it simply never reaches that path with a
+primitive concrete. Three notes for whoever writes a similar test: the defect
+does **not** reproduce from C via `turi_try_show_by_tag` (that is the auto-show
+tier, not the broken path), `(load "stdlib/str.tur")` first **masks** it
+entirely, and the harness's `check` uses `grep -qF`, which treats a multi-line
+pattern as alternatives -- a before/after expectation there passes on a broken
+compiler.
+
+`jit-s2-split-disengages-on-hoisted-inline-c-include` was resolved 2026-08-13
+and moved to
+[docs/archive](../archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md).
+Two corrections to its fix directions. Emitting the hoisted includes "above the
+split marker" as direction 1 proposes is **not safe** -- `#define
+_DEFAULT_SOURCE 1` sits immediately below that marker and its own comment says
+it must precede every `#include`; they went below the END marker instead, which
+is still ahead of every inline-C function. And moving the loop *within*
+`emit_runtime_preamble` does not fix anything, because the probe calls that same
+function after elaboration and so emits the includes too -- the loop had to move
+out of it entirely. Direction 3 (a `TUR_JIT_TIMING`-gated reason for the
+disengage) paid for itself inside one edit-compile cycle by catching that failed
+first attempt. Verified: the report's program B went from 7208 preamble lines
+(never engaging) to 5538, and every in-tree instance it names now engages.
+
+`reactor-fd-callback-fn-ptr-type-mismatch` was resolved 2026-08-13 and moved to
+[docs/archive](../archive/reactor-fd-callback-fn-ptr-type-mismatch.md), closing
+29 of its 32 UBSan findings. Three corrections worth carrying: the reactor had
+**four** mismatched sites, not one (the sibling audit the report asked for found
+them); the "emitted C" instance was mostly **hand-written inline C in
+`stdlib/httpd.tur`**, the same defect in a second file, not the emitter; and
+`local_park_wake_cb` served both the 4-arg fd/chan and 3-arg timer conventions
+from one definition on the reasoning that "the differing arity is harmless",
+which is true of the ABI and false of the language. Two things block anyone
+re-checking this: **GCC cannot see this class at all** (no `-fsanitize=function`),
+and until this landing no clang build of the tree compiled -- `elab_memory.c` had
+no trailing newline and `-Werror,-Wnewline-eof` stopped it. Also note the
+affected fixtures **PASS** while emitting the UB, so the summary line is not the
+signal. The residue is `emitter-thunk-type-return-mismatch` above.
+
+`turi-toplevel-expr-subforms-elaborate-in-global-scope` was resolved
+2026-08-13 and moved to
+[docs/archive](../archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md).
+Three corrections to the filing are worth carrying forward. The discriminator
+was never the engine -- it was the **synthesized-main fold**, which runs only
+when a file declares no `main`, so the *compiled path disagreed with itself*
+depending on an unrelated line elsewhere in the file. The divergence was
+accept/reject, not just diagnostic wording: the report's repro happens to have
+mismatched `if` branch types, which is the only reason the interpreter rejected
+it too. And the accepting path **miscompiles** -- the `def` elaborates as a
+global but codegen emits a local, so a later reference dies in the emitted C
+with `'answer_1326' undeclared`. The filed severity of low rested on "both paths
+still reject"; it should have been medium. Both engines now reject, via the
+report's *narrower* alternative (a statement-position bit on `Elab`), which
+turned out to be the primary fix rather than the fallback.
+
+`manifest-read-failure-degrades-to-module-not-found` was resolved 2026-08-13
+and moved to
+[docs/archive](../archive/manifest-read-failure-degrades-to-module-not-found.md).
+`pkg_manifest_read` now distinguishes ABSENT from MALFORMED, and a malformed
+manifest is recorded in a sticky verdict that survives `diag_reset()` --
+re-asserted as TUR-E0624 at each compile entry point, exactly like the
+`:tur-version` floor next to it. The command now fails *before* elaboration, so
+the `module not found` cascade does not happen at all rather than being
+annotated (the report's fix direction 3 was conditional on deferring direction
+1, which was not deferred; the prototype was confirmed unreachable and removed).
+Two notes for anyone re-checking this: the report's open question about where
+the error state was cleared is answered in a comment 30 lines below the code it
+was reading, and **the Debug build masks the bug** -- the repro exits 1 there
+because LeakSanitizer catches the partial-manifest leak (also fixed), not
+because the manifest error was honoured.
+
+`mono-specs-header-comment-stale` was resolved 2026-08-13 and moved to
+[docs/archive](../archive/mono-specs-header-comment-stale.md). The header
+comment was rewritten to the post-graduation reality, and the report's item 4
+(the general sweep) was carried out: **255 dead `docs/` citations across 88
+files in `src/`** were repointed at their real locations. Three of them named
+reports that were never filed *and* asserted defects that do not exist -- a
+`tvar/modify` codegen no-op (the arm is dead; elab lowers the form) and a
+`task-group-new` layout overflow (both layouts carry `cancel_reason`) -- so
+those comments were corrected rather than backfilled with reports. Note for the
+next sweep: citing `docs/archive/` up front does **not** immunise a comment (42
+of the 255 already did, and rotted when the file moved on to
+`docs/archive/history/`), and a single-line grep silently misses the ~6% of
+citations that wrap across a `*` comment continuation.
 
 `fixture-dirs-with-loose-tur-files-pass-without-running` was resolved
 2026-08-05 and moved to

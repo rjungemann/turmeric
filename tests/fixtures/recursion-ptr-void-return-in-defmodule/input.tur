@@ -11,7 +11,7 @@
 ;; single-element F_TYPE_ANN; the defmodule path now mirrors that.
 ;;
 ;; Regression for
-;; docs/reported/recursion-return-type-widens-to-int-inside-defmodule.md
+;; docs/archive/history/recursion-return-type-widens-to-int-inside-defmodule.md
 (defmodule probe/loop
   (export run)
   (defn run [i : int n : int] : ptr<void>

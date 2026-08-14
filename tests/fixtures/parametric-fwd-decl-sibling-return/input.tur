@@ -4,7 +4,7 @@
 ;; return type, the pattern binding fell back to the placeholder carrier and the
 ;; `(POK inner rest)` arm mistyped to `(PRes int)`, mismatching the sibling
 ;; `(PFail)` arm's `(PRes Expr)`.  No per-arm `(::)` ascription is needed now.
-;; See docs/archive/defdata-parametric-forward-decl-inference.md.
+;; See docs/archive/history/defdata-parametric-forward-decl-inference.md.
 
 (defdata PRes [a]
   (PFail)

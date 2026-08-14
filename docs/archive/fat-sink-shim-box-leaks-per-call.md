@@ -95,3 +95,100 @@ When this is resolved, update the fn-value section of
 [docs/guides/value-representations-guide.md](../guides/value-representations-guide.md):
 the `^fat` row gains an ownership column, and the static-box note under the
 nominal row should stop saying `^fat` is excluded for want of a contract.
+
+## Resolution (2026-08-13)
+
+Fixed by **fix direction 2** -- the one the report calls "not a shortcut around"
+direction 1. It is, because the information direction 1 was going to add as an
+annotation is already inferred.
+
+### The missing ownership fact already exists
+
+The report's argument for needing a new annotation is:
+
+> Whether a given `^fat` callee drops is not visible at the call site, so the
+> caller cannot choose between "share one static box forever" and "hand over a
+> fresh heap box".
+
+The first clause is true and the second does not follow. The only way to drop a
+fat handle is `TUR_CLOSURE_DROP`, which is a **C macro** -- reachable only from
+an inline-C body. And `nonretain_param_mask` (`elab_fns.c`) is zeroed outright
+for any body containing inline-C, for an unrelated reason recorded there: "an
+inline-C body can STORE a fn-param invisibly to the AST escape analysis."
+
+So a set nonretain bit already implies the callee neither retains **nor drops**
+the argument. That is precisely the fact direction 1 proposed to add. The
+call-site test is one line:
+
+```c
+bool sink_is_nonretaining =
+    fn_binding && i < 32 && (fn_binding->nonretain_param_mask & (1u << i)) != 0;
+```
+
+It also disposes of the `-Wfree-nonheap-object` objection: that warning was about
+handing a static box to a *dropping* callee, and a callee that can drop has the
+bit clear and keeps its heap box. `tests/fixtures/closure-drop-glue-fatshim` --
+whose whole point is a `^fat` callee that drops -- is inline-C and therefore
+untouched, and still passes.
+
+### The report's measurement conflates two allocations
+
+Worth recording, because the numbers do not otherwise add up. The report's repro
+recurses (`(loop (- n 1) (callit add3 acc))`) and attributes ~200 bytes/iteration
+to the shim box. Measured on that repro the fix moves 4e6 iterations from 822 MiB
+to 697 MiB -- real, but only ~31 bytes/iteration.
+
+The shim box is ~28 bytes. The rest is a **CPS continuation env**
+(`go_j0_env *__ce_go_j0 = malloc(...)` in the emitted C), allocated per call
+because the recursive shape routes through the DK trampoline. Rewriting the same
+loop as a `while` with `set!` -- no CPS -- isolates the shim exactly:
+
+| 4e6 iterations | before | after |
+| --- | --- | --- |
+| recursive (report's repro: shim + CPS env) | 821,620 kB | 696,616 kB |
+| `while` loop (shim only) | 109,420 kB | **1,296 kB** |
+
+Flat, which is the actual claim. Anyone re-measuring on the report's original
+program will see ~15% and conclude the fix barely worked; the `while` form is the
+one that measures this defect.
+
+Whether the CPS-join env is itself a leak or is reaped later (the call site
+threads `__dk_reap_node`) was not investigated here -- it is a different
+allocation in a different subsystem and does not belong to this report.
+
+### Coverage
+
+`tests/run-fat-shim-leak.sh` + `tests/fixtures/fat-sink-shim-no-leak`, modelled
+on the existing `run-closure-env-leak.sh`: emit C, compile it with
+`-fsanitize=address,undefined`, run under LeakSanitizer, assert no leak. A
+per-call box that is never freed is an LSan leak, so this fails loudly rather
+than requiring a trip count big enough to see in RSS. Registered as the
+`tur_fat_shim_leak` ctest target; the fixture carries
+`requires.dedicated-runner` because `tests/run.sh` compiles spawned programs
+without ASan and could not see this.
+
+Verified against a deliberately-reverted build: `LeakSanitizer: detected memory
+leaks`, nonzero exit.
+
+### Guide upkeep
+
+Done, and not as the report anticipated. The `^fat` row is removed from the
+open-cells table in
+[value-representations-guide.md](../guides/value-representations-guide.md), and
+the static-box note no longer says `^fat` is excluded for want of a contract --
+it explains the inference instead. No ownership column was added, because no
+annotation was needed.
+
+### What is still true
+
+Direction 1 (an explicit `^fat ^owned` / borrowing-by-default annotation) remains
+the more general answer, and would cover the case this does not: a `^fat` sink
+with an inline-C body that does **not** drop still keeps its heap box, because
+the inline-C guard is conservative. That is a leak-avoidance opportunity, not a
+correctness gap, and nothing in the tree currently needs it.
+
+### Verification
+
+`tests/run.sh`: 2597 passed, 0 failed. `tests/run-turi.sh`: 1782 passed, 0
+failed. `tests/run-fat-shim-leak.sh`, `tests/run-closure-env-leak.sh`, and
+`tests/run-leak-gate.sh` all pass.

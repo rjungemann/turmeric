@@ -14,7 +14,7 @@
 ;; straight-line path.  (A case that consumes the capture without `f` also
 ;; consuming it evicts upstream: the fn's scope-exit auto-drop becomes an
 ;; unlowered EX_DEFER -- see
-;; docs/reported/cps-handler-case-consumes-owning-capture-evicts.md.)  So the
+;; docs/archive/cps-handler-case-consumes-owning-capture-evicts.md.)  So the
 ;; capture rides the multi-shot env by a BARE SHALLOW ALIAS
 ;; (owning_cap_borrow_only downgrades it): no incref on read-out, no env clone --
 ;; leak-clean, and the observed strong count is EXACT (1, not the inflated 2 an

@@ -3,7 +3,7 @@
 ;; closure body per monomorphization, so a FLOAT instantiation is register-class
 ;; correct (xmm0) instead of dispatching the shared int64 thunk -- the case the
 ;; former TUR-E0705 guard rejected.  The :int instantiation continues to share
-;; the integer carrier.  See docs/upcoming/poly-closure-result-specialization-plan.md.
+;; the integer carrier.  See docs/archive/history/poly-closure-result-specialization-plan.md.
 
 (defn constant [A] [val :A] : ptr<void>
   (fn [t : float] : A val))

@@ -472,13 +472,13 @@
 ;; auto-load, so declare the dependency explicitly.  defclass is idempotent, so
 ;; this coexists with the auto-loaded stub and the on-demand full typeclass.tur
 ;; with no double-emission.  Mirrors either.tur's typeclass-functor.tur load.
-;; See docs/reported/load-not-expanded-in-imported-or-project-modules.md.
+;; See docs/archive/history/load-not-expanded-in-imported-or-project-modules.md.
 
 (load "stdlib/typeclass-eq.tur")
 ;; M4c-pre: rewrite to consult by-value fields directly via Eq A / Eq B,
 ;; so M4c can monomorphize the dispatch through a per-instantiation dict
 ;; without needing to spill `x`/`y` to the int64 carrier (the legacy
-;; tuple2-eq-carrier? path).  See docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+;; tuple2-eq-carrier? path).  See docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
 
 (definstance Eq [Tuple2]
   [(Eq A) (Eq B)]

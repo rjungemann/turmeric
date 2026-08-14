@@ -3,7 +3,6 @@
 ;; a (:: expr T) ascription.  Previously collect_free_vars did not descend into
 ;; EX_ASCRIBE, so `ch` was missed as a capture and codegen emitted the bare
 ;; `ch_NNNN` local inside the lifted closure -- a hard C 'undeclared' error.
-;; See docs/reported/ascribe-captured-var-in-closure.md.
 
 (defopaque Chan :ptr<void>)
 

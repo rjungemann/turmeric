@@ -908,8 +908,8 @@ export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 # scan skipped both it and its children, and those children were compiled by
 # NO harness (run-turi.sh scans this deep, but only interprets).  That is
 # exactly where two latent miscompiles sat undisturbed until the J3 jit
-# harness compiled them: docs/archive/typed-result-map-cps-clone-struct-assign.md
-# and docs/archive/typed-slots-nested-specialization-float-garbage.md.  Both
+# harness compiled them: docs/archive/history/typed-result-map-cps-clone-struct-assign.md
+# and docs/archive/history/typed-slots-nested-specialization-float-garbage.md.  Both
 # are fixed, so this scan now covers them and the class cannot re-hide.
 #
 # Detection is structural, not a hard-coded list, and deliberately STRICT: a

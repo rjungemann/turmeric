@@ -5,7 +5,7 @@
 ; member of a self-sustaining cycle has strong_count>0 via its own back-edge, so
 ; a cycle was unconditionally marked live. Measured leak: 192 bytes per cycle,
 ; identical whether the collector was on or off
-; (docs/reported/gc-strong-cycles-not-collected.md).
+; (docs/archive/history/gc-strong-cycles-not-collected.md).
 ;
 ; Real trial deletion subtracts the internal edges first, so a block referenced
 ; only from within the candidate subgraph falls to a zero trial count and is

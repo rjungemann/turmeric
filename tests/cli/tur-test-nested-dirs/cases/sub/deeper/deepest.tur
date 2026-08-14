@@ -1,0 +1,3 @@
+;; Two levels down, to pin that the walk is fully recursive rather than
+;; one-level-deep.
+(defn main [] :int 0)

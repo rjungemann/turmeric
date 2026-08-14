@@ -70,7 +70,13 @@ This is sound by construction, and needs no new machinery:
 
 - The authority to mutate `w` is `w`'s own exclusive-mutable access. It cannot be
   forged from a shared borrow, so there is no capability to mint, hoard, or alias
-  -- the failure mode a capability token would have.
+  -- the failure mode a capability token would have. That holds for a `^borrow`
+  **parameter** too, not only for an in-frame `(& w)`: passing one on as
+  `^unique ^mut` is the same `TUR-E0200`. It is worth stating because the two
+  arrive by different routes -- an in-frame borrow is visible to the frame, while
+  a `^borrow` parameter's aliasing happened in the caller -- and for a while only
+  the first was checked (see
+  [docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md](../archive/borrow-param-passed-as-unique-mut-undiagnosed.md)).
 - `frozen` *borrows*, it does not consume: `w` is usable again after the region,
   so a real `despawn!` outside the region is fine.
 - Read-only accessors take `[^borrow w]` and coexist with the region borrow, so

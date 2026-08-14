@@ -1,7 +1,7 @@
 # Debugger Phase 1 -- Source-Spans Audit
 
 Status: landed (audit + coverage gate)
-Track: docs/upcoming/debugger-plan.md, Phase 1 ("suggested first PR")
+Track: docs/archive/history/debugger-plan.md, Phase 1 ("suggested first PR")
 
 This is the Phase 1 deliverable from [debugger-plan.md](./debugger-plan.md): an
 inventory of how source spans flow through the compiler, plus a coverage gate

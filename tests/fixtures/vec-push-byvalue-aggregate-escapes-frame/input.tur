@@ -3,7 +3,7 @@
 ;; OUTLIVES the producing frame must not store a dangling stack address.
 ;;
 ;; Before the fix
-;; (docs/archive/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md),
+;; (docs/archive/history/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md),
 ;; the concrete->carrier bridge spilled each element to a stack local and
 ;; carried `(int64_t)(intptr_t)(&tmp)`.  Correct for an immediate consumer, but
 ;; for a `Vec` returned from `build-vec` the stored pointers dangle the moment

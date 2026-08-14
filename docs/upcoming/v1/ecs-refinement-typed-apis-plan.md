@@ -402,7 +402,7 @@ expected and fails to elaborate.
 > segfaults nondeterministically** (6-8/8 crashes; ASan-silent -> arena/stack, not
 > heap). A partial fix landed (`cmd_build` now calls `refine_discharge_reset()` --
 > the memo held stale per-compile-arena VC pointers), but a second channel
-> remains. Filed as `docs/reported/refined-multi-compile-memory-corruption.md`.
+> remains. Filed as `docs/archive/history/refined-multi-compile-memory-corruption.md`.
 > So the RE1 refined tests are kept in `spices/ecs/tests/refined/` (a subdir
 > `tur test tests` does not descend into) and verified **individually** (each
 > passes on its own `tur run`/`tur check`), NOT auto-run. Auto-running is blocked
@@ -440,7 +440,7 @@ expected and fails to elaborate.
 > blocks an ergonomic `for-each-alive` MACRO is a different bug: a macro that
 > *generates* a refined guard/crossing (via the quasiquote template, not `~@body`
 > splicing the user's forms) does not discharge -- spurious `TUR-W0372`. Filed as
-> `docs/reported/macro-generated-refined-crossings-do-not-discharge.md`.
+> `docs/archive/history/macro-generated-refined-crossings-do-not-discharge.md`.
 >
 > **Remaining for RE1:** fix the refined-multi-compile corruption (unblocks
 > auto-running all refined tests); fix macro-generated refined-crossing discharge

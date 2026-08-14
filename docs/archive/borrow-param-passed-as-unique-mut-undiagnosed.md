@@ -90,3 +90,78 @@ where the E0200 path gets exercised. The guide's claim that "a `^borrow`
 parameter does not register the borrow the region needs" turned out to be false
 in the *other* direction (a `^borrow` parameter registers it fine, and that
 sentence has been corrected); characterizing that is what turned this up.
+
+## Resolution (2026-08-13)
+
+Fixed by the second of the two options the report weighs: reject the
+`^unique ^mut` crossing on a `^borrow`-moded binding directly, rather than
+registering `^borrow` parameters as frame-live borrows.
+
+### Root cause, now diagnosed
+
+The report leaves this open ("not investigated") and points at the right place.
+The UT2 check in `src/compiler/elab_call.c` reads:
+
+```c
+if (... FN_ARG_FLAG(fn_type.as.fn, i, FA_UNIQUE_MUT) && args[i]->kind == EX_VAR) {
+    Binding *arg_b = args[i]->as.var.binding;
+    if (scope_borrow_conflicts(e->scope, arg_b, BK_MUT)) { ...E0200... }
+}
+```
+
+`scope_borrow_conflicts` consults borrows registered **in this frame**, which is
+what an explicit `(& v)` creates. A `^borrow` parameter registers nothing there,
+and correctly so -- the aliasing happened in the *caller*, one frame up. So the
+two shapes the report's table contrasts are not "the same thing checked
+inconsistently"; they are visible to different scopes, and only one of them was
+being asked.
+
+### Why the direct rejection rather than registering the borrow
+
+The report calls option 1 "more faithful and probably noisier", and the noise is
+the deciding factor: registering a `^borrow` parameter as a live borrow for its
+whole extent would feed every *other* borrow check in the function, not just this
+one, and each of those would need re-judging.
+
+The direct rejection asserts something narrower and unconditionally true -- a
+shared reference cannot become an exclusive one -- which does not depend on what
+the frame happens to know, and cannot make any other check fire. `Binding` already
+carries `is_borrow` (LB1), so no new state is needed.
+
+### Coverage
+
+- `tests/fixtures/errors/borrow-param-to-unique-mut` -- the report's repro
+  verbatim, now `TUR-E0200`.
+- `tests/fixtures/borrow-param-unique-mut-allowed` -- the shapes that must
+  **not** break: an owner passed as `^unique ^mut`, and a `^borrow` parameter
+  read and passed on to another `^borrow` parameter. Sharing a shared reference
+  is what `^borrow` is for; only the exclusive crossing is rejected. Without
+  this second fixture an over-fire would surface as a silently rejected program
+  somewhere downstream rather than as a failing test.
+
+One wrinkle in writing the positive fixture, unrelated to this report but worth
+knowing: `(let [^mut v (vec-new)] (bump! v) ...)` is a `TUR-E0001`, because
+`(vec-new)` alone is `(Vec 'A)` and nothing has grounded the element type. The
+report's own repro pushes an int first, which is why it does not hit this. The
+fixture does the same and says so inline.
+
+### Also corrected
+
+`docs/guides/stateful-refinements-guide.md`'s soundness argument -- "the
+authority to mutate `w` ... cannot be forged from a shared borrow" -- was the
+claim this report bounded. It now holds, and the guide says explicitly that it
+covers a `^borrow` *parameter* and not only an in-frame `(& w)`, since those
+arrive by different routes and for a while only the first was checked.
+
+### Verification
+
+`tests/run.sh`: 2595 passed, 0 failed. `tests/run-turi.sh`: 1781 passed, 0
+failed. No existing fixture had to change, which is the useful signal here: the
+rejected shape was not in use anywhere in the corpus, so this tightens the
+checker without narrowing anything the tree relies on.
+
+The sibling report
+[frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md)
+stays open and is genuinely distinct, as this report says -- that one is a
+deliberate escape hatch through a `::` cast, answered by `:sealed`; this one was
+the ordinary path failing to check.

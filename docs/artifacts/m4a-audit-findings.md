@@ -1,7 +1,7 @@
 ---
 title: M4a findings — audit + ABI-binding infrastructure
 category: Planning -- ABI / Codegen rework
-description: Audit results and ABI-binding scaffolding for `docs/upcoming/m4-typeclass-per-method-abi-plan.md` §M4a. Handoff to M4b.
+description: Audit results and ABI-binding scaffolding for `docs/archive/m4-typeclass-per-method-abi-plan.md` §M4a. Handoff to M4b.
 ---
 
 # M4a — audit + ABI-binding infrastructure

@@ -3,7 +3,7 @@
 ;; handler).  Each non-escaping `(fn ...)` heap-allocates an env that the
 ;; scoped-free pass releases at scope exit; without it, this program leaks one
 ;; env per loop iteration and one per handler invocation.
-;; See docs/reported/fat-closure-env-leak.md.
+;; See docs/archive/history/fat-closure-env-leak.md.
 ;;
 ;; This fixture is owned by its own ASan ctest target (tur_closure_env_leak),
 ;; which compiles the emitted C with -fsanitize=address and ASAN_OPTIONS

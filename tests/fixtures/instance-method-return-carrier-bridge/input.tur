@@ -10,7 +10,7 @@
 ;; with "aggregate value used where an integer was expected".
 ;;
 ;; This is the turmeric-side regression for
-;; docs/upcoming/instance-method-return-carrier-bridge.md (the
+;; docs/archive/history/instance-method-return-carrier-bridge.md (the
 ;; derive-decode-struct seam, reproduced without the json spice).  The `int`
 ;; instance keeps its inline-C `tur_box_ok` carrier body so the legitimate
 ;; carrier->concrete deref path stays exercised alongside the by-value one.

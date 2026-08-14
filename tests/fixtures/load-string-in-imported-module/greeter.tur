@@ -1,5 +1,5 @@
 ;; Regression fixture for
-;; docs/reported/compiled-string-return-int-conversion.md (secondary blocker).
+;; docs/archive/compiled-string-return-int-conversion.md (secondary blocker).
 ;;
 ;; This module pulls the owned stdlib String into its exported signature via
 ;; `(load "stdlib/string.tur")`, then is IMPORTED by input.tur.  The load

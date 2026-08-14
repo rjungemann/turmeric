@@ -104,6 +104,25 @@ void diag_reset(void) {
     for (size_t i = 0; i < MAX_FILES; i++) files_[i] = NULL;
 }
 
+size_t diag_files_capacity(void) { return MAX_FILES; }
+
+size_t diag_files_save(const SourceFile **out, size_t cap) {
+    size_t n = (cap < MAX_FILES) ? cap : MAX_FILES;
+    for (size_t i = 0; i < n; i++) out[i] = files_[i];
+    return n;
+}
+
+void diag_files_restore(const SourceFile **in, size_t n) {
+    if (n > MAX_FILES) n = MAX_FILES;
+    /* Skip id 0: the caller has just registered THIS turn's source blob there,
+     * and the saved entry is the previous turn's, which must not clobber it. */
+    for (size_t i = 1; i < n; i++) {
+        if (!in[i] || files_[i]) continue;
+        files_[i] = in[i];
+        if (i >= file_count_) file_count_ = i + 1;
+    }
+}
+
 /* Check if stderr is a TTY (for auto-color detection) */
 bool stderr_is_tty(void) {
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 1

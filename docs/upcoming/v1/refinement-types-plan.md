@@ -816,7 +816,7 @@ never mentions:
 > (`src/turi/eval.c:9392`) applies the 64-bit MurmurHash3 finalizer to a
 > `uintptr_t`, so at wasm32 it shifts a 32-bit value by 33. clang warns;
 > `turi/eval.c` is the interpreter, which IS the web REPL. Filed as
-> `docs/reported/wasm32-promo-hash-shift-ub.md` rather than fixed inline --
+> `docs/archive/history/wasm32-promo-hash-shift-ub.md` rather than fixed inline --
 > the one-line fix changes hash values and therefore promo-map iteration
 > order, which deserves its own suite run rather than riding along with an
 > unrelated slice. (`hamt.c` does the same shift on a `uint64_t` and is fine.)
@@ -1124,8 +1124,7 @@ never mentions:
 > The fuzzer gained a `datatype` shape, and it immediately found a codegen
 > null-deref unrelated to refinements: a `match` on a non-ADT scrutinee whose
 > FIRST arm is a wildcard or bare binder reads `adt->name` through NULL, gate or
-> no gate. Filed as `docs/reported/match-int-scrutinee-guard-null-adt.md`; the
-> affected rungs are dropped from the generator with a pointer back to it. (My
+> no gate. The affected rungs are dropped from the generator. (My
 > first reading blamed `when`, which was wrong -- it is decided by arm 0's
 > pattern alone.)
 >
@@ -1385,9 +1384,10 @@ never mentions:
 >
 > Two more codegen defects surfaced, both unrelated to refinements and both
 > reproducing with the gate off: a guarded WILDCARD arm on a non-ADT scrutinee
-> emits invalid C (`else` without `if`). Appended to
-> `docs/reported/match-int-scrutinee-guard-null-adt.md`, which is now two
-> defects in the same non-ADT match lowering and probably one fix.
+> emits invalid C (`else` without `if`). Same non-ADT match lowering as the
+> null-deref above, and probably one fix. (Both are guarded today by the
+> `!_scrut_is_adt` disjunct in emit_expr.c's literal-match arm; the report
+> these notes say was filed never was.)
 >
 > Verified: suite 2329/0, solver unit 47/0, 400 fuzz cases across two seeds
 > with 0 soundness bugs.
@@ -3248,9 +3248,9 @@ always sound.
   *checking* convenience in RT4 (we deliberately skip their *inference* layer).
 - **Turmeric Contract Types** -- `docs/guides/contract-types-guide.md`
 - **Turmeric Sized Types** -- `docs/guides/sized-types-guide.md`
-- **Lang layers** -- `docs/upcoming/lang-layers-plan.md` (the `refined` semantic
+- **Lang layers** -- `docs/archive/lang-layers-plan.md` (the `refined` semantic
   layer, phase L4 -- since removed; see the graduation note at the top).
-- **Experiment mechanism** -- `docs/upcoming/v1/experimental-flag-mechanism-plan.md`.
+- **Experiment mechanism** -- `docs/archive/history/experimental-flag-mechanism-plan.md`.
 
 ### Turmeric plans that depend on or extend this one
 

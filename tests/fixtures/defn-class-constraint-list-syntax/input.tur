@@ -9,7 +9,7 @@
 ;; declarations against int-carried opaque receivers (sidestepping
 ;; gap H item 3, which is still open for struct-receivers).
 ;;
-;; See docs/reported/typeclass-constrained-defn-rejected.md.
+;; See docs/archive/history/typeclass-constrained-defn-rejected.md.
 ;;
 ;; Expected output:
 ;;   42        -- single-constraint use returns the bound int

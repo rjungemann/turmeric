@@ -1,7 +1,7 @@
 ;; ^syntax marks the param as receiving its arg as raw AST.
 ;; Without it, `(mk (speed : float 200.0))` would have `speed` resolved by
 ;; the elaborator before the macro runs.
-;; docs/reported/macro-args-elaborated-before-expansion.md
+;; docs/archive/history/macro-args-elaborated-before-expansion.md
 (defmacro mk [^syntax decl]
   `(println ~(symbol-name (first decl))))
 

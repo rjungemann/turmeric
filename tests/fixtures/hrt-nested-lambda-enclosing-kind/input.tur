@@ -14,7 +14,7 @@
 ;; so this exercises only the kind recovery.  Forwarding a `(f X)`-typed value
 ;; into another constrained rank-2 fn -- full van Laarhoven lens COMPOSITION --
 ;; additionally needs dictionary forwarding and is still open; see
-;; docs/reported/van-laarhoven-lens-composition.md.
+;; docs/archive/history/van-laarhoven-lens-composition.md.
 
 (defopaque Const [r a] :int)
 (defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)

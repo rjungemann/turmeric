@@ -1,7 +1,7 @@
 ;; Parametric struct function-field call-through.
 ;;
 ;; Regression for
-;; docs/archive/parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr.md:
+;; docs/archive/history/parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr.md:
 ;; calling a fn-typed field whose signature is written over the struct's own
 ;; type parameters (`get : (fn [S] A)`, `put : (fn [S A] S)` on a parametric
 ;; `(defstruct Lens [S A] ...)`) used to emit a direct call through the carrier-

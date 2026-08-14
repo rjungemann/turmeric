@@ -669,7 +669,7 @@ def test_lsp_unprimed_completion() -> None:
     forces an analysis and primes the index. Every case here is deliberately
     unprimed -- no request lands before the buffer is broken.
 
-    See docs/reported/lsp-symbol-retention-never-primes.md.
+    See docs/archive/history/lsp-symbol-retention-never-primes.md.
     """
     print("--- LSP completion without a primed index ---")
 

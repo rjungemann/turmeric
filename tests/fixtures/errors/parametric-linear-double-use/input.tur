@@ -2,7 +2,7 @@
 ;; -- must enforce single-use just like its non-parametric sibling.  The
 ;; phantom T parameter previously caused the :linear qualifier to be
 ;; silently dropped at the TY_APP node, so a double-consume compiled
-;; cleanly.  See docs/reported/parametric-linear-opaque-not-enforced.md.
+;; cleanly.  See docs/archive/history/parametric-linear-opaque-not-enforced.md.
 (defopaque Token [T] :int :linear)
 
 (defn make-token [T]

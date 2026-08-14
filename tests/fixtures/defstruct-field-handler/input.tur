@@ -4,7 +4,7 @@
 ; int64 carrier slot of the record ADT (like a fn-typed field), stored by the
 ; explicit TY_HANDLER case in struct_field_storage_from_type.  Previously this
 ; hit the DS-A4 "not yet supported as a struct/ADT field" hard error
-; (docs/upcoming/structdef-exotic-field-handler-plan.md).
+; (docs/archive/structdef-exotic-field-handler-plan.md).
 
 (defeffect Ask [] :int)
 

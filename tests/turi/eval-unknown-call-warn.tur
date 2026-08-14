@@ -2,7 +2,7 @@
 ;; hard error under --interpret (TuriEnv natives are resolved at runtime), but
 ;; the elaborator must warn (TUR-W0040) so embedders consuming the diag sink
 ;; surface the likely typo at load time instead of only at runtime on the
-;; branch that runs.  See docs/archive/eval-mode-unknown-call-deferred-to-runtime.md.
+;; branch that runs.  See docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md.
 (defn main [] : int
   (definitely-not-a-real-function 1 2 3)
   0)

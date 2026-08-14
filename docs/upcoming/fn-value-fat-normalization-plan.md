@@ -5,7 +5,7 @@
 wants ("it is a calling-convention change across every non-carrier fn-typed
 parameter, so it wants its own plan and a full-suite regen, not a patch"),
 plus the sibling findings that arrived since
-(`docs/reported/fn-typed-value-return-ascribe-miscompiles.md`). No `--enable`
+(`docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md`). No `--enable`
 gate: this is a miscompile fix converging on existing checked behavior, not a
 new user-facing feature -- the experiment machinery does not apply, the
 regen-coordination rules do.
@@ -304,7 +304,7 @@ that must NOT change (owning fn-fields, capturing closures).
 sink leaks too, and worse -- 5e6 iterations peaked at **1002 MiB**.  It is
 pre-existing and needs an ownership contract on `^fat` before a caller can
 choose a representation, so it is its own report:
-[`fat-sink-shim-box-leaks-per-call`](../reported/fat-sink-shim-box-leaks-per-call.md).
+[`fat-sink-shim-box-leaks-per-call`](../archive/fat-sink-shim-box-leaks-per-call.md).
 
 ## Stages
 

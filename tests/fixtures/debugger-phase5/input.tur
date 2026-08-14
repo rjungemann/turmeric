@@ -28,8 +28,8 @@
 ;; monomorphized name.  See
 ;; docs/archive/history/phase5-gdb-bare-result-lowered-to-int64-carrier.md.
 ;;
-;; See docs/upcoming/debugger-plan.md (Phase 5) and
-;; docs/upcoming/debugger-native-types-plan.md.
+;; See docs/archive/history/debugger-plan.md (Phase 5) and
+;; docs/archive/history/debugger-native-types-plan.md.
 
 (defn seed [] : int
   ```c

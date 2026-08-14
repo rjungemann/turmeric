@@ -1390,7 +1390,7 @@ running nothing. Four directories are in that state -- `sandbox/` (17 files),
 `stm/` (7, including atomicity and deadlock-freedom), `module-transitive-imports/`
 (4), `typeclass/` (2) -- and no other harness picks them up. 30 `.tur` files
 that the summary line counts as passing. Filed as
-[docs/reported/fixture-dirs-with-loose-tur-files-pass-without-running.md](../reported/fixture-dirs-with-loose-tur-files-pass-without-running.md).
+[docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md](../reported/fixture-dirs-with-loose-tur-files-pass-without-running.md).
 Found because `module-transitive-imports` looked like the multi-module fixture
 precedent and turned out not to run; the shape G3's fixtures actually use is
 `errors/sealed-opaque-cross-module-fabricate`'s.

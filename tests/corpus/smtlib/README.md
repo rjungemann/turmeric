@@ -289,7 +289,7 @@ over-budget: it sits at the 10s line and moves with machine load, not with
 these changes.) The over-budget and unlabelled counts are timing- and
 sample-dependent; re-measure rather than compare across machines. Full
 measurements and fix rationale:
-[docs/archive/corpus-reader-tail-plan.md](../../../docs/archive/corpus-reader-tail-plan.md)
+[docs/archive/history/corpus-reader-tail-plan.md](../../../docs/archive/history/corpus-reader-tail-plan.md)
 (archived -- the tail it tracked is closed).
 
 ## Running it

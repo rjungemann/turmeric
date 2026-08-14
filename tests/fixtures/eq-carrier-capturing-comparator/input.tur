@@ -4,7 +4,7 @@
 ;; slot 0 of a real capturing box jumped into garbage (segfault); the
 ;; constrained-Eq instances and the recursive-Eq synthesis dispatcher passed
 ;; bare captureless pointers, so the helpers could not move onto ^fat.  See
-;; docs/reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md.
+;; docs/archive/history/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md.
 ;;
 ;; `cmp` closes over `k`, so it is a genuine capturing closure, not a captureless
 ;; lambda that gets auto-boxed at the call site -- it exercises the helper's fat

@@ -7,7 +7,7 @@
 ; `return` is the motivating case: it is the conventional name for a monadic
 ; unit, and (return x) always elaborates as the early-return form.
 ;
-; See docs/archive/defn-shadows-return-special-form.md
+; See docs/archive/history/defn-shadows-return-special-form.md
 (defn return [x : int] : int
   (+ x 1))
 

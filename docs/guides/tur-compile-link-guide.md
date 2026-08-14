@@ -121,7 +121,7 @@ the line. Set `TUR_RUNTIME_LIB` if your archive lives elsewhere.
 
 ## Why this exists
 
-See [docs/upcoming/v2/tur-link-and-build-split-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v2/tur-link-and-build-split-plan.md).
+See [docs/archive/tur-link-and-build-split-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/tur-link-and-build-split-plan.md).
 The short version: splitting the compile from the link makes the object
 compiles cacheable (ccache hits on unchanged runtime sources across every
 fixture and every run) and stops re-compiling the runtime per build -- the

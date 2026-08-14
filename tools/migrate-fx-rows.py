@@ -157,7 +157,7 @@ def rewrite_text(src: str) -> Tuple[str, int, int]:
 # history.  The fx-row rename plan itself uses `#{...}` literally to describe
 # what is being replaced; the docs sweep handles it by hand.
 DEFAULT_EXCLUDE_DIRS = ("docs/archive",)
-DEFAULT_EXCLUDE_FILES = ("docs/upcoming/fx-row-syntax-rename-plan.md",)
+DEFAULT_EXCLUDE_FILES = ("docs/archive/history/fx-row-syntax-rename-plan.md",)
 
 
 def _is_default_excluded(path: str) -> bool:

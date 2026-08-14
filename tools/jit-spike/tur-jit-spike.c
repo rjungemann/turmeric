@@ -166,7 +166,7 @@ static void *jit_run_entry (void *p) {
    drop-glue headers; under `cc` the linker resolves that, but host code in this
    process was linked long ago and reads its own weak copy -- so the runtime
    plain-free'd an interior pointer and every reactor fixture died at teardown
-   (docs/reported/jit-reactor-fixtures-abort-under-mir.md, root cause).  After
+   (docs/archive/jit-reactor-fixtures-abort-under-mir.md, root cause).  After
    the module is loaded, copy the program's value onto the host's global.
 
    The six weak no-op tur_scheduler_*_st FUNCTIONS this note used to flag as

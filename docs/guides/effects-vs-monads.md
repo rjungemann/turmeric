@@ -626,10 +626,23 @@ pins the type:
 (defn mk [] : (Option int) (pure 42))   ;; OK -- return type pins it
 ```
 
-The `for` comprehension macro is currently caught by this: it desugars the body
-to `.pure`, which sits inside a `fn` with no expected type, so `for` fails to
-resolve against the auto-loaded `Applicative` instances. **Use `do-m` instead**
--- it only desugars to `.bind`, which is receiver-directed and resolves fine.
+The `for` comprehension macro used to be caught by this and no longer is. It
+desugars the body to `.pure`, and the dot form asks the wrong question for a
+return-directed method -- `.m` means "dispatch on the first argument", but
+`pure`'s first argument is the payload, not the class type, so the receiver was
+an erased `int64_t` and every `Applicative` instance matched by name. The
+expected type was there all along (`bind`'s signature pins the lambda's result);
+the dot-dispatch path just was not asking for it. It does now, so `for` resolves
+against the auto-loaded instances:
+
+```turmeric no-check
+(defn sums [] : (Option int)
+  (for [x (half 20) y (half x)] (+ x y)))   ;; => 15
+```
+
+`do-m` remains the more explicit spelling and is what most of this guide uses;
+it desugars only to `.bind`, which is receiver-directed. See
+[docs/archive/for-comprehension-pure-ambiguous-against-stdlib.md](../archive/for-comprehension-pure-ambiguous-against-stdlib.md).
 
 ### Type erasure at instance boundaries
 

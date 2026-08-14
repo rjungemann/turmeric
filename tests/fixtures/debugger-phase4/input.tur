@@ -11,8 +11,8 @@
 ;; (a null dereference does not fault where page 0 is mapped); abort() always
 ;; raises SIGABRT.
 ;;
-;; See docs/upcoming/debugger-plan.md (Phase 4) and
-;; docs/upcoming/debugger-native-sourcemaps-phase4.md.
+;; See docs/archive/history/debugger-plan.md (Phase 4) and
+;; docs/artifacts/debugger-native-sourcemaps-phase4.md.
 
 (defn boom [n : int] : int
   ```c

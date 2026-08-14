@@ -4,7 +4,7 @@
 ;; src/compiler/emit_module.c -- the `if (!user_has_main)` arm). The fix
 ;; wires the body into a __attribute__((constructor)) function that the
 ;; C runtime invokes before main(). Filed and resolved under
-;; docs/reported/top-level-def-init-dropped.md.
+;; docs/archive/history/top-level-def-init-dropped.md.
 
 (def x 7)
 (def y 42)

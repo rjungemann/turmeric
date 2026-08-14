@@ -24,7 +24,7 @@
  *     closures for process lifetime) but worth revisiting if fibers are ever
  *     created in a hot loop.
  *
- * See docs/upcoming/v1/windows-support-plan.md.
+ * See docs/archive/windows-support-plan.md.
  */
 
 #ifndef TUR_PLATFORM_UCONTEXT_WIN_H

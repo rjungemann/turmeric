@@ -34,7 +34,7 @@ static void pbp_push(EmitCtx *ctx, Binding *b) {
 /* The declared C type of parameter `i`, matching the function signature's
  * default (non-pbp, non-poly) path.
  *
- * M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+ * M4 follow-up (docs/archive/history/tco-in-abi-specs-for-stdlib-iteration.md):
  * when emitting an ABI spec body, the spec's per-instantiation arg type
  * is the authoritative C-level shape — the bare fn binding's full type is
  * the generic (pre-substitution) form which lowers to int64_t for TY_APP.
@@ -91,7 +91,7 @@ static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
      * every such loop is one engine switch away from a stack overflow (it
      * survives the cc path only because gcc -O2 turns the emitted self-call
      * into a sibling call; MIR performs no such optimization).  See
-     * docs/archive/named-let-self-tail-not-tco.md. */
+     * docs/archive/history/named-let-self-tail-not-tco.md. */
     for (uint32_t i = tco_env_offset(fd); i < fd->n_params; i++) {
         if (fd->params[i]->is_poly_fn) return false;
         Type pty = tco_param_type(ctx, fn_e, fd, i);
@@ -120,7 +120,7 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
     if (!call || call->kind != EX_CALL) return false;
     if (!call->as.call_.fn_binding) return false;     /* must be a direct call */
     if (call->as.call_.fn_expr) return false;          /* indirect field call */
-    /* M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+    /* M4 follow-up (docs/archive/history/tco-in-abi-specs-for-stdlib-iteration.md):
      * Path A's elab resolves typeclass dispatch directly to the instance
      * method's binding (`fn_binding = method->binding; fn_expr = NULL`).
      * `dict_arg` is still set as an annotation, but the actual call IS a
@@ -355,7 +355,7 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
              * carrier handle.  A pure-Turmeric wrapper around such a helper
              * needs the same carrier->by-value bridge that the #{Construct}
              * and __inst_ producers above already get.
-             * See docs/archive/tail-call-inline-c-carrier-bridge.md. */
+             * See docs/archive/history/tail-call-inline-c-carrier-bridge.md. */
             if (b->body_is_inline_c && b->type.kind == TY_FN &&
                 b->type.as.fn.result_full_type &&
                 type_uses_carrier_abi(*b->type.as.fn.result_full_type))
@@ -857,7 +857,7 @@ static bool gs_param_class(EmitCtx *ctx, Type t, TypeKind *out_kind,
  * non-tail self-recursion (`(+ 1 (f ...))`), a catch whose thunk actually
  * panics, and nested if/let/do all run with a flat C stack.
  *
- * Model (mirrors docs/upcoming/prototypes/d3-stackless-catch-unwind.c):
+ * Model (mirrors docs/artifacts/d3-stackless-catch-unwind.c):
  *   - Every function-scope scalar local (params + hoisted let-vars + one result
  *     temp per suspension) rides a `tur_cont` node's saved[] across a descend.
  *   - A "suspension" is a self-call or a catch-unwind: its value is produced on
@@ -3411,7 +3411,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * inline-C body's `(int64_t)(intptr_t)<orig>` cast then operates on
      * a pointer and produces the int64 carrier the call site expects.
      * No source-level annotation: the recognizer is purely structural.
-     * See docs/reported/polymorphic-ok-fails-for-value-struct-payload.md. */
+     * See docs/archive/history/polymorphic-ok-fails-for-value-struct-payload.md. */
     uint32_t nbp = fd->n_params ? fd->n_params : 1;
     bool *needs_box_spill = (bool *)arena_alloc(ctx->type_arena, nbp * sizeof(bool));
     for (uint32_t i = 0; i < nbp; i++) needs_box_spill[i] = false;
@@ -3646,7 +3646,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * have no carrier helper and never produce carrier values, so the
      * generic body for them is unreachable from carrier call sites.
      *
-     * See docs/reported/m2b-stdlib-migration-blocked-on-carrier-fallback.md
+     * See docs/archive/history/m2b-stdlib-migration-blocked-on-carrier-fallback.md
      * for the rationale; this implements that report's option (a). */
     bool m2b_carrier_synth = false;
     /* Fire in TWO contexts:
@@ -3813,7 +3813,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * function can be emitted as an iterative loop instead of self-recursion.
      * Excludes main (different signature handling).
      *
-     * M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+     * M4 follow-up (docs/archive/history/tco-in-abi-specs-for-stdlib-iteration.md):
      * lifted the `!use_abi_spec` restriction.  TCO inside an ABI spec is
      * safe: the `__tur_tailcall:` label and the param-reassign loop are
      * pure C-level constructs, and `tco_params_simple` reads the spec's
@@ -4063,8 +4063,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * hard cc error (aggregate into integer).  When the body's own type
              * is a concrete non-carrier aggregate, spill THAT type so the malloc
              * size and the cast match the actual value.
-             * See docs/reported/m7-hkt-bimap-... family / instance-method-
-             * return-carrier-bridge fixture. */
+             * See docs/archive/history/m7-hkt-bimap-twoparam-struct-tyvar-leak.md
+             * / the instance-method-return-carrier-bridge fixture. */
             if (struct_cty &&
                 strcmp(struct_cty, "int64_t") == 0 && fd->body) {
                 const char *body_cty = emit_type_c_name(ctx, fd->body->type);

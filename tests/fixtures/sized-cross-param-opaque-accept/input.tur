@@ -1,7 +1,7 @@
 ; SZ8 non-GADT extension: cross-parameter size unification on a defopaque
 ; carrier whose phantom size index is pinned to a Size literal at both
 ; call sites.  Companion to errors/sized-cross-param-opaque-reject.
-; Closes docs/reported/sz8-opaque-phantom-size-not-load-bearing.md.
+; Closes docs/archive/history/sz8-opaque-phantom-size-not-load-bearing.md.
 ;
 ; Both `(mk-dense-2)` calls return (Dense (Static 2) int); the call-site
 ; inference (sz_cross_param_unify's non-GADT path) recovers SZT_CONST 2

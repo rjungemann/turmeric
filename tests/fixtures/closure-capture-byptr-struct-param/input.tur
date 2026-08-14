@@ -3,7 +3,7 @@
 ;; captured C value is `const T *`, while the closure env field is declared
 ;; by value (`T`).  The capture-store must deref so the closure owns a copy
 ;; rather than the caller's pointer (which would dangle once the frame
-;; returns).  See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (B5).
+;; returns).  See docs/archive/history/stdlib-type-erasure-cleanup-plan.md (B5).
 
 (defstruct Cfg
   [name :cstr

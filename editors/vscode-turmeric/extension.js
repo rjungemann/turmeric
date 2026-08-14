@@ -4,7 +4,7 @@
 // Phase 3).  The adapter itself lives in the compiler; this extension only
 // declares the debug type and spawns `tur dap` as the adapter executable.
 //
-// See docs/upcoming/debugger-dap-phase3.md.
+// See docs/artifacts/debugger-dap-phase3.md.
 
 const vscode = require('vscode');
 

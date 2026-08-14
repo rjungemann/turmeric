@@ -4,7 +4,7 @@
 ;; must keep specializing the recursive call on the ENCLOSING element type A,
 ;; not collapse it to the int-carrier spec (`Cons__int`).
 ;;
-;; Root cause (docs/reported/recursive-constrained-generic-carrier-ascription-loses-element-spec.md):
+;; Root cause (docs/archive/history/recursive-constrained-generic-carrier-ascription-loses-element-spec.md):
 ;; the G7 concrete-result override in emit_module.c treated the carrier-erasure
 ;; ascription `(:: (rep ...) :int)` as a concrete monomorphization target, so the
 ;; `cstr`/`float` specs of `rep` recursed into `rep__spec__Cons__int__`. Element

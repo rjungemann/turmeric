@@ -1,4 +1,4 @@
-; Regression: docs/reported/kind-star-instance-two-param-type-cannot-bind-constraint-var.md
+; Regression: docs/archive/history/kind-star-instance-two-param-type-cannot-bind-constraint-var.md
 ;
 ; A STAR-declared typeclass (param kind *) must accept a FULLY-APPLIED
 ; 2-parameter instance head that fixes one type argument and binds the other to

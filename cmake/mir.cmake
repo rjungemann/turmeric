@@ -23,7 +23,7 @@ include_guard(GLOBAL)
 #     `ret 0, 0` to `ret t, t`, returning { second-word, second-word } for a
 #     two-word struct -- exactly the emitted tail-loop for a self-recursive
 #     carrier-struct function
-#     (docs/archive/mir-two-word-struct-return-goto-loop-miscompile.md).
+#     (docs/archive/history/mir-two-word-struct-return-goto-loop-miscompile.md).
 #   41ff4d94 -- try_spilled_reg_mem overran its 2-entry op_nums[] when one
 #     insn used the same spilled register in three operand positions
 #     (`mul r,r,r` from coalesced `r = r * r`), smashing rewrite_insn's frame
@@ -37,7 +37,7 @@ include_guard(GLOBAL)
 #     supporting c2mir fixes -- _Alignas was unparseable in spec_qual_list
 #     (struct members) and ignored for layout when it did parse
 #     (jit-engine-j0-findings.md section 30.1,
-#     docs/archive/jit-arm64-uint128-align-struct-layout-skew.md).
+#     docs/archive/history/jit-arm64-uint128-align-struct-layout-skew.md).
 #   d7e19e8d -- c2mir accepted `#pragma pack` and silently ignored it, laying
 #     the struct out at natural alignment.  Unlike c2mir's other gaps this one
 #     does not refuse the input: it compiles, runs, and is wrong (a pack(4)

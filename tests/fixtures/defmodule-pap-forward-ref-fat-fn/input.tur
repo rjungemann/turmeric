@@ -8,7 +8,7 @@
 ;; then looked under-saturated and synthesised a partial-application wrapper
 ;; whose body passed THREE scalar args to sample's two-arg C prototype:
 ;;   error: too many arguments to function call, expected 2, have 3
-;; See docs/reported/pap-defmodule-fat-fn-too-many-args.md
+;; See docs/archive/history/pap-defmodule-fat-fn-too-many-args.md
 
 (defmodule sig/probe
   (export sample apply-twice)

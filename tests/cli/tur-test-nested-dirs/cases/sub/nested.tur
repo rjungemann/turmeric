@@ -1,0 +1,5 @@
+;; One level down.  Before the recursive collector this file was silently never
+;; run: `tur test` used a flat readdir, so a tests/ tree organised into
+;; subdirectories reported green while executing only its top level.
+;; See docs/archive/tur-build-nested-src-dir-finds-no-files.md
+(defn main [] :int 0)

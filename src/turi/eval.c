@@ -164,7 +164,7 @@ void turi_env_register_native(TuriEnv *env, const char *name,
 /* Typed variant: install the native exactly as turi_env_register_native does,
  * then record its runtime return type in the process-global signature registry
  * so the elaborator can type calls to it (and typed wrappers over it).  See
- * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+ * docs/archive/history/untyped-native-registration-blocks-curated-facades.md. */
 void turi_env_register_native_typed(TuriEnv *env, const char *name,
                                     TuriNativeFn fn, void *ud,
                                     TurNativeRetType ret) {
@@ -408,7 +408,7 @@ typedef struct EvalBinding {
 /* generic-dict-dispatch: a runtime tyvar->concrete-type substitution captured at
  * a generic function's call site, so a typeclass method baked to the carrier
  * representative inside the body can re-resolve to the receiver's real instance.
- * See docs/reported/turi-generic-dict-dispatch-bakes-representative-instance.md. */
+ * See docs/archive/turi-generic-dict-dispatch-bakes-representative-instance.md. */
 typedef struct TyvarBind {
     const char       *name;   /* interned tyvar name, e.g. "A" */
     Type              type;   /* the concrete type bound to it at this call site */
@@ -588,7 +588,7 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
  * `TuriStruct*` and used to bind the pointer straight through, which made the
  * same write visible to the caller -- one program printing 0 compiled and 3
  * interpreted.  See
- * docs/reported/struct-param-mutation-backend-divergence.md.
+ * docs/archive/struct-param-mutation-backend-divergence.md.
  *
  * Three kinds of value must NOT be copied, because for them sharing IS the
  * semantics rather than an artifact of the representation:
@@ -806,7 +806,7 @@ static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void
 /* DEPR-D0: TuriThrow / make_throw_val / turi_native_throw deleted.  The
  * env->throwing / env->throw_value scratch slots remain wired through the
  * interpreter as never-set signals; no path produces a TURI_THROW value
- * after R0+D0.  See docs/upcoming/throw-deprecation-plan.md. */
+ * after R0+D0.  See docs/archive/history/throw-deprecation-plan.md. */
 
 /* Defer item: body expression + snapshot frame of captured values.
  *
@@ -816,7 +816,7 @@ static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void
  * same-scope LIFO, and, on an early exit (return / throw / panic), scopes
  * outer-first.  Markers carry no body and are never evaluated; they are simply
  * skipped (LIFO firing) or used to delimit segments (by-scope firing) and then
- * freed.  See docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
+ * freed.  See docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
 typedef struct DeferItem {
     Expr             *body;       /* NULL => scope-boundary marker (not fired) */
     EvalFrame        *snapshot;   /* captured variable values at defer-call time */
@@ -905,7 +905,7 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
  * A flat item-reversal -- the previous implementation -- collapsed both axes
  * into one FIFO walk, so multiple defers in a single (e.g. tail-position) scope
  * came out oldest-first instead of LIFO.  See
- * docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
+ * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
 static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
                                          EvalFrame *fallback_frame) {
     /* Collect [head .. mark) into an array, head-first (index 0 = newest). */
@@ -1667,7 +1667,7 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
  * The context-capturing variants (serial-shift / cloneable-shift), which DO
  * hand a resumable continuation to f, are a separate, larger piece of work and
  * remain a documented interpreter carve-out -- see
- * docs/archive/turi-capturing-shift-unimplemented.md.  serial-reset and
+ * docs/archive/history/turi-capturing-shift-unimplemented.md.  serial-reset and
  * cloneable-reset establish a prompt boundary so the no-shift passthrough case
  * (e.g. (serial-reset 42)) evaluates correctly; a *-shift inside them still
  * errors cleanly until the capturing work lands.
@@ -1777,7 +1777,7 @@ static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
  * cloneable and marshalable (in-process) for serial.  This mirrors collect_ctx;
  * shapes it does not model (do-sequence prelude, struct envs, call/cc*) fall
  * through to a clean error, matching the compiled grammar's own NULL returns.
- * See docs/archive/turi-capturing-shift-unimplemented.md.
+ * See docs/archive/history/turi-capturing-shift-unimplemented.md.
  * ---------------------------------------------------------------------- */
 #define TS_MAX_CTX_FRAMES 64
 
@@ -2043,7 +2043,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
  * same diagnostic here so the interpreter rejects it rather than silently
  * miscompiling -- recovering the not-capturable negative fixtures on the
  * interpret path (the "decouple the TUR-E0706 negative path" slice of
- * docs/archive/turi-capturing-shift-unimplemented.md).  Returns an
+ * docs/archive/history/turi-capturing-shift-unimplemented.md).  Returns an
  * "elaboration error" sentinel so cmd_eval does not re-print the message. */
 static TuriValue ts_not_capturable(bool serial, Span span) {
     if (serial) {
@@ -3153,7 +3153,7 @@ static bool ic_eval_binexpr(const char **pp, int min_prec,
  * honest "inline-C not supported" path rather than silently returning a wrong
  * value.  (Previously this dropped any trailing binary operator -- e.g.
  * `return p != 0;` evaluated to `p` -- a silent miscompile; see
- * docs/reported/turi-inline-c-ignores-comparison-operator.md.) */
+ * docs/archive/history/turi-inline-c-ignores-comparison-operator.md.) */
 static bool ic_eval_assign_expr(const char *expr,
                                  FnDef *fn, uint32_t param_offset,
                                  TuriValue *args, uint32_t n_args,
@@ -3710,7 +3710,7 @@ static TuriValue ic_exec_accessor(TuriEnv *env, const char *body,
      * clean "inline-C not supported" error instead of a silent miscompile.
      * (The `var ? var->field : fallback` and `field ? field : "def"` shapes are
      * already handled above / below and contain none of these operators.)
-     * See docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md. */
+     * See docs/archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md. */
     for (const char *p = ret; *p && *p != ';'; p++) {
         if (p[0] == '-' && p[1] == '>') { p++; continue; }   /* skip the arrow */
         if ((p[0] == '|' && p[1] == '|') ||                  /* || */
@@ -4137,7 +4137,7 @@ static TuriValue ic_exec_snprintf_fmt(TuriEnv *env, const char *body,
      *   if (kind == 1) snprintf(buf, 32, "[%lld", v);
      *   else           snprintf(buf, 32, "(%lld", v);
      * ) -- always taking the first emits "[7" where the Exclusive branch wants
-     * "(7" (see docs/reported/turi-pure-turi-silent-miscompiles.md). So first
+     * "(7" (see docs/archive/history/turi-pure-turi-silent-miscompiles.md). So first
      * try to resolve a guarding if/else and format only the live branch; fall
      * back to the linear "first matching snprintf" scan otherwise. */
     {
@@ -4309,7 +4309,7 @@ static TuriValue ic_exec_linked_list_print(const char *body,
 
 /* Top-level dispatcher */
 /* Diagnostic groundwork for the inline-C silent-miscompile tightening (W4, see
- * docs/reported/turi-inline-c-silent-miscompiles.md): when TUR_IC_TRACE is set,
+ * docs/archive/history/turi-inline-c-silent-miscompiles.md): when TUR_IC_TRACE is set,
  * log which ic_exec_* matcher claimed a body and what it returned. This makes
  * the per-cluster "refuse-rather-than-guess" work tractable -- you can see at a
  * glance which matcher mis-claims each fixture, and confirm a tightening flips a
@@ -4443,7 +4443,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
  * on emit-side per-call-site specialization to re-resolve.  The interpreter has
  * no such pass, so it must re-resolve at runtime from the tyvar's concrete type
  * captured at the call site (the call's abi_bindings).  See
- * docs/reported/turi-generic-dict-dispatch-bakes-representative-instance.md. */
+ * docs/archive/turi-generic-dict-dispatch-bakes-representative-instance.md. */
 
 /* Head constructor name of a concrete type (descends TY_APP to its base). */
 static const char *gde_type_head_name(const Type *t) {
@@ -4526,6 +4526,33 @@ static TuriValue gde_method_closure(TuriEnv *env, const Expr *dict_arg,
     return turi_nil();
 }
 
+/* True when `tc` is still a class object of the LIVE registry.
+ *
+ * After a `#lang` reader switch the REPL calls turi_env_reset_to_prelude, which
+ * drops the ElabSession and re-elaborates the pinned prelude WITHOUT
+ * re-evaluating it.  So every generic body still bound in env->globals keeps a
+ * `dict_arg` baked against the OLD TypeClassEnv, while env->last_tc_env now
+ * points at the rebuilt one -- same classes, different allocations.  The
+ * pointer compare in gde_reresolve_method then matches nothing at all, and for
+ * a PRIMITIVE element type the by-name retry below is deliberately skipped, so
+ * the baked int-carrier representative answers every call: `(show #map{:a 1})`
+ * renders its Sym key as a raw carrier integer, permanently, and switching the
+ * reader back does not restore it.
+ *
+ * Distinguishing "this class object is dead" from "this class object is live
+ * but has no instance for the concrete" is what lets the retry open up for
+ * primitives in the reset case only.  The restriction exists to stop a primitive
+ * from mis-matching a stale DUPLICATE class's instance while its own class is
+ * still live and simply has nothing better -- that case is untouched here,
+ * because `tc` is live in it.
+ * See docs/archive/lang-switch-breaks-generic-instance-resolution.md. */
+static bool gde_tc_is_live(const TypeClassEnv *tc_env, const TypeClass *tc) {
+    if (!tc_env || !tc) return false;
+    for (const TypeClassInstance *i = tc_env->instances; i; i = i->next)
+        if (i->typeclass == tc) return true;
+    return false;
+}
+
 static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
                                       const Type *concrete) {
     if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
@@ -4566,7 +4593,12 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
      * concrete keeps its exact prior dispatch (a primitive that finds no by-name
      * instance under its own tc pointer must keep the baked representative, never
      * a stale duplicate's copy). */
-    if (!match && !concrete_is_primitive && head && tc->name) {
+    /* A dict baked against a registry that no longer exists (session reset)
+     * can never match by pointer, so the primitive restriction below would
+     * pin it to the baked representative forever.  Treat a dead class object
+     * as licence to retry by name even for a primitive concrete. */
+    bool tc_stale = !gde_tc_is_live(tc_env, tc);
+    if (!match && (!concrete_is_primitive || tc_stale) && head && tc->name) {
         const char *tc_name = tc->name->name;
         for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
             if (inst->n_type_args == 0 || inst == rep) continue;
@@ -4576,6 +4608,12 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
             const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
                                 ? inst->type_arg_syms[0]->name : NULL;
             if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+            /* The precise loop above spells a primitive instance head via
+             * gde_primitive_type_name; this retry must too, or an instance over
+             * a primitive (`Show [Sym]`, `Show [cstr]`) has no name to compare
+             * and is skipped -- which is exactly the set of element types the
+             * reset case needs to find. */
+            if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
             if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
         }
     }
@@ -4601,7 +4639,7 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
  * and the receiver-tyvar gate at the EX_CALL site cannot fire.  The elaborator's
  * baked representative then answers every call site, which is silently wrong for
  * any constrained generic that calls one (see
- * docs/reported/turi-return-directed-method-keeps-baked-instance.md: two
+ * docs/archive/turi-return-directed-method-keeps-baked-instance.md: two
  * differently-tagged Applicatives both return the second instance's answer).
  *
  * The concrete type is already on the frame.  `frame_record_abi` pins the
@@ -4723,6 +4761,55 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
         TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
         tb->name = ab->name;
         tb->type = t;
+        tb->next = callee->tyvars;
+        callee->tyvars = tb;
+    }
+}
+
+/* Pin a callee's HKT tyvar from the STATIC type of the argument passed to it,
+ * for a call that pins nothing of its own.
+ *
+ * A constrained generic reached through a rank-2 `forall` parameter carries no
+ * abi_bindings: `(defn at-t1 [g (forall [(m :: * -> *)] ...)])` invokes it as
+ * `(g (mk-t1 0))`, and the elaborator has no call-site substitution to record
+ * because the callee is a parameter, not a named generic.  So nothing reaches
+ * the frame, gde_reresolve_return_directed finds no concrete tyvar, and the
+ * baked representative answers -- two differently-tagged Applicatives both
+ * returning the second instance's `pure`.
+ *
+ * The substitution is nonetheless right there in the types: the callee declares
+ * `x : (m int)` and the call site's argument has static type `(T1 int)`.  Match
+ * the two type applications and `m -> T1` follows.
+ *
+ * Deliberately narrow.  Only a declared `(tyvar arg)` against a concrete-headed
+ * `(Ctor arg)` is matched -- the higher-kinded shape this is about -- rather
+ * than general structural unification, whose extra reach would be untested and
+ * whose failure mode is a WRONG instance rather than today's conservative one.
+ * Only called when the call recorded no abi_bindings, so every call that pins
+ * something keeps its exact prior behaviour.
+ * See docs/archive/turi-return-directed-method-keeps-baked-instance.md. */
+static void frame_pin_hkt_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
+                                           const FnDef *fn,
+                                           uint32_t param_offset,
+                                           uint32_t effective_params,
+                                           const Expr *call, uint32_t arg_base) {
+    if (!fn || !fn->params || !call || call->kind != EX_CALL) return;
+    for (uint32_t i = 0; i < effective_params; i++) {
+        uint32_t ai = arg_base + i;
+        if (ai >= call->as.call_.n_args || !call->as.call_.args[ai]) continue;
+        const Type *pt = &fn->params[param_offset + i]->type;
+        const Type *at = &call->as.call_.args[ai]->type;
+        if (pt->kind != TY_APP || at->kind != TY_APP) continue;
+        const Type *pf = pt->as.app.fn;
+        const Type *af = at->as.app.fn;
+        if (!pf || !af) continue;
+        if (pf->kind != TY_TYVAR || !pf->as.tyvar_.name) continue;
+        if (af->kind == TY_TYVAR) continue;   /* argument still abstract */
+        Type existing;
+        if (frame_lookup_tyvar(callee, pf->as.tyvar_.name, &existing)) continue;
+        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        tb->name = pf->as.tyvar_.name;
+        tb->type = *af;
         tb->next = callee->tyvars;
         callee->tyvars = tb;
     }
@@ -5363,7 +5450,7 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
          * recovered at the call site re-tags the carrier, matching the compiled
          * path's monomorphized re-dispatch.  This is what lets Show[Set] /
          * Show[Map] over cstr keys render the string rather than the raw HAMT
-         * carrier word (docs/reported/interp-hamt-key-show-dispatches-on-carrier). */
+         * carrier word (docs/archive/history/interp-hamt-key-show-dispatches-on-carrier.md). */
         switch (ascribe_effective_kind(frame, &e->type)) {
         case TY_BOOL:
             if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
@@ -7206,6 +7293,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * method call inside the body can re-resolve its instance. */
                 if (top->expr->as.call_.n_abi_bindings > 0)
                     frame_record_abi(env, call_frame, top->frame, top->expr);
+                else
+                    frame_pin_hkt_tyvars_from_args(env, call_frame, fn,
+                                                   param_offset, effective_params,
+                                                   top->expr, arg_base);
                 /* Bare-head constrained instance: bind its constraint tyvars
                  * (`(C A)`'s `A`) from the receiver arg's static type so a nested
                  * dispatch inside the body resolves the element's real instance
@@ -7282,7 +7373,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * (by-scope reversal); on normal completion fire head-first
                  * (innermost scope first, same-scope LIFO).  Both mirror the
                  * compiled tur_frame_fire_chain (see
-                 * docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
+                 * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
                 if (env_signaled(env))
                     fire_defers_to_mark_by_scope(env, (DeferItem *)top->aux, NULL);
                 else
@@ -9735,10 +9826,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     case EX_TVAR_MODIFY: {
         /* Read-modify-write: r = fn(old); write r; return old.  NOTE: the
-         * compiled path (emit_expr.c EX_TVAR_MODIFY) currently emits a no-op
-         * stub returning NULL -- a latent bug filed in
-         * docs/reported/stm-tvar-modify-codegen-stub.md.  The interpreter
-         * implements the intended semantics. */
+         * compiled path never reaches its EX_TVAR_MODIFY arm -- elab_tvar_modify
+         * (elab_concurrent.c) lowers `(tvar/modify tv f)` to
+         * `(let [g tv] (tvar/swap g (f (tvar/read g))))` first, so the arm in
+         * emit_expr.c is a defensive stub, not a live no-op.  The interpreter
+         * implements the semantics directly. */
         if (!g_stm_tx)
             return turi_error("eval: tvar/modify used outside of an atomically block");
         TuriValue err = turi_nil();
@@ -10705,7 +10797,21 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     size_t      src_len  = combined->len;
     const char *src_copy = combined->data;
 
-    /* 4. Reset diagnostics; register the eval source file. */
+    /* 4. Reset diagnostics; register the eval source file.
+     *
+     * Snapshot the file registry first.  diag_reset() clears it, and on the
+     * incremental path the `(load ...)`ed files registered by an EARLIER turn
+     * are never re-registered -- that turn's Forms are reused rather than
+     * re-parsed, so the load splicing does not run again -- while those Forms
+     * still carry their file ids.  Without the restore below, every later
+     * diag_file_path() on such an id misses and the DAP debugger reports a
+     * frame as `?:19` with no `source` object.  Sound here because the
+     * interpreter retains its eval arenas for the life of the env, so the saved
+     * SourceFile pointers stay valid.
+     * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
+    const SourceFile *saved_files[64];
+    size_t n_saved = diag_files_save(saved_files,
+                                     sizeof(saved_files) / sizeof(saved_files[0]));
     diag_reset();
 
     SourceFile *sfile = (SourceFile *)arena_alloc(eval_arena, sizeof(SourceFile));
@@ -10725,6 +10831,9 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     sfile->reader_type = env->reader_type;
     sfile->lang_layers = env->lang_layers;   /* lang-layers-plan L1 */
     diag_register_file(sfile);
+    /* Re-register the previous turn's loaded files (id 0, this turn's blob,
+     * is skipped) so spans in reused Forms still resolve to their real path. */
+    diag_files_restore(saved_files, n_saved);
 
     /* 5. Parse. RM Q#5: pass env->reader_macros so reader-macros defined
      * in earlier eval calls remain visible.
@@ -11187,7 +11296,7 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
 /* =========================================================================
  * Debugger Phase 2 -- interactive interpreter debugger
  *
- * See docs/upcoming/debugger-plan.md (Phase 2).  A TuriDebugger is attached to
+ * See docs/archive/history/debugger-plan.md (Phase 2).  A TuriDebugger is attached to
  * a TuriEnv by turi_debug_enable(); the eval loop then calls turi_dbg_before_node
  * before each AST node and turi_dbg_push/pop around each turi-body activation.
  * On a breakpoint or a satisfied step predicate the loop yields to a small

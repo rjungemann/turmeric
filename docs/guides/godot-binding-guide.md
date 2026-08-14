@@ -4,7 +4,7 @@
 > facades, interpreter and AOT execution, the editor plugin (highlighter,
 > completion, structured validation, and a stack-frame debugger),
 > inspector exports/signals, cross-script calls, and `preload`.
-> **Plan:** [docs/upcoming/v1/godot-language-binding-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/godot-language-binding-plan.md)
+> **Plan:** [docs/archive/godot-language-binding-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-language-binding-plan.md)
 > **Repo:** `../turmeric-godot/` (sibling to this one)
 
 This guide is for people who want to attach `.tur` scripts to Godot
@@ -415,7 +415,7 @@ friends.
    unwrap with `(:: h :int)` at the call boundary.
 
 3. **No Android / iOS / web export.** Desktop only for v1; web is
-   blocked on [`wasm-spices-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/wasm-spices-plan.md).
+   blocked on [`wasm-spices-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/hold/wasm-spices-plan.md).
 
 4. **Generated facade allowlist is 53 of 920 classes.** Grown
    tactically as demos demand; the long tail is editor-internals /

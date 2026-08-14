@@ -1222,6 +1222,212 @@ EOF
     rm -f "$ADD_ERR"; rm -rf "$ADDDIR"
 done
 
+# ---------------------------------------------------------------------------
+# A BROKEN build.tur must fail the command, and must not degrade into a
+# cascade of `module not found`.
+# docs/archive/manifest-read-failure-degrades-to-module-not-found.md
+#
+# pkg_manifest_read returned a bare `false` for two unrelated situations --
+# "no manifest here" (normal) and "there IS a manifest and it is broken"
+# (fatal) -- so every caller took the benign branch.  The spice root's src/
+# then never joined the module search path and every intra-spice import failed
+# with `module not found`, naming the import rather than the manifest.  In the
+# field that hid 41 unreadable manifests for four weeks: one manifest typo
+# presented as 66 unrelated import failures, and `tur check` printed the
+# manifest error at `error:` severity while exiting 0.
+MF_DIR=$(mktemp -d)
+mkdir -p "$MF_DIR/src/demo" "$MF_DIR/tests"
+# `:spices #fx{...}` -- an effect-row literal where the reader wants a map.
+# This is the exact spelling that caused the field incident (TUR-E0620).
+cat >"$MF_DIR/build.tur" <<'EOF'
+(defpackage demo
+  :name    "demo"
+  :version "0.1.0"
+  :spices #fx{ "test" #map{:url "https://example.invalid/test"} }
+  :exports #map{ "demo/lib" ["answer"] })
+EOF
+cat >"$MF_DIR/src/demo/lib.tur" <<'EOF'
+(defmodule demo/lib
+  (export answer)
+  (defn answer [] : int 42))
+EOF
+cat >"$MF_DIR/tests/use_test.tur" <<'EOF'
+(defmodule use_it
+  (export)
+  (import demo/lib :refer [answer])
+  (defn main [] : int (println (answer)) 0))
+EOF
+
+# An `error:` diagnostic must never coexist with exit 0.  This exited 0 before,
+# so any CI step shelling out to `tur check` and trusting $? saw a clean
+# manifest.
+MF_ERR=$(mktemp)
+( cd "$MF_DIR" && "$LS6_ABS_TUR" check tests/use_test.tur ) >/dev/null 2>"$MF_ERR"
+mf_rc=$?
+if [ "$mf_rc" -ne 0 ]; then
+    echo "PASS malformed-manifest-fails-tur-check"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL malformed-manifest-fails-tur-check -- printed error: and exited 0"
+    echo "  stderr:"; sed 's/^/    /' "$MF_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("malformed-manifest-fails-tur-check")
+fi
+
+# The failure must name the MANIFEST, and the offending slot.
+for mf_case in 'TUR-E0624|malformed-manifest-names-the-manifest' \
+               ':spices is malformed|malformed-manifest-names-the-slot'; do
+    mf_needle=${mf_case%%|*}
+    mf_label=${mf_case#*|}
+    if grep -F -q "$mf_needle" "$MF_ERR"; then
+        echo "PASS $mf_label"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL $mf_label -- stderr missing: $mf_needle"
+        echo "  stderr:"; sed 's/^/    /' "$MF_ERR"
+        FAIL=$((FAIL + 1))
+        FAILED+=("$mf_label")
+    fi
+done
+
+# And it must NOT degrade into the misleading cascade.  The `-I src` hint is
+# the specific trap: it does make the import resolve, so a reader who follows
+# it concludes the IMPORT was mis-specified and never revisits the manifest.
+for mf_anti in 'not found|malformed-manifest-no-module-not-found-cascade' \
+               'try `tur check -I src|malformed-manifest-suppresses-I-src-hint'; do
+    mf_needle=${mf_anti%%|*}
+    mf_label=${mf_anti#*|}
+    if grep -F -q "$mf_needle" "$MF_ERR"; then
+        echo "FAIL $mf_label -- stderr still contains: $mf_needle"
+        echo "  stderr:"; sed 's/^/    /' "$MF_ERR"
+        FAIL=$((FAIL + 1))
+        FAILED+=("$mf_label")
+    else
+        echo "PASS $mf_label"
+        PASS=$((PASS + 1))
+    fi
+done
+
+# Control: the SAME tree with `#fx{` corrected to `#map{` must pass clean.
+# Nothing else changes, which is what makes the manifest the sole variable.
+sed 's/#fx{ "test"/#map{ "test"/' "$MF_DIR/build.tur" >"$MF_DIR/build.tur.new"
+mv "$MF_DIR/build.tur.new" "$MF_DIR/build.tur"
+MF_OK_ERR=$(mktemp)
+( cd "$MF_DIR" && "$LS6_ABS_TUR" check tests/use_test.tur ) >/dev/null 2>"$MF_OK_ERR"
+mf_ok_rc=$?
+if [ "$mf_ok_rc" -eq 0 ]; then
+    echo "PASS well-formed-manifest-still-checks-clean"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL well-formed-manifest-still-checks-clean -- exit $mf_ok_rc"
+    echo "  stderr:"; sed 's/^/    /' "$MF_OK_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("well-formed-manifest-still-checks-clean")
+fi
+
+# An ABSENT manifest is NOT malformed: the walk-up probe misses on most
+# directories, and that must stay quiet.  This is the distinction the old
+# single `false` collapsed, so it is the half most at risk from the fix.
+MF_NONE=$(mktemp -d)
+cat >"$MF_NONE/solo.tur" <<'EOF'
+(defn main [] : int 0)
+EOF
+MF_NONE_ERR=$(mktemp)
+( cd "$MF_NONE" && "$LS6_ABS_TUR" check solo.tur ) >/dev/null 2>"$MF_NONE_ERR"
+mf_none_rc=$?
+if [ "$mf_none_rc" -eq 0 ] && ! grep -F -q "TUR-E0624" "$MF_NONE_ERR"; then
+    echo "PASS absent-manifest-is-not-malformed"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL absent-manifest-is-not-malformed -- exit $mf_none_rc"
+    echo "  stderr:"; sed 's/^/    /' "$MF_NONE_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("absent-manifest-is-not-malformed")
+fi
+
+rm -f "$MF_ERR" "$MF_OK_ERR" "$MF_NONE_ERR"
+rm -rf "$MF_DIR" "$MF_NONE"
+
+# ---------------------------------------------------------------------------
+# `tur build src/` and `tur check src/` must handle a NESTED module layout.
+# docs/archive/tur-build-nested-src-dir-finds-no-files.md
+#
+# Both used a FLAT readdir, so a spice whose modules live one level down --
+# `src/demo/lib.tur`, the layout `:exports "demo/lib"` implies -- reported
+# `tur: no .tur files found in 'src/'`.  That is the exact invocation the
+# `module not found` diagnostic recommends, so the advertised recovery from one
+# confusing error produced a second one.  Project mode (`tur build .`) already
+# recursed, so the two spellings of "build this spice" disagreed with nothing in
+# the output to say which you got.
+#
+# Finding the files is only half of it: once the walk is recursive the sibling
+# that does `(import demo/lib)` has to resolve it, so the build dir goes on the
+# include path too.  The `main.tur` below imports across the nesting for that
+# reason -- a case with no cross-file import would pass on a half fix.
+NEST=$(mktemp -d)
+mkdir -p "$NEST/src/demo" "$NEST/src/app"
+cat >"$NEST/build.tur" <<'EOF'
+(defpackage nested
+  :name    "nested"
+  :version "0.1.0"
+  :exports #map{ "demo/lib" ["answer"] })
+EOF
+cat >"$NEST/src/demo/lib.tur" <<'EOF'
+(defmodule demo/lib
+  (export answer)
+  (defn answer [] : int 42))
+EOF
+cat >"$NEST/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (export)
+  (import demo/lib :refer [answer])
+  (defn main [] : int (println (answer)) 0))
+EOF
+
+NEST_ERR=$(mktemp)
+( cd "$NEST" && "$LS6_ABS_TUR" check src/ ) >/dev/null 2>"$NEST_ERR"
+nest_check_rc=$?
+if [ "$nest_check_rc" -eq 0 ]; then
+    echo "PASS nested-src-tur-check-finds-files"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL nested-src-tur-check-finds-files -- exit $nest_check_rc"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-tur-check-finds-files")
+fi
+
+# The message that used to come out; assert it is gone rather than only
+# assert on the exit code, so a future regression names itself.
+if grep -qF "no .tur files found" "$NEST_ERR"; then
+    echo "FAIL nested-src-no-empty-dir-message"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-no-empty-dir-message")
+else
+    echo "PASS nested-src-no-empty-dir-message"
+    PASS=$((PASS + 1))
+fi
+
+NEST_BIN="$NEST/out"
+NEST_BERR=$(mktemp)
+( cd "$NEST" && "$LS6_ABS_TUR" build src/ -o "$NEST_BIN" ) >/dev/null 2>"$NEST_BERR"
+nest_build_rc=$?
+nest_out=""
+[ -x "$NEST_BIN" ] && nest_out="$("$NEST_BIN" 2>/dev/null)"
+if [ "$nest_build_rc" -eq 0 ] && [ "$nest_out" = "42" ]; then
+    echo "PASS nested-src-tur-build-resolves-intra-spice-import"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL nested-src-tur-build-resolves-intra-spice-import"
+    echo "  exit: $nest_build_rc  output: '$nest_out' (want 42)"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_BERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-tur-build-resolves-intra-spice-import")
+fi
+
+rm -f "$NEST_ERR" "$NEST_BERR"; rm -rf "$NEST"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

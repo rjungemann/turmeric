@@ -222,7 +222,7 @@
 ;; mirroring Eq Tuple2 / Eq Pair.  `result-eq?` itself is kept (the
 ;; structural-eq fixture still consults it from the carrier path); only the
 ;; instance body switches off it.  See
-;; docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+;; docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
 
 (definstance Eq [Result]
   [(Eq A) (Eq B)]
@@ -278,7 +278,7 @@
 ;; hole marks the free parameter, sidestepping that.) The element arm is erased
 ;; to the int64 carrier, so these instances delegate to inline-C carrier-level
 ;; bodies that operate on the ok arm and pass err through unchanged. See
-;; docs/reported/result-param-order-blocks-functor-monad.md.
+;; docs/archive/history/result-param-order-blocks-functor-monad.md.
 ;; ---------------------------------------------------------------------------
 ;;; Bifunctor [Result] -- map fn-left over err, fn-right over ok.
 ;;;

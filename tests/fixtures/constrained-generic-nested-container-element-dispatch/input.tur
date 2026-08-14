@@ -3,7 +3,7 @@
 ;; ITSELF a container, routing through the `(C A)` constraint to that
 ;; container's own instance (e.g. C[Option] for A = (Option int)).
 ;;
-;; Root cause (docs/archive/constrained-generic-dispatch-container-typed-element-ambiguous.md):
+;; Root cause (docs/archive/history/constrained-generic-dispatch-container-typed-element-ambiguous.md):
 ;; an instance head declared applied -- `[(Option A)]` -- stores its type_arg as
 ;; TY_APP(Option, ...), whereas a bare head -- `[Cons]`/`[Vec]` -- stores it as
 ;; TY_STRUCT.  typeclass_env_lookup_instance normalized only the QUERY type's

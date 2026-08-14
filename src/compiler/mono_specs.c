@@ -1,6 +1,6 @@
 /* mono_specs.c -- VBM1/VBM2 by-value HKT monomorphization spec registry.
  *
- * See mono_specs.h and docs/upcoming/van-laarhoven-monomorphization-plan.md.
+ * See mono_specs.h and docs/archive/history/van-laarhoven-monomorphization-plan.md.
  *
  * VBM1 populates a flat, deduped table of ABSTRACT lens specialization keys
  * during elaboration (each keyed on the abstract lens param `l` at the `(l g s)`
@@ -64,15 +64,19 @@ typedef struct {
     LensResolution lens_set[MONO_SPEC_LENSSET_MAX];
     size_t         n_lens_set;
     bool           lens_set_capped;
-    /* CM4 partial-graduation gate: set when this consumer lens param was EVER
-     * passed a COMPOSED lens (one whose body tails into another lens rather than
-     * a direct `fmap` dispatch -- see lens_is_simple_for_pathb).  A composed lens
-     * straddles the by-value outer `g` and its carrier-lowered nested lenses
-     * (docs/reported CM4 gap 2 / docs/upcoming/v2 by-value-propagation plan),
-     * which the by-value mono body cannot yet emit.  A poisoned key falls FULLY
-     * back to Path A: every Path-B accessor below reports "nothing" for it, so
-     * even simple lenses sharing the same consumer stay on the carrier rather
-     * than risk a mixed by-value/carrier miscompile. */
+    /* CB5 backstop (was the CM4 partial-graduation gate).  A COMPOSED lens is
+     * one whose body tails into another lens rather than into a direct `fmap`
+     * dispatch -- see lens_is_simple_for_pathb.  CM4 poisoned EVERY composed
+     * lens, because the outer by-value `g` straddled its carrier-lowered nested
+     * lenses; CB1-CB5 closed that by threading `(f a)` by value through the
+     * whole chain (docs/archive/history/van-laarhoven-composed-byvalue-plan.md),
+     * so this flag is now set only for the residue CB2/CB3 still cannot lower:
+     * a runtime-selected nested lens, a non-lens tail, a missing composition
+     * adapter, or nesting past MONO_NESTED_DEPTH_MAX -- see
+     * composed_lens_byvalueable.  A poisoned key falls FULLY back to Path A:
+     * every Path-B accessor below reports "nothing" for it, so even simple
+     * lenses sharing the same consumer stay on the carrier rather than risk a
+     * mixed by-value/carrier miscompile. */
     bool           has_composed_lens;
 } MonoSpecKey;
 

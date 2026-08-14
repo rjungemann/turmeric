@@ -6,7 +6,7 @@
 ;; double-boxed the `(Cons A)` pointer (length-1 / garbage list) and the
 ;; cstr/float specs kept building `Cons__int` internally.
 ;;
-;; Regression for docs/archive/constrained-defn-cons-return-not-monomorphized.md.
+;; Regression for docs/archive/history/constrained-defn-cons-return-not-monomorphized.md.
 (defclass C [a] (one [i : int] : (Result a cstr)))
 (definstance C [int]   (one [i] (ok i)))
 (definstance C [cstr]  (one [i] (ok "v")))

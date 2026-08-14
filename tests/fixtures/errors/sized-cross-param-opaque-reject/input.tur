@@ -2,7 +2,7 @@
 ; cross-parameter size unification fires on a defopaque carrier whose
 ; phantom size index is pinned to distinct Size literals at the two call
 ; sites.  Closes the gap reported in
-; docs/reported/sz8-opaque-phantom-size-not-load-bearing.md.
+; docs/archive/history/sz8-opaque-phantom-size-not-load-bearing.md.
 ;
 ; `zip` declares both xs and ys as (Dense n A) -- the size variable `n`
 ; shares scope across parameters, so passing a (Dense (Static 2) ...) for

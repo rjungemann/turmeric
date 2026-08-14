@@ -88,7 +88,7 @@ TypeKind typekind_from_symbol(const char *name) {
  *    *next* parameter and are NOT slots -- counting them over-states the arity,
  *    which made a saturated call look under-saturated and synthesised a bogus
  *    extra-arg partial-application wrapper that failed to C-compile
- *    (docs/reported/pap-defmodule-fat-fn-too-many-args.md);
+ *    (docs/archive/history/pap-defmodule-fat-fn-too-many-args.md);
  *  - a fused `:T` (F_KEYWORD) or spaced `: T` (F_TYPE_ANN) annotates the most
  *    recently opened slot;
  *  - scalar primitive annotations (float/bool/cstr/sized numerics/...) are
@@ -1388,7 +1388,7 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
     return false;
 }
 
-/* set-bang-rc-release (docs/reported/set-bang-does-not-release-old-rc-value.md).
+/* set-bang-rc-release (docs/archive/history/set-bang-does-not-release-old-rc-value.md).
  *
  * An rc-managed `^mut` binding owns exactly ONE strong reference for its whole
  * lifetime: its init takes the +1 and the scope-exit auto-drop releases it.
@@ -2216,7 +2216,7 @@ MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
          *   companion) during W's body re-elaboration -- the helper fell back
          *   to being elaborated as a regular function call, and any vec
          *   argument hit the data-literals lowering with unbound symbols.
-         *   See docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
+         *   See docs/archive/history/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
         if (m->is_referred) return m;
         if (m->defining_module_name == NULL) return m;
         if (m->defining_module_name == e->current_module_name) return m;

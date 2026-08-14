@@ -5,7 +5,7 @@
 ;; its instance body was `(clone [x] x)` against a method declared `: int`, so
 ;; it returned the struct where an int64 was expected.  `tur check` accepts that
 ;; mismatch whenever a struct/ADT is on either side of it -- a separate hole,
-;; filed as docs/reported/struct-return-type-mismatch-unchecked-until-cc.md.
+;; filed as docs/archive/struct-return-type-mismatch-unchecked-until-cc.md.
 ;; Written here the way the fixture's name implies: clone the int field through
 ;; the `Clone int` constraint.  See
 ;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.

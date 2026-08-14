@@ -230,7 +230,7 @@ habits follow, both cheap:
   is a guide, not the plan that built it.
 
 This is not a rows-specific failure. See
-`docs/reported/mono-specs-header-comment-stale.md` for the same pattern in a
+`docs/archive/mono-specs-header-comment-stale.md` for the same pattern in a
 source comment.
 
 ## References

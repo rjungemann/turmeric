@@ -623,6 +623,18 @@ typedef struct Elab {
      * user code that later shadows them gets a hard diagnostic instead
      * of broken C output. */
     bool             in_stdlib_load;
+    /* The top-level form currently being elaborated by elaborate_program's
+     * Pass 2, or NULL when not at file scope.
+     *
+     * `e->scope == &e->global` is true both for a `def` that IS a top-level
+     * form and for a `def` buried in a top-level EXPRESSION's subforms
+     * (`(if c (def x 1) (def y 2))`), so the scope pointer alone cannot tell
+     * statement position from expression position.  elab_def needs that
+     * distinction: the second shape elaborates as a global but codegen emits
+     * it as a local, so a later reference fails in the emitted C with an
+     * `undeclared identifier`.  See def_form_is_statement_position() and
+     * docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md. */
+    const Form      *toplevel_stmt;
     /* Phase M4: During macro expansion, the defining module of the currently
      * expanding macro (so private helper macros from that module are visible).
      * Cross-module wrapper-macro bug fix: when an outer macro M (defined in
@@ -634,7 +646,7 @@ typedef struct Elab {
      * elab_lookup_macro walks the stack so any module in the active expansion
      * chain contributes its visibility. macro_expansion_module remains the
      * innermost entry for back-compat with sites that read it directly. See
-     * docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
+     * docs/archive/history/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
     const Symbol    *macro_expansion_module;
     const Symbol   **macro_expansion_stack;
     uint32_t         n_macro_expansion_stack;
@@ -1065,7 +1077,7 @@ typedef struct MacroDef {
     uint32_t n_params;       /* number of fixed params (excludes rest param) */
     bool is_variadic;        /* true if [params & rest] syntax used */
     const Symbol *rest_param; /* rest-arg symbol name, or NULL */
-    /* docs/reported/macro-args-elaborated-before-expansion.md:
+    /* docs/archive/history/macro-args-elaborated-before-expansion.md:
      * per-param ^syntax marker.  When is_syntax_param[i] is true, the
      * corresponding arg form is passed to the macro as data: substitute_params
      * leaves the param symbol in place and elab_eval_macro_form binds the
@@ -1119,7 +1131,7 @@ struct CtEnv {
      * left as data for ordinary elaboration -- expanding it during CT eval
      * would mis-fire on data forms threaded through builtins like `list`
      * (e.g. an accumulated `(map-assoc ...)`).  Not inherited by child envs.
-     * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+     * docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md */
     bool expand_macro_head;
 };
 
@@ -1452,11 +1464,11 @@ Expr *elab_escape(Elab *e, const Form *call);
 Expr *elab_defn(Elab *e, const Form *call);
 Expr *elab_fn(Elab *e, const Form *call);
 /* bare-fat-param-non-int-result inference (Phase A); see
- * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+ * docs/archive/history/bare-fat-result-type-inference-plan.md. */
 bool kind_is_non_int_register_class(TypeKind k);
 
 /* bare-fat-result-monomorphization (Phase B); see
- * docs/upcoming/bare-fat-result-monomorphization-plan.md.
+ * docs/archive/history/bare-fat-result-monomorphization-plan.md.
  *  - elab_specialize_bare_fat: re-elaborate `callee`'s retained body with its
  *    bare-^fat param result kind set to `k`, returning the clone's binding
  *    (memoized by (callee, k)); NULL if it cannot be specialized.

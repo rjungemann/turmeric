@@ -41,7 +41,7 @@
 ;; The multi-use accessors -- chan-send / chan-recv and the async send/recv/try/
 ;; count variants -- declare their handle parameter ^borrow, so sending and
 ;; receiving repeatedly reads the handle without consuming it; only the *-free
-;; operation consumes. See docs/reported/stdlib-linear-handle-borrows.md.
+;; operation consumes. See docs/archive/history/stdlib-linear-handle-borrows.md.
 (defopaque Chan :ptr<void> :linear)
 
 (defopaque AsyncChan :ptr<void> :linear)

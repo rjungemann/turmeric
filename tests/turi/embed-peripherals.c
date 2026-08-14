@@ -247,7 +247,7 @@ static void test_shared_spice_image(void) {
 
 /* --- Typed native registration: curated facade over a non-:int native ----
  * Regression test for
- * docs/archive/untyped-native-registration-blocks-curated-facades.md.
+ * docs/archive/history/untyped-native-registration-blocks-curated-facades.md.
  * A native whose runtime result is :float must be wrappable by a defn that
  * declares the honest :float return type -- without the typed registry the
  * wrapper failed elaboration (TUR-E0707) because the call was typed :int. */

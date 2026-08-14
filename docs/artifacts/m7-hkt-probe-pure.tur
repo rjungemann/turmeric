@@ -12,7 +12,7 @@
 ;; receiver-dispatch shapes (elab_method_call), so the layer-4 by-value spec
 ;; interning had to be mirrored there.
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-pure.tur; echo $?
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe-pure.tur; echo $?
 ;;   -> 42  (TARGET, REACHED 2026-06-19)
 ;;
 ;; ASCRIPTION IS INHERENT HERE (unlike the prior probes). Return-directed

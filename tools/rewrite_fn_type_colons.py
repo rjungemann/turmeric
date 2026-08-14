@@ -21,7 +21,7 @@ defclass/defprotocol method signatures, and `(:: expr TYPE)` /
 
 This is the inner-type-expression analogue of `spaced-types-rewrite.py`
 and shares its tokenizer/parser.  See
-docs/upcoming/still-in-flight-plan.md ("Drop leading colons inside
+docs/archive/still-in-flight-plan.md ("Drop leading colons inside
 `(fn ...)` types").
 
 Usage:

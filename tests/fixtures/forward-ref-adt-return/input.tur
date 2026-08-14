@@ -3,7 +3,7 @@
 ;; its real ADT result type -- not the TY_INT default.  Before the fix, `(g n)`
 ;; below was typed `int`, so the `(B inner)` arm returning `T` reported a
 ;; spurious "match: arm types incompatible -- expected int, got adt".
-;; See docs/reported/logic-port-language-gaps.md GAP 2.
+;; See docs/archive/history/logic-port-language-gaps.md GAP 2.
 
 (defdata T :copy (A :int) (B :T))
 

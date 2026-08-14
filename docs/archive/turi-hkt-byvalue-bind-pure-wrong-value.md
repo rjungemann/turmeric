@@ -1,6 +1,6 @@
 ---
 status: NOT FIXED -- ABSORBED 2026-08-01 into
-  docs/reported/turi-return-directed-method-keeps-baked-instance.md
+  docs/archive/turi-return-directed-method-keeps-baked-instance.md
 severity: medium
 discovered: 2026-07-31
 area: interpreter (turi HKT dict routing, Option value readback)
@@ -14,7 +14,7 @@ already filed as
 `turi-hkt-constrained-byvalue-bind-pure-wrong-values.md`, and both are symptom
 reports on one root cause -- `--interpret` keeping the elaboration-baked
 instance for a RETURN-directed class method. Read
-[`turi-return-directed-method-keeps-baked-instance`](../reported/turi-return-directed-method-keeps-baked-instance.md)
+[`turi-return-directed-method-keeps-baked-instance`](../archive/turi-return-directed-method-keeps-baked-instance.md)
 instead.
 
 The "is-some flag / wrong-slot readback" reading below is wrong: nothing is

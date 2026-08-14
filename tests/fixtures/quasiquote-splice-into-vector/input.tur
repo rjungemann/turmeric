@@ -1,4 +1,4 @@
-; Regression: docs/reported/quasiquote-splice-into-vector-unsupported.md
+; Regression: docs/archive/history/quasiquote-splice-into-vector-unsupported.md
 ;
 ; `~@` (unquote-splicing) must expand inside a vector literal `[...]`, not just
 ; inside a `(...)` list.  The motivating case is a macro that splices a computed

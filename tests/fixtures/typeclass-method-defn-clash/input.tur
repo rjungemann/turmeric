@@ -5,7 +5,7 @@
 ; for receiver types that have no instance.  The compiler emits TUR-W0039 to
 ; surface the shared name; the dotted form (.render ...) always dispatches.
 ;
-; See docs/reported/typeclass-methods-share-value-namespace-with-defns.md
+; See docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md
 (defclass Showy [a]
   (render [x] : cstr))
 

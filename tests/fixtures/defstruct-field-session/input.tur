@@ -5,7 +5,7 @@
 ;; the record ADT (like a handler/fn field), stored by the explicit TY_SESSION
 ;; case in struct_field_storage_from_type.  Previously this hit the DS-A4 "not
 ;; supported as a struct/ADT field" hard error
-;; (docs/upcoming/structdef-exotic-field-forms-plan.md).
+;; (docs/archive/history/structdef-exotic-field-forms-plan.md).
 ;;
 ;; The Send endpoint is stored in a Chan struct; a receiver thread recvs and
 ;; prints the value; the main thread reads the field back and sends 42.

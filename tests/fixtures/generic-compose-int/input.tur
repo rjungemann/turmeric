@@ -1,4 +1,4 @@
-;; Stage A of docs/upcoming/poly-closure-result-specialization-plan.md
+;; Stage A of docs/archive/history/poly-closure-result-specialization-plan.md
 ;; (Direction B of arrow-compose-float-closure-int64-thunk-mismatch.md).
 ;;
 ;; A *generic*, typed, closure-returning compose combinator must now

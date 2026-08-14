@@ -201,7 +201,7 @@
 ;; `try`/`catch` special form it exercised no longer exists in the language
 ;; (only `try-with` remains), so `(catch [e] 0)` now parses `[e]` as a vec
 ;; literal and errors with `unbound symbol 'e'` at elaboration, aborting the
-;; whole `:reload`.  See docs/reported/eval-tco-stale-try-catch.md.)
+;; whole `:reload`.  See docs/archive/history/eval-tco-stale-try-catch.md.)
 
 ;; --- Test 18 (C1): deeply NESTED catch-unwind stays heap-bounded ------------
 ;; Each level wraps the next recursion in its own (catch-unwind (fn [] ...)).

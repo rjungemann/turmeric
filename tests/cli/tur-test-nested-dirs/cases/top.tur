@@ -1,0 +1,2 @@
+;; Directly in cases/ -- found by the flat collector too.
+(defn main [] :int 0)

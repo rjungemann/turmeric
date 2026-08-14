@@ -19,7 +19,7 @@
 #   gdb -ex "source tools/debug/turmeric_gdb.py" ./build/bin/foo
 #
 # or from your ~/.gdbinit / a project .gdbinit.  See
-# docs/upcoming/debugger-native-types-plan.md (N2) for the auto-load story.
+# docs/archive/history/debugger-native-types-plan.md (N2) for the auto-load story.
 
 import gdb
 import gdb.printing

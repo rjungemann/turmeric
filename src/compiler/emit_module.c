@@ -1103,7 +1103,7 @@ static bool emit_abi_type_has_named_tyvar(const Type *t) {
  * whose only abstract bindings are row variables does not require
  * specialization to resolve -- the carrier definition is sufficient.
  * Filed at
- * docs/reported/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
+ * docs/archive/history/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
  * before the fix. */
 static bool emit_abi_type_has_concrete_named_tyvar(const Type *t) {
     if (!t) return false;
@@ -3181,7 +3181,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     } else {
         fd = fn_expr->as.fn_def_.fn;
         if (fd->closure || !fd->body) return;
-        /* Per-instantiation monomorphization (docs/reported/generic-inline-c-
+        /* Per-instantiation monomorphization (docs/archive/history/generic-inline-c-
          * struct-arg-monomorphises-to-int64.md): inline-C bodies *without*
          * `__TUR_TY_<NAME>__` markers used to bail to the carrier int64 path,
          * which silently miscompiled any struct-typed A.  We now proceed to
@@ -3211,7 +3211,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             arg_types[i] = expected_full
                 ? emit_abi_instantiate_type(expected_full, bindings, n_bindings, ctx->type_arena)
                 : fd->param_types[i];
-            /* M4c Path A.1 (docs/upcoming/m4c-execution-plan.md): when this
+            /* M4c Path A.1 (docs/archive/m4c-execution-plan.md): when this
              * call dispatches a typeclass-instance method, the param's full
              * type is the resolved class-var (e.g. `Tuple2`) — the TY_TYVAR
              * was erased at instance elab.  Override the substitution here:
@@ -3614,7 +3614,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * audit flags -- so a top-level `(ok 5)` in user code keeps the carrier path
      * (avoiding the broad M2 suite-wide snapshot blast).
      *
-     * 2026-06-17 generalization (docs/reported/option-consumer-retype-byvalue.md
+     * 2026-06-17 generalization (docs/archive/history/option-consumer-retype-byvalue.md
      * step 1): the gate now also fires for NON-instance generic specs whose
      * declared return is a concrete by-value Option/Result struct of the same
      * family the body's construct produces.  That unblocks pure-Turmeric
@@ -3815,7 +3815,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         return;
     }
 
-    /* Per-instantiation monomorphization (docs/reported/generic-inline-c-
+    /* Per-instantiation monomorphization (docs/archive/history/generic-inline-c-
      * struct-arg-monomorphises-to-int64.md): an inline-C body without
      * `__TUR_TY_<NAME>__` markers may have hand-rolled int64_t carriers in
      * its C source.  Specializing such a body when no slot actually escapes
@@ -3864,7 +3864,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 type_has_concrete_codegen_layout(&arg_types[i])) {
                 needs_byvalue_spec = true; break;
             }
-            /* M5 residual-straddle (docs/upcoming/m5-residual-straddle-
+            /* M5 residual-straddle (docs/artifacts/m5-residual-straddle-
              * retirement.md): a defn carrying `#{ByVal}` opts into
              * by-value spec interning for *any* aggregate arg type that
              * resolves to a concrete struct application -- including
@@ -4611,7 +4611,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                  * recursive call to the int-carrier spec (`Cons__int`) instead
                  * of the enclosing spec's element type, dropping every element
                  * past the head (round-trip-list cstr/float arrays:
-                 * docs/reported/recursive-constrained-generic-carrier-ascription-loses-element-spec.md).
+                 * docs/archive/history/recursive-constrained-generic-carrier-ascription-loses-element-spec.md).
                  * Only fire G7 when the ascription preserves the result's
                  * parametric shape (both TY_APP), not when it collapses a
                  * parametric application down to a bare scalar carrier. */
@@ -4647,7 +4647,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             /* Calls inside the packed value still need worklist seeding so
              * any polymorphic helper used to construct the existential is
              * monomorphized.  See
-             * docs/reported/open-monomorphizes-polymorphic-fn-only-partially.md. */
+             * docs/archive/history/open-monomorphizes-polymorphic-fn-only-partially.md. */
             emit_abi_scan_expr(ctx, e->as.exists_pack_.value, items, n_items);
             /* The pack emits a witness table storing `&dict_<Class>_<T>_singleton`
              * for each constraint witness (emit_expr.c).  Those dict references
@@ -4683,7 +4683,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
              * for a parameterized Result -- fall off the worklist and
              * the C linker reports them undeclared. Mirrors the
              * EX_EXISTS_OPEN fix; tracked in
-             * docs/reported/typeclass-method-parameterized-result-carrier-mismatch.md
+             * docs/archive/history/typeclass-method-parameterized-result-carrier-mismatch.md
              * (Issue 1 / Prereq 1). */
             HandleExpr *h = e->as.handle_.handle;
             if (h) {
@@ -4725,7 +4725,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
              * decl nor a definition is emitted and the C linker reports the
              * symbol undefined.  Mirrors the EX_EXISTS_OPEN / EX_HANDLE fixes;
              * tracked in
-             * docs/reported/hkt-instance-method-match-scrutinee-undefined-symbol.md */
+             * docs/archive/history/hkt-instance-method-match-scrutinee-undefined-symbol.md */
             emit_abi_scan_expr(ctx, e->as.match_.scrutinee, items, n_items);
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
                 emit_abi_scan_expr(ctx, e->as.match_.arms[i].body, items, n_items);
@@ -5472,7 +5472,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         spec->fn->binding->name->name &&
         strncmp(spec->fn->binding->name->name, "__inst_", 7) == 0;
     /* M4c Path A result-side
-     * (docs/reported/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
+     * (docs/archive/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
      * for non-HKT instance method specs (spec->typeclass_inst is set by
      * emit_abi_intern_spec), emit the concrete result type rather than the
      * carrier int64.  HKT classes keep the legacy carrier override.  Without
@@ -6275,7 +6275,7 @@ static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
  * regardless of build mode.  The header (emit_header) never emits the base ADT
  * typedef, only monomorphized type-applications, so without this the per-module
  * .c references `tur_adt_Either` / `ctor_Left` with no definition.  See
- * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+ * docs/archive/history/load-not-expanded-in-imported-or-project-modules.md. */
 static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
                                        bool typedef_only) {
     /* CONV-S1 (defstruct-as-defadt): a struct-origin ADT superseded by a later
@@ -6483,7 +6483,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
  * the same block per module .c so that `^fat` parameters, typeclass-method
  * closures, and inline-C closure application work under `tur build <dir>` (which
  * does not run the whole-program preamble).  See
- * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+ * docs/archive/history/load-not-expanded-in-imported-or-project-modules.md. */
 static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     /* project-mode-rc-runtime-preamble-missing: in separate compilation this
      * runtime is emitted both by the shared tur_runtime.h (via the preamble) and
@@ -7692,15 +7692,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
             buf_puts(out, "#include <regex.h>\n");
             buf_puts(out, "#endif\n");
         }
-    }
-    /* inline-c-function-scope-include-guards fix: emit every `#include`
-     * directive that elab lifted from the top of an inline-C body so
-     * include-guarded headers (sqlite3.h, rtmidi_c.h, lo/lo.h, ...) are
-     * visible to every inline-C function in this TU. The same scan strips
-     * the directives from each body at substitute time, so they appear
-     * exactly once -- here. */
-    for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
-        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
     /* AR8: Variadic rest-list cons-cell helper -- only emit when module has variadics */
     if (g_has_variadics) {
@@ -11149,6 +11140,36 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "/* ==== tur: end of fixed runtime preamble ==== */\n");
 }
 
+/* inline-c-function-scope-include-guards fix: emit every `#include` directive
+ * that elab lifted from the top of an inline-C body so include-guarded headers
+ * (sqlite3.h, rtmidi_c.h, lo/lo.h, ...) are visible to every inline-C function
+ * in this TU.  The same scan strips the directives from each body at
+ * substitute time, so they appear exactly once -- here.
+ *
+ * This lives OUTSIDE emit_runtime_preamble, and every caller emits it AFTER
+ * that call, deliberately.  These lines are the one program-dependent thing in
+ * an otherwise fixed region, and while they sat inside the marked span the S2
+ * split could never reproduce them: the probe (emit_rt_split_source) forces the
+ * g_needs_* gates on so the rest matches, but it has no g_hoisted_includes, so
+ * any program that hoisted an include emitted a preamble whose hash did not
+ * match the committed blob and the split silently disengaged.  Since it fails
+ * closed nothing noticed -- and it hit exactly the programs that most want the
+ * fast path, every spice binding a C library through inline-C.
+ *
+ * Below the end marker they are still ahead of every inline-C function (those
+ * live in the program half), so the visibility guarantee above is unchanged,
+ * while the span the split replaces is genuinely fixed again.  Keeping them out
+ * of emit_runtime_preamble is what makes that true for the PROBE as well: the
+ * probe calls the same function, so a guard inside it would have to be
+ * conditional on probe-ness, and the coupling that produced this bug would
+ * survive.  See
+ * docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md. */
+static void emit_hoisted_includes(Buf *out) {
+    for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
+    }
+}
+
 /* project-mode-rc-runtime-preamble-missing: shared runtime header for the
  * owner-TU design.  Wraps the full runtime preamble (shared mode: globals
  * owner-gated, most functions demoted to static, the rc<T>/GC family
@@ -11164,6 +11185,7 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "/* generated by tur -- shared runtime (tur_runtime.h) */\n");
     buf_puts(out, "#ifndef TUR_RUNTIME_H\n#define TUR_RUNTIME_H\n");
     emit_runtime_preamble(out, NULL, /*shared=*/true);
+    emit_hoisted_includes(out);
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
 }
 
@@ -11407,7 +11429,7 @@ int emit_program(Buf *out, const Expr *program) {
      * survive into a __constructor__ when the user defines their own
      * main(). Pre-fix these landed in `body`, which is silently dropped
      * under user_has_main. Filed under
-     * docs/reported/top-level-def-init-dropped.md. */
+     * docs/archive/history/top-level-def-init-dropped.md. */
     Buf def_init_body; buf_init(&def_init_body);
     /* Phase 19: separate buffers for ordered final assembly:
      *   early_file   - pass 0: struct typedefs + drop glue
@@ -12771,6 +12793,7 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Final assembly. */
     emit_runtime_preamble(out, program, false);
+    emit_hoisted_includes(out);
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
@@ -12882,7 +12905,7 @@ int emit_program(Buf *out, const Expr *program) {
          * these are the only initializers that execute *user* code, so they
          * must see the pthread keys and registries already in place.
          *
-         * Filed under docs/reported/top-level-def-init-dropped.md. */
+         * Filed under docs/archive/history/top-level-def-init-dropped.md. */
         buf_puts(out, "static void __tur_module_def_init(void) {\n");
         buf_write(out, def_init_body.data, def_init_body.len);
         buf_puts(out, "}\n\n");
@@ -14017,7 +14040,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * reference these types in the final assembly.  Struct typedefs are NOT
      * emitted here -- emit_header already emits every struct typedef into the
      * header this .c #includes.  See
-     * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+     * docs/archive/history/load-not-expanded-in-imported-or-project-modules.md. */
     Buf impl_early; buf_init(&impl_early);
     for (uint32_t i = 0; i < impl_n_items; i++) {
         const Expr *e = impl_items[i];

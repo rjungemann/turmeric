@@ -5,7 +5,7 @@
 ;; crossing match (rt_form_ident), this was `0 proven, 1 unknown` (a hard
 ;; TUR-W0372 under --strict-refine) while the identical inline
 ;; `(let [_ (& w)] ...)` proved. Regression guard for
-;; docs/archive/frozen-macro-breaks-refinement-guard-discharge.md.
+;; docs/archive/history/frozen-macro-breaks-refinement-guard-discharge.md.
 ;;
 ;; Under --strict-refine this compiles (and prints 42) ONLY because the crossing
 ;; discharges; if the guard were lost the strict build would fail with W0372.

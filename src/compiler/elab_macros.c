@@ -134,7 +134,7 @@ static Form *ct_value_to_form(CtEnv *env, CtValue v, Span span) {
  * elements of its (list-valued) result into the output.  Shared by every
  * sequence kind so `~@` works uniformly inside `[...]`, `#map{...}`,
  * `#set{...}`, etc. -- not just inside `(...)` lists.
- * docs/reported/quasiquote-splice-into-vector-unsupported.md. Returns the
+ * docs/archive/history/quasiquote-splice-into-vector-unsupported.md. Returns the
  * expanded item array and writes its length to *out_n; returns NULL (with
  * *env->ok cleared) on a splice-evaluation error. */
 static Form **ct_qq_eval_seq_items(CtEnv *env, Form *f, uint32_t *out_n) {
@@ -198,7 +198,7 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
              * wrap with `do` so the CBLOCK sits in a body position and
              * elaborates as a statement, matching Clojure's "leaves self-
              * evaluate in quasiquote" model. Filed and resolved under
-             * docs/reported/macro-cannot-emit-inline-c-block.md. */
+             * docs/archive/history/macro-cannot-emit-inline-c-block.md. */
             if (n_out > 0 && items[0]->tag == F_CBLOCK) {
                 Form **wrapped = (Form **)arena_alloc(env->elab->arena,
                                                       (n_out + 1) * sizeof(Form *));
@@ -254,7 +254,7 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
             return form_contract_type(env->elab->arena, f->span, items, n);
         }
         case F_TYPE_ANN: {
-            /* docs/reported/macro-template-type-position-rejects-unquoted-compound.md:
+            /* docs/archive/history/macro-template-type-position-rejects-unquoted-compound.md:
              * recurse into the type-annotation payload so unquoted compound
              * expressions inside a `: T` annotation (e.g. `: (Box ~(first xs))`)
              * are evaluated at expansion time rather than left as raw F_UNQUOTE
@@ -313,7 +313,7 @@ static bool form_contains_ct_builtins(Form *f) {
             }
             return false;
         case F_TYPE_ANN:
-            /* docs/reported/macro-template-type-position-rejects-unquoted-compound.md:
+            /* docs/archive/history/macro-template-type-position-rejects-unquoted-compound.md:
              * a `: (T ~(first xs))` annotation wraps the type-expression in an
              * F_TYPE_ANN whose payload still carries the unquote node.  If we
              * report `false` here, elab_eval_macro_form is skipped and the raw
@@ -409,7 +409,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
          * `: type` into form_type_ann(inner) (src/compiler/forms.c:142),
          * stored as items[0] with len=1. CT first/rest/second only
          * descend F_LIST/F_VEC, so the macro author has no other way
-         * through. See docs/reported/ct-primitives-cannot-walk-type-ann-nodes.md. */
+         * through. See docs/archive/history/ct-primitives-cannot-walk-type-ann-nodes.md. */
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time type-ann-inner expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
         if (args[0]->tag != F_TYPE_ANN) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time type-ann-inner expects an annotation form"); return ct_value_form(form_nil(env->elab->arena, span)); }
         return ct_value_form(args[0]->as.list.items[0]);
@@ -664,7 +664,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
          * that must be spliced verbatim, not validated under compile-time fn
          * rules. Detect that shape (a type-annotated parameter, or a return
          * type annotation) and return the form untouched.
-         * docs/reported/macro-typed-inline-lambda-arg.md */
+         * docs/archive/history/macro-typed-inline-lambda-arg.md */
         {
             bool runtime_lambda = false;
             for (uint32_t i = 0; i < params_f->as.list.len; i++) {
@@ -741,7 +741,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
      * instead of being forced through ct_value_to_form (which only accepts
      * data forms). This lets a template GENERATE the sequence it splices, e.g.
      * `(do ~@(map (fn [x] `(println ~x)) items))`.
-     * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+     * docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md */
     if (ct_symbol_name(head->as.sym, "map") && f->as.list.len == 3) {
         CtValue fn_v = ct_eval_form(env, f->as.list.items[1]);
         if (!*env->ok) return fn_v;
@@ -849,7 +849,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
      * splice the call is left as data (rebuilt below) for ordinary
      * elaboration, so macro-built data forms threaded through `list`/`cons`
      * (e.g. an accumulated `(map-assoc ...)`) are not prematurely expanded.
-     * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+     * docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md */
     if (env->expand_macro_head) {
         MacroDef *macro = elab_lookup_macro(env->elab, head->as.sym);
         if (macro) {
@@ -931,7 +931,7 @@ static Form *elab_eval_macro_form(Elab *e, Form *f, MacroDef *macro, Form **args
     /* Bind ^syntax params so (first decl) / (symbol-name decl) in the macro
      * body see the raw arg Form as a CT value instead of trying to evaluate
      * the substituted code (which would hit the bug in
-     * docs/reported/macro-args-elaborated-before-expansion.md). */
+     * docs/archive/history/macro-args-elaborated-before-expansion.md). */
     if (macro && macro->is_syntax_param) {
         for (uint32_t i = 0; i < macro->n_params; i++) {
             if (!macro->is_syntax_param[i]) continue;
@@ -1089,7 +1089,7 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
  * pass evaluates X and splices its RESULT. Without this, `~@(map ...)` /
  * `~@(chain ...)` are flattened into their literal call tokens (`map`, the fn,
  * the argument list), which then reach the elaborator as an unbound symbol.
- * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+ * docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md */
 static bool splice_inner_needs_ct_eval(Elab *e, Form *f) {
     if (form_contains_ct_builtins(f)) return true;
     if (f->tag == F_LIST && f->as.list.len > 0 &&
@@ -1137,7 +1137,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
              * time. Recurse so `~Symbol` markers inside type-position
              * unquotes get substituted from macro args. Filed and
              * resolved under
-             * docs/reported/macro-unquote-in-type-position-rejected.md. */
+             * docs/archive/history/macro-unquote-in-type-position-rejected.md. */
             if (f->as.list.len == 0) return f;
             Form *inner = substitute_params(e, f->as.list.items[0], macro, args);
             return form_type_ann(e->arena, f->span, inner);
@@ -1415,7 +1415,7 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     /* TUR-W0042: macro dispatch happens AFTER special-form dispatch in
      * elab_call, so a macro named after a reserved special form is never
      * expanded at a bare call site.  Same warning, same reasoning as the defn
-     * path (docs/archive/defn-shadows-return-special-form.md). */
+     * path (docs/archive/history/defn-shadows-return-special-form.md). */
     if (!e->in_stdlib_load)
         tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro");
 

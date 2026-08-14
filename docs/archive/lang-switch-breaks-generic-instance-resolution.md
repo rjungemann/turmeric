@@ -186,3 +186,105 @@ switch (e.g. `turi_try_show_by_tag` on `#map{:a 1}` returning `#map{:a 1}`),
 which is exactly the assertion that would have caught this. Its current checks
 are all `map-count`-style integer results, which is why the defect survived
 that fix.
+
+## Resolution (2026-08-13)
+
+The report's candidate 1 was right -- stale vs. fresh `TypeClassEnv` identity --
+but it is only half the cause, and the missing half is why the existing
+duplicate-class fallback did not already absorb this.
+
+### Cause
+
+Two independent things had to be true, and instrumenting `gde_reresolve_method`
+(`src/turi/eval.c`) showed both:
+
+```
+before switch:  head=sym prim=1 stale=0 match=0x...f960   <- Show[Sym] found
+after switch:   head=sym prim=1 stale=1 match=(nil)       <- nothing found
+```
+
+1. **The baked class object is dead.** `turi_env_reset_to_prelude` drops the
+   `ElabSession` and re-elaborates the pinned prelude *without* re-evaluating
+   it, so every generic body still bound in `env->globals` keeps a `dict_arg`
+   baked against the old `TypeClassEnv` while `env->last_tc_env` points at the
+   rebuilt one. Same classes, different allocations, so
+   `inst->typeclass != tc` for every instance and the precise pointer match
+   finds nothing. (`stale=1` above is that, measured.)
+
+2. **The by-name retry could not fire, and could not have matched anyway.**
+   The retry beneath the pointer match was gated `!concrete_is_primitive`, and
+   `gde_type_is_primitive_star` counts `TY_SYM` and `TY_CSTR` -- so the two
+   element types in the report's own repros were both excluded. Lifting that
+   gate alone still did not fix it: the retry derives an instance's head name
+   from `type_arg_syms[0]` or `gde_type_head_name`, but **not** from
+   `gde_primitive_type_name`, which the precise loop above it does use. An
+   instance over a primitive therefore has no name to compare and is skipped.
+
+Either alone leaves the bug. Both had to go.
+
+### Fix
+
+- `gde_tc_is_live()` asks whether the baked `TypeClass*` is still reachable in
+  the live registry. A dead class object licenses the by-name retry even for a
+  primitive concrete. The restriction's actual purpose -- stopping a primitive
+  from mis-matching a stale *duplicate* class's instance while its own class is
+  still live -- is untouched, because `tc` is live in that case.
+- The retry gains the `gde_primitive_type_name` fallback the precise loop
+  already had, so `Show [Sym]` / `Show [cstr]` have a head name to match on.
+
+### Blast radius: the report's open question, answered
+
+The report's probe found `Eq [Vec cstr]` unaffected while `Show [Vec cstr]`
+regressed, and left two candidates for why. The answer is candidate 1, and it
+generalises: nothing about `Eq` survived that `Show` did not. The discriminator
+is whether the constrained element re-resolution is reached **with a primitive
+concrete** at all -- `Eq[cstr]` answers through its own carrier before getting
+there. So the "every generic typeclass dispatch" framing was right in kind and
+the narrowing to display-only was an artifact of which classes happen to route
+around this path. Any class whose constrained element dispatch reaches
+`gde_reresolve_method` with a primitive concrete was affected, and `Ord`/`Hash`
+did not need separate probing once the mechanism was pinned.
+
+### Coverage
+
+The report proposes `tests/turi/lang-switch-prelude.c`. That file turns out to
+be the wrong home: its harness preloads via `turi_env_preload_*` and asserts
+from C, and **the defect does not reproduce there** -- a C-side auto-show render
+(`turi_try_show_by_tag`) of the same map is correct across the switch even on
+the broken compiler, exactly as the report's own "Not the display path" section
+implies. The assertion has to drive an explicit Turmeric `(show ...)`, which
+means driving the REPL. It landed in `tests/turi/repl-smoke.sh` instead.
+
+Three ways to write this check silently do not bite, each found by trying it:
+
+- **Asserting on a bare collection result.** That is the auto-show tier, not the
+  broken path.
+- **`(load "stdlib/str.tur")` first**, to reduce the rendering to an integer the
+  existing `check_int` could take. The load re-registers instances into the live
+  registry and the output comes out **correct even with the fix reverted** --
+  the tempting shape is the one that measures nothing.
+- **A multi-line expectation passed to the file's existing `check`.** It uses
+  `grep -qF`, and grep treats a multi-line fixed pattern as *alternatives*, so a
+  before/after expectation matches as soon as its BEFORE line appears. Both
+  switch cases reported PASS on a compiler that was demonstrably broken. Added
+  `check_last`, which compares the final `=> ` line exactly.
+
+The four cases were verified against a deliberately-reverted build: the two
+switch cases FAIL and the before-switch and monomorphic controls PASS, which is
+the shape that says the check is measuring constrained resolution and not
+something ambient.
+
+### Verification
+
+`tests/run.sh` 2592 passed, 0 failed. `tests/run-turi.sh` 1779 passed, 0
+failed. `tests/turi/repl-smoke.sh` 34 passed, 0 failed. The report's two
+original repros both come out right, including switch-back:
+
+```
+(show (:: #map{:a 1} (Map Sym int)))   => "#map{:a 1}"
+#lang turmeric/neoteric                => "#map{:a 1}"
+#lang turmeric                         => "#map{:a 1}"
+```
+
+and the `Vec cstr` probe renders `[ab]` after the switch, where it previously
+rendered `[88098369185552]`, with `Eq` unchanged at `true` throughout.

@@ -46,7 +46,7 @@ typedef enum {
 /* Suspect roots buffer - global for v1 (per-thread in future).
  * CG0: heap-allocated and grown on demand (was a fixed 4096-entry array whose
  * overflow silently dropped blocks -- see
- * docs/reported/gc-strong-cycles-not-collected.md). */
+ * docs/archive/history/gc-strong-cycles-not-collected.md). */
 extern RcControlBlock **gc_suspect_roots;
 extern uint32_t gc_suspect_count;
 extern uint32_t gc_suspect_capacity;

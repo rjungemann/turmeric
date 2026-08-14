@@ -22,7 +22,7 @@ something we don't have.
 For the introductory tutorial see
 [`ecs-guide.md`](ecs-guide.md). For the long-form plan and the
 load-bearing prereqs that closed in 2026-06-11 see
-[`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md).
+[`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
 
 ## The bottom line
 
@@ -37,7 +37,7 @@ load-bearing prereqs that closed in 2026-06-11 see
 | **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness by importing the `ecs/refined-world` facade: a read whose entity is not proven alive is a compile error |
 | **Query arity** | Tuples up to 8-ish via type-class hackery; degrades past that | `Query` arrow combinators -- no cap, but composition cost is real | Truly variadic via row-kinded `for-each`; row type is the kind-`[*]` of components |
 | **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check (lifts when the spice wires `SizedVec<n, T>` -- SZ6+ shipped, spice wiring still TODO) |
-| **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-cross-world-systems-plan.md)); single-world is v1 |
+| **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md)); single-world is v1 |
 
 The single largest delta is **write-set enforcement**. Both Haskell
 libraries trust the programmer not to write to a component they didn't
@@ -429,12 +429,12 @@ scheduler ever runs.
 ## Where to look next
 
 - [`ecs-guide.md`](ecs-guide.md) -- the introductory tutorial.
-- [`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md)
+- [`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md)
   -- the long-form plan, status, and what's still queued for v2.
 - [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md)
   -- the Phase I implementation log for the cap-gating surface that
   delivered the headline compile-time-write-set claim.
-- [`../upcoming/v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-cross-world-systems-plan.md)
+- [`../upcoming/v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md)
   -- post-v1 follow-up extending the cap surface to multi-world
   render-extract / client-prediction patterns.
 - [`substructural-types-guide.md`](substructural-types-guide.md) --

@@ -12,7 +12,7 @@
 ;;; the auto-load boundary is re-anchored after `(load ...)` expansion, so the
 ;;; last auto-loaded stdlib module's exported macros (`with-unique`) are promoted
 ;;; to global visibility alongside its defns -- no explicit import needed from
-;;; user code.  See docs/archive/autoload-defmodule-macro-not-promoted.md.
+;;; user code.  See docs/archive/history/autoload-defmodule-macro-not-promoted.md.
 ;;;
 ;;; Since: UT3
 ;; Uniqueness-type pattern forms.

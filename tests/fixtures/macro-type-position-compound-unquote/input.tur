@@ -1,4 +1,4 @@
-;; Regression for docs/reported/macro-template-type-position-rejects-unquoted-compound.md
+;; Regression for docs/archive/history/macro-template-type-position-rejects-unquoted-compound.md
 ;;
 ;; A defmacro template that emits a (defstruct ...) field type may use a
 ;; *compound* unquoted expression like ~(first comps) inside a type-

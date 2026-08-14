@@ -3,7 +3,7 @@
 ;; (skipping the middle closure).  The middle closure must transitively
 ;; capture that grandparent binding so it can forward it into the inner env.
 ;;
-;; Regression for docs/reported/nested-closure-transitive-capture.md:
+;; Regression for docs/archive/history/nested-closure-transitive-capture.md:
 ;; collect_free_vars did not fold a nested EX_CLOSURE's capture set into the
 ;; enclosing closure, so the middle closure captured `x` (its own param,
 ;; trivially in scope) but never `n` (the grandparent binding).  The middle

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_crossing_routing.py -- R4 ratchet for carrier<->concrete crossing routing.
 
-docs/archive/carrier-crossing-recovery-routing-plan.md turns the carrier<->
+docs/archive/history/carrier-crossing-recovery-routing-plan.md turns the carrier<->
 concrete recovery routines into mandatory chokepoints.  R3 enforces their
 *runtime* postcondition (a non-concrete recovered type is a Debug ICE); this
 script is R4's *static* enforcement: the audit registry is the single source of

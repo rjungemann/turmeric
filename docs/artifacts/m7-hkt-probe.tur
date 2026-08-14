@@ -2,10 +2,10 @@
 ;; design with the flag OFF). It is the minimal end-to-end reproduction the M7
 ;; work is driven against. Kept out of tests/fixtures/ on purpose.
 ;;
-;; Run it with: ./build/tur run docs/upcoming/v2/m7-hkt-probe.tur
+;; Run it with: ./build/tur run docs/artifacts/m7-hkt-probe.tur
 ;;
 ;; BEHAVIOR ON HEAD, default (flag OFF) -- unchanged hard error:
-;;   docs/upcoming/v2/m7-hkt-probe.tur:<line>: error [TUR-E0001]:
+;;   docs/artifacts/m7-hkt-probe.tur:<line>: error [TUR-E0001]:
 ;;     function 'unwrap' arg 1: expected (type-app Option tyvar 'A'),
 ;;     got (type-app ? ?)
 ;;   The producer `(gmap (some 21) dbl)` resolves to an anonymous
@@ -13,7 +13,7 @@
 ;;   byte-identical to HEAD; the suite runs with the flag OFF.)
 ;;
 ;; BEHAVIOR UNDER `TUR_M7_HKT=1` -- LANDED end-to-end (2026-06-19, layer 4):
-;;   `TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe.tur; echo $?`
+;;   `TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe.tur; echo $?`
 ;;   exits 42 with NO ascription anywhere. The full chain now works:
 ;;     - elaborator threads g -> Option, a/b -> int  (layers 0-3, prior session)
 ;;     - the dispatch call attaches the element-tyvar abi_bindings (elab)

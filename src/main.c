@@ -726,6 +726,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
     pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
@@ -768,7 +769,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     /* Phase 7: prepend stdlib autoload forms.  Shared with compile_to_h via
      * prepend_stdlib_forms so project-mode builds see the same stdlib API
      * (Cons / Option / Result / typeclass stubs / etc.) that single-file
-     * builds do.  See docs/archive/project-mode-no-stdlib-autoload.md. */
+     * builds do.  See docs/archive/history/project-mode-no-stdlib-autoload.md. */
     uint8_t file_id = 1;
     uint32_t total_stdlib_forms = prepend_stdlib_forms(&arena, &st, path,
                                                        &forms, &nforms,
@@ -848,7 +849,7 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
      * preloaded here in the same order, so `(Cons A)` / `tnil?` /
      * `Option`/`Result` etc. are visible inside spice defmodule bodies
      * built via `tur build .` without explicit imports.  See
-     * docs/archive/project-mode-no-stdlib-autoload.md.
+     * docs/archive/history/project-mode-no-stdlib-autoload.md.
      *
      * Codegen note: bindings created during this prelude window are
      * marked `is_from_stdlib`. emit_implementation skips non-exported
@@ -931,6 +932,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
     pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
@@ -1033,6 +1035,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
     pkg_tur_version_reassert();   /* :tur-version floor survives the reset above */
+    pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
@@ -1621,7 +1624,7 @@ static void hoist_tur_include_directives(Buf *csrc) {
      * any feature-test `#define` ahead of the include it conditions), then all
      * code payloads (likewise in source order).  Relative order within each
      * bucket is preserved; only the two kinds are separated.
-     * See docs/reported/hoisted-inline-c-precedes-includes.md. */
+     * See docs/archive/history/hoisted-inline-c-precedes-includes.md. */
     Buf hdr, code;
     buf_init(&hdr);
     buf_init(&code);
@@ -2944,6 +2947,27 @@ static void collect_tur_recursive(const char *dir,
     closedir(d);
 }
 
+/* Collect every `.tur` file under `dir`, recursively.
+ *
+ * `tur build <dir>`, `tur check <dir>`, and `tur test <dir>` used the FLAT
+ * collect_tur_files, which sees only files sitting directly in `dir`.  A spice
+ * whose modules live one level down -- `src/demo/lib.tur`, the layout
+ * `:exports "demo/lib"` implies and the guides use -- therefore reported
+ * `tur: no .tur files found in 'src/'`, on the invocation the `module not
+ * found` diagnostic itself recommends.  Project mode already recursed
+ * (collect_project_src_files), so the two spellings of "build this spice"
+ * disagreed, with nothing in the output to say which one you got.
+ *
+ * Same shape as free_tur_files' input, so the caller frees it unchanged.
+ * See docs/archive/tur-build-nested-src-dir-finds-no-files.md. */
+static char **collect_tur_files_deep(const char *dir, int *n_out) {
+    char **files = NULL;
+    int n = 0, cap = 0;
+    collect_tur_recursive(dir, &files, &n, &cap);
+    *n_out = n;
+    return files;
+}
+
 /* Collect a spice/library project's module files for a directory build.
  * Prefers a recursive walk of `<root>/src` (the conventional layout used by
  * every first-party spice, including nested `src/<pkg>/` trees); when there
@@ -3004,7 +3028,7 @@ static char **collect_project_src_files(const char *root, int *n_out) {
  *   - VisitedRoots below dedupes the WALK, so a cycle terminates.
  * This comment used to claim the first also did the second; it does not, and
  * a manifest cycle recursed until something else gave out.  See
- * docs/archive/spice-cycle-include-path-blowup.md. */
+ * docs/archive/history/spice-cycle-include-path-blowup.md. */
 static bool include_dir_seen(const char **dirs, int n, const char *cand) {
     for (int i = 0; i < n; i++)
         if (dirs[i] && strcmp(dirs[i], cand) == 0) return true;
@@ -3332,16 +3356,36 @@ static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
  * untouched) on hash mismatch, missing marker, or TUR_JIT_NO_SPLIT=1.
  * Shared by cmd_jit and the J2 REPL image build.  See cmd_jit's call site
  * for the full rationale. */
+/* Report WHY the split did not engage, under TUR_JIT_TIMING=1.
+ *
+ * The split fails closed -- a rejected hash just means the full preamble is
+ * emitted, which is correct but slow -- so a disengage is invisible in every
+ * observable except wall-clock.  That is how a hoisted inline-C `#include`
+ * disabled the fast path for the entire httpd-*, image-*, and C-binding-spice
+ * corpus without anyone noticing.  Note that the absence of TUR-W0071 is NOT
+ * evidence the split engaged: W0071 means engaged-then-failed-to-compile, and a
+ * never-engaged build is silent.  See
+ * docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md. */
+static bool jit_split_reject(const char *why) {
+    const char *v = getenv("TUR_JIT_TIMING");
+    if (v && *v && strcmp(v, "0") != 0)
+        fprintf(stderr, "TUR_JIT_TIMING\tsplit\tdisengaged\t%s\n", why);
+    return false;
+}
+
 static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     const char *no_split = getenv("TUR_JIT_NO_SPLIT");
-    if (no_split && *no_split && strcmp(no_split, "0") != 0) return false;
-    if (!csrc->data) return false;
+    if (no_split && *no_split && strcmp(no_split, "0") != 0)
+        return jit_split_reject("TUR_JIT_NO_SPLIT set");
+    if (!csrc->data) return jit_split_reject("no emitted source");
     Buf probe;
     buf_init(&probe);
     emit_rt_split_source(&probe);
     uint64_t cur = tur_hamt_hash_xxh64(probe.data, probe.len);
     buf_free(&probe);
-    if (cur != tur_rt_split_hash) return false;
+    if (cur != tur_rt_split_hash)
+        return jit_split_reject("preamble hash != committed artifact "
+                                "(regenerate with tools/gen-runtime-split.py)");
     buf_putc(csrc, '\0');
     csrc->len--;   /* NUL-terminate for strstr, keep logical len */
     static const char pre_start[] = "/* generated by tur (phase 2) */\n";
@@ -3349,7 +3393,7 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
         "/* ==== tur: end of fixed runtime preamble ==== */\n";
     const char *ps = strstr(csrc->data, pre_start);
     const char *pe = ps ? strstr(ps, pre_end) : NULL;
-    if (!ps || !pe) return false;
+    if (!ps || !pe) return jit_split_reject("preamble markers not found");
     const char *after = pe + sizeof(pre_end) - 1;
     buf_write(out, csrc->data, (size_t)(ps - csrc->data));
     buf_write(out, tur_rt_split_decls, tur_rt_split_decls_len);
@@ -4197,7 +4241,7 @@ static int cmd_run(int argc, char **argv) {
     /* CMake dependency handling: generate and build if cmake-deps present.
      * Walk the enclosing manifest's :spices block transitively so a
      * workspace sibling's :cmake-deps participate in this TU's build --
-     * see docs/upcoming/transitive-cmake-deps-plan.md. */
+     * see docs/archive/history/transitive-cmake-deps-plan.md. */
     PkgCmakeDep *closure_deps = NULL;
     int          n_closure_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(root, &m,
@@ -4323,7 +4367,7 @@ static void parse_test_directives(const char *path, TestDirectives *out) {
 
 static int cmd_test(const char *dir) {
     int n_files = 0;
-    char **tur_files = collect_tur_files(dir, &n_files);
+    char **tur_files = collect_tur_files_deep(dir, &n_files);
     if (!tur_files || n_files == 0) {
         fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
         free_tur_files(tur_files, n_files);
@@ -4505,7 +4549,7 @@ static int cmd_test(const char *dir) {
  * nearest build.tur, exactly like cmd_test. Returns 0 iff all files pass. */
 static int cmd_check_dir(const char *dir) {
     int n_files = 0;
-    char **tur_files = collect_tur_files(dir, &n_files);
+    char **tur_files = collect_tur_files_deep(dir, &n_files);
     if (!tur_files || n_files == 0) {
         fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
         free_tur_files(tur_files, n_files);
@@ -5231,7 +5275,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     /* GCC 14 / Apple clang 15+ promoted -Wincompatible-pointer-types and
      * -Wint-conversion from warnings to hard errors.  The generated C used to
      * trip both -- carrier<->concrete representation straddles (void*<->int64_t)
-     * -- tracked under docs/archive/codegen-gcc14-permerrors.md and
+     * -- tracked under docs/archive/history/codegen-gcc14-permerrors.md and
      * docs/archive/macos-clang-int-conversion-hard-error.md.  Every straddle is
      * now bridged at emit time (String returns, cloneable-frame call args,
      * cps->direct spawn/void* params, closure-env void* fields, and __ps_N
@@ -5255,7 +5299,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * output or a plain `tests/run.sh`: neither exercises the hoist path, and
      * both reported a false all-clear on exactly this question.  Use
      * tools/jit-spike/sweep-turjit.sh.  See findings 21.2/21.3 and
-     * docs/archive/hoisted-inline-c-precedes-includes.md. */
+     * docs/archive/history/hoisted-inline-c-precedes-includes.md. */
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -5328,7 +5372,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
                            const char *manifest_path, const char *cli_build_dir) {
     int n_files;
-    char **tur_files = collect_tur_files(dir, &n_files);
+    char **tur_files = collect_tur_files_deep(dir, &n_files);
     if (!tur_files || n_files == 0) {
         fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
         free_tur_files(tur_files, n_files);
@@ -5336,8 +5380,16 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
     }
     char *build_dir = resolve_build_dir(dir, cli_build_dir);
     if (!build_dir) { free_tur_files(tur_files, n_files); return 2; }
-    int rc = cmd_build_multi_files(tur_files, n_files, n_files, dir, NULL, NULL,
-                                   out_path, shared, manifest_path, NULL, 0,
+    /* `dir` is the module root for the files just collected, so put it on the
+     * include path: now that the walk is recursive, `src/demo/lib.tur` is in
+     * the set, and the sibling that does `(import demo/lib)` has to be able to
+     * resolve it.  Finding the files and being unable to link them is only half
+     * a fix -- and `tur build src/` is what the `module not found` diagnostic
+     * tells the user to run.  Project mode passes its own resolved path here;
+     * this is the bare-directory equivalent. */
+    const char *self_inc[1] = { dir };
+    int rc = cmd_build_multi_files(tur_files, n_files, n_files, dir, dir, NULL,
+                                   out_path, shared, manifest_path, self_inc, 1,
                                    build_dir);
     free(build_dir);
     return rc;
@@ -5399,7 +5451,7 @@ static int cmd_build_project(const char *root_in, const char *out_path,
 
     /* Transitive cmake-deps autobuild.  Walks the manifest's `:spices`
      * closure (but NOT every workspace sibling -- see
-     * docs/archive/tur-build-cmake-deps-workspace-overreach.md) and gen +
+     * docs/archive/history/tur-build-cmake-deps-workspace-overreach.md) and gen +
      * builds the union of their `:cmake-deps` into `<root>/cmake/`, mirroring
      * what cmd_run does for `tur run`.  Without this, a spice that imports
      * the json modules (which pull in yyjson) generates headers fine but
@@ -6672,18 +6724,17 @@ static int cmd_eval_h(const char *path, bool use_color,
      * preloaded stdlib registers no reader macros and the user file is parsed
      * in a single pass (no self-replay of its own `reader-macros/define`). */
     env->reader_macros->strict = true;
-    /* Debug sessions (`tur dap`) need real per-file span provenance: the DAP
-     * server resolves each frame's source from diag_file_path(span.file_id)
-     * and matches breakpoints by that file's basename.  The TR2 incremental
-     * elaboration path re-attributes spans to the accumulated `<eval>` source
-     * blob rather than the originating file, so frames come back with no
-     * `source` object and file-scoped breakpoints stop matching -- the
-     * observable symptom was a post-stepOut frame reported as `?:19` followed
-     * by a conditional breakpoint that never fired.  A debug session loads one
-     * program once, so the incremental win (a long-lived REPL amortising a
-     * growing prefix) does not apply here and opting out costs nothing.
-     * See docs/reported/incremental-elab-loses-span-file-provenance.md. */
-    if (debug) turi_env_set_incremental_elab(env, false);
+    /* A debug session used to opt OUT of incremental elaboration here, because
+     * the DAP server resolves each frame's source from diag_file_path(
+     * span.file_id) and the incremental path lost that provenance -- a
+     * post-stepOut frame came back as `?:19` with no `source` object, and the
+     * conditional breakpoint never fired.  The cause was the file REGISTRY, not
+     * the spans: diag_reset() clears it every turn, and the incremental path
+     * reuses previously-parsed Forms rather than re-running their `(load ...)`
+     * splices, so the files those Forms name were never re-registered.  Fixed
+     * at the source (diag_files_save / diag_files_restore in turi_eval_impl),
+     * so debug sessions keep the incremental path.
+     * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
     /* Pre-detect the user file's #lang so the prelude loads under the SAME
      * reader.  Otherwise the user file's `#lang sweet-exp` (etc.) flips
      * env->reader_type mid-stream, and turi_eval_impl discards the accumulated
@@ -6781,8 +6832,8 @@ static int cmd_eval_h(const char *path, bool use_color,
      * site).  The inline-C bodies of these modules (map/set ops, contract
      * checks, mutmap, ...) are overridden by the native_* shims registered below
      * (wk_register_stdlib_natives et al.), which is why this preload runs BEFORE
-     * that registration.  See docs/reported/turi-map-set-hamt-interpreter-gap.md
-     * and docs/reported/web-repl-missing-stdlib-preload.md. */
+     * that registration.  See docs/archive/history/turi-map-set-hamt-interpreter-gap.md
+     * and docs/archive/history/web-repl-missing-stdlib-preload.md. */
     turi_env_preload_collections(env, resolve_stdlib_root());
     /* JR0/RD (turi-json-schema-interpreter-plan, Layers 1-2): auto-load
      * json.tur, then schema.tur on top of it, so the #json(...) reader-macro
@@ -9655,7 +9706,7 @@ int main(int argc, char **argv) {
     /* Debugger Phase 2: `tur debug <file.tur> [args...]` -- run a file through
      * the tree-walking interpreter under the interactive debugger.  Drops into
      * a command REPL at program entry; commands are read from stdin (so a
-     * script can drive it).  See docs/upcoming/debugger-plan.md (Phase 2). */
+     * script can drive it).  See docs/archive/history/debugger-plan.md (Phase 2). */
     if (strcmp(cmd, "debug") == 0) {
         if (argc < 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
             fprintf(stderr,

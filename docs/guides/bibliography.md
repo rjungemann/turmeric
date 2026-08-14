@@ -229,7 +229,7 @@ Patrick M. Rondon, Ming Kawaguchi, Ranjit Jhala.
 (The template-based inference approach in the Turmeric refinement-types design
 follows this paper closely.)
 
-Referenced by: `docs/upcoming/refinement-types-plan.md`.
+Referenced by: `docs/upcoming/v1/refinement-types-plan.md`.
 
 ---
 
@@ -238,7 +238,7 @@ Nikhil Swamy et al.
 (The two-phase static-then-runtime-fallback strategy in the Turmeric refinement
 types design is modelled on F\*'s `Tot`/`Dv` effect distinction.)
 
-Referenced by: `docs/upcoming/refinement-types-plan.md`.
+Referenced by: `docs/upcoming/v1/refinement-types-plan.md`.
 
 ---
 
@@ -249,7 +249,7 @@ LPAR 2010.
 (The counterexample hint generation in the refinement-types design mirrors
 Dafny's error reporting.)
 
-Referenced by: `docs/upcoming/refinement-types-plan.md`.
+Referenced by: `docs/upcoming/v1/refinement-types-plan.md`.
 
 ---
 
@@ -259,5 +259,5 @@ Referenced by: `docs/upcoming/refinement-types-plan.md`.
 Clark Barrett, Pascal Fontaine, Cesare Tinelli et al.
 <https://smtlib.cs.uiowa.edu/>
 
-Referenced by: `docs/upcoming/refinement-types-plan.md` (SMT-LIB2 encoder for
+Referenced by: `docs/upcoming/v1/refinement-types-plan.md` (SMT-LIB2 encoder for
 refinement-type obligations).

@@ -137,3 +137,96 @@ is the part that will happen again.
 That also means "suite green" claims recorded for those spices between
 2026-07-05 and 2026-08-01 were measured against a compiler older than the
 shipping one, and should not be trusted without a re-run.
+
+## Resolution (2026-08-13)
+
+All four fix directions landed, plus a memory leak the repro surfaced.
+
+**1. The two outcomes are separated.** `PkgManifestStatus`
+(`ABSENT` / `OK` / `MALFORMED`) with `pkg_manifest_read_status()`; the old
+`pkg_manifest_read()` stays as a bool wrapper. The boundary is the `fopen`:
+**before** it, "no manifest here" is `ABSENT` and stays quiet, which is the
+normal result of every walk-up probe. **After** it the file exists, so every
+subsequent failure is `MALFORMED`.
+
+The report's direction 1 proposed making `MALFORMED` fatal at each of the ~28
+call sites. That is not what landed, and the difference matters: rather than
+edit 28 branches, a malformed manifest is recorded in a **sticky verdict** that
+survives `diag_reset()`, and `pkg_manifest_reassert()` re-emits it at each
+compile entry point. The command fails wherever the manifest was consumed,
+which is the actual goal, with a fraction of the blast radius.
+
+**2. `error:` no longer coexists with exit 0** -- and the report's open question
+("the error state is evidently no longer set by the time `tur check` picks its
+exit code. I did not pin down where it is cleared") has an answer that was
+already written down 30 lines below the code the report was reading.
+`pkg.c`'s `:tur-version` block documents exactly this, for exactly this reason:
+
+> The manifest is read once, before compilation; every compile entry point then
+> calls `diag_reset()` [...] That reset is correct, and it also wiped this
+> check's error -- so a floor violation printed an "error" and then exited 0,
+> which is not an error at all. **(The pre-existing TUR-E0620 manifest error has
+> the same shape.)**
+
+So the mechanism was known and annotated; only the fix had not been generalised
+from `:tur-version` to the manifest as a whole. `pkg_manifest_reassert()` is
+modelled directly on `pkg_tur_version_reassert()` and is called beside it at
+all three sites in `main.c`.
+
+**3. The cascade is gone rather than annotated** -- and direction 3 was
+**deliberately not implemented**. It was explicitly conditional ("if 1 is
+deferred"), and 1 was not deferred. Because TUR-E0624 fails the compile *before*
+elaboration, the `module not found` errors never happen at all: verified across
+`tur check`, `tur test`, `tur emit-c`, `tur run`, and `tur build`. A prototype
+that added a `note:` to the `searched:` list and suppressed the `-I src` hint
+was written, confirmed unreachable, and removed; `elab_module.c` carries a
+comment saying why, so the next reader does not re-add it. Preventing the
+cascade beats explaining it.
+
+**4. Slot-parser return values are checked.** `parse_spices` /
+`parse_cmake_deps` / `parse_exports` / `parse_str_vec` had their `bool` results
+discarded. They are now checked, and the first failing slot name rides along in
+the sticky verdict, so the error names it. Parsing still continues past a bad
+slot on purpose -- the user sees every slot's diagnostic in one pass instead of
+one per edit-compile cycle.
+
+### A memory leak, found by reproducing the report
+
+Running the repro under the Debug build's LeakSanitizer failed the process with
+36 bytes leaked in 4 allocations from `parse_exports` (`pkg.c:483`) and `ss_dup`
+(`pkg.c:50`). Cause: the slot parsers run to completion past a broken slot, so
+`out` holds whatever *did* parse, and every caller's `if (!read) continue;`
+branch dropped it without `pkg_manifest_free`. `pkg_manifest_read` now frees and
+zeroes `*out` before returning false, so the failure branch owns nothing. This
+also settles the report's "silently partial `PkgManifest`" concern by
+construction -- there is no longer a partial manifest to hand back.
+
+One artifact worth knowing: **the leak masked the bug.** Under the Debug build
+the repro exits **1**, because LeakSanitizer fails the process -- not because
+the manifest error was honoured. The report's exit-0 claim is correct and
+reproduces on Release, or with `ASAN_OPTIONS=detect_leaks=0`. Anyone re-checking
+this on a Debug `tur` and reading the exit code alone will conclude, wrongly,
+that there is nothing to fix.
+
+### Verification
+
+`tests/spice-resolver-tests.sh` gains seven cases (73 passed, 0 failed):
+`tur check` on the report's exact `:spices #fx{...}` tree must exit non-zero;
+stderr must carry `TUR-E0624` and name `:spices`; stderr must **not** carry
+`not found` or the `-I src` hint; the same tree with `#fx{` corrected to
+`#map{` must still check clean; and an **absent** manifest must remain silent
+and exit 0 -- that last one guards the half of the split most at risk from
+this fix.
+
+`tests/run.sh`: 2590 passed, 0 failed. The manifest-adjacent ctest targets
+(`tur_spice_resolver_tests`, `tur_spice_c_sources_tests`, `tur_flags_tests`,
+`tur_build_project`, `tur_sweet_manifest`, `tur_install_tests`, and all eight
+`tur_repl*`) pass.
+
+### Filed separately
+
+`tur build src/` -- the invocation the `module not found` hint recommends --
+prints `tur: no .tur files found in 'src/'` and **exits 0** on a project whose
+sources are nested one level (`src/demo/lib.tur`). Unrelated to the manifest
+(it reproduces with a perfectly valid one) but found while verifying this fix.
+See `docs/archive/tur-build-nested-src-dir-finds-no-files.md`.

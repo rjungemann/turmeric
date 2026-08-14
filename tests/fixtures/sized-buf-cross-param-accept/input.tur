@@ -1,4 +1,4 @@
-; P3 of docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md:
+; P3 of docs/archive/history/ecs-e2c-sized-dense-needs-bounded-world.md:
 ; stdlib/sized-buf.tur was lifted from a raw :int handle to a phantom-
 ; indexed (SizedBuf n) defopaque.  This fixture exercises the load-
 ; bearing case: sized-buf-copy!'s two parameters share `n`, and when

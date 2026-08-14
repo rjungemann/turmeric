@@ -45,7 +45,7 @@ void turi_env_preload_native_stubs(TuriEnv *env) {
      * eval_builtin cannot execute -- its default arm silently returns nil (see
      * src/turi/eval.c).  That is exactly the REPL-only
      * `(list-head (cons 65 (cons 66 0))) => nil` divergence
-     * (docs/reported/repl-list-head-over-cons-returns-nil.md): under
+     * (docs/archive/repl-list-head-over-cons-returns-nil.md): under
      * `--interpret` these stubs make `cons` a user-defn call the runtime native
      * (registered by wk_register_stdlib_natives, which overrides the stub body)
      * actually services, so the same expression returns 65.  Loaded AFTER

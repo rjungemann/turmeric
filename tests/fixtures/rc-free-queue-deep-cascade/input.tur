@@ -1,5 +1,5 @@
 ; rc-free-queue-drain-quadratic
-; (docs/archive/rc-free-queue-drain-is-quadratic.md).
+; (docs/archive/history/rc-free-queue-drain-is-quadratic.md).
 ;
 ; The deferred free queue exists so that releasing a deeply nested rc structure
 ; runs at CONSTANT stack depth instead of recursing once per link -- that is the

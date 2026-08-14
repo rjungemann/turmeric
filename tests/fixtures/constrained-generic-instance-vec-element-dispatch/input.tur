@@ -3,7 +3,7 @@
 ;; (recovered from a carrier helper like vec-get via an explicit `(:: e A)`
 ;; ascription), not on a single fixed representative instance.
 ;;
-;; Root cause (docs/reported/constrained-generic-instance-method-dispatch-ignores-constraint.md):
+;; Root cause (docs/archive/constrained-generic-instance-method-dispatch-ignores-constraint.md):
 ;; inside `(definstance C [Vec] [(C A)] ...)` an element read `(vec-get v i)`
 ;; returns the carrier helper's `:A`, which collapses to the int64 carrier at
 ;; elaboration.  The documented idiom is to ascribe the read to the constraint

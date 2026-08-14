@@ -13,7 +13,7 @@
 ;; constructor spec from leaking into carrier-context `(none)` sites (a 0-arg
 ;; call has no args to disambiguate one spec from another structurally).
 ;;
-;; See docs/reported/option-consumer-retype-byvalue.md (bucket C, steps 1+2).
+;; See docs/archive/history/option-consumer-retype-byvalue.md (bucket C, steps 1+2).
 
 (load "stdlib/math.tur")
 

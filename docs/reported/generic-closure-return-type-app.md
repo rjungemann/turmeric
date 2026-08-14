@@ -251,3 +251,38 @@ changes shape on the way -- update
 in the same PR: fix the representation inventory, move this report's row out
 of the missing-cells table, and correct the link when the report moves to
 `docs/archive/`.
+
+## Re-verification note (2026-08-13) -- the pinned line references have rotted
+
+Defect A still reproduces exactly as filed on `main` at v0.33.2:
+
+```
+gca.tur:4:26: error [TUR-E0001]: function 'use' arg 1:
+  expected (type-app Cons tyvar 'A'), got (type-app ? ?)
+```
+
+But the "Root cause -- Defect A (pinned)" section's second cause does **not**
+describe the current tree, and anyone starting from it will lose time. The
+report says the correct instantiated type is clobbered at
+`elab_call.c:3706-3708` by
+
+```c
+if (fn_binding->closure_fn_binding) { fn_type = fn_binding->closure_fn_binding->type;
+```
+
+That code still exists (now around `:4026`), but a probe placed on it prints
+**nothing** for the repro above -- the swap never executes. `((mk 1))` has an
+*expression* head, so it routes through `elab_call_head_expr` (`:1355`), which
+builds a temp binding from `head_expr->type` and only then attaches
+`closure_fn_binding` (`:1380`/`:1391`). Whether the shell arrives already in
+`head_expr->type` or is substituted later was not determined.
+
+So cause 1 (the deliberate `!fn_type_has_named_tyvar` drop at what is now
+`elab_fns.c:6635-6637`, which the report pins convincingly and which is easy to
+re-confirm) stands, and cause 2 needs re-pinning against the current tree before
+fix direction 2's second candidate ("stop `elab_call.c:3706` from clobbering")
+can be attempted -- there is presently nothing there to stop.
+
+The verified-at line `v0.32.2 (tree b54ab718e)` at the top of this report is
+doing real work; treat every `file:line` below it as needing a re-check first.
+Defect B was not re-verified in this pass.

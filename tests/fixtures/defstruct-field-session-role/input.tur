@@ -4,7 +4,7 @@
 ;; pointer at the C level).  It lowers like a `(Session P)` field (explicit
 ;; TY_ROLE storage case, int64 pointer carrier); previously it hit the DS-A4
 ;; "not supported as a struct/ADT field" hard error
-;; (docs/upcoming/structdef-exotic-field-forms-plan.md).
+;; (docs/archive/history/structdef-exotic-field-forms-plan.md).
 ;;
 ;; Role A's endpoint (from make-protocol) is stored in a RoleA struct; role B
 ;; runs on a thread.  Main reads the role endpoint back out of the field, sends

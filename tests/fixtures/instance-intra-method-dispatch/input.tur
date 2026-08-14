@@ -1,7 +1,7 @@
 ;; instance-intra-method-dispatch -- a method body dispatches to a *sibling*
 ;; method of the same instance via (.sibling self ...).
 ;;
-;; Regression for docs/reported/intra-instance-method-dispatch-unsupported.md.
+;; Regression for docs/archive/history/intra-instance-method-dispatch-unsupported.md.
 ;; Previously the instance was registered only AFTER all method bodies were
 ;; elaborated, so (.base self ...) inside `twice` failed with
 ;; "no typeclass method found for 'base'".  The instance is now registered (and

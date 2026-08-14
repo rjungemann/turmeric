@@ -28,6 +28,29 @@ check() {
     fi
 }
 
+# Compare the LAST `=> ...` line of a session, exactly.
+#
+# `check` above uses `grep -qF "$expected"`, and grep treats a MULTI-LINE fixed
+# pattern as a set of alternatives -- any one line matching is a hit.  So a
+# multi-line expectation written for `check` passes as soon as its first line
+# appears anywhere, which for a before/after session is the BEFORE line: the
+# check would report PASS on a compiler where the after-line is wrong.  Found
+# the hard way while adding the reader-switch cases below.
+check_last() {
+    local desc="$1" expected="$2" actual="$3"
+    local last
+    last="$(echo "$actual" | grep '^=> ' | tail -1)"
+    if [ "$last" = "$expected" ]; then
+        echo "PASS: $desc"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL: $desc"
+        echo "  expected final result line: $expected"
+        echo "  got:                        $last"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
 # --- Basic evaluation ---
 check "(+ 1 2)"       "=> 3"       "$(repl_out '(+ 1 2)')"
 check "(* 6 7)"       "=> 42"      "$(repl_out '(* 6 7)')"
@@ -125,6 +148,56 @@ check ":explain TUR-E9999" "unknown diagnostic code 'TUR-E9999'" "$EXPLAIN_MISS_
 # Case 5: Bare :explain after a diagnostic is triggered
 EXPLAIN_AFTER_OUT="$(repl_out "(defn f [] invalid-name)" ":explain")"
 check "bare :explain after unbound symbol" "Unbound symbol" "$EXPLAIN_AFTER_OUT"
+
+# --- A `#lang` reader switch must not break GENERIC typeclass resolution ---
+# lang-switch-breaks-generic-instance-resolution.
+#
+# A reader switch calls turi_env_reset_to_prelude, which drops the ElabSession
+# and RE-ELABORATES the pinned prelude without re-evaluating it.  Generic bodies
+# still bound in env->globals therefore keep a dict baked against the OLD
+# TypeClassEnv while last_tc_env points at the rebuilt one, so the pointer
+# compare in gde_reresolve_method matched nothing and the baked int-carrier
+# representative answered every element `show`:
+#
+#     (show (:: #map{:a 1} (Map Sym int)))   => "#map{:a 1}"
+#     #lang turmeric/neoteric
+#     (show (:: #map{:a 1} (Map Sym int)))   => "#map{91328184844352 1}"
+#
+# Three properties of the check matter, each one having been got wrong first:
+#
+#  * The element type must ride the int64 carrier.  A Sym key does; an int key
+#    renders correctly either way and measures nothing.
+#  * It must be an explicit `(show ...)`, not a bare collection result.  A bare
+#    result goes through the C-side auto-show tier (turi_try_show_by_tag), which
+#    is NOT the broken path -- the report says so and it reproduces that way.
+#  * Nothing may be `(load ...)`ed first.  Loading stdlib/str.tur to reduce the
+#    rendering to an integer MASKS the defect completely: the load re-registers
+#    instances into the live registry and the output is correct even on the
+#    broken compiler.
+#
+# The monomorphic control beside each one is what says a failure is about
+# CONSTRAINED-instance resolution rather than Show or Sym in general.
+LANG_GENERIC='(show (:: #map{:a 1} (Map Sym int)))'
+
+LS_BEFORE_OUT="$(repl_out "$LANG_GENERIC")"
+check "generic Show[Map] before any switch" '=> "#map{:a 1}"' "$LS_BEFORE_OUT"
+
+LS_AFTER_OUT="$(repl_out "$LANG_GENERIC" '#lang turmeric/neoteric' "$LANG_GENERIC")"
+check_last "generic Show[Map] survives a reader switch" \
+           '=> "#map{:a 1}"' "$LS_AFTER_OUT"
+
+# Switch-back is the property that distinguished this defect from the
+# stdlib-drop bug (web-repl-lang-switch-drops-stdlib): that one recovered when
+# the original reader was restored, this one did not.
+LS_BACK_OUT="$(repl_out "$LANG_GENERIC" '#lang turmeric/sweet' '#lang turmeric' "$LANG_GENERIC")"
+check_last "generic Show[Map] survives switch and switch-back" \
+           '=> "#map{:a 1}"' "$LS_BACK_OUT"
+
+# Control: a monomorphic instance over the same primitive element type was never
+# affected by this defect.
+LS_MONO_OUT="$(repl_out '(show :hello)' '#lang turmeric/neoteric' '(show :hello)')"
+check_last "monomorphic Show[Sym] survives a reader switch" \
+           '=> ":hello"' "$LS_MONO_OUT"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

@@ -17,7 +17,7 @@
 ;; bindings only ever reached via specs get their carrier removed,
 ;; while bindings still reached via the carrier ABI keep their body).
 ;;
-;; See docs/reported/typeclass-constrained-defn-rejected.md.
+;; See docs/archive/history/typeclass-constrained-defn-rejected.md.
 ;;
 ;; Expected output:
 ;;   42  -- polymorphic wrapper over by-value GameWorld dispatches to

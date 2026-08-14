@@ -19,7 +19,7 @@
 ;
 ; So this fixture asserts values, not just "it compiles" -- a wrong poly-fn
 ; calling convention would compile and then read garbage for `init`/`value`.
-; See docs/archive/rc-tur-legacy-instances-do-not-compile.md.
+; See docs/archive/history/rc-tur-legacy-instances-do-not-compile.md.
 (load "stdlib/rc.tur")
 
 (defn dbl [x : int] : int (* x 2))

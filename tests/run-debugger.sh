@@ -7,8 +7,8 @@
 # asserts the salient output: program-entry stop, line breakpoints, step /
 # next / finish, backtrace, locals, print, the (break) builtin, and continue.
 #
-# See docs/upcoming/debugger-plan.md (Phase 2) and
-# docs/upcoming/debugger-interpreter-phase2.md.
+# See docs/archive/history/debugger-plan.md (Phase 2) and
+# docs/artifacts/debugger-interpreter-phase2.md.
 #
 # The interpreter intentionally never frees its process-lifetime closures, so
 # the harness runs with LeakSanitizer off (matching run-turi.sh / run-flags.sh).

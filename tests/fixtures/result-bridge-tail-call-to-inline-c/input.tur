@@ -12,7 +12,7 @@
 ;; `return inlineC_helper(...);` and cc rejects with "incompatible types when
 ;; returning type 'int64_t' but 'Result__cstr__cstr' was expected".
 ;;
-;; Regression for docs/archive/result-bridge-tail-call-from-pure-tur-to-inline-c.md.
+;; Regression for docs/archive/history/result-bridge-tail-call-from-pure-tur-to-inline-c.md.
 
 (defn captures-get [caps : int key : cstr] : (Result cstr cstr)
   ```c

@@ -1,7 +1,7 @@
 ; Regression fixture: the turi interpreter's simple inline-C evaluator must
 ; honour trailing binary operators in `return <expr>;`, not drop them.
 ; Previously `return p != 0;` evaluated to `p` -- a silent miscompile.
-; See docs/reported/turi-inline-c-ignores-comparison-operator.md.
+; See docs/archive/history/turi-inline-c-ignores-comparison-operator.md.
 ;
 ; Every helper below uses only operand + binary-operator shapes the evaluator
 ; supports (no grouping parens, no pointer deref), so the result must match the

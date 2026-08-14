@@ -333,7 +333,7 @@ is what Try Turmeric opens with -- analyses clean.
   analysis indicator stayed visible for every visitor whose server never
   booted. Caught by the degradation spec on its first run.
 - **Compiler-internal symbols flood completion** -- reported, not fixed:
-  [`docs/reported/lsp-completion-internal-symbols.md`](../reported/lsp-completion-internal-symbols.md).
+  [`docs/archive/lsp-completion-internal-symbols.md`](../reported/lsp-completion-internal-symbols.md).
   Elaborator-synthesised globals (`__inst_Eq_eq_qu_int`, `__fn_774`) are
   collected as ordinary symbols and overrun the 200-item cap on a trivial
   buffer, so the stdlib names a user actually wants are the ones cut. Native

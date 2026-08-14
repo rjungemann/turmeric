@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/check-stdlib-no-rc-cycles.sh -- WR2 regression guard for the stdlib
-# ownership audit (docs/archive/stdlib-weak-ref-audit-plan.md).
+# ownership audit (docs/archive/history/stdlib-weak-ref-audit-plan.md).
 #
 # Finding of the 2026-07-24 audit: the stdlib builds NO rc<T> cycles and needs
 # weak<T> nowhere, because it avoids shared mutable ownership almost entirely --
@@ -12,7 +12,7 @@
 # That property is currently free -- and worth keeping. A cycle can only form if
 # a stored field (in a defstruct / defdata) holds an rc<T>. Since the compiler's
 # cycle collector cannot reclaim a live strong rc<T> cycle today (it is
-# zombie-only; see docs/reported/gc-strong-cycles-not-collected.md), any such
+# zombie-only; see docs/archive/history/gc-strong-cycles-not-collected.md), any such
 # field must be reviewed for a weak<T> break to stay leak-free.
 #
 # This guard is a TRIPWIRE, not a prohibition: it fails if a stdlib type
@@ -84,7 +84,7 @@ if [ "$status" -ne 0 ]; then
     echo "FAIL stdlib-no-rc-cycles: unreviewed rc<T> type annotation(s) in stdlib:"
     printf '%s' "$hits" | sed 's/^/    /'
     echo "    A stored rc<T> can form a reference cycle, which the cycle collector"
-    echo "    cannot reclaim today (docs/reported/gc-strong-cycles-not-collected.md)."
+    echo "    cannot reclaim today (docs/archive/history/gc-strong-cycles-not-collected.md)."
     echo "    Break any cycle with weak<T>, then acknowledge with a trailing"
     echo "    '   ;; rc-cycle-ok: <reason>' marker and update the ownership section"
     echo "    in docs/guides/gc-guide.md."

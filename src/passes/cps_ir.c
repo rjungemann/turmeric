@@ -836,7 +836,7 @@ static bool is_delegatable_value(const Expr *e) {
              * case, never as a general indirect callee, so the has_capture cut /
              * indirect-callee hazard does not apply.  collect_caps walks its
              * scalar (Copy) captures into the lifted env; a non-Copy capture bails
-             * to fallback.  See docs/upcoming/cps-native-handle-in-reset-plan.md.
+             * to fallback.  See docs/archive/cps-native-handle-in-reset-plan.md.
              *
              * Admitting a GENERAL capturing closure as a plain value (the Phase-1
              * keystone) is functionally correct here but leaks its fat-closure env
@@ -1072,7 +1072,7 @@ static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR;
  * read-only-correct across resumes and the owner drops it once (borrow teardown,
  * never a double-drop).  A multi-word owning aggregate does not fit the one-word
  * env and is excluded here.  See
- * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+ * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
 /* An owning by-value AGGREGATE (a one-ctor by-value ADT product with an
  * rc/ref field -- needs_drop_glue).  Multi-word, so it cannot ride the one-word
  * frame env by value; the cloneable emit carries a POINTER to the owner's
@@ -3324,7 +3324,7 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
  * position that has to stay on the CPS path evicted the whole function.  In a
  * handler clause that eviction had no recovery: the clause's `perform` reached
  * the direct emitter, which aborts.  See
- * docs/reported/handler-clause-statement-if-ices-emitter.md. */
+ * docs/archive/handler-clause-statement-if-ices-emitter.md. */
 static CTerm *cps_tail_unit(CpsB *b, CKont kont) {
     if (kont.kind == KK_LOOP) return make_continue(b);
     CTerm *t = new_term(b, CT_APPCONT);

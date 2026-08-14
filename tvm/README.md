@@ -7,7 +7,7 @@ per-user, shell-installable tool: no root, no system package manager.
 It is intentionally close to `nvm` in spirit -- if you know
 `nvm install <v>` / `nvm use <v>`, you already know `tvm`.
 
-See [`docs/upcoming/v1/tur-version-manager-plan.md`](../docs/upcoming/v1/tur-version-manager-plan.md)
+See [`docs/archive/tur-version-manager-plan.md`](../docs/archive/tur-version-manager-plan.md)
 for the design rationale.
 
 > **Already on `mise` or `asdf`?** You don't need `tvm`. The

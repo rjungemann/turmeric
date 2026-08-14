@@ -70,7 +70,7 @@ bool effect_row_is_empty(struct EffectRow *row);
 /* ---- the emittable value set (non-scalar Tier A) --------------------- *
  * A type is "slot-representable at Tier A" when its value fits the one-word DK
  * slot by a plain cast: any <=64-bit integer/bool, or a cstr/pointer.  See
- * docs/upcoming/v1/cps-backend-non-scalar-values-plan.md.  Tier B (float, bit-
+ * docs/archive/cps-backend-non-scalar-values-plan.md.  Tier B (float, bit-
  * reinterpret) and Tier C (wide by-value aggregates, boxed) are not yet here.
  *
  * Deliberately absent: the OWNING pointers TY_REF / TY_RC / TY_WEAK / TY_LREF.
@@ -81,7 +81,7 @@ bool effect_row_is_empty(struct EffectRow *row);
  * enclosing aggregate's drop glue (N3), not a per-pointer cast.  The non-owning
  * borrows TY_REF_IMMUT / TY_REF_MUT are also omitted: a borrow threaded through a
  * continuation would outlive its referent, which the borrow checker rejects.
- * See docs/upcoming/v1/cps-backend-owning-pointers-plan.md. */
+ * See docs/archive/cps-backend-owning-pointers-plan.md. */
 static bool slot_ty(TypeKind k) {
     switch (k) {
         case TY_INT: case TY_INT64: case TY_BOOL:
@@ -345,7 +345,7 @@ static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, b
  * dk_perform, shared read-only across a multi-shot resume -- and so is never
  * consume-freed at a load site (that would double-free the reaped box).  A
  * scalar slot is returned unchanged (no pointer to free).  See
- * docs/reported/cps-effect-perform-carrier-leak.md. */
+ * docs/archive/cps-effect-perform-carrier-leak.md. */
 static char *slot_store_reap(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) {
     char *s = slot_store(ctx, k, t, e);
     Type _r; const Type *rt = cps_resolve_ty(t, &_r);
@@ -1413,7 +1413,7 @@ static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
  * *reachable* here in a BORROW-ONLY shape: a case that consumes (drops/moves)
  * the capture without the enclosing fn also consuming it evicts upstream (the
  * fn's scope-exit auto-drop becomes an unlowered EX_DEFER -- see
- * docs/reported/cps-handler-case-consumes-owning-capture-evicts.md).  For a
+ * docs/archive/cps-handler-case-consumes-owning-capture-evicts.md).  For a
  * borrow-only capture the owner (the enclosing fn) drops the value exactly once
  * on its straight-line path, so the env needs neither clone nor drop: it rides
  * by a bare shallow alias -- leak-clean, no double-free, and the observed value
@@ -1964,7 +1964,7 @@ static bool handle_case_ok_rec(const CTerm *t) {
              * then reached the direct emitter, which has no lowering for one.
              * (A `while` in a clause is a different blocker -- CT_LOOP, still
              * unadmitted here.)  See
-             * docs/reported/handler-clause-statement-if-ices-emitter.md. */
+             * docs/archive/handler-clause-statement-if-ices-emitter.md. */
             return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty)
                     || t->as.letcont.param.ty == TY_NIL)
                 && handle_case_ok_rec(t->as.letcont.jbody)
@@ -2023,7 +2023,7 @@ static bool handle_case_ok_rec(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok_rec(t->as.if_.then_) && handle_case_ok_rec(t->as.if_.else_);
         case CT_PERFORM:
-            /* Effect re-opening (docs/reported/cps-handler-case-effect-reopening-
+            /* Effect re-opening (docs/archive/cps-handler-case-effect-reopening-
              * needs-emission.md): a handler CASE body that itself performs an
              * effect handled by an ENCLOSING handler.  The interior perform
              * dispatches against the case's enclosing handler markers -- emit_lifted
@@ -2341,7 +2341,7 @@ static bool term_core_ok(const CTerm *t) {
              * that the __Shift handler case invokes as `(recv k)` to resume the
              * captured continuation.  A bare TY_FN fails the generic atom_ok slot
              * gate, and widening atom_ok for ALL fn atoms miscompiles the effectful-
-             * callback set (see docs/upcoming/cps-native-handle-in-reset-plan.md
+             * callback set (see docs/archive/cps-native-handle-in-reset-plan.md
              * "Dead ends").  Admit it ONLY here, scoped to the __Shift effect:
              * emit_perform stores the fn-pointer word as the effect value and the
              * handler case (emit_lifted) bridge-wraps the DK subk before the call,
@@ -3116,7 +3116,7 @@ static bool jbody_has_perform(const CTerm *t) {
  * continuation frame captures the enclosing continuation (`__ce->__k = __kont`),
  * so the join must ride an LH_RESUME_CONT resume-frame (which RECEIVES its
  * downstream chain as `__kont`) rather than a value-only LH_PERFORM_CONT frame
- * (which has no `__kont`).  See docs/reported/cps-toplevel-synthesized-main-
+ * (which has no `__kont`).  See docs/archive/cps-toplevel-synthesized-main-
  * bypasses-dk.md (effect-nested). */
 static bool jbody_has_delim(const CTerm *t) {
     if (!t) return false;
@@ -3717,7 +3717,7 @@ static bool letraw_effect_free(const CTerm *t) {
      * `(handle (do (f g) 0) ...)` ends with.  That evicted the handler fn,
      * tainted its effect, co-evicted the performer, and landed its `perform` in
      * the direct emitter -- an ICE.  See
-     * docs/archive/named-effectful-defn-as-fat-fn-value-ices.md.  A genuine
+     * docs/archive/history/named-effectful-defn-as-fat-fn-value-ices.md.  A genuine
      * delegated CALL to an effectful callee is still rejected: that is the case
      * this gate exists for (its effect would run on the fiber, escaping the
      * handle's DK prompt). */
@@ -6502,7 +6502,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * A scalar-captured receiver frees cleanly; an owning capture
                  * leaks its captured value (no closure drop glue yet) but never
                  * double-frees -- the conservative interim of
-                 * docs/reported/escaping-fat-closure-env-leak.md, applied to the
+                 * docs/archive/escaping-fat-closure-env-leak.md, applied to the
                  * one non-escaping closure the CPS backend itself constructs.
                  *
                  * closure-drop-glue: flag-on this receiver box is headered
@@ -6864,7 +6864,7 @@ static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps) {
 /* CT_RESET: install a prompt whose outer continuation is the lifted reset body
  * (carrying k + captures), then emit the delimited body threading that prompt
  * chain.  The per-reset DK nodes are leaked (DK is opaque; see
- * docs/reported/cps-delimited-dk-node-leak.md), matching the abortive path. */
+ * docs/archive/cps-delimited-dk-node-leak.md), matching the abortive path. */
 static void emit_reset(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
@@ -7863,7 +7863,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
         /* The arg array (and any boxed slot within it) is read by the handler via
          * slot_load(consume=false) and shared read-only across a multi-shot
          * resume, so it is never freed at a load site; reap it at the outermost
-         * entry boundary (docs/reported/cps-effect-perform-carrier-leak.md). */
+         * entry boundary (docs/archive/cps-effect-perform-carrier-leak.md). */
         ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", av);
         for (uint32_t i = 0; i < t->as.perform.n; i++) {
             char *ai = atom_str(ce, &t->as.perform.args[i]);
@@ -7961,7 +7961,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
          * needed after this dk_perform returns.  Register it for a single-node
          * free at the outermost entry boundary (__dk_reap_node: kind=0, a bare
          * free that does not walk into cur_k), matching the reset/handle
-         * structural-node reaping discipline (docs/reported/cps-resume-frame-node-leak.md,
+         * structural-node reaping discipline (docs/archive/cps-resume-frame-node-leak.md,
          * docs/archive/cps-delimited-dk-node-leak.md). */
         ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));",
                 tag, sa, pname, envexpr, ce->cur_k);
@@ -8504,7 +8504,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * resolves to the same raw (id-less) C name the direct emitter uses.  Without
      * this a fn-value parameter's declaration (id-suffixed) and its delegated use
      * (raw, e.g. `fnv.fn`) diverge; see
-     * docs/reported/cps-backend-indirect-call-fatclosure-param-divergence.md.
+     * docs/archive/history/cps-backend-indirect-call-fatclosure-param-divergence.md.
      * Saved/restored around the whole emission (body + signature + wrapper). */
     Binding **saved_fn_params   = ctx->fn_params;
     uint8_t    saved_n_fn_params = ctx->n_fn_params;

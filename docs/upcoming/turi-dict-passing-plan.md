@@ -3,7 +3,7 @@
 **Status:** not started. Investigation done 2026-07-30; findings below change the
 shape of the work substantially from how it was first described.
 
-**Motivates:** [turi-return-directed-method-keeps-baked-instance](../reported/turi-return-directed-method-keeps-baked-instance.md),
+**Motivates:** [turi-return-directed-method-keeps-baked-instance](../archive/turi-return-directed-method-keeps-baked-instance.md),
 and would retire [the archived receiver-dispatch fix](../archive/turi-generic-dict-dispatch-bakes-representative-instance.md)'s
 heuristic plus root cause B of [map-show-keyword-key-raw-int](../archive/map-show-keyword-key-raw-int.md).
 

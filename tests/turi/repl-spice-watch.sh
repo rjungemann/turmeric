@@ -68,7 +68,7 @@ mtime_of() {
 # Block until $file contains a line matching the grep -E $pat, or $timeout
 # seconds elapse.  Returns 0 on match, 1 on timeout.  Replaces fixed sleeps so
 # the session advances on observed REPL output rather than wall-clock guesses
-# (de-flake plan, Option A -- see docs/upcoming/repl-spice-watch-flake-plan.md).
+# (de-flake plan, Option A -- see docs/archive/history/repl-spice-watch-flake-plan.md).
 wait_for() {
     local file="$1" pat="$2" timeout="${3:-30}"
     local ticks=0 max=$((timeout * 10))

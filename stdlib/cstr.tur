@@ -7,7 +7,7 @@
 ;;; without allocating a view.
 ;;;
 ;;; Not autoloaded: `(import cstr :refer [cstr-len cstr-nth])` explicitly.
-;;; See docs/archive/no-cstr-byte-primitives-pure-turmeric.md for why (an
+;;; See docs/archive/history/no-cstr-byte-primitives-pure-turmeric.md for why (an
 ;;; earlier attempt to autoload perturbed Vec element-type inference).
 ;;;
 ;;; Since: 2026-07-01

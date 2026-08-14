@@ -1,7 +1,7 @@
 ;; nested-construct-byvalue-decode -- the construct/return companion of
 ;; constrained-instance-element-dispatch (which covers the READ side).
 ;;
-;; Root cause (docs/archive/nested-construct-byvalue-in-constrained-instance-body.md):
+;; Root cause (docs/archive/history/nested-construct-byvalue-in-constrained-instance-body.md):
 ;; the body of `(definstance Dec [Option] [(Dec A)] ...)` builds a nested
 ;; `(ok (some (ok-val (:: (dec tag) (Result A cstr)))))`.  Each carrier seam --
 ;; the inner return-dispatched `(dec tag)`, the `ok-val` destructure, and the

@@ -1,4 +1,4 @@
-; P2 of docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md asked
+; P2 of docs/archive/history/ecs-e2c-sized-dense-needs-bounded-world.md asked
 ; whether `defstruct` threads a shared size parameter through every
 ; field's type at projection time.  This fixture demonstrates that it
 ; does -- the elaborator substitutes the struct's `m` parameter into
@@ -14,7 +14,7 @@
 ; `(int64_t){.pos = ..., .vel = ...}`, an invalid designated initializer on a
 ; non-aggregate.  The fix keys the cast off the struct's mangled C name, so
 ; both the all-phantom World and a mixed phantom/by-value struct lower to their
-; real aggregates.  See docs/reported/make-struct-phantom-typeparam-lowering.md.
+; real aggregates.  See also tests/fixtures/make-struct-phantom-typeparam.
 
 (defgadt Size []
   (Static (int) : (Size))

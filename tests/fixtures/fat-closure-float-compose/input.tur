@@ -12,7 +12,7 @@
 ;; stored in `double` env fields and reinterpreted as pointers on read.  That
 ;; only round-trips by luck (valid pointers fit in a double's 53-bit integer
 ;; range); the fields must be the int64_t fn-ABI carrier instead.  See
-;; docs/reported/captured-fn-stored-in-double-env-field.md.
+;; docs/archive/history/captured-fn-stored-in-double-env-field.md.
 
 (defn call-f [^fat f :(fn [float] #fx{} float) x : float] : float
   (f x))

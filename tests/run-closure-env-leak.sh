@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/run-closure-env-leak.sh -- LeakSanitizer regression gate for the
-# fat-closure-env scoped-free pass (docs/reported/fat-closure-env-leak.md).
+# fat-closure-env scoped-free pass (docs/archive/history/fat-closure-env-leak.md).
 #
 # Every `(fn ...)` that captures a free variable heap-allocates a fat-closure
 # env.  When the closure provably does not escape its defining scope, the

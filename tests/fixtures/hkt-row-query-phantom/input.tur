@@ -3,7 +3,7 @@
 ;; a phantom type argument -- it distinguishes Query instantiations at the type
 ;; level and is erased at codegen -- so a row is used soundly as a type
 ;; argument and the program runs end-to-end.
-;; See docs/reported/variadic-hkt-rows-missing.md (Layer 4).
+;; See docs/archive/history/variadic-hkt-rows-missing.md (Layer 4).
 (defstruct Query [^&components] (world :int))
 
 (defn make-query [w : int] : (Query #row{int bool})

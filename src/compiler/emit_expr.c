@@ -1593,7 +1593,7 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
     return v;
 }
 
-/* Fat-closure-env scoped free (docs/reported/fat-closure-env-leak.md): decide
+/* Fat-closure-env scoped free (docs/archive/history/fat-closure-env-leak.md): decide
  * whether let-binding `idx` of `e` holds a freshly-constructed fat closure whose
  * heap env can be `free`d when the let scope exits.  Sound iff:
  *   - the initializer is an EX_CLOSURE (so the value is a `malloc`'d env), and
@@ -3421,7 +3421,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             "cannot hold %s today.\n"
                             "  Store a plain handle instead, or keep the %s "
                             "outside the collection.\n"
-                            "  See docs/archive/collections-cannot-hold-rc-values.md\n",
+                            "  See docs/archive/history/collections-cannot-hold-rc-values.md\n",
                             typekind_to_string(owning_src ? src_kind : dst_kind),
                             typekind_to_string(owning_src ? src_kind : dst_kind),
                             typekind_to_string(owning_src ? src_kind : dst_kind));
@@ -4304,7 +4304,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * signature and pass native-typed args for *every* kind, so
                  * float/cstr/ptr round-trip without int64 truncation or the
                  * pointer<->int64 -Wint-conversion warnings the generic carrier
-                 * path emits.  See docs/reported/fn-first-class-float-carrier-gap.md. */
+                 * path emits.  See docs/archive/history/fn-first-class-float-carrier-gap.md. */
                 bool typed_carrier = fn_binding && fn_binding->poly_type &&
                                      fn_binding->poly_type->kind == TY_FN;
                 bool phase_f_concrete = !e->as.call_.poly_arg_mask &&
@@ -5417,7 +5417,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
-                    /* gcc14-int-conversion (docs/reported/codegen-gcc14-permerrors.md):
+                    /* gcc14-int-conversion (docs/archive/history/codegen-gcc14-permerrors.md):
                      * a CONCRETE (non-carrier) rc<T>/weak<T> field lowers to
                      * `RcControlBlock *`, but its argument is frequently the int64
                      * carrier -- an `rc<T>` function parameter's C type is int64_t,
@@ -5685,7 +5685,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *arg_expr = e->as.call_.args[i];
-                /* M5 residual-straddle (docs/upcoming/m5-residual-straddle-
+                /* M5 residual-straddle (docs/artifacts/m5-residual-straddle-
                  * retirement.md): the strip below historically erased
                  * EX_ASCRIBE wrappers before emit_value so the call could
                  * see the underlying value directly.  But a Path A spec
@@ -5805,7 +5805,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * stashed into an int64 carrier slot (`(some (:: (fn ...) int))`)
                  * reaches a carrier param uncast and trips -Wint-conversion.  See
                  * the residual under root cause C of
-                 * docs/reported/m5-suite-residual-6-failures-2026-06-14.md. */
+                 * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md. */
                 bool emit_arg_is_fnptr = emit_arg &&
                     (emit_arg->type.kind == TY_FN || emit_arg->type.kind == TY_PTR_VOID);
                 bool needs_fn_cast = (e->as.call_.args[i]->kind != EX_POLY_WRAP) &&
@@ -6889,7 +6889,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * (`tur_adt_...`, not the int64 carrier or a pointer), so an
                  * ordinary carrier-`:int` consumer or an already-by-value arg is
                  * untouched.  See
-                 * docs/reported/inline-c-option-byvalue-carrier-straddle.md. */
+                 * docs/archive/inline-c-option-byvalue-carrier-straddle.md. */
                 else if (!needs_fn_cast && !matched_spec &&
                          !callee_param_is_typed_heap_ptr &&
                          emit_arg && fn_name &&
@@ -7538,7 +7538,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * env field is declared by value (type_c_name => `T`).  Deref so
                  * the closure stores its own copy of the value rather than the
                  * caller's pointer (which would dangle once the frame returns).
-                 * See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (B5). */
+                 * See docs/archive/history/stdlib-type-erasure-cleanup-plan.md (B5). */
                 bool captured_is_pbp = false;
                 for (uint32_t _p = 0; _p < ctx->n_pbp_params; _p++) {
                     if (ctx->pbp_param_ptrs[_p] == captured) {
@@ -7611,7 +7611,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              *
              * cb->value must point AT the payload, so for a heap ADT adopt the
              * pointer the ctor already produced. See
-             * docs/reported/gc-heap-struct-rc-not-a-control-block.md. */
+             * docs/archive/gc-heap-struct-rc-not-a-control-block.md. */
             bool payload_is_heap_adt =
                 e->as.rc_of_.expr->type.kind == TY_ADT &&
                 e->as.rc_of_.expr->type.as.adt_.def &&
@@ -7849,7 +7849,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * plain function pointer -- spawn it directly.  A FAT (boxed)
                  * closure -- a capturing lambda, EX_CLOSURE `{__fn, captures...}`
                  * -- is NOT a function pointer: calling the box as code crashes
-                 * (docs/reported/compiled-async-capturing-closure-segfault.md).
+                 * (docs/archive/compiled-async-capturing-closure-segfault.md).
                  * Route it to the env-taking spawn, which reads the thunk out of
                  * the box and invokes it with the box as its env. */
                 char *fn_val = emit_value(ctx, body, fn_expr);
@@ -8589,7 +8589,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the user no location and no way to act, so report it as a located
              * codegen error instead -- emit_program already fails the build on
              * diag_had_error().  See
-             * docs/reported/handler-clause-statement-if-ices-emitter.md for the
+             * docs/archive/handler-clause-statement-if-ices-emitter.md for the
              * shapes that still reach this. */
             diag_emit(DIAG_ERROR, e->span,
                       "this effect operation has no lowering here: the enclosing "
@@ -9457,7 +9457,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (`(:: <int> :A)`, e.g. a phantom-parameterized opaque accessor)
              * is likewise a pure relabel -- the value already IS the carrier --
              * so it must not go through the by-value carrier bridge either.
-             * See docs/reported/parameterized-defopaque.md. */
+             * See docs/archive/history/parameterized-defopaque.md. */
             bool ascribe_to_opaque =
                 /* structdef-retirement slice 5: an opaque newtype is now a
                  * TY_ADT with is_opaque -- ascribing into it (`(:: 7 :Tag)`) is
@@ -10209,8 +10209,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * any arm spells a literal.  Gating on `_has_lit` alone sent
                  * `(match p _ 0)` and `(match p x x)` down the ADT path below,
                  * which reads `adt->name` through a NULL AdtDef -- there is no
-                 * AdtDef for an `:int`.  See
-                 * docs/reported/match-int-scrutinee-guard-null-adt.md. */
+                 * AdtDef for an `:int`.  The `!_scrut_is_adt` disjunct below is
+                 * that guard; do not narrow it back to `_has_lit`. */
                 const Type *_sbase = &e->as.match_.scrutinee->type;
                 while (_sbase && _sbase->kind == TY_APP && _sbase->as.app.fn)
                     _sbase = _sbase->as.app.fn;
@@ -10757,7 +10757,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
          * the rest type is a polymorphic `:A` that unifies to a bare defn
          * (`void *(*)(int64_t)` or similar). Without the cast, clang
          * rejects the function-pointer pass with -Wint-conversion. See
-         * docs/upcoming/variadic-rest-closure-cast-plan.md. */
+         * docs/archive/history/variadic-rest-closure-cast-plan.md. */
         case EX_CONS_LIST: {
             uint32_t n = e->as.cons_list_.n;
             if (n == 0) return strdup("0LL");

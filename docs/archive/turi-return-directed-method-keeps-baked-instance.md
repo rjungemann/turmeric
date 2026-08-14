@@ -250,3 +250,91 @@ If this is not fixed soon, the honest interim is a `requires.*` marker on
 how its siblings are already carved out. That trades a red for a visible skip.
 It should not be done silently: the skip is what hid the gap in the first place,
 and the family currently reports green while executing none of it.
+
+## RESOLVED 2026-08-13 -- the rank-2 forall shape
+
+The remaining half is fixed. `hkt-constrained-pure-two-instances` and
+`hkt-constrained-continuation-dict` now print `107 207` interpreted, matching
+compiled.
+
+### Cause
+
+The report is right that "no tyvar reaches the frame for the fallback to find".
+Instrumenting the call confirms it, and shows the shape precisely:
+
+```
+[rd-call] fn=at-t1 nabi=0 ...
+[rd-call] fn=g     nabi=0 nargs=2  fnname=make
+   param[0] x declkind=21 declhead=-  | argkind=21 arghead=T1
+[rd-call] fn=__inst_Applicative_pure_T2 ...     <- the baked representative
+```
+
+Every call in the chain pins nothing, so `gde_reresolve_return_directed`'s
+frame walk has nothing to walk. `make` is reached through a rank-2 `forall`
+*parameter*, so there is no named generic for the elaborator to record a
+call-site substitution against.
+
+But the substitution is sitting in plain view on the same line: the callee
+declares `x : (m int)` (`declkind=21` is `TY_APP`, head a tyvar, hence
+`declhead=-`) and the argument's static type is `(T1 int)` -- the same `TY_APP`
+with a **concrete** head. Matching the two gives `m -> T1`, and it is a
+different head at each of the two call sites, which is exactly the
+discrimination that was missing.
+
+### Fix
+
+`frame_pin_hkt_tyvars_from_args` (`src/turi/eval.c`) pins the callee's tyvar
+from the call site's static argument type, and runs **only** when the call
+recorded no `abi_bindings` -- so every call that pins something keeps its exact
+prior dispatch, the same scoping discipline the direct-call fix used.
+
+It is deliberately narrow: only a declared `(tyvar arg)` against a
+concrete-headed `(Ctor arg)` is matched, not general structural unification.
+The extra reach would be untested, and its failure mode would be dispatching to
+a *wrong* instance -- strictly worse than the conservative baked-representative
+answer this replaces. Same reasoning the ambiguity bail in
+`gde_reresolve_return_directed` already applies.
+
+### Coverage -- the visibility trap, closed
+
+This report's "Coverage note" warns that the family reports green while
+executing none of it. That is why the gap survived, and it applied to the fix
+as much as to the bug: both rank-2 fixtures carry inline-C and are PASS-skipped
+by the TI7 carve-out in `tests/run-turi.sh`, so a fix verified only against
+them would have been just as invisible as the defect.
+
+`tests/fixtures/hkt-rank2-forall-pure-two-instances` is an **inline-C-free**
+restatement of `hkt-constrained-pure-two-instances`. Parametric ADTs (`defdata
+B1 [a] (Mk1 :int a)`) give the same two-instance discrimination with no inline-C,
+so `run-turi` actually executes it. One wrinkle worth recording: the tag has to
+be a literal field set by `pure` (`(Mk1 100 x)`), not arithmetic on the payload
+-- `x` is still a tyvar inside `pure`'s body, and `(+ x 100)` is a `TUR-E0006`.
+
+Verified against a deliberately-reverted build: interpreted, it fails with
+`eval: match: no arm matched`, because the wrong instance's `pure` builds a
+`Mk2` value that `un-1`'s `Mk1` arm cannot match. A hard error rather than the
+silent `207 207` the inline-C fixtures produce -- a better regression signal
+than the shape it replaces.
+
+### Verification
+
+| Fixture | Compiled | Interpreted (before) | Interpreted (now) |
+|---|---|---|---|
+| `hkt-constrained-pure-two-instances` | `107 207` | `207 207` | `107 207` |
+| `hkt-constrained-continuation-dict` | `107 207` | `207 207` | `107 207` |
+| `hkt-constrained-byvalue-bind-pure` | `42 -1 7` | `42 -1 7` (fixed 2026-08-01) | `42 -1 7` |
+| `hkt-rank2-forall-pure-two-instances` (new) | `107 207` | *(would not run)* | `107 207` |
+
+`tests/run.sh`: 2593 passed, 0 failed. `tests/run-turi.sh`: 1780 passed, 0
+failed, 705 skipped -- both counts up by one, which is the new fixture being
+executed by both engines rather than skipped by one.
+
+### What this does not close
+
+Fix direction 2 -- making the interpreter use the dict clones the elaborator
+already builds ([docs/upcoming/turi-dict-passing-plan.md](../upcoming/turi-dict-passing-plan.md))
+-- is still the principled fix and still worth doing. Both halves of this report
+are re-resolution heuristics that recover, at run time, a type the compiled path
+carries in a dictionary. They are correct on every shape now known, but each was
+added after a shape was found to escape the previous one, and that is the
+pattern dict passing would end rather than extend.

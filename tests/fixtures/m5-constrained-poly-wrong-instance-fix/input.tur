@@ -1,4 +1,4 @@
-;; M5 (docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
+;; M5 (docs/archive/history/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
 ;; A constrained-poly defn with `(Eq A)` constraint whose `eq?` call
 ;; uses an EX_ASCRIBE-to-A receiver `(:: v A)` previously picked the
 ;; WRONG instance -- typically `__inst_Eq_eq_qu_MutableMap`
