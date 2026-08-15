@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/turi/repl-host-integration.sh — the REPL surface a GUI host drives.
 #
-# Every case here comes from §5 of docs/upcoming/lsp-client-gaps-plan.md: a
+# Every case here comes from §5 of docs/archive/lsp-client-gaps-plan.md: a
 # real client (Trowel) carried a workaround because the REPL would not answer
 # the question directly. Covers OSC 133 busy/idle markers over a pipe, the
 # logical working directory, and :load-string.

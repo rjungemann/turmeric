@@ -72,7 +72,7 @@ All notable changes to Turmeric are documented here.
   alias for `def` in both positions. Nothing that compiled before compiles
   differently: every change is a position or spelling that used to be an error
   becoming legal. See
-  [docs/upcoming/def-define-consolidation-plan.md](docs/upcoming/def-define-consolidation-plan.md).
+  [docs/archive/def-define-consolidation-plan.md](docs/archive/def-define-consolidation-plan.md).
 - **A name defined at the REPL prompt with `define` now survives to the next
   turn.** `define` used to error at the top level, so the REPL worked around it
   by wrapping each turn containing one in an implicit `(do ...)` -- which also

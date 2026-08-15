@@ -3,7 +3,7 @@
 > **Status:** proposed (2026-07-29)
 > **Type:** Web playground / `#lang` plumbing
 > **Related:** [`lang-layers-plan.md`](lang-layers-plan.md),
-> [`try-turmeric-lsp-plan.md`](try-turmeric-lsp-plan.md)
+> [`try-turmeric-lsp-plan.md`](../archive/try-turmeric-lsp-plan.md)
 
 ## 0. Summary
 

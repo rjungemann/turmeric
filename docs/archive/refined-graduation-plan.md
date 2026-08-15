@@ -335,7 +335,7 @@ gated dogfooding avoids it while keeping the oracle's benefit.
 So the sequence is:
 
 1. **Corpus work** -- raise what the reader handles (see
-   [corpus-reader-tail-plan.md](corpus-reader-tail-plan.md)).
+   [corpus-reader-tail-plan.md](history/corpus-reader-tail-plan.md)).
 2. **Gated dogfooding, with an oracle build available.** Build the dogfooded
    project once under `-DTUR_REFINE_Z3_ORACLE=ON`; that is the cross-check on
    VCs that real programs generate, which is the evidence retirement actually

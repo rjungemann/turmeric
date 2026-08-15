@@ -5,7 +5,7 @@
 > grant it enables are **on in every build** -- there is no flag to set. (A
 > lingering `--enable=refined` is accepted as a no-op, `TUR-W0063`.) The design
 > of record is
-> [`docs/upcoming/v1/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md).
+> [`docs/archive/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md).
 > A `#reads`-refined accessor now proves its guarded crossings *and* codegens
 > (see [Codegen and enforcement](#codegen-and-enforcement) -- this required
 > suppressing an impure entry contract). Read the
@@ -415,7 +415,7 @@ that pins what a broken read-side promise costs.
   `^unique ^mut`, and the `TUR-E0200` exclusive-access rule the `frozen` region
   relies on.
 - [Uniqueness Types guide](uniqueness-types-guide.md) -- `^unique` semantics.
-- [`refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md)
+- [`refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)
   -- the design record, including why the capability-token approach was retired
   in favour of `frozen` and why `#reads` is trusted.
 - [ECS guide](ecs-guide.md) -- the first consumer; `tur-ecs`'s `ecs/freeze`

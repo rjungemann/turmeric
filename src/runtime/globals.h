@@ -237,7 +237,7 @@ extern bool g_opt_jit;
 /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
  * predicates is unconditional; the g_opt_refined enable bit and its
  * elaboration gates are gone.  See
- * docs/upcoming/v1/refined-graduation-plan.md. */
+ * docs/archive/refined-graduation-plan.md. */
 
 /* sealed-opaque: gates the `:sealed` defopaque attribute's ENFORCEMENT.  When
  * off, `:sealed` parses and is recorded but the `::` check never fires, so

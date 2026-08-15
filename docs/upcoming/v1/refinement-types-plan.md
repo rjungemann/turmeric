@@ -26,17 +26,17 @@ and `"refined"` moved to `GRADUATED[]` / `GRADUATED_LAYERS[]`: a lingering
 `--enable=refined` is a `TUR-W0063` no-op and a lingering `#lang turmeric
 refined` a `TUR-W0064` no-op, both aging out one minor line later. Targets
 v0.33.0. See
-[refined-graduation-plan.md](refined-graduation-plan.md). **Every "gated behind
+[refined-graduation-plan.md](../../archive/refined-graduation-plan.md). **Every "gated behind
 `--enable=refined`" sentence anywhere in this file is historical.**
 
 **Sibling plans.** Two follow-on plans build directly on this one and account
 for fixtures a reader will find under `tests/fixtures/refine-*` that this plan
 never mentions:
 
-- [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
+- [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
   (`RM-B`, boolean-sorted measures -- LANDED RM-B0..RM-B3). Backs
   `refine-bool-measure`, `refine-float-measure`, `refine-measure-euf`.
-- [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)
+- [refine-stateful-measures-plan.md](../../archive/refine-stateful-measures-plan.md)
   (`RM-S`, refinements over mutable state -- RM-S0 done, A-vs-B decision open).
   Backs the `refine-stateful-*` fixtures.
 
@@ -1681,7 +1681,7 @@ never mentions:
 >
 > Two pieces of remaining work now have their own plans:
 >
-> - [refined-graduation-plan.md](refined-graduation-plan.md) -- the decision and
+> - [refined-graduation-plan.md](../../archive/refined-graduation-plan.md) -- the decision and
 >   the mechanical checklist for removing the gate. The clock (`expires_at`
 >   `0.34.0`) makes this the only item with a deadline.
 >
@@ -1856,9 +1856,9 @@ never mentions:
 > **Solver:** the Z3 scaffold was **retired 2026-07-30 in 0.32.5** and its
 > sources deleted. The in-house S0--S4 chain is the only solver, in every build.
 >
-> **Sibling plans:** [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
+> **Sibling plans:** [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
 > (boolean-sorted measures, `RM-B`) and
-> [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)
+> [refine-stateful-measures-plan.md](../../archive/refine-stateful-measures-plan.md)
 > (refinements over mutable state, `RM-S`) extend the predicate language beyond
 > what this plan scopes.
 >
@@ -3255,12 +3255,12 @@ always sound.
 ### Turmeric plans that depend on or extend this one
 
 - **Graduating `refined`** --
-  [refined-graduation-plan.md](refined-graduation-plan.md). EXECUTED
+  [refined-graduation-plan.md](../../archive/refined-graduation-plan.md). EXECUTED
   2026-08-01, targeting v0.33.0. The record of the four preconditions, the
   dogfooding cost measurement, and the exact mechanical checklist that removed
   the gate.
 - **Boolean-sorted measures (`RM-B`)** --
-  [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md).
+  [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md).
   LANDED (RM-B0..RM-B3). Lifts the hard-coded `VS_INT` measure result sort in
   `refine_collect.c` so a `bool`-returning function can be a predicate atom.
   RM-B0 also uncovered a float measure **mis-sort**, a soundness bug, written up
@@ -3269,7 +3269,7 @@ always sound.
   Backing fixtures: `refine-bool-measure`, `refine-float-measure`,
   `refine-measure-euf`.
 - **Refinements over mutable state (`RM-S`)** --
-  [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md). RM-S0
+  [refine-stateful-measures-plan.md](../../archive/refine-stateful-measures-plan.md). RM-S0
   (dogfooding) done 2026-07-26 recommending Candidate B; the A-vs-B decision is
   awaiting sign-off, and RM-S1/RM-S2 do not start without it. Addresses the
   direct consequence of this plan's purity requirement: a measure must be

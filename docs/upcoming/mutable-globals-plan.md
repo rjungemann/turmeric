@@ -6,7 +6,7 @@
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
-> [`def-define-consolidation-plan.md`](def-define-consolidation-plan.md) §8.4
+> [`def-define-consolidation-plan.md`](../archive/def-define-consolidation-plan.md) §8.4
 > named ("giving mutable globals a concurrency story is its own plan, not a
 > rider on this one").
 > **Type:** Language / elaboration / effects

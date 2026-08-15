@@ -69,7 +69,7 @@ Put the probe inside a function body, where both engines agree. That is what
 
 ## Found while
 
-Executing `docs/upcoming/def-define-consolidation-plan.md` phases D1-D3.
+Executing `docs/archive/def-define-consolidation-plan.md` phases D1-D3.
 
 ## Resolution (2026-08-13)
 

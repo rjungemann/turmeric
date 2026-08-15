@@ -9,10 +9,10 @@ description: A measure is always declared `VS_INT`, so a `bool`-returning functi
 **Status:** LANDED (RM-B0..RM-B3). RM-B0 came back worse than the plan
 assumed -- the float case **mis-sorts**, and the mis-sort is a soundness bug,
 not a completeness hole. Written up in
-[docs/archive/history/refine-float-measure-missort.md](../../archive/history/refine-float-measure-missort.md).
-**Depends on:** [refinement-types-plan.md](refinement-types-plan.md) (RT0--RT7,
+[docs/archive/history/refine-float-measure-missort.md](history/refine-float-measure-missort.md).
+**Depends on:** [refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md) (RT0--RT7,
 S0--S4, all landed).
-**Feeds:** [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md)
+**Feeds:** [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md)
 gap C1.
 
 ## The bug
@@ -109,7 +109,7 @@ tightens a strict bound when every variable is integer-sorted (`e < 0` becomes
 wrongly declared `Int`, `(< (norm v) 4.0) |- (<= (norm v) 3.0)` *proved*, the
 return check was elided, and a program whose `norm` was `3.75` returned a value
 violating its own refinement with no panic. Full write-up and repro in
-[docs/archive/history/refine-float-measure-missort.md](../../archive/history/refine-float-measure-missort.md);
+[docs/archive/history/refine-float-measure-missort.md](history/refine-float-measure-missort.md);
 pinned by `tests/fixtures/errors/refine-float-measure-not-tightened`.
 
 ### An abstract measure has no return type to read

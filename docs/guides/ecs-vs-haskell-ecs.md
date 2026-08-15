@@ -329,7 +329,7 @@ statically on every compile
 impure-measure question -- `alive?` reads mutable world state through
 inline C, which is exactly what congruence must refuse in general -- was
 answered by `#reads` + `frozen` regions
-([`docs/upcoming/v1/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md)):
+([`docs/archive/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)):
 a `#reads w` measure is congruent while `w` is immutably borrowed, and
 the borrow makes `^unique ^mut` despawn a compile error inside the
 region, which is what makes trusting the guard sound. The

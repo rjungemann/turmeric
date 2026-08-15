@@ -10895,7 +10895,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * which also scoped the binding to that one turn, so a name defined at the
      * prompt did not survive to the next one.  `define` is now a spelling of
      * `def`, so a top-level `define` is a genuine top-level binding and needs
-     * no workaround.  See docs/upcoming/def-define-consolidation-plan.md. */
+     * no workaround.  See docs/archive/def-define-consolidation-plan.md. */
     uint32_t prior = env->prior_toplevel;
 
     /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit).

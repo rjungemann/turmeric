@@ -425,7 +425,7 @@ thing. The bar this proposal actually failed was not "is the win big enough" but
 
 - `docs/guides/stateful-refinements-guide.md` -- the trajectory this plans
   ("The intended trajectory"), and the trust-boundary argument WF2 inherits.
-- `docs/upcoming/v1/refine-stateful-measures-plan.md` -- RM-S2 item 1 (the
+- `docs/archive/refine-stateful-measures-plan.md` -- RM-S2 item 1 (the
   "effect row remains an option" note this makes concrete), and the B3 spike's
   invalidation-site inventory WF3 joins.
 - `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` -- the RE2 probe

@@ -472,7 +472,7 @@ GAPS_TUR = textwrap.dedent("""\
 
 def test_lsp_client_gaps() -> None:
     """The gaps a real client (Trowel) had to work around -- see
-    docs/upcoming/lsp-client-gaps-plan.md."""
+    docs/archive/lsp-client-gaps-plan.md."""
     print("--- LSP client-gap coverage ---")
     path = make_tempfile(GAPS_TUR)
     uri = "file://" + path

@@ -11,7 +11,7 @@ was elided on the strength of a false proof, and the resulting program returned
 a value violating its own declared refinement with no panic and no diagnostic.
 
 **Status:** fixed in the same change that landed
-[refine-predicate-measures-plan.md](../../upcoming/v1/refine-predicate-measures-plan.md)
+[refine-predicate-measures-plan.md](../refine-predicate-measures-plan.md)
 (phases RM-B0..RM-B3). Verified against `build/tur` at 0.30.8.
 
 This report exists because the plan's RM-B0 phase asked for exactly one thing
@@ -77,7 +77,7 @@ returned `RT_VALID`, `refine_discharge_one` reported `proven`, and the return
 contract check was never emitted. `norm(v) = 3.75` is the counterexample the
 check would have caught.
 
-The bool case (`docs/upcoming/v1/refine-predicate-measures-plan.md`'s original
+The bool case (`docs/archive/refine-predicate-measures-plan.md`'s original
 motivation) shared the same line but was only a completeness hole: an
 `Int`-sorted goal was rejected by `refine_vc_build` as "predicate does not
 denote a proposition", which is the safe direction.

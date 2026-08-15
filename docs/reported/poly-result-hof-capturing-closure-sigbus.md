@@ -217,7 +217,7 @@ same with `[W R] ... (fn [] R) : R` crashes.
 ## Where it bites
 
 Discovered building phase B1 of the stateful-refinement plan
-(`docs/upcoming/v1/refine-stateful-measures-plan.md`): a `with-frozen` region
+(`docs/archive/refine-stateful-measures-plan.md`): a `with-frozen` region
 combinator wants the natural polymorphic signature
 `[W R] [^borrow tok : (DespawnCap W) body : (fn [] R)] : R`, but that shape
 crashes with a capturing region body (the common case -- the body reads the

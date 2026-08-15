@@ -12,8 +12,8 @@ the guide is out of spec-mode. RM-S1 (Candidate A, epochs) was **not pursued**.
 This plan states the problem and the two candidate answers, and keeps the
 dogfooding evidence and the design spikes that chose between them -- read the
 dated blocks below as a record, not as open work.
-**Depends on:** [refinement-types-plan.md](refinement-types-plan.md).
-**Feeds:** [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md)
+**Depends on:** [refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md).
+**Feeds:** [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md)
 gap C2 -- **satisfied**; that plan's RE1 is complete.
 
 > **Reconciled 2026-08-01.** The header used to say the A-vs-B decision was
@@ -309,7 +309,7 @@ So RM-S0 is not an implementation phase.
 ### RM-S0 -- Write both surfaces by hand, in `tur-ecs`, and read them  [DONE 2026-07-26 -- recommends B; see status block + turmeric-spices/docs/ecs-rms0-stateful-refinement-dogfood.md]
 
 Take the accessor family from
-[the ECS plan's RE1](ecs-refinement-typed-apis-plan.md#re1----strict-aliveness-needs-c2-wants-c1)
+[the ECS plan's RE1](../upcoming/v1/ecs-refinement-typed-apis-plan.md#re1----strict-aliveness-needs-c2-wants-c1)
 and write its call sites twice -- once with epoch arguments threaded, once
 inside a hypothetical frozen region. No compiler changes; the epoch version
 partly runs today, the region version is a sketch that does not compile.
@@ -638,7 +638,7 @@ noted per fixture):
   was vacuous because `tur` double-loaded its stdlib when spawned via a
   subprocess from a checkout root; fixed in `load_path_key` (resolve a
   `stdlib/X` load via `stdlib_dir` first). Report archived at
-  [`refine-fuzzer-subprocess-stdlib-double-load.md`](../../archive/history/refine-fuzzer-subprocess-stdlib-double-load.md).
+  [`refine-fuzzer-subprocess-stdlib-double-load.md`](history/refine-fuzzer-subprocess-stdlib-double-load.md).
   **Run it with a Debug `tur` and `TUR_STDLIB_DIR` unset** (Release strips
   contracts so gate-off never aborts; a stale env stdlib is the wrong one).
 
@@ -688,7 +688,7 @@ noted per fixture):
 
 ### Documentation (landing task -- do NOT skip)
 
-The guide [`stateful-refinements-guide.md`](../../guides/stateful-refinements-guide.md)
+The guide [`stateful-refinements-guide.md`](../guides/stateful-refinements-guide.md)
 was written *ahead* of the implementation and is explicitly marked **in-flight /
 spec**. When `#reads` + the congruence grant land, **update that guide in the
 same PR**:
@@ -727,14 +727,14 @@ regression in its own right.
 
 ## References
 
-- [refinement-types-plan.md](refinement-types-plan.md) -- particularly
+- [refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md) -- particularly
   "The purity gap was a real miscompile", "Purity, take two: the effect row was
   never evidence", and "The third congruence door"
-- [refinement-types-guide.md](../../guides/refinement-types-guide.md) -- the
+- [refinement-types-guide.md](../guides/refinement-types-guide.md) -- the
   purity rules as shipped
-- [substructural-types-guide.md](../../guides/substructural-types-guide.md) --
+- [substructural-types-guide.md](../guides/substructural-types-guide.md) --
   the linear/borrow machinery Candidate B leans on
-- [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md) -- the
+- [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md) -- the
   consumer
-- [refined-dogfooding-plan.md](../../archive/refined-dogfooding-plan.md) -- RM-S0 is
+- [refined-dogfooding-plan.md](refined-dogfooding-plan.md) -- RM-S0 is
   a slice of it

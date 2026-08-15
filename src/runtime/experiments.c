@@ -166,7 +166,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * moves to GRADUATED[] below and to GRADUATED_LAYERS[] in lang_layers.c --
      * a lingering --enable is a TUR-W0063 no-op, and a lingering
      * `#lang turmeric refined` a TUR-W0064 one.  See
-     * docs/upcoming/v1/refined-graduation-plan.md. */
+     * docs/archive/refined-graduation-plan.md. */
     /* J1 (docs/upcoming/jit-engine-plan.md): the in-process MIR JIT engine.
      * Gated because it is a third execution engine whose semantics must stay
      * identical to `tur build` output while the J3 parity sweep is still to

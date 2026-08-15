@@ -57,7 +57,7 @@ the single most load-bearing gap for ECS, because *every* domain predicate an
 ECS wants -- alive, has-component, in-bounds-for-this-world -- is naturally a
 `bool`-returning function.
 
-Tracked in [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md).
+Tracked in [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md).
 
 ### 2. The int-valued workaround **works today**
 
@@ -97,7 +97,7 @@ diagnostic reads as pure and congruence reads as impure. So the failure mode
 here is silent loss of the proof, not a rejection.
 
 This is the wall. Tracked in
-[`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md).
+[`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md).
 
 ### 4. A `#refine{...}` on a `defopaque` parameter compiles
 
@@ -199,7 +199,7 @@ Explicitly **not** a goal: making refinement types the default way to use
 > (TUR-W0063 / TUR-W0064) whose shim ages out one minor line later. So the
 > refined surface no longer costs its consumers a flag, and "opt-in" here means
 > an API choice rather than a compiler gate. See
-> [`refined-graduation-plan.md`](refined-graduation-plan.md).
+> [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md).
 
 ---
 
@@ -211,8 +211,8 @@ it.
 
 | # | Gap | Needed for | Plan |
 |---|---|---|---|
-| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
-| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
+| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
+| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
 | C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md) |
 
 **C1 is not strictly blocking** -- probe 2 shows the `(= (alive-i w x) 1)`
@@ -672,7 +672,7 @@ work), then RE1 as the dogfooding vehicle, then C3/RE2 only against a profile.
 - Parent plan (archived): [`ecs-spice-plan`](../../archive/ecs-spice-plan.md)
 - [`refinement-types-plan.md`](refinement-types-plan.md) -- what landed
 - [`refinement-types-guide.md`](../../guides/refinement-types-guide.md) -- the surface
-- [`refined-graduation-plan.md`](refined-graduation-plan.md)
+- [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md)
 - [`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md)
 - [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md)
 - `docs/guides/ecs-guide.md`, `docs/guides/ecs-vs-haskell-ecs.md`,

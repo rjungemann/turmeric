@@ -181,7 +181,7 @@ These are arguably the reason the divergence survived this long:
   says such a parameter "may mutate the value in place". Read plainly, that
   promises exactly the by-reference behavior the compiled backend does not
   provide. The by-value model is stated only in
-  `docs/upcoming/v1/refine-stateful-measures-plan.md:182`.
+  `docs/archive/refine-stateful-measures-plan.md:182`.
 - **`docs/guides/turi-parity-guide.md:57`** lists `Structs / ADTs | OK | OK`.
   That parity row is wrong for mutation through a parameter.
 - **`structs-guide.md` never states struct value semantics at function

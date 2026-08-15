@@ -536,6 +536,22 @@ finding rather than a closed one:
 - **[spice-guides-bare-brace-manifest-syntax.md](spice-guides-bare-brace-manifest-syntax.md)** -- guides corrected; spice-README coverage and `tur add-cmake` comment-dropping are not
 - **[turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)** -- TR1 carrier relocation shelved as demand-driven
 
+### Completed plans swept out of `docs/upcoming/` (2026-08-15)
+
+Each of these declares itself executed/landed with nothing outstanding, so it
+is a record rather than open work. `docs/upcoming/` holds only unfinished
+plans; plans whose experiment has not graduated yet (`write-frames`,
+`global-state`, `jit`) stay there because the graduation is still ahead.
+
+- **[def-define-consolidation-plan.md](def-define-consolidation-plan.md)** -- one `def` form for top-level and body positions; EXECUTED 2026-08-05 (D1-D4)
+- **[lsp-client-gaps-plan.md](lsp-client-gaps-plan.md)** -- `tur lsp` gaps found by writing a real client (Trowel); everything scheduled in its SS6 has landed
+- **[try-turmeric-lsp-plan.md](try-turmeric-lsp-plan.md)** -- LSP-backed editor intelligence in the web playground; L0-L4 landed, and SS7 closed the `emcc` gap SS6.4 could not
+- **[refined-graduation-plan.md](refined-graduation-plan.md)** -- graduating the `refined` experiment; EXECUTED 2026-08-01, shipped in v0.33.0
+- **[refined-dogfood-ecs-report.md](refined-dogfood-ecs-report.md)** -- the tur-ecs cost measurement (1.004x) behind that graduation's precondition 2
+- **[refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)** -- boolean-sorted measures in refinement predicates; RM-B0..RM-B3 landed
+- **[refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)** -- refinements over mutable state; LANDED as Candidate B (`#reads` + the borrow-based `frozen` region); RM-S1 not pursued
+- **[turi-incremental-elaboration-design.md](turi-incremental-elaboration-design.md)** -- incremental parse + elaboration for the turi REPL; SHIPPED and on by default 2026-07-25
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

@@ -251,7 +251,7 @@ bool g_opt_jit = false;
 
 /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}` is
  * unconditional; the g_opt_refined enable bit and its elaboration gates are
- * gone.  See docs/upcoming/v1/refined-graduation-plan.md. */
+ * gone.  See docs/archive/refined-graduation-plan.md. */
 
 /* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `(defopaque H :int
  * :sealed)` makes `::` refuse to convert between H and its representation type

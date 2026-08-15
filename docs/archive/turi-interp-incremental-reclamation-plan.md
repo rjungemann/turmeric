@@ -193,7 +193,7 @@ differential (`tur_incremental_elab_diff`) comparing every turn's result between
 the two paths, with the one intentional divergence (defn redefinition now works
 instead of erroring) pinned explicitly.
 
-**Design: `docs/upcoming/v1/turi-incremental-elaboration-design.md`.**
+**Design: `docs/archive/turi-incremental-elaboration-design.md`.**
 The investigation corrected an assumption this phase originally carried -- a
 completed eval's arena **cannot** simply be freed: parse output and elaborated
 IR share one arena, and closures/ctors/handlers/conts (nine escape categories)

@@ -16,7 +16,7 @@ so the program stays correct; what is lost is the proof, and with
 Pinned by `tests/fixtures/refine-crossing-path-conditions-multi-form`.
 
 Found while landing
-[refine-predicate-measures-plan.md](../../upcoming/v1/refine-predicate-measures-plan.md);
+[refine-predicate-measures-plan.md](../refine-predicate-measures-plan.md);
 unrelated to that plan's sort work.
 
 ## Repro

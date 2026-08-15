@@ -367,7 +367,7 @@ scratch promotion, which deep-copies each eval boundary's escaping values into
 a permanent pool and rewinds the scratch pool (measured over 1500
 transient-heavy turns: ~1.1 GB retained -> ~2.2 MB). Embedders using the bare
 create/eval/free pattern need neither and get the old behavior with
-promotion off. See `docs/upcoming/v1/turi-incremental-elaboration-design.md`
+promotion off. See `docs/archive/turi-incremental-elaboration-design.md`
 and `docs/archive/turi-interp-incremental-reclamation-plan.md`.
 
 **Collections (Vec/Set/Map) backing buffers** are `calloc`/`malloc`'d outside
