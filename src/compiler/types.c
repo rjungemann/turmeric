@@ -4751,6 +4751,20 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
     if (byval_product) {
         if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK)
             return REPR_BOXED_AGG;
+        /* Increment 4 stage 3 (adt-field shadow, 2026-08-15): a field slot
+         * boxes a by-value product that OWNS drop glue, exactly as a
+         * container slot does.  The reason is the owner's copyability, not
+         * the element protocol -- inlining a sub-aggregate that owns an
+         * rc/ref would force recursive drop glue onto the outer product, so
+         * `adt_field_is_inline_byval` restricts inlining to drop-glue-free
+         * inners and the owning ones ride the carrier with `drop_inner_def`
+         * driving their release.  The shadow found this as a spec hole: it
+         * was the only field shape whose slot form disagreed, and stripping
+         * this arm makes it fire again (sabotage-verified). */
+        const AdtDef *bp_def = t->kind == TY_ADT ? t->as.adt_.def
+                                                 : type_adt_app_def(t);
+        if (pos == REPR_POS_STRUCT_FIELD && bp_def && bp_def->needs_drop_glue)
+            return REPR_BOXED_AGG;
         return REPR_BYVAL_AGG;
     }
 

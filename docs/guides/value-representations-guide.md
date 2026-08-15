@@ -142,7 +142,15 @@ Each of these is a crossing where a bridge may be needed:
 - generic (tyvar-typed) call argument and result
 - typeclass method dispatch result (bare and dotted spellings)
 - `Vec` element slot (push and get)
-- struct field store / load
+- struct field store / load -- **instrumented and measured silent
+  2026-08-15** (increment 4 stage 3). The declaration side of this boundary
+  is one chokepoint, `adt_ctor_field_c_type`, which all nine field-emission
+  sites route through; a `repr_of` shadow there found 84 disagreements and
+  all 84 were one word spelled two ways, not seams. Worth knowing when you
+  read a field slot: the owner, not the field type, picks the protocol. A
+  by-value owner inlines a drop-glue-free aggregate field and **boxes** one
+  that owns an rc/ref (so the owner stays trivially copyable); a carrier
+  owner keeps every field as a one-word slot.
 - closure capture and closure return
 - inline-C body edge (always the raw carrier)
 

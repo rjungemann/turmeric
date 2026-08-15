@@ -592,6 +592,16 @@ bool emit_str_is_bare_ident(const char *s);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
+/* Increment 4 stage 3 (repr-decision-function-plan): the shadow instrument,
+ * shared across emitting TUs.  `repr_form_from_cty` recovers the ReprForm a
+ * site ACTUALLY chose from the C type it declared (`cty`), given the type's
+ * own C spelling (`own_cty`); `repr_shadow_report` prints one `repr-shadow`
+ * line when that disagrees with `repr_of`'s intended protocol.  Neither ever
+ * changes a decision -- the shadow is measurement only. */
+ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
+                            const char *cty);
+void repr_shadow_report(const char *site, ReprPosition pos, Type resolved,
+                        ReprForm want, ReprForm got, const char *cty);
 /* fn-typed-return: typedef name for a concrete thin function-value return type,
  * or NULL when the return is not such a fn / is a dict-dispatched method impl
  * (see emit_core.c). */

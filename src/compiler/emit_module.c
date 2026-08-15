@@ -6260,9 +6260,46 @@ static const char *adt_field_scalar_c_type(TypeKind k) {
  * by-value owner inlines (a carrier owner keeps every field as an int64 slot and
  * boxes a by-value child at the store). */
 static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
-    if (byval && adt_field_is_inline_byval(f))
-        return adt_field_inline_c_name(f);
-    return adt_field_scalar_c_type(f->kind);
+    const char *chosen = (byval && adt_field_is_inline_byval(f))
+                             ? adt_field_inline_c_name(f)
+                             : adt_field_scalar_c_type(f->kind);
+    /* Increment 4 stage 3: the STRUCT_FIELD shadow.  This one function is the
+     * whole field-position decision -- all nine emission sites route through
+     * it -- so instrumenting it here covers the position with no ctx to
+     * thread.
+     *
+     * The owner's by-value status picks the POSITION, not just the answer: a
+     * by-value product inlines its aggregate fields, so its slots are real
+     * STRUCT_FIELD positions, while a carrier product keeps every field as an
+     * int64 slot and boxes a by-value child at the store -- which is the
+     * CARRIER_SINK protocol wearing a field's name.  Asking repr_of for
+     * STRUCT_FIELD on a carrier owner would report the owner's design as a
+     * seam.  This is the same shape as the recorded param-position boundary:
+     * a decision the Type alone does not carry. */
+    if (g_emit_abi_trace && f) {
+        /* A nested OWNING aggregate field has its `full_type` deliberately
+         * left NULL -- a carrier-ADT full_type would misclassify field reads
+         * -- and carries its inner def in `drop_inner_def` instead.  Without
+         * this reconstruction the shadow's blind spot would be exactly the
+         * shape most worth watching: a by-value product stored behind the
+         * int64 carrier because it owns an rc/ref, which is the one field
+         * shape whose slot form genuinely disagrees with the protocol. */
+        Type ft;
+        bool have = false;
+        if (f->full_type) { ft = *f->full_type; have = true; }
+        else if (f->drop_inner_def) {
+            ft = type_adt((AdtDef *)f->drop_inner_def);
+            have = true;
+        }
+        if (have) {
+            ReprPosition pos =
+                byval ? REPR_POS_STRUCT_FIELD : REPR_POS_CARRIER_SINK;
+            repr_shadow_report("adt-field", pos, ft, repr_of(&ft, pos),
+                               repr_form_from_cty(ft, type_c_name(ft), chosen),
+                               chosen);
+        }
+    }
+    return chosen;
 }
 
 /* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`

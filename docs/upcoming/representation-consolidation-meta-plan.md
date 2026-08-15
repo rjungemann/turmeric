@@ -1,9 +1,13 @@
 # Representation consolidation -- the meta-plan
 
-**Status:** proposed. This is not a plan for one seam; it is the plan for how
-every representation-consolidation increment gets chosen, de-risked, landed,
-and verified, so the work neither stalls (as attempts here have) nor trades
-away the low-level performance the current representations exist to buy.
+**Status:** IN PROGRESS. Increments 0-3 are landed, increment 4 has its
+child plan with stages 1, 2 and 4 landed and stage 3 in progress (see the
+Sequencing section for each increment's dated record); increment 5 remains
+conditional on what the decision function shows. This is not a plan for one
+seam; it is the plan for how every representation-consolidation increment
+gets chosen, de-risked, landed, and verified, so the work neither stalls (as
+attempts here have) nor trades away the low-level performance the current
+representations exist to buy.
 Child plans (starting with
 [fn-value-fat-normalization-plan.md](fn-value-fat-normalization-plan.md))
 follow this template; this doc owns the principles, the sequencing, and the
@@ -290,6 +294,22 @@ This campaign uses five kinds:
    Increment 1's fat-normalized boundaries should get the same treatment:
    a hand-written C file per boundary shape, ASan/UBSan clean, kept for
    reproducibility.
+   **A silence criterion is only as good as its probe** (added 2026-08-15,
+   after the adt-field shadow). Once a position is migrated, its check
+   inverts from "this shape must fire" to "nothing may fire" -- and a
+   silence check passes for every reason a probe can fail to say anything.
+   The adt-field smoke's first draft passed with the guard it existed to pin
+   REMOVED, twice over: the probe did not compile (no output, therefore no
+   disagreement lines), and its layout assertions used
+   `echo "$var" | grep -q` under `set -o pipefail`, where grep closing the
+   pipe on its first match kills `echo` with SIGPIPE so the pipeline reports
+   failure on a pattern that matched. So a silence check owes two things a
+   fire check does not: an assertion that the probe actually ran and
+   produced the shapes it names, and a sabotage run in that final state
+   proving the removed guard makes it fail. This is the repo's standing
+   "assertions that pass when you run them directly were probably never
+   really run" trap (CLAUDE.md), reached from the other direction.
+
 5. **Performance probes.** Each child plan names the benchmark(s) that
    actually exercise its seam (`benchmarks/`, `tur run bench` -- e.g.
    `bench-poly-specialize.tur` for dispatch seams, closure-heavy benches
@@ -427,8 +447,32 @@ about, and cowpaths are paved before the field is closed:
   payload-free TypeKind the single home of its three type-axis answers
   (C name, mangle token, concrete layout), expanded by all three switches,
   byte-identical behavior, guard extended to a sixth property (type_c_name
-  exhaustiveness).  Stages 2-4 (position enum + shadow log, chokepoint
-  migration, registry ratchet) are specified in the child plan.*
+  exhaustiveness).*
+  *Status 2026-07-31, later: stages 2 and 4 landed too.* Stage 2 is
+  `ReprPosition` + `repr_of` + the shadow log (521 -> 80 lines over two
+  calibration passes); stage 3's chokepoint 1 migrated concrete heap
+  bindings to their typed pointer and drove the shadowed sites to corpus
+  silence (80 -> 0); stage 4 is `tests/check-repr-decision-ratchet.sh`,
+  which pins the per-file call-site count of every representation-DECISION
+  predicate so new code consults the chokepoints or explains itself in the
+  same commit.
+  *Status 2026-08-15: stage 3 continues -- the STRUCT_FIELD position is
+  instrumented and silent.* Shadowed at `adt_ctor_field_c_type` (the one
+  function all nine field-emission sites route through); 2028-fixture sweep
+  84 -> 0. Two results worth carrying forward. **The slot calibration:** a
+  field / container-element / carrier-sink slot is one machine word, and
+  which form that word holds is decided by the STORE (already consolidated
+  in increment 3), so a declaration-recovered shadow can only honestly ask
+  "inline aggregate, or one word?" there -- narrowing the instrument's claim
+  rather than patching the 84 shapes it mis-reported, per the CPS rule in
+  the stall table. **The one real finding was a spec hole, not a seam:** a
+  by-value product that owns drop glue is BOXED at a field (so the owner
+  stays trivially copyable), which is the container protocol under a field's
+  name -- and that shape's `full_type` is deliberately NULL, so the shadow
+  had to reconstruct it from `drop_inner_def` or its blind spot would have
+  been exactly the shape worth watching. Suite 2598/0, no snapshot churn.
+  Remaining stage-3 positions: fn-value tail/join, method-result carrier
+  production, the `emit_expr.c` per-arg bridges, and CONTAINER_ELEM.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --

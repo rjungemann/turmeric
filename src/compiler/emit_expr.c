@@ -454,8 +454,13 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
  * is one stderr line, which the stage-3 migration reads as its blast-radius
  * measurement.  `chosen_cty` is the C type the site actually declared; the
  * observed ReprForm is recovered from it plus the resolved type. */
-static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
-                                        const char *cty) {
+/* `own_cty` is the type's OWN C spelling (what the type alone c-names to),
+ * which the caller supplies because the two shadowed TUs reach it
+ * differently: emission has a spec-substituting `emit_type_c_name(ctx, t)`,
+ * while the ADT-layout emitter runs before any EmitCtx exists and uses the
+ * ctx-free `type_c_name`.  Everything else about the recovery is shared. */
+ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
+                            const char *cty) {
     size_t n = strlen(cty);
     bool is_ptr = n >= 1 && cty[n - 1] == '*';
     if (strcmp(cty, "int64_t") == 0) {
@@ -466,7 +471,7 @@ static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
             return REPR_SCALAR_BITS;
         if (resolved.kind != TY_FN && resolved.kind != TY_ADT &&
             resolved.kind != TY_APP &&
-            strcmp(emit_type_c_name(ctx, resolved), "int64_t") == 0 &&
+            strcmp(own_cty, "int64_t") == 0 &&
             type_has_concrete_codegen_layout(&resolved))
             return REPR_SCALAR_BITS;   /* int64_t IS this scalar's spelling */
         return REPR_CARRIER_I64;
@@ -478,7 +483,7 @@ static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
         /* A pointer that is the type's own scalar spelling (cstr, Sym,
          * ptr<T> leaves) is the value's bits; any other pointer decl is a
          * heap-object handle. */
-        if (strcmp(emit_type_c_name(ctx, resolved), cty) == 0 &&
+        if (strcmp(own_cty, cty) == 0 &&
             type_has_concrete_codegen_layout(&resolved))
             return REPR_SCALAR_BITS;
         return REPR_HEAP_PTR;
@@ -491,22 +496,62 @@ static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
     return REPR_BYVAL_AGG;             /* a bare aggregate type name */
 }
 
+/* Slot positions -- an ADT/struct field, a container element, a generic
+ * carrier sink -- are ONE MACHINE WORD by construction.  Scalar bits, a heap
+ * pointer, a fat-closure handle, a boxed-aggregate pointer and the erased
+ * carrier all occupy that word identically, and which one a given word holds
+ * is decided by the STORE, not by the declaration (increment 3 consolidated
+ * the store side behind `type_is_boxed_container_elem`).  So the only
+ * question a declaration-recovered shadow can honestly ask at a slot is the
+ * binary one the slot actually answers: **inline aggregate, or one word?**
+ *
+ * This narrows what the instrument claims rather than patching the shapes it
+ * mis-reports -- the CPS-graduation rule from the meta-plan.  The first
+ * corpus sweep measured the cost of not doing it: all 84 adt-field lines
+ * were one-word-spelled-two-ways (`cty=int64_t own=<T> *`), zero were seams.
+ * Direct positions (param / result / let-bind) keep the full-resolution
+ * comparison; their spelling IS the representation there, which is what let
+ * chokepoint 1 migrate them.  The printed line always names the exact forms,
+ * so a folded pair is still readable in a trace diff. */
+static bool repr_pos_is_word_slot(ReprPosition pos) {
+    return pos == REPR_POS_STRUCT_FIELD || pos == REPR_POS_CONTAINER_ELEM ||
+           pos == REPR_POS_CARRIER_SINK;
+}
+
+static ReprForm repr_form_slot_class(ReprForm f, ReprPosition pos) {
+    if (!repr_pos_is_word_slot(pos)) return f;
+    return f == REPR_BYVAL_AGG ? REPR_BYVAL_AGG : REPR_CARRIER_I64;
+}
+
+void repr_shadow_report(const char *site, ReprPosition pos, Type resolved,
+                        ReprForm want, ReprForm got, const char *cty) {
+    if (repr_form_slot_class(want, pos) == repr_form_slot_class(got, pos))
+        return;
+    Buf tb; buf_init(&tb);
+    type_print(&tb, resolved);
+    buf_putc(&tb, '\0');
+    /* `own` is the type's own C spelling.  A sweep needs it to tell a real
+     * seam ("the site declared something other than what this type c-names
+     * to") from a spelling identity ("both are the same word, named two
+     * ways") without re-deriving it by hand per line. */
+    fprintf(stderr,
+            "repr-shadow %s %s type=%s want=%s got=%s cty=%s own=%s\n",
+            site, repr_position_name(pos), tb.data,
+            repr_form_name(want), repr_form_name(got), cty,
+            type_c_name(resolved));
+    buf_free(&tb);
+}
+
 static void repr_shadow_check(EmitCtx *ctx, const char *site,
                               ReprPosition pos, Type declared_ty,
                               const char *chosen_cty) {
     if (!g_emit_abi_trace || !chosen_cty) return;
     Type resolved = emit_resolve_type(ctx, declared_ty);
-    ReprForm want = repr_of(&resolved, pos);
-    ReprForm got = repr_form_from_decision(ctx, resolved, chosen_cty);
-    if (want != got) {
-        Buf tb; buf_init(&tb);
-        type_print(&tb, resolved);
-        buf_putc(&tb, '\0');
-        fprintf(stderr, "repr-shadow %s %s type=%s want=%s got=%s cty=%s\n",
-                site, repr_position_name(pos), tb.data,
-                repr_form_name(want), repr_form_name(got), chosen_cty);
-        buf_free(&tb);
-    }
+    repr_shadow_report(site, pos, resolved, repr_of(&resolved, pos),
+                       repr_form_from_cty(resolved,
+                                          emit_type_c_name(ctx, resolved),
+                                          chosen_cty),
+                       chosen_cty);
 }
 
 /* KB-021: true when emitting `e` yields a *by-value* concrete carrier-ABI

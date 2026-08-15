@@ -134,6 +134,69 @@ else
   rc=1
 fi
 
+# Increment 4 stage 3: the STRUCT_FIELD position (shadowed at the
+# adt_ctor_field_c_type chokepoint, which all nine field-emission sites route
+# through).  The probe carries all three OWNER classes the position
+# distinguishes, because the owner -- not the field type -- picks which
+# protocol a slot follows:
+#
+#   FdInline   by-value owner, drop-glue-free aggregate field -> INLINED
+#   FdBoxed    by-value owner, rc-owning aggregate field      -> BOXED (int64)
+#   FdCarrier  carrier owner: scalar, :heap pointer, fn slots -> one-word sink
+#
+# FdBoxed is the load-bearing row: it is the shape whose `full_type` is
+# deliberately NULL (reconstructed for the shadow from `drop_inner_def`), and
+# the only field shape whose form disagreed before repr_of learned that an
+# owning by-value product is BOXED_AGG at a field.  Sabotage-verified: with
+# that arm stripped, FdBoxed fires two lines and this check fails.
+#
+# The position was measured silent corpus-wide (84 -> 0), so any line here
+# means a field decision drifted from the protocol -- triage against
+# docs/upcoming/repr-decision-function-plan.md.
+cat > "$tmp/shadow-fields.tur" <<'EOF'
+(defstruct FdPoint :heap [x : int y : int])
+(defstruct FdFlat [a : int b : int])
+(defstruct FdOwn [r : rc<int> tag : int])
+(defstruct FdInline [i : FdFlat n : int])
+(defstruct FdBoxed [o : FdOwn n : int])
+(defstruct FdCarrier [s : int p : FdPoint f : (fn [int] int)])
+(defn bump [n : int] : int (+ n 1))
+(defn main [] : int
+  (let [a (make-struct FdInline :i (FdFlat 4 5) :n 1)]
+    (let [b (make-struct FdBoxed :o (make-struct FdOwn :r (rc/of 3) :tag 1) :n 2)]
+      (let [c (make-struct FdCarrier :s 7 :p (FdPoint 1 2) :f bump)]
+        (println (+ (.n a) (+ (.n b) (.s c)))))))
+  0)
+EOF
+# Assert the probe COMPILES and produced each owner layout before reading its
+# silence.  A probe that fails to compile emits no repr-shadow lines either,
+# so a silence check alone would pass vacuously -- which is exactly how the
+# first draft of this check passed with the guard it was meant to pin removed.
+# NB: grep the emitted C as a FILE, not through `echo "$var" | grep -q`.  This
+# script runs under `set -o pipefail`, and `grep -q` closes the pipe on its
+# first match, so `echo` dies of SIGPIPE and the pipeline reports failure even
+# though the pattern matched -- which reads exactly like a missing layout.
+"$TUR" emit-c "$tmp/shadow-fields.tur" >"$tmp/fields.c" 2>"$tmp/fields.err"
+if [ -s "$tmp/fields.err" ] || [ ! -s "$tmp/fields.c" ]; then
+  echo "  FAIL adt-field probe did not compile:"
+  head -5 "$tmp/fields.err"
+  rc=1
+elif ! grep -q "tur_adt_FdFlat i;" "$tmp/fields.c" \
+   || ! grep -q "typedef struct tur_adt_FdBoxed {" "$tmp/fields.c" \
+   || ! grep -q "typedef struct tur_adt_FdCarrier {" "$tmp/fields.c"; then
+  echo "  FAIL adt-field probe did not produce the three owner layouts"
+  rc=1
+else
+  ftrace="$("$TUR" emit-c --emit-abi-trace "$tmp/shadow-fields.tur" 2>&1 >/dev/null | grep '^repr-shadow' || true)"
+  if [ -z "$ftrace" ]; then
+    echo "  ok  adt-field position silent across all three owner classes"
+  else
+    echo "  FAIL adt-field shadow -- expected no repr-shadow lines, got:"
+    echo "$ftrace"
+    rc=1
+  fi
+fi
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
   echo "--- fn-param trace ---"

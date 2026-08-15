@@ -1,6 +1,9 @@
 # Increment 4: the representation decision function (`repr-of`)
 
-**Status:** stage 1 landed 2026-07-31; stages 2-4 proposed.
+**Status:** stages 1, 2 and 4 landed 2026-07-31; stage 3 in progress -- the
+let-bind, merge-temp and (2026-08-15) struct-field positions are instrumented
+and measured silent corpus-wide; the fn-value tail/join, method-result and
+per-arg-bridge positions are not yet instrumented.
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 4 -- "the true consolidation; it goes last because by then the
 sites agree in *behavior* and the collapse is mechanical rather than
@@ -143,6 +146,67 @@ EXTENDING shadow coverage to the positions not yet instrumented --
 fn-value tail/join classification (already alias-aware -- mechanical),
 method-result carrier production, then the long tail of `emit_expr.c`
 per-arg bridges -- and then stage 4's registry ratchet.
+
+**The STRUCT_FIELD position: instrumented, calibrated, silent
+(2026-08-15).**  Shadowed at `adt_ctor_field_c_type` -- one function that
+all nine field-emission sites route through, so the position is covered
+without threading a ctx through the ADT layout emitter.  The shared half of
+the instrument moved out of `emit_expr.c` (`repr_form_from_cty` +
+`repr_shadow_report`, declared in `emit_internal.h`); the caller supplies
+the type's own C spelling because emission has the spec-substituting
+`emit_type_c_name` while the layout emitter runs before any EmitCtx exists.
+
+Sweep arc over 2028 fixtures: **84 -> 0**, in two moves.
+
+| # | lines | what the measurement said |
+| --- | --- | --- |
+| 1 | 84 (16 shapes) | every line `cty=int64_t own=<T> *` -- a pointer-valued type in the ADT's one-word field slot |
+| 2 | 2 | after the slot calibration below; the residue was one shape, and it was a spec hole |
+| 3 | 0 | after `repr_of` learned that an owning by-value product is BOXED_AGG at a field |
+
+*Calibration -- a slot position is one machine word.*  Scalar bits, a heap
+pointer, a fat handle, a boxed-aggregate pointer and the erased carrier all
+occupy that word identically, and WHICH one a word holds is decided by the
+store, not the declaration (increment 3 already consolidated the store side
+behind `type_is_boxed_container_elem`).  So at STRUCT_FIELD /
+CONTAINER_ELEM / CARRIER_SINK the shadow now asks the binary question the
+slot actually answers -- **inline aggregate, or one word?** -- while direct
+positions (param / result / let-bind) keep the full-resolution comparison
+that let chokepoint 1 migrate them.  This narrows what the instrument
+claims instead of patching the shapes it mis-reports, per the meta-plan's
+CPS-graduation rule.  Adding `own=` (the type's own C spelling) to the
+`repr-shadow` line is what made the first sweep classifiable in one pass
+rather than by hand-deriving each shape.
+
+*The one real finding -- a spec hole, not a seam.*  The residue was a
+by-value product that OWNS drop glue sitting in a by-value owner's field:
+declared `int64_t`, because `adt_field_is_inline_byval` restricts inlining
+to drop-glue-free inners so the outer product stays trivially copyable, and
+the owning ones ride the carrier with `drop_inner_def` driving their
+release.  That is the BOXED_AGG protocol under a field's name, so `repr_of`
+says BOXED_AGG there now.  The position also has a deliberate blind spot
+that had to be closed first: this exact shape has its `full_type` left NULL
+on purpose (a carrier-ADT full_type would misclassify field READS), so the
+shadow reconstructs the type from `drop_inner_def` -- without that, the one
+field shape worth watching was the one the instrument could not see.
+
+*Non-vacuity, checked twice.*  The smoke's first draft passed with the
+guard it was meant to pin removed -- twice over: its probe did not compile
+(so it emitted no lines and "silence" was trivially true), and its layout
+assertions used `echo "$var" | grep -q` under `set -o pipefail`, where grep
+closing the pipe on first match kills `echo` with SIGPIPE and the pipeline
+reports failure on a pattern that MATCHED.  The check now asserts the probe
+compiles and produced all three owner layouts before it reads silence, and
+greps a file rather than a pipeline.  Sabotage-verified in that state:
+stripping the BOXED_AGG arm makes `FdBoxed` fire two lines and the smoke
+fail.
+
+Suite 2598/0, no snapshot churn (the shadow is `--emit-abi-trace`-only and
+the `repr_of` arm is consulted by nothing else); ratchet and typekind
+exhaustiveness checks unchanged.  Remaining stage-3 positions are as listed
+above -- fn-value tail/join, method-result carrier production, the
+`emit_expr.c` per-arg bridges -- plus CONTAINER_ELEM, which the slot
+calibration now gives a spec for but which has no shadow site yet.
 
 ### Stage 4 -- registry + ratchet
 (ratchet LANDED 2026-07-31)
