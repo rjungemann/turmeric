@@ -14,7 +14,7 @@ description: Rewritten after refinement types landed. What the shipped `#refine{
 >
 > RT0--RT7 and S0--S4 landed 2026-07-24/25 behind `--enable=refined` /
 > `#lang turmeric refined` (see
-> [`refinement-types-plan.md`](refinement-types-plan.md) and
+> [`refinement-types-plan.md`](../../archive/refinement-types-plan.md) and
 > [the guide](../../guides/refinement-types-guide.md)). So this plan can stop
 > speculating and start measuring. **Everything asserted below about compiler
 > behaviour was checked against `build-release/tur` at VERSION 0.30.8**; each
@@ -670,7 +670,7 @@ work), then RE1 as the dogfooding vehicle, then C3/RE2 only against a profile.
 ## References
 
 - Parent plan (archived): [`ecs-spice-plan`](../../archive/ecs-spice-plan.md)
-- [`refinement-types-plan.md`](refinement-types-plan.md) -- what landed
+- [`refinement-types-plan.md`](../../archive/refinement-types-plan.md) -- what landed
 - [`refinement-types-guide.md`](../../guides/refinement-types-guide.md) -- the surface
 - [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md)
 - [`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md)

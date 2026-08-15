@@ -1,8 +1,15 @@
 # MIR Interpreter Tier Plan (tier-0 `MIR_interp`)
 
-Status: **I0 RUN 2026-07-31 -- RESULT NEGATIVE for I1-I3; I4 still
-recommended.** See section 6 for the measurements. Depends on the JIT engine
-(J1/J2/S2, see [jit-engine-plan.md](jit-engine-plan.md)), which is landed.
+Status: **CLOSED 2026-07-31. I0 RUN -- RESULT NEGATIVE for I1-I3, which are
+declined by measurement; I4 LANDED (section 7).** Nothing in this plan is
+outstanding. See section 6 for the measurements and section 7 for what I4
+shipped as. Depends on the JIT engine (J1/J2/S2, see
+[jit-engine-plan.md](../upcoming/jit-engine-plan.md)), which is landed.
+
+> The banner above used to read "I4 still recommended," which it stopped being
+> on the day it landed -- section 7 was appended and the header was not. That
+> stale line is why this plan sat in `docs/upcoming/` for two weeks after it
+> was done.
 
 This plan opens by retracting the premise that motivated it. Read section 0
 before section 1: the headline benefit that made this idea attractive does
@@ -395,7 +402,7 @@ The refine ones fail off the JIT path too: `tur run` on
 This was first written up as a high-severity product bug ("the `refined`
 experiment checks nothing in Release"). **That was wrong and is retracted** --
 see
-[docs/archive/history/refined-obligations-silently-pass-in-release.md](../archive/history/refined-obligations-silently-pass-in-release.md).
+[docs/archive/history/refined-obligations-silently-pass-in-release.md](history/refined-obligations-silently-pass-in-release.md).
 Contract checks are stripped from Release builds by CT3 policy unless
 `--keep-contracts` is passed (`elab_fns.c:250`, `:5287`), the same bargain C
 makes with `assert()`/`NDEBUG`; refinement obligations fall back to those

@@ -10,7 +10,7 @@ description: A measure is always declared `VS_INT`, so a `bool`-returning functi
 assumed -- the float case **mis-sorts**, and the mis-sort is a soundness bug,
 not a completeness hole. Written up in
 [docs/archive/history/refine-float-measure-missort.md](history/refine-float-measure-missort.md).
-**Depends on:** [refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md) (RT0--RT7,
+**Depends on:** [refinement-types-plan.md](refinement-types-plan.md) (RT0--RT7,
 S0--S4, all landed).
 **Feeds:** [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md)
 gap C1.

@@ -12,7 +12,7 @@ the guide is out of spec-mode. RM-S1 (Candidate A, epochs) was **not pursued**.
 This plan states the problem and the two candidate answers, and keeps the
 dogfooding evidence and the design spikes that chose between them -- read the
 dated blocks below as a record, not as open work.
-**Depends on:** [refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md).
+**Depends on:** [refinement-types-plan.md](refinement-types-plan.md).
 **Feeds:** [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md)
 gap C2 -- **satisfied**; that plan's RE1 is complete.
 
@@ -727,7 +727,7 @@ regression in its own right.
 
 ## References
 
-- [refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md) -- particularly
+- [refinement-types-plan.md](refinement-types-plan.md) -- particularly
   "The purity gap was a real miscompile", "Purity, take two: the effect row was
   never evidence", and "The third congruence door"
 - [refinement-types-guide.md](../guides/refinement-types-guide.md) -- the

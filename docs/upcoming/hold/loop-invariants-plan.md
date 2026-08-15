@@ -4,7 +4,7 @@
 > deliberately not scheduled; see "Why not now" for the bar it has to clear.
 > **Last Updated:** 2026-07-25
 > **Type:** Compiler / Refinement types
-> **Depends on:** [refinement-types-plan.md](../v1/refinement-types-plan.md)
+> **Depends on:** [refinement-types-plan.md](../../archive/refinement-types-plan.md)
 > (RT0--RT7 + S0--S4, all landed) and on the `refined` experiment graduating.
 
 ## Goal
@@ -162,7 +162,7 @@ Until then this file is the record, and "no measured demand" is the answer.
 
 ## References
 
-- [refinement-types-plan.md](../v1/refinement-types-plan.md) -- the parent
+- [refinement-types-plan.md](../../archive/refinement-types-plan.md) -- the parent
   plan; "Why checking, not inference" is the constraint this one inherits.
 - [../../guides/refinement-types-guide.md](../../guides/refinement-types-guide.md)
   -- the user-facing write-up; the `while` limitation is documented there.

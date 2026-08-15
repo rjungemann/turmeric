@@ -63,7 +63,7 @@ endif()
 #
 # `TUR_REFINE_Z3_ORACLE`, the `find_package(Z3)` block, `refine_libz3.c` and
 # every `#ifdef TUR_REFINE_Z3_ORACLE` are gone, per the retirement criteria in
-# docs/upcoming/v1/refinement-types-plan.md ("Z3 retirement criteria").  Both
+# docs/archive/refinement-types-plan.md ("Z3 retirement criteria").  Both
 # criteria were met: the in-house chain discharges the fixtures the bootstrap
 # carried, and oracle trust was established over a labelled corpus, a 3600-
 # benchmark generated soak, a 7000-VC differential run, and a real-program
@@ -502,7 +502,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # RT2/S0--S3: refinement VC + decision-procedure unit test
-# (docs/upcoming/v1/refinement-types-plan.md).
+# (docs/archive/refinement-types-plan.md).
 add_test(
   NAME tur_refine_solver
   COMMAND "${CMAKE_BINARY_DIR}/tur_refine_solver"

@@ -552,6 +552,12 @@ plans; plans whose experiment has not graduated yet (`write-frames`,
 - **[refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)** -- refinements over mutable state; LANDED as Candidate B (`#reads` + the borrow-based `frozen` region); RM-S1 not pursued
 - **[turi-incremental-elaboration-design.md](turi-incremental-elaboration-design.md)** -- incremental parse + elaboration for the turi REPL; SHIPPED and on by default 2026-07-25
 
+Two more found in the same sweep, both of which read as open only because a
+banner was never updated after the work landed. Each banner is corrected here:
+
+- **[mir-interp-tier-plan.md](mir-interp-tier-plan.md)** -- a tier-0 `MIR_interp` engine. CLOSED: I0 retracted the premise and measured I1-I3 as not worth building; I4 (engine reachable from a plain `libturi` embedder) LANDED 2026-07-31. The header still said "I4 still recommended" after I4 shipped
+- **[refinement-types-plan.md](refinement-types-plan.md)** -- RT0-RT7 plus the in-house solver S0-S4, all landed; `refined` graduated in v0.33.0. Still the **status source** for the feature and the `tests/fixtures/refine-*` corpus, so it is archived as a record rather than retired. Its sibling-plan block also claimed the RM-S A-vs-B decision was open; it was decided (Candidate B) on 2026-07-26
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

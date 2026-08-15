@@ -27,7 +27,7 @@
 # be installed. Compiling the translation units directly keeps verification
 # free of side effects. Build tur_wasm when you mean to deploy.
 #
-# See docs/upcoming/v1/refinement-types-plan.md (phase RT5a).
+# See docs/archive/refinement-types-plan.md (phase RT5a).
 
 set -uo pipefail
 cd "$(dirname "$0")/.."

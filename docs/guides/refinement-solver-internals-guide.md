@@ -6,7 +6,7 @@
 > [refinement-types-guide.md](refinement-types-guide.md). For the always-on
 > runtime half see [contract-types-guide.md](contract-types-guide.md). The
 > design of record is
-> [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md).
+> [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md).
 
 A contract type `#refine{ x : T | p }` always has a runtime meaning: `p` is
 checked when a value crosses into the type. On top of that, the compiler
@@ -518,7 +518,7 @@ to enable.
 
 It was scaffolding with a defined end: a bootstrap while the in-house stages
 were thin, and an oracle while their trustworthiness was still being
-established. Both jobs finished (see `docs/upcoming/v1/refinement-types-plan.md`,
+established. Both jobs finished (see `docs/archive/refinement-types-plan.md`,
 "Z3 retirement criteria"), and keeping a second solver around past that point
 buys nothing while implying the shipped compiler has a solver dependency it
 never had.
@@ -588,7 +588,7 @@ bash tests/run.sh 2>&1 | grep -E '^(FAIL|summary)'
 
 - [refinement-types-guide.md](refinement-types-guide.md) -- user-facing feature guide.
 - [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half.
-- [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md) -- design of record; the RT1..RT7 and S0..S4 phase names used throughout this doc.
+- [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design of record; the RT1..RT7 and S0..S4 phase names used throughout this doc.
 - [experimental-flags-guide.md](experimental-flags-guide.md), [effects-system-guide.md](effects-system-guide.md), [compiler-internals.md](compiler-internals.md).
 - Archived decisions: `docs/archive/impure-refinement-predicates-accepted.md`, `docs/archive/class-param-refinement-not-demanded-of-callers.md`, `docs/archive/crossing-shadowed-binder-false-proof.md`.
 - Source: `src/compiler/refine_*.{c,h}`, `src/runtime/experiments.c`, `src/compiler/diag.{c,h}`.

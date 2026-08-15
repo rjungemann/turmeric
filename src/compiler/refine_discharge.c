@@ -13,7 +13,7 @@
  * obligations LEFT in the chain; it never changes an answer, because every
  * stage preserves the one-directional soundness invariant.
  *
- * See docs/upcoming/v1/refinement-types-plan.md (phase RT3). */
+ * See docs/archive/refinement-types-plan.md (phase RT3). */
 
 #include "refine_discharge.h"
 

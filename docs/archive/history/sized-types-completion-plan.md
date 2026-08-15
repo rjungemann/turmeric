@@ -85,7 +85,7 @@ Non-goals (deferred, tracked elsewhere):
   `post-mvp.md` and the rationale doc. Sized types stay restricted to
   natural-number size indices over the existing `Size` GADT.
 - SMT-backed entailment for size arithmetic -- see
-  [refinement-types-plan.md](refinement-types-plan.md). SZ-static checking uses
+  [refinement-types-plan.md](../refinement-types-plan.md). SZ-static checking uses
   syntactic normalization (`size-normalize`/`size-simplify`, already in
   `stdlib/sized.tur`), not a solver. Non-trivial nonlinear equalities fall back
   to a runtime check rather than being proven.
@@ -282,4 +282,4 @@ did not exist. Once SZ6--SZ8 land, record an explicit 1.0 disposition for
 - [sized-types-guide.md](../guides/sized-types-guide.md) -- user guide (to be reconciled in SZ5)
 - [advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md) -- the intended sized-types design
 - [typing-gap-plan.md](archive/typing-gap-plan.md) -- flag-graduation matrix (SZ9 feeds it)
-- [refinement-types-plan.md](refinement-types-plan.md) -- the SMT-backed static-checking story sized types deliberately avoid
+- [refinement-types-plan.md](../refinement-types-plan.md) -- the SMT-backed static-checking story sized types deliberately avoid

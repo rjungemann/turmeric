@@ -1,5 +1,14 @@
 # Refinement Types -- Prototype Plan (RT0--RT7 + in-house solver S0--S4)
 
+**Status: CLOSED. RT0--RT7 and S0--S4 all landed, and the `refined` experiment
+graduated 2026-08-01 (v0.33.0).** Nothing here is outstanding work. The file is
+archived rather than retired because it remains the **status source** for the
+refinement feature and for the `tests/fixtures/refine-*` corpus -- read it as a
+record, per the two-document note below. Work that builds on it and is still
+open lives in [`loop-invariants-plan.md`](../upcoming/hold/loop-invariants-plan.md)
+and [`reflected-measures-plan.md`](../upcoming/hold/reflected-measures-plan.md),
+both deliberately unscheduled.
+
 ## How to read this file -- it is TWO documents
 
 **This file is a journal stacked on top of a design document. They have
@@ -26,19 +35,20 @@ and `"refined"` moved to `GRADUATED[]` / `GRADUATED_LAYERS[]`: a lingering
 `--enable=refined` is a `TUR-W0063` no-op and a lingering `#lang turmeric
 refined` a `TUR-W0064` no-op, both aging out one minor line later. Targets
 v0.33.0. See
-[refined-graduation-plan.md](../../archive/refined-graduation-plan.md). **Every "gated behind
+[refined-graduation-plan.md](refined-graduation-plan.md). **Every "gated behind
 `--enable=refined`" sentence anywhere in this file is historical.**
 
 **Sibling plans.** Two follow-on plans build directly on this one and account
 for fixtures a reader will find under `tests/fixtures/refine-*` that this plan
 never mentions:
 
-- [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
+- [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
   (`RM-B`, boolean-sorted measures -- LANDED RM-B0..RM-B3). Backs
   `refine-bool-measure`, `refine-float-measure`, `refine-measure-euf`.
-- [refine-stateful-measures-plan.md](../../archive/refine-stateful-measures-plan.md)
-  (`RM-S`, refinements over mutable state -- RM-S0 done, A-vs-B decision open).
-  Backs the `refine-stateful-*` fixtures.
+- [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)
+  (`RM-S`, refinements over mutable state -- LANDED as Candidate B: `#reads`
+  plus the borrow-based `frozen` region. RM-S1, the epoch design, was not
+  pursued). Backs the `refine-stateful-*` fixtures.
 
 ---
 
@@ -47,7 +57,7 @@ never mentions:
 > **RT0--RT3 and S0--S3 are implemented and on `main`'s feature branch**, gated
 > behind `--enable=refined` / `#lang turmeric refined`. RT5b (`stdlib/refine.tur`)
 > landed with them. The user-facing write-up is
-> [docs/guides/refinement-types-guide.md](../../guides/refinement-types-guide.md).
+> [docs/guides/refinement-types-guide.md](../guides/refinement-types-guide.md).
 >
 > | Phase | State | Where |
 > |---|---|---|
@@ -822,7 +832,7 @@ never mentions:
 > unrelated slice. (`hamt.c` does the same shift on a `uint64_t` and is fine.)
 >
 > **FIXED 2026-07-26**, archived at
-> [docs/archive/history/wasm32-promo-hash-shift-ub.md](../../archive/history/wasm32-promo-hash-shift-ub.md).
+> [docs/archive/history/wasm32-promo-hash-shift-ub.md](history/wasm32-promo-hash-shift-ub.md).
 > The deferral reason above turned out not to apply: on LP64 the rewrite is
 > bit-identical (the cast is a no-op widening), so native hash values do not
 > move at all, and the promo map is a seen-set nothing iterates for output.
@@ -1583,7 +1593,7 @@ never mentions:
 > zero-parameter caller, so this makes the treatment consistent rather than
 > adopting a new posture. Seven positive/negative shapes checked by hand.
 >
-> Archived: [docs/archive/runtime-guarded-refutation-needs-closed-model.md](../../archive/runtime-guarded-refutation-needs-closed-model.md).
+> Archived: [docs/archive/runtime-guarded-refutation-needs-closed-model.md](runtime-guarded-refutation-needs-closed-model.md).
 >
 > ### Landed: class parameter inheritance, and reading B + a lint
 >
@@ -1668,7 +1678,7 @@ never mentions:
 > open model, so the violation surfaces under `--strict-refine` rather than by
 > default. Independent of typeclasses; `(safe-div 10 0)` reports in a
 > zero-parameter caller and not in a one-parameter one. Filed as
-> [docs/archive/runtime-guarded-refutation-needs-closed-model.md](../../archive/runtime-guarded-refutation-needs-closed-model.md);
+> [docs/archive/runtime-guarded-refutation-needs-closed-model.md](runtime-guarded-refutation-needs-closed-model.md);
 > not fixed here because it widens hard errors across every crossing, which is
 > its own decision.
 >
@@ -1681,7 +1691,7 @@ never mentions:
 >
 > Two pieces of remaining work now have their own plans:
 >
-> - [refined-graduation-plan.md](../../archive/refined-graduation-plan.md) -- the decision and
+> - [refined-graduation-plan.md](refined-graduation-plan.md) -- the decision and
 >   the mechanical checklist for removing the gate. The clock (`expires_at`
 >   `0.34.0`) makes this the only item with a deadline.
 >
@@ -1695,10 +1705,10 @@ never mentions:
 >   `refine-graduated-enable-noop` and `refine-graduated-lang-layer-noop`. **The
 >   deadline item is closed** -- there is no longer an item in this plan with a
 >   clock on it.
-> - [corpus-reader-tail-plan.md](../../archive/history/corpus-reader-tail-plan.md) -- the last 7
+> - [corpus-reader-tail-plan.md](history/corpus-reader-tail-plan.md) -- the last 7
 >   skips in the SMT-LIB corpus reader, with a recommendation to do one of the
 >   two items and skip the other.
-> - [../../archive/refined-dogfooding-plan.md](../../archive/refined-dogfooding-plan.md) --
+> - [../../archive/refined-dogfooding-plan.md](refined-dogfooding-plan.md) --
 >   on hold, waiting on a real program rather than on effort. It carries a
 >   tiered list of what such a program should contain, since coverage there is
 >   what makes the exercise worth running, and it is the only source of the
@@ -1738,7 +1748,7 @@ never mentions:
 >   constrained generics; the intersection is **zero**.
 >
 >   Filed with repros:
->   [docs/archive/class-param-refinement-not-demanded-of-callers.md](../../archive/class-param-refinement-not-demanded-of-callers.md).
+>   [docs/archive/class-param-refinement-not-demanded-of-callers.md](class-param-refinement-not-demanded-of-callers.md).
 >   Guide corrected -- it previously showed `(.scale-by 3 0)` erroring without
 >   noting that only holds when the instance restates the predicate.
 > - **Higher-order callees** -- a function-typed parameter carries no
@@ -1805,7 +1815,7 @@ never mentions:
 >   crossings are worth more and need no new syntax.
 >
 >   Placeholder plan, with the sketch and the trigger condition written down:
->   [docs/upcoming/hold/loop-invariants-plan.md](../hold/loop-invariants-plan.md).
+>   [docs/upcoming/hold/loop-invariants-plan.md](../upcoming/hold/loop-invariants-plan.md).
 > - ~~**A datatype theory for the VC**~~ -- LANDED IN FULL, see above, and
 >   without the new sort this entry assumed it needed. Arm hypotheses and
 >   constructor axioms both shipped; `(.a (Box p q))` now reduces to `p`. What
@@ -1856,9 +1866,9 @@ never mentions:
 > **Solver:** the Z3 scaffold was **retired 2026-07-30 in 0.32.5** and its
 > sources deleted. The in-house S0--S4 chain is the only solver, in every build.
 >
-> **Sibling plans:** [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
+> **Sibling plans:** [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)
 > (boolean-sorted measures, `RM-B`) and
-> [refine-stateful-measures-plan.md](../../archive/refine-stateful-measures-plan.md)
+> [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)
 > (refinements over mutable state, `RM-S`) extend the predicate language beyond
 > what this plan scopes.
 >
@@ -1982,7 +1992,7 @@ registrations:
    ```c
    { "refined",
      "static discharge of #refine{...} predicates (refinement types)",
-     "docs/upcoming/v1/refinement-types-plan.md",
+     "docs/archive/refinement-types-plan.md",
      "0.<minor>.0",              /* introduced -- set at RT0 landing */
      "0.<minor+3>.0",            /* expires_at -- soft deadline; review at cut */
      XF_LIFECYCLE_PROTOTYPE,
@@ -2748,7 +2758,7 @@ scaffold is deleted once all of the following hold:
 
   Measured 2026-07-26: **200 / 200 parsed, 0 skipped, 0 crashes, 0 soundness
   failures.** The reader tail that used to skip 7 is closed -- see
-  [corpus-reader-tail-plan.md](../../archive/history/corpus-reader-tail-plan.md), now
+  [corpus-reader-tail-plan.md](history/corpus-reader-tail-plan.md), now
   archived/resolved. So the parsed-coverage bar this criterion actually gates on
   is met outright.
 
@@ -2907,9 +2917,9 @@ proceed in parallel with RT5a once RT3 lands.
 > `src/compiler/elab_types.c:2466-2470`: *"a refinement alias takes no type
 > parameters in this prototype (the predicate cannot mention them)."* This is a
 > settled non-goal, tagged `[prototype]` / "Not planned" in
-> [refinement-types-guide.md](../../guides/refinement-types-guide.md); the
+> [refinement-types-guide.md](../guides/refinement-types-guide.md); the
 > revisit trigger lives in
-> [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md).
+> [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md).
 > `stdlib/refine.tur` shipped monomorphic aliases only -- there is no `Bounded`.
 
 > **CORRECTED 2026-08-01: `stdlib/refine-vec.tur` was NEVER CREATED.** The
@@ -2920,7 +2930,7 @@ proceed in parallel with RT5a once RT3 lands.
 > takes a different route: the bound is a *value-level* fact the smart
 > constructor `bidx-of?` checks once and returns as an `Option`, not a type the
 > checker tracks. The revisit trigger for the typed version lives in
-> [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md).
+> [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md).
 
 `stdlib/refine-vec.tur` would wire the `(< i n)` index obligation through
 `SizedVec` -- the direct target of S2a difference logic:
@@ -3255,21 +3265,21 @@ always sound.
 ### Turmeric plans that depend on or extend this one
 
 - **Graduating `refined`** --
-  [refined-graduation-plan.md](../../archive/refined-graduation-plan.md). EXECUTED
+  [refined-graduation-plan.md](refined-graduation-plan.md). EXECUTED
   2026-08-01, targeting v0.33.0. The record of the four preconditions, the
   dogfooding cost measurement, and the exact mechanical checklist that removed
   the gate.
 - **Boolean-sorted measures (`RM-B`)** --
-  [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md).
+  [refine-predicate-measures-plan.md](refine-predicate-measures-plan.md).
   LANDED (RM-B0..RM-B3). Lifts the hard-coded `VS_INT` measure result sort in
   `refine_collect.c` so a `bool`-returning function can be a predicate atom.
   RM-B0 also uncovered a float measure **mis-sort**, a soundness bug, written up
   in
-  [docs/archive/history/refine-float-measure-missort.md](../../archive/history/refine-float-measure-missort.md).
+  [docs/archive/history/refine-float-measure-missort.md](history/refine-float-measure-missort.md).
   Backing fixtures: `refine-bool-measure`, `refine-float-measure`,
   `refine-measure-euf`.
 - **Refinements over mutable state (`RM-S`)** --
-  [refine-stateful-measures-plan.md](../../archive/refine-stateful-measures-plan.md). RM-S0
+  [refine-stateful-measures-plan.md](refine-stateful-measures-plan.md). RM-S0
   (dogfooding) done 2026-07-26 recommending Candidate B; the A-vs-B decision is
   awaiting sign-off, and RM-S1/RM-S2 do not start without it. Addresses the
   direct consequence of this plan's purity requirement: a measure must be
@@ -3278,7 +3288,7 @@ always sound.
   (`-frozen-macro`, `-guard-discharges`, `-nonfinal-statement`,
   `-nonstrict-warns`, `-resizable-bounds`).
 - **Refinement-typed ECS APIs** --
-  [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md). The
+  [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md). The
   downstream consumer; carries the revisit triggers for two settled non-goals
   here (parameterized refinement aliases, and the typed `SizedVec` index bound
   that `refine-vec.tur` would have provided).

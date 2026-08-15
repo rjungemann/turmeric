@@ -20,7 +20,7 @@
  *   - each parameter declared with a contract type (`v` renamed to the param)
  *   - the function's `:pre` predicate
  *
- * See docs/upcoming/v1/refinement-types-plan.md (phase RT1). */
+ * See docs/archive/refinement-types-plan.md (phase RT1). */
 
 #include <stdbool.h>
 #include <stdint.h>

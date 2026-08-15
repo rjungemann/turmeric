@@ -13,7 +13,7 @@
  * decide falls straight to the runtime contract check it would have had anyway
  * (or, under --strict-refine, to a hard error).
  *
- * See docs/upcoming/v1/refinement-types-plan.md (phase RT3). */
+ * See docs/archive/refinement-types-plan.md (phase RT3). */
 
 #include "refine_collect.h"
 

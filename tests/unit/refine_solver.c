@@ -7,7 +7,7 @@
  * cases assert `verdict != RT_VALID` rather than a specific verdict -- a
  * future stage that legitimately decides one of them must not break this file.
  *
- * See docs/upcoming/v1/refinement-types-plan.md. */
+ * See docs/archive/refinement-types-plan.md. */
 
 #include <stdio.h>
 #include <stdlib.h>
