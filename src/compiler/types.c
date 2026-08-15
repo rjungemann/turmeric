@@ -3,6 +3,7 @@
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
+#include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
 #include "mangle.h"  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
@@ -3072,9 +3073,62 @@ bool type_is_wide_byval_adt(Type t) {
  * folds), and the read-back recovery must consult THIS predicate so the four
  * decisions cannot drift. */
 bool type_is_boxed_container_elem(Type t) {
-    if (t.kind != TY_ADT || !t.as.adt_.def) return false;
-    if (t.as.adt_.def->is_heap) return false;
-    return adt_byval_value_size_bytes(t.as.adt_.def) > 0;
+    bool boxed = t.kind == TY_ADT && t.as.adt_.def &&
+                 !t.as.adt_.def->is_heap &&
+                 adt_byval_value_size_bytes(t.as.adt_.def) > 0;
+    /* Increment 4 stage 3: the CONTAINER_ELEM shadow.  Unlike the let-bind /
+     * merge-temp / adt-field shadows this one compares a PREDICATE, not a C
+     * spelling: a container slot is one word in every case (see the slot
+     * calibration in repr-decision-function-plan), so the decision the
+     * position actually makes is boxed-or-not, and recovering that from a
+     * declaration is impossible -- both answers are `int64_t`.  Comparing the
+     * predicate directly is the sharper instrument anyway: it checks the
+     * two-place decision at its source rather than through its spelling.
+     *
+     * Silence here is the precondition for making repr_of the DEFINITION of
+     * this predicate, which is what increment 4 is for.  Every container
+     * boxing site, its ownership probe, and the read-back recovery route
+     * through this one function, so instrumenting it covers all of them.
+     *
+     * MEASURED 2026-08-15 (2028 fixtures): 5 lines, all one shape --
+     * `(type-app Option int)`, want-boxed=1 got-boxed=0.  That is a SCOPE
+     * mismatch, not a seam, and the distinction is the whole point:
+     *
+     *   - repr_of answers the OUTCOME question ("is this element heap-boxed
+     *     into the slot?") and is right for both -- a concrete by-value APP
+     *     element IS boxed (`malloc(sizeof(tur_adt_Option__int))` + push);
+     *   - this predicate answers the narrower "does it take the ADT
+     *     box/deref bridge?", and TY_APP elements do not.  They ride a
+     *     separate monomorph-aware path: malloc the monomorph on push,
+     *     reconstruct field-by-field through the GENERIC one-word box
+     *     (`tur_option_t`) on read.
+     *
+     * That second path is sound rather than lucky: every parametric
+     * monomorph's payload occupies exactly one word (`double` bit-cast
+     * through a union, a by-value struct payload as `tur_adt_Pt *`), so the
+     * generic box is layout-compatible with every monomorph by
+     * construction.  Verified by running the round trip for int, float
+     * (7.1/2.5) and a by-value struct payload -- all correct.
+     *
+     * So this is two mechanisms deciding one thing and AGREEING, which is
+     * the campaign's core anatomy caught before it drifts.  Collapsing them
+     * is the next chokepoint, and it is a behavior change (the app path
+     * would have to start consulting this predicate without double-boxing),
+     * so it wants its own measured increment -- not a widening bolted on
+     * here.  Until then the 5 lines are a pinned work list, not noise. */
+    if (g_emit_abi_trace) {
+        bool want = repr_of(&t, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
+        if (want != boxed) {
+            Buf tb; buf_init(&tb);
+            type_print(&tb, t);
+            buf_putc(&tb, '\0');
+            fprintf(stderr,
+                    "repr-shadow container-elem type=%s want-boxed=%d "
+                    "got-boxed=%d\n", tb.data, (int)want, (int)boxed);
+            buf_free(&tb);
+        }
+    }
+    return boxed;
 }
 
 /* Parametric-by-value: app-aware sibling of adt_byval_pass_by_ptr.  A concrete

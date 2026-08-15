@@ -471,8 +471,27 @@ about, and cowpaths are paved before the field is closed:
   name -- and that shape's `full_type` is deliberately NULL, so the shadow
   had to reconstruct it from `drop_inner_def` or its blind spot would have
   been exactly the shape worth watching. Suite 2598/0, no snapshot churn.
+  *Status 2026-08-15, later: CONTAINER_ELEM instrumented -- and it named the
+  next chokepoint.* Shadowed inside `type_is_boxed_container_elem` (the
+  predicate every boxing site, ownership probe and read-back recovery
+  consults). This one compares a PREDICATE rather than a C spelling, because
+  the slot calibration says the slot is one word either way, so boxed-or-not
+  is not recoverable from a declaration. Sweep: 5 lines, one shape --
+  a concrete by-value APP element (`(Vec (Option int))`). It is a **scope
+  mismatch, not a seam**: `repr_of` answers the outcome ("is it boxed?" --
+  yes, the push mallocs the monomorph), while the predicate answers "does it
+  take the ADT box/deref bridge?" -- which TY_APP elements do not, riding a
+  separate monomorph-aware path instead. Sound rather than lucky: every
+  parametric monomorph's payload occupies one word, verified by round-tripping
+  int, float (7.1/2.5) and a by-value struct payload. So: **two mechanisms
+  deciding one thing and agreeing** -- this campaign's core anatomy, caught
+  before it drifts. Collapsing them is a behavior change (the app path must
+  consult the predicate without double-boxing) and wants its own measured
+  increment; until then the row is pinned in `run-repr-trace.sh` the way the
+  fuzzer pins a `--known-probes` row -- the TY_APP line must still fire, and
+  the TY_ADT half must stay silent.
   Remaining stage-3 positions: fn-value tail/join, method-result carrier
-  production, the `emit_expr.c` per-arg bridges, and CONTAINER_ELEM.*
+  production, the `emit_expr.c` per-arg bridges.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --

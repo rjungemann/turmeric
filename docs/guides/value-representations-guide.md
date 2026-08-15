@@ -141,7 +141,15 @@ Each of these is a crossing where a bridge may be needed:
 - `let` binding / ascription `(:: e T)`
 - generic (tyvar-typed) call argument and result
 - typeclass method dispatch result (bare and dotted spellings)
-- `Vec` element slot (push and get)
+- `Vec` element slot (push and get) -- **instrumented 2026-08-15** (increment
+  4 stage 3). Two mechanisms box an element here and they are easy to
+  confuse: a nominal by-value ADT/struct element takes the box/deref bridge
+  behind `type_is_boxed_container_elem`, while a concrete by-value *app*
+  element (`(Vec (Option int))`) takes a monomorph-aware path -- malloc the
+  monomorph on push, reconstruct field-by-field through the generic one-word
+  box on read. Both really do box; only the first consults the predicate. The
+  second is layout-safe because every parametric monomorph's payload occupies
+  exactly one word.
 - struct field store / load -- **instrumented and measured silent
   2026-08-15** (increment 4 stage 3). The declaration side of this boundary
   is one chokepoint, `adt_ctor_field_c_type`, which all nine field-emission

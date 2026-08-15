@@ -197,6 +197,57 @@ else
   fi
 fi
 
+# Increment 4 stage 3: the CONTAINER_ELEM shadow, at
+# `type_is_boxed_container_elem` -- the one predicate every container boxing
+# site, its ownership probe, and the read-back recovery consult.  Unlike the
+# other three shadows this one compares a PREDICATE rather than a C spelling,
+# because a container slot is one word either way and the boxed-or-not
+# decision is not recoverable from a declaration.
+#
+# Two checks, because this position has both a positive and a negative:
+#
+#   fire     a concrete by-value APP element (`(Vec (Option int))`) is a KNOWN
+#            pinned disagreement -- repr_of reports the outcome (it IS boxed)
+#            while the predicate answers the narrower "takes the ADT
+#            box/deref bridge", which TY_APP elements do not.  Corpus-wide
+#            this is the only shape, 5 lines.  Losing the line means the
+#            instrument died, not that the seam closed -- closing it is a
+#            behavior change with its own increment (see types.c).
+#   silence   a TY_ADT element is the half the predicate owns; any line there
+#            means a container decision drifted from the protocol.
+cat > "$tmp/celem-app.tur" <<'EOF'
+(defn main [] : int
+  (let [vo (:: (vec-new) (Vec (Option int)))]
+    (vec-push! vo (:: (some 5) (Option int)))
+    (let [a (:: (vec-get vo 0) (Option int))]
+      (println (unwrap-or a -1))))
+  0)
+EOF
+cat > "$tmp/celem-adt.tur" <<'EOF'
+(defstruct CeSm [a : int])
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec CeSm))]
+    (vec-push! v (CeSm 31))
+    (let [b (:: (vec-get v 0) CeSm)] (println (.a b))))
+  0)
+EOF
+"$TUR" emit-c --emit-abi-trace "$tmp/celem-app.tur" 2>"$tmp/celem-app.err" >/dev/null
+if grep -q '^repr-shadow container-elem type=(type-app Option int) want-boxed=1 got-boxed=0' "$tmp/celem-app.err"; then
+  echo "  ok  container-elem shadow alive on the pinned TY_APP row"
+else
+  echo "  FAIL container-elem shadow -- pinned TY_APP row did not fire; got:"
+  grep '^repr-shadow' "$tmp/celem-app.err" || echo "    (no repr-shadow lines at all)"
+  rc=1
+fi
+"$TUR" emit-c --emit-abi-trace "$tmp/celem-adt.tur" 2>"$tmp/celem-adt.err" >/dev/null
+if grep -q '^repr-shadow' "$tmp/celem-adt.err"; then
+  echo "  FAIL container-elem shadow -- TY_ADT element must be consolidated:"
+  grep '^repr-shadow' "$tmp/celem-adt.err"
+  rc=1
+else
+  echo "  ok  container-elem silent on the TY_ADT element it owns"
+fi
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
   echo "--- fn-param trace ---"

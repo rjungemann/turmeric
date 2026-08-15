@@ -1,9 +1,11 @@
 # Increment 4: the representation decision function (`repr-of`)
 
-**Status:** stages 1, 2 and 4 landed 2026-07-31; stage 3 in progress -- the
-let-bind, merge-temp and (2026-08-15) struct-field positions are instrumented
-and measured silent corpus-wide; the fn-value tail/join, method-result and
-per-arg-bridge positions are not yet instrumented.
+**Status:** stages 1, 2 and 4 landed 2026-07-31; stage 3 in progress.
+Instrumented so far: let-bind, merge-temp, struct-field (all silent
+corpus-wide) and container-elem (2026-08-15), which is silent on the half its
+predicate owns and carries one pinned, diagnosed disagreement naming the next
+chokepoint.  Not yet instrumented: fn-value tail/join, method-result carrier
+production, the `emit_expr.c` per-arg bridges.
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 4 -- "the true consolidation; it goes last because by then the
 sites agree in *behavior* and the collapse is mechanical rather than
@@ -203,10 +205,54 @@ fail.
 
 Suite 2598/0, no snapshot churn (the shadow is `--emit-abi-trace`-only and
 the `repr_of` arm is consulted by nothing else); ratchet and typekind
-exhaustiveness checks unchanged.  Remaining stage-3 positions are as listed
-above -- fn-value tail/join, method-result carrier production, the
-`emit_expr.c` per-arg bridges -- plus CONTAINER_ELEM, which the slot
-calibration now gives a spec for but which has no shadow site yet.
+exhaustiveness checks unchanged.
+
+**The CONTAINER_ELEM position: instrumented, and it found the next
+chokepoint (2026-08-15).**  Shadowed inside `type_is_boxed_container_elem`,
+the predicate every container boxing site, its ownership probe, and the
+read-back recovery consult.  This shadow compares a **predicate**, not a C
+spelling -- the slot calibration above says a container slot is one word
+either way, so boxed-or-not is simply not recoverable from a declaration.
+Comparing the decision at its source is the sharper instrument anyway, and
+it is the form the eventual migration needs: making `repr_of` the
+DEFINITION of this predicate is what increment 4 is for.
+
+Corpus sweep: **5 lines, one shape** -- `(type-app Option int)`,
+`want-boxed=1 got-boxed=0`.  It is a SCOPE mismatch, not a seam, and the
+difference is the finding:
+
+- `repr_of` answers the OUTCOME question ("is this element heap-boxed into
+  the slot?") and is right for both.  A concrete by-value APP element IS
+  boxed -- the emitted push is `malloc(sizeof(tur_adt_Option__int))`, store,
+  `vec_hypush_ex`.
+- `type_is_boxed_container_elem` answers the narrower "does it take the ADT
+  box/deref bridge?", and TY_APP elements do not.  They ride a separate
+  monomorph-aware path: malloc the monomorph on push, reconstruct
+  field-by-field through the GENERIC one-word box (`tur_option_t`) on read.
+
+The second path is sound rather than lucky, which had to be established
+before calling this a work item instead of a bug: every parametric
+monomorph's payload occupies exactly one word, so `tur_option_t {bool,
+int64}` is layout-compatible with every `Option` monomorph by construction.
+Checked by running the round trip -- `int` (11 / none / 33), `float`
+(7.1 / 2.5, bit-cast through a union), and a by-value struct payload (stored
+as `tur_adt_Pt *`) -- all correct.  Following the meta-plan's "find the
+fixture that exercises the OTHER side of the split" rule is what turned a
+plausible miscompile into a measured invariant.
+
+So this is **two mechanisms deciding one thing and agreeing** -- the
+campaign's core anatomy, caught before it drifts rather than after a
+downstream spice trips on it.  Collapsing them is the next chokepoint and it
+is a real behavior change (the app path must start consulting the predicate
+without double-boxing), so it wants its own measured increment rather than a
+widening bolted onto the shadow.  Until then the 5 lines are a **pinned work
+list**, in the fuzzer's `--known-probes` spirit: `tests/run-repr-trace.sh`
+asserts the TY_APP row still fires (losing it means the instrument died, not
+that the seam closed) and that a TY_ADT element -- the half the predicate
+owns -- stays silent.
+
+Remaining stage-3 positions: fn-value tail/join classification,
+method-result carrier production, and the `emit_expr.c` per-arg bridges.
 
 ### Stage 4 -- registry + ratchet
 (ratchet LANDED 2026-07-31)
