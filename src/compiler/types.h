@@ -1798,6 +1798,15 @@ typedef enum ReprForm {
 } ReprForm;
 
 ReprForm     repr_of(const Type *t, ReprPosition pos);
+/* Increment 4 stage 3: the binding-context sibling the param-position
+ * boundary note pre-registered.  A fn-typed value's representation is decided
+ * by per-BINDING flags (`is_poly_fn`, `is_fat`) that elaboration sets and that
+ * the Type does not carry, so `repr_of(type, pos)` alone mislabels every fn
+ * param.  This overload consults those flags first and delegates to `repr_of`
+ * otherwise.  Declared here (with a forward-declared Binding) rather than in a
+ * second decision function, so the campaign keeps ONE home for the question. */
+struct Binding;
+ReprForm     repr_of_binding(const struct Binding *b, ReprPosition pos);
 const char  *repr_form_name(ReprForm f);
 const char  *repr_position_name(ReprPosition pos);
 /* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /

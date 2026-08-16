@@ -3,6 +3,7 @@
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
+#include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
 #include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
 #include "mangle.h"  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
@@ -4831,4 +4832,21 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
      * erased carrier (compile-time-only kinds, unions, placeholders). */
     if (type_has_concrete_codegen_layout(t)) return REPR_SCALAR_BITS;
     return REPR_CARRIER_I64;
+}
+
+ReprForm repr_of_binding(const struct Binding *b, ReprPosition pos) {
+    if (!b) return REPR_CARRIER_I64;
+    /* The two decisions elaboration records on the binding and the Type does
+     * not carry.  Order matters: a rank-2 poly fn PARAM is the by-value
+     * tur_poly_fn_t carrier even though its type is spelled ptr<void>, and
+     * `^fat` is an explicit request for the fat handle. */
+    if (b->is_poly_fn && b->is_param) return REPR_CARRIER_I64;
+    if (b->is_fat) return REPR_FAT_HANDLE;
+    /* A parameter's representation is fixed where it was DECLARED, not where
+     * it is later used -- a fn param normalized to fat at the signature stays
+     * fat when it appears in a tail, so asking the use position would give
+     * the wrong answer (param and result positions deliberately disagree; see
+     * fn_param_type_is_fat_normalized vs fn_result_type_is_fat_normalized). */
+    if (b->is_param) return repr_of(&b->type, REPR_POS_PARAM);
+    return repr_of(&b->type, pos);
 }

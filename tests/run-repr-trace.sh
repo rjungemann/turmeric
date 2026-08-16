@@ -248,6 +248,44 @@ else
   echo "  ok  container-elem silent on the TY_ADT element it owns"
 fi
 
+# Increment 4 stage 3: the fn-value TAIL/JOIN classification, shadowed in
+# `elab_normalize_fn_tail_leaves` against `repr_of_binding` -- the
+# binding-context decision function, which consults the `is_poly_fn` /
+# `is_fat` flags the Type does not carry.  Only leaves whose BINDING is
+# authoritative (params) are shadowed; a let-bound alias carries its
+# representation in its initialiser, which no binding-only signature can see.
+#
+# Silence alone would prove nothing here (the walker runs on few shapes: 8
+# evaluations corpus-wide), so the check first proves the probe REACHES the
+# classification by requiring a to-fat conversion in its emitted C.  Both
+# arms of the join are fn params returned through a fn-typed result, which is
+# exactly what the walker normalizes.  Grep files, never `... | grep -q`:
+# under `set -o pipefail` an early-exiting grep SIGPIPEs its producer and a
+# match reports failure.
+cat > "$tmp/fn-tail.tur" <<'EOF'
+(defn pick [c : int f : (fn [int] int) g : (fn [int] int)] : (fn [int] int)
+  (if (> c 0) f g))
+(defn main [] : int
+  (let [h (pick 1 (fn [x] (+ x 1)) (fn [x] (* x 2)))]
+    (println (h 5)))
+  0)
+EOF
+"$TUR" emit-c --emit-abi-trace "$tmp/fn-tail.tur" >"$tmp/fn-tail.c" 2>"$tmp/fn-tail.err"
+if [ ! -s "$tmp/fn-tail.c" ]; then
+  echo "  FAIL fn-tail probe did not compile:"
+  head -5 "$tmp/fn-tail.err"
+  rc=1
+elif ! grep -q "to_fat" "$tmp/fn-tail.c"; then
+  echo "  FAIL fn-tail probe never reached the fn-value classification"
+  rc=1
+elif grep -q '^repr-shadow fn-tail-leaf' "$tmp/fn-tail.err"; then
+  echo "  FAIL fn-tail-leaf shadow -- classification disagrees with repr_of_binding:"
+  grep '^repr-shadow fn-tail-leaf' "$tmp/fn-tail.err"
+  rc=1
+else
+  echo "  ok  fn-tail-leaf classification agrees with repr_of_binding"
+fi
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
   echo "--- fn-param trace ---"

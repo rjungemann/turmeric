@@ -1,11 +1,13 @@
 # Increment 4: the representation decision function (`repr-of`)
 
 **Status:** stages 1, 2 and 4 landed 2026-07-31; stage 3 in progress.
-Instrumented so far: let-bind, merge-temp, struct-field (all silent
-corpus-wide) and container-elem (2026-08-15), which is silent on the half its
+Instrumented so far: let-bind, merge-temp, struct-field and fn-value
+tail/join (all silent) plus container-elem, which is silent on the half its
 predicate owns and carries one pinned, diagnosed disagreement naming the next
-chokepoint.  Not yet instrumented: fn-value tail/join, method-result carrier
-production, the `emit_expr.c` per-arg bridges.
+chokepoint.  `repr_of_binding` now exists alongside `repr_of` for the
+positions whose decision lives on the Binding rather than the Type.  Not yet
+instrumented: method-result carrier production, the `emit_expr.c` per-arg
+bridges.
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 4 -- "the true consolidation; it goes last because by then the
 sites agree in *behavior* and the collapse is mechanical rather than
@@ -251,8 +253,57 @@ asserts the TY_APP row still fires (losing it means the instrument died, not
 that the seam closed) and that a TY_ADT element -- the half the predicate
 owns -- stays silent.
 
-Remaining stage-3 positions: fn-value tail/join classification,
-method-result carrier production, and the `emit_expr.c` per-arg bridges.
+**The fn-value TAIL/JOIN position: `repr_of_binding` exists, and the
+classification agrees (2026-08-16).**  This is the position the param-position
+boundary note below deferred with "if a future increment wants an independent
+check there, the signature must grow a binding-context argument
+(`repr_of_binding(const Binding *, ReprPosition)`); do that when a consumer
+needs it, not before."  A consumer needed it, so it exists now, defined next to
+`repr_of` in `types.c` (which can include `expr.h` -- the dependency runs that
+way, not the reverse -- so the campaign keeps ONE home for the question rather
+than growing a second decision function).
+
+`repr_of_binding` consults the two decisions elaboration records on the
+binding and the Type does not carry -- `is_poly_fn && is_param` is the
+by-value `tur_poly_fn_t` carrier (spelled `ptr<void>`), `is_fat` is an
+explicit fat request -- then delegates.  It encodes one protocol statement
+worth stating out loud: **a parameter's representation is fixed where it was
+DECLARED, not where it is used**, so a param leaf is asked at
+`REPR_POS_PARAM` even when it appears in a tail.  Asking the use position
+would be wrong precisely because param and result deliberately disagree
+(`fn_param_type_is_fat_normalized` vs `fn_result_type_is_fat_normalized`).
+
+Shadowed in `elab_normalize_fn_tail_leaves` -- the walker the fn-value axis
+turns on, which sorts each tail leaf into carrier / already-fat /
+thin-needing-a-shim and emits the matching conversion.  **0 disagreements**
+corpus-wide.
+
+Two honesty notes on that zero:
+
+- **It is a small population.**  Sabotaging `repr_of_binding` to a wrong
+  answer and re-sweeping counts the evaluations rather than the
+  disagreements: **8 corpus-wide**, 2 on the dedicated probe.  So this is
+  "the classification agrees everywhere it runs", not broad verification --
+  the walker only runs on param leaves under fn-tail normalization.  The
+  smoke therefore requires the probe to REACH the classification (a to-fat
+  conversion must appear in its emitted C) before reading its silence.
+- **Only param leaves are shadowed.**  A let-bound alias carries its
+  representation in its INITIALISER -- an alias of a closure is fat while its
+  binding type reads thin -- which no binding-only signature can see.  Those
+  leaves are left to the existing alias resolution; the instrument narrows
+  its claim rather than emitting disagreements it cannot ground.
+
+**The stage-4 ratchet earned its keep here.**  The shadow's first draft
+re-derived `fn_param_type_is_fat_normalized` to describe what the site
+decided, and the ratchet failed the build: `elab_fns.c grew 3 -> 4`.  That is
+exactly the "a representation decision is being re-derived at a new site"
+case, and the right fix was not to bump the baseline but to hoist the site's
+own check into one local that the shadow and the decision share -- so the
+count went back to 3 and the duplication never existed.  A guard that catches
+its own campaign's instrumentation is a working guard.
+
+Remaining stage-3 positions: method-result carrier production, and the
+`emit_expr.c` per-arg bridges.
 
 ### Stage 4 -- registry + ratchet
 (ratchet LANDED 2026-07-31)
@@ -282,7 +333,9 @@ shared predicate -- so the position is COVERED, by trace rather than
 shadow.  If a future increment wants an independent check there, the
 signature must grow a binding-context argument
 (`repr_of_binding(const Binding *, ReprPosition)`); do that when a
-consumer needs it, not before.  The data-param half of the signature
+consumer needs it, not before.  **A consumer needed it on 2026-08-16 --
+the fn-value tail/join classification -- so it exists; see that section
+above.**  The data-param half of the signature
 position is dominated by `type_uses_carrier_abi`/pass-by-ptr decisions
 whose call sites the stage-4 ratchet now pins.
 

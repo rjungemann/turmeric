@@ -490,8 +490,26 @@ about, and cowpaths are paved before the field is closed:
   increment; until then the row is pinned in `run-repr-trace.sh` the way the
   fuzzer pins a `--known-probes` row -- the TY_APP line must still fire, and
   the TY_ADT half must stay silent.
-  Remaining stage-3 positions: fn-value tail/join, method-result carrier
-  production, the `emit_expr.c` per-arg bridges.*
+  *Status 2026-08-16: the fn-value tail/join position closed, and the
+  decision function grew its second signature.* `repr_of_binding(const
+  Binding *, ReprPosition)` -- pre-registered by the param-position boundary
+  note and built now that a consumer needed it -- consults the `is_poly_fn` /
+  `is_fat` flags elaboration records and the Type does not carry, and encodes
+  that **a parameter's representation is fixed where it was DECLARED, not
+  where it is used**. Shadowed in `elab_normalize_fn_tail_leaves`: 0
+  disagreements, on a sabotage-counted population of 8 evaluations
+  corpus-wide -- so "agrees everywhere it runs", not broad verification, and
+  the smoke requires the probe to reach the classification before reading its
+  silence. Only param leaves are shadowed; a let-bound alias carries its
+  representation in its initialiser, which no binding-only signature can see.
+  **The stage-4 ratchet caught this increment's own instrumentation**: the
+  shadow's first draft re-derived `fn_param_type_is_fat_normalized` to
+  describe the site's decision and the build failed with
+  `elab_fns.c grew 3 -> 4`. The fix was to hoist the site's own check into
+  one shared local rather than bump the baseline -- a guard that catches its
+  author is a working guard.
+  Remaining stage-3 positions: method-result carrier production, the
+  `emit_expr.c` per-arg bridges.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --

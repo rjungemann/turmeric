@@ -4048,6 +4048,36 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
     Binding *vb = (r->kind == EX_VAR && r->as.var.binding)
                       ? r->as.var.binding
                       : x->as.var.binding;
+    /* Increment 4 stage 3: the fn-value TAIL/JOIN shadow.  This walker is the
+     * classification the fn-value axis turns on -- each tail leaf is sorted
+     * into carrier / already-fat / thin-needing-a-shim, and the emitted
+     * conversion follows.  Shadow it against `repr_of_binding`, the
+     * binding-context decision function, so the two cannot drift.
+     *
+     * Only leaves whose BINDING is authoritative are shadowed: a param
+     * carries its representation in its flags, but a let-bound alias carries
+     * it in its INITIALISER (an alias of a closure is fat while its binding
+     * type reads thin), which no binding-only signature can see.  Those are
+     * left to the alias resolution below -- narrowing what the instrument
+     * claims rather than emitting disagreements it cannot ground. */
+    /* The "already fat" question is evaluated ONCE and consulted by both the
+     * shadow and the decision below.  Re-deriving it for the shadow would be
+     * the exact thing the stage-4 ratchet exists to catch -- and it did catch
+     * it, on the first draft of this shadow. */
+    bool leaf_already_fat =
+        vb->is_fat || (vb->is_param && vb->type.kind == TY_FN &&
+                       fn_param_type_is_fat_normalized(&vb->type));
+    if (g_emit_abi_trace && vb->is_param) {
+        ReprForm site = (vb->is_poly_fn && vb->is_param) ? REPR_CARRIER_I64
+                        : leaf_already_fat ? REPR_FAT_HANDLE
+                                           : REPR_THIN_FN;
+        ReprForm want = repr_of_binding(vb, REPR_POS_RESULT);
+        if (site != want)
+            fprintf(stderr,
+                    "repr-shadow fn-tail-leaf result name=%s want=%s got=%s\n",
+                    vb->name ? vb->name->name : "_", repr_form_name(want),
+                    repr_form_name(site));
+    }
     if (vb->is_poly_fn && vb->is_param) {
         Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID, x->span);
         conv->as.poly_to_fat_.inner = x;
@@ -4056,9 +4086,7 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
         *slot = conv;
         return;
     }
-    if (vb->is_fat ||
-        (vb->is_param && vb->type.kind == TY_FN &&
-         fn_param_type_is_fat_normalized(&vb->type)))
+    if (leaf_already_fat)
         return;  /* already fat */
     if (r != x && r->kind != EX_VAR &&
         (r->kind == EX_CLOSURE || r->kind == EX_FN_TO_FAT ||
