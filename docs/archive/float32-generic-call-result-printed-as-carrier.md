@@ -1,7 +1,27 @@
 # A `float32` returned from a generic call is consumed as the raw int64 carrier
 
 **Severity:** silent wrong answer. `7.1` prints as `1088631603`.
-**Status:** OPEN.
+**Status: FIXED 2026-08-16.**  The elaboration hole is closed by a paired
+change: `call_wrap_reinterpret_owning` (elab_call.c) admits the
+carrier<->float32 pair -- the one mixed-size float pair that IS
+bit-meaningful, whose silent bail was the root cause -- and the
+EX_REINTERPRET size-mismatch arm (emit_expr.c) uses the union overlay for
+float pairs instead of the C value cast that would convert the bit pattern.
+`(idf (:: 7.1 float32))` now prints 7.1, the spurious TUR-E0707 on an
+ascribed result is gone, and compiled/turi agree.  Pinned by
+`tests/fixtures/float32-generic-call-result` (both widths, argument
+direction, chained calls, ascription).  Suite 2599/0 -> 2600/0 with the
+fixture; fuzzer seeds 9301/9302 clean.
+
+Residual, deliberately NOT covered by this fix, each with its own report:
+a typeclass-method result feeding a generic call still fails at the PRODUCER
+(`return self;` value-converts -- [`method-result-float-spec-return-value-converts`](../reported/method-result-float-spec-return-value-converts.md),
+now reproducible at float32 too), and a float32-ascribed LITERAL in
+comparison position emits as the double literal
+([`float32-ascribed-literal-compares-as-double`](../reported/float32-ascribed-literal-compares-as-double.md),
+pre-existing, engine-divergent, found while pinning this fixture).
+
+Originally filed as OPEN with the text below.
 **Found by:** probing the `float32` sibling of
 [`method-result-float-spec-return-value-converts`](method-result-float-spec-return-value-converts.md),
 which asked for exactly this check. Same disease, **opposite** asymmetry --

@@ -3559,6 +3559,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (src_size == dst_size) {
                 buf_printf(&out, "((union { %s s; %s d; }){.s = %s}).d",
                            type_c_name(src), type_c_name(dst), inner);
+            } else if (src_kind == TY_FLOAT32 || dst_kind == TY_FLOAT32 ||
+                       src_kind == TY_FLOAT || dst_kind == TY_FLOAT ||
+                       src_kind == TY_FLOAT64 || dst_kind == TY_FLOAT64) {
+                /* float32-generic-call-result-printed-as-carrier: a mixed-size
+                 * pair involving a float is the int64 carrier holding float32
+                 * bits (elab admits exactly that pair).  A C value cast here
+                 * would CONVERT -- `(float)(int64_t)` of the bit pattern is
+                 * garbage -- so use the union overlay, whose smaller member
+                 * reads the carrier's low bytes: the same idiom
+                 * emit_carrier_bridge emits for the inline-scalar crossing,
+                 * which is what the producing side already used. */
+                buf_printf(&out, "((union { %s s; %s d; }){.s = %s}).d",
+                           type_c_name(src), type_c_name(dst), inner);
             } else {
                 /* Integral narrowing/widening across the int64 carrier (elab
                  * call_wrap_reinterpret only allows size mismatch when both

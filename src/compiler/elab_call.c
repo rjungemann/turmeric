@@ -1008,8 +1008,25 @@ static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_
      * float<->int and cstr<->int). Mixing float with an integer at different
      * sizes is neither bit- nor value-meaningful, so bail in that case. */
     if (src_size != dst_size) {
-        if (!call_reinterpret_kind_is_integral(source_kind) ||
-            !call_reinterpret_kind_is_integral(target_kind)) {
+        /* float32-generic-call-result-printed-as-carrier: the int64 CARRIER
+         * holding float32 bits is the one mixed-size float pair that IS
+         * bit-meaningful -- the producing side already stores the low 4 bytes
+         * through the union overlay (`emit_carrier_bridge`'s inline arm covers
+         * TY_FLOAT32), so the read-back is the same overlay in reverse.
+         * Silently returning `inner` here was the root cause of that report:
+         * the tyvar-result path REQUESTED the reinterpret (`A := float32`
+         * collected fine) and this bail dropped it, so the call stayed typed
+         * `int` and printed 1088631603 -- while the float64 twin, being
+         * same-size, took the union arm and worked.  Note the bail was
+         * SILENT: the caller cannot tell a wrapped result from a dropped
+         * wrap, which is what made this an elaboration bug that read like an
+         * emit bug. */
+        bool carrier_f32 =
+            (source_kind == TY_INT && target_kind == TY_FLOAT32) ||
+            (source_kind == TY_FLOAT32 && target_kind == TY_INT);
+        if (!carrier_f32 &&
+            (!call_reinterpret_kind_is_integral(source_kind) ||
+             !call_reinterpret_kind_is_integral(target_kind))) {
             return inner;
         }
     }
