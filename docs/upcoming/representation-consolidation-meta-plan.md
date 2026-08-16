@@ -1,9 +1,13 @@
 # Representation consolidation -- the meta-plan
 
-**Status:** IN PROGRESS. Increments 0-3 are landed, increment 4 has its
-child plan with stages 1, 2 and 4 landed and stage 3 in progress (see the
-Sequencing section for each increment's dated record); increment 5 remains
-conditional on what the decision function shows. This is not a plan for one
+**Status:** IN PROGRESS. Increments 0-4 are landed (see the Sequencing
+section for each increment's dated record). **Increment 5 has been measured
+and does not start**: the coverage census
+([repr-coverage-census.md](repr-coverage-census.md)) shows no retirement
+candidate, and the one form that reads empty survives its
+redundancy-falsification probe. The census found a coverage hole instead --
+2122 fn-value decisions per corpus sweep are made outside the decision
+function -- which makes the **fn axis** the natural successor increment. This is not a plan for one
 seam; it is the plan for how every representation-consolidation increment
 gets chosen, de-risked, landed, and verified, so the work neither stalls (as
 attempts here have) nor trades away the low-level performance the current
@@ -599,7 +603,30 @@ about, and cowpaths are paved before the field is closed:
   Increment 4 is complete; next is increment 5's conditional retirement,
   whose precondition is a redundancy-falsification probe rather than a code
   change.*
-- **Increment 5 (conditional) -- representation retirement.** If the
+- **Increment 5 (conditional) -- representation retirement.**
+  *Status 2026-08-16: MEASURED, and it does not start.* The condition was
+  never tested until now; `TUR_REPR_CENSUS=1` plus a corpus sweep produces
+  the position x form matrix the clause asks for
+  ([repr-coverage-census.md](repr-coverage-census.md)). Over **257,005
+  answers** every form is populated except `thin-fn`, which is zero in all
+  six positions -- and the redundancy-falsification probe kills it as a
+  candidate immediately: the SAME sweep shows elaboration routing **2122 fn
+  params onto the thin representation** (2088 tyvar-sig, 19 effect-row, 15
+  non-scalar-sig). `repr_of` returns it zero times because it is never
+  ASKED -- the fn axis is decided from Binding flags before `repr_of_binding`
+  delegates. A zero means "no site consults the decision function here", not
+  "no code needs this form", which is the "load-bearing, not redundant"
+  verdict arriving for the fourth time in this archive.
+  What the census found instead is a **coverage hole with a number on it**:
+  2122 representation decisions per sweep are made outside the decision
+  function. That is the fn axis, and it is the natural successor to increment
+  4 -- consolidating it needs the `repr_of_binding(const Binding *, ...)`
+  signature to become the site's answer rather than its shadow.
+  Also recorded: the plan's guessed candidate, the by-value fat struct
+  in-flight form, has no distinct `ReprForm`, so this census cannot speak to
+  it either way; retiring it needs an instrument that distinguishes in-flight
+  forms.
+  The original clause, for reference -- if the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --
   delete it CPS-style, with the two milestones kept explicitly separate:

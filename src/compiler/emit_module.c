@@ -6276,7 +6276,7 @@ static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
      * STRUCT_FIELD on a carrier owner would report the owner's design as a
      * seam.  This is the same shape as the recorded param-position boundary:
      * a decision the Type alone does not carry. */
-    if (g_emit_abi_trace && f) {
+    if (repr_shadow_active() && f) {
         /* A nested OWNING aggregate field has its `full_type` deliberately
          * left NULL -- a carrier-ADT full_type would misclassify field reads
          * -- and carries its inner def in `drop_inner_def` instead.  Without

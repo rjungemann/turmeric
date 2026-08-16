@@ -4707,7 +4707,27 @@ const char *repr_position_name(ReprPosition pos) {
     return "?";
 }
 
+/* Increment 5 precondition: the coverage census.  Increment 5 is CONDITIONAL
+ * -- "if the decision function shows a form with no remaining (type,
+ * position) pairs" -- and nothing had ever produced that matrix.  Under
+ * TUR_REPR_CENSUS=1 every answer prints one line, so a corpus sweep
+ * aggregates into a position x form table.  An empty cell is a retirement
+ * CANDIDATE, never a decision: the meta-plan's most repeated stall verdict is
+ * "load-bearing, not redundant", so a candidate still owes a
+ * redundancy-falsification probe before any code moves. */
+static ReprForm repr_of_impl(const Type *t, ReprPosition pos);
+
 ReprForm repr_of(const Type *t, ReprPosition pos) {
+    ReprForm f = repr_of_impl(t, pos);
+    static int census = -1;
+    if (census < 0) census = getenv("TUR_REPR_CENSUS") ? 1 : 0;
+    if (census)
+        fprintf(stderr, "repr-census %s %s\n", repr_position_name(pos),
+                repr_form_name(f));
+    return f;
+}
+
+static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
     if (!t) return REPR_CARRIER_I64;
 
     /* Contracts share their base type's representation (type_c_name rule). */
