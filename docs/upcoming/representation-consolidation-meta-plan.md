@@ -622,6 +622,18 @@ about, and cowpaths are paved before the field is closed:
   function. That is the fn axis, and it is the natural successor to increment
   4 -- consolidating it needs the `repr_of_binding(const Binding *, ...)`
   signature to become the site's answer rather than its shadow.
+  **Done, same day.** `repr_of_fn_param(const Binding *, const Type *ann)`
+  now owns the routing gate set, the site consults it (`carrier_ok` is one
+  comparison), the fn-value tail walker consults `repr_of_binding` for param
+  leaves, and both answers are censused. The matrix gained an `fn-param` row
+  of 24706 answers that reconciles line-for-line with the elaboration trace,
+  `thin-fn` stopped being empty, and **no empty cell remains** -- so increment
+  5 is closed on stronger evidence than the falsification probe alone. The
+  full repr-trace sweep is byte-identical across both migrations (43058 lines,
+  empty diff), which for a pure consolidation is the whole proof: the decision
+  moved, the decisions did not. The ratchet read the tail-walker migration as
+  `elab_fns.c shrank 3 -> 2` and the baseline was tightened in the same
+  commit.
   Also recorded: the plan's guessed candidate, the by-value fat struct
   in-flight form, has no distinct `ReprForm`, so this census cannot speak to
   it either way; retiring it needs an instrument that distinguishes in-flight

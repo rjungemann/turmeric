@@ -1,6 +1,10 @@
 # The representation coverage census (increment 5's precondition)
 
 **Status:** census landed 2026-08-16; **increment 5 does not start.**
+**Update, same day:** the coverage hole this census found has been closed --
+the fn-param routing is now one named routine (`repr_of_fn_param`) that the
+site consults and the census counts, so `thin-fn` is no longer empty and the
+matrix has no empty cell at all.  See "Closing the hole" below.
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 5 -- conditional representation retirement).
 **Sibling:** [repr-decision-function-plan.md](repr-decision-function-plan.md)
@@ -85,6 +89,62 @@ Two honest limits on this census:
   as `byval-agg` or `fat-handle` -- so this census cannot speak to it either
   way.  Retiring it needs an instrument that distinguishes in-flight forms,
   which is a different measurement from this one.
+
+## Closing the hole (2026-08-16)
+
+The 2122 decisions the census found outside the decision function -- 24706
+counting all fn params, not just the thin ones -- are now inside one.
+
+**`repr_of_fn_param(const Binding *b, const Type *ann)`** encodes the routing
+gate set that used to be an inline expression at the decision site.  It takes
+a Binding AND an annotation because that is genuinely the domain: `plain`
+reads the binding's substructural flags, while the effect row, cfnptr,
+variadic, arity, named-tyvar and carrier-safety gates read the type.
+`repr_of(type, pos)` cannot answer it, which is exactly what the census
+measured.  It lives in `elab_fns.c` because its two gate predicates
+(`fn_type_has_named_tyvar`, `fn_type_is_carrier_safe`) are elaboration
+predicates defined there; it is declared in `types.h` so the `repr_*` family
+still reads from one header.
+
+Two sites migrated from deriving to consulting:
+
+- the fn-param routing itself -- `carrier_ok` is now
+  `repr_of_fn_param(pb, ann) == REPR_CARRIER_I64`;
+- the fn-value tail walker -- a PARAM leaf's "already fat" test is now
+  `repr_of_binding(vb, RESULT) == REPR_FAT_HANDLE`, deleting the derivation
+  its shadow had proven redundant.  That shadow is retired by construction,
+  the same end state the container-element collapse reached.  A NON-param
+  leaf keeps the old test: its representation lives in its initialiser, which
+  no binding-only signature can see (the grounding guard).
+
+The tail-walker migration dropped a `fn_param_type_is_fat_normalized` call
+site, so the stage-4 ratchet reported `elab_fns.c shrank 3 -> 2` and the
+baseline was tightened in the same commit -- the ratchet reading a
+consolidation as progress rather than as drift.
+
+**Evidence it changed nothing it should not.** The full `repr-trace` sweep is
+**byte-identical across both migrations**: 43058 lines before, 43058 after,
+empty diff.  Suite 2599/0, fuzzer seed 9101 clean, no snapshot churn.  For a
+pure consolidation an empty trace diff is the whole proof -- the decision
+moved, the decisions did not.
+
+**The matrix after** (`fn-param` is the new row; the position's 24706 answers
+reconcile line-for-line with the elaboration trace, 14425 fat + 8112 cfnptr +
+2122 thin + 47 carrier):
+
+| position | scalar-bits | heap-ptr | byval-agg | boxed-agg | carrier-i64 | fat-handle | thin-fn |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fn-param | -- | -- | -- | -- | 47 | 14425 | **10234** |
+
+`thin-fn` was the one empty column, and it is empty no longer.  There is now
+no empty cell in the matrix, so increment 5 stays closed on stronger evidence
+than before: not "the candidate survived its falsification probe", but "there
+is no candidate".
+
+Note the granularity difference, deliberately: `ReprForm` folds cfnptr and
+thin into `thin-fn`, because both are nominal TY_FN code pointers; the
+elaboration trace keeps the finer split for diagnostics.  A census is a
+representation-level instrument, not a diagnostic one.
 
 ## Reusing it
 

@@ -1825,6 +1825,13 @@ const char  *repr_position_name(ReprPosition pos);
  * `known` marks a pinned, documented disagreement (today: the container-elem
  * TY_APP row).  A known row logs under trace and is silent otherwise -- it is
  * a work list, not a defect, and must never abort a build. */
+/* The fn-PARAM routing answer.  Defined in elab_fns.c, where its two gate
+ * predicates live; declared here so the repr_* family reads from one header.
+ * See docs/upcoming/repr-coverage-census.md for why this signature exists --
+ * `repr_of(type, pos)` cannot answer it, because the routing depends on the
+ * binding's substructural flags as well as the annotation's shape. */
+ReprForm     repr_of_fn_param(const struct Binding *b, const Type *ann);
+
 bool         repr_shadow_active(void);
 void         repr_shadow_disagree(const char *site, bool known,
                                   const char *line);

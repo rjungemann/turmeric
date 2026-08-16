@@ -3674,6 +3674,60 @@ static bool fn_type_is_carrier_safe(const Type *ft) {
     return true;
 }
 
+/* Increment 4 successor (repr-coverage-census): the fn-PARAM routing
+ * decision, as one named routine.
+ *
+ * This is the answer the coverage census found missing: `repr_of(type, pos)`
+ * has no carrier answer for a fn param, because the routing depends on the
+ * BINDING's substructural flags as well as the annotation's shape -- exactly
+ * the (Binding x Type) domain `repr_of_binding` was introduced for.  It lives
+ * here rather than beside `repr_of` in types.c because its two gates
+ * (`fn_type_has_named_tyvar`, `fn_type_is_carrier_safe`) are elaboration
+ * predicates defined in this file; declaring it in types.h keeps the repr_*
+ * family discoverable from one header.
+ *
+ * Returns the representation the parameter is routed onto:
+ *   CARRIER_I64  the typed tur_poly_fn_t {env, fn} carrier
+ *   FAT_HANDLE   an explicit `^fat` param
+ *   THIN_FN      a nominal TY_FN -- a cfnptr, or a signature the carrier
+ *                cannot round-trip (effect row, tyvar, variadic, wide arity,
+ *                non-scalar), or a substructural binding with its own
+ *                discipline
+ *
+ * Order matters and mirrors the routing it replaces: carrier wins, then
+ * `^fat`, then everything nominal. */
+static ReprForm repr_of_fn_param_impl(const Binding *b, const Type *ann);
+
+ReprForm repr_of_fn_param(const Binding *b, const Type *ann) {
+    ReprForm f = repr_of_fn_param_impl(b, ann);
+    /* Counted by the coverage census like every other repr_* answer.  Without
+     * this the fn axis would be consolidated but still invisible in the
+     * matrix -- the census would keep reporting the hole it just closed,
+     * which is how a metric quietly stops tracking the thing it names. */
+    static int census = -1;
+    if (census < 0) census = getenv("TUR_REPR_CENSUS") ? 1 : 0;
+    if (census)
+        fprintf(stderr, "repr-census fn-param %s\n", repr_form_name(f));
+    return f;
+}
+
+static ReprForm repr_of_fn_param_impl(const Binding *b, const Type *ann) {
+    if (!b || !ann || ann->kind != TY_FN) return REPR_THIN_FN;
+    /* A substructural or ^fat binding keeps its nominal type -- those have
+     * their own calling conventions and discipline checks. */
+    bool plain = !b->is_fat && !b->is_borrow && !b->is_unique && !b->is_mut &&
+                 !b->is_linear && !b->is_affine && !b->is_relevant;
+    bool effectful = ann->as.fn.effect_row != NULL;
+    bool carrier = plain && !effectful && !ann->as.fn.cfnptr &&
+                   !ann->as.fn.is_variadic &&
+                   ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
+                   !fn_type_has_named_tyvar(ann) &&
+                   fn_type_is_carrier_safe(ann);
+    if (carrier) return REPR_CARRIER_I64;
+    if (b->is_fat) return REPR_FAT_HANDLE;
+    return REPR_THIN_FN;
+}
+
 /* Re-stamp bare-^fat int64 calls in `tail`'s result position(s) to `target`
  * (a concrete non-int register-class kind).  Returns true if any call was
  * retyped.  Tail-precise: only result positions are visited, so a non-tail
@@ -4060,27 +4114,21 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
      * type reads thin), which no binding-only signature can see.  Those are
      * left to the alias resolution below -- narrowing what the instrument
      * claims rather than emitting disagreements it cannot ground. */
-    /* The "already fat" question is evaluated ONCE and consulted by both the
-     * shadow and the decision below.  Re-deriving it for the shadow would be
-     * the exact thing the stage-4 ratchet exists to catch -- and it did catch
-     * it, on the first draft of this shadow. */
+    /* MIGRATED (increment 4 successor): for a PARAM leaf the decision function
+     * IS the answer, so the hand-derived "already fat" test is deleted rather
+     * than duplicated.  Its shadow ran silent on every evaluation before this
+     * (8 corpus-wide), which is what licensed the swap; now the two cannot
+     * disagree because there is only one of them, and the shadow is retired by
+     * construction -- the same end state the container-element collapse
+     * reached.
+     *
+     * Grounding guard: a NON-param binding keeps the old test.  Its
+     * representation lives in its INITIALISER (an alias of a closure is fat
+     * while its binding type reads thin), which no binding-only signature can
+     * see, so there is nothing here for the decision function to own yet. */
     bool leaf_already_fat =
-        vb->is_fat || (vb->is_param && vb->type.kind == TY_FN &&
-                       fn_param_type_is_fat_normalized(&vb->type));
-    if (repr_shadow_active() && vb->is_param) {
-        ReprForm site = (vb->is_poly_fn && vb->is_param) ? REPR_CARRIER_I64
-                        : leaf_already_fat ? REPR_FAT_HANDLE
-                                           : REPR_THIN_FN;
-        ReprForm want = repr_of_binding(vb, REPR_POS_RESULT);
-        if (site != want) {
-            char line[256];
-            snprintf(line, sizeof line,
-                     "repr-shadow fn-tail-leaf result name=%s want=%s got=%s\n",
-                     vb->name ? vb->name->name : "_", repr_form_name(want),
-                     repr_form_name(site));
-            repr_shadow_disagree("fn-tail-leaf", false, line);
-        }
-    }
+        vb->is_param ? repr_of_binding(vb, REPR_POS_RESULT) == REPR_FAT_HANDLE
+                     : vb->is_fat;
     if (vb->is_poly_fn && vb->is_param) {
         Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID, x->span);
         conv->as.poly_to_fat_.inner = x;
@@ -4865,11 +4913,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                  * its nominal TY_FN (cfnptr) type so the param lowers to the
                  * concrete `R (*)(A...)` typedef and only captureless callbacks
                  * are admitted.  Never demote it onto the poly carrier. */
-                bool carrier_ok = plain && !effectful && !ann->as.fn.cfnptr &&
-                                  !ann->as.fn.is_variadic &&
-                                  ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
-                                  !fn_type_has_named_tyvar(ann) &&
-                                  fn_type_is_carrier_safe(ann);
+                /* Increment 4's successor -- the fn axis moves from a
+                 * shadowed derivation to a consulted decision.  The census
+                 * measured 2122 fn-param routings per corpus sweep made
+                 * OUTSIDE the decision function; this is the site that makes
+                 * them, and the gate set is now one named routine other
+                 * sites can ask instead of re-deriving.  `plain` and
+                 * `effectful` remain here because the routine reads them
+                 * back off the binding and annotation. */
+                bool carrier_ok =
+                    repr_of_fn_param(pb, ann) == REPR_CARRIER_I64;
                 /* fn-value-fat-normalization stage 2: a NESTED concrete
                  * effect-free fn RESULT inside a fn-typed param annotation is
                  * marked boxed, recursively -- stage-2 producers return fat
