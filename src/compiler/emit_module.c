@@ -3550,7 +3550,24 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * named-tyvar result) that Direction 3 cannot handle. */
     bool inner_float = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
         emit_inner_closure_needs_float_spec(inner_closure, bindings, n_bindings);
-    if (inner_float) abi_changes = true;
+    /* generic-closure-return-type-app (Defect B): the float-only claim above
+     * ("every int64-register kind round-trips through the carrier") is false
+     * for a body that CONSTRUCTS a tyvar-dependent ADT app -- the shared
+     * generic thunk emits the BASE `ctor_Cons`, which is never defined for a
+     * parametric def, and the program dies at link having passed tur check.
+     * The signature of that shape is exact: the lifted closure's result_kind
+     * is TY_APP/TY_ADT with result_full_type NULL -- the "(type-app ? ?)"
+     * shell the elab-side grounding gate deliberately leaves when the body
+     * type mentions the enclosing fn's tyvar.  Clone per spec exactly as the
+     * float case does, so the body re-resolves under the spec bindings and
+     * the ctor call lands on the emitted monomorph. */
+    bool inner_app = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
+        inner_closure->type.kind == TY_FN &&
+        inner_closure->type.as.fn.result_full_type == NULL &&
+        (inner_closure->type.as.fn.result_kind == TY_APP ||
+         inner_closure->type.as.fn.result_kind == TY_ADT) &&
+        n_bindings > 0;
+    if (inner_float || inner_app) abi_changes = true;
     /* M6 / gap G6(c): a generic body PASSES a captured closure whose result type
      * follows the spec's tyvar (the recursive `(fn [c] : B (re-cata alg c))` to
      * `fmap` inside `re-cata [B]`).  Clone it per spec so its recursive call
@@ -4062,7 +4079,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * params / env fields / dispatch typedefs all resolve through
      * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
      * construction then stores the clone's thunk + uses its suffixed env. */
-    if ((inner_float || inner_passed || inner_dispatch) && inner_closure) {
+    if ((inner_float || inner_app || inner_passed || inner_dispatch) && inner_closure) {
         const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
@@ -4091,6 +4108,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 ? emit_abi_instantiate_type(inner_closure->type.as.fn.result_full_type,
                                             bindings, n_bindings, ctx->type_arena)
                 : emit_type_from_kind(inner_closure->type.as.fn.result_kind);
+            /* Defect B: with a NULL result_full_type the line above yields the
+             * zeroed app shell.  The lifted BODY's elaborated type still
+             * carries the real `(Cons A)` (the grounding gate only refused to
+             * copy it onto the binding), so instantiate that instead. */
+            if (inner_app && !inner_closure->type.as.fn.result_full_type &&
+                inner_fd->body &&
+                (inner_fd->body->type.kind == TY_APP ||
+                 inner_fd->body->type.kind == TY_ADT))
+                inner_res = emit_abi_instantiate_type(
+                    &inner_fd->body->type, bindings, n_bindings, ctx->type_arena);
             /* constrained-instance-element-dispatch-in-closures: the outer spec
              * binds only the CLASS var (`a -> Vec__bool`); the closure body
              * dispatches on the CONSTRAINT var (`A`), which the re-resolver
@@ -4158,7 +4185,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * re-dispatched at scan time (emit_abi_register_call's reresolve
              * liveness mark), keeping the concrete element instance
              * (`__inst_Tag_tag_bool`) live instead of pruned as dead. */
-            if ((inner_passed || inner_dispatch) && inner_is_new && inner_fd->body) {
+            /* generic-closure-return-type-app (Defect B): the float and
+             * nonground-app clones need the same scan -- their bodies contain
+             * calls (`tcons x ...`) that must register their OWN specs at the
+             * clone's bindings, or the clone body emits against the carrier
+             * base (whose parametric ctor is never defined: a link error).
+             * The int case worked by coincidence -- some other call in the
+             * program had already interned tcons@int -- which is exactly the
+             * kind of coincidence this campaign exists to remove. */
+            if ((inner_passed || inner_dispatch || inner_float || inner_app) &&
+                inner_is_new && inner_fd->body) {
                 const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
                 bool saved_in = saved_c >= ctx->abi_specializations &&
                                 saved_c < ctx->abi_specializations + ctx->n_abi_specializations;

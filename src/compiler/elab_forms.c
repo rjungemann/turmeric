@@ -982,6 +982,13 @@ Expr *elab_let(Elab *e, const Form *call) {
                         b->returns_closure_fn_binding = closure_b;
                     } else {
                         b->closure_fn_binding = closure_b;
+                        /* generic-closure-return-type-app (Defect B): remember
+                         * WHICH call produced the closure value, so the invoke
+                         * can target the producing spec's inner-body clone
+                         * instead of the shared generic base thunk -- same
+                         * stash as the call-head temp in elab_call.c. */
+                        if (init->kind == EX_CALL)
+                            b->closure_head_init = init;
                     }
                 }
             }

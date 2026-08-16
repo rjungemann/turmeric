@@ -9,6 +9,44 @@ monad instead of a parametric one.
 
 Verified against `./build/tur` at **v0.32.2** (Debug, tree at `b54ab718e`).
 
+**Status: FIXED, 2026-08-16.** Both defects. The combined repro below (the
+parametric backtracking monad) now compiles, links, and prints `1 2` --
+*without* the Defect A workaround casts.
+
+- **Defect A** landed as the report's own "narrower change" (fix direction
+  2, second candidate): a result-graft recovery at the closure thunk-type
+  clobber in `elab_call.c`. When the thunk's `TY_FN` carries
+  `result_kind == TY_APP/TY_ADT` but `result_full_type == NULL` (the
+  `(type-app ? ?)` shell the grounding gate deliberately produces), and the
+  binding's own instantiated type has a ground `result_full_type` of the
+  matching kind, that ground result is grafted onto the call's fn type
+  instead of being clobbered by the shell. The `elab_fns.c` grounding gate
+  itself is untouched -- the Phase 2 monomorphization invariant stands.
+- **Defect B** was the per-spec inner-closure clone machinery not firing for
+  type-app results: the clone trigger keyed on `inner_float` only. Three
+  parts: an `inner_app` trigger in `emit_module.c` (fires when the inner
+  closure's `result_full_type` is NULL with TY_APP/TY_ADT kind under a
+  specialized outer fn, deriving the clone's result from the body type
+  instantiated under the spec's bindings), the clone-body scan extended to
+  cover it (so `ctor_Cons` gets registered for emission), and head-keyed
+  clone resolution at the thunk direct-call site in `emit_expr.c` via a new
+  `closure_head_init` stash on `Binding` (`expr.h`, populated in
+  `elab_call.c`/`elab_forms.c`) -- so the *clone*, not the never-emitted
+  base thunk, is what gets stored and invoked.
+
+Fixture: `tests/fixtures/generic-closure-return-type-app/` pins the failing
+shape at both widths (int and `7.1` float), the user-let invoke, and all six
+clean variants from the Defect A table (per fix direction 3 -- the boundary
+is sharp and easy to regress). Doc follow-up done in the same change:
+`docs/guides/logic-programming-guide.md`'s Backtrack Monad is now the
+parametric version, casts dropped, re-run before publishing.
+
+Known residue, filed the same day: the now-dead base thunk chain is still
+*emitted* and references the undefined base `ctor_Cons` -- harmless under the
+standard `-O2` pipeline (dead-stripped), a link error if the emitted C is
+compiled at `-O0`. See
+[docs/reported/dead-base-thunk-chain-references-undefined-ctor.md](../reported/dead-base-thunk-chain-references-undefined-ctor.md).
+
 ## Defect A -- type application erased through a generic closure return type
 
 A generic function whose declared return type is `(fn [] (Cons A))` produces a
@@ -224,7 +262,7 @@ the parametric version compiles but still needs the casts from step 2.
 
 ## Related
 
-- [poly-result-hof-capturing-closure-sigbus.md](poly-result-hof-capturing-closure-sigbus.md)
+- [poly-result-hof-capturing-closure-sigbus.md](../reported/poly-result-hof-capturing-closure-sigbus.md)
   -- **same family, different bug.** There: a capturing closure passed *into* a
   HOF whose result is a bare tyvar, compiling clean and crashing with SIGBUS.
   Here: a closure *returned from* a generic function over a type application,
@@ -232,7 +270,7 @@ the parametric version compiles but still needs the casts from step 2.
   positions, but all three are "polymorphic instantiation meets closure" -- a
   fix in the substitution/emission walk may well touch all of them, so worth
   reading together.
-- [composite-type-alias-gap.md](../archive/history/composite-type-alias-gap.md) -- the
+- [composite-type-alias-gap.md](history/composite-type-alias-gap.md) -- the
   missing transparent alias, which is why these signatures had to spell
   `(fn [] (Cons A))` inline everywhere instead of naming it once. **Resolved**
   (`defalias` takes composite targets as of Phase TA2), but only for a
@@ -240,7 +278,7 @@ the parametric version compiles but still needs the casts from step 2.
   int-carried shape, while the parametric `(fn [] (Cons A))` still cannot be
   named, since alias type parameters remain unsupported. This defect is what
   keeps the parametric version out of reach.
-- [defn-shadows-return-special-form.md](../archive/history/defn-shadows-return-special-form.md) --
+- [defn-shadows-return-special-form.md](history/defn-shadows-return-special-form.md) --
   the third defect found in the same guide (resolved as TUR-W0042; archived).
 
 ## Guide upkeep

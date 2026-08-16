@@ -1492,6 +1492,7 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     Expr *call_expr = elab_call_fn(e, call, tmp_b);
     if (!call_expr) return NULL;
 
+    tmp_b->closure_head_init = head_expr;
     LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
     let_bs->binding = tmp_b;
     let_bs->init = head_expr;
@@ -4067,6 +4068,34 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                            cbind, &n_cbind) && n_cbind > 0) {
                 fn_type = call_instantiate_type(e, &fn_type, cbind, n_cbind);
             }
+        }
+        /* generic-closure-return-type-app (Defect A): the thunk's
+         * result_full_type is NULL -- the "(type-app ? ?)" shell the lambda
+         * grounding gate deliberately leaves when the inferred body type
+         * mentions the enclosing fn's tyvar (elab_fns.c, closure-result-
+         * monomorphization Phase 2).  The recovery above is guarded on it
+         * being non-NULL, so it never fired and the call's result fell
+         * through to `type_from_kind(TY_APP)`: a zeroed app whose printer
+         * renders `(type-app ? ?)`.  But the BINDING's own type carries the
+         * correctly-instantiated result -- elab_call_head_expr copied the
+         * head expr's `(fn [] (Cons int))` onto the temp, and a user let
+         * records the grounded type the same way -- so graft that result
+         * onto the thunk signature.  Result slot only: the thunk's arg list
+         * includes the hidden env parameter and must not be replaced.  This
+         * is the report's "narrower change": the deliberate grounding
+         * invariant in elab_fns.c is untouched. */
+        if (fn_type.kind == TY_FN && !fn_type.as.fn.result_full_type &&
+            (fn_type.as.fn.result_kind == TY_APP ||
+             fn_type.as.fn.result_kind == TY_ADT) &&
+            fn_binding->type.kind == TY_FN &&
+            fn_binding->type.as.fn.result_full_type &&
+            fn_binding->type.as.fn.result_full_type->kind ==
+                fn_type.as.fn.result_kind &&
+            !call_type_has_named_tyvar(
+                fn_binding->type.as.fn.result_full_type)) {
+            Type *ground = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *ground = *fn_binding->type.as.fn.result_full_type;
+            fn_type.as.fn.result_full_type = ground;
         }
     } else if (fn_binding->type.kind == TY_PTR_VOID && !fn_binding->is_fat) {
         /* CRU B-4: retire the :ptr<void>-as-closure overload.  A *raw*

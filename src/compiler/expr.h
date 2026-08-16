@@ -78,6 +78,15 @@ struct Binding {
     uint32_t      scope_depth;
     /* Phase 3: For closure bindings, this points to the thunk function binding */
     struct Binding *closure_fn_binding;
+    /* generic-closure-return-type-app (Defect B): for a call-head temp
+     * (`((pure 5))` -> `(let [__call_head_N (pure 5)] (__call_head_N))`), the
+     * head INIT expression that produced the closure value.  The emit-side
+     * thunk direct-call uses it to find which OUTER spec the init resolved to
+     * (via the specialized-call registry) and target that spec's inner-closure
+     * CLONE instead of the shared generic base thunk -- the base bakes the
+     * un-monomorphized body (a `ctor_Cons` that is never emitted).  NULL
+     * everywhere else. */
+    struct Expr *closure_head_init;
     /* Returned-closure metadata: if evaluating this binding yields a closure value,
      * this points at the closure's thunk binding. */
     struct Binding *returns_closure_fn_binding;

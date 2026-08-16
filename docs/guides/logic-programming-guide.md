@@ -96,111 +96,116 @@ instance Clone (Vector a) [Clone a]
 
 Multi-shot continuations are modeled as the **backtracking monad**:
 
-A `Backtrack` computation is a **thunk that yields a cons-list of result
-thunks**: forcing the outer thunk runs the search one level, and each element
-is itself a suspended result.
+A `Backtrack` computation over element type `A` is a **thunk that yields a
+typed cons-list of results**: forcing the thunk runs the search one level, and
+each `(Cons A)` element is one answer. The monad is parametric -- the same
+`pure`/`mplus`/`bind` serve `int` searches and `float` searches alike.
 
-`defalias` names both halves of that shape, so the signatures below read as the
-monad rather than as its representation:
+The recurring shape `(fn [] (Cons A))` is spelled inline below because
+`defalias` does not take type parameters yet -- a *monomorphic* alias like
+`(defalias Backtrack (fn [] int))` works fine if you fix the element type, and
+is transparent (the alias and `(fn [] int)` are the same type at every use
+site, so `(fs)` applies exactly as it would without it). `deftype` is the
+wrong tool for naming either shape -- it binds a recursive `TY_REC`, a
+distinct nominal type that makes `(fs)` fail with `'fs' is not a function or
+continuation`.
 
 ```turmeric
-;; Backtrack -- a suspended search: forcing it yields a cons-list of results
-(defalias Backtrack (fn [] int))
-;; Goal -- a step: one result in, a list of results out
-(defalias Goal (fn [int] int))
-
 ;; mzero -- the empty computation (no results)
-(defn mzero [] : Backtrack
-  (fn [] (tnil)))
-
-;; mplus -- choice: all of fs's results, then all of gs's
-(defn mplus [^fat fs : Backtrack ^fat gs : Backtrack] : Backtrack
-  (fn [] (list-concat (fs) (gs))))
+(defn mzero [A] [] : (fn [] (Cons A))
+  (fn [] (:: (tnil) (Cons A))))
 
 ;; pure -- a computation with exactly one result
-(defn pure [x : int] : Backtrack
-  (fn [] (cons x (tnil))))
+(defn pure [A] [x : A] : (fn [] (Cons A))
+  (fn [] (tcons x (tnil))))
 
-;; flat-map over an int-carried cons list; f returns a list per element
-(defn list-flat-map [xs : int ^fat f : Goal] : int
+;; mplus -- choice: all of fs's results, then all of gs's
+(defn mplus [A] [^fat fs : (fn [] (Cons A)) ^fat gs : (fn [] (Cons A))] : (fn [] (Cons A))
+  (fn [] (:: (list-concat (fs) (gs)) (Cons A))))
+
+;; flat-map over a typed cons list; f returns a list per element
+(defn list-flat-map [A] [xs : (Cons A) ^fat f : (fn [A] (Cons A))] : (Cons A)
   (if (tnil? xs)
-    (tnil)
-    (list-concat (f (list-head xs))
-                 (list-flat-map (list-tail xs) f))))
+    (:: (tnil) (Cons A))
+    (:: (list-concat (f (thead xs))
+                     (list-flat-map (:: (ttail xs) (Cons A)) f))
+        (Cons A))))
 
 ;; bind -- sequence: run xs, then f on each result, concatenating
-(defn bind [^fat xs : Backtrack ^fat f : Goal] : Backtrack
+(defn bind [A] [^fat xs : (fn [] (Cons A)) ^fat f : (fn [A] (Cons A))] : (fn [] (Cons A))
   (fn [] (list-flat-map (xs) f)))
 ```
 
 ```sweet-exp
-;; Backtrack -- a suspended search: forcing it yields a cons-list of results
-defalias Backtrack (fn [] int)
-;; Goal -- a step: one result in, a list of results out
-defalias Goal (fn [int] int)
-
 ;; mzero -- the empty computation (no results)
-defn mzero [] : Backtrack
-  fn [] tnil()
-
-;; mplus -- choice: all of fs's results, then all of gs's
-defn mplus [^fat fs : Backtrack ^fat gs : Backtrack] : Backtrack
+defn mzero [A] [] : (fn [] (Cons A))
   fn []
-    list-concat(fs() gs())
+    :: tnil() (Cons A)
 
 ;; pure -- a computation with exactly one result
-defn pure [x : int] : Backtrack
+defn pure [A] [x : A] : (fn [] (Cons A))
   fn []
-    cons(x tnil())
+    tcons(x tnil())
 
-;; flat-map over an int-carried cons list; f returns a list per element
-defn list-flat-map [xs : int ^fat f : Goal] : int
+;; mplus -- choice: all of fs's results, then all of gs's
+defn mplus [A] [^fat fs : (fn [] (Cons A)) ^fat gs : (fn [] (Cons A))] : (fn [] (Cons A))
+  fn []
+    :: list-concat(fs() gs()) (Cons A)
+
+;; flat-map over a typed cons list; f returns a list per element
+defn list-flat-map [A] [xs : (Cons A) ^fat f : (fn [A] (Cons A))] : (Cons A)
   if tnil?(xs)
-    tnil()
-    list-concat
-      f(list-head(xs))
-      list-flat-map(list-tail(xs) f)
+    :: tnil() (Cons A)
+    ::
+      list-concat
+        f(thead(xs))
+        list-flat-map (:: ttail(xs) (Cons A)) f
+      (Cons A)
 
 ;; bind -- sequence: run xs, then f on each result, concatenating
-defn bind [^fat xs : Backtrack ^fat f : Goal] : Backtrack
+defn bind [A] [^fat xs : (fn [] (Cons A)) ^fat f : (fn [A] (Cons A))] : (fn [] (Cons A))
   fn []
     list-flat-map(xs() f)
 ```
 
-`defalias` is *transparent*: `Backtrack` and `(fn [] int)` are the same type at
-every use site, so `(fs)` applies exactly as it would without the alias. That
-is why `deftype` is the wrong tool here -- it binds a recursive `TY_REC`, which
-is a distinct nominal type and makes `(fs)` fail with `'fs' is not a function
-or continuation`.
-
-Driving it -- `mplus` offers both branches, `bind` maps over every result:
+Driving it -- `mplus` offers both branches, `bind` maps over every result, and
+the same monad instantiates at `int` and at `float` with no casts at the use
+site:
 
 ```turmeric
-;; Force every suspended result and print it
-(defn print-all [xs : int] : void
+;; Force every result and print it with p
+(defn print-all [A] [xs : (Cons A) ^fat p : (fn [A] void)] : void
   (if (tnil? xs)
     nil
-    (do (println (list-head xs))
-        (print-all (list-tail xs)))))
+    (do (p (thead xs))
+        (print-all (:: (ttail xs) (Cons A)) p))))
 
-(print-all ((mplus (pure 1) (pure 2))))
+(print-all ((mplus (pure 1) (pure 2)))
+           (fn [x : int] (println x)))
 ;; => 1
 ;; => 2
 
 (print-all ((bind (mplus (pure 1) (pure 2))
-                  (fn [x] (cons (* x 10) (tnil))))))
+                  (fn [x : int] (tcons (* x 10) (tnil)))))
+           (fn [x : int] (println x)))
 ;; => 10
 ;; => 20
+
+(print-all ((mplus (pure 7.1) (pure 2.5)))
+           (fn [x : float] (println x)))
+;; => 7.1
+;; => 2.5
 ```
 
-> **One constraint shapes the code above, a current-compiler fact.**
+> **Two representation facts shape the code above.**
 >
-> - **Cons cells are int-carried**, so the element thunks ride as `int` handles
->   and the closures are `^fat`. A parametric version over `(Cons A)` is blocked
->   by two separate defects -- a generic closure return type erases its type
->   application, and a struct constructor used inside a closure in a generic
->   function is never emitted (link error). See
->   [docs/reported/generic-closure-return-type-app.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md).
+> - The closures are `^fat` -- they capture, so they ride as fat
+>   `{thunk, env}` values, and the parameter annotations say so.
+> - List **tails** are int-carried: `ttail` returns `:int` and `list-concat`
+>   is int-typed, which is why the `(:: ... (Cons A))` ascriptions appear on
+>   tail recursions and around each `list-concat` result. Passing a
+>   `(Cons A)` *into* an int-typed slot needs no cast (the carrier direction
+>   is admitted); only the way back up is spelled out.
 
 ## Example: Parsing with Backtracking
 

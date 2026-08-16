@@ -45,12 +45,19 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
-| [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
+| [mut-map-reassign-missing-spec-link-error](mut-map-reassign-missing-spec-link-error.md) | medium | `set!`-grown `^mut` map: `map-assoc` spec declared+called but never emitted (**link** error); plus a merge-temp repr seam the R3 ICE catches first in Debug |
 
-The two remaining are one campaign but **not** duplicates -- each has its own
-pinned investigation and its own fix (a calling-convention change; a generic
-instantiation + ctor-emission bug). Do not merge them; the investigations are
-the expensive part.
+`generic-closure-return-type-app` was resolved 2026-08-16 (both defects) and
+moved to
+[docs/archive](../archive/generic-closure-return-type-app.md): Defect A by the
+report's own "narrower change" (a result-graft recovery at the thunk-type
+clobber in `elab_call.c`, leaving the grounding gate untouched), Defect B by
+making the per-spec inner-closure clone fire for type-app results and be the
+thing actually invoked (`inner_app` trigger + clone-body scan in
+`emit_module.c`, head-keyed clone resolution via a `closure_head_init` stash).
+The parametric backtracking monad it blocked now compiles, links, and runs
+cast-free; `docs/guides/logic-programming-guide.md` was promoted to it in the
+same change.
 
 `fat-sink-shim-box-leaks-per-call` was resolved 2026-08-13 and moved to
 [docs/archive](../archive/fat-sink-shim-box-leaks-per-call.md). It needed no
@@ -227,6 +234,7 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [dead-base-thunk-chain-references-undefined-ctor](dead-base-thunk-chain-references-undefined-ctor.md) | low | residue of the generic-closure-return-type-app fix: the now-dead base thunk chain still emits a reference to the undefined base `ctor_Cons`; `-O2` strips it, a hand `-O0` compile of emitted C fails at link |
 | [emitter-thunk-type-return-mismatch](emitter-thunk-type-return-mismatch.md) | low-medium | **2 findings left, down from 3 (2026-08-13).** The `void`/`int64_t` half is fixed -- an explicit `: nil` on a lambda was indistinguishable from unannotated, so the infer-from-body step retyped it to the tail's type and the emitted fn disagreed with the thunk pointer built from the same declaration. What remains is the `:int` closure sinks in the httpd API: the call site names the thunk from the erased sink, the lambda from its real type. **GCC cannot see this class at all** (no `-fsanitize=function`); needs clang |
 | [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
 

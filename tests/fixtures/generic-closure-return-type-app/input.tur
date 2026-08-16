@@ -1,0 +1,41 @@
+;; generic-closure-return-type-app (archived): generic + type application +
+;; closure in RETURN position.  Two defects, fixed together 2026-08-16:
+;;
+;;   A (elab): the lambda grounding gate leaves the thunk's result_full_type
+;;     NULL when the body type mentions the enclosing tyvar, and the call
+;;     site clobbered the correctly-instantiated head type with that shell --
+;;     `(use ((plist 1)))` errored with "got (type-app ? ?)".  The recovery in
+;;     elab_call.c now grafts the binding's ground result onto the thunk
+;;     signature (result slot only; the grounding gate is untouched).
+;;   B (emit): the shared generic thunk emitted the BASE `ctor_Cons`, which
+;;     is never defined for a parametric def -- a link error past tur check.
+;;     The inner-closure per-spec clone machinery (built for float results)
+;;     now also fires on the nonground-app result signature, the clone body
+;;     is scanned under its own spec so `tcons` registers its monomorph, and
+;;     the invoke resolves the producing spec's clone through the stashed
+;;     head init (immediate calls AND user lets) instead of the base thunk.
+;;
+;; The boundary was unusually sharp, so the six clean variants from the
+;; report's minimization table are pinned alongside: no-closure generic,
+;; bare-tyvar closure, monomorphic closure, and the two parameter positions.
+(defn plist [A] [x : A] : (fn [] (Cons A))
+  (fn [] (tcons x (tnil))))
+(defn plist-direct [A] [x : A] : (Cons A) (tcons x (tnil)))
+(defn ident [A] [x : A] : (fn [] A) (fn [] x))
+(defn plist-mono [x : int] : (fn [] (Cons int)) (fn [] (tcons x (tnil))))
+(defn takes-thunk [A] [^fat f : (fn [] (Cons A))] : (Cons A) (f))
+(defn takes-list-fn [A] [^fat f : (fn [(Cons A)] int) xs : (Cons A)] : int (f xs))
+
+(defn main [] : int
+  ;; the two fixed shapes, no ascriptions anywhere:
+  (println (thead ((plist 5))))                       ; A+B, immediate call
+  (println (thead ((plist 7.1))))                     ; float instantiation of the clone
+  (let [g (plist 42)]
+    (println (thead (g))))                           ; user-let invoke
+  ;; the clean variants (must stay clean):
+  (println (thead (plist-direct 9)))
+  (println ((ident 11)))
+  (println (thead ((plist-mono 13))))
+  (println (thead (takes-thunk (plist 21))))
+  (println (takes-list-fn (fn [xs : (Cons int)] : int (thead xs)) (plist-direct 33)))
+  0)

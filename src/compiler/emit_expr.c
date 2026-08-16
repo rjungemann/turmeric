@@ -4659,6 +4659,47 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (_isp && _isp->clone_name)
                         thunk_name = strdup(_isp->clone_name);
                 }
+                /* generic-closure-return-type-app (Defect B, site 3): the
+                 * invoke is OUTSIDE any spec (e.g. in main), but the closure
+                 * value came from a call the emitter resolved to a spec clone
+                 * of the producing generic -- `pure__spec__...` -- whose
+                 * EX_CLOSURE stores the inner-body CLONE's thunk.  Direct-
+                 * calling the shared base thunk here would re-enter the
+                 * un-monomorphized body (whose `ctor_Cons` is never emitted:
+                 * a link error past tur check).  Resolve the outer spec the
+                 * head init actually called via the specialized-call registry,
+                 * then follow its inner-closure link -- the same pairing rule
+                 * as sites 1 and 2, keyed by the head instead of the ambient
+                 * spec. */
+                if (!thunk_name && fn_binding->closure_head_init) {
+                    const Expr *src = fn_binding->closure_head_init;
+                    while (src && src->kind == EX_ASCRIBE)
+                        src = src->as.ascribe_.inner;
+                    const char *outer_clone = NULL;
+                    if (src && src->kind == EX_CALL) {
+                        for (uint32_t si = 0; si < ctx->n_specialized_calls; si++) {
+                            if (ctx->specialized_call_exprs[si] == src) {
+                                outer_clone = ctx->specialized_call_names[si];
+                                break;
+                            }
+                        }
+                    }
+                    if (outer_clone) {
+                        for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+                            const EmitAbiSpecialization *osp =
+                                &ctx->abi_specializations[si];
+                            if (!osp->clone_name ||
+                                strcmp(osp->clone_name, outer_clone) != 0)
+                                continue;
+                            const EmitAbiSpecialization *_isp =
+                                emit_inner_closure_spec_for_binding(
+                                    ctx, osp, thunk_binding);
+                            if (_isp && _isp->clone_name)
+                                thunk_name = strdup(_isp->clone_name);
+                            break;
+                        }
+                    }
+                }
                 if (!thunk_name) thunk_name = raw_name_for_binding(thunk_binding);
                 if (!thunk_name) { fprintf(stderr, "tur: oom\n"); abort(); }
 

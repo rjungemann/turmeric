@@ -361,7 +361,8 @@ choose a representation, so it is its own report:
   instead of rejected.
 - `generic-closure-return-type-app` Defect A/B (checker-side type-app
   erasure and missing ctor emission) -- same neighborhood, different layer;
-  its report keeps its own fix directions.
+  its report kept its own fix directions and both defects were resolved
+  2026-08-16 (report now in `docs/archive/`).
 
 ## Doc follow-up
 
