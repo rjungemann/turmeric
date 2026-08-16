@@ -2,7 +2,7 @@
 
 **Severity:** silent wrong answer. No crash, no diagnostic -- `7.1` becomes
 `3.45846e-323`.
-**Status:** OPEN. Pre-existing (reproduced on the compiler before the
+**Status:** OPEN. A producer-side fix was attempted and reverted on 2026-08-16 -- see "Fix direction" for why it cannot work unilaterally. Pre-existing (reproduced on the compiler before the
 2026-08-16 argcast routing change, byte-identical emitted C both sides).
 **Found by:** `tests/type-fuzz-src.py --n 250 --seed 9201`, case 98.
 
@@ -62,21 +62,77 @@ carrier convention -- with the twist that the disagreement is
 **value-vs-bits** rather than boxed-vs-unboxed, so it produces a wrong number
 instead of a compile error or a crash.
 
-## Fix direction
+## Fix direction -- ATTEMPTED 2026-08-16, REVERTED, and the revert is the finding
 
-The spec clone's return needs the same bit reinterpret the caller applies,
-rather than C's implicit conversion:
+The obvious fix is to emit the mirror bit-cast on the producing side whenever
+a carrier-returning function's body tail is float-typed:
 
 ```c
-return ((union { double d; int64_t s; }){.d = self}).s;
+return ((union { double s; int64_t d; }){.s = (self)}).d;   /* via emit_carrier_bridge */
 ```
 
-The caller side already has this union-bitcast idiom (see `__ps_160` above),
-so the fix is to emit its mirror on the producing side whenever a
-carrier-returning specialization's body tail is a float-typed value.  Worth
-checking the same clone family for `float32` and for a float **argument**
-crossing the other way before fixing, since the value/bits confusion is not
-inherently specific to the return slot.
+**It is wrong, and measuring it is what shows why: the CONSUMER convention is
+not uniform.**  Implemented in the direct-return chain in `emit_fns.c` (the
+arm that already routes several carrier cases through `emit_carrier_bridge`)
+and run against the suite: **2595 passed, 4 failed** --
+`poly-to-fat-float-roundtrip`, `poly-to-fat-float-named-fn`,
+`poly-to-fat-bare-fat-sink` (stdout) and `map-multiword-struct-value`
+(codegen).
+
+The emitted-C diff for the first is a single line, and it is decisive:
+
+```c
+static int64_t __inst_BoxMap_boxmap_BoxW(int64_t container, tur_poly_fn_t fn) {
+        double __ps_46 = (call_hyff(..., 3.5));
+-       return __ps_46;                                            /* converts 7.0 -> 7 */
++       return ((union { double s; int64_t d; }){.s = (__ps_46)}).d;  /* bits */
+}
+```
+
+That function has the *same shape* as the buggy one -- int64 carrier return
+over a float body -- but **its** consumer reads the carrier as an integer
+VALUE (the fixture expects `7`), while the consumer in this report's repro
+bit-reinterprets it.  So the two consumers disagree, and no producer-side
+rule can satisfy both.
+
+**This is increment 2's `bind` cell shape exactly**, and its resolution is the
+template: *"Fixing it means deciding the pairing where the entry point is
+selected"* -- there, `ctx->poly_wrap_callee_carrier` is set at the call-arg
+emission (where the callee is known) and consulted at the spill gate.  A real
+fix here needs the same: the producer's float convention paired with the
+consumer the dispatch actually selects, not chosen unilaterally.
+
+Two things the attempt did settle, so the next attempt need not re-derive
+them:
+
+- **Where the emission is.** Not `emit_tail` (never reached for these clones)
+  but the direct-return chain in `emit_fns.c` around the
+  `ret_is_int64_carrier` arms.
+- **Three keys, measured.** `spec->result_type` is already the int64 carrier
+  for exactly this clone, so a guard keyed on it is inert. `fd->return_type`
+  is unset (kind 0) on an instance-method FnDef, so that is inert too. Keying
+  on the BODY's type does fire -- and is unambiguous, because the checker
+  rejects the only colliding shape (`(defn f [] : int 7.1)` is **TUR-E0707**,
+  whose message already makes this argument: *"a float and a non-float live in
+  different register classes ... not a tolerable carrier bridge"*) -- but it
+  fires on both consumer conventions, which is the over-reach above.
+
+## Sibling found while probing: float32 is broken on a SIMPLER shape
+
+The check this report asked for turned one up, and it is not the same cell:
+
+```turmeric
+(defn idf [A] [x : A] : A x)
+(println (:: 7.1 float32))          ; 7.1        -- literal alone, fine
+(println (idf (:: 7.1 float32)))    ; 1088631603 -- generic identity ALONE
+```
+
+`1088631603` is `0x40E33333`, the IEEE-754 single-precision bits of 7.1.  No
+typeclass method is involved: a `float32` crossing a plain generic (carrier)
+boundary is already wrong, where the `float64` twin is fine.  That is a
+smaller and probably easier cell than this one, and it is unaffected by the
+attempted fix above (identical output before and after).  Worth its own
+report when someone picks it up.
 
 ## Why the fixtures never caught it
 

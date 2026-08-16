@@ -178,6 +178,7 @@ filed), and the `^fat` leak row was resolved and removed 2026-08-13.
 | --- | --- |
 | capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
+| **`float32`** generic (carrier) call result -> concrete consumer -- the spec clone bit-casts correctly and the consumer never casts back, printing the carrier (`7.1` -> `1088631603`) | [`float32-generic-call-result-printed-as-carrier`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/float32-generic-call-result-printed-as-carrier.md) |
 | typeclass method result at **float** -> generic (carrier) call argument -- the carrier-returning spec clone value-converts (`7.1` -> `7`) where the caller bit-reinterprets | [`method-result-float-spec-return-value-converts`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/method-result-float-spec-return-value-converts.md) |
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
