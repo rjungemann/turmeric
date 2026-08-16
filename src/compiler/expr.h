@@ -87,6 +87,13 @@ struct Binding {
      * un-monomorphized body (a `ctor_Cons` that is never emitted).  NULL
      * everywhere else. */
     struct Expr *closure_head_init;
+    /* fn-value-fat-normalization (effect-row increment): for a `__borrowc`
+     * hoist temp of a CAPTURING closure, the lifted lambda's binding.  A
+     * dedicated field, NOT closure_fn_binding -- that one carries direct-call
+     * semantics at emit (the thunk direct-call path) and setting it on the
+     * hoist temp reroutes pure fat dispatch.  Read only by the CPS coloring /
+     * threadability walks, which must resolve the temp back to the lambda. */
+    struct Binding *hoist_closure_fn_binding;
     /* Returned-closure metadata: if evaluating this binding yields a closure value,
      * this points at the closure's thunk binding. */
     struct Binding *returns_closure_fn_binding;

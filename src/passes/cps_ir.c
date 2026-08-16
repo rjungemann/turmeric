@@ -990,7 +990,7 @@ static const Binding *marshal_named_receiver(CpsB *b, const Expr *shift,
     const Binding *recv = kf->as.var.binding;
     if (serial) {
         if (recv->type.kind != TY_FN) return NULL;   /* a function value */
-        if (recv->closure_fn_binding) return NULL;   /* not a fat closure */
+        if (recv->closure_fn_binding || recv->hoist_closure_fn_binding) return NULL;   /* not a fat closure */
         if (recv->is_global && callee_colored(b, recv)) return NULL;
     } else {
         if (!recv->is_global) return NULL;           /* a top-level fn */
@@ -1273,7 +1273,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
-            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
             if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;         /* result */
             if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;  /* arg */
@@ -1301,7 +1301,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
-            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
             if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
@@ -1424,7 +1424,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
                 const Binding *fb = tail->as.call_.fn_binding;
                 if (fb->type.kind != TY_FN) return NULL;
-                if (fb->closure_fn_binding) return NULL;    /* not a fat closure */
+                if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;    /* not a fat closure */
                 if (callee_colored(b, fb)) return NULL;     /* uncolored target */
                 if (tail->type.kind != TY_INT) return NULL; /* result: int */
                 if (nf >= CL_IR_MAX_FRAMES) return NULL;

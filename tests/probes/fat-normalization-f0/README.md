@@ -1,7 +1,7 @@
 # fat-normalization-f0 -- ABI ratification probe (increment 1, stage 0)
 
 Hand-written C proving the calling convention proposed by
-`docs/upcoming/fn-value-fat-normalization-plan.md` stage 1, before the
+`docs/archive/fn-value-fat-normalization-plan.md` stage 1, before the
 emitter change exists -- the `cps-abi-c0` pattern applied to the fn-value
 axis. See the header of `fatparam.c` for the Models / Proves table.
 

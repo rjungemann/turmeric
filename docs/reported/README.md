@@ -44,8 +44,22 @@ the plan links. File a new repr cell there as well as here.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | low-medium (was medium) | capturing closure into a thin `(fn ...)` param; **one row left** -- an EFFECT-ROW signature, and as of 2026-08-16 it is a compile-time TUR-E0007 (with a `^fat` workaround), no longer a silent crash. Open for the representation itself: the E2a CPS twin registry is keyed on direct entry pointers, so filling the cell is a CPS increment (slot-0-keyed lookup + env-aware twins) |
 | [mut-map-reassign-missing-spec-link-error](mut-map-reassign-missing-spec-link-error.md) | medium | `set!`-grown `^mut` map: `map-assoc` spec declared+called but never emitted (**link** error); plus a merge-temp repr seam the R3 ICE catches first in Debug |
+
+`poly-result-hof-capturing-closure-sigbus` was resolved 2026-08-16 -- its
+LAST row (the effect-row signature), by exactly the CPS increment its own
+status bullet specified -- and moved to
+[docs/archive](../archive/poly-result-hof-capturing-closure-sigbus.md).
+Effect-annotated fn params are now fat-normalized like every other nominal
+fn param: the E2a registry call sites dispatch fat (slot 0 = a registered
+capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the
+fatshim's stashed bare-fn entry), threadable capturing lambdas are
+CPS-admitted with the direct thunk's env-unpack preamble, and the
+effect_check walkers peel the shim so all five `errors/effect-*` negatives
+keep diagnosing.  The fix reached past the report: a capturing PERFORMING
+callback -- previously no working spelling at all -- now threads the
+handler chain (pinned at value 37 in
+`tests/fixtures/effect-capturing-closure-thin-param/`).
 
 `generic-closure-return-type-app` was resolved 2026-08-16 (both defects) and
 moved to

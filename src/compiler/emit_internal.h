@@ -838,6 +838,14 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out);
 bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params);
 char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
                                  Type result_type, Type *param_types, uint8_t n_params);
+/* fn-value-fat-normalization (effect-row increment): fat-closure env struct +
+ * drop glue at file scope, deduped via ctx->env_struct_names.  Called from the
+ * EX_CLOSURE construction site (emit_expr.c) and from the CPS twin pre-pass
+ * (emit_cps_ir.c), whichever runs first. */
+void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
+                                      struct Closure *closure,
+                                      const Symbol *env_name,
+                                      bool resolve_spec_params);
 /* closure-typed-invocation-abi-plan: ensure a typed fat-shim exists for the
  * given closure signature, returning its C function name.  Returns NULL when
  * the signature is the all-int64_t carrier case (caller uses the preamble

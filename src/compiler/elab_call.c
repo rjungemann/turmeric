@@ -1120,6 +1120,16 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
         snprintf(nm, sizeof nm, "__borrowc_%u", e->next_id++);
         const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
         Binding *cb = binding_new(e, sym, a->type, false, false, span);
+        /* fn-value-fat-normalization (effect-row increment): record the lifted
+         * lambda behind this hoist temp so the CPS coloring / threadability
+         * walks resolve the temp back to the lambda (without this, a capturing
+         * callback into an effectful param reads as an opaque var, is never
+         * force-colored or threadable, and perm-taints its effect row to the
+         * deleted fiber engine).  Deliberately NOT closure_fn_binding, which
+         * carries direct-call semantics at emit. */
+        if (a->kind == EX_CLOSURE && a->as.closure_.closure &&
+            a->as.closure_.closure->fn)
+            cb->hoist_closure_fn_binding = a->as.closure_.closure->fn->binding;
         lbs[h].binding = cb;
         lbs[h].init = a;                 /* ascribe-peeled EX_CLOSURE literal or a
                                           * fresh-closure-returning call */
@@ -5542,20 +5552,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 fn_type.as.fn.arg_full_types) {
                 const Type *aft_nom = fn_type.as.fn.arg_full_types[fn_arg_idx_fat];
                 slot_nominal = aft_nom && fn_param_type_is_fat_normalized(aft_nom);
-                /* poly-result-hof-capturing-closure-sigbus (the effect row --
-                 * the one open row of that report): an effect-row'd fn param
-                 * is exactly the slot fn_param_type_is_fat_normalized rejects,
-                 * so it keeps the THIN calling convention -- which has nowhere
-                 * to carry a closure environment (the CPS twin registry is
-                 * keyed on direct entry pointers).  A capturing closure
-                 * argument therefore compiles clean and the callee jumps into
-                 * the env box as code at run time (SIGBUS/SIGSEGV).  A
-                 * capturing body that PERFORMS already diagnoses downstream
-                 * (CPS-subset eviction, "no lowering here"); this catches the
-                 * silent non-performing shape at the call site, before the
-                 * `^borrow` hoist hides the closure literal behind a temp.
-                 * Row kind does not matter -- concrete, empty, and
-                 * row-variable rows all ride thin. */
+                /* poly-result-hof-capturing-closure-sigbus, residual arm: the
+                 * effect-row exclusion was lifted 2026-08-16 (effect-annotated
+                 * fn params are fat-normalized; slot_nominal is true for them
+                 * and this diagnostic no longer fires there).  What remains
+                 * THIN is the predicate's other rejects -- cfnptr, variadic,
+                 * arity>5 -- and a capturing closure into an EFFECT-ANNOTATED
+                 * such param still has nowhere to carry its environment: the
+                 * callee would jump into the env box as code at run time
+                 * (SIGBUS/SIGSEGV).  Keep the call-site error for exactly
+                 * those shapes, placed before the `^borrow` hoist hides the
+                 * closure literal behind a temp. */
                 if (!slot_nominal && aft_nom && aft_nom->kind == TY_FN &&
                     aft_nom->as.fn.effect_row && !aft_nom->as.fn.cfnptr) {
                     Expr *cl = args[i];
@@ -5567,13 +5574,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         diag_emit_with_code(DIAG_ERROR, cl->span,
                             TUR_E0007_CAPTURE_ERROR,
                             "capturing closure passed to effectful fn "
-                            "parameter %u of '%s': an effect-annotated "
-                            "(fn ...) parameter uses the thin calling "
-                            "convention, which cannot carry a closure "
-                            "environment -- this call would crash at run "
-                            "time. Mark the parameter ^fat (a fat effectful "
-                            "callback may not itself perform), or pass the "
-                            "captured state as explicit arguments",
+                            "parameter %u of '%s': this parameter shape "
+                            "(cfnptr, variadic, or arity above 5) keeps the "
+                            "thin calling convention, which cannot carry a "
+                            "closure environment -- this call would crash at "
+                            "run time. Reduce the signature to 5 or fewer "
+                            "non-variadic parameters, or pass the captured "
+                            "state as explicit arguments",
                             (unsigned)(i + 1),
                             fn_binding->name ? fn_binding->name->name
                                              : "<fn>");

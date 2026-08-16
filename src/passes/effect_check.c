@@ -232,8 +232,21 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                 EffectRow *param_row = param->type.as.fn.effect_row;
                 if (!param_row || param_row->kind != ERK_VAR) continue;
 
-                /* Determine the actual argument's effect row. */
+                /* Determine the actual argument's effect row.  Peel the
+                 * fat-normalization shim first (EX_FN_TO_FAT boxes a bare-fn
+                 * or lambda argument into a fat handle) and erased
+                 * ascriptions: the row belongs to the wrapped value.  Without
+                 * the peel, row-variable unification never runs for a
+                 * normalized effectful slot -- which silently disarmed both
+                 * the occurs check (TUR-E0254 negatives) and the row-var
+                 * mismatch inference (TUR-E0009). */
                 Expr *actual = e->as.call_.args[pi];
+                while (actual &&
+                       (actual->kind == EX_ASCRIBE ||
+                        actual->kind == EX_FN_TO_FAT))
+                    actual = (actual->kind == EX_ASCRIBE)
+                                 ? actual->as.ascribe_.inner
+                                 : actual->as.fn_to_fat_.inner;
                 EffectRow *actual_row = NULL;
                 if (actual && actual->kind == EX_CLOSURE) {
                     /* Closure literal: collect its body effects with a fresh subst. */

@@ -1,7 +1,22 @@
 # Fn-value fat normalization -- one calling convention for non-carrier fn boundaries
 
+> **COMPLETE, 2026-08-16.** Stage 1 (params, 2026-07-30, with the two
+> narrowings), stage 2 (return/let/ascribe, 2026-07-30), increment 2 (tyvar
+> signatures, 2026-08-01), and finally the effect-row exclusion -- the last
+> narrowing -- lifted 2026-08-16 by the CPS increment (E2a fat dispatch,
+> env-aware `__cps` twins for threadable capturing lambdas, shim-peeling
+> effect_check walkers).  `fn_param_type_is_fat_normalized` now admits every
+> nominal fn param except cfnptr / variadic / arity>5, which keep a call-site
+> TUR-E0007 against capturing closures.  Both driving reports are archived:
+> [`poly-result-hof-capturing-closure-sigbus`](poly-result-hof-capturing-closure-sigbus.md)
+> and [`fn-typed-value-return-ascribe-miscompiles`](history/fn-typed-value-return-ascribe-miscompiles.md).
+> Stage 3 (unifying the flag'd sinks into one code path) stayed at its
+> "at minimum" bar: the residual differences are documented in the
+> representations guide.  Zero snapshot churn end to end -- no fixture
+> regen was needed at any stage.
+
 **Status:** proposed. This is the plan the investigation in
-`docs/reported/poly-result-hof-capturing-closure-sigbus.md` said the fix
+`docs/archive/poly-result-hof-capturing-closure-sigbus.md` said the fix
 wants ("it is a calling-convention change across every non-carrier fn-typed
 parameter, so it wants its own plan and a full-suite regen, not a patch"),
 plus the sibling findings that arrived since
@@ -312,7 +327,7 @@ that must NOT change (owning fn-fields, capturing closures).
 sink leaks too, and worse -- 5e6 iterations peaked at **1002 MiB**.  It is
 pre-existing and needs an ownership contract on `^fat` before a caller can
 choose a representation, so it is its own report:
-[`fat-sink-shim-box-leaks-per-call`](../archive/fat-sink-shim-box-leaks-per-call.md).
+[`fat-sink-shim-box-leaks-per-call`](fat-sink-shim-box-leaks-per-call.md).
 
 ## Stages
 

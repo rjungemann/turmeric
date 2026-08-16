@@ -591,10 +591,12 @@ static const DiagExplanation diag_explanations_[] = {
       "variables from the enclosing scope cannot be captured by them.\n"
       "\n"
       "A capturing closure also cannot be passed to an effect-annotated\n"
-      "(fn ... #fx{...} ...) parameter: effectful callbacks use the thin\n"
-      "calling convention, which has no slot for a closure environment.\n"
-      "Mark the parameter ^fat (a fat effectful callback may not itself\n"
-      "perform), or pass the captured state as explicit arguments.\n"
+      "(fn ...) parameter that is cfnptr, variadic, or has more than 5\n"
+      "parameters: those shapes keep the thin calling convention, which\n"
+      "has no slot for a closure environment.  Reduce the signature, or\n"
+      "pass the captured state as explicit arguments.  (Ordinary\n"
+      "effect-annotated parameters take capturing closures as of the\n"
+      "2026-08-16 fat-normalization increment.)\n"
     },
     { TUR_E0009_EFFECT_ROW_MISMATCH,
       "TUR-E0009: Effect-row mismatch\n"

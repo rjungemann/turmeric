@@ -68,7 +68,7 @@ float bit-reinterpret note below).
 
 Function values are their own zoo. The per-boundary decision today spans
 (at least) these forms -- see the investigation in
-`docs/reported/poly-result-hof-capturing-closure-sigbus.md` for where each
+`docs/archive/poly-result-hof-capturing-closure-sigbus.md` for where each
 is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 
 1. **`tur_poly_fn_t {env, fn}` carrier** -- for plain, non-effectful,
@@ -89,11 +89,16 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
    two carrier-side feeds were shimmed as well -- a call THROUGH a
    rank-2/forall param (`elab_poly_call`) and the make-struct fn-field
    store, which had been boxing an already-normalized param a second time.
-   The thin form now survives only for **effect-row'd** signatures
-   (load-bearing for the CPS backend's twin/trampoline convention, and for
-   effect-row checking itself), cfnptr, variadic, and arity>5. Passing a
-   capturing closure into an effect-row'd one is the last live row of
-   `poly-result-hof-capturing-closure-sigbus`.
+   The thin form now survives only for cfnptr, variadic, and arity>5
+   signatures; passing a capturing closure into an *effect-annotated* such
+   param is a call-site TUR-E0007. The effect-row exclusion -- the last
+   broad thin holdout -- was lifted 2026-08-16 by the CPS increment: the
+   E2a twin registry's call sites dispatch fat (slot 0 = a registered
+   capturing-lambda entry whose `__cps` twin takes the env, slot 1 = the
+   fatshim box's stashed bare-fn direct entry), threadable capturing
+   lambdas are CPS-admitted with the direct thunk's env-unpack preamble,
+   and effect-row checking peels the `EX_FN_TO_FAT` shim
+   (`poly-result-hof-capturing-closure-sigbus`, archived -- every row).
 
    The `{ shim, orig }` box a bare fn is shimmed into is `malloc`'d per
    execution of the bridge.  At a normalized nominal param nothing frees it,
@@ -173,12 +178,12 @@ index -- a repr cell with a filed report belongs here, so if you file one,
 add the row. All four were re-verified against `main` on 2026-08-01; two moved
 that day (the first row narrowed to the effect row, and the `^fat` leak row was
 filed); the `^fat` leak row was resolved and removed 2026-08-13, and the
-generic-closure-return-type-app row 2026-08-16.
+generic-closure-return-type-app and poly-result-hof-capturing-closure-sigbus
+(effect row -- the CPS increment) rows on 2026-08-16.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
 | `^mut` rebinding of a concrete heap container (merge-temp position) -- spelled as the carrier where chokepoint 1's rule says typed pointer; travels with a spec-materialization hole that makes the same repro fail at LINK | [`mut-map-reassign-missing-spec-link-error`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mut-map-reassign-missing-spec-link-error.md) |
-| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work). No longer a silent crash as of 2026-08-16 -- the call site is a TUR-E0007 with a `^fat` workaround -- but the cell itself (a representation that carries both an environment and the CPS twin registration) is still missing; the E2a direct-entry-keyed twin registry is the load-bearing thin dependence | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --
@@ -186,6 +191,7 @@ the next cell in this family is usually adjacent to one of them.
 
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
+| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (the report's LAST row; concrete and tyvar signatures were already fat-normalized) | the CPS increment (2026-08-16): effect-annotated fn params join `fn_param_type_is_fat_normalized`; the E2a registry call sites dispatch fat (slot 0 = a registered capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the fatshim's stashed bare-fn entry); threadable capturing lambdas are CPS-admitted with the direct thunk's env-unpack preamble; the effect_check walkers peel the shim. Capturing PERFORMING callbacks -- previously no working spelling -- thread the handler chain too. Thin remainder (cfnptr/variadic/arity>5 effectful) keeps a call-site TUR-E0007 | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) -- the `(type-app ? ?)` shell at the checker AND the never-emitted `ctor_Cons` at link | Defect A: result-graft recovery at the thunk-type clobber in `elab_call.c` (the binding's own ground `result_full_type` survives the swap; the `elab_fns.c` grounding gate is untouched). Defect B: `inner_app` clone trigger + body-type-derived clone result + head-keyed clone resolution at the thunk direct-call, so the per-spec inner-closure clone is both emitted and the one actually invoked | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/generic-closure-return-type-app.md) |
 | typeclass method result at **float** (any width) -> generic (carrier) call argument | producer bit-cast keyed on the method's DECLARED result kind (the same type the consumer keys its reinterpret on -- paired by construction); an int-declared method keeps its value conversion | [`method-result-float-spec-return-value-converts`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/method-result-float-spec-return-value-converts.md) |
 | `float32`-ascribed literal -> any mixed C expression | ascribe elaborator retypes a float literal in place (`(:: 7.1 float32)` == `7.1f32`), so it emits at single precision instead of as the double literal the promotion rules then dominated | [`float32-ascribed-literal-compares-as-double`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-ascribed-literal-compares-as-double.md) |
@@ -237,7 +243,7 @@ pinned by `--known-probes` instead, so a red run means a NEW cell.
 The convention-level fix for the closure rows -- normalize every non-carrier
 fn boundary onto the fat protocol instead of deciding representation
 per-boundary -- is planned in
-`docs/upcoming/fn-value-fat-normalization-plan.md`. The campaign-level
+`docs/archive/fn-value-fat-normalization-plan.md` (complete 2026-08-16). The campaign-level
 strategy governing that plan and its successors (which seams consolidate in
 which order, the probe/blast-radius discipline, and the performance
 guardrails) is `docs/upcoming/representation-consolidation-meta-plan.md`;

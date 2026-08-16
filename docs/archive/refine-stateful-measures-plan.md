@@ -76,7 +76,7 @@ gap C2 -- **satisfied**; that plan's RE1 is complete.
 > both carried into B2: (a) non-forgeability is a usage discipline at B1 (mint
 > the cap once at world construction; do not re-mint mid-frame) -- B2's region
 > *form* makes it structural; (b) the ergonomic region HOF hit a codegen bug
-> (`docs/reported/poly-result-hof-capturing-closure-sigbus.md`: a capturing
+> (`docs/archive/poly-result-hof-capturing-closure-sigbus.md`: a capturing
 > closure through a HOF with a *type-variable result* SIGBUSes), worked around
 > by fixing `with-frozen`'s body result to `int`. B2 should make the region a
 > first-class form (not a polymorphic HOF), or that bug must be fixed first.
@@ -95,7 +95,7 @@ gap C2 -- **satisfied**; that plan's RE1 is complete.
 > HOF is the right mechanism (borrow, not consume -- a consume cannot restore
 > the linear cap in place; `set!` on a consumed linear binding is itself a
 > `TUR-E0101`), but its *polymorphic* form crashes on a capturing body
-> (`docs/reported/poly-result-hof-capturing-closure-sigbus.md`), so the region
+> (`docs/archive/poly-result-hof-capturing-closure-sigbus.md`), so the region
 > result is pinned to `int`. A first-class `(frozen w ...)` special form -- which
 > B3 could also key congruence off directly -- is the eventual shape; it is
 > deferred behind either that codegen fix or B3's elaborator work, whichever

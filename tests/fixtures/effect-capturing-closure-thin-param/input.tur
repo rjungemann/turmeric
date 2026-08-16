@@ -1,0 +1,31 @@
+;; poly-result-hof-capturing-closure-sigbus -- the effect row, the report's
+;; LAST open row, closed 2026-08-16 by the CPS increment: a capturing closure
+;; into an effect-annotated (fn ...) parameter now rides the fat protocol end
+;; to end.  The elab shim boxes it, the E2a registry dispatch reads the lifted
+;; entry out of the box's slot 0 (or the fatshim's stashed direct entry out of
+;; slot 1 for a bare-fn argument), and a threadable capturing lambda gets a
+;; real __cps twin (env unpacked exactly like the direct thunk).
+;;
+;; Three shapes, weakest to strongest:
+;;   1. concrete-row param, capturing NON-performing callback (the report's
+;;      own repro -- used to SIGSEGV, then TUR-E0007, now runs);
+;;   2. row-VARIABLE param, capturing callback (same thin convention, same
+;;      history);
+;;   3. concrete-row param, capturing PERFORMING callback under a handle --
+;;      the shape that previously had NO working spelling at all (thin and
+;;      ^fat both died on the CPS-subset eviction).
+(defeffect Ask [] :int)
+
+(defn run-thunk [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))
+(defn apply1 [f : (fn [int] #fx{|e} int) x : int] #fx{|e} : int (f x))
+(defn apply-cb [f : (fn [] #fx{Ask} int) base : int] #fx{Ask} : int
+  (+ (* (f) 2) base))
+
+(defn main [] #fx{Write} : int
+  (let [k 7]
+    (println (run-thunk (fn [] #fx{Write} : int (+ k 1))))
+    (println (apply1 (fn [x : int] : int (+ x k)) 10)))
+  (let [w 5]
+    (println (handle (apply-cb (fn [] : int (+ (perform (Ask)) w)) 7)
+               (Ask [] kk) (resume kk 10))))
+  0)

@@ -262,7 +262,7 @@ the parametric version compiles but still needs the casts from step 2.
 
 ## Related
 
-- [poly-result-hof-capturing-closure-sigbus.md](../reported/poly-result-hof-capturing-closure-sigbus.md)
+- [poly-result-hof-capturing-closure-sigbus.md](poly-result-hof-capturing-closure-sigbus.md)
   -- **same family, different bug.** There: a capturing closure passed *into* a
   HOF whose result is a bare tyvar, compiling clean and crashing with SIGBUS.
   Here: a closure *returned from* a generic function over a type application,

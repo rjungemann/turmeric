@@ -189,13 +189,12 @@ KNOWN_PROBES = [
      "(defn call [f : (fn [] FzB)] : FzB (f))\n"
      "(defn main [] : int\n"
      "  (let [k 7] (println (.a (call (fn [] (FzB k))))))\n  0)\n"),
-    # The one row of that report still open: an EFFECT-ANNOTATED fn param
-    # keeps the thin convention (load-bearing for the CPS backend).  Since
-    # 2026-08-16 this probe "fires (reject)" rather than crashing -- the
-    # call site is a TUR-E0007 -- which is still the correct OPEN signal:
-    # the representation cell is unfilled, only the soundness hole closed.
-    # When the CPS increment lands (slot-0-keyed twin lookup + env-aware
-    # twins), this flips to FIXED and the row retires.
+    # RESOLVED 2026-08-16 (the report's LAST row) by the CPS increment: the
+    # E2a registry call sites dispatch fat (slot 0 = capturing-lambda entry
+    # with an env-taking __cps twin, slot 1 = fatshim's stashed bare-fn
+    # entry), and effect-annotated fn params are fat-normalized like every
+    # other nominal fn param.  Kept as a FIXED regression probe; pinned by
+    # tests/fixtures/effect-capturing-closure-thin-param/.
     ("poly-result-hof-capturing-closure-sigbus (effect row)",
      "(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))\n"
      "(defn main [] #fx{Write} : int\n"

@@ -3,9 +3,56 @@
 **Severity:** medium (miscompile: clean compile, crashes at run time; a
 carrier-eligible-signature workaround exists).
 
-**Status:** ONE ROW LEFT -- **the effect row**. Everything else in the crash
-table below is fixed and pinned. The report stays open only for
-`(fn [] #fx{Write} int)`; its title still applies to that row.
+**Status: FIXED, 2026-08-16 -- every row.** The last row (the effect row)
+closed with the CPS increment this report's 2026-08-16 status bullet
+specified, and the fix went further than the row: a capturing PERFORMING
+callback -- which previously had no working spelling at all -- now threads
+the handler chain too. What landed:
+
+- **The E2a registry call sites dispatch fat.** A via_registry callee that
+  is a `^fat` or normalized param emits a two-key dispatch: slot 0 of the
+  fat box (a capturing lambda's lifted entry, called with the box as env)
+  is tried first; the checked fallback reads slot 1 (a fatshim box's
+  stashed bare-fn direct entry, called thin exactly as before). An
+  unregistered value still aborts loudly with the callee's name.
+- **Threadable capturing lambdas get real `__cps` twins.** The coloring
+  pass force-colors a capturing closure literal passed to an effectful
+  param (previously only EX_VAR args); the threadability walk counts
+  closure literals and let/`^borrow`-hoist temps (a new
+  `hoist_closure_fn_binding` field -- deliberately NOT closure_fn_binding,
+  which carries direct-call semantics at emit); `param_is_thread_safe`
+  accepts them; and the CPS emitter admits the lambda (its `__env_p_` env
+  param is exempt from the `__` name-clash reject), emitting the same
+  env-cast preamble the direct thunk uses, with the env struct + drop glue
+  hoisted ahead of the twin (`emit_closure_env_struct_and_glue`, shared
+  with the construction site, which now routes through
+  `pending_handler_fns` so the definition always lands at file scope).
+  Admission is deliberately narrow -- threadable, primitive captures only,
+  no poly-fn captures, and never a monomorph spec clone -- so TCO'd
+  named-let closures, lens lambdas, and every other direct-only facility
+  keep their existing path.
+- **Effect checking survives the shim.** The row-subtype AND row-var
+  unification walkers in effect_check.c peel `EX_FN_TO_FAT`/`EX_ASCRIBE`,
+  so all five `errors/effect-*` negatives (including the occurs checks)
+  keep diagnosing under normalization.
+- The join-frame capture of a forwarded normalized param spells the
+  int64 carrier (its arg atom rides TY_PTR_VOID after the pass-through
+  retype); lifted continuation helpers clear the closure env context so
+  their frame-env loaders use raw local names.
+- `fn_param_type_is_fat_normalized` drops the effect-row exclusion --
+  effect-annotated fn params are normalized like every other nominal fn
+  param.  The 2026-08-16 TUR-E0007 call-site diagnostic survives only for
+  the still-thin remainder (cfnptr / variadic / arity>5 effectful params).
+
+Verified: suite 2605/0 (the three restored negatives included), turi
+1790/0, all four `--known-probes` print FIXED, 150-case fuzz session
+clean. Pinned by `tests/fixtures/effect-capturing-closure-thin-param/`
+(concrete row + row-var + capturing-performing-under-handle, at values
+8/17/37) and `tests/fixtures/effect-fat-callback-capturing/` (the `^fat`
+spelling stays working).
+
+Original status line, for the record: ONE ROW LEFT -- the effect row;
+everything else in the crash table below was already fixed and pinned.
 
 - **2026-07-30, stage 1** -- by-value struct arg/result, heap results, and
   the `^linear`/`^borrow` rows: FIXED (concrete effect-free signatures are
@@ -78,7 +125,7 @@ table below is fixed and pinned. The report stays open only for
   `^fat` escape hatch), both-engines checked (turi rejects/accepts
   identically via the shared elaboration).
 
-Plan: [docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md).
+Plan: [docs/archive/fn-value-fat-normalization-plan.md](fn-value-fat-normalization-plan.md).
 
 Root cause identified and mechanism confirmed (2026-07-29);
 the fix is a calling-convention change, not a patch -- see
@@ -90,10 +137,10 @@ report as originally filed.
 2026-07-30: `tests/type-fuzz-src.py` found the sibling family for fn-typed
 VALUES (a returned closure through a pass-through param, `^fat` included, or
 an ascription around a let) -- see
-[fn-typed-value-return-ascribe-miscompiles.md](../archive/history/fn-typed-value-return-ascribe-miscompiles.md).
+[fn-typed-value-return-ascribe-miscompiles.md](history/fn-typed-value-return-ascribe-miscompiles.md).
 Those repros are additional acceptance tests for the calling-convention plan
 sketched below; the two reports should land together. The plan is now
-written: [docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md).
+written: [docs/archive/fn-value-fat-normalization-plan.md](fn-value-fat-normalization-plan.md).
 
 ## Investigation (2026-07-29)
 

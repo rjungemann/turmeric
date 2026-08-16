@@ -20,6 +20,136 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
+static Type emit_fn_result_type_from_type(Type fn_type);
+
+/* Emit a fat closure's env struct definition + its drop glue at file scope,
+ * deduped through ctx->env_struct_names.  Extracted from the EX_CLOSURE
+ * construction site so the CPS twin pre-pass (emit_cps_ir.c) can define the
+ * struct BEFORE a `__cps` body that reads captures through it -- a CPS-emitted
+ * capturing callback lands earlier in the file than its construction site.
+ * `resolve_spec_params` mirrors the inner-closure-spec path (thunk param types
+ * resolved under the active spec); the CPS pre-pass passes false. */
+void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
+                                      struct Closure *closure,
+                                      const Symbol *env_name,
+                                      bool resolve_spec_params) {
+    bool already_emitted = false;
+    if (ctx->env_struct_names) {
+        for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
+            if (ctx->env_struct_names[i] == env_name) {
+                already_emitted = true;
+                break;
+            }
+        }
+    }
+    if (already_emitted) return;
+    Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
+    uint32_t thunk_arity = closure->fn->n_params > 0 ? (uint32_t)(closure->fn->n_params - 1) : 0;
+    Type _rtp[MAX_FN_ARITY];
+    Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+    if (thunk_params && resolve_spec_params) {
+        for (uint8_t _t = 0; _t < thunk_arity; _t++)
+            _rtp[_t] = emit_resolve_type(ctx, closure->fn->param_types[_t + 1]);
+        thunk_params = _rtp;
+    }
+    char *thunk_typedef = ensure_typed_thunk_typedef(ctx, out, thunk_result, thunk_params, thunk_arity);
+    /* Track this env struct */
+    if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
+        ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
+        ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
+            ctx->cap_env_struct_names * sizeof(const Symbol *));
+    }
+    ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+
+    /* Phase HKT §5: fat closure struct -- __fn first, then captures. */
+    if (thunk_typedef) {
+        buf_printf(out, "struct %s { %s __fn; ", env_name->name, thunk_typedef);
+    } else {
+        buf_printf(out, "struct %s { int64_t __fn; ", env_name->name);
+    }
+    for (uint8_t i = 0; i < closure->n_captures; i++) {
+        Binding *captured = closure->captures[i];
+        /* Edge 1: a letrec/named-let member referenced from a nested
+         * closure is captured eagerly (its globalness is unknown when
+         * collect_free_vars runs), but if it turned out captureless it
+         * is lifted as a directly-callable global with no env -- emit
+         * no field for it (it is reached by its C symbol, not a slot).
+         * Globals are never legitimately captured elsewhere, so this
+         * only affects that one case. */
+        if (captured && captured->is_global) continue;
+        char *field = raw_name_for_binding(captured);
+        /* A captured function value (fat closure or bare fn ptr) is
+         * carried as the int64_t fn-ABI carrier -- the same C type
+         * fn-typed parameters use (see emit_fns.c, TY_FN param
+         * branch).  type_c_name(TY_FN) returns the *result* type's C
+         * name (e.g. "double" for a :float-returning closure), which
+         * would store the closure pointer in a floating-point field
+         * and reinterpret it through a double on read -- a latent
+         * miscompile that only survives because valid pointers fit
+         * exactly in a double's 53-bit integer range.  Pin the field
+         * to the carrier so the stored bits and the fat-dispatch
+         * read-back agree. */
+        const char *field_ctype = captured->type.kind == TY_FN
+            ? "int64_t"
+            : emit_type_c_name(ctx, captured->type);
+        buf_printf(out, "%s %s; ", field_ctype, field);
+        free(field);
+    }
+    buf_puts(out, "};\n");
+    free(thunk_typedef);
+
+    /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
+     * can be released generically (opaque-C teardown or scope-exit)
+     * through its env[-1] header.  Releases each refcounted owning
+     * capture (rc decrement, balancing the env-fill retain) then frees
+     * the base.  MUST stay in lockstep with the emit_fns.c twin site
+     * (that pre-pass normally wins the shared env_struct_names guard;
+     * this arm is the fallback) so the rc retain/release always pairs.
+     * Non-refcounted owning captures await move analysis -- see the
+     * emit_fns.c site for the rationale. */
+    {
+        buf_printf(out,
+            "static void drop_glue_%s(void *__p) {\n", env_name->name);
+        buf_printf(out,
+            "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
+            env_name->name, env_name->name);
+        for (int32_t i = (int32_t)closure->n_captures - 1; i >= 0; i--) {
+            Binding *cap = closure->captures[i];
+            if (cap && cap->is_global) continue;
+            if (cap && cap->type.kind == TY_RC) {
+                char *cf = raw_name_for_binding(cap);
+                buf_printf(out,
+                    "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
+                    cf, cf);
+                free(cf);
+            } else if (cap && cap->is_fat &&
+                       !(cap->closure_fn_binding && closure->fn &&
+                         closure->fn->binding &&
+                         cap->closure_fn_binding == closure->fn->binding)) {
+                /* Type-honesty (a): release an OWNED `^fat` closure
+                 * handle capture (see emit_fns.c twin site). Kept in
+                 * lockstep so the move/walk pairing holds either site. */
+                char *cf = raw_name_for_binding(cap);
+                buf_printf(out, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
+                free(cf);
+            } else if (closure->capture_drop_insts &&
+                       closure->capture_drop_insts[i] &&
+                       closure->capture_drop_insts[i]->n_method_impls > 0 &&
+                       closure->capture_drop_insts[i]->method_impls[0] &&
+                       closure->capture_drop_insts[i]->method_impls[0]->binding) {
+                /* Model R #1b: Drop-instance release (see emit_fns.c twin). */
+                char *cf = raw_name_for_binding(cap);
+                char *dm = raw_name_for_binding(
+                    closure->capture_drop_insts[i]->method_impls[0]->binding);
+                buf_printf(out, "    %s(__e->%s);\n", dm, cf);
+                free(dm); free(cf);
+            }
+        }
+        buf_puts(out,
+            "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
+    }
+}
+
 /* CM3 (van-laarhoven-consumer-mono-plan): peel type-erasing wrappers off a
  * consumer call's lens argument and return the named global lens it resolves to
  * (NULL for an anonymous / runtime-selected lens -- those stay on Path A). */
@@ -7457,125 +7587,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 thunk_sym_override = _isp->clone_name;
             }
 
-            /* Emit env struct type definition at file scope if not already emitted */
-            /* Check if we've already emitted this env struct */
-            bool already_emitted = false;
-            if (ctx->env_struct_names) {
-                for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
-                    if (ctx->env_struct_names[i] == env_name) {
-                        already_emitted = true;
-                        break;
-                    }
-                }
-            }
-            if (!already_emitted) {
-                Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
-                uint32_t thunk_arity = closure->fn->n_params > 0 ? (uint32_t)(closure->fn->n_params - 1) : 0;
-                Type _rtp[MAX_FN_ARITY];
-                Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
-                if (thunk_params && thunk_sym_override) {
-                    for (uint8_t _t = 0; _t < thunk_arity; _t++)
-                        _rtp[_t] = emit_resolve_type(ctx, closure->fn->param_types[_t + 1]);
-                    thunk_params = _rtp;
-                }
-                char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file, thunk_result, thunk_params, thunk_arity);
-                /* Track this env struct */
-                if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
-                    ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
-                    ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
-                        ctx->cap_env_struct_names * sizeof(const Symbol *));
-                }
-                ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
-                
-                /* Phase HKT §5: fat closure struct — __fn first, then captures. */
-                if (thunk_typedef) {
-                    buf_printf(ctx->file, "struct %s { %s __fn; ", env_name->name, thunk_typedef);
-                } else {
-                    buf_printf(ctx->file, "struct %s { int64_t __fn; ", env_name->name);
-                }
-                for (uint8_t i = 0; i < closure->n_captures; i++) {
-                    Binding *captured = closure->captures[i];
-                    /* Edge 1: a letrec/named-let member referenced from a nested
-                     * closure is captured eagerly (its globalness is unknown when
-                     * collect_free_vars runs), but if it turned out captureless it
-                     * is lifted as a directly-callable global with no env -- emit
-                     * no field for it (it is reached by its C symbol, not a slot).
-                     * Globals are never legitimately captured elsewhere, so this
-                     * only affects that one case. */
-                    if (captured && captured->is_global) continue;
-                    char *field = raw_name_for_binding(captured);
-                    /* A captured function value (fat closure or bare fn ptr) is
-                     * carried as the int64_t fn-ABI carrier -- the same C type
-                     * fn-typed parameters use (see emit_fns.c, TY_FN param
-                     * branch).  type_c_name(TY_FN) returns the *result* type's C
-                     * name (e.g. "double" for a :float-returning closure), which
-                     * would store the closure pointer in a floating-point field
-                     * and reinterpret it through a double on read -- a latent
-                     * miscompile that only survives because valid pointers fit
-                     * exactly in a double's 53-bit integer range.  Pin the field
-                     * to the carrier so the stored bits and the fat-dispatch
-                     * read-back agree. */
-                    const char *field_ctype = captured->type.kind == TY_FN
-                        ? "int64_t"
-                        : emit_type_c_name(ctx, captured->type);
-                    buf_printf(ctx->file, "%s %s; ", field_ctype, field);
-                    free(field);
-                }
-                buf_puts(ctx->file, "};\n");
-                free(thunk_typedef);
+            /* Emit env struct type definition + drop glue at file scope if
+             * not already emitted.  Shared with the CPS twin pre-pass in
+             * emit_cps_ir.c, which must define the struct BEFORE an
+             * earlier-in-file __cps body reads captures through it.
+             *
+             * Route through pending_handler_fns when available: during
+             * emit_fn_def, ctx->file points INSIDE the current function's
+             * body buffer, and a `static void drop_glue_...` at block scope
+             * is invalid C.  pending_handler_fns drains to file scope AHEAD
+             * of the function being emitted -- exactly the position the
+             * struct and glue need.  (Previously this fallback wrote to
+             * ctx->file and survived only because emission order always let
+             * a file-scope site win the dedup guard first.) */
+            emit_closure_env_struct_and_glue(
+                ctx,
+                ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file,
+                closure, env_name, thunk_sym_override != NULL);
 
-                /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
-                 * can be released generically (opaque-C teardown or scope-exit)
-                 * through its env[-1] header.  Releases each refcounted owning
-                 * capture (rc decrement, balancing the env-fill retain) then frees
-                 * the base.  MUST stay in lockstep with the emit_fns.c twin site
-                 * (that pre-pass normally wins the shared env_struct_names guard;
-                 * this arm is the fallback) so the rc retain/release always pairs.
-                 * Non-refcounted owning captures await move analysis -- see the
-                 * emit_fns.c site for the rationale. */
-                {
-                    buf_printf(ctx->file,
-                        "static void drop_glue_%s(void *__p) {\n", env_name->name);
-                    buf_printf(ctx->file,
-                        "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
-                        env_name->name, env_name->name);
-                    for (int32_t i = (int32_t)closure->n_captures - 1; i >= 0; i--) {
-                        Binding *cap = closure->captures[i];
-                        if (cap && cap->is_global) continue;
-                        if (cap && cap->type.kind == TY_RC) {
-                            char *cf = raw_name_for_binding(cap);
-                            buf_printf(ctx->file,
-                                "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
-                                cf, cf);
-                            free(cf);
-                        } else if (cap && cap->is_fat &&
-                                   !(cap->closure_fn_binding && closure->fn &&
-                                     closure->fn->binding &&
-                                     cap->closure_fn_binding == closure->fn->binding)) {
-                            /* Type-honesty (a): release an OWNED `^fat` closure
-                             * handle capture (see emit_fns.c twin site). Kept in
-                             * lockstep so the move/walk pairing holds either site. */
-                            char *cf = raw_name_for_binding(cap);
-                            buf_printf(ctx->file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
-                            free(cf);
-                        } else if (closure->capture_drop_insts &&
-                                   closure->capture_drop_insts[i] &&
-                                   closure->capture_drop_insts[i]->n_method_impls > 0 &&
-                                   closure->capture_drop_insts[i]->method_impls[0] &&
-                                   closure->capture_drop_insts[i]->method_impls[0]->binding) {
-                            /* Model R #1b: Drop-instance release (see emit_fns.c twin). */
-                            char *cf = raw_name_for_binding(cap);
-                            char *dm = raw_name_for_binding(
-                                closure->capture_drop_insts[i]->method_impls[0]->binding);
-                            buf_printf(ctx->file, "    %s(__e->%s);\n", dm, cf);
-                            free(dm); free(cf);
-                        }
-                    }
-                    buf_puts(ctx->file,
-                        "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
-                }
-            }
-            
             /* Phase HKT §5: heap-allocate the fat closure struct so that the
              * fat pointer can safely escape from the local stack frame and be
              * passed to HKT helpers as an opaque int64_t.  Layout:

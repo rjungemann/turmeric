@@ -639,6 +639,27 @@ static bool cps_force_color_eff_fnval_args(const Expr *e, CpsNode *nodes, uint32
                         if (arg && arg->kind == EX_VAR && arg->as.var.binding) {
                             int li = cps_find_node(nodes, n, arg->as.var.binding);
                             if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
+                            /* A let temp of a capturing closure records the
+                             * lifted lambda in closure_fn_binding; a `^borrow`
+                             * hoist temp in hoist_closure_fn_binding. */
+                            const Binding *lam = arg->as.var.binding->closure_fn_binding
+                                ? arg->as.var.binding->closure_fn_binding
+                                : arg->as.var.binding->hoist_closure_fn_binding;
+                            if (lam) {
+                                li = cps_find_node(nodes, n, lam);
+                                if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
+                            }
+                        }
+                        /* fn-value-fat-normalization (effect-row increment): a
+                         * CAPTURING closure literal in the same position -- its
+                         * lifted FnDef (env as param[0]) needs the same __cps
+                         * entry for the registry's slot-0 (env-taking) dispatch. */
+                        if (arg && arg->kind == EX_CLOSURE && arg->as.closure_.closure
+                            && arg->as.closure_.closure->fn
+                            && arg->as.closure_.closure->fn->binding) {
+                            int li = cps_find_node(nodes, n,
+                                arg->as.closure_.closure->fn->binding);
+                            if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
                         }
                     }
                 }
@@ -655,6 +676,13 @@ static bool cps_force_color_eff_fnval_args(const Expr *e, CpsNode *nodes, uint32
                     const Expr *arg = cps_peel_fnvalue_arg(e->as.call_.args[p]);
                     if (arg && arg->kind == EX_VAR && arg->as.var.binding) {
                         int li = cps_find_node(nodes, n, arg->as.var.binding);
+                        if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
+                    }
+                    if (arg && arg->kind == EX_CLOSURE && arg->as.closure_.closure
+                        && arg->as.closure_.closure->fn
+                        && arg->as.closure_.closure->fn->binding) {
+                        int li = cps_find_node(nodes, n,
+                            arg->as.closure_.closure->fn->binding);
                         if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
                     }
                 }

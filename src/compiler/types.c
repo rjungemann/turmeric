@@ -748,14 +748,16 @@ bool type_is_transparent_int_newtype(Type t) {
  * and the make-struct fn-field store (which must not re-box an already
  * normalized param).  Named tyvars are therefore no longer excluded here.
  *
- * One exclusion remains, measured again 2026-08-01 with the tyvar half in:
- *   - effect rows -- an effectful callback's thin convention is LOAD-BEARING
- *     for the CPS backend.  Lifting it regresses 22 fixtures: 17 effect/cps
- *     behavioral (colored fn values have their own twin/trampoline calling
- *     convention this predicate must not override) and, more seriously, 5
- *     `tests/fixtures/errors/effect-*` negative fixtures STOP diagnosing --
- *     effect-row checking itself reads the thin representation.  That is a
- *     CPS-backend increment, not a param-side rule.
+ * The LAST exclusion -- effect rows -- was lifted 2026-08-16 by the CPS
+ * increment it was waiting on.  The load-bearing thin dependence was the E2a
+ * direct-entry-keyed CPS twin registry; the via_registry call sites now
+ * dispatch fat (slot 0 = a registered capturing-lambda entry with an
+ * env-taking __cps twin, slot 1 = a fatshim's stashed bare-fn entry), the
+ * effect_check walkers peel the EX_FN_TO_FAT shim, and threadable capturing
+ * lambdas are CPS-admitted with the env unpacked exactly like the direct
+ * thunk.  Effect-annotated fn params are therefore normalized like every
+ * other nominal fn param.  Pinned by
+ * tests/fixtures/effect-capturing-closure-thin-param/.
  *
  * Note the asymmetry with fn_result_type_is_fat_normalized below: a tyvar-sig
  * fn type is normalized in PARAM position but not as a declared RESULT.  The
@@ -795,7 +797,6 @@ bool fn_param_type_is_fat_normalized(const Type *t) {
     if (!(t && t->kind == TY_FN && !t->as.fn.cfnptr &&
           !t->as.fn.is_variadic && t->as.fn.arity <= 5))
         return false;
-    if (t->as.fn.effect_row) return false;
     return true;
 }
 

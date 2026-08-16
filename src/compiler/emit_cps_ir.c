@@ -1083,6 +1083,16 @@ static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
      * by cap_add_fn_scalar) rides the env as a bare int64 direct-entry fn-ptr --
      * `binder_ctype_full(TY_FN)` would leak a bad spelling. */
     if (caps->ty[i] == TY_FN) return "int64_t";
+    /* fn-value-fat-normalization (effect-row increment): a normalized fn param
+     * FORWARDED as an argument was retyped to TY_PTR_VOID by the elab
+     * pass-through (so the arg loop does not double-shim it), so its capture
+     * atom arrives as TY_PTR_VOID while the C param it loads from is the
+     * int64_t carrier.  Spelling the env field `void *` makes the fill an
+     * int->pointer assignment (-Wint-conversion).  The binding still says
+     * TY_FN; keep the slot the one-word carrier. */
+    if (caps->ty[i] == TY_PTR_VOID && caps->b[i] &&
+        caps->b[i]->type.kind == TY_FN)
+        return "int64_t";
     return binder_ctype_full(ctx, caps->ty[i], caps->type[i]);
 }
 
@@ -2693,6 +2703,11 @@ static bool param_name_clashes_cps(const Binding *b) {
     if (!b || !b->name || !b->name->name) return false;
     const char *n = b->name->name;
     if (strcmp(n, "k") == 0) return true;
+    /* fn-value-fat-normalization (effect-row increment): a lifted capturing
+     * lambda's env param is `__env_p_<id>` -- uniquely numbered, never a name
+     * the CPS emitter mints itself.  Admitting it is what lets a capturing
+     * callback get a `__cps` twin (the registry's slot-0 env-taking entry). */
+    if (strncmp(n, "__env_p_", 8) == 0) return false;
     if (n[0] == '_' && n[1] == '_') return true;
     if (n[0] == 't' && n[1] != '\0') {
         for (const char *p = n + 1; *p; p++) if (*p < '0' || *p > '9') return false;
@@ -2791,6 +2806,8 @@ static bool fn_carrier_param_ok(const FnDef *fd, const Binding *p) {
     return strcmp(type_c_name(p->type), "int64_t") == 0;
 }
 
+static bool threadable_has(const Binding *b);
+
 static bool fn_sig_ok(const FnDef *fd) {
     /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate).  A
      * nil/void return is admitted too: the body still delivers a unit (0) to the
@@ -2808,6 +2825,40 @@ static bool fn_sig_ok(const FnDef *fd) {
     const Type *rt = fn_ret_type(fd);
     if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
         && !fn_carrier_ret_ok(fd, rt)) return false;
+    /* fn-value-fat-normalization (effect-row increment): a CAPTURING lambda is
+     * CPS-admitted ONLY when it is in the threadable set -- i.e. it flows into
+     * an effectful fn slot and needs a registered __cps twin for the E2a fat
+     * dispatch.  Every other capturing lambda keeps the direct path exactly as
+     * before (which carries TCO for named-let loops, the fat-dispatch spelling
+     * for poly-fn captures, and every other direct-only facility the CPS body
+     * render does not reproduce).  A threadable lambda with a rank-2 poly-fn
+     * capture is still rejected: its env field is the 16-byte fat struct and
+     * the body's `.fn/.env` dispatch has no CPS spelling here yet. */
+    if (fd->closure) {
+        if (!threadable_has(fd->binding)) return false;
+        for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
+            const Binding *cap = fd->closure->captures[ci];
+            if (!cap || cap->is_global) continue;
+            if (cap->is_poly_fn) return false;
+            /* PRIMITIVE captures only: an aggregate / type-app / tyvar capture
+             * (the lens `l2 : Lens` shape) may resolve by-value under a spec,
+             * be read `(__env->l2).field` under a spec-suffixed env layout the
+             * CPS render does not reproduce -- and a monomorph SPEC clone of
+             * an admitted lambda routes through CPS emission too.  The base
+             * type looks slot-safe at classification time, so a slot test is
+             * not enough; whitelist the primitive kinds the report's shapes
+             * actually capture.  Rejected lambdas keep the direct path; if
+             * one ever flows into a genuinely threading call it aborts loudly
+             * at the checked registry lookup rather than miscompiling. */
+            switch (cap->type.kind) {
+                case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_FLOAT32:
+                case TY_FLOAT64: case TY_CSTR: case TY_FN: case TY_PTR_VOID:
+                    break;
+                default:
+                    return false;
+            }
+        }
+    }
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
@@ -3378,9 +3429,31 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         case EX_COMPOSE_HANDLERS: REC(e->as.compose_handlers_.h1); REC(e->as.compose_handlers_.h2); return;
         /* --- structural / binding forms: recurse into every sub-expression --- */
         case EX_LET:
-        case EX_LETREC:   /* reuses the let_ union member */
-            for (uint32_t i = 0; i < e->as.let_.n; i++) REC(e->as.let_.bindings[i].init);
+        case EX_LETREC: { /* reuses the let_ union member */
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                Expr *init = e->as.let_.bindings[i].init;
+                const Binding *lb = e->as.let_.bindings[i].binding;
+                /* A closure literal bound to a let/hoist temp that RECORDS it
+                 * (closure_fn_binding) is not an independent value-use of the
+                 * lifted lambda -- the temp's own uses are counted through the
+                 * EX_VAR indirection.  Still recurse into the closure body so
+                 * its effects collect.  Without this, the hoisted-callback
+                 * shape reads uses=2 ok=1 and is never threadable. */
+                const Binding *lb_lam = lb
+                    ? (lb->closure_fn_binding ? lb->closure_fn_binding
+                                              : lb->hoist_closure_fn_binding)
+                    : NULL;
+                if (init && init->kind == EX_CLOSURE && lb_lam &&
+                    init->as.closure_.closure &&
+                    init->as.closure_.closure->fn &&
+                    init->as.closure_.closure->fn->binding == lb_lam) {
+                    REC(init->as.closure_.closure->fn->body);
+                } else {
+                    REC(init);
+                }
+            }
             REC(e->as.let_.body); return;
+        }
         case EX_IF:    REC(e->as.if_.cond); REC(e->as.if_.then_); REC(e->as.if_.else_or_null); return;
         case EX_DO:    for (uint32_t i = 0; i < e->as.do_.n; i++) REC(e->as.do_.items[i]); return;
         case EX_WHILE: REC(e->as.while_.cond); REC(e->as.while_.body); return;
@@ -3454,8 +3527,24 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     ? fd_for_binding(acc->thr_program, e->as.call_.fn_binding) : NULL;
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     const Expr *a = peel_fn_value(e->as.call_.args[i]);
-                    if (a && a->kind == EX_VAR && a->as.var.binding == acc->count_target
-                        && cfd) {
+                    bool is_target = a && a->kind == EX_VAR
+                        && a->as.var.binding == acc->count_target;
+                    /* fn-value-fat-normalization (effect-row increment): a
+                     * CAPTURING closure literal is a use of its lifted FnDef's
+                     * binding in the same threadable-arg sense -- under
+                     * normalization the fat box's slot 0 is that entry, and
+                     * the E2a dispatch threads it when registered.  A let /
+                     * `^borrow`-hoist temp of such a closure records the lifted
+                     * lambda in closure_fn_binding; follow it. */
+                    if (!is_target && a && a->kind == EX_CLOSURE
+                        && a->as.closure_.closure && a->as.closure_.closure->fn
+                        && a->as.closure_.closure->fn->binding == acc->count_target)
+                        is_target = true;
+                    if (!is_target && a && a->kind == EX_VAR && a->as.var.binding
+                        && (a->as.var.binding->closure_fn_binding == acc->count_target
+                            || a->as.var.binding->hoist_closure_fn_binding == acc->count_target))
+                        is_target = true;
+                    if (is_target && cfd) {
                         PtClass cls = param_thread_class(cfd, i);
                         if (cls != PT_NONE) {
                             (*acc->thr_ok)++;
@@ -3562,6 +3651,15 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         /* nested function / closure: descend into its body so a lambda that
          * performs an effect taints the effect for its enclosing function too. */
         case EX_CLOSURE:
+            /* fn-value-fat-normalization (effect-row increment): the closure
+             * LITERAL is a value-use of its lifted FnDef's binding -- count it
+             * so fn_value_threadable's total matches the threadable-arg count
+             * (a capturing callback into an effectful slot used to read as
+             * uses=0 and could never be threadable). */
+            if (acc->count_target && acc->count_out
+                && e->as.closure_.closure && e->as.closure_.closure->fn
+                && e->as.closure_.closure->fn->binding == acc->count_target)
+                (*acc->count_out)++;
             if (e->as.closure_.closure && e->as.closure_.closure->fn)
                 REC(e->as.closure_.closure->fn->body);
             return;
@@ -3580,6 +3678,13 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         case EX_VAR:
             if (acc->count_target && e->as.var.binding == acc->count_target
                 && acc->count_out)
+                (*acc->count_out)++;
+            /* A let/hoist temp of a capturing closure counts as a use of the
+             * lifted lambda it records (closure_fn_binding) -- pairs with the
+             * threadable-arg probe's identical indirection above. */
+            else if (acc->count_target && acc->count_out && e->as.var.binding
+                     && (e->as.var.binding->closure_fn_binding == acc->count_target
+                         || e->as.var.binding->hoist_closure_fn_binding == acc->count_target))
                 (*acc->count_out)++;
             if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN) {
                 if (!acc->calls_only) eff_acc_add_callee(acc, e->as.var.binding);
@@ -4104,17 +4209,31 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
             if (e->kind == EX_CALL && e->as.call_.fn_binding == fd->binding) {
                 if (pi >= e->as.call_.n_args) return false;
                 const Expr *a = peel_fn_value(e->as.call_.args[pi]);
+                /* fn-value-fat-normalization (effect-row increment): a CAPTURING
+                 * closure literal is thread-safe when its lifted lambda is
+                 * threadable (the E2a fat dispatch reads its registered entry
+                 * out of the box's slot 0). */
+                if (a && a->kind == EX_CLOSURE) {
+                    if (!(a->as.closure_.closure && a->as.closure_.closure->fn
+                          && threadable_has(a->as.closure_.closure->fn->binding)))
+                        return false;
+                    seen++;
+                } else {
                 if (!a || a->kind != EX_VAR) return false;
                 /* E2 (cps-tramp-resume): a SELF-recursive call passing fd's OWN
                  * param `pi` back at position `pi` threads the same row-poly
                  * fn-value -- it introduces no new fn-value, so it is trivially
                  * thread-safe (effect-poly-map).  Any OTHER arg must be a registered
-                 * threadable fn-value. */
+                 * threadable fn-value.  A let / `^borrow`-hoist temp of a
+                 * capturing closure resolves through closure_fn_binding. */
                 if (!(g_opt_cps_tramp_resume && fd->params
                       && a->as.var.binding == fd->params[pi])
-                    && !threadable_has(a->as.var.binding))
+                    && !threadable_has(a->as.var.binding)
+                    && !threadable_has(a->as.var.binding->closure_fn_binding)
+                    && !threadable_has(a->as.var.binding->hoist_closure_fn_binding))
                     return false;
                 seen++;
+                }
             }
             switch (e->kind) {
                 case EX_CALL:
@@ -5293,6 +5412,60 @@ static const char *e2a_lookup_key(char *out, size_t cap,
     return out;
 }
 
+/* fn-value-fat-normalization (the effect-row increment): is this via_registry
+ * callee carried as a FAT handle?  Every value flowing into a normalized fn
+ * param is a fat box (the elab call-site shim guarantees it), and a `^fat`
+ * param always was.  A NULL binding (E2c struct-field load) keeps the raw
+ * atom key -- effectful fields kept the thin store. */
+static bool e2a_callee_is_fat(const Binding *fn) {
+    if (!fn) return false;
+    if (fn->is_fat) return true;
+    return fn->is_param && fn->type.kind == TY_FN &&
+           fn_param_type_is_fat_normalized(&fn->type);
+}
+
+/* Emit the via_registry dispatch for a FAT callee.  Two box species reach an
+ * effectful fn slot, distinguishable by which slot the registry knows:
+ *
+ *   - a capturing closure's env box `{ lifted-entry, caps... }`: slot 0 is the
+ *     lifted entry, registered (when threadable) against an ENV-TAKING twin --
+ *     call `twin(box, args..., kont)`;
+ *   - a fatshim box `{ __tur_fatshimN, direct-entry }` (a bare fn or
+ *     captureless lambda auto-shimmed by the arg loop): slot 0 is the shim
+ *     (never registered), slot 1 the registered direct entry -- call
+ *     `twin(args..., kont)` exactly as the thin convention did.
+ *
+ * Try slot 0 first, fall back to a CHECKED slot-1 lookup so a genuinely
+ * unregistered value still aborts with the callee's name instead of jumping
+ * into the box.  `argv` is the carrier-cast arg CSV ("" when n == 0) and
+ * `thread` the continuation expression. */
+static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
+                                  const char *argv, uint32_t n,
+                                  const char *thread, const char *tag) {
+    char env_cast[512]; int off = snprintf(env_cast, sizeof env_cast,
+                                           "int64_t (*)(void *, ");
+    for (uint32_t i = 0; i < n && off < 400; i++)
+        off += snprintf(env_cast + off, sizeof env_cast - (size_t)off, "int64_t, ");
+    snprintf(env_cast + off, sizeof env_cast - (size_t)off, "DK *)");
+    char thin_cast[512]; off = snprintf(thin_cast, sizeof thin_cast, "int64_t (*)(");
+    for (uint32_t i = 0; i < n && off < 400; i++)
+        off += snprintf(thin_cast + off, sizeof thin_cast - (size_t)off, "int64_t, ");
+    snprintf(thin_cast + off, sizeof thin_cast - (size_t)off, "DK *)");
+    ce_line(ce, "{ int64_t *__e2ab = (int64_t *)(intptr_t)(%s); /* %s (fat callee) */", callee, tag);
+    ce_line(ce, "  __tur_cps_fn __e2af = __tur_cps_lookup(__e2ab[0]);");
+    if (n) {
+        ce_line(ce, "  if (__e2af) return ((%s)__e2af)((void *)__e2ab, %s, %s);",
+                env_cast, argv, thread);
+        ce_line(ce, "  return ((%s)__tur_cps_lookup_checked(__e2ab[1], \"%s\"))(%s, %s); }",
+                thin_cast, who, argv, thread);
+    } else {
+        ce_line(ce, "  if (__e2af) return ((%s)__e2af)((void *)__e2ab, %s);",
+                env_cast, thread);
+        ce_line(ce, "  return ((%s)__tur_cps_lookup_checked(__e2ab[1], \"%s\"))(%s); }",
+                thin_cast, who, thread);
+    }
+}
+
 /* Join a term's atom arguments into a malloc'd "a0, a1, ..." string. */
 static char *atoms_csv(CE *ce, const CAtom *args, uint32_t n) {
     Buf b; buf_init(&b);
@@ -5791,6 +5964,12 @@ static void emit_term(CE *ce, const CTerm *t) {
                 char *argv = atoms_csv_call_cps(ce, t->as.tailcall.args, t->as.tailcall.n);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
+                if (e2a_callee_is_fat(t->as.tailcall.fn)) {
+                    emit_e2a_fat_dispatch(ce, pf, pf, argv, t->as.tailcall.n,
+                                          thread, "E2a threaded fn-value");
+                    free(pf); free(argv);
+                    break;
+                }
                 /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
                 char cast[512]; int off = snprintf(cast, sizeof cast, "int64_t (*)(");
                 for (uint32_t i = 0; i < t->as.tailcall.n && off < 400; i++)
@@ -6361,6 +6540,19 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                         const CTerm *body, const CHandleCase *hcase,
                         const CapSet *caps) {
     bool has_caps = (caps && caps->n > 0);
+    /* fn-value-fat-normalization (effect-row increment): a lifted helper is its
+     * OWN function -- captures arrive through its frame env (`__cap->fN`) as
+     * raw-named locals, never through the enclosing closure's env pointer.
+     * When this helper is lifted out of a capturing lambda's __cps body, the
+     * ctx closure context (which routes capture reads through `__env_X->cap`)
+     * must not leak in: it would spell the loader's LOCAL name as a deref
+     * (`int64_t __env_X->w = __cap->f0;` -- invalid C).  The frame FILL back in
+     * the enclosing body still runs under the closure context and reads
+     * `__env_X->w` correctly. */
+    struct Closure *saved_lh_closure = ce->ctx->closure;
+    const char *saved_lh_env_var = ce->ctx->env_var_name;
+    ce->ctx->closure = NULL;
+    ce->ctx->env_var_name = NULL;
     /* A RE-OPENING case (its body performs an effect its own handle does not
      * handle) runs with the REAL enclosing chain as `__kont`
      * (dk_case_enclosing_real) and delivers its value through it on every exit
@@ -6581,6 +6773,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     buf_puts(ce->helpers, tmp.data);
     buf_puts(ce->helpers, "}\n");
     buf_free(&tmp);
+    ce->ctx->closure = saved_lh_closure;
+    ce->ctx->env_var_name = saved_lh_env_var;
 }
 
 /* A non-tail cps->cps call `let x = g(args) in jbody`, represented as a
@@ -6657,12 +6851,17 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     } else if (call->as.tailcall.via_registry) {
         /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified
          * join `frame` to its CPS entry recovered from the registry. */
+        /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
+        char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
+        if (e2a_callee_is_fat(call->as.tailcall.fn)) {
+            emit_e2a_fat_dispatch(ce, fn, fn, argv_cps, call->as.tailcall.n,
+                                  frame, "E2a threaded fn-value heap join");
+            free(argv_cps);
+        } else {
         char cast[512]; int coff = snprintf(cast, sizeof cast, "int64_t (*)(");
         for (uint32_t i = 0; i < call->as.tailcall.n && coff < 400; i++)
             coff += snprintf(cast + coff, sizeof cast - (size_t)coff, "int64_t, ");
         snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
-        /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
-        char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
         char key[640];
         e2a_lookup_key(key, sizeof key, call->as.tailcall.fn, fn);
         if (call->as.tailcall.n)
@@ -6672,6 +6871,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
             ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s); /* E2a threaded fn-value heap join */",
                     cast, key, fn, frame);
         free(argv_cps);
+        }
     } else if (call->as.tailcall.n)
     {
         /* Param-type-aware carrier casts (gcc14-int-conversion). */
@@ -8298,6 +8498,12 @@ bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b) {
  * fn_sig_ok's per-binding checks (is_poly_fn / is_borrow / effect-free fn param /
  * name clash) but reads the concrete type at each position. */
 static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
+    /* fn-value-fat-normalization (effect-row increment): a monomorph SPEC
+     * clone of a lifted CLOSURE lambda is never CPS-emitted.  The spec's env
+     * layout rides an env_name_override the CPS render's base-env unpack does
+     * not know, and the registry story only ever threads the BASE entry (the
+     * fat box's slot 0).  The clone keeps the direct path. */
+    if (fd->closure) return false;
     const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
                    ? &spec->result_type : fn_ret_type(fd);
     /* A CONCRETE monomorph of an ORDINARY defn has a single concrete C signature
@@ -8521,6 +8727,35 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
     ce.cur_k = "__kont"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
     ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
+    /* fn-value-fat-normalization (effect-row increment): a CAPTURING lambda's
+     * __cps twin reads its captures exactly like the direct thunk does -- cast
+     * the env param to the env struct and route capture reads through it.
+     * atom_var / name_for_binding consult ctx->closure + ctx->env_var_name (the
+     * same chokepoint the direct emitter's closure preamble uses), so setting
+     * them around the body render is the whole integration. */
+    struct Closure *saved_cps_closure = ctx->closure;
+    const char *saved_cps_env_var = ctx->env_var_name;
+    char *cps_env_var = NULL;
+    if (fd->closure && fd->n_params > 0 && fd->closure->env_name) {
+        /* The env struct must be DEFINED before this __cps body reads captures
+         * through it -- the EX_CLOSURE construction site (which normally emits
+         * it) lands later in the file.  Deduped via ctx->env_struct_names, so
+         * whichever site runs first wins and the other skips. */
+        emit_closure_env_struct_and_glue(ctx, file, fd->closure,
+                                         fd->closure->env_name, false);
+        ctx->closure = fd->closure;
+        char *env_param_name = raw_name_for_binding(fd->params[0]);
+        Buf ev; buf_init(&ev);
+        buf_printf(&ev, "__env_%s", fd->closure->env_name->name);
+        buf_putc(&ev, '\0');
+        cps_env_var = strdup(ev.data);
+        buf_free(&ev);
+        buf_printf(&body_buf, "    struct %s *%s = (struct %s *)%s;\n",
+                   fd->closure->env_name->name, cps_env_var,
+                   fd->closure->env_name->name, env_param_name);
+        free(env_param_name);
+        ctx->env_var_name = cps_env_var;
+    }
     /* B7: pre-scan this function's term for escaping-continuation mutables, which
      * emit as by-reference heap cells (see g_byref_muts). */
     g_byref_muts_n = 0;
@@ -8533,6 +8768,11 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
+    if (cps_env_var) {
+        ctx->closure = saved_cps_closure;
+        ctx->env_var_name = saved_cps_env_var;
+        free(cps_env_var);
+    }
     buf_putc(&body_buf, '\0');
     buf_putc(&helpers, '\0');
 
