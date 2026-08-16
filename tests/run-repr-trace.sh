@@ -332,6 +332,35 @@ else
   rc=1
 fi
 
+# Increment 4 stage 3 -> R3: ENFORCEMENT mode.  A Debug build now treats a
+# representation-shadow disagreement as an ICE with no flag required, which is
+# licensed only because stage 3's whole position list runs silent.  The two
+# modes must stay distinguishable, so pin both:
+#
+#   measurement  --emit-abi-trace collects disagreements as lines and never
+#                aborts (this is how every position was calibrated, and how
+#                the pinned container-elem row stays visible);
+#   enforcement  a plain Debug run of the same file exits 0.
+#
+# The container-elem row is the sharp case: it is a KNOWN, documented
+# disagreement, so it must appear under trace and must NOT abort a build.
+"$TUR" emit-c --emit-abi-trace "$tmp/celem-app.tur" >/dev/null 2>"$tmp/mode-trace.err"
+"$TUR" emit-c "$tmp/celem-app.tur" >/dev/null 2>"$tmp/mode-plain.err"
+plain_rc=$?
+if [ $plain_rc -ne 0 ]; then
+  echo "  FAIL enforcement mode aborted on the known container-elem row (exit $plain_rc):"
+  head -4 "$tmp/mode-plain.err"
+  rc=1
+elif ! grep -q '^repr-shadow container-elem' "$tmp/mode-trace.err"; then
+  echo "  FAIL measurement mode lost the known container-elem row"
+  rc=1
+elif grep -q 'internal error (ICE)' "$tmp/mode-plain.err"; then
+  echo "  FAIL enforcement mode ICE'd on a known row"
+  rc=1
+else
+  echo "  ok  known row logs under trace and never aborts a build"
+fi
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
   echo "--- fn-param trace ---"

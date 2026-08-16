@@ -528,24 +528,23 @@ void repr_shadow_report(const char *site, ReprPosition pos, Type resolved,
     if (repr_form_slot_class(want, pos) == repr_form_slot_class(got, pos))
         return;
     Buf tb; buf_init(&tb);
-    type_print(&tb, resolved);
-    buf_putc(&tb, '\0');
     /* `own` is the type's own C spelling.  A sweep needs it to tell a real
      * seam ("the site declared something other than what this type c-names
      * to") from a spelling identity ("both are the same word, named two
      * ways") without re-deriving it by hand per line. */
-    fprintf(stderr,
-            "repr-shadow %s %s type=%s want=%s got=%s cty=%s own=%s\n",
-            site, repr_position_name(pos), tb.data,
-            repr_form_name(want), repr_form_name(got), cty,
-            type_c_name(resolved));
+    buf_printf(&tb, "repr-shadow %s %s type=", site, repr_position_name(pos));
+    type_print(&tb, resolved);
+    buf_printf(&tb, " want=%s got=%s cty=%s own=%s\n", repr_form_name(want),
+               repr_form_name(got), cty, type_c_name(resolved));
+    buf_putc(&tb, '\0');
+    repr_shadow_disagree(site, false, tb.data);
     buf_free(&tb);
 }
 
 static void repr_shadow_check(EmitCtx *ctx, const char *site,
                               ReprPosition pos, Type declared_ty,
                               const char *chosen_cty) {
-    if (!g_emit_abi_trace || !chosen_cty) return;
+    if (!repr_shadow_active() || !chosen_cty) return;
     Type resolved = emit_resolve_type(ctx, declared_ty);
     repr_shadow_report(site, pos, resolved, repr_of(&resolved, pos),
                        repr_form_from_cty(resolved,
@@ -1081,15 +1080,15 @@ static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
  * pairing the wrapper ABI differently. */
 Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
     Type t = fn_body_tail_byvalue_carrier_type_inner(ctx, e);
-    if (g_emit_abi_trace && t.kind != TY_UNKNOWN) {
+    if (repr_shadow_active() && t.kind != TY_UNKNOWN) {
         ReprForm got = repr_of(&t, REPR_POS_RESULT);
         if (got == REPR_CARRIER_I64) {
             Buf tb; buf_init(&tb);
+            buf_puts(&tb, "repr-shadow method-result result type=");
             type_print(&tb, t);
+            buf_puts(&tb, " want=concrete got=carrier-i64\n");
             buf_putc(&tb, '\0');
-            fprintf(stderr,
-                    "repr-shadow method-result result type=%s "
-                    "want=concrete got=carrier-i64\n", tb.data);
+            repr_shadow_disagree("method-result", false, tb.data);
             buf_free(&tb);
         }
     }

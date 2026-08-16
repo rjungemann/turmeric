@@ -564,11 +564,26 @@ about, and cowpaths are paved before the field is closed:
   else. Chokepoint 1 reads LET_BIND, so the one place this answer drives real
   codegen is unchanged (suite 2598/0). After scoping: 65 -> 0, every other
   position still silent.
-  Stage 3's remaining work is no longer a position but the two things a
-  complete, silent list makes possible: the R3-style Debug ICE (graduating a
-  disagreement from a log line to a hard error) and the container-elem
-  collapse the pinned row names. Both are behavior changes wanting their own
-  measured increments.*
+  *Status 2026-08-16, R3: the Debug ICE landed.* A representation-shadow
+  disagreement is now a hard error in a Debug build with no flag required --
+  the routing plan's R3 step, taken only after every position ran silent
+  (*enforce before centralizing* is the stall-table entry this respects). The
+  instrument has three modes stated once in `types.c` rather than per site:
+  measurement (`--emit-abi-trace`, logs everything, never aborts -- a sweep
+  that dies on its first finding cannot calibrate a spec), enforcement (Debug,
+  ICE, `TUR_REPR_NO_SHADOW_ICE` downgrades), off (Release). Known rows -- today
+  the container-elem TY_APP class -- log under trace and never abort: a
+  diagnosed work list must not break someone's build. The ICE text and escape
+  hatch deliberately mirror `emit_abi_assert_routed_concrete` /
+  `TUR_ABI_NO_ROUTE_ICE`, the sibling R3 assert.
+  **The flip is its own measurement** (the CPS lesson): suite 2598/0 with the
+  ICE armed over the full build-and-run path; two fresh-seed fuzzer sessions
+  (8161, 8162) at 250 cases, 0 BUG classes; and a sabotage run -- un-scoping
+  the erased-spelling rule -- aborts 20 fixtures and downgrades cleanly under
+  the escape hatch, so both halves are load-bearing.
+  Remaining for increment 4: the container-elem collapse the pinned row
+  names, a behavior change wanting its own measured increment. Then increment
+  5's conditional retirement.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --

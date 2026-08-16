@@ -4279,12 +4279,16 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
          * that is not there.  Position PARAM, because a per-arg crossing
          * lands in a parameter slot and that is where a type's concrete
          * spelling is decided. */
-        ReprForm cf = repr_of(&concrete_ty, REPR_POS_PARAM);
-        if (cf == REPR_CARRIER_I64)
-            fprintf(stderr,
-                    "repr-shadow arg-bridge param type=%s want=concrete "
-                    "got=carrier-i64 dir=%s form=%s\n",
-                    type_name(concrete_ty), dir, form);
+    }
+    if (repr_shadow_active() &&
+        repr_of(&concrete_ty, REPR_POS_PARAM) == REPR_CARRIER_I64) {
+        const char *dir2 = (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+            ? "carrier->concrete" : "concrete->carrier";
+        char line[512];
+        snprintf(line, sizeof line,
+                 "repr-shadow arg-bridge param type=%s want=concrete "
+                 "got=carrier-i64 dir=%s\n", type_name(concrete_ty), dir2);
+        repr_shadow_disagree("arg-bridge", false, line);
     }
 
     const char *cname = emit_type_c_name(ctx, concrete_ty);

@@ -3117,15 +3117,21 @@ bool type_is_boxed_container_elem(Type t) {
      * would have to start consulting this predicate without double-boxing),
      * so it wants its own measured increment -- not a widening bolted on
      * here.  Until then the 5 lines are a pinned work list, not noise. */
-    if (g_emit_abi_trace) {
+    if (repr_shadow_active()) {
         bool want = repr_of(&t, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
         if (want != boxed) {
             Buf tb; buf_init(&tb);
+            buf_puts(&tb, "repr-shadow container-elem type=");
             type_print(&tb, t);
+            buf_printf(&tb, " want-boxed=%d got-boxed=%d\n", (int)want,
+                       (int)boxed);
             buf_putc(&tb, '\0');
-            fprintf(stderr,
-                    "repr-shadow container-elem type=%s want-boxed=%d "
-                    "got-boxed=%d\n", tb.data, (int)want, (int)boxed);
+            /* KNOWN: the concrete by-value APP element.  Diagnosed above --
+             * a scope mismatch between two agreeing mechanisms, and the next
+             * chokepoint's work item.  It must never abort a build. */
+            bool known = t.kind == TY_APP ||
+                         (t.kind != TY_ADT || !t.as.adt_.def);
+            repr_shadow_disagree("container-elem", known, tb.data);
             buf_free(&tb);
         }
     }
@@ -4846,6 +4852,46 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
      * erased carrier (compile-time-only kinds, unions, placeholders). */
     if (type_has_concrete_codegen_layout(t)) return REPR_SCALAR_BITS;
     return REPR_CARRIER_I64;
+}
+
+bool repr_shadow_active(void) {
+#ifndef NDEBUG
+    return true;              /* enforcement mode: evaluate even without the flag */
+#else
+    return g_emit_abi_trace;  /* Release: measurement only, and only on request */
+#endif
+}
+
+void repr_shadow_disagree(const char *site, bool known, const char *line) {
+    /* Measurement mode collects the whole list; it never aborts, because the
+     * point of a sweep is to see all of it at once. */
+    if (g_emit_abi_trace) {
+        fputs(line, stderr);
+        return;
+    }
+    if (known) return;        /* pinned work-list row -- never a build failure */
+#ifndef NDEBUG
+    if (getenv("TUR_REPR_NO_SHADOW_ICE")) {
+        fprintf(stderr, "tur: warning: representation shadow disagreement at "
+                        "%s; downgraded by TUR_REPR_NO_SHADOW_ICE\n  %s",
+                site, line);
+        return;
+    }
+    fprintf(stderr,
+            "tur: internal error (ICE): a representation decision disagrees "
+            "with repr_of at %s.\n  %s"
+            "Two sites now decide this value's representation differently -- "
+            "the defect family\n"
+            "docs/upcoming/repr-decision-function-plan.md exists to close.  "
+            "Re-run with\n"
+            "--emit-abi-trace to see every disagreement, or set "
+            "TUR_REPR_NO_SHADOW_ICE=1 to\ndowngrade this to a warning while "
+            "fixing.\n",
+            site, line);
+    abort();
+#else
+    (void)site;
+#endif
 }
 
 ReprForm repr_of_binding(const struct Binding *b, ReprPosition pos) {

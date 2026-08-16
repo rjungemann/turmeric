@@ -6,10 +6,11 @@ struct-field, fn-value tail/join, method-result and per-arg bridge all run
 silent corpus-wide, and container-elem is silent on the half its predicate
 owns while carrying one pinned, diagnosed disagreement that names the next
 chokepoint.  `repr_of_binding` exists alongside `repr_of` for the positions
-whose decision lives on the Binding rather than the Type.  What is left for
-the increment is the R3-style Debug ICE (a disagreement graduating from a log
-line to a hard error) and the container-elem collapse -- both behavior
-changes wanting their own measured increments.
+whose decision lives on the Binding rather than the Type.  **The R3 Debug ICE
+landed 2026-08-16**: in a Debug build a disagreement is now a hard error, not
+a log line, with measurement mode (`--emit-abi-trace`) and known rows exempt.
+What is left for the increment is the container-elem collapse -- a behavior
+change wanting its own measured increment.
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 4 -- "the true consolidation; it goes last because by then the
 sites agree in *behavior* and the collapse is mechanical rather than
@@ -392,12 +393,62 @@ stayed silent.
 | method-result | `fn_body_tail_byvalue_carrier_type` | 0 | 7211 |
 | per-arg bridge | `emit_carrier_bridge` | 0 | 13787 |
 
-Stage 3's position list is complete.  What remains for the increment is not
-another position but the two things the list makes possible: the R3-style
-Debug ICE (now that every instrumented position runs silent, a disagreement
-can graduate from a log line to a hard error), and the container-elem
-collapse the pinned row names.  Both are behavior changes and want their own
-measured increments.
+Stage 3's position list is complete.
+
+### The R3 Debug ICE (LANDED 2026-08-16)
+
+With every position silent, the disagreement graduates from a log line to a
+hard error -- the routing plan's R3 step, and the reason its rule is "the ICE
+comes AFTER the chokepoint exists" (meta-plan stall table: *enforce before
+centralizing* is what made the poly-result diagnostic fire on six correct
+fixtures).
+
+The instrument now has two modes, and keeping them distinct is the whole
+design:
+
+| mode | when | behavior |
+| --- | --- | --- |
+| measurement | `--emit-abi-trace`, any build | every disagreement is one line; nothing aborts, so a sweep sees the whole list |
+| enforcement | Debug build, no flag | a disagreement is an ICE; `TUR_REPR_NO_SHADOW_ICE` downgrades it to a warning |
+| off | Release | shadows are not evaluated at all |
+
+Two shapes are deliberately exempt from enforcement.  A **known** row -- today
+only the container-elem TY_APP class -- logs under trace and is silent
+otherwise: it is a diagnosed work list, not a defect, and a work list must
+never abort someone's build.  And measurement mode never aborts even on an
+unknown row, because a sweep that dies on its first finding cannot calibrate
+a spec.
+
+`repr_shadow_active()` / `repr_shadow_disagree()` in `types.c` are the two
+entry points; all five shadows route through them, so the mode policy is
+stated once rather than re-implemented per site.  The ICE text and the
+`TUR_REPR_NO_SHADOW_ICE` escape hatch mirror `emit_abi_assert_routed_concrete`
+and `TUR_ABI_NO_ROUTE_ICE` -- the sibling R3 assert from the carrier-crossing
+campaign -- so the two read the same way in a log.
+
+**Evidence for the flip, which is its own measurement** (the CPS graduation
+lesson: the probe that says "ready" is not the flip):
+
+- `bash tests/run.sh` with the ICE armed and no flag: **2598 passed, 0
+  failed**.  This is stronger than the emit-c sweeps each position was
+  calibrated on, because it drives the full build-and-run path over the whole
+  corpus.
+- Type fuzzer, the plan's named acceptance instrument: two fresh-seed
+  sessions (8161, 8162), 250 cases each, **0 BUG classes, 0 known-report
+  hits**.
+- Sabotage: un-scoping the erased-spelling rule (the 65-line arg-bridge
+  finding above) makes **20 fixtures abort** with the ICE, and
+  `TUR_REPR_NO_SHADOW_ICE=1` turns those into warnings with exit 0.  So both
+  the enforcement and the escape hatch are load-bearing rather than
+  decorative.
+- `tests/run-repr-trace.sh` pins the mode split directly: the known
+  container-elem row must appear under trace AND must not abort a plain
+  Debug run.
+
+What remains for increment 4 is the container-elem collapse the pinned row
+names -- a behavior change (the app path must consult the predicate without
+double-boxing) wanting its own measured increment -- and then increment 5's
+conditional retirement.
 
 ### Stage 4 -- registry + ratchet
 (ratchet LANDED 2026-07-31)

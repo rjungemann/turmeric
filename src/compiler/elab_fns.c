@@ -4067,16 +4067,19 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
     bool leaf_already_fat =
         vb->is_fat || (vb->is_param && vb->type.kind == TY_FN &&
                        fn_param_type_is_fat_normalized(&vb->type));
-    if (g_emit_abi_trace && vb->is_param) {
+    if (repr_shadow_active() && vb->is_param) {
         ReprForm site = (vb->is_poly_fn && vb->is_param) ? REPR_CARRIER_I64
                         : leaf_already_fat ? REPR_FAT_HANDLE
                                            : REPR_THIN_FN;
         ReprForm want = repr_of_binding(vb, REPR_POS_RESULT);
-        if (site != want)
-            fprintf(stderr,
-                    "repr-shadow fn-tail-leaf result name=%s want=%s got=%s\n",
-                    vb->name ? vb->name->name : "_", repr_form_name(want),
-                    repr_form_name(site));
+        if (site != want) {
+            char line[256];
+            snprintf(line, sizeof line,
+                     "repr-shadow fn-tail-leaf result name=%s want=%s got=%s\n",
+                     vb->name ? vb->name->name : "_", repr_form_name(want),
+                     repr_form_name(site));
+            repr_shadow_disagree("fn-tail-leaf", false, line);
+        }
     }
     if (vb->is_poly_fn && vb->is_param) {
         Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID, x->span);
