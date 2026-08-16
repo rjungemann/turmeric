@@ -5542,6 +5542,43 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 fn_type.as.fn.arg_full_types) {
                 const Type *aft_nom = fn_type.as.fn.arg_full_types[fn_arg_idx_fat];
                 slot_nominal = aft_nom && fn_param_type_is_fat_normalized(aft_nom);
+                /* poly-result-hof-capturing-closure-sigbus (the effect row --
+                 * the one open row of that report): an effect-row'd fn param
+                 * is exactly the slot fn_param_type_is_fat_normalized rejects,
+                 * so it keeps the THIN calling convention -- which has nowhere
+                 * to carry a closure environment (the CPS twin registry is
+                 * keyed on direct entry pointers).  A capturing closure
+                 * argument therefore compiles clean and the callee jumps into
+                 * the env box as code at run time (SIGBUS/SIGSEGV).  A
+                 * capturing body that PERFORMS already diagnoses downstream
+                 * (CPS-subset eviction, "no lowering here"); this catches the
+                 * silent non-performing shape at the call site, before the
+                 * `^borrow` hoist hides the closure literal behind a temp.
+                 * Row kind does not matter -- concrete, empty, and
+                 * row-variable rows all ride thin. */
+                if (!slot_nominal && aft_nom && aft_nom->kind == TY_FN &&
+                    aft_nom->as.fn.effect_row && !aft_nom->as.fn.cfnptr) {
+                    Expr *cl = args[i];
+                    while (cl && cl->kind == EX_ASCRIBE)
+                        cl = cl->as.ascribe_.inner;
+                    if (cl && cl->kind == EX_CLOSURE &&
+                        cl->as.closure_.closure &&
+                        cl->as.closure_.closure->n_captures > 0) {
+                        diag_emit_with_code(DIAG_ERROR, cl->span,
+                            TUR_E0007_CAPTURE_ERROR,
+                            "capturing closure passed to effectful fn "
+                            "parameter %u of '%s': an effect-annotated "
+                            "(fn ...) parameter uses the thin calling "
+                            "convention, which cannot carry a closure "
+                            "environment -- this call would crash at run "
+                            "time. Mark the parameter ^fat (a fat effectful "
+                            "callback may not itself perform), or pass the "
+                            "captured state as explicit arguments",
+                            (unsigned)(i + 1),
+                            fn_binding->name ? fn_binding->name->name
+                                             : "<fn>");
+                    }
+                }
             }
             if (slot_fat_decl || slot_nominal) {
                 /* fat-closure-ascription: an *already-fat* closure value that is

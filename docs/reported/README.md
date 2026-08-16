@@ -44,7 +44,7 @@ the plan links. File a new repr cell there as well as here.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
+| [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | low-medium (was medium) | capturing closure into a thin `(fn ...)` param; **one row left** -- an EFFECT-ROW signature, and as of 2026-08-16 it is a compile-time TUR-E0007 (with a `^fat` workaround), no longer a silent crash. Open for the representation itself: the E2a CPS twin registry is keyed on direct entry pointers, so filling the cell is a CPS increment (slot-0-keyed lookup + env-aware twins) |
 | [mut-map-reassign-missing-spec-link-error](mut-map-reassign-missing-spec-link-error.md) | medium | `set!`-grown `^mut` map: `map-assoc` spec declared+called but never emitted (**link** error); plus a merge-temp repr seam the R3 ICE catches first in Debug |
 
 `generic-closure-return-type-app` was resolved 2026-08-16 (both defects) and

@@ -190,7 +190,12 @@ KNOWN_PROBES = [
      "(defn main [] : int\n"
      "  (let [k 7] (println (.a (call (fn [] (FzB k))))))\n  0)\n"),
     # The one row of that report still open: an EFFECT-ANNOTATED fn param
-    # keeps the thin convention (load-bearing for the CPS backend).
+    # keeps the thin convention (load-bearing for the CPS backend).  Since
+    # 2026-08-16 this probe "fires (reject)" rather than crashing -- the
+    # call site is a TUR-E0007 -- which is still the correct OPEN signal:
+    # the representation cell is unfilled, only the soundness hole closed.
+    # When the CPS increment lands (slot-0-keyed twin lookup + env-aware
+    # twins), this flips to FIXED and the row retires.
     ("poly-result-hof-capturing-closure-sigbus (effect row)",
      "(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))\n"
      "(defn main [] #fx{Write} : int\n"
@@ -198,9 +203,14 @@ KNOWN_PROBES = [
     # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
     # archived; probe retired -- pinned by
     # tests/fixtures/result-monad-bind-typed-boundary/.)
+    # RESOLVED 2026-08-16 (both defects; archived) -- kept as a FIXED
+    # regression probe like the two rows above, since the boundary was
+    # unusually sharp.  Pinned by
+    # tests/fixtures/generic-closure-return-type-app/.
     # Faithful to the report: it takes the stdlib Cons (a defstruct).  The
-    # same shape over a local parametric defdata checks AND runs clean, so
-    # the trigger is narrower than "generic + type-app + closure return".
+    # same shape over a local parametric defdata checked AND ran clean even
+    # before the fix, so the trigger was narrower than "generic + type-app +
+    # closure return".
     ("generic-closure-return-type-app (Defect A: checker reject)",
      "(defn pure [A] [x : A] : (fn [] (Cons A))\n"
      "  (fn [] (tcons x (tnil))))\n"

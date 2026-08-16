@@ -178,7 +178,7 @@ generic-closure-return-type-app row 2026-08-16.
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
 | `^mut` rebinding of a concrete heap container (merge-temp position) -- spelled as the carrier where chokepoint 1's rule says typed pointer; travels with a spec-materialization hole that makes the same repro fail at LINK | [`mut-map-reassign-missing-spec-link-error`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mut-map-reassign-missing-spec-link-error.md) |
-| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
+| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work). No longer a silent crash as of 2026-08-16 -- the call site is a TUR-E0007 with a `^fat` workaround -- but the cell itself (a representation that carries both an environment and the CPS twin registration) is still missing; the E2a direct-entry-keyed twin registry is the load-bearing thin dependence | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --

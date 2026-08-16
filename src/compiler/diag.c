@@ -589,6 +589,12 @@ static const DiagExplanation diag_explanations_[] = {
       "Effect handler case bodies are emitted as separate C functions with\n"
       "no access to the enclosing stack frame, so borrow-typed (&T / &mut T)\n"
       "variables from the enclosing scope cannot be captured by them.\n"
+      "\n"
+      "A capturing closure also cannot be passed to an effect-annotated\n"
+      "(fn ... #fx{...} ...) parameter: effectful callbacks use the thin\n"
+      "calling convention, which has no slot for a closure environment.\n"
+      "Mark the parameter ^fat (a fat effectful callback may not itself\n"
+      "perform), or pass the captured state as explicit arguments.\n"
     },
     { TUR_E0009_EFFECT_ROW_MISMATCH,
       "TUR-E0009: Effect-row mismatch\n"

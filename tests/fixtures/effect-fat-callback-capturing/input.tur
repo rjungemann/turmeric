@@ -1,0 +1,13 @@
+;; The spelling that WORKS next to errors/effect-capturing-closure-thin-param,
+;; and the one its TUR-E0007 recommends: a ^fat effectful param carries a
+;; CAPTURING (non-performing) callback -- the fat box holds the environment,
+;; and the annotated row still participates in row subtyping.  (A capturing
+;; callback that PERFORMS is a different, already-loud limitation: the CPS
+;; subset eviction error.  A non-capturing performing callback through a THIN
+;; param is pinned by cps-backend-effectful-callback.)
+(defn run-cb [^fat body : (fn [] #fx{Write} int)] #fx{Write} : int (body))
+
+(defn main [] #fx{Write} : int
+  (let [k 7]
+    (println (run-cb (fn [] : int (+ k 1)))))
+  0)

@@ -31,6 +31,52 @@ table below is fixed and pinned. The report stays open only for
   param-side rule. Pinned as a probe:
   `poly-result-hof-capturing-closure-sigbus (effect row)` in
   `tests/type-fuzz-src.py --known-probes`.
+- **2026-08-16 -- the SOUNDNESS hole in that row is closed** (the row itself
+  stays open; the representation still cannot carry an environment). Three
+  findings from a fresh investigation, then the change:
+  1. **The remaining silent shape is narrower than the row.** A capturing
+     callback that PERFORMS already dies loudly at compile time -- the
+     capture evicts the closure from the CPS-supported subset, and the
+     `perform` then has no lowering ("this effect operation has no lowering
+     here"). Only a capturing, **non-performing** body (an effect-annotated
+     signature whose body never performs -- exactly this report's repro
+     shape) reached the SIGSEGV.
+  2. **The thin dependence has a mechanism, not just a fixture count**: the
+     E2a direct-entry -> CPS-entry registry (`emit_dk_runtime.c`,
+     `__tur_cps_register`/`__tur_cps_lookup`) is keyed on the *direct entry
+     pointer*. A fat env box can never hit that registry -- lifting the
+     exclusion turns the 17 behavioral fixtures into
+     "no CPS entry registered for effectful fn-value" aborts. Any future
+     lift must key the registry lookup on the box's slot-0 entry and teach
+     the twins to accept an env. Re-measured 2026-08-16: still exactly
+     22 fixtures (17 + 5), so the landscape has not drifted.
+  3. **The 5 negatives stop diagnosing for a mechanical reason**: the
+     call-site row-subtype walker (`effect_check.c`,
+     `check_call_site_rows_in_expr`) pattern-matches `EX_CLOSURE`/`EX_VAR`
+     argument shapes, and the normalization shim wraps arguments in
+     `EX_FN_TO_FAT`, which it did not recognize. Fixed pre-emptively (the
+     walker now peels `EX_ASCRIBE`/`EX_FN_TO_FAT`), so that half of the
+     future CPS increment is already paid.
+
+  The change: the crash is now a **compile-time TUR-E0007** at the call
+  site (`elab_call.c`, next to the fat-shim gate, before the `^borrow`
+  hoist hides the closure literal behind a temp -- the effect-check pass
+  sees only the hoisted var, which is why the diagnostic lives in elab).
+  It fires for a capturing closure into any non-`^fat` effect-row'd fn
+  param -- concrete, empty (`#fx{}`), and row-variable (`#fx{|e}`) rows
+  all ride thin and all crashed. Zero false positives on the 2605-fixture
+  suite; note this does NOT contradict the "compile-time diagnostic is not
+  the cheap substitute" section below, which rejected a predicate over ALL
+  nominal thin params pre-stage-1 -- scoped to effect rows post-stage-2,
+  the six false-positive fixtures it names are all effect-free and out of
+  scope. The recommended fix in the message is real: `^fat` on the param
+  accepts the capturing callback and runs correctly so long as the callback
+  body does not itself perform (verified; a performing capturing callback
+  through `^fat` hits the loud CPS-eviction error, same as thin). Pinned
+  by `tests/fixtures/errors/effect-capturing-closure-thin-param/` (both
+  row kinds) and `tests/fixtures/effect-fat-callback-capturing/` (the
+  `^fat` escape hatch), both-engines checked (turi rejects/accepts
+  identically via the shared elaboration).
 
 Plan: [docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md).
 
@@ -257,6 +303,17 @@ rc=139   (SIGSEGV), no output
 
 Same shape as the original, one `#fx{...}` annotation away. The control is the
 same snippet with the effect annotations dropped, which prints `8`.
+
+**2026-08-16: this snippet no longer crashes either -- it is now a
+compile-time TUR-E0007** (see the status bullet above). What is left of this
+report is the *representation* gap itself: the diagnostic names the missing
+cell, it does not fill it. To reproduce the underlying limitation, note the
+rejected program has no accepted spelling with the same shape -- `^fat`
+accepts it (and runs) only because fat is a different convention, and a
+performing capturing callback has no working spelling at all (both thin and
+`^fat` hit the CPS-subset eviction error). Filling the cell is the CPS
+increment sketched in the status bullet: slot-0-keyed twin lookup + env-aware
+twins.
 
 ## Guide upkeep
 

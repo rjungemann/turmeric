@@ -124,7 +124,15 @@ claim, do not patch the misses):
 - **effect rows stay thin**: 17 effect/cps fixtures regress behaviorally
   under normalization -- a colored (CPS-lowered) callback's thin convention
   is LOAD-BEARING (twin/trampoline dispatch).  Normalizing effectful fn
-  params needs CPS-aware treatment; deferred.
+  params needs CPS-aware treatment; deferred.  **2026-08-16 update**: the
+  crash this leaves is now a compile-time TUR-E0007 (elab_call.c, next to
+  the fat-shim gate) with a `^fat` workaround, and the mechanism behind the
+  17 is pinned -- the E2a direct-entry-keyed CPS twin registry
+  (emit_dk_runtime.c); the future lift must key lookup on the fat box's
+  slot-0 entry and teach twins to take an env.  The 5 negative-fixture
+  regressions are already paid for: effect_check.c's call-site walker now
+  peels EX_FN_TO_FAT/EX_ASCRIBE, so row subtyping survives the shim.
+  Re-measured 2026-08-16: still exactly 22 fixtures.
 - **tyvar signatures stay thin**: 10 hkt-cata / van-laarhoven fixtures
   regress -- a tyvar-sig param's arguments arrive through the
   generic/carrier machinery as thin pointers the call-site shim cannot
