@@ -553,6 +553,41 @@ static void repr_shadow_check(EmitCtx *ctx, const char *site,
                        chosen_cty);
 }
 
+/* Increment 0's deferred coverage gap, closed (2026-08-16).
+ *
+ * The trace note said: "ad-hoc spill sites NOT routed through the named
+ * chokepoints do not trace -- those sites becoming chokepoint calls is
+ * increments 2-4's job, and the trace will grow with them."  The audit found
+ * 14 of them in this file, all one shape: an inline
+ * `(int64_t)(intptr_t)(val)` reinterpreting a pointer-ish value into the
+ * int64 carrier at a call boundary.
+ *
+ * They are CORRECT -- a pure reinterpret is what `emit_carrier_bridge` itself
+ * emits for a heap value, which is why the corpus and the fuzzer are clean --
+ * but each was an independent `buf_printf`, so none of them appeared in the
+ * representation trace and none could be counted.  Routing them here changes
+ * no emitted byte and makes the population visible.
+ *
+ * Deliberately NOT `emit_carrier_bridge`: that chokepoint spills, boxes, and
+ * resolves spec types, and these sites have already established their value
+ * is carrier-shaped.  Sending them through it would change behavior, which is
+ * a migration with its own measurement, not this one. */
+char *emit_carrier_reinterpret(EmitCtx *ctx, char *val, const Type *t,
+                               const char *site) {
+    (void)ctx;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "(int64_t)(intptr_t)(%s)", val);
+    buf_putc(&b, '\0');
+    if (g_emit_abi_trace)
+        fprintf(stderr, "repr-trace argcast %s %s\n", site,
+                t ? repr_form_name(repr_of(t, REPR_POS_CARRIER_SINK))
+                  : "unknown");
+    free(val);
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
+}
+
 /* KB-021: true when emitting `e` yields a *by-value* concrete carrier-ABI
  * aggregate rather than the int64_t carrier.  Such a value must be bridged to
  * the carrier before a dictionary-dispatch / carrier-ABI call; an already-
@@ -4248,12 +4283,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         type_uses_carrier_in_dispatch(resolved_arg_ty[i]);
                     arg_cast[i] = needs_fn_cast || needs_carrier_bridge;
                     if (needs_fn_cast) {
-                        Buf cast; buf_init(&cast);
-                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
-                        buf_putc(&cast, '\0');
-                        free(raw);
-                        raw = strdup(cast.data);
-                        buf_free(&cast);
+                        raw = emit_carrier_reinterpret(ctx, raw, NULL, "generic-call-arg");
                     } else if (needs_carrier_bridge &&
                                expr_emits_byvalue_carrier_abi(ctx, e->as.call_.args[i])) {
                         /* KB-021: only a by-value aggregate (struct literal, by-value
@@ -4712,12 +4742,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     if (formal_is_int64_carrier &&
                         (actual == TY_PTR_VOID || actual == TY_FN)) {
-                        Buf cast; buf_init(&cast);
-                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
-                        buf_putc(&cast, '\0');
-                        free(raw);
-                        raw = strdup(cast.data);
-                        buf_free(&cast);
+                        raw = emit_carrier_reinterpret(ctx, raw, NULL, "poly-call-arg");
                     } else if (formal_is_ptr && arg_is_int64_carrier) {
                         /* Reverse direction: formal slot is a pointer,
                          * but the arg's C value is the int64_t carrier (because
@@ -5352,12 +5377,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * (a pure reinterpret) -- otherwise the void* is passed to
                      * the int64_t ctor param with a -Wint-conversion warning. */
                     if (arg && arg->kind == EX_FN_TO_FAT) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-fnbox");
                     }
                     /* CONV-S1 (slice 4): when the owning ctor is itself a by-value
                      * product and this field is a by-value aggregate, the field is
@@ -5385,12 +5405,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * otherwise clang emits a -Wint-conversion note. */
                     if (!suffix && field_is_fn && arg &&
                         arg->kind != EX_FN_TO_FAT) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-fnptr");
                     }
                     /* EF-2: a handler-typed ctor field rides the int64 carrier slot
                      * (like an fn field -- see the CONV-S1 slice-6 cast above), but a
@@ -5403,12 +5418,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         i < e->as.call_.ctor->n_fields &&
                         e->as.call_.ctor->fields[i].kind == TY_HANDLER;
                     if (!suffix && field_is_handler && arg) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-byval");
                     }
                     /* EF-4: a session/role-typed ctor field also rides the int64
                      * carrier, but a `(Session P)` / `(Role G R)` VALUE is a
@@ -5421,12 +5431,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (e->as.call_.ctor->fields[i].kind == TY_SESSION ||
                          e->as.call_.ctor->fields[i].kind == TY_ROLE);
                     if (!suffix && field_is_session && arg) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-carrier");
                     }
                     /* CONV-S1/B3: a by-value ADT argument flowing into a carrier
                      * constructor's int64 field slot must be boxed (heap copy ->
@@ -5494,12 +5499,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (type_is_heap_struct(resolved_arg_type) ||
                          type_is_heap_adt(resolved_arg_type) ||
                          (field_is_carrier && is_ptr_like))) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-heap");
                     }
                     /* gcc14-int-conversion (docs/archive/history/codegen-gcc14-permerrors.md):
                      * a CONCRETE (non-carrier) rc<T>/weak<T> field lowers to
@@ -5587,12 +5587,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * does not cover it). */
                     if (!field_inline && arg &&
                         emit_resolve_type(ctx, arg->type).kind == TY_EXISTS) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-exists");
                     }
                     /* A FLOAT argument flowing into a ctor field that is ERASED
                      * to the int64 CARRIER -- a tyvar field of a carrier-helper
@@ -7127,12 +7122,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     !(matched_spec && i < matched_spec->n_args &&
                       (type_is_heap_struct(matched_spec->arg_types[i]) ||
                        type_is_heap_adt(matched_spec->arg_types[i])))) {
-                    Buf _hb; buf_init(&_hb);
-                    buf_printf(&_hb, "(int64_t)(intptr_t)(%s)", raw);
-                    buf_putc(&_hb, '\0');
-                    free(raw);
-                    raw = strdup(_hb.data);
-                    buf_free(&_hb);
+                    raw = emit_carrier_reinterpret(ctx, raw, NULL, "spec-call-arg");
                 }
                 /* gcc14-int-conversion (carrier-to-typed-param): cast the arg to
                  * the callee's concrete heap-pointer param type.  The existing gate
@@ -7239,12 +7229,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool arg_is_voidp = acty && strcmp(acty, "void *") == 0;
                         bool arg_is_exists = strncmp(raw, "(tur_exists_t)", 14) == 0;
                         if (arg_is_conc_ptr || arg_is_voidp || arg_is_exists) {
-                            Buf _rb; buf_init(&_rb);
-                            buf_printf(&_rb, "(int64_t)(intptr_t)(%s)", raw);
-                            buf_putc(&_rb, '\0');
-                            free(raw);
-                            raw = strdup(_rb.data);
-                            buf_free(&_rb);
+                            raw = emit_carrier_reinterpret(ctx, raw, NULL, "spec-call-heap-arg");
                         }
                     }
                     /* gcc14-int-conversion (carrier-representation-tracking,
@@ -9687,12 +9672,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const char *icty = emit_type_c_name(ctx, e->as.ascribe_.inner->type);
                 size_t iL = icty ? strlen(icty) : 0;
                 if (icty && iL >= 1 && icty[iL - 1] == '*') {
-                    Buf cb; buf_init(&cb);
-                    buf_printf(&cb, "(int64_t)(intptr_t)(%s)", inner_val);
-                    buf_putc(&cb, '\0');
-                    free(inner_val);
-                    inner_val = strdup(cb.data);
-                    buf_free(&cb);
+                    inner_val = emit_carrier_reinterpret(ctx, inner_val, NULL, "closure-capture");
                 }
             }
             return inner_val;

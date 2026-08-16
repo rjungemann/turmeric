@@ -389,6 +389,24 @@ about, and cowpaths are paved before the field is closed:
   - one per aggregate heap-box/unbox at the `emit_agg_box`/`emit_agg_unbox`
     chokepoints (poly-carrier and wide-byval crossings).
 
+  *Status 2026-08-16: the deferred gap below is CLOSED.* The note said ad-hoc
+  spill sites outside the named chokepoints do not trace, and that closing
+  them was increments 2-4's job. Audited: 14 sites in `emit_expr.c`, all one
+  shape -- an inline `(int64_t)(intptr_t)(val)` reinterpreting a pointer-ish
+  value into the carrier at a call boundary. They are CORRECT (a pure
+  reinterpret is what `emit_carrier_bridge` emits for a heap value, which is
+  why corpus and fuzzer were clean), but each was an independent `buf_printf`,
+  so none appeared in the trace. 11 matched the exact idiom and now route
+  through one named chokepoint, `emit_carrier_reinterpret`, named per site
+  (`spec-call-arg`, `ctor-field-*`, `closure-capture`, ...). Deliberately NOT
+  `emit_carrier_bridge`: that one spills, boxes and resolves spec types, and
+  these sites have already established their value is carrier-shaped --
+  sending them through it would be a behavior change with its own
+  measurement. **Emitted C byte-identical across all 2029 fixtures**, and the
+  trace gained **7148 crossings** it could not previously see, against 13822
+  already visible -- so the instrument had been blind to about a THIRD of all
+  carrier crossings. 3 sites remain un-migrated (they sit inside if/else
+  chains with a different idiom) and are the residue of this gap.
   All pinned by `tests/run-repr-trace.sh` (ctest `tur_repr_trace`, 8
   classifications). Guide table reconciled (+2 rows:
   `fn-payload-in-container-undeclared-temp`, enumerations-drift Finding
