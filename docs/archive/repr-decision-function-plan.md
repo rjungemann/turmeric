@@ -1,11 +1,14 @@
 # Increment 4: the representation decision function (`repr-of`)
 
-**Status:** INCREMENT 4 COMPLETE (2026-08-16).  Stages 1, 2 and 4 landed
-2026-07-31; stage 3 instrumented all seven positions, graduated to the R3
-Debug ICE, and closed with the container-element collapse -- the first
-position whose site decision IS `repr_of`'s answer, which also fixed a silent
-per-push leak in `(Vec (Option int))`.  Next: increment 5's conditional
-retirement.
+**Status:** COMPLETE (2026-08-16) -- and the parent meta-plan closed with
+it.  Stages 1, 2 and 4 landed 2026-07-31; stage 3 instrumented all seven
+positions, graduated to the R3 Debug ICE, and closed with the
+container-element collapse -- the first position whose site decision IS
+`repr_of`'s answer, which also fixed a silent per-push leak in
+`(Vec (Option int))`.  Increment 5's census then closed the fn-axis
+coverage hole the same day (`repr_of_fn_param`), and the ICE's first live
+catch -- the mut-map merge-temp seam -- was fixed the day it fired,
+emptying the guide's open-cells table.
 All seven positions are instrumented: let-bind, merge-temp, struct-field,
 fn-value tail/join, method-result and per-arg bridge run silent corpus-wide,
 and container-elem no longer has a shadow at all -- its predicate IS

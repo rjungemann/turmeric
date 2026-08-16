@@ -4876,7 +4876,7 @@ void repr_shadow_disagree(const char *site, bool known, const char *line) {
             "with repr_of at %s.\n  %s"
             "Two sites now decide this value's representation differently -- "
             "the defect family\n"
-            "docs/upcoming/repr-decision-function-plan.md exists to close.  "
+            "docs/archive/repr-decision-function-plan.md exists to close.  "
             "Re-run with\n"
             "--emit-abi-trace to see every disagreement, or set "
             "TUR_REPR_NO_SHADOW_ICE=1 to\ndowngrade this to a warning while "

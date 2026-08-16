@@ -3,7 +3,7 @@
 **Severity:** memory leak, silent, proportional to element count. No
 miscompile -- values round-trip correctly; they are simply never released.
 **Status:** FIXED 2026-08-16 by the increment-4 container-element collapse
-(`docs/upcoming/repr-decision-function-plan.md`).
+(`docs/archive/repr-decision-function-plan.md`).
 **Found by:** the CONTAINER_ELEM representation shadow, while diagnosing what
 looked like a harmless scope mismatch.
 

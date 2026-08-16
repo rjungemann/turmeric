@@ -1,13 +1,24 @@
 # Representation consolidation -- the meta-plan
 
-**Status:** IN PROGRESS. Increments 0-4 are landed (see the Sequencing
-section for each increment's dated record). **Increment 5 has been measured
-and does not start**: the coverage census
-([repr-coverage-census.md](repr-coverage-census.md)) shows no retirement
-candidate, and the one form that reads empty survives its
-redundancy-falsification probe. The census found a coverage hole instead --
-2122 fn-value decisions per corpus sweep are made outside the decision
-function -- which makes the **fn axis** the natural successor increment. This is not a plan for one
+**Status: COMPLETE, 2026-08-16.** Every increment is landed (see the
+Sequencing section for each increment's dated record): 0 (observability),
+1 (the fn-value axis, through the effect-row CPS increment -- its child
+plan is archived complete), 2 (method-result bridging), 3 (the container
+element protocol), 4 (the decision function, R3 ICE and all seven
+positions), and 5 -- whose conditional retirement was measured, found no
+candidate, and instead closed the census's coverage hole the same day
+(`repr_of_fn_param` owns the fn-axis routing gate set;
+[repr-coverage-census.md](repr-coverage-census.md)). The campaign's exit
+state: the guide's open-cells table is **empty**, the fuzzer's
+`known_bug_slug` avoid table is **empty** and all its `--known-probes`
+print FIXED, and a representation-shadow disagreement is a Debug-build
+ICE whose first live catch (`mut-map-reassign`) was itself fixed the day
+it fired. The instruments stay armed -- the trace, the census hook, the
+ICE, and the stage-4 ratchet are permanent fixtures, not campaign
+scaffolding -- so the next un-exercised pairing someone hits becomes a
+new open-cells row instead of a years-later mystery.
+
+Original framing follows. This is not a plan for one
 seam; it is the plan for how every representation-consolidation increment
 gets chosen, de-risked, landed, and verified, so the work neither stalls (as
 attempts here have) nor trades away the low-level performance the current

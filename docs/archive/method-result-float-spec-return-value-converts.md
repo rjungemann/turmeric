@@ -169,7 +169,7 @@ report when someone picks it up.
 ## Why the fixtures never caught it
 
 Two one-sided coverage gaps compounding, which is the pattern
-`docs/upcoming/representation-consolidation-meta-plan.md` warns about:
+`docs/archive/representation-consolidation-meta-plan.md` warns about:
 
 - the method-result carrier crossing is well covered at `int`, where value
   conversion and bit reinterpretation are the same operation, so the bug is

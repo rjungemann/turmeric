@@ -230,7 +230,7 @@ arms and now also checks `type_c_name` exhaustiveness;
 `tests/check-monomorph-name-collision.sh` reads what they emit). The
 position axis -- one `repr-of(type, position)` routine for the per-SITE
 choices -- is staged in
-[docs/upcoming/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/repr-decision-function-plan.md).
+[docs/archive/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/repr-decision-function-plan.md).
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
@@ -252,7 +252,7 @@ per-boundary -- is planned in
 `docs/archive/fn-value-fat-normalization-plan.md` (complete 2026-08-16). The campaign-level
 strategy governing that plan and its successors (which seams consolidate in
 which order, the probe/blast-radius discipline, and the performance
-guardrails) is `docs/upcoming/representation-consolidation-meta-plan.md`;
+guardrails) is `docs/archive/representation-consolidation-meta-plan.md`;
 this guide's open-cells table is that campaign's live scoreboard, and the
 closed-cells table below it is the record of what the campaign has already
 consolidated.

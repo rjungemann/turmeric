@@ -104,7 +104,7 @@ vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_
 # corpus-wide.  The check now asserts SILENCE on the former anchor: any
 # repr-shadow line reappearing here means a site regressed away from the
 # protocol (or the spec changed) -- triage it against
-# docs/upcoming/repr-decision-function-plan.md.  History of the anchor:
+# docs/archive/repr-decision-function-plan.md.  History of the anchor:
 # phantom int-newtype app (silenced by the SC7 spec fix) -> lens Line
 # binding (silenced by migration) -> silence.
 strace="$("$TUR" emit-c --emit-abi-trace tests/fixtures/van-laarhoven-lens-compose/input.tur 2>&1 >/dev/null | grep '^repr-shadow' || true)"
@@ -152,7 +152,7 @@ fi
 #
 # The position was measured silent corpus-wide (84 -> 0), so any line here
 # means a field decision drifted from the protocol -- triage against
-# docs/upcoming/repr-decision-function-plan.md.
+# docs/archive/repr-decision-function-plan.md.
 cat > "$tmp/shadow-fields.tur" <<'EOF'
 (defstruct FdPoint :heap [x : int y : int])
 (defstruct FdFlat [a : int b : int])
