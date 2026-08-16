@@ -26,10 +26,12 @@
   (println (second2 (:: 1.5 float32) (:: 2.5 float32)))
   (println (idf (idf (:: 3.25 float32))))
   (println (g))
-  ;; Equality is pinned at 2.5 (exactly representable in single precision),
-  ;; not 7.1: a float32-ascribed LITERAL in comparison position emits as the
-  ;; bare double literal (pre-existing, engine-divergent -- see
-  ;; docs/reported/float32-ascribed-literal-compares-as-double.md), so a 7.1
-  ;; equality would test that bug, not this fix.
-  (println (= (idf (:: 2.5 float32)) (:: 2.5 float32)))
+  ;; Equality deliberately at 7.1 -- NOT exactly representable in single
+  ;; precision, per the float-probe rule.  This row needs BOTH fixes: the
+  ;; generic-result reinterpret above, and the ascribed-literal retyping
+  ;; (float32-ascribed-literal-compares-as-double, archived) without which
+  ;; the RHS emitted as a double literal and the comparison promoted.
+  (println (= (idf (:: 7.1 float32)) (:: 7.1 float32)))
+  ;; The suffix spelling is the same literal; pin the two spellings agree.
+  (println (= (idf 7.1f32) (:: 7.1 float32)))
   0)

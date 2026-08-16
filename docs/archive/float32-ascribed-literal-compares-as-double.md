@@ -2,7 +2,19 @@
 
 **Severity:** silent wrong answer, engine-divergent -- compiled says `false`
 where turi says `true`.
-**Status:** OPEN. Pre-existing (reproduces on the compiler before the
+**Status: FIXED 2026-08-16, same day as filed.**  A float LITERAL ascribed
+to a float kind is now retyped in place in the ascribe elaborator
+(`elab_types.c`) -- `(:: 7.1 float32)` becomes exactly what `7.1f32` already
+was, so emit renders it through `atom_float32` as a single-precision
+constant and no mixed-width promotion occurs.  Scope is deliberately the
+literal only: a non-literal float64 expression ascribed to float32 keeps the
+erased-ascription behavior, because narrowing a runtime value is a
+representation decision this fix does not take.  Pinned in
+`tests/fixtures/float32-generic-call-result` (equality at 7.1 through both
+the ascribed and suffixed spellings); suite 2600/0, compiled and turi agree,
+fuzzer seeds 9401/9402 clean.
+
+Originally filed as OPEN, pre-existing (reproduces on the compiler before the
 2026-08-16 float32 generic-result fix; monomorphic repro, no generics
 involved).
 **Found by:** pinning the fixture for

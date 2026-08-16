@@ -3101,6 +3101,27 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
             return NULL;
         }
     }
+    /* float32-ascribed-literal-compares-as-double: a float LITERAL ascribed
+     * to a float kind is retyped in place, exactly as if it had been written
+     * with the width suffix (`(:: 7.1 float32)` == `7.1f32`).  Without this
+     * the sizes differ (8 vs 4), no reinterpret is built, and the EX_ASCRIBE
+     * wrapper is erased at codegen -- so the literal renders as the bare
+     * DOUBLE literal, and any mixed C expression promotes the float32
+     * operand up to it: `(= (mono (:: 7.1 float32)) (:: 7.1 float32))` was
+     * `false` compiled and `true` under turi.  A literal is the one shape
+     * where the narrowing is unambiguous -- the author wrote a constant AT
+     * that width; there is no runtime value to preserve the wider bits of.
+     * (A non-literal float64 expression ascribed to float32 keeps today's
+     * erased-ascription behavior; narrowing IT is a value conversion with a
+     * representation question this arm deliberately does not answer.) */
+    if (inner->kind == EX_FLOAT_LIT &&
+        (src_kind == TY_FLOAT || src_kind == TY_FLOAT32 ||
+         src_kind == TY_FLOAT64) &&
+        (dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+         dst_kind == TY_FLOAT64)) {
+        inner->type = *ascribed;
+        return inner;
+    }
     if (src_kind != dst_kind) {
         int src_size = type_size_bytes(src_kind);
         int dst_size = type_size_bytes(dst_kind);
