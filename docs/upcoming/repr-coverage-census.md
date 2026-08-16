@@ -56,6 +56,14 @@ the thin representation**:
 | `effect-row` | 19 |
 | `non-scalar-sig` | 15 |
 
+*(Update 2026-08-16, after the CPS increment: the `effect-row` class is no
+longer thin -- effect-annotated fn params are fat-normalized like every
+other nominal fn param, and the 19 rows above now route fat at the call-site
+shim/invoke.  "Thin" at THIS gate has always meant "keeps the nominal TY_FN
+spelling at elaboration" -- the tyvar-sig rows were already fat-normalized
+downstream when this table was measured -- so the falsification verdict
+stands: the genuinely-thin remainder is cfnptr / variadic / arity>5.)*
+
 So the thin representation is not merely alive, it is the routing outcome for
 two thousand parameters.  `repr_of` returns it zero times because **it is
 never asked**: the fn-value axis is decided from per-Binding flags

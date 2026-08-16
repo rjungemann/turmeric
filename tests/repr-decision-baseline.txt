@@ -13,6 +13,7 @@ type_is_boxed_container_elem types.c 1
 fn_param_type_is_fat_normalized elab_call.c 4
 fn_param_type_is_fat_normalized elab_fns.c 2
 fn_param_type_is_fat_normalized elab_forms.c 2
+fn_param_type_is_fat_normalized emit_cps_ir.c 1
 fn_param_type_is_fat_normalized emit_expr.c 1
 fn_param_type_is_fat_normalized types.c 3
 fn_result_type_is_fat_normalized elab_fns.c 2
