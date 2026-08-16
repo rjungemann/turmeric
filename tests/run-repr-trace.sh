@@ -309,6 +309,29 @@ else
   rc=1
 fi
 
+# Increment 4 stage 3: the PER-ARG BRIDGE position -- the "long tail" the
+# plan expected to be the big one.  It turned out to be one chokepoint after
+# all: every per-argument crossing in emit_expr.c routes through
+# `emit_carrier_bridge` (the escaping sibling delegates), so the shadow sits
+# with the existing repr-trace there and covers all ~24 call sites at once.
+#
+# Invariant: a crossing is a contract that `concrete_ty` really is the
+# CONCRETE side.  A type the protocol calls the erased carrier means the
+# bridge is about to spill/address/reinterpret an int64 across a boundary
+# that is not there.  Corpus population 13787 crossings, 0 disagreements.
+#
+# The value probe crosses on both directions (heap-reinterpret for the Vec
+# handle, aggregate for the element read), so requiring its trace lines --
+# already asserted above -- doubles as this check's liveness proof.
+abshadow="$("$TUR" emit-c --emit-abi-trace "$tmp/vprobe.tur" 2>&1 >/dev/null | grep '^repr-shadow arg-bridge' || true)"
+if [ -z "$abshadow" ]; then
+  echo "  ok  arg-bridge crossings all name concrete types"
+else
+  echo "  FAIL arg-bridge shadow -- a crossing named an erased-carrier type:"
+  echo "$abshadow"
+  rc=1
+fi
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
   echo "--- fn-param trace ---"

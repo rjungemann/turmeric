@@ -294,6 +294,18 @@ This campaign uses five kinds:
    Increment 1's fat-normalized boundaries should get the same treatment:
    a hand-written C file per boundary shape, ASan/UBSan clean, kept for
    reproducibility.
+   **A calibration rediscovered at a third site belongs in the decision
+   function** (added 2026-08-16, after the per-arg bridge shadow). The
+   pointer/carrier spelling identity was calibrated away once per position --
+   431 of 521 let-bind lines, all 84 adt-field lines, all 65 arg-bridge
+   lines. Twice is coincidence; the third time is a signal that the rule is
+   general and the per-site exclusions are copies. Move it into `repr_of`,
+   and while moving it, ask which positions it is actually ABOUT -- that
+   question is what turned "a heap app with tyvar args is erased" into "the
+   erased spelling is a DECLARATION fact", true at let-bind and result and
+   false everywhere else. A rule that has to be re-excluded per site is
+   usually a rule stated at the wrong altitude.
+
    **Report the population, not just the disagreement count** (added
    2026-08-16, after the method-result shadow). "0 disagreements" is not a
    result until you know how many answers were checked: the fn-value
@@ -535,8 +547,28 @@ about, and cowpaths are paved before the field is closed:
   different things** -- a shadow result is only as strong as the count of
   answers it actually checked, which is why each of these increments now
   measures its population rather than reporting a bare zero.
-  Remaining stage-3 position: the `emit_expr.c` per-arg bridges -- the long
-  tail, and the one always expected to be the big one.*
+  *Status 2026-08-16, final for stage 3: the per-arg bridges closed, and
+  stage 3's position list is complete.* The "long tail" turned out to be one
+  chokepoint: every per-arg crossing already routes through
+  `emit_carrier_bridge`, because that routing is what the 2026-06
+  carrier-crossing campaign landed -- so an earlier increment had already
+  paid for this one. First sweep: 65 disagreements over a population of
+  **13787 crossings**, all one shape -- heap containers with tyvar arguments,
+  all crossing as `heap-reinterpret`. **That is the pointer/carrier spelling
+  identity for the third time** (431 of 521 let-bind lines, all 84 adt-field
+  lines, all 65 here), and the repetition is the finding: three positions
+  rediscovering one calibration is the DECISION FUNCTION's job to absorb, not
+  each site's to re-exclude. So the rule moved into `repr_of` and got scoped
+  to the positions it is about -- the erased spelling is a **declaration**
+  fact, not a value fact, so it holds at LET_BIND and RESULT and nowhere
+  else. Chokepoint 1 reads LET_BIND, so the one place this answer drives real
+  codegen is unchanged (suite 2598/0). After scoping: 65 -> 0, every other
+  position still silent.
+  Stage 3's remaining work is no longer a position but the two things a
+  complete, silent list makes possible: the R3-style Debug ICE (graduating a
+  disagreement from a log line to a hard error) and the container-elem
+  collapse the pinned row names. Both are behavior changes wanting their own
+  measured increments.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --

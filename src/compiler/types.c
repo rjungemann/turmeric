@@ -4782,7 +4782,21 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
      * were this spelling distinction; the exists-element rows surfaced in
      * the third). */
     if (type_is_heap_struct(*t) || type_is_heap_adt(*t)) {
-        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t))
+        /* Increment 4 stage 3 (2026-08-16): the erased spelling is a
+         * DECLARATION fact, not a value fact, so it is scoped to the
+         * positions that declare.  `(Vec A)` inside a generic body is
+         * DECLARED `int64_t` -- that is what the let-bind chokepoint
+         * migrated around -- but the value is a pointer in both spellings,
+         * and a CROSSING of it is a pure reinterpret.
+         *
+         * This position-scoping was earned three times over: the same
+         * pointer/carrier spelling identity accounted for 431 of the first
+         * sweep's 521 let-bind lines, all 84 of the first adt-field sweep,
+         * and all 65 of the first arg-bridge sweep.  Three positions
+         * rediscovering one calibration is the decision function's job to
+         * absorb, not each site's to re-exclude. */
+        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t) &&
+            (pos == REPR_POS_LET_BIND || pos == REPR_POS_RESULT))
             return REPR_CARRIER_I64;
         return REPR_HEAP_PTR;
     }

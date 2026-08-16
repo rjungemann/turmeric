@@ -4264,6 +4264,27 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                                                       : "aggregate";
         fprintf(stderr, "repr-trace bridge %s %s %s\n",
                 dir, form, type_name(concrete_ty));
+
+        /* Increment 4 stage 3: the PER-ARG BRIDGE shadow.  This chokepoint is
+         * the whole position -- every per-argument representation crossing in
+         * emit_expr.c routes through here (the escaping sibling delegates),
+         * so one check covers what the plan called "the long tail" without
+         * touching the ~24 call sites individually.
+         *
+         * The invariant is the one the method-result shadow settled on: a
+         * crossing is a contract that `concrete_ty` really is the CONCRETE
+         * side.  If the protocol calls that type the erased carrier, the
+         * bridge is about to spill, address, or reinterpret an int64 as
+         * though it were a distinct representation -- crossing a boundary
+         * that is not there.  Position PARAM, because a per-arg crossing
+         * lands in a parameter slot and that is where a type's concrete
+         * spelling is decided. */
+        ReprForm cf = repr_of(&concrete_ty, REPR_POS_PARAM);
+        if (cf == REPR_CARRIER_I64)
+            fprintf(stderr,
+                    "repr-shadow arg-bridge param type=%s want=concrete "
+                    "got=carrier-i64 dir=%s form=%s\n",
+                    type_name(concrete_ty), dir, form);
     }
 
     const char *cname = emit_type_c_name(ctx, concrete_ty);

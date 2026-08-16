@@ -1,12 +1,15 @@
 # Increment 4: the representation decision function (`repr-of`)
 
 **Status:** stages 1, 2 and 4 landed 2026-07-31; stage 3 in progress.
-Instrumented so far: let-bind, merge-temp, struct-field, fn-value tail/join
-and method-result (all silent) plus container-elem, which is silent on the
-half its predicate owns and carries one pinned, diagnosed disagreement naming
-the next chokepoint.  `repr_of_binding` now exists alongside `repr_of` for the
-positions whose decision lives on the Binding rather than the Type.  Not yet
-instrumented: the `emit_expr.c` per-arg bridges.
+**Stage 3's position list is complete** (2026-08-16): let-bind, merge-temp,
+struct-field, fn-value tail/join, method-result and per-arg bridge all run
+silent corpus-wide, and container-elem is silent on the half its predicate
+owns while carrying one pinned, diagnosed disagreement that names the next
+chokepoint.  `repr_of_binding` exists alongside `repr_of` for the positions
+whose decision lives on the Binding rather than the Type.  What is left for
+the increment is the R3-style Debug ICE (a disagreement graduating from a log
+line to a hard error) and the container-elem collapse -- both behavior
+changes wanting their own measured increments.
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 4 -- "the true consolidation; it goes last because by then the
 sites agree in *behavior* and the collapse is mechanical rather than
@@ -335,8 +338,66 @@ both that the walker ran and that it stayed silent.
 
 Suite 2598/0, ratchet unchanged, no snapshot churn.
 
-Remaining stage-3 position: the `emit_expr.c` per-arg bridges -- the long
-tail, and the one the plan always expected to be the big one.
+**PER-ARG BRIDGES: the long tail was one chokepoint (2026-08-16).**  The
+plan expected this to be the big one -- many scattered sites wanting an
+audit-then-route campaign.  The audit says otherwise: every per-argument
+crossing in `emit_expr.c` already routes through `emit_carrier_bridge` (~24
+call sites; `emit_carrier_bridge_escaping` delegates), because that routing
+IS what the 2026-06 carrier-crossing campaign landed.  So the shadow sits
+beside the increment-0 repr-trace inside the bridge and covers the whole
+position at once.  What increment 0 deferred here -- "ad-hoc spill sites NOT
+routed through the named chokepoints" -- is the remaining gap, and it is a
+gap in ROUTING, not in this shadow: a site that never calls the bridge
+cannot be caught by instrumenting the bridge.
+
+Invariant, the same one method-result settled on: a crossing is a contract
+that `concrete_ty` really is the concrete side.  A type the protocol calls
+the erased carrier means the bridge is about to spill, address or reinterpret
+an int64 across a boundary that is not there.
+
+First sweep: **65 disagreements over a population of 13787 crossings** -- and
+all 65 were one shape family, heap containers with TYVAR arguments
+(`(Vec tyvar)` 49, `(Map tyvar tyvar)` 10, `(MutableMap tyvar tyvar)` 6),
+every one crossing as `heap-reinterpret`.
+
+**That is the pointer/carrier spelling identity for the THIRD time**, and the
+repetition is the finding.  It accounted for 431 of the first let-bind
+sweep's 521 lines, all 84 of the first adt-field sweep, and all 65 here.
+Three positions rediscovering one calibration is the decision function's job
+to absorb, not each site's to re-exclude -- so the rule moved into `repr_of`
+and got scoped to the positions it is actually about:
+
+> the erased spelling is a **declaration** fact, not a value fact.  `(Vec A)`
+> inside a generic body is DECLARED `int64_t` (which is what chokepoint 1
+> migrated around), but the value is a pointer under both spellings, and a
+> CROSSING of it is a pure reinterpret.
+
+`repr_of` now returns the erased spelling for a tyvar-argumented heap app
+only at `LET_BIND` and `RESULT` -- the declaring positions -- and the heap
+pointer everywhere else.  Chokepoint 1 reads `LET_BIND`, so the one place
+this answer drives real codegen is unchanged; suite 2598/0 confirms it.
+
+After the scoping: **arg-bridge 65 -> 0**, and every other shadowed position
+stayed silent.
+
+### Where stage 3 stands
+
+| position | shadowed at | disagreements | population |
+| --- | --- | --- | --- |
+| let-bind | `emit_binding_repr_c_name` | 0 | (migrated, chokepoint 1) |
+| result (merge temp) | `control_result_temp_ctype` | 0 | (migrated) |
+| struct-field | `adt_ctor_field_c_type` | 0 | 84 -> 0 after calibration |
+| container-elem | `type_is_boxed_container_elem` | **5, pinned** | one diagnosed shape |
+| fn-value tail/join | `elab_normalize_fn_tail_leaves` | 0 | 8 |
+| method-result | `fn_body_tail_byvalue_carrier_type` | 0 | 7211 |
+| per-arg bridge | `emit_carrier_bridge` | 0 | 13787 |
+
+Stage 3's position list is complete.  What remains for the increment is not
+another position but the two things the list makes possible: the R3-style
+Debug ICE (now that every instrumented position runs silent, a disagreement
+can graduate from a log line to a hard error), and the container-elem
+collapse the pinned row names.  Both are behavior changes and want their own
+measured increments.
 
 ### Stage 4 -- registry + ratchet
 (ratchet LANDED 2026-07-31)
