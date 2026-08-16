@@ -176,6 +176,7 @@ filed), and the `^fat` leak row was resolved and removed 2026-08-13.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
+| `^mut` rebinding of a concrete heap container (merge-temp position) -- spelled as the carrier where chokepoint 1's rule says typed pointer; travels with a spec-materialization hole that makes the same repro fail at LINK | [`mut-map-reassign-missing-spec-link-error`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mut-map-reassign-missing-spec-link-error.md) |
 | capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
 

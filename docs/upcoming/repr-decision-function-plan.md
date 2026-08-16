@@ -448,6 +448,18 @@ lesson: the probe that says "ready" is not the flip):
   container-elem row must appear under trace AND must not abort a plain
   Debug run.
 
+**First live catch (2026-08-16, hours after arming).**  The collapse's
+performance probe -- the first code in the tree to grow a Map by `set!`
+reassignment of a `^mut` binding -- tripped the ICE on a genuine
+un-migrated shape: a concrete heap app's merge temp spelled `int64_t`
+where chokepoint 1's rule says the typed pointer.  The corpus's silence
+was real but bounded by the corpus (every fixture grows maps by chained
+lets), and enforcement surfaced the gap on first contact with a new
+shape instead of years later.  Triage found the ICE was standing in
+front of a worse, older defect: the same repro fails at LINK on any
+build (a `map-assoc` spec declared but never emitted).  Both filed as
+[`mut-map-reassign-missing-spec-link-error`](../reported/mut-map-reassign-missing-spec-link-error.md).
+
 ### The container-element collapse (LANDED 2026-08-16) -- and the leak it found
 
 The last item of increment 4, and the one that turns the campaign's thesis
@@ -502,7 +514,36 @@ Two lessons worth carrying, both about the shadow rather than the leak:
 **Blast radius**, per the landing checklist: suite **2599/0** (the new
 fixture included), no snapshot churn, ratchet unchanged; type fuzzer two
 fresh seeds (9001, 9002) at 250 cases, 0 BUG classes; the ASan probe that
-leaked now exits clean.  Pinned by
+leaked now exits clean.
+
+**Performance probe (checklist item 5; measured 2026-08-16, same box,
+3 runs per side, pre-collapse compiler rebuilt at `e6e07e20` in a
+worktree).**  The one behavior change with a runtime cost model is the
+ownership fold flipping 0 -> 1 for app elements: `vec-free` (and the map
+release) now walk and free per-element boxes that were previously leaked.
+
+*Vec leg* -- 2000 rounds x 5000 pushes of `(Option int)` + `vec-free`
+(10M element crossings):
+
+| | wall (avg of 3) | peak RSS |
+| --- | ---: | ---: |
+| before (leaking) | ~273 ms | 307 MiB |
+| after (freeing) | ~244 ms | **1.8 MiB** |
+
+**-10% wall, -99.4% peak RSS.**  The free loop costs less than the leak's
+allocator pressure, so the "cost" of correctness is negative on this bench.
+The retro acceptable-delta statement the checklist wanted up front: a >5%
+wall regression would have gated; measured is a 10% improvement.
+
+*Map leg* -- 2000 x 200 `map-assoc` of app-element VALUES + `map-free`: not
+comparable, because the BEFORE compiler emits **invalid C** for the shape
+(a bad `map_assoc_eq_o__spec__...` declaration, cc rejects).  The collapse
+made the shape compile at all; ~300 ms / 483 MiB after (the RSS is HAMT
+nodes `map-free` documents as not freed).  Writing the probe also surfaced
+two pre-existing finds, filed separately: `set!` on a `^mut` Map binding
+fails at LINK (missing spec emission) with a merge-temp spelling seam in
+front of it in Debug builds --
+[`mut-map-reassign-missing-spec-link-error`](../reported/mut-map-reassign-missing-spec-link-error.md).  Pinned by
 `tests/fixtures/vec-app-element-box-lifecycle` (the double-free direction,
 which an unsanitized harness CAN observe) and by a `run-repr-trace.sh` check
 that the app-element `vec-free` is emitted with a non-zero `owned` flag.
