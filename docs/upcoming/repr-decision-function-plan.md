@@ -1,13 +1,12 @@
 # Increment 4: the representation decision function (`repr-of`)
 
 **Status:** stages 1, 2 and 4 landed 2026-07-31; stage 3 in progress.
-Instrumented so far: let-bind, merge-temp, struct-field and fn-value
-tail/join (all silent) plus container-elem, which is silent on the half its
-predicate owns and carries one pinned, diagnosed disagreement naming the next
-chokepoint.  `repr_of_binding` now exists alongside `repr_of` for the
+Instrumented so far: let-bind, merge-temp, struct-field, fn-value tail/join
+and method-result (all silent) plus container-elem, which is silent on the
+half its predicate owns and carries one pinned, diagnosed disagreement naming
+the next chokepoint.  `repr_of_binding` now exists alongside `repr_of` for the
 positions whose decision lives on the Binding rather than the Type.  Not yet
-instrumented: method-result carrier production, the `emit_expr.c` per-arg
-bridges.
+instrumented: the `emit_expr.c` per-arg bridges.
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 4 -- "the true consolidation; it goes last because by then the
 sites agree in *behavior* and the collapse is mechanical rather than
@@ -302,8 +301,42 @@ own check into one local that the shadow and the decision share -- so the
 count went back to 3 and the duplication never existed.  A guard that catches
 its own campaign's instrumentation is a working guard.
 
-Remaining stage-3 positions: method-result carrier production, and the
-`emit_expr.c` per-arg bridges.
+**METHOD-RESULT carrier production: the shadow corrected the spec, then went
+silent (2026-08-16).**  Instrumented at a wrapper around
+`fn_body_tail_byvalue_carrier_type` -- the walker that tells a carrier-return
+slot which concrete type sits on the far side of the bridge.  Wrapping rather
+than touching each of its ~20 return points keeps it one chokepoint (the
+recursive self-calls were pointed at the inner function so the shadow reports
+the outermost answer once, not every sub-answer).
+
+**The first spec was wrong, and the size of the wrong answer is the useful
+part: 5740 lines.**  The naive reading -- "a function called
+`byvalue_carrier_type` returns a by-value AGGREGATE" -- fired on 4495 heap
+containers (`(Vec int)` 2072, `(Cons int)` 2063, `Set`, `Map`).  It is the
+struct-field lesson again from a new angle: **"by-value" in this walker's
+name is opposed to ERASED, not to pointer.**  A heap container's typed
+pointer is a perfectly concrete far side, and the crossing it feeds is the
+lossless pointer/carrier round trip.
+
+The honest invariant is narrower and sharper: the walker must never name a
+type the protocol calls the **erased carrier**, because that hands a caller
+an int64 dressed as a concrete spelling -- the exact shape increment 2 chased
+through the `bind` cell, where the elab-side gate and the emit-side dispatch
+paired the wrapper ABI differently.  Under that spec: **0 disagreements**.
+
+**Population: 7211**, measured rather than assumed (temporarily widening the
+condition to count every concrete answer).  That is three orders of magnitude
+more coverage than the fn-tail-leaf position's 8, and it is worth recording
+the contrast: two positions can both report "0" and mean very different
+things.  Liveness comes free in the smoke -- the value probe's
+`repr-trace bridge carrier->concrete aggregate (type-app Option int)` line is
+emitted by the bridge that CONSUMES this walker's answer, so one probe proves
+both that the walker ran and that it stayed silent.
+
+Suite 2598/0, ratchet unchanged, no snapshot churn.
+
+Remaining stage-3 position: the `emit_expr.c` per-arg bridges -- the long
+tail, and the one the plan always expected to be the big one.
 
 ### Stage 4 -- registry + ratchet
 (ratchet LANDED 2026-07-31)

@@ -294,6 +294,18 @@ This campaign uses five kinds:
    Increment 1's fat-normalized boundaries should get the same treatment:
    a hand-written C file per boundary shape, ASan/UBSan clean, kept for
    reproducibility.
+   **Report the population, not just the disagreement count** (added
+   2026-08-16, after the method-result shadow). "0 disagreements" is not a
+   result until you know how many answers were checked: the fn-value
+   tail/join position measured 0 out of **8** evaluations corpus-wide, the
+   method-result position 0 out of **7211**. Those are the same number and
+   wildly different evidence. Both counts came from the same cheap technique
+   -- temporarily widen the shadow's condition to fire on every evaluation,
+   re-sweep, count -- so there is no excuse for reporting the bare zero.
+   Spec errors surface the same way: the method-result shadow's first,
+   wrong invariant fired 5740 lines, and the size of that number is what
+   said "your spec is wrong", not "the compiler is broken".
+
    **A silence criterion is only as good as its probe** (added 2026-08-15,
    after the adt-field shadow). Once a position is migrated, its check
    inverts from "this shape must fire" to "nothing may fire" -- and a
@@ -508,8 +520,23 @@ about, and cowpaths are paved before the field is closed:
   `elab_fns.c grew 3 -> 4`. The fix was to hoist the site's own check into
   one shared local rather than bump the baseline -- a guard that catches its
   author is a working guard.
-  Remaining stage-3 positions: method-result carrier production, the
-  `emit_expr.c` per-arg bridges.*
+  *Status 2026-08-16, later: method-result carrier production instrumented and
+  silent.* Shadowed at a wrapper around `fn_body_tail_byvalue_carrier_type`.
+  The first spec was wrong and its wrongness is the useful measurement: the
+  naive reading ("a `byvalue_carrier_type` returns a by-value AGGREGATE")
+  fired 5740 lines, 4495 of them heap containers. **"By-value" in that
+  walker's name is opposed to ERASED, not to pointer** -- the struct-field
+  calibration again from a new angle. The honest invariant is that the walker
+  must never name a type the protocol calls the erased carrier (an int64
+  dressed as a concrete spelling -- increment 2's `bind` cell shape): **0
+  disagreements over a measured population of 7211**. Worth carrying forward:
+  that population is three orders of magnitude above the fn-tail-leaf
+  position's 8, so **two positions can both report "0" and mean very
+  different things** -- a shadow result is only as strong as the count of
+  answers it actually checked, which is why each of these increments now
+  measures its population rather than reporting a bare zero.
+  Remaining stage-3 position: the `emit_expr.c` per-arg bridges -- the long
+  tail, and the one always expected to be the big one.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --

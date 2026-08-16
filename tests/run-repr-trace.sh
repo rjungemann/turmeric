@@ -286,6 +286,29 @@ else
   echo "  ok  fn-tail-leaf classification agrees with repr_of_binding"
 fi
 
+# Increment 4 stage 3: METHOD-RESULT carrier production, shadowed at the
+# `fn_body_tail_byvalue_carrier_type` wrapper -- the walker that tells a
+# carrier-return slot which concrete type sits on the far side of the bridge.
+#
+# The watched invariant is what that walker PROMISES its callers: a type they
+# can spell concretely.  Naming a type the protocol calls the erased carrier
+# would hand a caller an int64 dressed as a concrete spelling, which is the
+# shape increment 2 chased through the `bind` cell.
+#
+# Liveness comes free on the value probe: `repr-trace bridge carrier->concrete
+# aggregate (type-app Option int)` (asserted above) is emitted by the bridge
+# that CONSUMES this walker's answer, so the same probe proves the walker ran
+# and that it stayed silent.  Corpus-wide the population is 7211 concrete
+# answers with 0 disagreements -- see the plan.
+vshadow="$("$TUR" emit-c --emit-abi-trace "$tmp/vprobe.tur" 2>&1 >/dev/null | grep '^repr-shadow method-result' || true)"
+if [ -z "$vshadow" ]; then
+  echo "  ok  method-result walker names only concrete types"
+else
+  echo "  FAIL method-result shadow -- walker named an erased-carrier type:"
+  echo "$vshadow"
+  rc=1
+fi
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
   echo "--- fn-param trace ---"

@@ -1057,13 +1057,53 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
  * type -- recovered from the matched spec's resolved result (the source of
  * truth; the construct's own e->type is collapsed to the int64 carrier) or a
  * make-struct's type -- so a carrier-return slot can spill it concrete->carrier. */
+static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
+                                                    const Expr *e);
+
+/* Increment 4 stage 3: the METHOD-RESULT carrier-production shadow.
+ * Instrumenting the wrapper rather than each of this walker's ~20 return
+ * points keeps it one chokepoint and costs no duplicated logic.
+ *
+ * The invariant being watched is what this function PROMISES its callers: a
+ * type they can spell concretely on the far side of a carrier bridge.  The
+ * first sweep corrected the spec here, which is the shadow doing its job --
+ * the naive reading ("by-value carrier type" means a C aggregate) fired 5740
+ * lines, 4495 of them heap containers (`(Vec int)`, `(Cons int)`, `Set`,
+ * `Map`).  "By-value" in this walker's name is opposed to ERASED, not to
+ * pointer: a heap container's typed pointer is a perfectly concrete far side,
+ * and the crossing it feeds is the lossless pointer/carrier round trip --
+ * the same distinction the struct-field sweep had to calibrate away.
+ *
+ * So the drift condition is narrower and sharper: the walker naming a type
+ * that the protocol says is the ERASED CARRIER.  That would hand a caller an
+ * int64 dressed as a concrete spelling, which is the shape increment 2 chased
+ * through the `bind` cell -- the elab-side gate and the emit-side dispatch
+ * pairing the wrapper ABI differently. */
 Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
+    Type t = fn_body_tail_byvalue_carrier_type_inner(ctx, e);
+    if (g_emit_abi_trace && t.kind != TY_UNKNOWN) {
+        ReprForm got = repr_of(&t, REPR_POS_RESULT);
+        if (got == REPR_CARRIER_I64) {
+            Buf tb; buf_init(&tb);
+            type_print(&tb, t);
+            buf_putc(&tb, '\0');
+            fprintf(stderr,
+                    "repr-shadow method-result result type=%s "
+                    "want=concrete got=carrier-i64\n", tb.data);
+            buf_free(&tb);
+        }
+    }
+    return t;
+}
+
+static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
+                                                    const Expr *e) {
     Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
     if (!e) return unknown;
     switch (e->kind) {
         case EX_ASCRIBE: {
             Type inner_t =
-                fn_body_tail_byvalue_carrier_type(ctx, e->as.ascribe_.inner);
+                fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.ascribe_.inner);
             if (inner_t.kind != TY_UNKNOWN) return inner_t;
             /* consolidation increment 2 (bind cell, ascription form): the
              * inner recovery failed -- a carrier producer whose declared
@@ -1096,27 +1136,27 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
         }
         case EX_DO:
             return e->as.do_.n > 0
-                ? fn_body_tail_byvalue_carrier_type(ctx, e->as.do_.items[e->as.do_.n - 1])
+                ? fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.do_.items[e->as.do_.n - 1])
                 : unknown;
         case EX_IF: {
-            Type t = fn_body_tail_byvalue_carrier_type(ctx, e->as.if_.then_);
+            Type t = fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.if_.then_);
             if (t.kind != TY_UNKNOWN) return t;
             return e->as.if_.else_or_null
-                ? fn_body_tail_byvalue_carrier_type(ctx, e->as.if_.else_or_null)
+                ? fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.if_.else_or_null)
                 : unknown;
         }
         case EX_MATCH: {
             /* Mirror the bool predicate: the by-value carrier type of the first
              * arm whose tail produces one. */
             for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
-                Type t = fn_body_tail_byvalue_carrier_type(ctx, e->as.match_.arms[ai].body);
+                Type t = fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.match_.arms[ai].body);
                 if (t.kind != TY_UNKNOWN) return t;
             }
             return unknown;
         }
         case EX_LET:
         case EX_LETREC:
-            return fn_body_tail_byvalue_carrier_type(ctx, e->as.let_.body);
+            return fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.let_.body);
         default: break;
     }
     const Expr *x = e;
