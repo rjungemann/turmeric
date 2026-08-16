@@ -1,9 +1,28 @@
 # Plan: make `--interpret` use the dict clones the elaborator already builds
 
 **Status:** PIECES 1 AND 2 LANDED, 2026-08-16 -- for the rank-2 path, plus a
-compiled-path SIGSEGV the first probe found.  What remains is step 4
-(retiring the gde_* heuristics and the map-show seeding), which stays open
-until the dict path demonstrably covers their fixtures.
+compiled-path SIGSEGV the first probe found.  Step 4 is HALF done, decided
+by sabotage measurement the same day:
+
+- **`gde_reresolve_return_directed` is RETIRED.**  Disabled, the full
+  interpreter corpus passes (run-turi 1793/0 plus the hand-run
+  hkt-constrained family); disabled TOGETHER with the dict path, the
+  constrained fixtures regress to the baked representative (`1 -1 1` /
+  `207 207`) -- so the DictBind path is what carries the return-directed
+  shapes now, which is exactly this plan's retirement criterion.  Deleted
+  with the measurement recorded at its former definition in eval.c.
+- **`gde_reresolve_method` (receiver-directed) STAYS**: 5 fixtures still
+  rely on it (constrained-defn-cons-return-monomorphize,
+  constrained-generic-nested-container-element-dispatch,
+  constrained-loop-vec-push-byvalue-result-element,
+  generic-show-dispatch-opaque, string-slice).  Those shapes' method calls
+  do not route through dict clones, so there is no dictionary on the frame
+  to read -- retiring it needs the dict path extended to plain constrained
+  generics first.
+- **`gde_reresolve_method_by_value` STAYS**: 1 fixture
+  (constrained-generic-instance-vec-element-unascribed) -- same reason.
+- **map-show seeding STAYS** (tests/turi/show-collection-elems.c passes;
+  auto-show element rendering does not go through dict clones at all).
 
 What landed, found by probing for the next heuristic escape:
 
