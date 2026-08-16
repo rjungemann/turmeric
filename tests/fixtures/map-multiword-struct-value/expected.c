@@ -4200,16 +4200,16 @@ static double __inst_Num_sub_float(double, double);
 static double __inst_Num_mul_float(double, double);
 static double __inst_Num_div_float(double, double);
 static double __inst_Num_neg_float(double);
-static int64_t __inst_Clone_clone_bool(bool);
-static int64_t __inst_Clone_clone_cstr(const char *);
-static int64_t __inst_Clone_clone_int8(int8_t);
-static int64_t __inst_Clone_clone_int16(int16_t);
-static int64_t __inst_Clone_clone_int32(int32_t);
-static int64_t __inst_Clone_clone_uint8(uint8_t);
-static int64_t __inst_Clone_clone_uint16(uint16_t);
-static int64_t __inst_Clone_clone_uint32(uint32_t);
-static int64_t __inst_Clone_clone_uint64(uint64_t);
-static int64_t __inst_Clone_clone_float32(float);
+static bool __inst_Clone_clone_bool(bool);
+static const char * __inst_Clone_clone_cstr(const char *);
+static int8_t __inst_Clone_clone_int8(int8_t);
+static int16_t __inst_Clone_clone_int16(int16_t);
+static int32_t __inst_Clone_clone_int32(int32_t);
+static uint8_t __inst_Clone_clone_uint8(uint8_t);
+static uint16_t __inst_Clone_clone_uint16(uint16_t);
+static uint32_t __inst_Clone_clone_uint32(uint32_t);
+static uint64_t __inst_Clone_clone_uint64(uint64_t);
+static float __inst_Clone_clone_float32(float);
 static const char * __inst_Display_display_int(int64_t);
 static const char * __inst_Debug_debug_int(int64_t);
 static const char * __inst_Display_display_cstr(const char *);
@@ -5260,43 +5260,43 @@ static double __inst_Num_neg_float(double x) {
         return (0.0) - (x);
 }
 
-static int64_t __inst_Clone_clone_bool(bool x) {
+static bool __inst_Clone_clone_bool(bool x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_cstr(const char * x) {
-        return (int64_t)(intptr_t)x;
-}
-
-static int64_t __inst_Clone_clone_int8(int8_t x) {
+static const char * __inst_Clone_clone_cstr(const char * x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_int16(int16_t x) {
+static int8_t __inst_Clone_clone_int8(int8_t x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_int32(int32_t x) {
+static int16_t __inst_Clone_clone_int16(int16_t x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_uint8(uint8_t x) {
+static int32_t __inst_Clone_clone_int32(int32_t x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_uint16(uint16_t x) {
+static uint8_t __inst_Clone_clone_uint8(uint8_t x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_uint32(uint32_t x) {
+static uint16_t __inst_Clone_clone_uint16(uint16_t x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_uint64(uint64_t x) {
+static uint32_t __inst_Clone_clone_uint32(uint32_t x) {
         return x;
 }
 
-static int64_t __inst_Clone_clone_float32(float x) {
+static uint64_t __inst_Clone_clone_uint64(uint64_t x) {
+        return x;
+}
+
+static float __inst_Clone_clone_float32(float x) {
         return x;
 }
 

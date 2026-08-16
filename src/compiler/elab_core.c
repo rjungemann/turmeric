@@ -2440,12 +2440,13 @@ bool return_type_carrier_aggregate_conflict(Type declared, Type body) {
  * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)
  * and returns the first conflict.  `cls` calibrates two axes against the carrier
  * ABI:
- *   - Register-class (float-vs-non-float): symmetric for both defn classes
- *     (a float never rides the int64 carrier, so a float-vs-concrete-non-float
- *     result is always an xmm-vs-GP miscompile); commit-direction-only
- *     (declared float) for RET_CLASS_CARRIER_METHOD, where the per-instance emit
- *     path resolves a non-float-declared / float-body method to its real
- *     register class.
+ *   - Register-class (float-vs-non-float): symmetric for EVERY class as of
+ *     2026-08-16 (a float never rides the int64 carrier, so a
+ *     float-vs-concrete-non-float result is always an xmm-vs-GP miscompile).
+ *     The former RET_CLASS_CARRIER_METHOD tolerance claimed the per-instance
+ *     emit path resolves such a method to its real register class; measured
+ *     false (the emitted C value-converts), and the engines diverged on it --
+ *     see docs/archive/int-declared-method-float-body-engine-divergence.md.
  *   - Pointer-scalar REVERSE (integer-declared, cstr body): only RET_CLASS_
  *     COMMITTED rejects it (Phase 2).  For a generic / `#{Unsafe}` defn
  *     (RET_CLASS_CARRIER_FN) or an instance method (RET_CLASS_CARRIER_METHOD)
@@ -2462,10 +2463,24 @@ ReturnConflict return_position_conflict(const AdtDef *ret_adt,
     /* Register-class: commit-direction-only for a typeclass instance method;
      * symmetric otherwise.  The predicate already tolerates a same-register-class
      * pair, so the gate only narrows the instance-method case. */
-    bool rc_commit_only = (cls == RET_CLASS_CARRIER_METHOD);
-    if ((!rc_commit_only || rc_is_float_kind(ret_kind)) &&
-        return_type_register_class_conflict(ret_kind, body))
+    /* int-declared-method-float-body-engine-divergence: SYMMETRIC for every
+     * return class, instance methods included.  The old commit-direction gate
+     * tolerated a float body under a non-float instance slot on the claim
+     * that "the per-instance emit path resolves [it] to its real register
+     * class" -- measured false: the emitted C was `static int64_t ... {
+     * return 7.5; }`, a destructive value conversion, while turi kept the
+     * float, so the two engines disagreed on every program that used the
+     * shape.  Unlike a cstr body under `: int` (pointer bits ride the
+     * carrier losslessly and come back -- still tolerated below), a float
+     * under an int slot cannot bridge: its bits and its value part ways,
+     * and the shape cannot say which the author meant (stdlib Clone wanted
+     * bits; the poly-to-fat fixtures wanted the value).  The stdlib half
+     * was resolved by giving Clone its honest `[x : a] : a` signature;
+     * this closes the user-facing half by making the shape an error, the
+     * same TUR-E0707 the equivalent defn has always been. */
+    if (return_type_register_class_conflict(ret_kind, body))
         return RET_CONFLICT_REGISTER_CLASS;
+    (void)cls;
 
     if (return_type_pointer_scalar_conflict(ret_kind, body))
         return RET_CONFLICT_POINTER_SCALAR;

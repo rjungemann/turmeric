@@ -13,13 +13,11 @@
 ;; keying on the body type alone broke exactly that fixture -- the reverted
 ;; first attempt in the archived report).
 ;;
-;; The int-declared control (a method `: int` whose body produces a float,
-;; where the value CONVERSION is the declared semantics) is pinned by
-;; poly-to-fat-float-roundtrip, not here: on that shape the engines
-;; disagree (compiled truncates per the declared type, turi returns the
-;; float -- see docs/reported/int-declared-method-float-body-engine-divergence.md),
-;; and this fixture runs under run-turi.sh, which diffs the same
-;; expected.stdout.
+;; A float body under a fixed `: int` class slot is TUR-E0707 now (it used
+;; to value-convert compiled and keep the float under turi -- see
+;; docs/archive/int-declared-method-float-body-engine-divergence.md), so
+;; there is no int-declared control here: the shape is pinned as an error by
+;; errors/instance-method-return-float-under-int-slot.
 (defclass C64 [a] (m64 [self : a] : a))
 (definstance C64 [float] (m64 [self : float] : float self))
 (defclass C32 [a] (m32 [self : a] : a))
