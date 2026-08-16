@@ -178,7 +178,6 @@ filed), and the `^fat` leak row was resolved and removed 2026-08-13.
 | --- | --- |
 | capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
-| typeclass method result at **float** -> generic (carrier) call argument -- the carrier-returning spec clone value-converts (`7.1` -> `7`) where the caller bit-reinterprets | [`method-result-float-spec-return-value-converts`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/method-result-float-spec-return-value-converts.md) |
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --
@@ -186,6 +185,7 @@ the next cell in this family is usually adjacent to one of them.
 
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
+| typeclass method result at **float** (any width) -> generic (carrier) call argument | producer bit-cast keyed on the method's DECLARED result kind (the same type the consumer keys its reinterpret on -- paired by construction); an int-declared method keeps its value conversion | [`method-result-float-spec-return-value-converts`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/method-result-float-spec-return-value-converts.md) |
 | `float32`-ascribed literal -> any mixed C expression | ascribe elaborator retypes a float literal in place (`(:: 7.1 float32)` == `7.1f32`), so it emits at single precision instead of as the double literal the promotion rules then dominated | [`float32-ascribed-literal-compares-as-double`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-ascribed-literal-compares-as-double.md) |
 | `float32` generic (carrier) call result -> concrete consumer | elaboration: `call_wrap_reinterpret_owning` admits the carrier<->float32 pair (its silent mixed-size bail dropped the requested reinterpret, typing the call `int`); emit's size-mismatch reinterpret arm reads float pairs through the union overlay | [`float32-generic-call-result-printed-as-carrier`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-generic-call-result-printed-as-carrier.md) |
 | `TY_CONTRACT` in type-ARGUMENT position -- the payload kept a live contract type at every downstream boundary | peeled to its base in BOTH type-application loops (`rt_peel_type_arg_contract`), warning `TUR-W0380` that the payload predicate is not enforced; `TY_CONTRACT` then joined `type_has_concrete_codegen_layout` by delegating to its base | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/contract-type-arg-not-peeled-to-base.md) |

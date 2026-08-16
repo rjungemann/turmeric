@@ -1,0 +1,33 @@
+;; method-result-float-spec-return-value-converts (archived): a float
+;; typeclass-method result crossing into a generic (carrier) call was
+;; value-converted by the producing spec clone -- its C return is the int64
+;; carrier and its body `return self;` is C's implicit float->int conversion
+;; (7.1 -> 7) -- while every consumer of a float-declared method result
+;; bit-reinterprets the carrier.  `(idf (m64 7.1))` printed 3.45846e-323.
+;;
+;; The fix keys the producer's bit-cast on the method's DECLARED result kind
+;; (the instance-resolved signature), which is the same type the consumer
+;; keys its reinterpret on -- pairing the two by construction.  A method
+;; DECLARED `: int` whose body produces a float keeps the value conversion
+;; (that IS its declared semantics; poly-to-fat-float-roundtrip pins it, and
+;; keying on the body type alone broke exactly that fixture -- the reverted
+;; first attempt in the archived report).
+;;
+;; The int-declared control (a method `: int` whose body produces a float,
+;; where the value CONVERSION is the declared semantics) is pinned by
+;; poly-to-fat-float-roundtrip, not here: on that shape the engines
+;; disagree (compiled truncates per the declared type, turi returns the
+;; float -- see docs/reported/int-declared-method-float-body-engine-divergence.md),
+;; and this fixture runs under run-turi.sh, which diffs the same
+;; expected.stdout.
+(defclass C64 [a] (m64 [self : a] : a))
+(definstance C64 [float] (m64 [self : float] : float self))
+(defclass C32 [a] (m32 [self : a] : a))
+(definstance C32 [float32] (m32 [self : float32] : float32 self))
+(defn idf [A] [x : A] : A x)
+(defn main [] : int
+  (println (idf (m64 7.1)))
+  (println (= (idf (idf (m64 2.5))) 2.5))
+  (println (idf (m32 (:: 7.1 float32))))
+  (println (= (m64 (idf 7.1)) 7.1))
+  0)

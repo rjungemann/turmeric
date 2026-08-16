@@ -2,7 +2,39 @@
 
 **Severity:** silent wrong answer. No crash, no diagnostic -- `7.1` becomes
 `3.45846e-323`.
-**Status:** OPEN. A producer-side fix was attempted and reverted on 2026-08-16 -- see "Fix direction" for why it cannot work unilaterally. Pre-existing (reproduced on the compiler before the
+**Status: FIXED 2026-08-16** (same day the first attempt was reverted; the
+revert's record below is what made the second attempt land).  The producer's
+bit-cast is keyed on the method's **DECLARED result kind**
+(`e->type.as.fn.result_kind`, the instance-resolved signature) in the
+direct-return chain in `emit_fns.c`, routed through `emit_carrier_bridge`.
+That key is what the first attempt lacked, and it is what pairs producer with
+consumer: the consumer bit-reinterprets exactly when the call's resolved
+result type is a float -- the same declared type read from the other end.  A
+method DECLARED `: int` whose body produces a float (the BoxMap
+counterexample that broke attempt one) keeps its value conversion, because
+for it the conversion IS the declared semantics; all four fixtures the first
+attempt broke pass unchanged.
+
+The "two consumer conventions" the revert blamed turn out not to be arbitrary
+conventions at all -- they follow the declared result type, which the first
+attempt could not see because it keyed on the BODY type (fires on both) after
+measuring `fd->return_type` unset and `spec->result_type` already the
+carrier.  The discriminator was found by instrumenting the direct-return
+chain: the buggy clone reads `carrier=1 declared=FLOAT`, the counterexample
+`carrier=1 declared=INT`.
+
+Fixed at float, float64 and float32 (the composition
+`(idf (m32 (:: 7.1 float32)))` that still printed bits-of-7 after the
+generic-result fix now prints 7.1).  Pinned by
+`tests/fixtures/method-result-float-into-generic` (both widths, both
+directions, chained), engine-agreeing under turi; the int-declared control
+stays pinned by `poly-to-fat-float-roundtrip`, and the pre-existing
+compiled/turi divergence on THAT shape -- surfaced while writing the fixture
+-- is filed as
+[`int-declared-method-float-body-engine-divergence`](../reported/int-declared-method-float-body-engine-divergence.md).
+Suite 2601/0; fuzzer clean including the originally-finding seed 9201.
+
+Originally filed as OPEN. Pre-existing (reproduced on the compiler before the
 2026-08-16 argcast routing change, byte-identical emitted C both sides).
 **Found by:** `tests/type-fuzz-src.py --n 250 --seed 9201`, case 98.
 
