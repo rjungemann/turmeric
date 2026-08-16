@@ -1,6 +1,55 @@
 # Plan: make `--interpret` use the dict clones the elaborator already builds
 
-**Status:** not started. Investigation done 2026-07-30; findings below change the
+**Status:** PIECES 1 AND 2 LANDED, 2026-08-16 -- for the rank-2 path, plus a
+compiled-path SIGSEGV the first probe found.  What remains is step 4
+(retiring the gde_* heuristics and the map-show seeding), which stays open
+until the dict path demonstrably covers their fixtures.
+
+What landed, found by probing for the next heuristic escape:
+
+- **The escape was a compiled-path crash, not an interpreter divergence.**
+  A rank-2 constrained poly value whose class variable appears ONLY in the
+  result type (`make : int -> (m int)`, nothing to pin from) compiled clean
+  and SIGSEGV'd: `elab_poly_call`'s MB1 loop hit `if (!pinned) continue;`
+  ("resolved via return context; defer") -- but nothing downstream resolved
+  it.  The dict was silently not prepended while the callee wrapper still
+  expected it as a leading arg, so `(g 7)` called a 3-param wrapper with 2
+  args and dereferenced the int as the dictionary.  turi, resolving
+  per-instance at run time, got the same program RIGHT (107/207).
+- **Compiled fix:** the pin now also reads the RT expected-type channel
+  (structurally matching the forall body's declared result, exactly as MB4
+  matches an argument), the TY_APP result instantiation binds from it too,
+  and a still-unpinned constraint is a call-site ERROR naming the ascribe
+  fix instead of a silent mis-ABI call.  Channel discipline matters: the
+  first cut cleared `expected_type` around `elab_poly_call`'s args and broke
+  parsec-tutorial -- every plain fn-value invocation routes through that
+  function, and perturbing the channel starves sibling ctor inference.  The
+  landed version only snapshots it.  A broad "push expected type for every
+  concretely-annotated call argument" was also tried and measured out (8
+  fixture regressions); the ascription channel is the supported spelling.
+- **Piece 1 (turi):** `EX_POLY_WRAP` carries a new `dict_clone_binding`
+  (elab sets it at the rank-2 pass site), and the interpreter evaluates the
+  poly value to the DICT CLONE's global closure -- the clone is a registered
+  file-level def, so it is already in turi's globals.  `EX_DICT` in
+  address-only mode evaluates to the `TypeClassInstance *` carried as a
+  TURI_INT (the same int64 slot the compiled singleton address rides), so
+  the clone's leading dict params bind like any other argument.
+- **Piece 2 (turi):** the apply prologue records each dict param's value as
+  a class->instance `DictBind` on the callee frame; method dispatch consults
+  the frame chain FIRST -- explicit precedence over the gde_* heuristics,
+  as the risk note below prescribes -- gated exactly like the emit-side
+  env-dict gate (bare-tyvar receiver, or tyvar-headed result for
+  return-directed methods).  Chain-walking covers the captured-dict nested
+  mapper for free: the lambda captured the clone's frame, so its own apply
+  reaches the DictBinds through the parent chain.
+
+Pinned by `tests/fixtures/hkt-rank2-result-only-pin/` (inline-C-free, both
+engines, 107/207) and `errors/hkt-rank2-result-only-unpinned` (the
+ambiguous variant is a diagnostic, not a crash).  Suite 2608/0, turi
+1791/0, the whole `hkt-constrained-*` family hand-verified, 150-case fuzz
+session clean.
+
+Investigation done 2026-07-30; findings below changed the
 shape of the work substantially from how it was first described.
 
 **Motivates:** [turi-return-directed-method-keeps-baked-instance](../archive/turi-return-directed-method-keeps-baked-instance.md),

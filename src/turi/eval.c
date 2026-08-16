@@ -415,10 +415,24 @@ typedef struct TyvarBind {
     struct TyvarBind *next;
 } TyvarBind;
 
+/* turi-dict-passing-plan: a runtime dictionary bound at a dict-clone's apply --
+ * "constraint class TC is served by instance INST in this activation".  The
+ * tree-walking analogue of the compiled clone's leading `int64_t __dict` param;
+ * consulted with EXPLICIT precedence over the gde_* recovery heuristics, which
+ * reconstruct the same fact from pinned tyvars / runtime tags.  Chain-walked
+ * like tyvars, so a nested mapper lambda that captured the clone's frame reads
+ * the dict through its parent chain (the captured-dict case for free). */
+typedef struct DictBind {
+    struct TypeClass         *tc;
+    struct TypeClassInstance *inst;
+    struct DictBind          *next;
+} DictBind;
+
 struct EvalFrame {
     EvalBinding  *bindings;
     EvalFrame    *parent;
     TyvarBind    *tyvars;   /* generic-dict tyvar substitutions (usually NULL) */
+    DictBind     *dicts;    /* dict-clone runtime dictionaries (usually NULL) */
 };
 
 static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
@@ -429,7 +443,17 @@ static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
     f->bindings = NULL;
     f->parent   = parent;
     f->tyvars   = NULL;
+    f->dicts    = NULL;
     return f;
+}
+
+/* Resolve a typeclass to its runtime dictionary through the frame chain. */
+static struct TypeClassInstance *frame_lookup_dict(EvalFrame *f,
+                                                   const struct TypeClass *tc) {
+    for (EvalFrame *cur = f; cur; cur = cur->parent)
+        for (DictBind *db = cur->dicts; db; db = db->next)
+            if (db->tc == tc) return db->inst;
+    return NULL;
 }
 
 /* Resolve a tyvar name to its concrete type through the frame chain. */
@@ -5282,6 +5306,23 @@ static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
  * `(return)` with no value -- the caller runs the post directly on nil).
  * eval_unary_post applies the form's post-operand logic to the resolved value,
  * shared with eval_expr_impl so the two paths cannot diverge. */
+/* turi-dict-passing-plan: a rank-2 poly value wrapping a CONSTRAINED fn
+ * evaluates to its dict-clone's global closure -- the callee whose leading
+ * dict params the elaborated call site supplies.  Returns true (with *out
+ * set) when the clone resolves; false falls back to the plain unwrap. */
+static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name);
+static bool poly_wrap_dict_clone_value(TuriEnv *env, EvalFrame *frame,
+                                       const Expr *e, TuriValue *out) {
+    if (!e || e->kind != EX_POLY_WRAP || !e->as.poly_wrap_.dict_clone_binding)
+        return false;
+    const Binding *cb = e->as.poly_wrap_.dict_clone_binding;
+    if (!cb->name || !cb->name->name) return false;
+    TuriValue v = eval_lookup(env, frame, cb->name->name);
+    if (v.tag != TURI_CLOSURE) return false;
+    *out = v;
+    return true;
+}
+
 static bool unary_operand(const Expr *e, const Expr **operand) {
     switch (e->kind) {
     case EX_CAST:         *operand = e->as.cast_.expr;          return true;
@@ -6226,12 +6267,48 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * body-in-loop + TCO fold is T3.2b).  The closure value rides in
                  * `last`; the arg accumulator in `aux`. */
                 TuriValue fn_val;
+                bool gde_resolved = false;
+                /* turi-dict-passing-plan (Piece 2): a method call dispatched on
+                 * the constraint's own type variable, inside an activation that
+                 * carries a runtime dictionary for the method's class, resolves
+                 * through THAT dictionary -- the caller-supplied instance --
+                 * with explicit precedence over every recovery heuristic below.
+                 * The tyvar gate mirrors the emit-side env-dict gate
+                 * (emit_call_dict_env_dispatch_index): receiver-directed keys
+                 * on a bare-tyvar receiver, return-directed on a tyvar-headed
+                 * result; a concrete same-class call in the same body stays
+                 * instance-resolved. */
+                if (control->as.call_.dict_arg &&
+                    control->as.call_.dict_arg->kind == EX_DICT &&
+                    control->as.call_.dict_arg->as.dict_.instance &&
+                    control->as.call_.dict_arg->as.dict_.instance->typeclass &&
+                    control->as.call_.dict_arg->as.dict_.method_name[0] != '\0') {
+                    bool recv_is_tyvar =
+                        control->as.call_.n_args >= 1 && control->as.call_.args &&
+                        control->as.call_.args[0] &&
+                        control->as.call_.args[0]->type.kind == TY_TYVAR;
+                    const Type *h = &control->type;
+                    while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+                    if (recv_is_tyvar || h->kind == TY_TYVAR) {
+                        TypeClass *mtc =
+                            control->as.call_.dict_arg->as.dict_.instance->typeclass;
+                        struct TypeClassInstance *bound =
+                            frame_lookup_dict(cf, mtc);
+                        if (bound) {
+                            TuriValue rv = gde_method_closure(
+                                env, control->as.call_.dict_arg, mtc, bound);
+                            if (rv.tag == TURI_CLOSURE) {
+                                fn_val = rv;
+                                gde_resolved = true;
+                            }
+                        }
+                    }
+                }
                 /* generic-dict-dispatch: a typeclass method baked to the carrier
                  * representative (dict_arg set, receiver tyvar in abi_bindings[0])
                  * re-resolves to the receiver's real instance using the concrete
                  * type the enclosing generic call pinned onto that tyvar. */
-                bool gde_resolved = false;
-                if (control->as.call_.dict_arg &&
+                if (!gde_resolved && control->as.call_.dict_arg &&
                     control->as.call_.n_abi_bindings >= 1 &&
                     control->as.call_.fn_binding) {
                     AbiTypeBinding *ab0 = &control->as.call_.abi_bindings[0];
@@ -6804,6 +6881,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* SR N3: single-operand black-box forms descend their operand on
                  * the work-stack (DK_UNARY), so recursion threaded through a
                  * cast/ascribe/return/set/transparent-shim stays heap-bounded. */
+                {
+                    /* turi-dict-passing-plan: a constrained rank-2 poly value
+                     * resolves to its dict-clone, not the unwrapped original. */
+                    TuriValue dcv;
+                    if (poly_wrap_dict_clone_value(env, cf, control, &dcv)) {
+                        cur = dcv; descending = false; break;
+                    }
+                }
                 const Expr *operand = NULL;
                 if (unary_operand(control, &operand)) {
                     if (!operand) {
@@ -7288,6 +7373,29 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                fn->params[param_offset + i]->name->name,
                                turi_copy_byvalue_struct_arg(env, acc[arg_base + i]));
                 free(acc);
+                /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
+                 * just bound as ordinary int args carry TypeClassInstance
+                 * pointers (the EX_DICT address-only value).  Record them as
+                 * class->instance DictBinds on the frame so method dispatch
+                 * inside the body reads the caller-supplied dictionary with
+                 * precedence over the gde_* recovery heuristics. */
+                if (fn->n_dict_clone > 0) {
+                    for (uint8_t dk2 = 0; dk2 < fn->n_dict_clone; dk2++) {
+                        Binding *dp = fn->dict_clone_params[dk2];
+                        if (!dp || !dp->name || !fn->dict_clone_classes[dk2])
+                            continue;
+                        TuriValue dv = eval_lookup(env, call_frame,
+                                                   dp->name->name);
+                        if (dv.tag != TURI_INT || dv.as_int == 0) continue;
+                        DictBind *db = (DictBind *)turi_val_alloc(
+                            env, sizeof(DictBind));
+                        db->tc   = fn->dict_clone_classes[dk2];
+                        db->inst = (struct TypeClassInstance *)(intptr_t)
+                                       dv.as_int;
+                        db->next = call_frame->dicts;
+                        call_frame->dicts = db;
+                    }
+                }
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
                  * method call inside the body can re-resolve its instance. */
@@ -8981,6 +9089,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DICT: {
         TypeClassInstance *inst = e->as.dict_.instance;
         const char *mname = e->as.dict_.method_name;
+        /* turi-dict-passing-plan: address-only mode (method_name == "") is the
+         * dict VALUE the elaborator prepends at a dict-clone call site.  The
+         * compiled path spells it `(int64_t)(intptr_t)&dict_C_T_singleton`;
+         * the interpreter's dictionary IS the TypeClassInstance, carried in
+         * the same int64 slot so the clone's dict param binds it like any
+         * other arg.  (Previously nil, which starved the dict params.) */
+        if (inst && (!mname || mname[0] == '\0'))
+            return turi_int((int64_t)(intptr_t)inst);
         if (!inst || !mname || mname[0] == '\0') return turi_nil();
         TypeClass *tc = inst->typeclass;
         if (!tc) return turi_nil();
@@ -9070,8 +9186,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Phase N: poly wrap is transparent in the interpreter -------------- */
-    case EX_POLY_WRAP:
+    case EX_POLY_WRAP: {
+        /* turi-dict-passing-plan: a constrained rank-2 poly value resolves to
+         * its dict-clone (leading dict params supplied by the call site). */
+        TuriValue dcv;
+        if (poly_wrap_dict_clone_value(env, frame, e, &dcv)) return dcv;
         return eval_expr(env, frame, e->as.poly_wrap_.inner);
+    }
 
     /* --- A#1: fat-closure shim is transparent in the interpreter ----------- */
     case EX_FN_TO_FAT:

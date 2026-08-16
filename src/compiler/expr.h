@@ -1336,6 +1336,14 @@ struct Expr {
         struct {
             struct Expr    *inner;           /* the fn/closure being wrapped */
             struct Binding *wrapper_binding; /* the __poly_N wrapper thunk binding */
+            /* turi-dict-passing-plan: when the wrapped fn is CONSTRAINED and
+             * was dict-cloned for this rank-2 crossing, the clone's global
+             * binding.  The interpreter evaluates the poly value to the CLONE
+             * (whose leading dict params the elaborated call site supplies)
+             * instead of the original -- the tree-walking analogue of the
+             * wrapper targeting the clone on the compiled path.  NULL for
+             * unconstrained wraps. */
+            struct Binding *dict_clone_binding;
             /* Phase CCL: true when inner is a fat closure (void*) rather than a
              * named function.  The emitter packs it into tur_poly_fn_t at the
              * call site instead of emitting a (tur_poly_fn_t){ NULL, wrapper }. */

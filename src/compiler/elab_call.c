@@ -5385,6 +5385,10 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                             e, clone, clone->type.as.fn.arity, 0, args[i]->span, false);
                         if (!wrapper_b) return NULL;
                         wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+                        /* turi-dict-passing-plan: let the interpreter target
+                         * the clone directly (it cannot execute the emit-side
+                         * __poly wrapper). */
+                        wrap->as.poly_wrap_.dict_clone_binding = clone;
                     } else {
                         uint32_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                             ? inner_fn_b->type.as.fn.arity : 1;
@@ -7571,6 +7575,15 @@ Binding *poly_arg_fn_binding(Expr *arg) {
 static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
+    /* turi-dict-passing-plan probe (2026-08-16): snapshot the expected-type
+     * channel for THIS call (pushed by an ascription or typed let) for the
+     * MB1 dict pin and the result instantiation below.  Deliberately NOT
+     * cleared or restored: every fn-value invocation routes through this
+     * function (`(pred c)` on a plain fn param included), and perturbing the
+     * channel here starves sibling ctor inference in the enclosing body --
+     * measured as a parsec-tutorial if-branch mismatch on the first cut. */
+    Type *poly_expected = e->expected_type;
+
     /* Elaborate all arguments normally */
     Expr **args = (Expr **)arena_alloc(e->arena, (n_args ? n_args : 1) * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {
@@ -7781,7 +7794,58 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                         if (pinned) break;
                     }
                 }
-                if (!pinned) continue;   /* resolved via return context; defer */
+                /* turi-dict-passing-plan probe (2026-08-16): the constraint var
+                 * may appear ONLY in the forall body's RESULT type --
+                 * `make : (forall m. Applicative m => int -> (m int))` -- with
+                 * no argument to pin from.  The old code deferred with a
+                 * comment claiming the return context would resolve it, but
+                 * nothing downstream did: the dict was silently NOT prepended
+                 * while the callee wrapper still expects it as a leading arg,
+                 * so `(g 7)` called a 3-param wrapper with 2 args and the int
+                 * argument was dereferenced as the dict (SIGSEGV past a clean
+                 * compile; turi, which resolves per-instance at run time, got
+                 * it right).  Pin from the RT expected-type channel when the
+                 * call site carries one (ascription / typed let), structurally
+                 * matching the declared result exactly as MB4 matches an
+                 * argument. */
+                if (!pinned && poly_expected &&
+                    cbody->as.fn.result_full_type) {
+                    CallTypeBinding rbinds[16]; uint8_t rnb = 0;
+                    if (call_collect_type_bindings(cbody->as.fn.result_full_type,
+                                                   *poly_expected,
+                                                   rbinds, &rnb)) {
+                        for (uint8_t bi = 0; bi < rnb; bi++) {
+                            if (!rbinds[bi].name ||
+                                strcmp(rbinds[bi].name, vname) != 0)
+                                continue;
+                            const Type *base = &rbinds[bi].type;
+                            while (base->kind == TY_APP && base->as.app.fn)
+                                base = base->as.app.fn;
+                            if (base->kind != TY_TYVAR &&
+                                base->kind != TY_UNKNOWN) {
+                                concrete = *base;
+                                pinned = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                /* Still unpinned: the instantiation is ambiguous at this call
+                 * site and the emitted call would be the silent ABI mismatch
+                 * above -- reject instead. */
+                if (!pinned) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "rank-2 constraint '%s %s' cannot be resolved at "
+                              "this call site: no argument mentions '%s', and "
+                              "no expected result type is in scope to pin it. "
+                              "Ascribe the call result (e.g. (:: (f ...) (T "
+                              "...))) or bind it with a typed let so the "
+                              "instance can be chosen",
+                              (tc->name && tc->name->name) ? tc->name->name
+                                                           : "?",
+                              vname, vname);
+                    return NULL;
+                }
                 /* Only discharge against a ground type -- a tyvar/unknown/applied
                  * binding means the call sits inside another generic body and the
                  * obligation is still abstract (same guard as elab_call.c:4975). */
@@ -7947,6 +8011,14 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                             call_collect_type_bindings(body->as.fn.arg_full_types[j],
                                                        args[j]->type, binds, &nb);
                     }
+                    /* turi-dict-passing-plan probe: a bound var that no
+                     * argument mentions (`int -> (m int)`) instantiates from
+                     * the expected result type -- the same source the MB1
+                     * dict pin used above.  Args bind first, so an
+                     * arg-derived binding still wins. */
+                    if (poly_expected)
+                        call_collect_type_bindings(rfull, *poly_expected,
+                                                   binds, &nb);
                     Type inst = call_instantiate_type(e, rfull, binds, nb);
                     if (inst.kind == TY_APP || inst.kind == TY_ADT) {
                         Type *rf = (Type *)arena_alloc(e->arena, sizeof(Type));
