@@ -1,16 +1,19 @@
 # Increment 4: the representation decision function (`repr-of`)
 
-**Status:** stages 1, 2 and 4 landed 2026-07-31; stage 3 in progress.
-**Stage 3's position list is complete** (2026-08-16): let-bind, merge-temp,
-struct-field, fn-value tail/join, method-result and per-arg bridge all run
-silent corpus-wide, and container-elem is silent on the half its predicate
-owns while carrying one pinned, diagnosed disagreement that names the next
-chokepoint.  `repr_of_binding` exists alongside `repr_of` for the positions
-whose decision lives on the Binding rather than the Type.  **The R3 Debug ICE
-landed 2026-08-16**: in a Debug build a disagreement is now a hard error, not
-a log line, with measurement mode (`--emit-abi-trace`) and known rows exempt.
-What is left for the increment is the container-elem collapse -- a behavior
-change wanting its own measured increment.
+**Status:** INCREMENT 4 COMPLETE (2026-08-16).  Stages 1, 2 and 4 landed
+2026-07-31; stage 3 instrumented all seven positions, graduated to the R3
+Debug ICE, and closed with the container-element collapse -- the first
+position whose site decision IS `repr_of`'s answer, which also fixed a silent
+per-push leak in `(Vec (Option int))`.  Next: increment 5's conditional
+retirement.
+All seven positions are instrumented: let-bind, merge-temp, struct-field,
+fn-value tail/join, method-result and per-arg bridge run silent corpus-wide,
+and container-elem no longer has a shadow at all -- its predicate IS
+`repr_of`'s answer now, so it cannot disagree.  `repr_of_binding` exists
+alongside `repr_of` for the positions whose decision lives on the Binding
+rather than the Type.  A disagreement is a Debug-build ICE (measurement mode
+under `--emit-abi-trace` still just logs; there are currently no exempt
+rows).
 **Parent:** [representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md)
 (increment 4 -- "the true consolidation; it goes last because by then the
 sites agree in *behavior* and the collapse is mechanical rather than
@@ -445,10 +448,71 @@ lesson: the probe that says "ready" is not the flip):
   container-elem row must appear under trace AND must not abort a plain
   Debug run.
 
-What remains for increment 4 is the container-elem collapse the pinned row
-names -- a behavior change (the app path must consult the predicate without
-double-boxing) wanting its own measured increment -- and then increment 5's
-conditional retirement.
+### The container-element collapse (LANDED 2026-08-16) -- and the leak it found
+
+The last item of increment 4, and the one that turns the campaign's thesis
+from an argument into a measurement.
+
+`type_is_boxed_container_elem` is now **defined as** `repr_of`'s answer:
+
+```c
+bool type_is_boxed_container_elem(Type t) {
+    return repr_of(&t, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
+}
+```
+
+That is increment 4's stated goal -- "collapse the per-site representation
+choices into the single `repr-of(type, position)` routine" -- reached for the
+first position.  Its shadow is retired **by construction**: want and got are
+now the same expression, so a disagreement is unrepresentable.  A chokepoint
+that cannot drift needs no instrument watching it drift.
+
+**The pinned row was hiding a real leak.**  The 2026-08-15 diagnosis called
+the container-elem disagreement "two mechanisms deciding one thing and
+AGREEING" and deferred the collapse as tidiness.  That was right about the
+BOXING half and wrong about the OWNERSHIP half, and reading what each of the
+six consulting sites actually *does* with the answer is what separated them:
+
+- push side: a concrete by-value app element really is heap-boxed
+  (`malloc(sizeof(tur_adt_Option__int))`), exactly as repr_of said;
+- ownership side: `vec-free` threads `(tur-vec-elem-wide? v)`, that fold
+  consults this predicate, and the predicate answered 0 for app elements --
+  so **the boxes the push side allocated were never freed**.
+
+Measured: `(Vec (Option int))` leaked one element box per push -- 32 bytes in
+2 allocations under LeakSanitizer for a two-push probe, while the sibling
+`(Vec Sm)` in the same program freed both of its.  The emitted flags say it
+plainly: `INT64_C(0)` for the app-element vector, `INT64_C(1)` for the ADT
+one.  Written up in
+[`docs/archive/vec-app-element-boxes-never-freed.md`](../archive/vec-app-element-boxes-never-freed.md).
+
+Two lessons worth carrying, both about the shadow rather than the leak:
+
+- **A "they agree" verdict must name WHICH decision agrees.**  Boxing and
+  ownership are one decision to a reader and two to the compiler.  The
+  earlier verdict compared the halves the emitted push made visible and
+  never checked the half the free path consumed.
+- **The default build hides this class entirely.**  `tur build` links no
+  sanitizer, so neither an ordinary run nor the fixture harness could see the
+  leak; it took an explicit `TUR_CC_FLAGS` sanitizer build.  A representation
+  defect that only manifests as unfreed memory has no natural failure signal
+  in this repo -- worth remembering the next time a shadow row is dismissed
+  as cosmetic.
+
+**Blast radius**, per the landing checklist: suite **2599/0** (the new
+fixture included), no snapshot churn, ratchet unchanged; type fuzzer two
+fresh seeds (9001, 9002) at 250 cases, 0 BUG classes; the ASan probe that
+leaked now exits clean.  Pinned by
+`tests/fixtures/vec-app-element-box-lifecycle` (the double-free direction,
+which an unsanitized harness CAN observe) and by a `run-repr-trace.sh` check
+that the app-element `vec-free` is emitted with a non-zero `owned` flag.
+
+There are now no known/exempt shadow rows.  The `known` exemption stays in
+the code for the next one, and the smoke says so rather than pretending to
+exercise it.
+
+Increment 4 is complete.  Next is increment 5's conditional retirement -- and
+its precondition is a redundancy-falsification probe, not a code change.
 
 ### Stage 4 -- registry + ratchet
 (ratchet LANDED 2026-07-31)

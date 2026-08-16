@@ -581,9 +581,24 @@ about, and cowpaths are paved before the field is closed:
   (8161, 8162) at 250 cases, 0 BUG classes; and a sabotage run -- un-scoping
   the erased-spelling rule -- aborts 20 fixtures and downgrades cleanly under
   the escape hatch, so both halves are load-bearing.
-  Remaining for increment 4: the container-elem collapse the pinned row
-  names, a behavior change wanting its own measured increment. Then increment
-  5's conditional retirement.*
+  *Status 2026-08-16, INCREMENT 4 COMPLETE: the container-element collapse
+  landed, and the pinned row was hiding a real leak.*
+  `type_is_boxed_container_elem` is now DEFINED as
+  `repr_of(t, CONTAINER_ELEM) == BOXED_AGG` -- increment 4's stated goal
+  reached for its first position, with the shadow retired by construction
+  (want and got are one expression, so a disagreement is unrepresentable).
+  The 2026-08-15 verdict on that row -- "two mechanisms deciding one thing and
+  AGREEING" -- was right about the BOXING half and wrong about the OWNERSHIP
+  half: `vec-free` threads `tur-vec-elem-wide?`, that fold consults this
+  predicate, and it answered 0 for app elements, so the boxes the push side
+  allocated were never freed. `(Vec (Option int))` leaked one box per push (32
+  bytes / 2 allocations under LSan; the sibling `(Vec Sm)` freed both of its).
+  Written up in
+  [`docs/archive/vec-app-element-boxes-never-freed.md`](../archive/vec-app-element-boxes-never-freed.md).
+  Suite 2599/0, fuzzer 2 fresh seeds clean, no snapshot churn.
+  Increment 4 is complete; next is increment 5's conditional retirement,
+  whose precondition is a redundancy-falsification probe rather than a code
+  change.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --

@@ -197,30 +197,24 @@ else
   fi
 fi
 
-# Increment 4 stage 3: the CONTAINER_ELEM shadow, at
-# `type_is_boxed_container_elem` -- the one predicate every container boxing
-# site, its ownership probe, and the read-back recovery consult.  Unlike the
-# other three shadows this one compares a PREDICATE rather than a C spelling,
-# because a container slot is one word either way and the boxed-or-not
-# decision is not recoverable from a declaration.
+# Increment 4, THE COLLAPSE: `type_is_boxed_container_elem` is now defined as
+# `repr_of(t, CONTAINER_ELEM) == BOXED_AGG`, so its shadow is retired by
+# construction -- want and got are the same expression. What used to be the
+# pinned TY_APP disagreement row must therefore be SILENT now, and the boxing
+# it names must be paired with a matching ownership fold.
 #
-# Two checks, because this position has both a positive and a negative:
-#
-#   fire     a concrete by-value APP element (`(Vec (Option int))`) is a KNOWN
-#            pinned disagreement -- repr_of reports the outcome (it IS boxed)
-#            while the predicate answers the narrower "takes the ADT
-#            box/deref bridge", which TY_APP elements do not.  Corpus-wide
-#            this is the only shape, 5 lines.  Losing the line means the
-#            instrument died, not that the seam closed -- closing it is a
-#            behavior change with its own increment (see types.c).
-#   silence   a TY_ADT element is the half the predicate owns; any line there
-#            means a container decision drifted from the protocol.
+# The fold is the load-bearing half. Before the collapse the push side boxed a
+# concrete by-value app element while `tur-vec-elem-wide?` folded to 0, so
+# `vec-free` never released those boxes -- a leak of one box per push. Assert
+# the emitted fold is 1, which is the codegen-visible face of the fix; the
+# runtime face is tests/fixtures/vec-app-element-box-lifecycle.
 cat > "$tmp/celem-app.tur" <<'EOF'
 (defn main [] : int
   (let [vo (:: (vec-new) (Vec (Option int)))]
     (vec-push! vo (:: (some 5) (Option int)))
     (let [a (:: (vec-get vo 0) (Option int))]
-      (println (unwrap-or a -1))))
+      (println (unwrap-or a -1)))
+    (vec-free vo))
   0)
 EOF
 cat > "$tmp/celem-adt.tur" <<'EOF'
@@ -228,24 +222,25 @@ cat > "$tmp/celem-adt.tur" <<'EOF'
 (defn main [] : int
   (let [v (:: (vec-new) (Vec CeSm))]
     (vec-push! v (CeSm 31))
-    (let [b (:: (vec-get v 0) CeSm)] (println (.a b))))
+    (let [b (:: (vec-get v 0) CeSm)] (println (.a b)))
+    (vec-free v))
   0)
 EOF
-"$TUR" emit-c --emit-abi-trace "$tmp/celem-app.tur" 2>"$tmp/celem-app.err" >/dev/null
-if grep -q '^repr-shadow container-elem type=(type-app Option int) want-boxed=1 got-boxed=0' "$tmp/celem-app.err"; then
-  echo "  ok  container-elem shadow alive on the pinned TY_APP row"
-else
-  echo "  FAIL container-elem shadow -- pinned TY_APP row did not fire; got:"
-  grep '^repr-shadow' "$tmp/celem-app.err" || echo "    (no repr-shadow lines at all)"
+"$TUR" emit-c --emit-abi-trace "$tmp/celem-app.tur" >"$tmp/celem-app.c" 2>"$tmp/celem-app.err"
+"$TUR" emit-c --emit-abi-trace "$tmp/celem-adt.tur" >"$tmp/celem-adt.c" 2>"$tmp/celem-adt.err"
+if grep -q '^repr-shadow container-elem' "$tmp/celem-app.err" \
+   || grep -q '^repr-shadow container-elem' "$tmp/celem-adt.err"; then
+  echo "  FAIL container-elem shadow fired -- the position is defined by repr_of and cannot disagree:"
+  grep -h '^repr-shadow container-elem' "$tmp/celem-app.err" "$tmp/celem-adt.err"
   rc=1
-fi
-"$TUR" emit-c --emit-abi-trace "$tmp/celem-adt.tur" 2>"$tmp/celem-adt.err" >/dev/null
-if grep -q '^repr-shadow' "$tmp/celem-adt.err"; then
-  echo "  FAIL container-elem shadow -- TY_ADT element must be consolidated:"
-  grep '^repr-shadow' "$tmp/celem-adt.err"
+elif ! grep -q 'vec_hyfree_hyo' "$tmp/celem-app.c"; then
+  echo "  FAIL container-elem probe never reached vec-free"
+  rc=1
+elif grep -qE 'vec_hyfree_hyo\(.*INT64_C\(0\)\) \+' "$tmp/celem-app.c"; then
+  echo "  FAIL app-element vec freed with owned=0 -- the element boxes leak"
   rc=1
 else
-  echo "  ok  container-elem silent on the TY_ADT element it owns"
+  echo "  ok  container-elem collapsed into repr_of; app elements own their boxes"
 fi
 
 # Increment 4 stage 3: the fn-value TAIL/JOIN classification, shadowed in
@@ -338,27 +333,32 @@ fi
 # modes must stay distinguishable, so pin both:
 #
 #   measurement  --emit-abi-trace collects disagreements as lines and never
-#                aborts (this is how every position was calibrated, and how
-#                the pinned container-elem row stays visible);
-#   enforcement  a plain Debug run of the same file exits 0.
+#                aborts -- a sweep that died on its first finding could not
+#                calibrate a spec, which is how every position here was
+#                calibrated;
+#   enforcement  a plain Debug run ICEs on a disagreement.
 #
-# The container-elem row is the sharp case: it is a KNOWN, documented
-# disagreement, so it must appear under trace and must NOT abort a build.
+# There are currently NO known (exempt) rows: the container-elem row that used
+# to be one was closed by the collapse. The `known` exemption stays in the
+# code because the next pinned row will want it, but nothing exercises it
+# today -- so this check pins what is still true, rather than pretending to
+# test the exemption. If a future increment pins a new known row, assert here
+# that it appears under trace AND does not abort a plain run.
 "$TUR" emit-c --emit-abi-trace "$tmp/celem-app.tur" >/dev/null 2>"$tmp/mode-trace.err"
 "$TUR" emit-c "$tmp/celem-app.tur" >/dev/null 2>"$tmp/mode-plain.err"
 plain_rc=$?
 if [ $plain_rc -ne 0 ]; then
-  echo "  FAIL enforcement mode aborted on the known container-elem row (exit $plain_rc):"
+  echo "  FAIL enforcement mode aborted on a consolidated program (exit $plain_rc):"
   head -4 "$tmp/mode-plain.err"
   rc=1
-elif ! grep -q '^repr-shadow container-elem' "$tmp/mode-trace.err"; then
-  echo "  FAIL measurement mode lost the known container-elem row"
-  rc=1
 elif grep -q 'internal error (ICE)' "$tmp/mode-plain.err"; then
-  echo "  FAIL enforcement mode ICE'd on a known row"
+  echo "  FAIL enforcement mode ICE'd on a consolidated program"
+  rc=1
+elif ! grep -q '^repr-trace ' "$tmp/mode-trace.err"; then
+  echo "  FAIL measurement mode emitted no trace at all -- the instrument is dead"
   rc=1
 else
-  echo "  ok  known row logs under trace and never aborts a build"
+  echo "  ok  measurement traces, enforcement stays quiet on consolidated code"
 fi
 
 if [ $rc -ne 0 ]; then

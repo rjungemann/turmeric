@@ -3074,67 +3074,40 @@ bool type_is_wide_byval_adt(Type t) {
  * folds), and the read-back recovery must consult THIS predicate so the four
  * decisions cannot drift. */
 bool type_is_boxed_container_elem(Type t) {
-    bool boxed = t.kind == TY_ADT && t.as.adt_.def &&
-                 !t.as.adt_.def->is_heap &&
-                 adt_byval_value_size_bytes(t.as.adt_.def) > 0;
-    /* Increment 4 stage 3: the CONTAINER_ELEM shadow.  Unlike the let-bind /
-     * merge-temp / adt-field shadows this one compares a PREDICATE, not a C
-     * spelling: a container slot is one word in every case (see the slot
-     * calibration in repr-decision-function-plan), so the decision the
-     * position actually makes is boxed-or-not, and recovering that from a
-     * declaration is impossible -- both answers are `int64_t`.  Comparing the
-     * predicate directly is the sharper instrument anyway: it checks the
-     * two-place decision at its source rather than through its spelling.
+    /* Increment 4, THE COLLAPSE (2026-08-16): this predicate is now
+     * `repr_of`'s answer rather than a second derivation of it.  That is what
+     * increment 4 was for -- "collapse the per-site representation choices
+     * into the single repr-of(type, position) routine".
      *
-     * Silence here is the precondition for making repr_of the DEFINITION of
-     * this predicate, which is what increment 4 is for.  Every container
-     * boxing site, its ownership probe, and the read-back recovery route
-     * through this one function, so instrumenting it covers all of them.
+     * The shadow that measured this position reported one disagreement class:
+     * a concrete by-value APP element (`(Vec (Option int))`), where repr_of
+     * said BOXED and this predicate said not-boxed.  The diagnosis at the
+     * time was "two mechanisms deciding one thing and AGREEING" -- the push
+     * side really does malloc the monomorph either way -- and that was true
+     * of the BOXING half and false of the OWNERSHIP half.  Measured: the
+     * `tur-vec-elem-wide?` / `tur-wide-byval?` folds consult this predicate,
+     * so they answered 0 for app elements and `vec-free` never released the
+     * boxes the push side had allocated.  `(Vec (Option int))` leaked one
+     * element box per push (32 bytes / 2 allocations under LeakSanitizer for
+     * a two-push probe, while the sibling `(Vec Sm)` in the same program
+     * freed both of its).  Two mechanisms that agree on one half of a
+     * decision and disagree on the other is exactly the defect shape this
+     * campaign exists to close. */
+    bool boxed = repr_of(&t, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
+    /* The shadow that lived here is retired BY CONSTRUCTION: with the
+     * predicate defined as repr_of's answer, want and got are the same
+     * expression and a disagreement is unrepresentable.  That is the
+     * intended end state for a consolidated position -- a chokepoint that
+     * cannot drift needs no instrument watching it drift -- and it is why
+     * `run-repr-trace.sh` now asserts SILENCE on the shape that used to be
+     * the pinned TY_APP row.  The other six positions keep their shadows
+     * because their sites still derive their own answers.
      *
-     * MEASURED 2026-08-15 (2028 fixtures): 5 lines, all one shape --
-     * `(type-app Option int)`, want-boxed=1 got-boxed=0.  That is a SCOPE
-     * mismatch, not a seam, and the distinction is the whole point:
-     *
-     *   - repr_of answers the OUTCOME question ("is this element heap-boxed
-     *     into the slot?") and is right for both -- a concrete by-value APP
-     *     element IS boxed (`malloc(sizeof(tur_adt_Option__int))` + push);
-     *   - this predicate answers the narrower "does it take the ADT
-     *     box/deref bridge?", and TY_APP elements do not.  They ride a
-     *     separate monomorph-aware path: malloc the monomorph on push,
-     *     reconstruct field-by-field through the GENERIC one-word box
-     *     (`tur_option_t`) on read.
-     *
-     * That second path is sound rather than lucky: every parametric
-     * monomorph's payload occupies exactly one word (`double` bit-cast
-     * through a union, a by-value struct payload as `tur_adt_Pt *`), so the
-     * generic box is layout-compatible with every monomorph by
-     * construction.  Verified by running the round trip for int, float
-     * (7.1/2.5) and a by-value struct payload -- all correct.
-     *
-     * So this is two mechanisms deciding one thing and AGREEING, which is
-     * the campaign's core anatomy caught before it drifts.  Collapsing them
-     * is the next chokepoint, and it is a behavior change (the app path
-     * would have to start consulting this predicate without double-boxing),
-     * so it wants its own measured increment -- not a widening bolted on
-     * here.  Until then the 5 lines are a pinned work list, not noise. */
-    if (repr_shadow_active()) {
-        bool want = repr_of(&t, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
-        if (want != boxed) {
-            Buf tb; buf_init(&tb);
-            buf_puts(&tb, "repr-shadow container-elem type=");
-            type_print(&tb, t);
-            buf_printf(&tb, " want-boxed=%d got-boxed=%d\n", (int)want,
-                       (int)boxed);
-            buf_putc(&tb, '\0');
-            /* KNOWN: the concrete by-value APP element.  Diagnosed above --
-             * a scope mismatch between two agreeing mechanisms, and the next
-             * chokepoint's work item.  It must never abort a build. */
-            bool known = t.kind == TY_APP ||
-                         (t.kind != TY_ADT || !t.as.adt_.def);
-            repr_shadow_disagree("container-elem", known, tb.data);
-            buf_free(&tb);
-        }
-    }
+     * Kept deliberately: the >0-size and non-heap conditions now live in
+     * repr_of (heap types return HEAP_PTR before the by-value arm; a
+     * transparent int newtype returns SCALAR_BITS), so this function has no
+     * conditions of its own left to drift.
+     */
     return boxed;
 }
 
