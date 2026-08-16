@@ -184,7 +184,7 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-
+| [interp-hkt-pure-return-dispatch-elab-error](interp-hkt-pure-return-dispatch-elab-error.md) | low-medium | `--interpret` rejects `hkt-constrained-pure-return-dispatch` at elaboration (TUR-E0001: `int` vs `(m int)`) while `emit-c`/`tur run` accept and print the right answers; pre-existing at c909e790, masked by the TI7 carve-out |
 
 The first absorbed two symptom reports on 2026-08-01
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values`,
@@ -229,6 +229,7 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [caret-constraint-vector-not-registered](caret-constraint-vector-not-registered.md) | medium | the `[^Class a]` defn spelling (~66 files) registers NO TypeConstraint -- the class name becomes a bogus KIND_ARROW type param -- so call-site discharge and turi's constraint-dict path never see the obligation; dispatch survives only via ABI specs + gde heuristics |
 
 `lsp-completion-internal-symbols` was resolved 2026-08-05 (a
 `Binding.is_synthesized` bit filtered in the LSP collector) and moved to

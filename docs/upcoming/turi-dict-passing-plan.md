@@ -11,18 +11,57 @@ by sabotage measurement the same day:
   `207 207`) -- so the DictBind path is what carries the return-directed
   shapes now, which is exactly this plan's retirement criterion.  Deleted
   with the measurement recorded at its former definition in eval.c.
-- **`gde_reresolve_method` (receiver-directed) STAYS**: 5 fixtures still
-  rely on it (constrained-defn-cons-return-monomorphize,
-  constrained-generic-nested-container-element-dispatch,
-  constrained-loop-vec-push-byvalue-result-element,
-  generic-show-dispatch-opaque, string-slice).  Those shapes' method calls
-  do not route through dict clones, so there is no dictionary on the frame
-  to read -- retiring it needs the dict path extended to plain constrained
-  generics first.
+- **`gde_reresolve_method` (receiver-directed) STAYS, at reduced load**:
+  2 fixtures rely on it, down from 5 after the plain-constrained dict path
+  landed (below, same day).  The remaining two (generic-show-dispatch-opaque,
+  string-slice) use the `[^Show a]` defn spelling, which registers NO
+  TypeConstraint on the FnDef -- the caret token is misparsed into a
+  KIND_ARROW type param named after the class (see
+  docs/reported/caret-constraint-vector-not-registered.md) -- so there is
+  no constraint metadata for the apply-time dict push to read.  Retiring
+  the heuristic now needs that parse gap fixed (a ~66-file blast radius),
+  not more turi work.
 - **`gde_reresolve_method_by_value` STAYS**: 1 fixture
-  (constrained-generic-instance-vec-element-unascribed) -- same reason.
+  (constrained-generic-instance-vec-element-unascribed).  The receiver's
+  ELABORATED type is the collapsed int carrier (the unascribed-carrier
+  shape), so no tyvar gate ever fires and no pin exists for the dict push
+  either; only the runtime tag knows the element type.  Retiring it needs
+  the elaboration to keep the tyvar (see the archived
+  unascribed-carrier-helper report), not more turi work.
 - **map-show seeding STAYS** (tests/turi/show-collection-elems.c passes;
   auto-show element rendering does not go through dict clones at all).
+
+**Plain constrained generics LANDED, 2026-08-16** -- the extension the
+first measurement prescribed.  `frame_bind_constraint_dicts` (eval.c): at
+apply time, after the call's tyvar pins land on the callee frame, each of
+the callee's typeclass constraints (a constrained defn's
+`fd->constraints`, and a constrained instance body's
+`type_param_constraints`) is resolved against its pinned concrete type
+with the ELABORATOR'S own lookup -- exact structural match first, then the
+kind-erased head-discriminated lookup, then the KIND_ARROW key -- and
+recorded as a DictBind.  The method-dispatch gate that fed
+`gde_reresolve_method` (dict_arg + `abi_bindings[0]` still a tyvar) now
+consults the frame dictionary FIRST and falls back to the heuristic.
+Conservative by construction: unpinned tyvar, failed lookup, or two
+constraints on the same class (class-keyed DictBinds cannot tell them
+apart) push nothing and the heuristics behave exactly as before.
+
+Measured by sabotage, same methodology: dict path live + RECV heuristic
+disabled -> only the 2 caret-spelling fixtures fail (was 5); dict path AND
+RECV both disabled -> the 3 newly-covered fixtures regress to the baked
+representative; dict path disabled alone -> full corpus green (the path is
+strictly additive over the heuristics).  It is also a correctness FIX, not
+just plumbing: two instances over the same ADT head discriminated only by
+element type ((Code (Option int)) vs (Code (Option cstr))) resolved to one
+same-head instance under the head-name heuristic (`200 200` where compiled
+prints `100 200`); the exact structural lookup gets it right.  Pinned by
+`tests/fixtures/constrained-generic-samehead-instance-dict/` (inline-C-free,
+both engines).
+
+Found while measuring, filed separately: `--interpret` REJECTS
+`hkt-constrained-pure-return-dispatch` at elaboration while `emit-c` and
+`tur run` accept it (pre-existing at c909e790, masked by the TI7
+carve-out) -- docs/reported/interp-hkt-pure-return-dispatch-elab-error.md.
 
 What landed, found by probing for the next heuristic escape:
 

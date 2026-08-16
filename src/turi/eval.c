@@ -4848,6 +4848,69 @@ static void frame_bind_instance_constraint_tyvars(TuriEnv *env, EvalFrame *calle
     }
 }
 
+/* turi-dict-passing-plan (plain constrained generics): after a call's tyvar
+ * pins land on the callee frame, resolve each of the callee's typeclass
+ * constraints against its pinned concrete type using the ELABORATOR'S own
+ * instance lookup, and record the result as a DictBind.  This is the
+ * apply-time analogue of the dict-clone param binding: method dispatch inside
+ * the body then reads the frame dictionary with precedence over the gde_*
+ * recovery heuristics, instead of re-deriving the instance by head-name
+ * matching at every method call.
+ *
+ * Resolution order mirrors static dispatch: exact structural match first
+ * (disambiguates same-head instances like `(Option cstr)` vs `(Option int)`),
+ * then the kind-erased head-discriminated lookup (covers a bare-head
+ * `[Vec]` instance answering a `(Vec int)` query), then the KIND_ARROW
+ * structured key (an HKT constraint pinned to a bare carrier).
+ *
+ * Deliberately conservative: an unpinned tyvar, a failed lookup, or two
+ * constraints on the SAME class (a class-keyed DictBind cannot tell them
+ * apart) push nothing, leaving those shapes to the heuristics exactly as
+ * before. */
+static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
+                                        const TypeConstraint *constraints,
+                                        uint8_t n_constraints) {
+    if (!env || !env->last_tc_env || !constraints || n_constraints == 0) return;
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    for (uint8_t i = 0; i < n_constraints; i++) {
+        const TypeConstraint *c = &constraints[i];
+        if (!c->typeclass) continue;
+        bool dup = false;
+        for (uint8_t j = 0; j < n_constraints; j++)
+            if (j != i && constraints[j].typeclass == c->typeclass) dup = true;
+        if (dup) continue;
+        const char *tvname = NULL;
+        if (c->tyvar && c->tyvar->name) tvname = c->tyvar->name;
+        else if (c->type_arg.kind == TY_TYVAR && c->type_arg.as.tyvar_.name)
+            tvname = c->type_arg.as.tyvar_.name;
+        if (!tvname) continue;
+        Type concrete;
+        if (!frame_lookup_tyvar(callee, tvname, &concrete) ||
+            concrete.kind == TY_TYVAR)
+            continue;
+        TypeClassInstance *inst = typeclass_env_lookup_instance_exact(
+            tc_env, c->typeclass, &concrete, 1);
+        if (!inst)
+            inst = typeclass_env_lookup_instance(tc_env, c->typeclass,
+                                                 &concrete, 1);
+        if (!inst) {
+            TypeClassDispatchKey key;
+            memset(&key, 0, sizeof(key));
+            key.typeclass        = c->typeclass;
+            key.type_args        = &concrete;
+            key.n_type_args      = 1;
+            key.constructor_kind = KIND_ARROW;
+            inst = typeclass_env_lookup_instance_by_key(tc_env, &key);
+        }
+        if (!inst) continue;
+        DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+        db->tc   = c->typeclass;
+        db->inst = inst;
+        db->next = callee->dicts;
+        callee->dicts = db;
+    }
+}
+
 /* -------------------------------------------------------------------------
  * T2 (turi-eval-trampoline-plan): explicit-stack driver for the linear control
  * forms.  Flattens directly-nested EX_IF branch chains and EX_DO/EX_PROGRAM
@@ -6282,8 +6345,31 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     control->as.call_.fn_binding) {
                     AbiTypeBinding *ab0 = &control->as.call_.abi_bindings[0];
                     if (ab0->type.kind == TY_TYVAR && ab0->type.as.tyvar_.name) {
+                        /* Dict-first (turi-dict-passing-plan, plain constrained
+                         * generics): a method call still dispatched on a type
+                         * variable reads the enclosing activation's frame
+                         * dictionary -- pushed at apply time by
+                         * frame_bind_constraint_dicts -- before falling back to
+                         * the head-name recovery heuristic. */
+                        if (control->as.call_.dict_arg->kind == EX_DICT &&
+                            control->as.call_.dict_arg->as.dict_.instance &&
+                            control->as.call_.dict_arg->as.dict_.instance->typeclass) {
+                            TypeClass *mtc2 = control->as.call_.dict_arg
+                                                  ->as.dict_.instance->typeclass;
+                            struct TypeClassInstance *bound2 =
+                                frame_lookup_dict(cf, mtc2);
+                            if (bound2) {
+                                TuriValue rv = gde_method_closure(
+                                    env, control->as.call_.dict_arg, mtc2, bound2);
+                                if (rv.tag == TURI_CLOSURE) {
+                                    fn_val = rv;
+                                    gde_resolved = true;
+                                }
+                            }
+                        }
                         Type concrete;
-                        if (frame_lookup_tyvar(cf, ab0->type.as.tyvar_.name, &concrete) &&
+                        if (!gde_resolved &&
+                            frame_lookup_tyvar(cf, ab0->type.as.tyvar_.name, &concrete) &&
                             concrete.kind != TY_TYVAR) {
                             TuriValue rv = gde_reresolve_method(
                                 env, control->as.call_.dict_arg, &concrete);
@@ -7371,6 +7457,23 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (fn->owner_instance && n > 0 && top->expr->as.call_.args)
                     frame_bind_instance_constraint_tyvars(
                         env, call_frame, fn, &top->expr->as.call_.args[0]->type);
+                /* turi-dict-passing-plan (plain constrained generics): with the
+                 * tyvar pins in place, resolve the callee's own constraints to
+                 * instances and record them as frame dictionaries, so method
+                 * dispatch in the body reads a dict instead of re-deriving the
+                 * instance heuristically.  Covers both a constrained defn's
+                 * constraint set and a constrained instance body's
+                 * type-param constraints. */
+                if (fn->constraints.n_constraints > 0)
+                    frame_bind_constraint_dicts(env, call_frame,
+                                                fn->constraints.constraints,
+                                                fn->constraints.n_constraints);
+                if (fn->owner_instance &&
+                    fn->owner_instance->n_type_param_constraints > 0)
+                    frame_bind_constraint_dicts(
+                        env, call_frame,
+                        fn->owner_instance->type_param_constraints,
+                        fn->owner_instance->n_type_param_constraints);
 
                 if (top->tail) {
                     /* F3: tail call -- REUSE the enclosing activation's
