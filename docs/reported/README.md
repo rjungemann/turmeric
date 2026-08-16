@@ -44,7 +44,19 @@ the plan links. File a new repr cell there as well as here.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [mut-map-reassign-missing-spec-link-error](mut-map-reassign-missing-spec-link-error.md) | medium | `set!`-grown `^mut` map: `map-assoc` spec declared+called but never emitted (**link** error); plus a merge-temp repr seam the R3 ICE catches first in Debug |
+
+*(No open repr cells -- the guide's open-cells table emptied 2026-08-16.)*
+
+`mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
+and fixed the same day, both defects along its own fix directions) and moved
+to [docs/archive](../archive/mut-map-reassign-missing-spec-link-error.md):
+`emit_abi_scan_expr` gained its missing `EX_SET` case (a generic call in a
+`set!` RHS was the one statement position the spec-materialization walk
+never descended into), and chokepoint 1's concrete-heap rule was extracted
+to `emit_repr_concrete_heap_ptr_c_name` and shared with the merge-temp decl
++ ctype mirror, closing the seam the R3 ICE caught.  Zero snapshot churn --
+the respelling fires only for shapes that previously ICE'd.  Pinned by
+`tests/fixtures/mut-map-reassign/`.
 
 `poly-result-hof-capturing-closure-sigbus` was resolved 2026-08-16 -- its
 LAST row (the effect-row signature), by exactly the CPS increment its own

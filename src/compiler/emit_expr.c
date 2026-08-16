@@ -479,6 +479,49 @@ static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
  * type, e.g. (tuple2 a b)).  A binding must be declared with whichever its
  * initialiser yields, or the C initialiser fails to type-check.  Non-carrier
  * types have a single representation, so they fall through to emit_type_c_name. */
+/* Increment 4 stage 3, chokepoint 1 (repr-decision-function-plan), shared
+ * predicate: the typed-pointer C name for a CONCRETE (tyvar-free) heap
+ * container / :heap struct in a declaration position, or NULL when the
+ * declared type keeps the erased carrier spelling.  Consulted by the
+ * let-binding decl (emit_binding_repr_c_name) and -- since the
+ * mut-map-reassign seam (2026-08-16) -- by the control-form merge-temp decl
+ * and its ctype mirror, so the `^mut` rebinding path spells the same
+ * protocol as the let-bind position.
+ *
+ * Guarded on the DECLARED type being tyvar-free, exactly like the shadow
+ * check: a tyvar-DECLARED binding inside a generic body keeps the erased
+ * spelling by design even when the active spec resolves it concrete --
+ * without this guard the hoisted arm re-spelled spec-emitted stdlib
+ * bodies (`x : (Map K V)` resolved to `(Map int int)`) and churned 140
+ * fixtures' codegen. */
+static const char *emit_repr_concrete_heap_ptr_c_name(EmitCtx *ctx,
+                                                      Type declared,
+                                                      ReprPosition pos) {
+    Type rbt = emit_resolve_type(ctx, declared);
+    if (!((type_is_heap_adt(rbt) || type_is_heap_struct(rbt)) &&
+          !emit_repr_type_mentions_tyvar(&declared) &&
+          !emit_repr_type_mentions_tyvar(&rbt) &&
+          /* A BARE parametric ADT base (`Map` with its args erased, standing
+           * for `(Map K V)` in a generic body) is the erased container, not a
+           * concrete type -- its element types are gone, so "mentions tyvar"
+           * cannot see them.  Keep the erased spelling; only a genuinely
+           * non-parametric def (Line, n_type_params == 0) or a concrete app
+           * takes the typed pointer. */
+          !(rbt.kind == TY_ADT && rbt.as.adt_.def &&
+            rbt.as.adt_.def->n_type_params > 0) &&
+          repr_of(&rbt, pos) == REPR_HEAP_PTR))
+        return NULL;
+    const char *hn = emit_type_c_name(ctx, rbt);
+    /* Lens family: a :heap record whose FIELDS disqualify
+     * adt_is_byvalue_product (heap-struct fields -- `Line {a: Point}`)
+     * c-names to the carrier while its ctor returns the typed pointer.
+     * Ask the def for the pointer spelling directly so the binding
+     * matches the value the ctor actually hands it. */
+    if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT && rbt.as.adt_.def)
+        hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
+    return hn;
+}
+
 static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
                                             const Expr *init) {
     Type rbt = emit_resolve_type(ctx, binding_ty);
@@ -495,36 +538,11 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
      * erased carrier spelling (same bits, unresolved element).  Placed BEFORE
      * the carrier-ABI early return: the Line family (a :heap record with
      * heap-struct fields) is NOT carrier-ABI, and the early return would
-     * hand back type_c_name's int64 spelling for it.
-     *
-     * Guarded on the DECLARED type being tyvar-free, exactly like the shadow
-     * check: a tyvar-DECLARED binding inside a generic body keeps the erased
-     * spelling by design even when the active spec resolves it concrete --
-     * without this guard the hoisted arm re-spelled spec-emitted stdlib
-     * bodies (`x : (Map K V)` resolved to `(Map int int)`) and churned 140
-     * fixtures' codegen. */
-    if ((type_is_heap_adt(rbt) || type_is_heap_struct(rbt)) &&
-        !emit_repr_type_mentions_tyvar(&binding_ty) &&
-        !emit_repr_type_mentions_tyvar(&rbt) &&
-        /* A BARE parametric ADT base (`Map` with its args erased, standing
-         * for `(Map K V)` in a generic body) is the erased container, not a
-         * concrete type -- its element types are gone, so "mentions tyvar"
-         * cannot see them.  Keep the erased spelling; only a genuinely
-         * non-parametric def (Line, n_type_params == 0) or a concrete app
-         * takes the typed pointer. */
-        !(rbt.kind == TY_ADT && rbt.as.adt_.def &&
-          rbt.as.adt_.def->n_type_params > 0) &&
-        repr_of(&rbt, REPR_POS_LET_BIND) == REPR_HEAP_PTR) {
-        const char *hn = emit_type_c_name(ctx, rbt);
-        /* Lens family: a :heap record whose FIELDS disqualify
-         * adt_is_byvalue_product (heap-struct fields -- `Line {a: Point}`)
-         * c-names to the carrier while its ctor returns the typed pointer.
-         * Ask the def for the pointer spelling directly so the binding
-         * matches the value the ctor actually hands it. */
-        if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT &&
-            rbt.as.adt_.def)
-            hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
-        return hn;
+     * hand back type_c_name's int64 spelling for it. */
+    {
+        const char *hn = emit_repr_concrete_heap_ptr_c_name(
+            ctx, binding_ty, REPR_POS_LET_BIND);
+        if (hn) return hn;
     }
 
     if (!type_uses_carrier_abi(rbt))
@@ -1737,6 +1755,23 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
         emit_localvar_record_ctype(name, emit_type_c_name(ctx, bv));
         return;
     }
+    /* mut-map-reassign seam (chokepoint 1, merge-temp position): a CONCRETE
+     * heap container / :heap struct merge temp is its typed pointer, exactly
+     * like the let-bind position -- the `^mut` rebinding / control-form path
+     * was left behind by the original migration and the R3 shadow ICE'd on
+     * it (want=heap-ptr got=carrier-i64).  bridge_control_result_int_ptr
+     * reconciles a carrier-emitting tail into the pointer temp, mirroring
+     * the binding arms' int64->pointer bridge. */
+    {
+        const char *hn = emit_repr_concrete_heap_ptr_c_name(
+            ctx, type, REPR_POS_RESULT);
+        if (hn) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s;\n", hn, name);
+            emit_localvar_record_ctype(name, hn);
+            return;
+        }
+    }
     if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
         fn_body_tail_is_carrier_producer(tail_expr) &&
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_expr)) {
@@ -1775,8 +1810,15 @@ static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
                                               const Expr *tail) {
     const char *out;
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail);
+    const char *hn = (bv.kind == TY_UNKNOWN)
+        ? emit_repr_concrete_heap_ptr_c_name(ctx, type, REPR_POS_RESULT)
+        : NULL;
     if (bv.kind != TY_UNKNOWN)
         out = emit_type_c_name(ctx, bv);
+    else if (hn)
+        /* mut-map-reassign seam: mirror emit_control_result_temp_decl's
+         * concrete-heap branch exactly (chokepoint 1, merge-temp position). */
+        out = hn;
     else if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
              fn_body_tail_is_carrier_producer(tail) &&
              !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))

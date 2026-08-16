@@ -458,7 +458,10 @@ lets), and enforcement surfaced the gap on first contact with a new
 shape instead of years later.  Triage found the ICE was standing in
 front of a worse, older defect: the same repro fails at LINK on any
 build (a `map-assoc` spec declared but never emitted).  Both filed as
-[`mut-map-reassign-missing-spec-link-error`](../reported/mut-map-reassign-missing-spec-link-error.md).
+[`mut-map-reassign-missing-spec-link-error`](../archive/mut-map-reassign-missing-spec-link-error.md)
+-- and both resolved 2026-08-16 (the merge-temp decl + ctype mirror now
+share chokepoint 1's concrete-heap rule; `emit_abi_scan_expr` gained its
+missing `EX_SET` case), emptying the guide's open-cells table.
 
 ### The container-element collapse (LANDED 2026-08-16) -- and the leak it found
 
@@ -543,7 +546,7 @@ nodes `map-free` documents as not freed).  Writing the probe also surfaced
 two pre-existing finds, filed separately: `set!` on a `^mut` Map binding
 fails at LINK (missing spec emission) with a merge-temp spelling seam in
 front of it in Debug builds --
-[`mut-map-reassign-missing-spec-link-error`](../reported/mut-map-reassign-missing-spec-link-error.md).  Pinned by
+[`mut-map-reassign-missing-spec-link-error`](../archive/mut-map-reassign-missing-spec-link-error.md).  Pinned by
 `tests/fixtures/vec-app-element-box-lifecycle` (the double-free direction,
 which an unsanitized harness CAN observe) and by a `run-repr-trace.sh` check
 that the app-element `vec-free` is emitted with a non-zero `owned` flag.

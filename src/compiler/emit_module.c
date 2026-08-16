@@ -4609,6 +4609,16 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_scan_expr(ctx, e->as.set_field_.receiver, items, n_items);
             emit_abi_scan_expr(ctx, e->as.set_field_.value, items, n_items);
             break;
+        case EX_SET:
+            /* mut-map-reassign-missing-spec-link-error (defect 1): a `set!`
+             * RHS was the one statement position this walk never descended
+             * into, so a generic call there -- `(set! m (map-assoc m i i))`,
+             * the grow-by-reassignment idiom -- never interned its ABI spec:
+             * the call emitted the BASE generic name and died at link.
+             * Every fixture grew maps by chained lets, which is why the hole
+             * survived until the container-collapse perf probe. */
+            emit_abi_scan_expr(ctx, e->as.set_.value, items, n_items);
+            break;
         case EX_RETURN:
             emit_abi_scan_expr(ctx, e->as.return_.value, items, n_items);
             break;
