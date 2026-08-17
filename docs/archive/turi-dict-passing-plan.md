@@ -1,11 +1,22 @@
 # Plan: make `--interpret` use the dict clones the elaborator already builds
 
-**Status:** PIECES 1 AND 2 LANDED 2026-08-16 (rank-2 path, plus a
-compiled-path SIGSEGV the first probe found); plain constrained generics
-followed the same day, and the caret-constraint parse fix finished the job
-2026-08-17.  Step 4 is now MOSTLY done: two of the three recovery
-heuristics are retired on sabotage evidence, decided per the measurements
-below:
+**Status:** COMPLETE 2026-08-17.  Pieces 1 and 2 landed 2026-08-16 (rank-2
+path, plus a compiled-path SIGSEGV the first probe found); plain
+constrained generics followed the same day; the caret-constraint parse fix
+and the stdlib-preload class marking landed 2026-08-17; and the final
+holdout fell the same day: the interpreter now mirrors
+emit_reresolve_disp_type's carrier-helper branch (an unascribed
+`(tag (vec-get v 0))` recovers its element tyvar from the helper's own
+signature and reads the frame dictionary), which retired
+`gde_reresolve_method_by_value` -- measured exactly like its siblings
+(heuristic off: run-turi 1798/0 + 28 ctest targets + hand-run family
+green; heuristic AND recovery arm off: the unascribed fixture regresses to
+the baked representatives).  **All three recovery heuristics this plan set
+out to retire are gone**; what remains of the gde_* family is
+`gde_method_closure` (the shared method-slot resolver, now a dict-path
+utility) and the map-show seeding, which is the dict push's PIN SOURCE on
+the C auto-show tier, not a rival mechanism.  Step-4 history, kept as the
+measurement record:
 
 - **`gde_reresolve_return_directed` is RETIRED.**  Disabled, the full
   interpreter corpus passes (run-turi 1793/0 plus the hand-run

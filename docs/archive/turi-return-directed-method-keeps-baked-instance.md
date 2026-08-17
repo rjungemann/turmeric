@@ -234,7 +234,7 @@ warns about. They are the reason this report stays open.
    (this report, the archived receiver-dispatch one, and map-show's root cause
    B).
 
-   Scoped out in [docs/upcoming/turi-dict-passing-plan.md](../upcoming/turi-dict-passing-plan.md),
+   Scoped out in [docs/archive/turi-dict-passing-plan.md](turi-dict-passing-plan.md),
    and it is **smaller than "a much larger change" suggests**: `make_dict_clone`
    lives in the *elaborator* (`elab_call.c`), and instrumenting it shows it fires
    on the interpreter path too -- `[dictclone] just-pure` under both `emit-c` and
@@ -332,7 +332,7 @@ executed by both engines rather than skipped by one.
 ### What this does not close
 
 Fix direction 2 -- making the interpreter use the dict clones the elaborator
-already builds ([docs/upcoming/turi-dict-passing-plan.md](../upcoming/turi-dict-passing-plan.md))
+already builds ([docs/archive/turi-dict-passing-plan.md](turi-dict-passing-plan.md))
 -- is still the principled fix and still worth doing. Both halves of this report
 are re-resolution heuristics that recover, at run time, a type the compiled path
 carries in a dictionary. They are correct on every shape now known, but each was

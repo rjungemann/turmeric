@@ -19,7 +19,7 @@ engines).
 
 Registering the constraints was the missing input for the interpreter's
 apply-time dict path, and retired `gde_reresolve_method` outright -- see
-docs/upcoming/turi-dict-passing-plan.md for the measurement record,
+docs/archive/turi-dict-passing-plan.md for the measurement record,
 including the two mechanisms that had to ride along (tyvar-keyed DictBinds
 for `[^Show K ^Show V]`, and a by-name canonical-class retry in the dict
 push for the session-reset case the heuristic's `tc_stale` arm used to
@@ -58,7 +58,7 @@ invisible to:
 - the turi apply-time constraint-dict path (`frame_bind_constraint_dicts`,
   src/turi/eval.c) -- which is why `generic-show-dispatch-opaque` and
   `string-slice` still need the `gde_reresolve_method` head-name heuristic
-  (see docs/upcoming/turi-dict-passing-plan.md step-4 measurements);
+  (see docs/archive/turi-dict-passing-plan.md step-4 measurements);
 - any future tooling that reads constraint metadata.
 
 Dispatch still works in both engines because the compiled path leans on the

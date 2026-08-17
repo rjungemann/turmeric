@@ -4501,23 +4501,6 @@ static const char *gde_type_head_name(const Type *t) {
     }
 }
 
-/* Surface type name of a concrete `*`-kinded primitive, as a `definstance`
- * would spell it (`int`, `bool`, `cstr`, `float`).  Used so a primitive element
- * type can re-resolve to its OWN instance (e.g. Tag[bool], Enc[float]) instead
- * of the int-carrier representative baked by the elaborator.  NULL for kinds
- * that have no distinct user-instance surface name. */
-static const char *gde_primitive_type_name(const Type *t) {
-    if (!t) return NULL;
-    switch (t->kind) {
-    case TY_INT: case TY_INT64: return "int";
-    case TY_BOOL:               return "bool";
-    case TY_CSTR:               return "cstr";
-    case TY_FLOAT: case TY_FLOAT64: return "float";
-    case TY_FLOAT32:            return "float32";
-    case TY_SYM:                return "sym";
-    default:                    return NULL;
-    }
-}
 
 /* Build a closure for the dict node's method slot in instance `match`.  The dict
  * node's method_name is produced by the canonical injective mangler
@@ -4581,76 +4564,27 @@ static TuriValue gde_method_closure(TuriEnv *env, const Expr *dict_arg,
  * path both disabled the constrained fixtures regress to the baked
  * representative (`1 -1 1` / `207 207`) -- so the DictBind path is what
  * carries these shapes now, which is exactly the plan's retirement
- * criterion.  The receiver-directed heuristic followed it into retirement
- * 2026-08-17 (see the note above); the by-value heuristic below is NOT
- * retired -- 1 fixture still relies on it. */
+ * criterion.  The receiver-directed and by-value heuristics followed it
+ * into retirement 2026-08-17 (see the records above and below). */
 
-/* Re-resolve a baked-representative typeclass method using the RUNTIME type of
- * the receiver value, rather than a statically-pinned tyvar.  This catches the
- * constrained-instance element-dispatch case the static path misses: inside a
- * `(definstance C [Vec] [(C A)] ...)` body, `(c (:: (vec-get v i) A))` is baked
- * to the int-carrier representative, but at runtime the element value carries
- * its real tag (bool/float/cstr/struct) and there may be a distinct C[bool] /
- * C[float] / ... instance to dispatch to.
- *
- * SAFETY: only re-resolve for a *distinguishable* value -- bool/float/cstr or a
- * struct/ADT.  An int-carrier value (TURI_INT) is ambiguous: Vec/Map/Set and
- * other heap containers ride the int64 carrier too, so an int tag must keep the
- * baked instance (re-resolving a Vec receiver to C[int] would be wrong). */
-static TuriValue gde_reresolve_method_by_value(TuriEnv *env, const Expr *dict_arg,
-                                               TuriValue recv) {
-    if (!env || !env->last_tc_env || !dict_arg) return turi_nil();
-    TypeClassInstance *rep = dict_arg->as.dict_.instance;
-    if (!rep || !rep->typeclass) return turi_nil();
-    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
-    TypeClass   *tc      = rep->typeclass;
-
-    /* Pick a head name from the receiver's runtime tag.
-     *   - PRIMITIVE (bool/float/cstr): re-dispatch freely; a primitive that found
-     *     no instance keeps the baked rep.
-     *   - STRUCT/ADT: re-dispatch ONLY when the head matches a single instance.
-     *     Multiple same-head instances (e.g. `Enc [(Option cstr)]` vs
-     *     `Enc [(Option int)]`) are discriminated by the full applied type, which
-     *     the static elaborator dispatch already does correctly -- a coarse
-     *     by-head match here would mis-select, so defer to it.
-     *   - int-carrier / other: ambiguous (Vec/Map ride the carrier); keep baked. */
-    const char *head = NULL;
-    bool struct_recv = false;
-    switch (recv.tag) {
-    case TURI_BOOL:  head = "bool";  break;
-    case TURI_FLOAT: head = "float"; break;
-    case TURI_CSTR:  head = "cstr";  break;
-    case TURI_STRUCT:
-        struct_recv = true;
-        if (recv.as_struct) {
-            if (recv.as_struct->ctor && recv.as_struct->ctor->adt)
-                head = recv.as_struct->ctor->adt->name;
-            if (!head) head = recv.as_struct->name;
-        }
-        break;
-    default: return turi_nil();
-    }
-    if (!head) return turi_nil();
-
-    TypeClassInstance *match = NULL;
-    int n_head_matches = 0;
-    for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
-        if (inst->typeclass != tc || inst->n_type_args == 0) continue;
-        const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
-                            ? inst->type_arg_syms[0]->name : NULL;
-        if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
-        if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
-        if (ihead && strcmp(ihead, head) == 0) {
-            if (!match) match = inst;
-            n_head_matches++;
-        }
-    }
-    /* A struct head with >1 candidate instance is element-discriminated -- leave
-     * it to the static dispatch rather than guess. */
-    if (struct_recv && n_head_matches > 1) return turi_nil();
-    if (!match || match == rep) return turi_nil();
-    return gde_method_closure(env, dict_arg, tc, match);
-}
+/* gde_reresolve_method_by_value RETIRED 2026-08-17 (turi-dict-passing-plan
+ * step 4, final heuristic).  It re-dispatched a baked-representative method
+ * on the RECEIVER VALUE's runtime tag, covering the one shape the static
+ * paths missed: an unascribed carrier-helper read (`(tag (vec-get v 0))`)
+ * whose elaborated type collapses to the int64 carrier, so no tyvar gate
+ * fires.  Superseded by the carrier-helper dispatch recovery in the driver's
+ * EX_CALL (the turi mirror of emit_reresolve_disp_type's last branch): the
+ * helper's own signature names the element tyvar, and the frame dictionary
+ * pushed from the instance's constraints names the instance.  Measured
+ * before removal: heuristic disabled -> run-turi 1798/0, all 28
+ * interpreter-side ctest targets, and the hand-run constrained/hkt family
+ * green; heuristic AND the recovery arm both disabled -> the unascribed
+ * fixture regresses to the baked representatives (`1 1 hello 3.25` for
+ * `1 2 hello F`), so the dict path is what carries the shape -- the plan's
+ * retirement criterion.  With this, all three recovery heuristics the plan
+ * set out to retire are gone; the map-show seeding stays as the dict push's
+ * PIN SOURCE on the C auto-show tier, and gde_method_closure stays as the
+ * shared method-slot resolver. */
 
 /* Record the concrete type substitutions a call site pins onto the callee's
  * tyvars (its abi_bindings), resolving any still-abstract tyvar through the
@@ -4760,6 +4694,30 @@ static void frame_bind_instance_constraint_tyvars(TuriEnv *env, EvalFrame *calle
         tb->next = callee->tyvars;
         callee->tyvars = tb;
     }
+}
+
+/* Structurally match a declared type PATTERN against a concrete type and read
+ * the subtype at `varname`'s position -- matching `(Vec R)` against the actual
+ * `(Vec A)` yields `A`.  Mirror of emit_core.c:emit_pattern_extract_classvar
+ * (and elab_typeclasses.c's elab-side copy), for the interpreter's
+ * carrier-helper dispatch recovery below. */
+static bool turi_pattern_extract_var(const Type *pattern, const Type *concrete,
+                                     const char *varname, Type *out) {
+    if (!pattern || !concrete || !varname) return false;
+    if (pattern->kind == TY_TYVAR && pattern->as.tyvar_.name &&
+        strcmp(pattern->as.tyvar_.name, varname) == 0) {
+        *out = *concrete;
+        return true;
+    }
+    if (pattern->kind == TY_APP && concrete->kind == TY_APP) {
+        if (turi_pattern_extract_var(pattern->as.app.fn, concrete->as.app.fn,
+                                     varname, out))
+            return true;
+        if (turi_pattern_extract_var(pattern->as.app.arg, concrete->as.app.arg,
+                                     varname, out))
+            return true;
+    }
+    return false;
 }
 
 /* turi-dict-passing-plan (plain constrained generics): after a call's tyvar
@@ -6319,6 +6277,72 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         }
                     }
                 }
+                /* unascribed-carrier-helper-read-collapses-element-tyvar
+                 * (turi mirror of emit_reresolve_disp_type's last branch): the
+                 * receiver may be an UNASCRIBED generic carrier-helper read --
+                 * `(tag (vec-get v 0))` -- whose declared `:R` result collapsed
+                 * to the int64 carrier at elaboration, so neither tyvar gate
+                 * above fires.  Recover the dispatch tyvar from the helper's
+                 * own signature: its `result_full_type` is the type-param `R`,
+                 * and `R` also appears inside a parameter's declared full type
+                 * (`v : (Vec R)`); matching that pattern against the ACTUAL
+                 * argument's static type yields the enclosing body's element
+                 * var (`A`), whose frame dictionary -- pushed at apply time
+                 * from the instance's `[(Tag A)]` constraints -- names the
+                 * right instance.  This closed the last reliance on the
+                 * runtime-tag heuristic (gde_reresolve_method_by_value). */
+                if (!gde_resolved && control->as.call_.dict_arg &&
+                    control->as.call_.dict_arg->kind == EX_DICT &&
+                    control->as.call_.dict_arg->as.dict_.instance &&
+                    control->as.call_.dict_arg->as.dict_.instance->typeclass &&
+                    control->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
+                    control->as.call_.n_args >= 1 && control->as.call_.args) {
+                    const Expr *recv = control->as.call_.args[0];
+                    while (recv && recv->kind == EX_ASCRIBE)
+                        recv = recv->as.ascribe_.inner;
+                    if (recv && recv->kind == EX_CALL &&
+                        recv->as.call_.fn_binding && recv->as.call_.args) {
+                        const Type *ft = &recv->as.call_.fn_binding->type;
+                        if (ft->kind == TY_FN && ft->as.fn.arg_full_types &&
+                            ft->as.fn.result_full_type &&
+                            ft->as.fn.result_full_type->kind == TY_TYVAR &&
+                            ft->as.fn.result_full_type->as.tyvar_.name) {
+                            const char *rname =
+                                ft->as.fn.result_full_type->as.tyvar_.name;
+                            uint32_t np = ft->as.fn.arity;
+                            Type extracted;
+                            bool have_ex = false;
+                            for (uint8_t pi = 0;
+                                 pi < np && pi < recv->as.call_.n_args; pi++) {
+                                const Type *pft = ft->as.fn.arg_full_types[pi];
+                                const Expr *ae = recv->as.call_.args[pi];
+                                if (!pft || !ae) continue;
+                                if (turi_pattern_extract_var(pft, &ae->type,
+                                                             rname, &extracted)) {
+                                    have_ex = true;
+                                    break;
+                                }
+                            }
+                            if (have_ex && extracted.kind == TY_TYVAR &&
+                                extracted.as.tyvar_.name) {
+                                TypeClass *mtc3 = control->as.call_.dict_arg
+                                                      ->as.dict_.instance->typeclass;
+                                struct TypeClassInstance *bound3 =
+                                    frame_lookup_dict_tyvar(
+                                        cf, mtc3, extracted.as.tyvar_.name);
+                                if (bound3) {
+                                    TuriValue rv = gde_method_closure(
+                                        env, control->as.call_.dict_arg, mtc3,
+                                        bound3);
+                                    if (rv.tag == TURI_CLOSURE) {
+                                        fn_val = rv;
+                                        gde_resolved = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 /* Return-directed methods (`pure`, `empty`, `default-of`) are
                  * served by the DictBind path above (turi-dict-passing-plan);
                  * the frame-tyvar recovery that used to sit here
@@ -7286,20 +7310,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* All args ready (a zero-arg call reaches here directly with
                  * acc == NULL). */
                 TuriClosure *cl = top->last.as_closure;
-                /* generic-dict-dispatch by runtime value: a constrained-instance
-                 * element call (e.g. `(c (:: (vec-get v i) A))`) baked to the
-                 * int-carrier representative re-dispatches on the receiver's real
-                 * runtime tag.  The static (tyvar) re-resolution at call setup
-                 * misses this when the element tyvar is unbound in the frame; the
-                 * evaluated receiver value carries its concrete type, so resolve
-                 * from it here.  Only fires for a distinguishable receiver (see
-                 * gde_reresolve_method_by_value), so carrier containers keep the
-                 * baked instance. */
-                if (n >= 1 && acc && top->expr->as.call_.dict_arg) {
-                    TuriValue rv = gde_reresolve_method_by_value(
-                        env, top->expr->as.call_.dict_arg, acc[0]);
-                    if (rv.tag == TURI_CLOSURE && rv.as_closure) cl = rv.as_closure;
-                }
+                /* The runtime-tag re-dispatch that sat here
+                 * (gde_reresolve_method_by_value) is retired -- the
+                 * carrier-helper dispatch recovery at EX_CALL setup covers its
+                 * one shape statically; see the measurement record at its
+                 * former definition. */
                 FnDef       *fn = (FnDef *)cl->fn;
                 bool foldable = !cl->native && fn && fn->body &&
                                 fn->body->kind != EX_INLINE_C;
@@ -7333,9 +7348,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * poly fn param (is_poly_call) prepends one implicit dictionary
                  * actual per constraint on the poly param's type -- the compiled
                  * path binds these to the callee's dict-clone params.  The
-                 * tree-walker instead dispatches typeclass methods by the
-                 * receiver's runtime value (gde_reresolve_method_by_value), so
-                 * those leading dict actuals are redundant here.  Skip them and
+                 * tree-walker binds them as DictBinds in the apply prologue
+                 * below and dispatches through the frame dictionary, so the
+                 * leading dict actuals are not VALUE params.  Skip them and
                  * bind only the callee's declared value params.  See
                  * docs/archive/history/turi-interp-forall-dict-wide-consumer-arity.md. */
                 uint32_t arg_base = 0;
@@ -11113,7 +11128,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
 
     /* Publish this elaboration's TypeClassEnv BEFORE evaluating the new forms,
      * not only at the successful end of the call.  Runtime typeclass dispatch
-     * (gde_reresolve_method_by_value / frame_bind_constraint_dicts / turi_try_show)
+     * (frame_bind_constraint_dicts / turi_try_show)
      * reads env->last_tc_env during evaluation.  Previously last_tc_env was set
      * only in the success epilogue below, so the FIRST program to introduce a
      * class's instances (e.g. `Show [String]`, loaded via string.tur) evaluated

@@ -383,9 +383,11 @@ inline-C and are PASS-skipped by the TI7 carve-out, so a fix verified against
 only them would have been as invisible as the defect.
 `tests/fixtures/hkt-rank2-forall-pure-two-instances` restates one with
 parametric ADTs and no inline-C, so `run-turi` actually runs it. Fix direction 2
-(turi dict passing) is still open and still the principled end of this family --
-both halves are run-time heuristics recovering a type the compiled path carries
-in a dict, each added after a shape escaped the last.
+(turi dict passing) was carried to completion 2026-08-16/17 -- the interpreter
+follows real dictionaries end to end and ALL THREE recovery heuristics this
+family accreted are retired on sabotage evidence; see
+[docs/archive/turi-dict-passing-plan.md](../archive/turi-dict-passing-plan.md)
+for the full measurement record.
 
 `lang-switch-breaks-generic-instance-resolution` was resolved 2026-08-13 and
 moved to
