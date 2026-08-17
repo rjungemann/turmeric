@@ -1,0 +1,13 @@
+;; A ^fat effectful param carrying a CAPTURING (non-performing) callback --
+;; the fat box holds the environment, and the annotated row still participates
+;; in row subtyping.  Pinned when this was the recommended workaround for the
+;; thin-param crash (poly-result-hof-capturing-closure-sigbus); since the
+;; 2026-08-16 CPS increment the plain (non-^fat) spelling works too -- see
+;; effect-capturing-closure-thin-param -- but the ^fat spelling must keep
+;; working alongside it.
+(defn run-cb [^fat body : (fn [] #fx{Write} int)] #fx{Write} : int (body))
+
+(defn main [] #fx{Write} : int
+  (let [k 7]
+    (println (run-cb (fn [] : int (+ k 1)))))
+  0)

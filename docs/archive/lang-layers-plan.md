@@ -230,5 +230,5 @@ table is real.)
 - Arbitrary user reader-macro bundles in `#lang` -- stays on
   `#use-reader-macros` to avoid reintroducing path resolution into line 1.
 - Refinement type *checking* itself -- owned by
-  `docs/upcoming/v1/refinement-types-plan.md`; this plan only provides the
+  `docs/archive/refinement-types-plan.md`; this plan only provides the
   `#lang turmeric refined` front-door.

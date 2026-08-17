@@ -1,0 +1,10 @@
+;; The depth-cap diagnostic names the two base-case-never-fires causes.
+;; This is the nil?-on-empty-rest footgun: an empty ^syntax rest is an
+;; EMPTY LIST, so nil? never fires and the recursion runs to the cap.
+(defmacro sum-all [& ^syntax xs]
+  (if (nil? xs)
+    `0
+    `(+ ~(first xs) (sum-all ~@(rest xs)))))
+(defn main [] : int
+  (println (sum-all 1 2 3))
+  0)

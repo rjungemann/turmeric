@@ -150,6 +150,19 @@ extern bool g_symbols_enabled;
 /* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
 extern bool g_interpret_mode;
 
+/* interp-stdlib-class-method-shadows-user-defn: true while an interpreter
+ * entry point (--interpret / REPL / WASM) is preloading stdlib modules via
+ * `(load ...)` turns.  Those turns run with stdlib_prefix == 0, so
+ * `e->in_stdlib_load` never brackets them and every typeclass they register
+ * would read as USER-defined -- flipping the documented "user defn overrides
+ * a stdlib method" resolution (prefer_method_dispatch in elab_call.c) and
+ * the TUR-W0039 clash warning.  Typeclass registration ORs this in for
+ * `tc->from_stdlib`.  Deliberately NOT applied to binding-level
+ * `is_from_stdlib`: interpreter fixtures legitimately redefine stdlib defns
+ * (the benchmark head/tail stub pattern), and marking those would turn the
+ * MF3 collision error on under --interpret. */
+extern bool g_turi_stdlib_preload;
+
 /* F4 (cross-plan-followups): --Werror=deprecated flag — promotes
  * ^deprecated use-site warnings to errors. */
 extern bool g_werror_deprecated;
@@ -237,7 +250,7 @@ extern bool g_opt_jit;
 /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
  * predicates is unconditional; the g_opt_refined enable bit and its
  * elaboration gates are gone.  See
- * docs/upcoming/v1/refined-graduation-plan.md. */
+ * docs/archive/refined-graduation-plan.md. */
 
 /* sealed-opaque: gates the `:sealed` defopaque attribute's ENFORCEMENT.  When
  * off, `:sealed` parses and is recorded but the `::` check never fires, so

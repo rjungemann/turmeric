@@ -966,6 +966,16 @@ the manifest dir). Precedence runs CLI flag > env > manifest > default.
 The build dir is auto-created with a `.gitignore` of `*`, so its
 contents never leak into VCS even if the dir itself gets tracked. (See
 [manifest-driven-build-descent-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/manifest-driven-build-descent-plan.md).)
+
+`:engine "cc" | "jit" | "interp"` selects the default EXECUTION engine for
+`tur run`, on the same ladder: `--engine` flag > `TUR_ENGINE` env >
+manifest > `"cc"`.  An unknown value is a hard error (TUR-E0311); a `"jit"`
+selection needs a `-DTUR_JIT=ON` build plus the `jit` experiment
+(`:experiments [jit]` in the same manifest now opens that gate -- no CLI
+flag needed).  The engines differ in semantics, not just speed
+(`#?(:tur ... :turi ...)`, inline-C carve-outs), so when the choice is
+load-bearing, pair it with a `:tur-version` floor: older binaries silently
+ignore unknown manifest keys and would run under cc.
 The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`,
 `tur build <file>`, and `tur run <file>` get the same module resolution
 automatically -- they walk up from the input file looking for a sibling

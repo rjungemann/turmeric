@@ -7,7 +7,8 @@
       "Bash(find /Users/rjungemann/Projects/turmeric2/tests -type f -name \"*.tur\" -exec grep -l \"eq\\\\|Eq\" {} \\\\;)",
       "Bash(xargs cat *)",
       "Bash(bash tests/run-turi.sh)",
-      "mcp__Claude_Code_Remote__add_repo"
+      "mcp__Claude_Code_Remote__add_repo",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__send_later"
     ]
   }
 }

@@ -21,6 +21,13 @@
  */
 int cmd_justrun(int argc, char **argv);
 
+/* justrun_finds_justfile -- true when an explicit --justfile arg or the
+ * upward search from cwd yields a Justfile.  Lets main.c's `tur run`
+ * dispatcher fall back to the classic project-run path for a BARE
+ * invocation in a Justfile-less build.tur project (engine-selection-plan
+ * E3) instead of the historical hard 127. */
+int justrun_finds_justfile(void);
+
 /* usage_justrun -- print tur run help to stderr and return 0. */
 int usage_justrun(void);
 

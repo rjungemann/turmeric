@@ -19,7 +19,7 @@
  * check the predicate would have had anyway.  That is what makes an
  * incrementally hand-rolled solver shippable.
  *
- * See docs/upcoming/v1/refinement-types-plan.md (phase RT2). */
+ * See docs/archive/refinement-types-plan.md (phase RT2). */
 
 #include <stdbool.h>
 #include <stddef.h>

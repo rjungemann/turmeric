@@ -9,7 +9,7 @@ The program this was waiting for came to exist: `spices/ecs` (~5400 lines, 22
 modules, 66/66-green suite) carrying the RE1 refined surface. Results --
 1.004x cost on unannotated code, zero `TUR-E0371`, Z3 oracle agreement on every
 real VC, tier coverage with honest skips -- are in
-[`../upcoming/v1/refined-dogfood-ecs-report.md`](../upcoming/v1/refined-dogfood-ecs-report.md),
+[`refined-dogfood-ecs-report.md`](refined-dogfood-ecs-report.md),
 which follows this plan's report format. The tier checklist below is kept as
 written; per-item outcomes (covered / absence-result / skipped-no-natural-
 site, including the stdlib-alias mismatch finding) live in the report.
@@ -22,7 +22,7 @@ contorting a fixture into standing in for it.
 
 **What it fed (both now closed):**
 
-- [refined-graduation-plan.md](../upcoming/v1/refined-graduation-plan.md)
+- [refined-graduation-plan.md](refined-graduation-plan.md)
   precondition 2 -- compile-time cost on something that is not a fixture
   designed to be hard. Satisfied; graduation executed 2026-08-01.
 - The Z3 retirement decision. The oracle's whole value is cross-checking VCs

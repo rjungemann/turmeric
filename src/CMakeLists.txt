@@ -179,7 +179,7 @@ set(TUR_CORE_SOURCES
     compiler/reader_macros.c
     compiler/lang_layers.c
     compiler/stdlib_autoload.c
-    # RT1--RT3 + S0--S3 (docs/upcoming/v1/refinement-types-plan.md): refinement
+    # RT1--RT3 + S0--S3 (docs/archive/refinement-types-plan.md): refinement
     # types.  These stages are the whole solver -- the dev-only Z3 oracle that
     # once sat behind them was retired in 0.32.5, so there is no solver
     # dependency here to gate, in any build type.
@@ -911,7 +911,7 @@ set_target_properties(tur_ffi_dispatch_unit PROPERTIES
 
 # ---------------------------------------------------------------------------
 # RT2/S0--S3: refinement normalized-VC + decision-procedure unit test
-# (docs/upcoming/v1/refinement-types-plan.md).  Exercises hash-consing,
+# (docs/archive/refinement-types-plan.md).  Exercises hash-consing,
 # constant folding, each in-house stage, the cube expansion, the bounded
 # counterexample search, and the SMT-LIB serializer -- including the
 # "must NOT prove" direction, which is where the soundness invariant lives.

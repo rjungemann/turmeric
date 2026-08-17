@@ -114,6 +114,20 @@ if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
     fi
 fi
 
+# Standing rule from the numeric tower plan (section 1, made standing by N3):
+# _Complex / <complex.h> / the __mul*c3 / __div*c3 compiler-runtime family
+# never appear in generated C -- c2mir (the JIT) has no _Complex, and the
+# helper family would grow the JIT's runtime symbol boundary.  The check
+# itself predates this wiring as a ctest target (CMakeLists tur_no_c_complex);
+# running it here too puts it on the path every `bash tests/run.sh` invocation
+# takes.  Cheap (greps + a few emit-c runs); shares the ratchet opt-out.
+if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
+    if ! bash tests/check-no-c-complex.sh; then
+        echo "tests: no-C-_Complex check failed (see above); aborting." >&2
+        exit 1
+    fi
+fi
+
 # R4 (carrier-crossing-recovery-routing-plan): the audit registry is the single
 # source of truth for which carrier<->concrete crossings are routed.  A new
 # chokepoint call site that forgot its audit row (or a drifted/stale registry)
@@ -698,6 +712,30 @@ run_happy() {
                 echo "    Opt out for one run with TUR_SKIP_CC_WARN_CHECK=1."
             } > "$log_file"
             write_result "FAIL" "$name" "emitted C pointer/integer warning" "$log_file"
+            return
+        fi
+        # Ratchet: function-pointer type confusion at a closure dispatch.
+        #
+        # clang's -fsanitize=function (part of -fsanitize=undefined since
+        # clang 17, so any clang UBSan run of the suite carries it; GCC has no
+        # equivalent) prints this when an indirect call goes through a pointer
+        # whose type disagrees with the callee's definition -- benign on
+        # SysV/AAPCS for same-slot returns, a hard fault under CFI / CET-BTI /
+        # WASM call_indirect.  UBSan default is print-and-continue, so the
+        # fixture PASSES while emitting it and the summary line never shows
+        # the class -- which is how the reactor callback typedefs drifted
+        # twice.  The corpus was sweep-verified at ZERO under clang before
+        # this landed.  See
+        # docs/archive/emitter-thunk-type-return-mismatch.md.
+        if grep -q 'through pointer to incorrect function type' "$actual_stderr"; then
+            {
+                echo "FAIL $name -- indirect call through mismatched function-pointer type"
+                grep 'through pointer to incorrect function type' \
+                    "$actual_stderr" | sed 's/^/    /'
+                echo "    UBSan continues past this, so output may still match; the type"
+                echo "    confusion is the failure.  Opt out with TUR_SKIP_CC_WARN_CHECK=1."
+            } > "$log_file"
+            write_result "FAIL" "$name" "mismatched function-pointer dispatch" "$log_file"
             return
         fi
     fi

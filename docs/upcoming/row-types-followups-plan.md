@@ -102,6 +102,34 @@ arity-only checking (`elab_types.c:136-141`).
 builtin next to the existing four. Do **not** build a general type-level
 function facility first.
 
+**Demand survey, 2026-08-17: zero -- nothing to add.**  Method: grepped every
+consumer (`../turmeric-spices` at HEAD, all four typed modules + ecs; the
+full fixture corpus; stdlib) for calls to the existing four ops, for
+hand-maintained derived rows that a `row-diff` would replace, and for
+wish-comments near row code; read the ECS bounds plan (the nearest named
+future consumer).  Findings:
+
+- The ONLY call sites of `row-concat`/`row-union`/`row-intersect`/`row-canon`
+  anywhere are turmeric's own fixtures (`hkt-row-ops-labeled` et al.).  The
+  five spice modules (frame, sqlite, httpd, postgres, ecs) use rows purely as
+  PHANTOM literals in ascriptions -- `ecs/query.tur` *mentions*
+  row-union/row-intersect for future query joins in a docstring, but no code
+  composes rows anywhere.
+- No workaround shapes exist: no module hand-maintains a row that is another
+  row minus/plus elements, and no TODO/wish comment touches rows.
+- The ECS component-set-bounds plan explicitly wants a STRUCTURAL `has`
+  constraint solved by field lookup, not a row operation, and is itself
+  gated on a profile that has not happened.
+
+So per this plan's own rule, `row-diff` and `row-contains` stay unadded.  The
+trigger to re-run this survey is a spice actually calling the row algebra --
+today even the existing four ops have no consumer outside the test suite.
+(The survey also finally applied the Documentation-hygiene rule below to this
+plan's own motivating example: the two closed gaps in
+`docs/archive/history/variadic-hkt-rows-missing.md` -- strict row-element
+resolution and row-polymorphic `defn`, both re-verified live -- are now
+struck in place.)
+
 **Rationale.** Adding an operation is roughly an afternoon: one function in
 `types.c` beside `type_typerow_intersect`, one declaration in `types.h`, one
 `rop` branch in `elab_types.c:866-868`, unit coverage in

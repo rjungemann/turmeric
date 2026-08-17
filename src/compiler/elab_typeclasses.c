@@ -1619,7 +1619,15 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     /* method-vs-defn clash check: a class registered during stdlib auto-load is
      * "intentionally overridable" by a same-named user defn, so it is exempt
      * from the TUR-W0039 clash warning (see elab_toplevel.c). */
-    tc->from_stdlib       = e->in_stdlib_load;
+    /* interp-stdlib-class-method-shadows-user-defn: interpreter preload turns
+     * load stdlib outside the in_stdlib_load bracket (stdlib_prefix == 0), so
+     * OR in the preload flag -- otherwise MapKey/Show/... register as USER
+     * classes under --interpret and a same-named user defn loses bare-call
+     * resolution to the class method (compiled/interp divergence). */
+    {
+        extern bool g_turi_stdlib_preload;   /* runtime/globals.c */
+        tc->from_stdlib   = e->in_stdlib_load || g_turi_stdlib_preload;
+    }
 
     /* Create a TYPECLASS_DEF expression for codegen */
     Expr *tc_expr = expr_new(e->arena, EX_TYPECLASS_DEF, TYPE_NIL, call->span);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/check-repr-decision-ratchet.sh -- increment 4 stage 4
-# (docs/upcoming/repr-decision-function-plan.md).
+# (docs/archive/repr-decision-function-plan.md).
 #
 # Every bug in the representation-consolidation campaign's archive is two
 # sites re-deriving the same representation decision and disagreeing.  The
@@ -76,7 +76,7 @@ if [ $rc -ne 0 ]; then
   echo ""
   echo "A representation decision is being re-derived at a new site."
   echo "Prefer consulting repr_of(type, position) or the shared predicate"
-  echo "at an existing chokepoint (see docs/upcoming/repr-decision-function-plan.md"
+  echo "at an existing chokepoint (see docs/archive/repr-decision-function-plan.md"
   echo "and docs/guides/value-representations-guide.md).  If the new site IS a"
   echo "deliberate new chokepoint, update tests/repr-decision-baseline.txt in"
   echo "the same commit:  bash tests/check-repr-decision-ratchet.sh --update"

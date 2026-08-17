@@ -5,7 +5,7 @@
 ;; from: `set!`, a mutable global, and inline C.  It pins the inline-C one with
 ;; a `static` counter in a C block, because when it was written a global could
 ;; not BE mutable -- `^mut` on a top-level `def` only arrived with
-;; docs/upcoming/def-define-consolidation-plan.md D4.  This is the same hole
+;; docs/archive/def-define-consolidation-plan.md D4.  This is the same hole
 ;; through the newly-expressible door.
 ;;
 ;; `m` reads a mutable global, so two calls with equal arguments can disagree.

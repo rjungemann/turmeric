@@ -105,7 +105,7 @@ purely as spike instrumentation, and an interpreter tier was evaluated and *not*
 adopted -- `MIR_set_interp_interface` still publishes native shims through the
 same `MAP_JIT` code allocator, so it carries the identical entitlement and W^X
 profile as the generator and is not an escape hatch on locked-down platforms.
-The write-up is `docs/upcoming/mir-interp-tier-plan.md`.
+The write-up is `docs/archive/mir-interp-tier-plan.md`.
 
 ### MIR is a pinned fork, not upstream
 
@@ -532,6 +532,6 @@ end-to-end wall time.
   the phase-by-phase status.
 - `docs/upcoming/jit-engine-j0-findings.md` -- the numbered findings log; the
   empirical record behind nearly every claim in this guide.
-- `docs/upcoming/mir-interp-tier-plan.md` -- why there is no interpreter tier.
+- `docs/archive/mir-interp-tier-plan.md` -- why there is no interpreter tier.
 
 This guide carries what is settled; those carry what is moving.

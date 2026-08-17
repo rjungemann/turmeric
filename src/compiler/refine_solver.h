@@ -22,7 +22,7 @@
  * Cube expansion is capped; blowing the cap yields RT_UNKNOWN (this is the
  * "naive S4" the plan permits -- we never build a DPLL(T) engine).
  *
- * See docs/upcoming/v1/refinement-types-plan.md (S0--S4). */
+ * See docs/archive/refinement-types-plan.md (S0--S4). */
 
 #include "refine_vc.h"
 

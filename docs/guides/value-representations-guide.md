@@ -68,7 +68,7 @@ float bit-reinterpret note below).
 
 Function values are their own zoo. The per-boundary decision today spans
 (at least) these forms -- see the investigation in
-`docs/reported/poly-result-hof-capturing-closure-sigbus.md` for where each
+`docs/archive/poly-result-hof-capturing-closure-sigbus.md` for where each
 is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 
 1. **`tur_poly_fn_t {env, fn}` carrier** -- for plain, non-effectful,
@@ -89,11 +89,16 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
    two carrier-side feeds were shimmed as well -- a call THROUGH a
    rank-2/forall param (`elab_poly_call`) and the make-struct fn-field
    store, which had been boxing an already-normalized param a second time.
-   The thin form now survives only for **effect-row'd** signatures
-   (load-bearing for the CPS backend's twin/trampoline convention, and for
-   effect-row checking itself), cfnptr, variadic, and arity>5. Passing a
-   capturing closure into an effect-row'd one is the last live row of
-   `poly-result-hof-capturing-closure-sigbus`.
+   The thin form now survives only for cfnptr, variadic, and arity>5
+   signatures; passing a capturing closure into an *effect-annotated* such
+   param is a call-site TUR-E0007. The effect-row exclusion -- the last
+   broad thin holdout -- was lifted 2026-08-16 by the CPS increment: the
+   E2a twin registry's call sites dispatch fat (slot 0 = a registered
+   capturing-lambda entry whose `__cps` twin takes the env, slot 1 = the
+   fatshim box's stashed bare-fn direct entry), threadable capturing
+   lambdas are CPS-admitted with the direct thunk's env-unpack preamble,
+   and effect-row checking peels the `EX_FN_TO_FAT` shim
+   (`poly-result-hof-capturing-closure-sigbus`, archived -- every row).
 
    The `{ shim, orig }` box a bare fn is shimmed into is `malloc`'d per
    execution of the bridge.  At a normalized nominal param nothing frees it,
@@ -141,8 +146,24 @@ Each of these is a crossing where a bridge may be needed:
 - `let` binding / ascription `(:: e T)`
 - generic (tyvar-typed) call argument and result
 - typeclass method dispatch result (bare and dotted spellings)
-- `Vec` element slot (push and get)
-- struct field store / load
+- `Vec` element slot (push and get) -- **instrumented 2026-08-15** (increment
+  4 stage 3). Two mechanisms box an element here and they are easy to
+  confuse: a nominal by-value ADT/struct element takes the box/deref bridge
+  behind `type_is_boxed_container_elem`, while a concrete by-value *app*
+  element (`(Vec (Option int))`) takes a monomorph-aware path -- malloc the
+  monomorph on push, reconstruct field-by-field through the generic one-word
+  box on read. Both really do box; only the first consults the predicate. The
+  second is layout-safe because every parametric monomorph's payload occupies
+  exactly one word.
+- struct field store / load -- **instrumented and measured silent
+  2026-08-15** (increment 4 stage 3). The declaration side of this boundary
+  is one chokepoint, `adt_ctor_field_c_type`, which all nine field-emission
+  sites route through; a `repr_of` shadow there found 84 disagreements and
+  all 84 were one word spelled two ways, not seams. Worth knowing when you
+  read a field slot: the owner, not the field type, picks the protocol. A
+  by-value owner inlines a drop-glue-free aggregate field and **boxes** one
+  that owns an rc/ref (so the owner stays trivially copyable); a carrier
+  owner keeps every field as a one-word slot.
 - closure capture and closure return
 - inline-C body edge (always the raw carrier)
 
@@ -156,12 +177,18 @@ each has a live report in `docs/reported/`. This table is the campaign's
 index -- a repr cell with a filed report belongs here, so if you file one,
 add the row. All four were re-verified against `main` on 2026-08-01; two moved
 that day (the first row narrowed to the effect row, and the `^fat` leak row was
-filed), and the `^fat` leak row was resolved and removed 2026-08-13.
+filed); the `^fat` leak row was resolved and removed 2026-08-13, and the
+generic-closure-return-type-app and poly-result-hof-capturing-closure-sigbus
+(effect row -- the CPS increment) rows on 2026-08-16.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
-| generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
+| *(none -- the table emptied 2026-08-16 when the merge-temp row closed)* | |
+
+The empty table is a milestone, not an end state: the matrix above still has
+unexercised pairings, and the R3 shadow ICE plus the census are what turn the
+next one someone hits into a row here. File a new repr cell in this table as
+well as in `docs/reported/`.
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --
@@ -169,6 +196,12 @@ the next cell in this family is usually adjacent to one of them.
 
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
+| `^mut` rebinding of a concrete heap container (merge-temp position) -- carrier where chokepoint 1 says typed pointer, travelling with a spec-materialization hole (a generic call in a `set!` RHS never interned its spec: LINK error past tur check) | chokepoint 1's concrete-heap rule extracted to `emit_repr_concrete_heap_ptr_c_name` and shared by the let-bind decl, the merge-temp decl, and its ctype mirror (the existing int<->ptr bridge reconciles a carrier tail); `emit_abi_scan_expr` gains its missing `EX_SET` case | [`mut-map-reassign-missing-spec-link-error`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mut-map-reassign-missing-spec-link-error.md) |
+| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (the report's LAST row; concrete and tyvar signatures were already fat-normalized) | the CPS increment (2026-08-16): effect-annotated fn params join `fn_param_type_is_fat_normalized`; the E2a registry call sites dispatch fat (slot 0 = a registered capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the fatshim's stashed bare-fn entry); threadable capturing lambdas are CPS-admitted with the direct thunk's env-unpack preamble; the effect_check walkers peel the shim. Capturing PERFORMING callbacks -- previously no working spelling -- thread the handler chain too. Thin remainder (cfnptr/variadic/arity>5 effectful) keeps a call-site TUR-E0007 | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/poly-result-hof-capturing-closure-sigbus.md) |
+| generic closure return over a type application (struct `Cons`) -- the `(type-app ? ?)` shell at the checker AND the never-emitted `ctor_Cons` at link | Defect A: result-graft recovery at the thunk-type clobber in `elab_call.c` (the binding's own ground `result_full_type` survives the swap; the `elab_fns.c` grounding gate is untouched). Defect B: `inner_app` clone trigger + body-type-derived clone result + head-keyed clone resolution at the thunk direct-call, so the per-spec inner-closure clone is both emitted and the one actually invoked | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/generic-closure-return-type-app.md) |
+| typeclass method result at **float** (any width) -> generic (carrier) call argument | producer bit-cast keyed on the method's DECLARED result kind (the same type the consumer keys its reinterpret on -- paired by construction); an int-declared method keeps its value conversion | [`method-result-float-spec-return-value-converts`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/method-result-float-spec-return-value-converts.md) |
+| `float32`-ascribed literal -> any mixed C expression | ascribe elaborator retypes a float literal in place (`(:: 7.1 float32)` == `7.1f32`), so it emits at single precision instead of as the double literal the promotion rules then dominated | [`float32-ascribed-literal-compares-as-double`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-ascribed-literal-compares-as-double.md) |
+| `float32` generic (carrier) call result -> concrete consumer | elaboration: `call_wrap_reinterpret_owning` admits the carrier<->float32 pair (its silent mixed-size bail dropped the requested reinterpret, typing the call `int`); emit's size-mismatch reinterpret arm reads float pairs through the union overlay | [`float32-generic-call-result-printed-as-carrier`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-generic-call-result-printed-as-carrier.md) |
 | `TY_CONTRACT` in type-ARGUMENT position -- the payload kept a live contract type at every downstream boundary | peeled to its base in BOTH type-application loops (`rt_peel_type_arg_contract`), warning `TUR-W0380` that the payload predicate is not enforced; `TY_CONTRACT` then joined `type_has_concrete_codegen_layout` by delegating to its base | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/contract-type-arg-not-peeled-to-base.md) |
 | method result (carrier) -> typed `(Result A B)` defn boundary | increment 2: continuation-wrapper ABI paired with the entry point dispatch actually selects | [`result-monad-bind-typed-boundary-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/result-monad-bind-typed-boundary-miscompiles.md) |
 | by-value aggregate returned by a CAPTURING continuation -> int64 `tur_poly_fn_t.fn` carrier sink (nested `bind` / multi-step `do-m`) | signature-keyed fat spill shim: reads the real entry point out of the closure env's `__fn` slot and boxes the aggregate, the fat twin of the row above (which only covered named wrappers) | [`nested-bind-over-result-typed-boundary-segfaults`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/nested-bind-over-result-typed-boundary-segfaults.md) |
@@ -197,7 +230,7 @@ arms and now also checks `type_c_name` exhaustiveness;
 `tests/check-monomorph-name-collision.sh` reads what they emit). The
 position axis -- one `repr-of(type, position)` routine for the per-SITE
 choices -- is staged in
-[docs/upcoming/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/repr-decision-function-plan.md).
+[docs/archive/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/repr-decision-function-plan.md).
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
@@ -216,10 +249,10 @@ pinned by `--known-probes` instead, so a red run means a NEW cell.
 The convention-level fix for the closure rows -- normalize every non-carrier
 fn boundary onto the fat protocol instead of deciding representation
 per-boundary -- is planned in
-`docs/upcoming/fn-value-fat-normalization-plan.md`. The campaign-level
+`docs/archive/fn-value-fat-normalization-plan.md` (complete 2026-08-16). The campaign-level
 strategy governing that plan and its successors (which seams consolidate in
 which order, the probe/blast-radius discipline, and the performance
-guardrails) is `docs/upcoming/representation-consolidation-meta-plan.md`;
+guardrails) is `docs/archive/representation-consolidation-meta-plan.md`;
 this guide's open-cells table is that campaign's live scoreboard, and the
 closed-cells table below it is the record of what the campaign has already
 consolidated.

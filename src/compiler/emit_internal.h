@@ -592,6 +592,16 @@ bool emit_str_is_bare_ident(const char *s);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
+/* Increment 4 stage 3 (repr-decision-function-plan): the shadow instrument,
+ * shared across emitting TUs.  `repr_form_from_cty` recovers the ReprForm a
+ * site ACTUALLY chose from the C type it declared (`cty`), given the type's
+ * own C spelling (`own_cty`); `repr_shadow_report` prints one `repr-shadow`
+ * line when that disagrees with `repr_of`'s intended protocol.  Neither ever
+ * changes a decision -- the shadow is measurement only. */
+ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
+                            const char *cty);
+void repr_shadow_report(const char *site, ReprPosition pos, Type resolved,
+                        ReprForm want, ReprForm got, const char *cty);
 /* fn-typed-return: typedef name for a concrete thin function-value return type,
  * or NULL when the return is not such a fn / is a dict-dispatched method impl
  * (see emit_core.c). */
@@ -828,6 +838,14 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out);
 bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params);
 char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
                                  Type result_type, Type *param_types, uint8_t n_params);
+/* fn-value-fat-normalization (effect-row increment): fat-closure env struct +
+ * drop glue at file scope, deduped via ctx->env_struct_names.  Called from the
+ * EX_CLOSURE construction site (emit_expr.c) and from the CPS twin pre-pass
+ * (emit_cps_ir.c), whichever runs first. */
+void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
+                                      struct Closure *closure,
+                                      const Symbol *env_name,
+                                      bool resolve_spec_params);
 /* closure-typed-invocation-abi-plan: ensure a typed fat-shim exists for the
  * given closure signature, returning its C function name.  Returns NULL when
  * the signature is the all-int64_t carrier case (caller uses the preamble

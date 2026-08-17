@@ -4132,6 +4132,42 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * conversion.  (A void* carrier return needs no cast: the body value
              * is already a pointer.) */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (ret_is_int64_carrier && fd && fd->body &&
+            e->type.kind == TY_FN &&
+            (e->type.as.fn.result_kind == TY_FLOAT ||
+             e->type.as.fn.result_kind == TY_FLOAT64 ||
+             e->type.as.fn.result_kind == TY_FLOAT32) &&
+            (fd->body->type.kind == TY_FLOAT ||
+             fd->body->type.kind == TY_FLOAT64 ||
+             fd->body->type.kind == TY_FLOAT32)) {
+            /* method-result-float-spec-return-value-converts: this clone's C
+             * return is the int64 carrier, its DECLARED result is a float, and
+             * its body tail is a float.  A plain `return ret_val;` is then C's
+             * implicit floating-to-integer CONVERSION (7.1 -> 7) while every
+             * consumer of a float-declared method result reinterprets the
+             * carrier's BITS back -- so the value is destroyed before it
+             * leaves the callee (`(l1g2 (l1p1 7.1))` printed 3.45846e-323).
+             *
+             * The key is the DECLARED result kind (`e->type.as.fn.result_kind`
+             * -- the instance-resolved signature), and that key is what pairs
+             * producer with consumer: the consumer bit-reinterprets exactly
+             * when the call's resolved result type is a float, i.e. the same
+             * declared type read from the other end.  A method DECLARED `: int`
+             * whose instance body happens to produce a float (BoxMap's boxmap,
+             * pinned by poly-to-fat-float-roundtrip expecting `7`) keeps the
+             * value conversion, because for it the conversion IS the declared
+             * semantics.  The first attempt at this fix keyed on the BODY type
+             * alone and broke exactly those fixtures -- see the report's
+             * "reverted" record for the measurement.
+             *
+             * Routed through the carrier chokepoint, whose inline-scalar arm
+             * emits the same union bit-cast the consumer side uses. */
+            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                CK_CONCRETE, CK_CARRIER,
+                                                fd->body->type);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "return %s;\n", bridged);
+            free(bridged);
         } else if (use_abi_spec
                    && ctx->current_abi_specialization->typeclass_inst != NULL
                    && ret_ctype && strcmp(ret_ctype, "int64_t") != 0

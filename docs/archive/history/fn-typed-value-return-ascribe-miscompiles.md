@@ -6,7 +6,7 @@ area: codegen (first-class fn-typed VALUES at return/ascription boundaries)
 ---
 
 **Resolution:** every row of the matrix below passes as of fat-normalization
-stage 2 (docs/upcoming/fn-value-fat-normalization-plan.md): tail leaves of a
+stage 2 (docs/archive/fn-value-fat-normalization-plan.md): tail leaves of a
 concrete effect-free fn-typed result are normalized onto the fat handle
 (thin shimmed, carrier boxed via poly-to-fat), ascription preserves fat
 identity, and nested results in param annotations are boxed to match.
@@ -26,7 +26,7 @@ let-wrapped closure value segfaults, and a `^fat` HOF over a *nested* fn type
 
 Found by `tests/type-fuzz-src.py` (seed 7, cases 0/26/28/37/38, then
 hand-minimized). Adjacent to but distinct from
-[poly-result-hof-capturing-closure-sigbus](../../reported/poly-result-hof-capturing-closure-sigbus.md):
+[poly-result-hof-capturing-closure-sigbus](../poly-result-hof-capturing-closure-sigbus.md):
 that report is about closure *literals* flowing into non-carrier fn params;
 this one is about closure *values* -- even into carrier-safe signatures and
 even under `^fat`.
@@ -99,7 +99,7 @@ them, a parser library passing parsers through identity/compose functions --
 
 1. Fold into the calling-convention plan (fat protocol for every non-carrier
    fn boundary) --
-   [docs/upcoming/fn-value-fat-normalization-plan.md](../../upcoming/fn-value-fat-normalization-plan.md);
+   [docs/archive/fn-value-fat-normalization-plan.md](../fn-value-fat-normalization-plan.md);
    these repros are its stage-2 acceptance tests -- the pass-through and
    ascribe-around-let shapes specifically.
 2. Fixtures: the full matrix above, ok rows included -- the working/broken

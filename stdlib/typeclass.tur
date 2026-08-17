@@ -212,7 +212,7 @@
 ;;; Since: Phase B1
 ;; Phase B1: Clone typeclass - deep copy of a value
 
-(defclass Clone [a] (clone [x] : int))
+(defclass Clone [a] (clone [x : a] : a))
 ;; Clone instances for primitive types
 ;;; Clone [int] -- Clone instance for int (trivial copy).
 

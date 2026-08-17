@@ -21,7 +21,7 @@
 (defstruct BoxW [A]
   (raw :int))
 
-(defclass BoxMap [^f] (boxmap [container [fn :fn]] : int))
+(defclass BoxMap [^f] (boxmap [container [fn :fn]] : float))
 
 (definstance BoxMap [BoxW]
   (boxmap [container fn]

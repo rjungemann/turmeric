@@ -134,7 +134,7 @@ the paper trail.
 |---|---|---|
 | `docs/guides/logic-programming-guide.md:101` (and `:120` sweet-exp) | `(defalias Backtrack<a> (-> ((list (-> a)))))` | `defalias: target type must be a keyword` -- composite target |
 | `docs/guides/serializable-continuations-guide.md:170` (and the sweet-exp twin below it) | `(defalias serial-continuation<T> (struct [...]))` | same |
-| `docs/upcoming/v1/refinement-types-plan.md:2653` | `(deftype (Bounded lo hi) #refine{...})` | `error: deftype name must be a symbol` |
+| `docs/archive/refinement-types-plan.md:2653` | `(deftype (Bounded lo hi) #refine{...})` | `error: deftype name must be a symbol` |
 
 Note for anyone reading the diff: the `<T>` / `<a>` angle brackets in those
 snippets were **never** the defect. `Name<T>` is valid type-application syntax

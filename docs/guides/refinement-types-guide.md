@@ -4,7 +4,7 @@
 > experiment gate is gone). No flag is needed.
 > See [contract-types-guide.md](contract-types-guide.md) for the runtime half,
 > and
-> [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md)
+> [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md)
 > for the design.
 
 Contract types (`#refine{ x : T | p }`) check their predicate at **runtime**.
@@ -1007,4 +1007,4 @@ states.
 - [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half
 - [experimental-flags-guide.md](experimental-flags-guide.md) -- the `--enable=` mechanism
 - [syntax-guide.md](syntax-guide.md) -- `#lang` layers
-- [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md) -- design, staging, and what is left
+- [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design, staging, and what is left

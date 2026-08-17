@@ -63,6 +63,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[binding-forms-guide.md](binding-forms-guide.md)** -- Body-level `def`, `letrec`, and named-let -- the three local binding idioms that complement `let` and `defn`
 - **[data-literals-guide.md](data-literals-guide.md)** -- Compact literal syntax for maps, vecs, and sets using `#map{...}`, `#set{...}`, and `[...]`
+- **[macros-guide.md](macros-guide.md)** -- `defmacro`: quasiquote/unquote/splice, manual hygiene with `gensym`, `^syntax` parameters, recursion over arguments, type interpolation in templates, and the compile-time evaluator's deliberate limits
 - **[mutable-globals-guide.md](mutable-globals-guide.md)** -- `def ^mut`, what the compiler checks about a global write, and the concurrency story -- including what it deliberately does not cover
 - **[numeric-tower-guide.md](numeric-tower-guide.md)** -- Exact `Rational` and hand-written `Complex` arithmetic, the `#rat{...}` / `#cx{...}` literals, and `Num`-typeclass operator overloading
 - **[strings-guide.md](strings-guide.md)** -- The `cstr` vs `str` vs `String` tiering -- which string type to reach for, and when an owned `String` must replace a borrowed `cstr`

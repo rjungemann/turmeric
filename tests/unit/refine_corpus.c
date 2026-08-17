@@ -2,7 +2,7 @@
  * staged decision procedure, WITHOUT Z3.
  *
  * This is the durable half of the Z3 retirement criteria
- * (docs/upcoming/v1/refinement-types-plan.md, "Z3 retirement criteria").  The
+ * (docs/archive/refinement-types-plan.md, "Z3 retirement criteria").  The
  * scaffold oracle is a live cross-check that only exists on a dev build with a
  * system Z3 linked; what survives its deletion is a corpus whose labels are
  * DATA, checked into the repo and replayed by a harness that has no solver

@@ -1798,8 +1798,43 @@ typedef enum ReprForm {
 } ReprForm;
 
 ReprForm     repr_of(const Type *t, ReprPosition pos);
+/* Increment 4 stage 3: the binding-context sibling the param-position
+ * boundary note pre-registered.  A fn-typed value's representation is decided
+ * by per-BINDING flags (`is_poly_fn`, `is_fat`) that elaboration sets and that
+ * the Type does not carry, so `repr_of(type, pos)` alone mislabels every fn
+ * param.  This overload consults those flags first and delegates to `repr_of`
+ * otherwise.  Declared here (with a forward-declared Binding) rather than in a
+ * second decision function, so the campaign keeps ONE home for the question. */
+struct Binding;
+ReprForm     repr_of_binding(const struct Binding *b, ReprPosition pos);
 const char  *repr_form_name(ReprForm f);
 const char  *repr_position_name(ReprPosition pos);
+
+/* Increment 4 stage 3 -> R3: the shadow instrument has two modes.
+ *
+ *   MEASUREMENT (`--emit-abi-trace`): every disagreement is one stderr line
+ *   and nothing aborts, so a sweep collects the whole list.  This is how each
+ *   position was calibrated.
+ *
+ *   ENFORCEMENT (Debug builds, no flag): a disagreement is an ICE.  Licensed
+ *   only because stage 3's whole position list runs silent -- the routing
+ *   plan's rule is that the ICE comes AFTER the chokepoints exist, never
+ *   before.  `TUR_REPR_NO_SHADOW_ICE` downgrades it to a warning, mirroring
+ *   `TUR_ABI_NO_ROUTE_ICE` on the sibling R3 assert.
+ *
+ * `known` marks a pinned, documented disagreement (today: the container-elem
+ * TY_APP row).  A known row logs under trace and is silent otherwise -- it is
+ * a work list, not a defect, and must never abort a build. */
+/* The fn-PARAM routing answer.  Defined in elab_fns.c, where its two gate
+ * predicates live; declared here so the repr_* family reads from one header.
+ * See docs/archive/repr-coverage-census.md for why this signature exists --
+ * `repr_of(type, pos)` cannot answer it, because the routing depends on the
+ * binding's substructural flags as well as the annotation's shape. */
+ReprForm     repr_of_fn_param(const struct Binding *b, const Type *ann);
+
+bool         repr_shadow_active(void);
+void         repr_shadow_disagree(const char *site, bool known,
+                                  const char *line);
 /* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /
  * adt_is_byvalue_product -- a concrete flat-product ADT-app (`(Pair2 int
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the

@@ -6,7 +6,7 @@ that campaign made the neighbouring shape common enough to notice.
 
 Found 2026-08-01 while measuring the static-box hoist for normalized nominal
 fn params (fn-value-fat-normalization; that half is fixed, see
-[the plan](../upcoming/fn-value-fat-normalization-plan.md)).
+[the plan](fn-value-fat-normalization-plan.md)).
 
 ## Summary
 

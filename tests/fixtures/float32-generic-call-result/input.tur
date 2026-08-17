@@ -1,0 +1,37 @@
+;; float32-generic-call-result-printed-as-carrier (archived): a float32
+;; result of a generic call used to stay typed `int` -- the tyvar-result
+;; path REQUESTED the carrier reinterpret (`A := float32` collected fine),
+;; but call_wrap_reinterpret_owning silently bailed on the mixed-size pair
+;; (carrier 8 bytes, float32 4), so `(idf (:: 7.1 float32))` printed
+;; 1088631603 (0x40E33333, the IEEE-754 single bits of 7.1).  The float64
+;; twin, being same-size, always worked.
+;;
+;; The fix is paired: elab admits the carrier<->float32 pair (the one
+;; mixed-size float pair that IS bit-meaningful), and emit's size-mismatch
+;; reinterpret arm uses the union overlay for float pairs instead of the C
+;; value cast (which would convert the bit pattern, not read it).
+;;
+;; Pinned here: the fixed generic-result shape at both widths, a two-arg
+;; generic (the argument direction), the chained call, and the ascription
+;; that used to be a spurious TUR-E0707.  NOT pinned: a typeclass-method
+;; result feeding a generic call -- that shape fails at the PRODUCER
+;; (`return self;` value-converts) and is the still-open sibling report
+;; docs/reported/method-result-float-spec-return-value-converts.md.
+(defn idf [A] [x : A] : A x)
+(defn second2 [A] [x : A y : A] : A y)
+(defn g [] : float32 (idf (:: 7.1 float32)))
+(defn main [] : int
+  (println (idf (:: 7.1 float32)))
+  (println (idf 7.1))
+  (println (second2 (:: 1.5 float32) (:: 2.5 float32)))
+  (println (idf (idf (:: 3.25 float32))))
+  (println (g))
+  ;; Equality deliberately at 7.1 -- NOT exactly representable in single
+  ;; precision, per the float-probe rule.  This row needs BOTH fixes: the
+  ;; generic-result reinterpret above, and the ascribed-literal retyping
+  ;; (float32-ascribed-literal-compares-as-double, archived) without which
+  ;; the RHS emitted as a double literal and the comparison promoted.
+  (println (= (idf (:: 7.1 float32)) (:: 7.1 float32)))
+  ;; The suffix spelling is the same literal; pin the two spellings agree.
+  (println (= (idf 7.1f32) (:: 7.1 float32)))
+  0)

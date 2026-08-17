@@ -78,6 +78,22 @@ struct Binding {
     uint32_t      scope_depth;
     /* Phase 3: For closure bindings, this points to the thunk function binding */
     struct Binding *closure_fn_binding;
+    /* generic-closure-return-type-app (Defect B): for a call-head temp
+     * (`((pure 5))` -> `(let [__call_head_N (pure 5)] (__call_head_N))`), the
+     * head INIT expression that produced the closure value.  The emit-side
+     * thunk direct-call uses it to find which OUTER spec the init resolved to
+     * (via the specialized-call registry) and target that spec's inner-closure
+     * CLONE instead of the shared generic base thunk -- the base bakes the
+     * un-monomorphized body (a `ctor_Cons` that is never emitted).  NULL
+     * everywhere else. */
+    struct Expr *closure_head_init;
+    /* fn-value-fat-normalization (effect-row increment): for a `__borrowc`
+     * hoist temp of a CAPTURING closure, the lifted lambda's binding.  A
+     * dedicated field, NOT closure_fn_binding -- that one carries direct-call
+     * semantics at emit (the thunk direct-call path) and setting it on the
+     * hoist temp reroutes pure fat dispatch.  Read only by the CPS coloring /
+     * threadability walks, which must resolve the temp back to the lambda. */
+    struct Binding *hoist_closure_fn_binding;
     /* Returned-closure metadata: if evaluating this binding yields a closure value,
      * this points at the closure's thunk binding. */
     struct Binding *returns_closure_fn_binding;
@@ -1320,6 +1336,14 @@ struct Expr {
         struct {
             struct Expr    *inner;           /* the fn/closure being wrapped */
             struct Binding *wrapper_binding; /* the __poly_N wrapper thunk binding */
+            /* turi-dict-passing-plan: when the wrapped fn is CONSTRAINED and
+             * was dict-cloned for this rank-2 crossing, the clone's global
+             * binding.  The interpreter evaluates the poly value to the CLONE
+             * (whose leading dict params the elaborated call site supplies)
+             * instead of the original -- the tree-walking analogue of the
+             * wrapper targeting the clone on the compiled path.  NULL for
+             * unconstrained wraps. */
+            struct Binding *dict_clone_binding;
             /* Phase CCL: true when inner is a fat closure (void*) rather than a
              * named function.  The emitter packs it into tur_poly_fn_t at the
              * call site instead of emitting a (tur_poly_fn_t){ NULL, wrapper }. */

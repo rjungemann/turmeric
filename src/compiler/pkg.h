@@ -144,6 +144,11 @@ typedef struct PkgManifest {
     /* build-output-directory-plan: relative path (from the manifest dir) for
      * generated artifacts. NULL = use the default (`<manifest-dir>/build`). */
     char        *build_dir;
+    /* engine-selection-plan E1: default execution engine for `tur run` --
+     * "cc" | "jit" | "interp", or NULL when the key is absent.  Validated at
+     * parse (TUR-E0311); resolved by main.c's resolve_engine ladder
+     * (CLI --engine > TUR_ENGINE env > this key > "cc"). */
+    char        *engine;
     /* XF1 (experimental-flag-mechanism-plan): names from a top-level
      * :experiments [...] list. Each is a kebab-case experiment name (stored
      * without any leading ':'); merged with the CLI --enable= set at build

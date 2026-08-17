@@ -3674,6 +3674,60 @@ static bool fn_type_is_carrier_safe(const Type *ft) {
     return true;
 }
 
+/* Increment 4 successor (repr-coverage-census): the fn-PARAM routing
+ * decision, as one named routine.
+ *
+ * This is the answer the coverage census found missing: `repr_of(type, pos)`
+ * has no carrier answer for a fn param, because the routing depends on the
+ * BINDING's substructural flags as well as the annotation's shape -- exactly
+ * the (Binding x Type) domain `repr_of_binding` was introduced for.  It lives
+ * here rather than beside `repr_of` in types.c because its two gates
+ * (`fn_type_has_named_tyvar`, `fn_type_is_carrier_safe`) are elaboration
+ * predicates defined in this file; declaring it in types.h keeps the repr_*
+ * family discoverable from one header.
+ *
+ * Returns the representation the parameter is routed onto:
+ *   CARRIER_I64  the typed tur_poly_fn_t {env, fn} carrier
+ *   FAT_HANDLE   an explicit `^fat` param
+ *   THIN_FN      a nominal TY_FN -- a cfnptr, or a signature the carrier
+ *                cannot round-trip (effect row, tyvar, variadic, wide arity,
+ *                non-scalar), or a substructural binding with its own
+ *                discipline
+ *
+ * Order matters and mirrors the routing it replaces: carrier wins, then
+ * `^fat`, then everything nominal. */
+static ReprForm repr_of_fn_param_impl(const Binding *b, const Type *ann);
+
+ReprForm repr_of_fn_param(const Binding *b, const Type *ann) {
+    ReprForm f = repr_of_fn_param_impl(b, ann);
+    /* Counted by the coverage census like every other repr_* answer.  Without
+     * this the fn axis would be consolidated but still invisible in the
+     * matrix -- the census would keep reporting the hole it just closed,
+     * which is how a metric quietly stops tracking the thing it names. */
+    static int census = -1;
+    if (census < 0) census = getenv("TUR_REPR_CENSUS") ? 1 : 0;
+    if (census)
+        fprintf(stderr, "repr-census fn-param %s\n", repr_form_name(f));
+    return f;
+}
+
+static ReprForm repr_of_fn_param_impl(const Binding *b, const Type *ann) {
+    if (!b || !ann || ann->kind != TY_FN) return REPR_THIN_FN;
+    /* A substructural or ^fat binding keeps its nominal type -- those have
+     * their own calling conventions and discipline checks. */
+    bool plain = !b->is_fat && !b->is_borrow && !b->is_unique && !b->is_mut &&
+                 !b->is_linear && !b->is_affine && !b->is_relevant;
+    bool effectful = ann->as.fn.effect_row != NULL;
+    bool carrier = plain && !effectful && !ann->as.fn.cfnptr &&
+                   !ann->as.fn.is_variadic &&
+                   ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
+                   !fn_type_has_named_tyvar(ann) &&
+                   fn_type_is_carrier_safe(ann);
+    if (carrier) return REPR_CARRIER_I64;
+    if (b->is_fat) return REPR_FAT_HANDLE;
+    return REPR_THIN_FN;
+}
+
 /* Re-stamp bare-^fat int64 calls in `tail`'s result position(s) to `target`
  * (a concrete non-int register-class kind).  Returns true if any call was
  * retyped.  Tail-precise: only result positions are visited, so a non-tail
@@ -4048,6 +4102,33 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
     Binding *vb = (r->kind == EX_VAR && r->as.var.binding)
                       ? r->as.var.binding
                       : x->as.var.binding;
+    /* Increment 4 stage 3: the fn-value TAIL/JOIN shadow.  This walker is the
+     * classification the fn-value axis turns on -- each tail leaf is sorted
+     * into carrier / already-fat / thin-needing-a-shim, and the emitted
+     * conversion follows.  Shadow it against `repr_of_binding`, the
+     * binding-context decision function, so the two cannot drift.
+     *
+     * Only leaves whose BINDING is authoritative are shadowed: a param
+     * carries its representation in its flags, but a let-bound alias carries
+     * it in its INITIALISER (an alias of a closure is fat while its binding
+     * type reads thin), which no binding-only signature can see.  Those are
+     * left to the alias resolution below -- narrowing what the instrument
+     * claims rather than emitting disagreements it cannot ground. */
+    /* MIGRATED (increment 4 successor): for a PARAM leaf the decision function
+     * IS the answer, so the hand-derived "already fat" test is deleted rather
+     * than duplicated.  Its shadow ran silent on every evaluation before this
+     * (8 corpus-wide), which is what licensed the swap; now the two cannot
+     * disagree because there is only one of them, and the shadow is retired by
+     * construction -- the same end state the container-element collapse
+     * reached.
+     *
+     * Grounding guard: a NON-param binding keeps the old test.  Its
+     * representation lives in its INITIALISER (an alias of a closure is fat
+     * while its binding type reads thin), which no binding-only signature can
+     * see, so there is nothing here for the decision function to own yet. */
+    bool leaf_already_fat =
+        vb->is_param ? repr_of_binding(vb, REPR_POS_RESULT) == REPR_FAT_HANDLE
+                     : vb->is_fat;
     if (vb->is_poly_fn && vb->is_param) {
         Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID, x->span);
         conv->as.poly_to_fat_.inner = x;
@@ -4056,9 +4137,7 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
         *slot = conv;
         return;
     }
-    if (vb->is_fat ||
-        (vb->is_param && vb->type.kind == TY_FN &&
-         fn_param_type_is_fat_normalized(&vb->type)))
+    if (leaf_already_fat)
         return;  /* already fat */
     if (r != x && r->kind != EX_VAR &&
         (r->kind == EX_CLOSURE || r->kind == EX_FN_TO_FAT ||
@@ -4215,17 +4294,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * machinery is reached below. */
     const Form *constraint_forms[8];
     uint8_t n_constraint_forms = 0;
+    /* caret-constraint-vector-not-registered: `^Class binder` pairs collected
+     * from the defn TYPE-PARAM vector (`(defn f [^Show a] [x : a] ...)`).
+     * Previously `^Show` was silently minted as a KIND_ARROW type parameter
+     * named after the class and NO TypeConstraint existed anywhere, so
+     * call-site discharge and the interpreter's apply-time dict binding never
+     * saw the obligation.  Materialized into constraint_list next to the
+     * middle-vector constraints below. */
+    TypeClass    *tpv_con_class[MAX_FN_CONSTRAINTS];
+    const Symbol *tpv_con_binder[MAX_FN_CONSTRAINTS];
+    uint8_t       n_tpv_cons = 0;
     if (call->as.list.len > name_idx + 2 &&
         call->as.list.items[name_idx + 1]->tag == F_VEC &&
         call->as.list.items[name_idx + 2]->tag == F_VEC) {
         Form *type_params_f = call->as.list.items[name_idx + 1];
-        if (type_params_f->as.list.len > 8) {
-            diag_emit(DIAG_ERROR, type_params_f->span,
-                      "defn: too many type parameters (max 8)");
-            return NULL;
-        }
-        n_fn_type_params = (uint8_t)type_params_f->as.list.len;
-        for (uint8_t i = 0; i < n_fn_type_params; i++) {
+        /* Classes awaiting their binder: `^Show ^Eq a` constrains `a` twice. */
+        TypeClass *tpv_pending[MAX_FN_CONSTRAINTS];
+        uint8_t    n_tpv_pending = 0;
+        for (uint32_t i = 0; i < type_params_f->as.list.len; i++) {
             Form *tp = type_params_f->as.list.items[i];
             if (tp->tag != F_SYM) {
                 diag_emit(DIAG_ERROR, tp->span,
@@ -4241,24 +4327,107 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * validation (check_row_type_arg_kind) and uses in `#row{...}`
              * elements both see kind [*]. */
             if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
+                if (n_fn_type_params >= 8) {
+                    diag_emit(DIAG_ERROR, tp->span,
+                              "defn: too many type parameters (max 8)");
+                    return NULL;
+                }
                 const Symbol *bare = symtab_intern(e->st,
                     strslice(psym->name + 2, psym->len - 2));
-                fn_type_params[i] = bare;
-                fn_type_param_kinds[i] = KIND_TYPEROW;
+                fn_type_params[n_fn_type_params] = bare;
+                fn_type_param_kinds[n_fn_type_params] = KIND_TYPEROW;
+                n_fn_type_params++;
             } else if (psym->len > 1 && psym->name[0] == '^') {
+                /* An UPPERCASE name after the caret that resolves to a defined
+                 * typeclass is a constraint on the NEXT binder symbol -- the
+                 * type-param-vector spelling of the params-vector `^Class`
+                 * annotation (elab_defn's pending_constraints path below).  An
+                 * unknown uppercase name keeps the legacy behavior (a
+                 * higher-kinded type parameter) rather than erroring. */
+                if (psym->name[1] >= 'A' && psym->name[1] <= 'Z') {
+                    const Symbol *tc_sym = symtab_intern(e->st,
+                        strslice(psym->name + 1, psym->len - 1));
+                    TypeClass *tc = typeclass_env_lookup_typeclass(
+                        &e->typeclass_env, tc_sym);
+                    if (tc) {
+                        if (n_tpv_pending >= MAX_FN_CONSTRAINTS) {
+                            diag_emit(DIAG_ERROR, tp->span,
+                                      "defn: too many class constraints (max %d)",
+                                      MAX_FN_CONSTRAINTS);
+                            return NULL;
+                        }
+                        tpv_pending[n_tpv_pending++] = tc;
+                        continue;
+                    }
+                }
                 /* MB2 (constrained-hkt-forall-mode-b-plan): a `^f` type parameter
                  * is higher-kinded (`* -> *`), the defn analog of the
                  * `(defclass Functor [^f] ...)` marker -- so the body may use it
                  * applied as `(f a)`.  Strip the caret; annotations reference the
                  * bare name.  (Higher arities via `^^f` are not needed yet.) */
+                if (n_fn_type_params >= 8) {
+                    diag_emit(DIAG_ERROR, tp->span,
+                              "defn: too many type parameters (max 8)");
+                    return NULL;
+                }
                 const Symbol *bare = symtab_intern(e->st,
                     strslice(psym->name + 1, psym->len - 1));
-                fn_type_params[i] = bare;
-                fn_type_param_kinds[i] = KIND_ARROW;
+                fn_type_params[n_fn_type_params] = bare;
+                fn_type_param_kinds[n_fn_type_params] = KIND_ARROW;
+                n_fn_type_params++;
             } else {
-                fn_type_params[i] = psym;
-                fn_type_param_kinds[i] = KIND_STAR;
+                /* Bare symbol: a type parameter.  Deduplicate --
+                 * `[^Hash K ^MapKey K V]` names K twice -- and derive the
+                 * binder's kind from a pending class's own param kind, so an
+                 * HKT class constraint yields an arrow-kinded binder. */
+                bool already = false;
+                for (uint8_t k = 0; k < n_fn_type_params; k++)
+                    if (fn_type_params[k] == psym) { already = true; break; }
+                if (!already) {
+                    Kind bk = KIND_STAR;
+                    for (uint8_t p = 0; p < n_tpv_pending && bk == KIND_STAR; p++) {
+                        const TypeClass *ptc = tpv_pending[p];
+                        if (!ptc->type_param_kinds) continue;
+                        for (uint8_t k = 0; k < ptc->n_type_params; k++)
+                            if (ptc->type_param_kinds[k] != KIND_STAR) {
+                                bk = KIND_ARROW;
+                                break;
+                            }
+                    }
+                    if (n_fn_type_params >= 8) {
+                        diag_emit(DIAG_ERROR, tp->span,
+                                  "defn: too many type parameters (max 8)");
+                        return NULL;
+                    }
+                    fn_type_params[n_fn_type_params] = psym;
+                    fn_type_param_kinds[n_fn_type_params] = bk;
+                    n_fn_type_params++;
+                }
+                for (uint8_t p = 0; p < n_tpv_pending; p++) {
+                    if (n_tpv_cons >= MAX_FN_CONSTRAINTS) {
+                        diag_emit(DIAG_ERROR, tp->span,
+                                  "defn: too many class constraints (max %d)",
+                                  MAX_FN_CONSTRAINTS);
+                        return NULL;
+                    }
+                    tpv_con_class[n_tpv_cons]  = tpv_pending[p];
+                    tpv_con_binder[n_tpv_cons] = psym;
+                    n_tpv_cons++;
+                }
+                n_tpv_pending = 0;
             }
+        }
+        /* A dangling `^Class` with no following binder keeps the legacy
+         * meaning: a higher-kinded type parameter named after the class. */
+        for (uint8_t p = 0; p < n_tpv_pending; p++) {
+            if (n_fn_type_params >= 8) {
+                diag_emit(DIAG_ERROR, type_params_f->span,
+                          "defn: too many type parameters (max 8)");
+                return NULL;
+            }
+            fn_type_params[n_fn_type_params] = tpv_pending[p]->name;
+            fn_type_param_kinds[n_fn_type_params] = KIND_ARROW;
+            n_fn_type_params++;
         }
         params_idx = name_idx + 2;
 
@@ -4406,6 +4575,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         constraint_list = new_list;
         n_constraints = n_constraint_forms;
+    }
+
+    /* caret-constraint-vector-not-registered: materialize the `^Class binder`
+     * pairs collected from the type-param vector, in the same layout as the
+     * middle-vector constraints above -- type_arg resolves later from the
+     * call site; `tyvar` carries the binder for constraint-driven dispatch
+     * and the interpreter's apply-time dict binding. */
+    if (n_tpv_cons > 0) {
+        uint8_t new_count = (uint8_t)(n_constraints + n_tpv_cons);
+        TypeConstraint *new_list = (TypeConstraint *)arena_alloc(e->arena,
+            new_count * sizeof(TypeConstraint));
+        if (constraint_list && n_constraints > 0)
+            memcpy(new_list, constraint_list,
+                   n_constraints * sizeof(TypeConstraint));
+        for (uint8_t ci = 0; ci < n_tpv_cons; ci++) {
+            new_list[n_constraints + ci].typeclass       = tpv_con_class[ci];
+            new_list[n_constraints + ci].type_arg        = TYPE_UNKNOWN;
+            new_list[n_constraints + ci].param_idx       = -1;
+            new_list[n_constraints + ci].tyvar           = tpv_con_binder[ci];
+            new_list[n_constraints + ci].return_resolved = false;
+        }
+        constraint_list = new_list;
+        n_constraints = new_count;
     }
 
     /* Phase G3: Equality constraint env built from (: a T) param items */
@@ -4834,11 +5026,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                  * its nominal TY_FN (cfnptr) type so the param lowers to the
                  * concrete `R (*)(A...)` typedef and only captureless callbacks
                  * are admitted.  Never demote it onto the poly carrier. */
-                bool carrier_ok = plain && !effectful && !ann->as.fn.cfnptr &&
-                                  !ann->as.fn.is_variadic &&
-                                  ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
-                                  !fn_type_has_named_tyvar(ann) &&
-                                  fn_type_is_carrier_safe(ann);
+                /* Increment 4's successor -- the fn axis moves from a
+                 * shadowed derivation to a consulted decision.  The census
+                 * measured 2122 fn-param routings per corpus sweep made
+                 * OUTSIDE the decision function; this is the site that makes
+                 * them, and the gate set is now one named routine other
+                 * sites can ask instead of re-deriving.  `plain` and
+                 * `effectful` remain here because the routine reads them
+                 * back off the binding and annotation. */
+                bool carrier_ok =
+                    repr_of_fn_param(pb, ann) == REPR_CARRIER_I64;
                 /* fn-value-fat-normalization stage 2: a NESTED concrete
                  * effect-free fn RESULT inside a fn-typed param annotation is
                  * marked boxed, recursively -- stage-2 producers return fat

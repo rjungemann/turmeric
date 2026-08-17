@@ -75,7 +75,7 @@ why the compiled-fixture suite is unaffected and this went unnoticed.
 ## Why it matters now
 
 It blocks the soundness **gate** for the stateful-refinement (`#reads`) work
-(`docs/upcoming/v1/refine-stateful-measures-plan.md`): the plan requires a
+(`docs/archive/refine-stateful-measures-plan.md`): the plan requires a
 `stateful` fuzzer shape + a sabotage run, and the fuzzer cannot run a single
 meaningful case until this is fixed. See that plan's fuzzer note for the interim
 targeted-sabotage evidence used in its place.

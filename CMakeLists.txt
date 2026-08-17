@@ -63,7 +63,7 @@ endif()
 #
 # `TUR_REFINE_Z3_ORACLE`, the `find_package(Z3)` block, `refine_libz3.c` and
 # every `#ifdef TUR_REFINE_Z3_ORACLE` are gone, per the retirement criteria in
-# docs/upcoming/v1/refinement-types-plan.md ("Z3 retirement criteria").  Both
+# docs/archive/refinement-types-plan.md ("Z3 retirement criteria").  Both
 # criteria were met: the in-house chain discharges the fixtures the bootstrap
 # carried, and oracle trust was established over a labelled corpus, a 3600-
 # benchmark generated soak, a 7000-VC differential run, and a real-program
@@ -340,6 +340,15 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# engine-selection-plan E1-E3: `tur run` engine resolution ladder
+# (--engine > TUR_ENGINE > build.tur :engine > cc), the unsatisfiable-engine
+# hard errors, and the P0 manifest-experiment gate.  Runs on every build --
+# the jit rows assert whichever outcome (run vs hard error) this binary has.
+add_test(
+  NAME tur_engine_select
+  COMMAND bash tests/run-engine-select.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Off-tree (load "stdlib/<file>") resolution: a freestanding script run from
 # outside the repo resolves the stdlib via the exe-relative root, not just
 # cwd-relative. See docs/archive/history/one-off-script-print-and-annotation-ergonomics.md
@@ -502,7 +511,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # RT2/S0--S3: refinement VC + decision-procedure unit test
-# (docs/upcoming/v1/refinement-types-plan.md).
+# (docs/archive/refinement-types-plan.md).
 add_test(
   NAME tur_refine_solver
   COMMAND "${CMAKE_BINARY_DIR}/tur_refine_solver"

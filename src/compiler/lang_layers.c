@@ -97,7 +97,7 @@ static const LangLayerDescriptor LANG_LAYERS[] = {
  * is the worst moment to find out the shim does not work.
  *
  * `stringed` is the only remaining live layer and is not graduating.  See
- * docs/upcoming/v1/refined-graduation-plan.md.
+ * docs/archive/refined-graduation-plan.md.
  * ------------------------------------------------------------------------- */
 static const char *const GRADUATED_LAYERS[] = {
     "refined",  /* graduated 2026-08-01; static #refine{...} discharge is unconditional */

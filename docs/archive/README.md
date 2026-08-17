@@ -536,6 +536,28 @@ finding rather than a closed one:
 - **[spice-guides-bare-brace-manifest-syntax.md](spice-guides-bare-brace-manifest-syntax.md)** -- guides corrected; spice-README coverage and `tur add-cmake` comment-dropping are not
 - **[turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)** -- TR1 carrier relocation shelved as demand-driven
 
+### Completed plans swept out of `docs/upcoming/` (2026-08-15)
+
+Each of these declares itself executed/landed with nothing outstanding, so it
+is a record rather than open work. `docs/upcoming/` holds only unfinished
+plans; plans whose experiment has not graduated yet (`write-frames`,
+`global-state`, `jit`) stay there because the graduation is still ahead.
+
+- **[def-define-consolidation-plan.md](def-define-consolidation-plan.md)** -- one `def` form for top-level and body positions; EXECUTED 2026-08-05 (D1-D4)
+- **[lsp-client-gaps-plan.md](lsp-client-gaps-plan.md)** -- `tur lsp` gaps found by writing a real client (Trowel); everything scheduled in its SS6 has landed
+- **[try-turmeric-lsp-plan.md](try-turmeric-lsp-plan.md)** -- LSP-backed editor intelligence in the web playground; L0-L4 landed, and SS7 closed the `emcc` gap SS6.4 could not
+- **[refined-graduation-plan.md](refined-graduation-plan.md)** -- graduating the `refined` experiment; EXECUTED 2026-08-01, shipped in v0.33.0
+- **[refined-dogfood-ecs-report.md](refined-dogfood-ecs-report.md)** -- the tur-ecs cost measurement (1.004x) behind that graduation's precondition 2
+- **[refine-predicate-measures-plan.md](refine-predicate-measures-plan.md)** -- boolean-sorted measures in refinement predicates; RM-B0..RM-B3 landed
+- **[refine-stateful-measures-plan.md](refine-stateful-measures-plan.md)** -- refinements over mutable state; LANDED as Candidate B (`#reads` + the borrow-based `frozen` region); RM-S1 not pursued
+- **[turi-incremental-elaboration-design.md](turi-incremental-elaboration-design.md)** -- incremental parse + elaboration for the turi REPL; SHIPPED and on by default 2026-07-25
+
+Two more found in the same sweep, both of which read as open only because a
+banner was never updated after the work landed. Each banner is corrected here:
+
+- **[mir-interp-tier-plan.md](mir-interp-tier-plan.md)** -- a tier-0 `MIR_interp` engine. CLOSED: I0 retracted the premise and measured I1-I3 as not worth building; I4 (engine reachable from a plain `libturi` embedder) LANDED 2026-07-31. The header still said "I4 still recommended" after I4 shipped
+- **[refinement-types-plan.md](refinement-types-plan.md)** -- RT0-RT7 plus the in-house solver S0-S4, all landed; `refined` graduated in v0.33.0. Still the **status source** for the feature and the `tests/fixtures/refine-*` corpus, so it is archived as a record rather than retired. Its sibling-plan block also claimed the RM-S A-vs-B decision was open; it was decided (Candidate B) on 2026-07-26
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)

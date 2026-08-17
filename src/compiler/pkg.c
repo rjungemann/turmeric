@@ -763,6 +763,23 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         } else if (strcmp(kw, "build-dir") == 0) {
             /* build-output-directory-plan: relative path for build artifacts. */
             out->build_dir = form_str_dup(vf);
+        } else if (strcmp(kw, "engine") == 0) {
+            /* engine-selection-plan E1: default execution engine for
+             * `tur run`.  An unknown VALUE is a hard error -- `:engine
+             * "jitt"` silently running under cc is exactly the failure mode
+             * the plan exists to prevent (unknown KEYS stay silently
+             * ignored, which is the documented compatibility story). */
+            out->engine = form_str_dup(vf);
+            if (out->engine && strcmp(out->engine, "cc") != 0 &&
+                strcmp(out->engine, "jit") != 0 &&
+                strcmp(out->engine, "interp") != 0) {
+                diag_emit_with_code(DIAG_ERROR, vf->span,
+                                    TUR_E0311_UNKNOWN_ENGINE,
+                                    "build.tur: unknown :engine value '%s' "
+                                    "(expected \"cc\", \"jit\", or "
+                                    "\"interp\")",
+                                    out->engine);
+            }
         } else if (strcmp(kw, "experiments") == 0) {
             /* XF1: opt-in experimental features for this spice. */
             parse_experiments(vf, &out->experiments, &out->n_experiments);
@@ -1098,6 +1115,8 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
 
     if (m->build_dir)
         fprintf(f, "  :build-dir   \"%s\"\n", m->build_dir);
+    if (m->engine && *m->engine)
+        fprintf(f, "  :engine      \"%s\"\n", m->engine);
 
     if (m->n_reader_macros > 0) {
         fprintf(f, "\n  :reader-macros [");
@@ -1194,6 +1213,7 @@ void pkg_manifest_free(PkgManifest *m) {
     for (int i = 0; i < m->n_experiments; i++) free(m->experiments[i]);
     free(m->experiments);
     free(m->build_dir);
+    free(m->engine);
     memset(m, 0, sizeof(*m));
 }
 

@@ -15,6 +15,7 @@
 static const SourceFile *files_[MAX_FILES];
 static size_t            file_count_;
 static bool              had_error_;
+static uint64_t          error_serial_;   /* count of SHOWN (uncaptured) errors */
 static bool              use_color_ = false;
 static bool              json_output_ = false;  /* Phase 8: JSON diagnostics mode */
 
@@ -45,6 +46,8 @@ void diag_register_file(const SourceFile *file) {
 }
 
 bool diag_had_error(void) { return had_error_; }
+
+uint64_t diag_error_serial(void) { return error_serial_; }
 
 /* Speculative-elaboration capture frames (see diag.h). */
 #define MAX_CAPTURE_DEPTH 16
@@ -80,7 +83,15 @@ uint32_t diag_pop_capture(void) {
  * pre-capture behavior.  Errors and their subordinate notes/help are
  * suppressed together so a swallowed error never leaves orphaned notes. */
 static bool diag_intercept(DiagLevel level) {
-    if (capture_depth_ <= 0) return false;
+    if (capture_depth_ <= 0) {
+        /* An error that reaches the user.  Counted here -- the one gate every
+         * emit entry point passes through -- so callers can bracket a window
+         * and ask "did this elaboration surface an error?" without treating a
+         * captured-and-swallowed speculative error as one.  Consumed by the
+         * macro-expansion provenance note (elab_call.c). */
+        if (level == DIAG_ERROR) error_serial_++;
+        return false;
+    }
     if (level == DIAG_WARNING) return false;
     if (level == DIAG_ERROR && capture_depth_ <= MAX_CAPTURE_DEPTH)
         capture_err_[capture_depth_ - 1]++;
@@ -301,6 +312,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
+        case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
@@ -458,6 +470,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
+    if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
@@ -589,6 +602,14 @@ static const DiagExplanation diag_explanations_[] = {
       "Effect handler case bodies are emitted as separate C functions with\n"
       "no access to the enclosing stack frame, so borrow-typed (&T / &mut T)\n"
       "variables from the enclosing scope cannot be captured by them.\n"
+      "\n"
+      "A capturing closure also cannot be passed to an effect-annotated\n"
+      "(fn ...) parameter that is cfnptr, variadic, or has more than 5\n"
+      "parameters: those shapes keep the thin calling convention, which\n"
+      "has no slot for a closure environment.  Reduce the signature, or\n"
+      "pass the captured state as explicit arguments.  (Ordinary\n"
+      "effect-annotated parameters take capturing closures as of the\n"
+      "2026-08-16 fat-normalization increment.)\n"
     },
     { TUR_E0009_EFFECT_ROW_MISMATCH,
       "TUR-E0009: Effect-row mismatch\n"
@@ -2116,6 +2137,23 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: run `tur experiments` to see the exact set of recognized names, then\n"
       "correct the spelling (or drop the flag if the feature has graduated and no\n"
       "longer needs a gate).\n",
+    },
+    /* engine-selection-plan: unknown :engine value */
+    { TUR_E0311_UNKNOWN_ENGINE,
+      "TUR-E0311: unknown :engine value\n"
+      "\n"
+      "build.tur's `:engine` key (or the --engine flag / TUR_ENGINE env var)\n"
+      "named an execution engine outside the recognized set: \"cc\" (compile\n"
+      "via the C emitter and run the binary -- the default and the reference),\n"
+      "\"jit\" (the in-process MIR engine; needs a -DTUR_JIT=ON build and the\n"
+      "`jit` experiment), or \"interp\" (the tree-walking interpreter).\n"
+      "\n"
+      "Unknown values are a hard error rather than a fallback: the engines\n"
+      "differ in SEMANTICS (see `#?(:tur ... :turi ...)`, inline-C carve-outs,\n"
+      "c2mir divergences), so silently substituting one is the worst outcome.\n"
+      "\n"
+      "Fix: correct the spelling.  The precedence ladder is\n"
+      "  --engine > TUR_ENGINE env > build.tur :engine > \"cc\".\n",
     },
     /* XF: prototype experimental feature in use */
     { TUR_W0060_EXPERIMENTAL_PROTOTYPE,

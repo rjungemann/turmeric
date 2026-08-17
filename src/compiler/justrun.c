@@ -1768,6 +1768,13 @@ int usage_justrun(void) {
 /* CLI entry point                                                     */
 /* ================================================================== */
 
+int justrun_finds_justfile(void) {
+    char *p = find_justfile();
+    if (!p) return 0;
+    free(p);
+    return 1;
+}
+
 int cmd_justrun(int argc, char **argv) {
     int         list_mode        = 0;
     int         json_output      = 0;

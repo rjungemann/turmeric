@@ -710,6 +710,17 @@ what you are optimizing for -- startup latency or steady-state throughput:
 | MIR JIT | `tur --enable=jit jit f.tur` | in-process (c2mir) | run-edit-run loops, spice REPL reloads |
 | cc | `tur build f.tur` + run | subprocess cc -O2 | long-running programs, deployment |
 
+A project can select its default engine for `tur run` declaratively:
+`:engine "cc" | "jit" | "interp"` in `build.tur`, overridden by `TUR_ENGINE`
+in the environment, overridden by `--engine` on the command line (the same
+ladder shape as `:build-dir`).  An unknown value is a hard error
+(TUR-E0311), and a `"jit"` selection on a build without the engine, or
+without the `jit` experiment enabled, fails loudly rather than silently
+substituting -- the engines differ in SEMANTICS (`#?(:tur ... :turi ...)`,
+inline-C carve-outs, c2mir divergences), not just speed, so pair a
+load-bearing `:engine` with a `:tur-version` floor (older binaries silently
+ignore unknown manifest keys and run under cc).
+
 Measured triangle (x86-64 Linux, Release `tur`, best of 5, end-to-end wall
 time; `bash benchmarks/run-triangle.sh` regenerates this from
 `benchmarks/triangle/`):

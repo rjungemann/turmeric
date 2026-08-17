@@ -44,13 +44,46 @@ the plan links. File a new repr cell there as well as here.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
-| [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
 
-The two remaining are one campaign but **not** duplicates -- each has its own
-pinned investigation and its own fix (a calling-convention change; a generic
-instantiation + ctor-emission bug). Do not merge them; the investigations are
-the expensive part.
+*(No open repr cells -- the guide's open-cells table emptied 2026-08-16.)*
+
+`mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
+and fixed the same day, both defects along its own fix directions) and moved
+to [docs/archive](../archive/mut-map-reassign-missing-spec-link-error.md):
+`emit_abi_scan_expr` gained its missing `EX_SET` case (a generic call in a
+`set!` RHS was the one statement position the spec-materialization walk
+never descended into), and chokepoint 1's concrete-heap rule was extracted
+to `emit_repr_concrete_heap_ptr_c_name` and shared with the merge-temp decl
++ ctype mirror, closing the seam the R3 ICE caught.  Zero snapshot churn --
+the respelling fires only for shapes that previously ICE'd.  Pinned by
+`tests/fixtures/mut-map-reassign/`.
+
+`poly-result-hof-capturing-closure-sigbus` was resolved 2026-08-16 -- its
+LAST row (the effect-row signature), by exactly the CPS increment its own
+status bullet specified -- and moved to
+[docs/archive](../archive/poly-result-hof-capturing-closure-sigbus.md).
+Effect-annotated fn params are now fat-normalized like every other nominal
+fn param: the E2a registry call sites dispatch fat (slot 0 = a registered
+capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the
+fatshim's stashed bare-fn entry), threadable capturing lambdas are
+CPS-admitted with the direct thunk's env-unpack preamble, and the
+effect_check walkers peel the shim so all five `errors/effect-*` negatives
+keep diagnosing.  The fix reached past the report: a capturing PERFORMING
+callback -- previously no working spelling at all -- now threads the
+handler chain (pinned at value 37 in
+`tests/fixtures/effect-capturing-closure-thin-param/`).
+
+`generic-closure-return-type-app` was resolved 2026-08-16 (both defects) and
+moved to
+[docs/archive](../archive/generic-closure-return-type-app.md): Defect A by the
+report's own "narrower change" (a result-graft recovery at the thunk-type
+clobber in `elab_call.c`, leaving the grounding gate untouched), Defect B by
+making the per-spec inner-closure clone fire for type-app results and be the
+thing actually invoked (`inner_app` trigger + clone-body scan in
+`emit_module.c`, head-keyed clone resolution via a `closure_head_init` stash).
+The parametric backtracking monad it blocked now compiles, links, and runs
+cast-free; `docs/guides/logic-programming-guide.md` was promoted to it in the
+same change.
 
 `fat-sink-shim-box-leaks-per-call` was resolved 2026-08-13 and moved to
 [docs/archive](../archive/fat-sink-shim-box-leaks-per-call.md). It needed no
@@ -152,6 +185,16 @@ into a frame env again.
 | Report | Severity | One line |
 | --- | --- | --- |
 
+`interp-hkt-pure-return-dispatch-elab-error` was resolved 2026-08-17, the
+day after filing, and moved to
+[docs/archive](../archive/interp-hkt-pure-return-dispatch-elab-error.md).
+Its root-cause direction was wrong: no elaboration flag was involved -- the
+fixture's `mk-box` collides with the stdlib MapKey method of the same name,
+and the interpreter's `(load ...)`-based stdlib preload registered every
+typeclass with `from_stdlib = false`, so the "user defn overrides a stdlib
+method" resolution flipped to the method.  Fixed by marking preload turns
+(`g_turi_stdlib_preload`); the whole hand-run hkt-constrained family now
+passes under `--interpret`.
 
 The first absorbed two symptom reports on 2026-08-01
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values`,
@@ -197,6 +240,17 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 | Report | Severity | One line |
 | --- | --- | --- |
 
+`caret-constraint-vector-not-registered` was resolved 2026-08-17, the day
+after filing, and moved to
+[docs/archive](../archive/caret-constraint-vector-not-registered.md). The
+`[^Class a]` defn type-param-vector spelling now registers real
+TypeConstraints (uppercase `^Name` resolving to a defined class constrains
+the next binder; unknown names keep the legacy HKT-param meaning). The
+archived note corrects the filing's blast-radius estimate -- only 12 of the
+~66 matched files were genuinely the broken two-vector shape -- and records
+that this was the missing input that let the interpreter's constraint-dict
+path retire `gde_reresolve_method` entirely.
+
 `lsp-completion-internal-symbols` was resolved 2026-08-05 (a
 `Binding.is_synthesized` bit filtered in the LSP collector) and moved to
 [docs/archive](../archive/lsp-completion-internal-symbols.md). Its `__`-prefix
@@ -227,8 +281,23 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [emitter-thunk-type-return-mismatch](emitter-thunk-type-return-mismatch.md) | low-medium | **2 findings left, down from 3 (2026-08-13).** The `void`/`int64_t` half is fixed -- an explicit `: nil` on a lambda was indistinguishable from unannotated, so the infer-from-body step retyped it to the tail's type and the emitted fn disagreed with the thunk pointer built from the same declaration. What remains is the `:int` closure sinks in the httpd API: the call site names the thunk from the erased sink, the lambda from its real type. **GCC cannot see this class at all** (no `-fsanitize=function`); needs clang |
+| [dead-base-thunk-chain-references-undefined-ctor](dead-base-thunk-chain-references-undefined-ctor.md) | low | **narrowed 2026-08-17**: base-ctor forward decls now emitted (was a hard clang-16 BUILD failure, not cosmetic), both toolchains compile clean; only the hand `-O0` link cliff remains -- the dead chain is still emitted and needs the suppression fix |
 | [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
+
+`emitter-thunk-type-return-mismatch` was resolved 2026-08-17 and moved to
+[docs/archive](../archive/emitter-thunk-type-return-mismatch.md), with a
+correction worth reading: the clang re-sweep found the class had GROWN from 2
+findings to 14 -- the 2026-08-16 effect-row fat-normalization moved lambda
+callbacks onto carrier-typed fat entries and reactor.c's hand-written typedefs
+drifted a second time, plus five hand-packed fat boxes carried typed-convention
+entries in slot 0.  All are fixed (dispatch ascriptions name real types;
+hand-built boxes follow the carrier convention), the corpus sweeps ZERO under
+clang `-fsanitize=function`, and run.sh now FAILs any fixture whose stderr
+carries the UBSan report, backed by a clang-gated canary in
+`tests/check-cc-warn-ratchet.sh`.  The full retyping of the httpd `:int`
+sinks was deliberately NOT done -- the carrier ownership idiom keeps them --
+so the no-lazy-`:int` rule still points at that API as a preference, but no
+soundness finding remains.
 
 `struct-return-type-mismatch-unchecked-until-cc` was resolved 2026-08-06 and
 moved to
@@ -253,6 +322,7 @@ Pinned by four `errors/` negatives and
 | Report | Severity | One line |
 | --- | --- | --- |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
+| [ecs-defsystem-writes-fixture-expects-old-spices](ecs-defsystem-writes-fixture-expects-old-spices.md) | low | with `../turmeric-spices` present, `errors/ecs-defsystem-writes-unauthorized` fails: spices-HEAD `ecs/world.tur` errors during its own elaboration (Storage associated type), so the write-capability diagnostic the fixture pins is never reached; invisible without the optional checkout |
 
 `incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved
 to
@@ -313,9 +383,11 @@ inline-C and are PASS-skipped by the TI7 carve-out, so a fix verified against
 only them would have been as invisible as the defect.
 `tests/fixtures/hkt-rank2-forall-pure-two-instances` restates one with
 parametric ADTs and no inline-C, so `run-turi` actually runs it. Fix direction 2
-(turi dict passing) is still open and still the principled end of this family --
-both halves are run-time heuristics recovering a type the compiled path carries
-in a dict, each added after a shape escaped the last.
+(turi dict passing) was carried to completion 2026-08-16/17 -- the interpreter
+follows real dictionaries end to end and ALL THREE recovery heuristics this
+family accreted are retired on sabotage evidence; see
+[docs/archive/turi-dict-passing-plan.md](../archive/turi-dict-passing-plan.md)
+for the full measurement record.
 
 `lang-switch-breaks-generic-instance-resolution` was resolved 2026-08-13 and
 moved to

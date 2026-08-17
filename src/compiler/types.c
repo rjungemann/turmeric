@@ -3,6 +3,8 @@
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
+#include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
+#include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
 #include "mangle.h"  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
@@ -746,14 +748,16 @@ bool type_is_transparent_int_newtype(Type t) {
  * and the make-struct fn-field store (which must not re-box an already
  * normalized param).  Named tyvars are therefore no longer excluded here.
  *
- * One exclusion remains, measured again 2026-08-01 with the tyvar half in:
- *   - effect rows -- an effectful callback's thin convention is LOAD-BEARING
- *     for the CPS backend.  Lifting it regresses 22 fixtures: 17 effect/cps
- *     behavioral (colored fn values have their own twin/trampoline calling
- *     convention this predicate must not override) and, more seriously, 5
- *     `tests/fixtures/errors/effect-*` negative fixtures STOP diagnosing --
- *     effect-row checking itself reads the thin representation.  That is a
- *     CPS-backend increment, not a param-side rule.
+ * The LAST exclusion -- effect rows -- was lifted 2026-08-16 by the CPS
+ * increment it was waiting on.  The load-bearing thin dependence was the E2a
+ * direct-entry-keyed CPS twin registry; the via_registry call sites now
+ * dispatch fat (slot 0 = a registered capturing-lambda entry with an
+ * env-taking __cps twin, slot 1 = a fatshim's stashed bare-fn entry), the
+ * effect_check walkers peel the EX_FN_TO_FAT shim, and threadable capturing
+ * lambdas are CPS-admitted with the env unpacked exactly like the direct
+ * thunk.  Effect-annotated fn params are therefore normalized like every
+ * other nominal fn param.  Pinned by
+ * tests/fixtures/effect-capturing-closure-thin-param/.
  *
  * Note the asymmetry with fn_result_type_is_fat_normalized below: a tyvar-sig
  * fn type is normalized in PARAM position but not as a declared RESULT.  The
@@ -793,7 +797,6 @@ bool fn_param_type_is_fat_normalized(const Type *t) {
     if (!(t && t->kind == TY_FN && !t->as.fn.cfnptr &&
           !t->as.fn.is_variadic && t->as.fn.arity <= 5))
         return false;
-    if (t->as.fn.effect_row) return false;
     return true;
 }
 
@@ -3072,9 +3075,41 @@ bool type_is_wide_byval_adt(Type t) {
  * folds), and the read-back recovery must consult THIS predicate so the four
  * decisions cannot drift. */
 bool type_is_boxed_container_elem(Type t) {
-    if (t.kind != TY_ADT || !t.as.adt_.def) return false;
-    if (t.as.adt_.def->is_heap) return false;
-    return adt_byval_value_size_bytes(t.as.adt_.def) > 0;
+    /* Increment 4, THE COLLAPSE (2026-08-16): this predicate is now
+     * `repr_of`'s answer rather than a second derivation of it.  That is what
+     * increment 4 was for -- "collapse the per-site representation choices
+     * into the single repr-of(type, position) routine".
+     *
+     * The shadow that measured this position reported one disagreement class:
+     * a concrete by-value APP element (`(Vec (Option int))`), where repr_of
+     * said BOXED and this predicate said not-boxed.  The diagnosis at the
+     * time was "two mechanisms deciding one thing and AGREEING" -- the push
+     * side really does malloc the monomorph either way -- and that was true
+     * of the BOXING half and false of the OWNERSHIP half.  Measured: the
+     * `tur-vec-elem-wide?` / `tur-wide-byval?` folds consult this predicate,
+     * so they answered 0 for app elements and `vec-free` never released the
+     * boxes the push side had allocated.  `(Vec (Option int))` leaked one
+     * element box per push (32 bytes / 2 allocations under LeakSanitizer for
+     * a two-push probe, while the sibling `(Vec Sm)` in the same program
+     * freed both of its).  Two mechanisms that agree on one half of a
+     * decision and disagree on the other is exactly the defect shape this
+     * campaign exists to close. */
+    bool boxed = repr_of(&t, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
+    /* The shadow that lived here is retired BY CONSTRUCTION: with the
+     * predicate defined as repr_of's answer, want and got are the same
+     * expression and a disagreement is unrepresentable.  That is the
+     * intended end state for a consolidated position -- a chokepoint that
+     * cannot drift needs no instrument watching it drift -- and it is why
+     * `run-repr-trace.sh` now asserts SILENCE on the shape that used to be
+     * the pinned TY_APP row.  The other six positions keep their shadows
+     * because their sites still derive their own answers.
+     *
+     * Kept deliberately: the >0-size and non-heap conditions now live in
+     * repr_of (heap types return HEAP_PTR before the by-value arm; a
+     * transparent int newtype returns SCALAR_BITS), so this function has no
+     * conditions of its own left to drift.
+     */
+    return boxed;
 }
 
 /* Parametric-by-value: app-aware sibling of adt_byval_pass_by_ptr.  A concrete
@@ -4673,7 +4708,27 @@ const char *repr_position_name(ReprPosition pos) {
     return "?";
 }
 
+/* Increment 5 precondition: the coverage census.  Increment 5 is CONDITIONAL
+ * -- "if the decision function shows a form with no remaining (type,
+ * position) pairs" -- and nothing had ever produced that matrix.  Under
+ * TUR_REPR_CENSUS=1 every answer prints one line, so a corpus sweep
+ * aggregates into a position x form table.  An empty cell is a retirement
+ * CANDIDATE, never a decision: the meta-plan's most repeated stall verdict is
+ * "load-bearing, not redundant", so a candidate still owes a
+ * redundancy-falsification probe before any code moves. */
+static ReprForm repr_of_impl(const Type *t, ReprPosition pos);
+
 ReprForm repr_of(const Type *t, ReprPosition pos) {
+    ReprForm f = repr_of_impl(t, pos);
+    static int census = -1;
+    if (census < 0) census = getenv("TUR_REPR_CENSUS") ? 1 : 0;
+    if (census)
+        fprintf(stderr, "repr-census %s %s\n", repr_position_name(pos),
+                repr_form_name(f));
+    return f;
+}
+
+static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
     if (!t) return REPR_CARRIER_I64;
 
     /* Contracts share their base type's representation (type_c_name rule). */
@@ -4706,6 +4761,20 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
     if (t->kind == TY_EXISTS)
         return REPR_HEAP_PTR;
 
+    /* SS1/SS2 internal session pairs (make-session's [Session, Session]
+     * and recv's [T, Session]) are the same shape: a heap-boxed pair whose
+     * only C spelling is its `void *` pointer, so the pointer IS the value
+     * wherever it travels.  Their TY_SIMPLE_REPR_ROWS layout column stays
+     * false on purpose (they must never form a by-value monomorph or a
+     * type argument), which is why the generic scalar fallthrough below
+     * cannot see them -- without this arm the merge-temp shadow reports
+     * the site's correct `void *` decl as a carrier/heap-ptr seam
+     * (stdlib/session.tur, recv inside a control-form tail).  The offer
+     * result (TY_SESSION_OFFER, int64_t-spelled) rides the carrier via
+     * the fallthrough, which already agrees with its declarations. */
+    if (t->kind == TY_SESSION_PAIR || t->kind == TY_SESSION_RECV_PAIR)
+        return REPR_HEAP_PTR;
+
     /* `any` / union values are the two-word tur_tagged_t -- a real by-value
      * aggregate at direct positions; the erased carrier at generic sinks and
      * container slots (the layout switch deliberately rejects them from
@@ -4727,7 +4796,21 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
      * were this spelling distinction; the exists-element rows surfaced in
      * the third). */
     if (type_is_heap_struct(*t) || type_is_heap_adt(*t)) {
-        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t))
+        /* Increment 4 stage 3 (2026-08-16): the erased spelling is a
+         * DECLARATION fact, not a value fact, so it is scoped to the
+         * positions that declare.  `(Vec A)` inside a generic body is
+         * DECLARED `int64_t` -- that is what the let-bind chokepoint
+         * migrated around -- but the value is a pointer in both spellings,
+         * and a CROSSING of it is a pure reinterpret.
+         *
+         * This position-scoping was earned three times over: the same
+         * pointer/carrier spelling identity accounted for 431 of the first
+         * sweep's 521 let-bind lines, all 84 of the first adt-field sweep,
+         * and all 65 of the first arg-bridge sweep.  Three positions
+         * rediscovering one calibration is the decision function's job to
+         * absorb, not each site's to re-exclude. */
+        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t) &&
+            (pos == REPR_POS_LET_BIND || pos == REPR_POS_RESULT))
             return REPR_CARRIER_I64;
         return REPR_HEAP_PTR;
     }
@@ -4751,6 +4834,20 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
     if (byval_product) {
         if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK)
             return REPR_BOXED_AGG;
+        /* Increment 4 stage 3 (adt-field shadow, 2026-08-15): a field slot
+         * boxes a by-value product that OWNS drop glue, exactly as a
+         * container slot does.  The reason is the owner's copyability, not
+         * the element protocol -- inlining a sub-aggregate that owns an
+         * rc/ref would force recursive drop glue onto the outer product, so
+         * `adt_field_is_inline_byval` restricts inlining to drop-glue-free
+         * inners and the owning ones ride the carrier with `drop_inner_def`
+         * driving their release.  The shadow found this as a spec hole: it
+         * was the only field shape whose slot form disagreed, and stripping
+         * this arm makes it fire again (sabotage-verified). */
+        const AdtDef *bp_def = t->kind == TY_ADT ? t->as.adt_.def
+                                                 : type_adt_app_def(t);
+        if (pos == REPR_POS_STRUCT_FIELD && bp_def && bp_def->needs_drop_glue)
+            return REPR_BOXED_AGG;
         return REPR_BYVAL_AGG;
     }
 
@@ -4763,4 +4860,61 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
      * erased carrier (compile-time-only kinds, unions, placeholders). */
     if (type_has_concrete_codegen_layout(t)) return REPR_SCALAR_BITS;
     return REPR_CARRIER_I64;
+}
+
+bool repr_shadow_active(void) {
+#ifndef NDEBUG
+    return true;              /* enforcement mode: evaluate even without the flag */
+#else
+    return g_emit_abi_trace;  /* Release: measurement only, and only on request */
+#endif
+}
+
+void repr_shadow_disagree(const char *site, bool known, const char *line) {
+    /* Measurement mode collects the whole list; it never aborts, because the
+     * point of a sweep is to see all of it at once. */
+    if (g_emit_abi_trace) {
+        fputs(line, stderr);
+        return;
+    }
+    if (known) return;        /* pinned work-list row -- never a build failure */
+#ifndef NDEBUG
+    if (getenv("TUR_REPR_NO_SHADOW_ICE")) {
+        fprintf(stderr, "tur: warning: representation shadow disagreement at "
+                        "%s; downgraded by TUR_REPR_NO_SHADOW_ICE\n  %s",
+                site, line);
+        return;
+    }
+    fprintf(stderr,
+            "tur: internal error (ICE): a representation decision disagrees "
+            "with repr_of at %s.\n  %s"
+            "Two sites now decide this value's representation differently -- "
+            "the defect family\n"
+            "docs/archive/repr-decision-function-plan.md exists to close.  "
+            "Re-run with\n"
+            "--emit-abi-trace to see every disagreement, or set "
+            "TUR_REPR_NO_SHADOW_ICE=1 to\ndowngrade this to a warning while "
+            "fixing.\n",
+            site, line);
+    abort();
+#else
+    (void)site;
+#endif
+}
+
+ReprForm repr_of_binding(const struct Binding *b, ReprPosition pos) {
+    if (!b) return REPR_CARRIER_I64;
+    /* The two decisions elaboration records on the binding and the Type does
+     * not carry.  Order matters: a rank-2 poly fn PARAM is the by-value
+     * tur_poly_fn_t carrier even though its type is spelled ptr<void>, and
+     * `^fat` is an explicit request for the fat handle. */
+    if (b->is_poly_fn && b->is_param) return REPR_CARRIER_I64;
+    if (b->is_fat) return REPR_FAT_HANDLE;
+    /* A parameter's representation is fixed where it was DECLARED, not where
+     * it is later used -- a fn param normalized to fat at the signature stays
+     * fat when it appears in a tail, so asking the use position would give
+     * the wrong answer (param and result positions deliberately disagree; see
+     * fn_param_type_is_fat_normalized vs fn_result_type_is_fat_normalized). */
+    if (b->is_param) return repr_of(&b->type, REPR_POS_PARAM);
+    return repr_of(&b->type, pos);
 }

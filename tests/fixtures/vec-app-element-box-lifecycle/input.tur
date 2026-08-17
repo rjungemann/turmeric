@@ -1,0 +1,43 @@
+;; Increment 4 (repr-decision-function-plan), the container-element collapse.
+;;
+;; A concrete by-value APP element -- `(Vec (Option int))` -- is heap-boxed
+;; into its slot on push, exactly like a nominal by-value ADT element.  Before
+;; the collapse the two halves of that decision disagreed: the push side
+;; boxed (malloc of the monomorph) while the ownership fold
+;; `tur-vec-elem-wide?` answered 0, because `type_is_boxed_container_elem`
+;; only recognised TY_ADT.  So `vec-free` never released the boxes the push
+;; side had allocated, and this program leaked one box per push (measured:
+;; 32 bytes / 2 allocations under LeakSanitizer).
+;;
+;; The predicate is now defined as `repr_of(t, CONTAINER_ELEM) == BOXED_AGG`,
+;; so both halves read the same answer.  This fixture pins the OTHER
+;; direction, the one a default (unsanitized) harness run can actually see: a
+;; freed vector whose element boxes are released exactly once.  A
+;; double-free or a use-after-free here aborts instead of printing.
+;;
+;; The `Sm` vector is the control: a nominal by-value ADT element, which
+;; already took the boxed path before the collapse.
+
+(defstruct Sm [a : int])
+
+(defn main [] : int
+  (let [va (:: (vec-new) (Vec (Option int)))]
+    (vec-push! va (:: (some 11) (Option int)))
+    (vec-push! va (:: (none) (Option int)))
+    (vec-push! va (:: (some 33) (Option int)))
+    (let [a0 (:: (vec-get va 0) (Option int))
+          a1 (:: (vec-get va 1) (Option int))
+          a2 (:: (vec-get va 2) (Option int))]
+      (println (unwrap-or a0 -1))
+      (println (unwrap-or a1 -1))
+      (println (unwrap-or a2 -1)))
+    (vec-free va))
+  (let [vb (:: (vec-new) (Vec Sm))]
+    (vec-push! vb (Sm 44))
+    (vec-push! vb (Sm 55))
+    (let [b0 (:: (vec-get vb 0) Sm)
+          b1 (:: (vec-get vb 1) Sm)]
+      (println (.a b0))
+      (println (.a b1)))
+    (vec-free vb))
+  0)

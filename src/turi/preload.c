@@ -18,6 +18,12 @@ static const char *preload_root(const char *stdlib_root) {
     return (stdlib_root && stdlib_root[0]) ? stdlib_root : "stdlib";
 }
 
+/* interp-stdlib-class-method-shadows-user-defn: preload turns run with
+ * stdlib_prefix == 0, so the in_stdlib_load bracket never covers them; this
+ * flag is what marks the typeclasses they register as stdlib-owned (see
+ * runtime/globals.h).  Set for the duration of each preload helper. */
+extern bool g_turi_stdlib_preload;
+
 /* Emit and evaluate `(load "<root>/<base>")`. */
 static void preload_one(TuriEnv *env, const char *root, const char *base) {
     char form[4300];
@@ -28,12 +34,15 @@ static void preload_one(TuriEnv *env, const char *root, const char *base) {
 
 void turi_env_preload_macros(TuriEnv *env, const char *stdlib_root) {
     if (!env) return;
+    bool saved_preload = g_turi_stdlib_preload;
+    g_turi_stdlib_preload = true;
     const char *root = preload_root(stdlib_root);
     /* Each in its own eval so the file_id / Phase M7 promotion ordering that
      * cmd_eval documents holds: macros first (and/or/when/cond/for/...), then
      * contract (assert!/require!/ensure!/invariant!). */
     preload_one(env, root, "macros.tur");
     preload_one(env, root, "contract.tur");
+    g_turi_stdlib_preload = saved_preload;
 }
 
 void turi_env_preload_native_stubs(TuriEnv *env) {
@@ -117,6 +126,8 @@ void turi_env_preload_native_stubs(TuriEnv *env) {
 
 void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
     if (!env) return;
+    bool saved_preload = g_turi_stdlib_preload;
+    g_turi_stdlib_preload = true;
     const char *root = preload_root(stdlib_root);
 
     /* The typeclass-stub + typed-collection set the compiled path auto-loads.
@@ -157,10 +168,13 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
     TuriValue sv = turi_eval(env, src.data);
     (void)sv;
     buf_free(&src);
+    g_turi_stdlib_preload = saved_preload;
 }
 
 void turi_env_preload_typeclasses(TuriEnv *env, const char *stdlib_root) {
     if (!env) return;
+    bool saved_preload = g_turi_stdlib_preload;
+    g_turi_stdlib_preload = true;
     /* Load ONLY typeclass-show.tur (Show class + primitive instances +
      * Show[Vec]/Show[Set]/Show[Map]), not the full typeclass.tur.  The rest of
      * typeclass.tur (Error/Display/Debug[ptr<void>]) has inline-C instance
@@ -169,4 +183,5 @@ void turi_env_preload_typeclasses(TuriEnv *env, const char *stdlib_root) {
      * turi_env_preload_collections so the collection Show instances see their
      * backing Vec/Set/Map types. */
     preload_one(env, preload_root(stdlib_root), "typeclass-show.tur");
+    g_turi_stdlib_preload = saved_preload;
 }

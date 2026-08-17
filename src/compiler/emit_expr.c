@@ -20,6 +20,136 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
+static Type emit_fn_result_type_from_type(Type fn_type);
+
+/* Emit a fat closure's env struct definition + its drop glue at file scope,
+ * deduped through ctx->env_struct_names.  Extracted from the EX_CLOSURE
+ * construction site so the CPS twin pre-pass (emit_cps_ir.c) can define the
+ * struct BEFORE a `__cps` body that reads captures through it -- a CPS-emitted
+ * capturing callback lands earlier in the file than its construction site.
+ * `resolve_spec_params` mirrors the inner-closure-spec path (thunk param types
+ * resolved under the active spec); the CPS pre-pass passes false. */
+void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
+                                      struct Closure *closure,
+                                      const Symbol *env_name,
+                                      bool resolve_spec_params) {
+    bool already_emitted = false;
+    if (ctx->env_struct_names) {
+        for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
+            if (ctx->env_struct_names[i] == env_name) {
+                already_emitted = true;
+                break;
+            }
+        }
+    }
+    if (already_emitted) return;
+    Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
+    uint32_t thunk_arity = closure->fn->n_params > 0 ? (uint32_t)(closure->fn->n_params - 1) : 0;
+    Type _rtp[MAX_FN_ARITY];
+    Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+    if (thunk_params && resolve_spec_params) {
+        for (uint8_t _t = 0; _t < thunk_arity; _t++)
+            _rtp[_t] = emit_resolve_type(ctx, closure->fn->param_types[_t + 1]);
+        thunk_params = _rtp;
+    }
+    char *thunk_typedef = ensure_typed_thunk_typedef(ctx, out, thunk_result, thunk_params, thunk_arity);
+    /* Track this env struct */
+    if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
+        ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
+        ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
+            ctx->cap_env_struct_names * sizeof(const Symbol *));
+    }
+    ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+
+    /* Phase HKT §5: fat closure struct -- __fn first, then captures. */
+    if (thunk_typedef) {
+        buf_printf(out, "struct %s { %s __fn; ", env_name->name, thunk_typedef);
+    } else {
+        buf_printf(out, "struct %s { int64_t __fn; ", env_name->name);
+    }
+    for (uint8_t i = 0; i < closure->n_captures; i++) {
+        Binding *captured = closure->captures[i];
+        /* Edge 1: a letrec/named-let member referenced from a nested
+         * closure is captured eagerly (its globalness is unknown when
+         * collect_free_vars runs), but if it turned out captureless it
+         * is lifted as a directly-callable global with no env -- emit
+         * no field for it (it is reached by its C symbol, not a slot).
+         * Globals are never legitimately captured elsewhere, so this
+         * only affects that one case. */
+        if (captured && captured->is_global) continue;
+        char *field = raw_name_for_binding(captured);
+        /* A captured function value (fat closure or bare fn ptr) is
+         * carried as the int64_t fn-ABI carrier -- the same C type
+         * fn-typed parameters use (see emit_fns.c, TY_FN param
+         * branch).  type_c_name(TY_FN) returns the *result* type's C
+         * name (e.g. "double" for a :float-returning closure), which
+         * would store the closure pointer in a floating-point field
+         * and reinterpret it through a double on read -- a latent
+         * miscompile that only survives because valid pointers fit
+         * exactly in a double's 53-bit integer range.  Pin the field
+         * to the carrier so the stored bits and the fat-dispatch
+         * read-back agree. */
+        const char *field_ctype = captured->type.kind == TY_FN
+            ? "int64_t"
+            : emit_type_c_name(ctx, captured->type);
+        buf_printf(out, "%s %s; ", field_ctype, field);
+        free(field);
+    }
+    buf_puts(out, "};\n");
+    free(thunk_typedef);
+
+    /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
+     * can be released generically (opaque-C teardown or scope-exit)
+     * through its env[-1] header.  Releases each refcounted owning
+     * capture (rc decrement, balancing the env-fill retain) then frees
+     * the base.  MUST stay in lockstep with the emit_fns.c twin site
+     * (that pre-pass normally wins the shared env_struct_names guard;
+     * this arm is the fallback) so the rc retain/release always pairs.
+     * Non-refcounted owning captures await move analysis -- see the
+     * emit_fns.c site for the rationale. */
+    {
+        buf_printf(out,
+            "static void drop_glue_%s(void *__p) {\n", env_name->name);
+        buf_printf(out,
+            "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
+            env_name->name, env_name->name);
+        for (int32_t i = (int32_t)closure->n_captures - 1; i >= 0; i--) {
+            Binding *cap = closure->captures[i];
+            if (cap && cap->is_global) continue;
+            if (cap && cap->type.kind == TY_RC) {
+                char *cf = raw_name_for_binding(cap);
+                buf_printf(out,
+                    "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
+                    cf, cf);
+                free(cf);
+            } else if (cap && cap->is_fat &&
+                       !(cap->closure_fn_binding && closure->fn &&
+                         closure->fn->binding &&
+                         cap->closure_fn_binding == closure->fn->binding)) {
+                /* Type-honesty (a): release an OWNED `^fat` closure
+                 * handle capture (see emit_fns.c twin site). Kept in
+                 * lockstep so the move/walk pairing holds either site. */
+                char *cf = raw_name_for_binding(cap);
+                buf_printf(out, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
+                free(cf);
+            } else if (closure->capture_drop_insts &&
+                       closure->capture_drop_insts[i] &&
+                       closure->capture_drop_insts[i]->n_method_impls > 0 &&
+                       closure->capture_drop_insts[i]->method_impls[0] &&
+                       closure->capture_drop_insts[i]->method_impls[0]->binding) {
+                /* Model R #1b: Drop-instance release (see emit_fns.c twin). */
+                char *cf = raw_name_for_binding(cap);
+                char *dm = raw_name_for_binding(
+                    closure->capture_drop_insts[i]->method_impls[0]->binding);
+                buf_printf(out, "    %s(__e->%s);\n", dm, cf);
+                free(dm); free(cf);
+            }
+        }
+        buf_puts(out,
+            "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
+    }
+}
+
 /* CM3 (van-laarhoven-consumer-mono-plan): peel type-erasing wrappers off a
  * consumer call's lens argument and return the named global lens it resolves to
  * (NULL for an anonymous / runtime-selected lens -- those stay on Path A). */
@@ -349,6 +479,49 @@ static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
  * type, e.g. (tuple2 a b)).  A binding must be declared with whichever its
  * initialiser yields, or the C initialiser fails to type-check.  Non-carrier
  * types have a single representation, so they fall through to emit_type_c_name. */
+/* Increment 4 stage 3, chokepoint 1 (repr-decision-function-plan), shared
+ * predicate: the typed-pointer C name for a CONCRETE (tyvar-free) heap
+ * container / :heap struct in a declaration position, or NULL when the
+ * declared type keeps the erased carrier spelling.  Consulted by the
+ * let-binding decl (emit_binding_repr_c_name) and -- since the
+ * mut-map-reassign seam (2026-08-16) -- by the control-form merge-temp decl
+ * and its ctype mirror, so the `^mut` rebinding path spells the same
+ * protocol as the let-bind position.
+ *
+ * Guarded on the DECLARED type being tyvar-free, exactly like the shadow
+ * check: a tyvar-DECLARED binding inside a generic body keeps the erased
+ * spelling by design even when the active spec resolves it concrete --
+ * without this guard the hoisted arm re-spelled spec-emitted stdlib
+ * bodies (`x : (Map K V)` resolved to `(Map int int)`) and churned 140
+ * fixtures' codegen. */
+static const char *emit_repr_concrete_heap_ptr_c_name(EmitCtx *ctx,
+                                                      Type declared,
+                                                      ReprPosition pos) {
+    Type rbt = emit_resolve_type(ctx, declared);
+    if (!((type_is_heap_adt(rbt) || type_is_heap_struct(rbt)) &&
+          !emit_repr_type_mentions_tyvar(&declared) &&
+          !emit_repr_type_mentions_tyvar(&rbt) &&
+          /* A BARE parametric ADT base (`Map` with its args erased, standing
+           * for `(Map K V)` in a generic body) is the erased container, not a
+           * concrete type -- its element types are gone, so "mentions tyvar"
+           * cannot see them.  Keep the erased spelling; only a genuinely
+           * non-parametric def (Line, n_type_params == 0) or a concrete app
+           * takes the typed pointer. */
+          !(rbt.kind == TY_ADT && rbt.as.adt_.def &&
+            rbt.as.adt_.def->n_type_params > 0) &&
+          repr_of(&rbt, pos) == REPR_HEAP_PTR))
+        return NULL;
+    const char *hn = emit_type_c_name(ctx, rbt);
+    /* Lens family: a :heap record whose FIELDS disqualify
+     * adt_is_byvalue_product (heap-struct fields -- `Line {a: Point}`)
+     * c-names to the carrier while its ctor returns the typed pointer.
+     * Ask the def for the pointer spelling directly so the binding
+     * matches the value the ctor actually hands it. */
+    if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT && rbt.as.adt_.def)
+        hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
+    return hn;
+}
+
 static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
                                             const Expr *init) {
     Type rbt = emit_resolve_type(ctx, binding_ty);
@@ -365,36 +538,11 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
      * erased carrier spelling (same bits, unresolved element).  Placed BEFORE
      * the carrier-ABI early return: the Line family (a :heap record with
      * heap-struct fields) is NOT carrier-ABI, and the early return would
-     * hand back type_c_name's int64 spelling for it.
-     *
-     * Guarded on the DECLARED type being tyvar-free, exactly like the shadow
-     * check: a tyvar-DECLARED binding inside a generic body keeps the erased
-     * spelling by design even when the active spec resolves it concrete --
-     * without this guard the hoisted arm re-spelled spec-emitted stdlib
-     * bodies (`x : (Map K V)` resolved to `(Map int int)`) and churned 140
-     * fixtures' codegen. */
-    if ((type_is_heap_adt(rbt) || type_is_heap_struct(rbt)) &&
-        !emit_repr_type_mentions_tyvar(&binding_ty) &&
-        !emit_repr_type_mentions_tyvar(&rbt) &&
-        /* A BARE parametric ADT base (`Map` with its args erased, standing
-         * for `(Map K V)` in a generic body) is the erased container, not a
-         * concrete type -- its element types are gone, so "mentions tyvar"
-         * cannot see them.  Keep the erased spelling; only a genuinely
-         * non-parametric def (Line, n_type_params == 0) or a concrete app
-         * takes the typed pointer. */
-        !(rbt.kind == TY_ADT && rbt.as.adt_.def &&
-          rbt.as.adt_.def->n_type_params > 0) &&
-        repr_of(&rbt, REPR_POS_LET_BIND) == REPR_HEAP_PTR) {
-        const char *hn = emit_type_c_name(ctx, rbt);
-        /* Lens family: a :heap record whose FIELDS disqualify
-         * adt_is_byvalue_product (heap-struct fields -- `Line {a: Point}`)
-         * c-names to the carrier while its ctor returns the typed pointer.
-         * Ask the def for the pointer spelling directly so the binding
-         * matches the value the ctor actually hands it. */
-        if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT &&
-            rbt.as.adt_.def)
-            hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
-        return hn;
+     * hand back type_c_name's int64 spelling for it. */
+    {
+        const char *hn = emit_repr_concrete_heap_ptr_c_name(
+            ctx, binding_ty, REPR_POS_LET_BIND);
+        if (hn) return hn;
     }
 
     if (!type_uses_carrier_abi(rbt))
@@ -454,8 +602,13 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
  * is one stderr line, which the stage-3 migration reads as its blast-radius
  * measurement.  `chosen_cty` is the C type the site actually declared; the
  * observed ReprForm is recovered from it plus the resolved type. */
-static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
-                                        const char *cty) {
+/* `own_cty` is the type's OWN C spelling (what the type alone c-names to),
+ * which the caller supplies because the two shadowed TUs reach it
+ * differently: emission has a spec-substituting `emit_type_c_name(ctx, t)`,
+ * while the ADT-layout emitter runs before any EmitCtx exists and uses the
+ * ctx-free `type_c_name`.  Everything else about the recovery is shared. */
+ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
+                            const char *cty) {
     size_t n = strlen(cty);
     bool is_ptr = n >= 1 && cty[n - 1] == '*';
     if (strcmp(cty, "int64_t") == 0) {
@@ -466,7 +619,7 @@ static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
             return REPR_SCALAR_BITS;
         if (resolved.kind != TY_FN && resolved.kind != TY_ADT &&
             resolved.kind != TY_APP &&
-            strcmp(emit_type_c_name(ctx, resolved), "int64_t") == 0 &&
+            strcmp(own_cty, "int64_t") == 0 &&
             type_has_concrete_codegen_layout(&resolved))
             return REPR_SCALAR_BITS;   /* int64_t IS this scalar's spelling */
         return REPR_CARRIER_I64;
@@ -478,7 +631,7 @@ static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
         /* A pointer that is the type's own scalar spelling (cstr, Sym,
          * ptr<T> leaves) is the value's bits; any other pointer decl is a
          * heap-object handle. */
-        if (strcmp(emit_type_c_name(ctx, resolved), cty) == 0 &&
+        if (strcmp(own_cty, cty) == 0 &&
             type_has_concrete_codegen_layout(&resolved))
             return REPR_SCALAR_BITS;
         return REPR_HEAP_PTR;
@@ -491,22 +644,96 @@ static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
     return REPR_BYVAL_AGG;             /* a bare aggregate type name */
 }
 
+/* Slot positions -- an ADT/struct field, a container element, a generic
+ * carrier sink -- are ONE MACHINE WORD by construction.  Scalar bits, a heap
+ * pointer, a fat-closure handle, a boxed-aggregate pointer and the erased
+ * carrier all occupy that word identically, and which one a given word holds
+ * is decided by the STORE, not by the declaration (increment 3 consolidated
+ * the store side behind `type_is_boxed_container_elem`).  So the only
+ * question a declaration-recovered shadow can honestly ask at a slot is the
+ * binary one the slot actually answers: **inline aggregate, or one word?**
+ *
+ * This narrows what the instrument claims rather than patching the shapes it
+ * mis-reports -- the CPS-graduation rule from the meta-plan.  The first
+ * corpus sweep measured the cost of not doing it: all 84 adt-field lines
+ * were one-word-spelled-two-ways (`cty=int64_t own=<T> *`), zero were seams.
+ * Direct positions (param / result / let-bind) keep the full-resolution
+ * comparison; their spelling IS the representation there, which is what let
+ * chokepoint 1 migrate them.  The printed line always names the exact forms,
+ * so a folded pair is still readable in a trace diff. */
+static bool repr_pos_is_word_slot(ReprPosition pos) {
+    return pos == REPR_POS_STRUCT_FIELD || pos == REPR_POS_CONTAINER_ELEM ||
+           pos == REPR_POS_CARRIER_SINK;
+}
+
+static ReprForm repr_form_slot_class(ReprForm f, ReprPosition pos) {
+    if (!repr_pos_is_word_slot(pos)) return f;
+    return f == REPR_BYVAL_AGG ? REPR_BYVAL_AGG : REPR_CARRIER_I64;
+}
+
+void repr_shadow_report(const char *site, ReprPosition pos, Type resolved,
+                        ReprForm want, ReprForm got, const char *cty) {
+    if (repr_form_slot_class(want, pos) == repr_form_slot_class(got, pos))
+        return;
+    Buf tb; buf_init(&tb);
+    /* `own` is the type's own C spelling.  A sweep needs it to tell a real
+     * seam ("the site declared something other than what this type c-names
+     * to") from a spelling identity ("both are the same word, named two
+     * ways") without re-deriving it by hand per line. */
+    buf_printf(&tb, "repr-shadow %s %s type=", site, repr_position_name(pos));
+    type_print(&tb, resolved);
+    buf_printf(&tb, " want=%s got=%s cty=%s own=%s\n", repr_form_name(want),
+               repr_form_name(got), cty, type_c_name(resolved));
+    buf_putc(&tb, '\0');
+    repr_shadow_disagree(site, false, tb.data);
+    buf_free(&tb);
+}
+
 static void repr_shadow_check(EmitCtx *ctx, const char *site,
                               ReprPosition pos, Type declared_ty,
                               const char *chosen_cty) {
-    if (!g_emit_abi_trace || !chosen_cty) return;
+    if (!repr_shadow_active() || !chosen_cty) return;
     Type resolved = emit_resolve_type(ctx, declared_ty);
-    ReprForm want = repr_of(&resolved, pos);
-    ReprForm got = repr_form_from_decision(ctx, resolved, chosen_cty);
-    if (want != got) {
-        Buf tb; buf_init(&tb);
-        type_print(&tb, resolved);
-        buf_putc(&tb, '\0');
-        fprintf(stderr, "repr-shadow %s %s type=%s want=%s got=%s cty=%s\n",
-                site, repr_position_name(pos), tb.data,
-                repr_form_name(want), repr_form_name(got), chosen_cty);
-        buf_free(&tb);
-    }
+    repr_shadow_report(site, pos, resolved, repr_of(&resolved, pos),
+                       repr_form_from_cty(resolved,
+                                          emit_type_c_name(ctx, resolved),
+                                          chosen_cty),
+                       chosen_cty);
+}
+
+/* Increment 0's deferred coverage gap, closed (2026-08-16).
+ *
+ * The trace note said: "ad-hoc spill sites NOT routed through the named
+ * chokepoints do not trace -- those sites becoming chokepoint calls is
+ * increments 2-4's job, and the trace will grow with them."  The audit found
+ * 14 of them in this file, all one shape: an inline
+ * `(int64_t)(intptr_t)(val)` reinterpreting a pointer-ish value into the
+ * int64 carrier at a call boundary.
+ *
+ * They are CORRECT -- a pure reinterpret is what `emit_carrier_bridge` itself
+ * emits for a heap value, which is why the corpus and the fuzzer are clean --
+ * but each was an independent `buf_printf`, so none of them appeared in the
+ * representation trace and none could be counted.  Routing them here changes
+ * no emitted byte and makes the population visible.
+ *
+ * Deliberately NOT `emit_carrier_bridge`: that chokepoint spills, boxes, and
+ * resolves spec types, and these sites have already established their value
+ * is carrier-shaped.  Sending them through it would change behavior, which is
+ * a migration with its own measurement, not this one. */
+char *emit_carrier_reinterpret(EmitCtx *ctx, char *val, const Type *t,
+                               const char *site) {
+    (void)ctx;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "(int64_t)(intptr_t)(%s)", val);
+    buf_putc(&b, '\0');
+    if (g_emit_abi_trace)
+        fprintf(stderr, "repr-trace argcast %s %s\n", site,
+                t ? repr_form_name(repr_of(t, REPR_POS_CARRIER_SINK))
+                  : "unknown");
+    free(val);
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
 }
 
 /* KB-021: true when emitting `e` yields a *by-value* concrete carrier-ABI
@@ -1012,13 +1239,53 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
  * type -- recovered from the matched spec's resolved result (the source of
  * truth; the construct's own e->type is collapsed to the int64 carrier) or a
  * make-struct's type -- so a carrier-return slot can spill it concrete->carrier. */
+static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
+                                                    const Expr *e);
+
+/* Increment 4 stage 3: the METHOD-RESULT carrier-production shadow.
+ * Instrumenting the wrapper rather than each of this walker's ~20 return
+ * points keeps it one chokepoint and costs no duplicated logic.
+ *
+ * The invariant being watched is what this function PROMISES its callers: a
+ * type they can spell concretely on the far side of a carrier bridge.  The
+ * first sweep corrected the spec here, which is the shadow doing its job --
+ * the naive reading ("by-value carrier type" means a C aggregate) fired 5740
+ * lines, 4495 of them heap containers (`(Vec int)`, `(Cons int)`, `Set`,
+ * `Map`).  "By-value" in this walker's name is opposed to ERASED, not to
+ * pointer: a heap container's typed pointer is a perfectly concrete far side,
+ * and the crossing it feeds is the lossless pointer/carrier round trip --
+ * the same distinction the struct-field sweep had to calibrate away.
+ *
+ * So the drift condition is narrower and sharper: the walker naming a type
+ * that the protocol says is the ERASED CARRIER.  That would hand a caller an
+ * int64 dressed as a concrete spelling, which is the shape increment 2 chased
+ * through the `bind` cell -- the elab-side gate and the emit-side dispatch
+ * pairing the wrapper ABI differently. */
 Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
+    Type t = fn_body_tail_byvalue_carrier_type_inner(ctx, e);
+    if (repr_shadow_active() && t.kind != TY_UNKNOWN) {
+        ReprForm got = repr_of(&t, REPR_POS_RESULT);
+        if (got == REPR_CARRIER_I64) {
+            Buf tb; buf_init(&tb);
+            buf_puts(&tb, "repr-shadow method-result result type=");
+            type_print(&tb, t);
+            buf_puts(&tb, " want=concrete got=carrier-i64\n");
+            buf_putc(&tb, '\0');
+            repr_shadow_disagree("method-result", false, tb.data);
+            buf_free(&tb);
+        }
+    }
+    return t;
+}
+
+static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
+                                                    const Expr *e) {
     Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
     if (!e) return unknown;
     switch (e->kind) {
         case EX_ASCRIBE: {
             Type inner_t =
-                fn_body_tail_byvalue_carrier_type(ctx, e->as.ascribe_.inner);
+                fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.ascribe_.inner);
             if (inner_t.kind != TY_UNKNOWN) return inner_t;
             /* consolidation increment 2 (bind cell, ascription form): the
              * inner recovery failed -- a carrier producer whose declared
@@ -1051,27 +1318,27 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
         }
         case EX_DO:
             return e->as.do_.n > 0
-                ? fn_body_tail_byvalue_carrier_type(ctx, e->as.do_.items[e->as.do_.n - 1])
+                ? fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.do_.items[e->as.do_.n - 1])
                 : unknown;
         case EX_IF: {
-            Type t = fn_body_tail_byvalue_carrier_type(ctx, e->as.if_.then_);
+            Type t = fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.if_.then_);
             if (t.kind != TY_UNKNOWN) return t;
             return e->as.if_.else_or_null
-                ? fn_body_tail_byvalue_carrier_type(ctx, e->as.if_.else_or_null)
+                ? fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.if_.else_or_null)
                 : unknown;
         }
         case EX_MATCH: {
             /* Mirror the bool predicate: the by-value carrier type of the first
              * arm whose tail produces one. */
             for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
-                Type t = fn_body_tail_byvalue_carrier_type(ctx, e->as.match_.arms[ai].body);
+                Type t = fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.match_.arms[ai].body);
                 if (t.kind != TY_UNKNOWN) return t;
             }
             return unknown;
         }
         case EX_LET:
         case EX_LETREC:
-            return fn_body_tail_byvalue_carrier_type(ctx, e->as.let_.body);
+            return fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.let_.body);
         default: break;
     }
     const Expr *x = e;
@@ -1488,6 +1755,23 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
         emit_localvar_record_ctype(name, emit_type_c_name(ctx, bv));
         return;
     }
+    /* mut-map-reassign seam (chokepoint 1, merge-temp position): a CONCRETE
+     * heap container / :heap struct merge temp is its typed pointer, exactly
+     * like the let-bind position -- the `^mut` rebinding / control-form path
+     * was left behind by the original migration and the R3 shadow ICE'd on
+     * it (want=heap-ptr got=carrier-i64).  bridge_control_result_int_ptr
+     * reconciles a carrier-emitting tail into the pointer temp, mirroring
+     * the binding arms' int64->pointer bridge. */
+    {
+        const char *hn = emit_repr_concrete_heap_ptr_c_name(
+            ctx, type, REPR_POS_RESULT);
+        if (hn) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s;\n", hn, name);
+            emit_localvar_record_ctype(name, hn);
+            return;
+        }
+    }
     if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
         fn_body_tail_is_carrier_producer(tail_expr) &&
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_expr)) {
@@ -1526,8 +1810,15 @@ static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
                                               const Expr *tail) {
     const char *out;
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail);
+    const char *hn = (bv.kind == TY_UNKNOWN)
+        ? emit_repr_concrete_heap_ptr_c_name(ctx, type, REPR_POS_RESULT)
+        : NULL;
     if (bv.kind != TY_UNKNOWN)
         out = emit_type_c_name(ctx, bv);
+    else if (hn)
+        /* mut-map-reassign seam: mirror emit_control_result_temp_decl's
+         * concrete-heap branch exactly (chokepoint 1, merge-temp position). */
+        out = hn;
     else if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
              fn_body_tail_is_carrier_producer(tail) &&
              !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
@@ -3440,6 +3731,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (src_size == dst_size) {
                 buf_printf(&out, "((union { %s s; %s d; }){.s = %s}).d",
                            type_c_name(src), type_c_name(dst), inner);
+            } else if (src_kind == TY_FLOAT32 || dst_kind == TY_FLOAT32 ||
+                       src_kind == TY_FLOAT || dst_kind == TY_FLOAT ||
+                       src_kind == TY_FLOAT64 || dst_kind == TY_FLOAT64) {
+                /* float32-generic-call-result-printed-as-carrier: a mixed-size
+                 * pair involving a float is the int64 carrier holding float32
+                 * bits (elab admits exactly that pair).  A C value cast here
+                 * would CONVERT -- `(float)(int64_t)` of the bit pattern is
+                 * garbage -- so use the union overlay, whose smaller member
+                 * reads the carrier's low bytes: the same idiom
+                 * emit_carrier_bridge emits for the inline-scalar crossing,
+                 * which is what the producing side already used. */
+                buf_printf(&out, "((union { %s s; %s d; }){.s = %s}).d",
+                           type_c_name(src), type_c_name(dst), inner);
             } else {
                 /* Integral narrowing/widening across the int64 carrier (elab
                  * call_wrap_reinterpret only allows size mismatch when both
@@ -4164,12 +4468,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         type_uses_carrier_in_dispatch(resolved_arg_ty[i]);
                     arg_cast[i] = needs_fn_cast || needs_carrier_bridge;
                     if (needs_fn_cast) {
-                        Buf cast; buf_init(&cast);
-                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
-                        buf_putc(&cast, '\0');
-                        free(raw);
-                        raw = strdup(cast.data);
-                        buf_free(&cast);
+                        raw = emit_carrier_reinterpret(ctx, raw, NULL, "generic-call-arg");
                     } else if (needs_carrier_bridge &&
                                expr_emits_byvalue_carrier_abi(ctx, e->as.call_.args[i])) {
                         /* KB-021: only a by-value aggregate (struct literal, by-value
@@ -4532,6 +4831,47 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (_isp && _isp->clone_name)
                         thunk_name = strdup(_isp->clone_name);
                 }
+                /* generic-closure-return-type-app (Defect B, site 3): the
+                 * invoke is OUTSIDE any spec (e.g. in main), but the closure
+                 * value came from a call the emitter resolved to a spec clone
+                 * of the producing generic -- `pure__spec__...` -- whose
+                 * EX_CLOSURE stores the inner-body CLONE's thunk.  Direct-
+                 * calling the shared base thunk here would re-enter the
+                 * un-monomorphized body (whose `ctor_Cons` is never emitted:
+                 * a link error past tur check).  Resolve the outer spec the
+                 * head init actually called via the specialized-call registry,
+                 * then follow its inner-closure link -- the same pairing rule
+                 * as sites 1 and 2, keyed by the head instead of the ambient
+                 * spec. */
+                if (!thunk_name && fn_binding->closure_head_init) {
+                    const Expr *src = fn_binding->closure_head_init;
+                    while (src && src->kind == EX_ASCRIBE)
+                        src = src->as.ascribe_.inner;
+                    const char *outer_clone = NULL;
+                    if (src && src->kind == EX_CALL) {
+                        for (uint32_t si = 0; si < ctx->n_specialized_calls; si++) {
+                            if (ctx->specialized_call_exprs[si] == src) {
+                                outer_clone = ctx->specialized_call_names[si];
+                                break;
+                            }
+                        }
+                    }
+                    if (outer_clone) {
+                        for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+                            const EmitAbiSpecialization *osp =
+                                &ctx->abi_specializations[si];
+                            if (!osp->clone_name ||
+                                strcmp(osp->clone_name, outer_clone) != 0)
+                                continue;
+                            const EmitAbiSpecialization *_isp =
+                                emit_inner_closure_spec_for_binding(
+                                    ctx, osp, thunk_binding);
+                            if (_isp && _isp->clone_name)
+                                thunk_name = strdup(_isp->clone_name);
+                            break;
+                        }
+                    }
+                }
                 if (!thunk_name) thunk_name = raw_name_for_binding(thunk_binding);
                 if (!thunk_name) { fprintf(stderr, "tur: oom\n"); abort(); }
 
@@ -4628,12 +4968,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     if (formal_is_int64_carrier &&
                         (actual == TY_PTR_VOID || actual == TY_FN)) {
-                        Buf cast; buf_init(&cast);
-                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
-                        buf_putc(&cast, '\0');
-                        free(raw);
-                        raw = strdup(cast.data);
-                        buf_free(&cast);
+                        raw = emit_carrier_reinterpret(ctx, raw, NULL, "poly-call-arg");
                     } else if (formal_is_ptr && arg_is_int64_carrier) {
                         /* Reverse direction: formal slot is a pointer,
                          * but the arg's C value is the int64_t carrier (because
@@ -5268,12 +5603,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * (a pure reinterpret) -- otherwise the void* is passed to
                      * the int64_t ctor param with a -Wint-conversion warning. */
                     if (arg && arg->kind == EX_FN_TO_FAT) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-fnbox");
                     }
                     /* CONV-S1 (slice 4): when the owning ctor is itself a by-value
                      * product and this field is a by-value aggregate, the field is
@@ -5301,12 +5631,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * otherwise clang emits a -Wint-conversion note. */
                     if (!suffix && field_is_fn && arg &&
                         arg->kind != EX_FN_TO_FAT) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-fnptr");
                     }
                     /* EF-2: a handler-typed ctor field rides the int64 carrier slot
                      * (like an fn field -- see the CONV-S1 slice-6 cast above), but a
@@ -5319,12 +5644,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         i < e->as.call_.ctor->n_fields &&
                         e->as.call_.ctor->fields[i].kind == TY_HANDLER;
                     if (!suffix && field_is_handler && arg) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-byval");
                     }
                     /* EF-4: a session/role-typed ctor field also rides the int64
                      * carrier, but a `(Session P)` / `(Role G R)` VALUE is a
@@ -5337,12 +5657,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (e->as.call_.ctor->fields[i].kind == TY_SESSION ||
                          e->as.call_.ctor->fields[i].kind == TY_ROLE);
                     if (!suffix && field_is_session && arg) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-carrier");
                     }
                     /* CONV-S1/B3: a by-value ADT argument flowing into a carrier
                      * constructor's int64 field slot must be boxed (heap copy ->
@@ -5410,12 +5725,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (type_is_heap_struct(resolved_arg_type) ||
                          type_is_heap_adt(resolved_arg_type) ||
                          (field_is_carrier && is_ptr_like))) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-heap");
                     }
                     /* gcc14-int-conversion (docs/archive/history/codegen-gcc14-permerrors.md):
                      * a CONCRETE (non-carrier) rc<T>/weak<T> field lowers to
@@ -5503,12 +5813,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * does not cover it). */
                     if (!field_inline && arg &&
                         emit_resolve_type(ctx, arg->type).kind == TY_EXISTS) {
-                        Buf c; buf_init(&c);
-                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
-                        buf_putc(&c, '\0');
-                        free(arg_strs[i]);
-                        arg_strs[i] = strdup(c.data);
-                        buf_free(&c);
+                        arg_strs[i] = emit_carrier_reinterpret(ctx, arg_strs[i], NULL, "ctor-field-exists");
                     }
                     /* A FLOAT argument flowing into a ctor field that is ERASED
                      * to the int64 CARRIER -- a tyvar field of a carrier-helper
@@ -5650,6 +5955,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(suffix);
                 } else {
                     buf_printf(&out, "ctor_%s(", _mc);
+                    /* dead-base-thunk-chain-references-undefined-ctor: a
+                     * suffix-less ctor call on a HEAP parametric ADT names the
+                     * base `ctor_X`, which is never defined -- heap parametric
+                     * ADTs only get per-spec ctors (`ctor_Cons__int`), unlike
+                     * carrier-lowered parametric ADTs (Option/Result), whose
+                     * base ctor exists.  Such a call is only reachable from
+                     * the dead base generic thunk chain (every live path
+                     * routes to a spec), and `-O2` strips it, but the
+                     * reference must still COMPILE: clang 16+ hard-errors on
+                     * the implicit declaration.  Emit an extern forward
+                     * declaration in the carrier convention (base bodies are
+                     * carrier-typed); duplicates are legal C, and a genuinely
+                     * live call still fails loudly at link, which is the
+                     * desired behavior. */
+                    if (e->as.call_.ctor && e->as.call_.ctor->adt &&
+                        e->as.call_.ctor->adt->n_type_params > 0 &&
+                        e->as.call_.ctor->adt->is_heap && ctx->file) {
+                        buf_printf(ctx->file, "int64_t ctor_%s(", _mc);
+                        for (uint32_t di = 0; di < e->as.call_.n_args; di++)
+                            buf_printf(ctx->file, "%sint64_t", di ? ", " : "");
+                        buf_puts(ctx->file, ");\n");
+                    }
                 }
                 free(_mc);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
@@ -7043,12 +7370,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     !(matched_spec && i < matched_spec->n_args &&
                       (type_is_heap_struct(matched_spec->arg_types[i]) ||
                        type_is_heap_adt(matched_spec->arg_types[i])))) {
-                    Buf _hb; buf_init(&_hb);
-                    buf_printf(&_hb, "(int64_t)(intptr_t)(%s)", raw);
-                    buf_putc(&_hb, '\0');
-                    free(raw);
-                    raw = strdup(_hb.data);
-                    buf_free(&_hb);
+                    raw = emit_carrier_reinterpret(ctx, raw, NULL, "spec-call-arg");
                 }
                 /* gcc14-int-conversion (carrier-to-typed-param): cast the arg to
                  * the callee's concrete heap-pointer param type.  The existing gate
@@ -7155,12 +7477,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool arg_is_voidp = acty && strcmp(acty, "void *") == 0;
                         bool arg_is_exists = strncmp(raw, "(tur_exists_t)", 14) == 0;
                         if (arg_is_conc_ptr || arg_is_voidp || arg_is_exists) {
-                            Buf _rb; buf_init(&_rb);
-                            buf_printf(&_rb, "(int64_t)(intptr_t)(%s)", raw);
-                            buf_putc(&_rb, '\0');
-                            free(raw);
-                            raw = strdup(_rb.data);
-                            buf_free(&_rb);
+                            raw = emit_carrier_reinterpret(ctx, raw, NULL, "spec-call-heap-arg");
                         }
                     }
                     /* gcc14-int-conversion (carrier-representation-tracking,
@@ -7334,125 +7651,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 thunk_sym_override = _isp->clone_name;
             }
 
-            /* Emit env struct type definition at file scope if not already emitted */
-            /* Check if we've already emitted this env struct */
-            bool already_emitted = false;
-            if (ctx->env_struct_names) {
-                for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
-                    if (ctx->env_struct_names[i] == env_name) {
-                        already_emitted = true;
-                        break;
-                    }
-                }
-            }
-            if (!already_emitted) {
-                Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
-                uint32_t thunk_arity = closure->fn->n_params > 0 ? (uint32_t)(closure->fn->n_params - 1) : 0;
-                Type _rtp[MAX_FN_ARITY];
-                Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
-                if (thunk_params && thunk_sym_override) {
-                    for (uint8_t _t = 0; _t < thunk_arity; _t++)
-                        _rtp[_t] = emit_resolve_type(ctx, closure->fn->param_types[_t + 1]);
-                    thunk_params = _rtp;
-                }
-                char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file, thunk_result, thunk_params, thunk_arity);
-                /* Track this env struct */
-                if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
-                    ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
-                    ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
-                        ctx->cap_env_struct_names * sizeof(const Symbol *));
-                }
-                ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
-                
-                /* Phase HKT §5: fat closure struct — __fn first, then captures. */
-                if (thunk_typedef) {
-                    buf_printf(ctx->file, "struct %s { %s __fn; ", env_name->name, thunk_typedef);
-                } else {
-                    buf_printf(ctx->file, "struct %s { int64_t __fn; ", env_name->name);
-                }
-                for (uint8_t i = 0; i < closure->n_captures; i++) {
-                    Binding *captured = closure->captures[i];
-                    /* Edge 1: a letrec/named-let member referenced from a nested
-                     * closure is captured eagerly (its globalness is unknown when
-                     * collect_free_vars runs), but if it turned out captureless it
-                     * is lifted as a directly-callable global with no env -- emit
-                     * no field for it (it is reached by its C symbol, not a slot).
-                     * Globals are never legitimately captured elsewhere, so this
-                     * only affects that one case. */
-                    if (captured && captured->is_global) continue;
-                    char *field = raw_name_for_binding(captured);
-                    /* A captured function value (fat closure or bare fn ptr) is
-                     * carried as the int64_t fn-ABI carrier -- the same C type
-                     * fn-typed parameters use (see emit_fns.c, TY_FN param
-                     * branch).  type_c_name(TY_FN) returns the *result* type's C
-                     * name (e.g. "double" for a :float-returning closure), which
-                     * would store the closure pointer in a floating-point field
-                     * and reinterpret it through a double on read -- a latent
-                     * miscompile that only survives because valid pointers fit
-                     * exactly in a double's 53-bit integer range.  Pin the field
-                     * to the carrier so the stored bits and the fat-dispatch
-                     * read-back agree. */
-                    const char *field_ctype = captured->type.kind == TY_FN
-                        ? "int64_t"
-                        : emit_type_c_name(ctx, captured->type);
-                    buf_printf(ctx->file, "%s %s; ", field_ctype, field);
-                    free(field);
-                }
-                buf_puts(ctx->file, "};\n");
-                free(thunk_typedef);
+            /* Emit env struct type definition + drop glue at file scope if
+             * not already emitted.  Shared with the CPS twin pre-pass in
+             * emit_cps_ir.c, which must define the struct BEFORE an
+             * earlier-in-file __cps body reads captures through it.
+             *
+             * Route through pending_handler_fns when available: during
+             * emit_fn_def, ctx->file points INSIDE the current function's
+             * body buffer, and a `static void drop_glue_...` at block scope
+             * is invalid C.  pending_handler_fns drains to file scope AHEAD
+             * of the function being emitted -- exactly the position the
+             * struct and glue need.  (Previously this fallback wrote to
+             * ctx->file and survived only because emission order always let
+             * a file-scope site win the dedup guard first.) */
+            emit_closure_env_struct_and_glue(
+                ctx,
+                ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file,
+                closure, env_name, thunk_sym_override != NULL);
 
-                /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
-                 * can be released generically (opaque-C teardown or scope-exit)
-                 * through its env[-1] header.  Releases each refcounted owning
-                 * capture (rc decrement, balancing the env-fill retain) then frees
-                 * the base.  MUST stay in lockstep with the emit_fns.c twin site
-                 * (that pre-pass normally wins the shared env_struct_names guard;
-                 * this arm is the fallback) so the rc retain/release always pairs.
-                 * Non-refcounted owning captures await move analysis -- see the
-                 * emit_fns.c site for the rationale. */
-                {
-                    buf_printf(ctx->file,
-                        "static void drop_glue_%s(void *__p) {\n", env_name->name);
-                    buf_printf(ctx->file,
-                        "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
-                        env_name->name, env_name->name);
-                    for (int32_t i = (int32_t)closure->n_captures - 1; i >= 0; i--) {
-                        Binding *cap = closure->captures[i];
-                        if (cap && cap->is_global) continue;
-                        if (cap && cap->type.kind == TY_RC) {
-                            char *cf = raw_name_for_binding(cap);
-                            buf_printf(ctx->file,
-                                "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
-                                cf, cf);
-                            free(cf);
-                        } else if (cap && cap->is_fat &&
-                                   !(cap->closure_fn_binding && closure->fn &&
-                                     closure->fn->binding &&
-                                     cap->closure_fn_binding == closure->fn->binding)) {
-                            /* Type-honesty (a): release an OWNED `^fat` closure
-                             * handle capture (see emit_fns.c twin site). Kept in
-                             * lockstep so the move/walk pairing holds either site. */
-                            char *cf = raw_name_for_binding(cap);
-                            buf_printf(ctx->file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
-                            free(cf);
-                        } else if (closure->capture_drop_insts &&
-                                   closure->capture_drop_insts[i] &&
-                                   closure->capture_drop_insts[i]->n_method_impls > 0 &&
-                                   closure->capture_drop_insts[i]->method_impls[0] &&
-                                   closure->capture_drop_insts[i]->method_impls[0]->binding) {
-                            /* Model R #1b: Drop-instance release (see emit_fns.c twin). */
-                            char *cf = raw_name_for_binding(cap);
-                            char *dm = raw_name_for_binding(
-                                closure->capture_drop_insts[i]->method_impls[0]->binding);
-                            buf_printf(ctx->file, "    %s(__e->%s);\n", dm, cf);
-                            free(dm); free(cf);
-                        }
-                    }
-                    buf_puts(ctx->file,
-                        "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
-                }
-            }
-            
             /* Phase HKT §5: heap-allocate the fat closure struct so that the
              * fat pointer can safely escape from the local stack frame and be
              * passed to HKT helpers as an opaque int64_t.  Layout:
@@ -9603,12 +9819,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const char *icty = emit_type_c_name(ctx, e->as.ascribe_.inner->type);
                 size_t iL = icty ? strlen(icty) : 0;
                 if (icty && iL >= 1 && icty[iL - 1] == '*') {
-                    Buf cb; buf_init(&cb);
-                    buf_printf(&cb, "(int64_t)(intptr_t)(%s)", inner_val);
-                    buf_putc(&cb, '\0');
-                    free(inner_val);
-                    inner_val = strdup(cb.data);
-                    buf_free(&cb);
+                    inner_val = emit_carrier_reinterpret(ctx, inner_val, NULL, "closure-capture");
                 }
             }
             return inner_val;

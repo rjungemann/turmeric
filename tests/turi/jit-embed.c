@@ -1,4 +1,4 @@
-/* I4 (docs/upcoming/mir-interp-tier-plan.md section 2.4): the JIT engine is
+/* I4 (docs/archive/mir-interp-tier-plan.md section 2.4): the JIT engine is
  * reachable from a plain libturi embedder.
  *
  * Before I4 the engine was compiled onto the `tur` executable only, so a C
