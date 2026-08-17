@@ -2,10 +2,37 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.34.0] -- 2026-08-17
 
 ### Added
 
+- **An execution engine can be selected per project.** `:engine "cc" | "jit" |
+  "interp"` in `build.tur`, `--engine <name>` on the command line, or
+  `TUR_ENGINE` in the environment, resolved in that precedence with `"cc"`
+  last -- the same ladder `:build-dir` already used. `tur init` round-trips the
+  key. There is **no silent substitution**: an unknown value is a hard error
+  (`TUR-E0311`, with its own `tur explain` entry) and asking for `"jit"` on a
+  build without the engine names `-DTUR_JIT=ON` and the override spellings
+  rather than quietly falling back, because the engines differ in *semantics*
+  and not just speed. Unknown manifest *keys* are still silently ignored, which
+  is the documented compatibility story.
+- **`tur repl --engine <name>`.** Selects the engine that builds the enclosing
+  spice: `"cc"` (the `tur build --shared` subprocess, still the default) or
+  `"jit"` (compile the whole spice in process through MIR, no `.so`, no
+  `dlopen`). Reads the same precedence ladder as above, so `TUR_ENGINE=jit` or
+  `:engine "jit"` in `build.tur` work too.
+- **An error inside macro-generated code now names the call that generated
+  it.** Template spans survive expansion, so a diagnostic used to point into
+  the `defmacro` body with nothing tying it to the code the user actually
+  wrote. One note is appended at the call site -- "in expansion of macro
+  'name' -- the diagnostics above are inside code this call generated" -- on the
+  outermost frame only, so nested macros get a single note at the user-visible
+  call and a clean expansion followed by an unrelated error gets none.
+- **`maximum macro expansion depth exceeded` carries a hint** naming the two
+  measured causes of a base case that never fires: `nil?` on an empty `^syntax`
+  rest (an empty rest is an empty *list*, so `empty?` is the predicate), and
+  counting-driven recursion (the compile-time evaluator has no arithmetic, so a
+  spliced `(- n 1)` recurses on the unevaluated form).
 - **`^thread-local` on a top-level `def`**, behind `--enable=global-state`.
   Each thread gets its own copy, materialized on first access and initialized by
   running the declared initializer *on that thread* -- so
@@ -65,6 +92,64 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **Three experiments graduated: `cycle-gc`, `sealed-opaque`, and `jit`.** Each
+  gate had nothing left to decide. Existing opt-ins keep working and can be
+  deleted at leisure -- `--enable=<name>`, `:experiments [<name>]` in
+  `build.tur`, and the user experiments file are all accepted as no-ops with
+  `TUR-W0063`.
+
+  - **`(gc-auto!)` is an ordinary call form.** What graduated is the *call*, not
+    a default. `GC_AUTO` remains strictly opt-in, permanently: a program that
+    never calls `(gc-auto!)` still runs the pure-RC path with no collector
+    overhead, and the AUTO-only allocation cost is conditional on the mode at
+    run time. **Automatic GC is not becoming the default in this language**,
+    before or after v1. That the two decisions were separable is the whole
+    reason ungating cost a non-calling program nothing. Baked from 0.30.8 across
+    the 0.31-0.33 lines, with pause time fixed, the allocation-path cost
+    measured (~10%, fixed overhead rather than per-byte), and steady-state
+    residue on a real-shape workload measured at ~60 blocks.
+  - **`:sealed` on a `defopaque` now enforces on every compile.** Outside the
+    declaring module, `::` refuses both the unwrap and the fabricate direction
+    (`TUR-E0302`), closing the extract-and-re-wrap aliasing hole that otherwise
+    bounds every guarantee built on an opaque handle. Unusually low-risk for a
+    graduation: with the gate off `:sealed` already parsed and imposed nothing,
+    so this reaches only code that deliberately *wrote* `:sealed`. The
+    two-direction rule the gate existed to question survived the one spice that
+    adopted it, so it graduates as designed rather than narrowed to
+    fabrication-only. Still a compile-time discipline over the `::` surface --
+    inline-C can cast an `int64_t` to anything, so this raises the bypass from
+    "one `::` away in ordinary code" to "requires deliberate inline-C" and does
+    not claim more.
+  - **`tur jit` no longer needs a run-time flag.** The parity condition the gate
+    was holding for is discharged: the whole fixture corpus runs through the
+    engine on both hosts with an empty denylist. **The build-time gate stays and
+    is now the only one** -- `-DTUR_JIT=ON` vendors MIR at configure time, a
+    default build carries neither the fetch nor the dependency, and `tur jit` on
+    such a binary says so. `cc` is still the default engine; the JIT runs when
+    you invoke `tur jit` or when engine selection asks for it.
+
+  One thing moved rather than being deleted: `--enable=jit` was the only switch
+  that turned on the in-process REPL spice loader, so removing it would have
+  forced a choice between making that path the default and losing it. It now
+  hangs off engine selection (`tur repl --engine jit`), which is why `tur repl`
+  grew `--engine` in this release. Unset, the subprocess path is unchanged.
+- **A capturing closure passed to an effect-row'd `(fn ...)` parameter is now
+  `TUR-E0007`.** Such a parameter keeps the thin calling convention, which has
+  nowhere to carry a closure environment, so the callee jumped into the
+  environment box as code -- a clean compile and a SIGBUS at run time. Only the
+  capturing, non-performing shape reached the crash (a capturing callback that
+  *performs* already died loudly at CPS-subset eviction). Concrete, empty, and
+  row-variable rows all rode thin and all crashed; all three are now refused at
+  the call site. Annotating the parameter `^fat` is the way to accept one.
+- **`tur build <dir>`, `tur check <dir>` and `tur test <dir>` walk
+  subdirectories.** They used a flat `readdir`, so a spice whose modules live
+  one level down -- `src/demo/lib.tur`, the layout `:exports "demo/lib"` implies
+  -- reported `no .tur files found in 'src/'`. That was the exact invocation the
+  `module not found` diagnostic recommends, so the advertised recovery from one
+  confusing error produced a second one. Project mode already recursed, so the
+  two spellings of "build this spice" disagreed. `<dir>` also goes on the
+  include path as its own module root now, without which finding the files
+  merely moved the failure to `module 'demo/lib' not found`.
 - **`def` and `define` are one form; position, not spelling, selects the
   meaning.** `def` at the top level is a global binding (unchanged, and
   redefining is still an error); `def` in a body is a binding scoped over the
@@ -88,6 +173,47 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **The rational/complex numeric tower now runs on all three engines.** Measured
+  under the MIR engine for the first time: every rational and complex fixture
+  passes with **zero** `cc` fallbacks, from one pure-Turmeric implementation
+  against the same expected output. The 16-byte-struct ABI problem this was
+  expected to hit never materialized, so the by-pointer workaround sketched for
+  it was never needed. The standing rule that no `_Complex`, `<complex.h>`, or
+  `__mul*c3`/`__div*c3` reaches the generated C is now enforced by every plain
+  `bash tests/run.sh`, not only by its own ctest target.
+- **The interpreter resolves typeclass dictionaries the same way the compiler
+  does.** All three recovery heuristics turi used to guess an instance from a
+  receiver's runtime tag are retired, the last one covering an unascribed
+  carrier-helper read inside a constrained container instance. Where the
+  compiled path had solved these statically, the interpreter was pattern-matching
+  on runtime tags and could disagree with it; dictionary passing now carries all
+  of them, so the two engines agree by construction rather than by coincidence.
+- **Several float and carrier miscompiles.** A method result declared `:float`
+  keyed off the *body* rather than the declared result type; a float literal
+  ascribed to a narrower float width was not retyped in place; a `float32`
+  generic-call result had no admitted carrier pair; and the int-slot/float-body
+  engine divergence (`TUR-E0707`) was asymmetric between engines. Also a silent
+  per-push leak in the container-element path, and seven mismatched fat-closure
+  function-pointer types.
+- **A multi-shot resume across a nested handler delivers once.** The handler
+  chain carried two separate spines, so a resume crossing a nested `handle`
+  could deliver twice or not at all. `while` loops and statement-position
+  conditionals inside a handler clause work now too -- the latter used to hit an
+  internal compiler error rather than a diagnostic.
+- **A malformed `build.tur` fails the command instead of vanishing.** A manifest
+  that failed to parse was treated as absent, so the command proceeded with
+  whatever defaults applied and the real problem never surfaced.
+- **Assorted correctness fixes.** A `^borrow` parameter passed where `^unique
+  ^mut` is required is rejected; an explicit `: nil` return on a lambda is
+  honoured; generic instance resolution survives a `#lang` switch; an HKT type
+  variable is pinned from the argument type across a rank-2 `forall`; a return
+  type disagreeing with an aggregate body is rejected; `definstance` constraint
+  types resolve through the real type resolver; `println` prefers a resolved
+  `bool` shape over the runtime tag; a hoisted inline-C include no longer
+  disables the JIT's split-preamble fast path; the REPL's source-file registry
+  survives incremental eval turns; elaborator-minted names stay out of the LSP
+  symbol index; and `term/set-cooked` restores the saved terminal mode rather
+  than a zeroed one.
 - **A `#writes` frame is no longer VERIFIED when the body writes a mutable
   global** (behind `--enable=write-frames`). A frame's vocabulary is
   *parameters*; a global is written by name rather than passed, so `#writes []`

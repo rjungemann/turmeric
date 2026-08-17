@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.33.2` -- `#writes` write frames land behind `--enable=write-frames`, giving a checked per-argument write declaration that refinement hypotheses widen against; and the interpreter now copies by-value struct arguments, so a struct write no longer diverges between backends.
+**Latest release:** `v0.34.0` -- three experiments graduate: `(gc-auto!)`, `:sealed` opaque newtypes, and `tur jit` all work without a flag (automatic GC stays opt-in and `cc` stays the default engine); plus per-project engine selection via `:engine` in `build.tur`, `--engine`, or `TUR_ENGINE`.
 
 ## What
 
