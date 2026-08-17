@@ -4761,6 +4761,20 @@ static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
     if (t->kind == TY_EXISTS)
         return REPR_HEAP_PTR;
 
+    /* SS1/SS2 internal session pairs (make-session's [Session, Session]
+     * and recv's [T, Session]) are the same shape: a heap-boxed pair whose
+     * only C spelling is its `void *` pointer, so the pointer IS the value
+     * wherever it travels.  Their TY_SIMPLE_REPR_ROWS layout column stays
+     * false on purpose (they must never form a by-value monomorph or a
+     * type argument), which is why the generic scalar fallthrough below
+     * cannot see them -- without this arm the merge-temp shadow reports
+     * the site's correct `void *` decl as a carrier/heap-ptr seam
+     * (stdlib/session.tur, recv inside a control-form tail).  The offer
+     * result (TY_SESSION_OFFER, int64_t-spelled) rides the carrier via
+     * the fallthrough, which already agrees with its declarations. */
+    if (t->kind == TY_SESSION_PAIR || t->kind == TY_SESSION_RECV_PAIR)
+        return REPR_HEAP_PTR;
+
     /* `any` / union values are the two-word tur_tagged_t -- a real by-value
      * aggregate at direct positions; the erased carrier at generic sinks and
      * container slots (the layout switch deliberately rejects them from

@@ -2704,10 +2704,7 @@
 ;;; (typedefs in src/async/reactor.c) -- every value parameter is int64_t.  A
 ;;; `ptr<void>` spelling emits a `void *` C parameter, which -fsanitize=function
 ;;; flags (and CFI/CET-BTI/WASM reject) at every dispatch.
-(defn httpd-async-accept-cb [env : ptr<void>
-                             id : int
-                             events : int
-                             user : int] : nil
+(defn httpd-async-accept-cb [env : ptr<void> id : int events : int user : int] : nil
   ```c
   (void)id; (void)events; (void)user;
   typedef struct {
