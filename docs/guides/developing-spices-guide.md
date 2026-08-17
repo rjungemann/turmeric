@@ -570,6 +570,26 @@ defn db-open [path :cstr] (result :ptr)
 actual C header. No `-I` or `-L` flags are needed in your source; `tur build`
 injects them from `cmake/spice-deps-manifest.json`.
 
+### Constants: `#define`s do not survive linking -- re-export them
+
+A C library's `#define ZMQ_REP 4` / `SQLITE_OK 0` constants never reach a
+symbol table, so neither `extern-c` nor the dynamic FFI can resolve them --
+consumers of your spice (and REPL users) would otherwise have to restate
+magic numbers. Wrap each constant the library's API needs as a plain
+definition, **adjacent to the `extern-c` block it belongs to** so drift
+against the upstream header stays reviewable in one place:
+
+```turmeric no-check
+;; sqlite3.h result codes the API surface uses (keep next to the externs).
+(defn SQLITE-OK   [] :int 0)
+(defn SQLITE-ROW  [] :int 100)
+(defn SQLITE-DONE [] :int 101)
+```
+
+Exported like any other defn, these are callable from consumers and from
+the REPL, and a header bump that renumbers something is a one-line,
+reviewable diff instead of a scavenger hunt through call sites.
+
 ### Inline C for small wrappers
 
 When a binding is simpler to write directly in C, use an inline-C block:

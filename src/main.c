@@ -1882,6 +1882,27 @@ static void collect_build_aux(const char *input, Buf *cmake_flags,
             pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
             pkg_cmake_manifest_free(&cmake_manifest);
         }
+        /* ffi-spices-integration-plan S1: `:build-opts :link-libs` was
+         * parsed into the manifest (pkg.c) and then consumed nowhere --
+         * documented, round-tripped by `tur init`, and ignored by every
+         * build path.  Append it here, next to the cmake-dep flags, so both
+         * consumers of this function (the cc link line via
+         * cmd_build/cmd_compile, and the REPL's in-process JIT hook via
+         * repl_jit_build) receive it.  Entries are bare lib names
+         * (:link-libs ["m"] -> -lm), the same spelling the cmake manifest
+         * uses. */
+        char bm[4096];
+        if (pkg_resolve_manifest_path(proj_root, bm, sizeof(bm))) {
+            PkgManifest pm;
+            memset(&pm, 0, sizeof(pm));
+            if (pkg_manifest_read(bm, &pm)) {
+                for (int i = 0; i < pm.n_link_libs; i++) {
+                    if (pm.link_libs[i] && pm.link_libs[i][0])
+                        buf_printf(cmake_flags, " -l%s", pm.link_libs[i]);
+                }
+            }
+            pkg_manifest_free(&pm);
+        }
         collect_spice_aux_c(proj_root, aux_includes, aux_sources);
         free(proj_root);
     }
@@ -3920,6 +3941,48 @@ static int repl_jit_build(const char *build_dir, void **out_image,
     Buf autolink;
     buf_init(&autolink);
     scan_autolink_markers(&csrc, &autolink);
+
+    /* ffi-spices-integration-plan S1: the subprocess build injects the
+     * spice's cmake-dep and :link-libs flags into cc's link line; the
+     * in-process image's equivalent is the autolink string, whose -L/-l
+     * entries jit_load_autolink dlopens RTLD_GLOBAL before MIR_link
+     * resolves.  Without this, a spice that declares its C dependency the
+     * recommended way (:cmake-deps / :link-libs, no __tur_autolink__
+     * marker anywhere) compiled fine in-process and then failed to resolve
+     * the library's symbols.  Vendored :c-sources cannot be MIR-linked
+     * in-process at all -- fail the hook so the loader falls back to the
+     * subprocess path, which compiles them into the .so. */
+    {
+        Buf cmk, auxi, auxs;
+        buf_init(&cmk);
+        buf_init(&auxi);
+        buf_init(&auxs);
+        char probe[4400];
+        snprintf(probe, sizeof(probe), "%s/build.tur", rootd);
+        collect_build_aux(probe, &cmk, &auxi, &auxs);
+        bool have_aux_sources = auxs.len > 0;
+        if (cmk.len > 0) {
+            if (autolink.len > 0) {
+                /* scan_autolink_markers NUL-terminated it; reopen. */
+                autolink.len--;
+            }
+            buf_write(&autolink, cmk.data, cmk.len);
+            buf_putc(&autolink, '\0');
+        }
+        buf_free(&cmk);
+        buf_free(&auxi);
+        buf_free(&auxs);
+        if (have_aux_sources) {
+            fprintf(stderr,
+                    "tur repl: jit: this spice vendors C sources "
+                    "(:c-sources), which the in-process engine cannot "
+                    "link; using the subprocess build instead.\n");
+            buf_free(&csrc);
+            buf_free(&autolink);
+            buf_free(&manifest);
+            return -1;
+        }
+    }
 
     /* S2: same hash-gated preamble swap as cmd_jit -- a REPL reload is
      * exactly the loop the split exists for. */

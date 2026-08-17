@@ -97,20 +97,61 @@ typedef struct FfiBindingUd {
     const TurSpiceExport *export_;
 } FfiBindingUd;
 
+/* ffi-spices-integration-plan S2: build the rest-list for a variadic
+ * export.  Mirrors the compiled call sites' EX_CONS_LIST emission exactly:
+ * right-folded malloc'd {int64 head, int64 tail} cells, empty list = 0, an
+ * int-class element stored directly and a float element stored as its
+ * IEEE-754 bit pattern (a plain integer cast would truncate 1.5 to 1).
+ * Cells are deliberately never freed -- the compiled path's __tur_cons_of
+ * has no free either (callees may retain the list), so per-call leakage is
+ * the established semantics of variadic rest lists, not a REPL regression.
+ * Returns 0 on success with *out_list set; -1 with *err filled. */
+static int ffi_build_rest_list(const char *export_name, TuriValue *args,
+                               uint32_t from, uint32_t to, char rest_class,
+                               int64_t *out_list, TuriValue *err) {
+    typedef struct { int64_t head; int64_t tail; } ConsCell;
+    int64_t list = 0;
+    for (uint32_t k = to; k > from; k--) {
+        const TuriValue *v = &args[k - 1];
+        int64_t head;
+        if (rest_class == 'f') {
+            double d;
+            if (marshal_arg_f(v, &d) != 0) {
+                *err = turi_errorf(
+                    "ffi: '%s' rest arg %u: expected %s, got %s",
+                    export_name, k - 1, class_name('f'), tag_name(v->tag));
+                return -1;
+            }
+            union { double d; int64_t i; } u;
+            u.d = d;
+            head = u.i;
+        } else {
+            if (marshal_arg_i(v, &head) != 0) {
+                *err = turi_errorf(
+                    "ffi: '%s' rest arg %u: expected %s, got %s",
+                    export_name, k - 1, class_name('i'), tag_name(v->tag));
+                return -1;
+            }
+        }
+        ConsCell *c = (ConsCell *)malloc(sizeof(ConsCell));
+        if (!c) {
+            *err = turi_error("ffi: out of memory building rest list");
+            return -1;
+        }
+        c->head = head;
+        c->tail = list;
+        list = (int64_t)(intptr_t)c;
+    }
+    *out_list = list;
+    return 0;
+}
+
 static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
                                   void *ud) {
     (void)env;
     const FfiBindingUd *bud = (const FfiBindingUd *)ud;
     const TurSpiceExport *e = bud->export_;
 
-    /* RP4 v1 limits: reject variadic exports and unsupported classes
-     * with messages that point at the most useful next step. */
-    if (e->is_variadic) {
-        return turi_errorf(
-            "ffi: variadic spice export '%s/%s' is not callable from the "
-            "REPL yet (cons-list marshaling lands in a later RP)",
-            e->module, e->name);
-    }
     if (e->ret_class == '?') {
         return turi_errorf(
             "ffi: spice export '%s/%s' returns a type the FFI layer "
@@ -118,13 +159,19 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
             "primitives are supported in v1",
             e->module, e->name);
     }
-    if (n != e->n_args) {
+    /* S2: a variadic export's n_args INCLUDES the trailing rest-list slot;
+     * the REPL call supplies at least the positional prefix, and everything
+     * beyond it is folded into the cons list below. */
+    uint32_t fixed = e->is_variadic ? e->n_args - 1 : e->n_args;
+    if (e->is_variadic ? (n < fixed) : (n != e->n_args)) {
         return turi_errorf(
-            "ffi: '%s/%s' expects %u arg%s, got %u",
+            "ffi: '%s/%s' expects %s%u arg%s, got %u",
             e->module, e->name,
-            (unsigned)e->n_args, e->n_args == 1 ? "" : "s",
+            e->is_variadic ? "at least " : "",
+            (unsigned)fixed, fixed == 1 ? "" : "s",
             (unsigned)n);
     }
+    uint32_t nslots = e->n_args;   /* what the callee's C signature takes */
 
     /* Marshal args -- abort on the first mismatch with a per-arg diagnostic so
      * the user knows exactly which value was wrong.  Small arities use inline
@@ -134,9 +181,9 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
     double   f_inl[TUR_SPICE_ARITY_FASTPATH];
     int64_t *i_vals = i_inl, *i_heap = NULL;
     double  *f_vals = f_inl, *f_heap = NULL;
-    if (n > TUR_SPICE_ARITY_FASTPATH) {
-        i_heap = (int64_t *)malloc((size_t)n * sizeof(int64_t));
-        f_heap = (double  *)malloc((size_t)n * sizeof(double));
+    if (nslots > TUR_SPICE_ARITY_FASTPATH) {
+        i_heap = (int64_t *)malloc((size_t)nslots * sizeof(int64_t));
+        f_heap = (double  *)malloc((size_t)nslots * sizeof(double));
         if (!i_heap || !f_heap) {
             free(i_heap); free(f_heap);
             return turi_error("ffi: out of memory marshalling call");
@@ -145,7 +192,7 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
     }
 
     TuriValue result;
-    for (uint32_t k = 0; k < n; k++) {
+    for (uint32_t k = 0; k < fixed; k++) {
         char cls = e->arg_classes[k];
         if (cls == 'i') {
             if (marshal_arg_i(&args[k], &i_vals[k]) != 0) {
@@ -171,6 +218,22 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
         }
     }
 
+    /* S2: fold everything past the positional prefix into the rest list
+     * and hand it to the callee's final (int64 cons-list-pointer) slot. */
+    if (e->is_variadic) {
+        int64_t list = 0;
+        TuriValue err;
+        char ename[512];
+        snprintf(ename, sizeof ename, "%s/%s", e->module, e->name);
+        if (ffi_build_rest_list(ename, args, fixed, n, e->rest_class,
+                                &list, &err) != 0) {
+            result = err;
+            goto cleanup;
+        }
+        i_vals[fixed] = list;
+        f_vals[fixed] = 0.0;
+    }
+
     {
         int64_t out_i = 0;
         double  out_f = 0.0;
@@ -185,15 +248,15 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
             char sig[TUR_SPICE_ARITY_FASTPATH + 3];
             char *sigp = sig;
             char *sig_heap = NULL;
-            if ((size_t)n + 3 > sizeof sig) {
-                sig_heap = (char *)malloc((size_t)n + 3);
+            if ((size_t)nslots + 3 > sizeof sig) {
+                sig_heap = (char *)malloc((size_t)nslots + 3);
                 sigp = sig_heap;
             }
             if (sigp) {
                 sigp[0] = e->ret_class;
                 sigp[1] = ':';
-                if (n) memcpy(sigp + 2, e->arg_classes, n);
-                sigp[n + 2] = '\0';
+                if (nslots) memcpy(sigp + 2, e->arg_classes, nslots);
+                sigp[nslots + 2] = '\0';
                 jt = jp->thunk_for(sigp, NULL, 0);
             }
             free(sig_heap);

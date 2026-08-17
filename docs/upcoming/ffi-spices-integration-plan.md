@@ -1,7 +1,34 @@
 # FFI x spices: closing the gaps between the dynamic FFI and the package layer
 
-> **Status:** proposed (2026-08-17). **Track:** post-v1, incremental --
-> each phase is independently landable.
+> **Status:** S1, S2, S4 implemented (2026-08-17); S3 is a cross-reference
+> (tracked in jit-ffi-c2mir-plan F4/F5); S5 blocked on JIT REPLs becoming
+> the default configuration.  Proposed 2026-08-17.
+> **Track:** post-v1, incremental -- each phase is independently landable.
+>
+> **Implementation notes:**
+> - S1 went further than the fix shape: `:build-opts :link-libs` turned out
+>   to be parsed and consumed NOWHERE (schema + docs only), so
+>   `collect_build_aux` now appends it for every consumer -- the cc link
+>   line gets it too, not just the REPL hook.  A hook build failure also no
+>   longer fails the whole spice load: the loader falls back to the
+>   subprocess path (which handles vendored :c-sources and static-only
+>   cmake deps the engine cannot).  Test:
+>   `tests/turi/repl-spice-linklibs.sh` (hermetic -- builds its own .so),
+>   ctest `tur_repl_spice_linklibs`.
+> - S2 surfaced a latent loader bug: the exports-manifest parser pushed an
+>   extra arg slot for the `&` marker even though `fd->n_params` already
+>   includes the rest formal (`(:int :int & :int)` parsed as arity 3, and a
+>   :float rest slot would have classed 'f' where the callee takes a
+>   pointer) -- harmless only while variadic exports were rejected
+>   outright.  Fixed alongside the marshaller; the rest-list builder
+>   mirrors the compiled EX_CONS_LIST emission (right-folded malloc'd
+>   cells, float heads as IEEE-754 bit patterns, never freed -- matching
+>   compiled semantics).  Tests: `s2-variadic-*` in
+>   `tests/turi/repl-spice-call.sh`, green on all three dispatch rungs
+>   (shape table, JIT thunk, in-process hook).
+> - S4: the constants convention is documented in
+>   developing-spices-guide.md ("Constants: #defines do not survive
+>   linking").
 > **Builds on:** [jit-ffi-c2mir-plan.md](jit-ffi-c2mir-plan.md) (F1-F3
 > implemented; F4/F5 trailing),
 > [docs/guides/developing-spices-guide.md](../guides/developing-spices-guide.md),

@@ -27,7 +27,7 @@ cat > "$PROJ/build.tur" <<'EOF'
 EOF
 cat > "$PROJ/src/lib.tur" <<'EOF'
 (defmodule sh
-  (export add42 mul scale answer noisy sum12 wide-mix imix9)
+  (export add42 mul scale answer noisy sum12 wide-mix imix9 vsum)
   (defn add42 [x :int] :int (+ x 42))
   (defn mul [a :int b :int] :int (* a b))
   (defn scale [x :float y :float] :float (* x y))
@@ -48,7 +48,27 @@ cat > "$PROJ/src/lib.tur" <<'EOF'
   ;; Wide all-int, int return, to pin the int-slot indexing at arity 9.
   (defn imix9 [a :int b :int c :int d :int e :int
                f :int g :int h :int i :int] :int
-    (- a (+ b (+ c (+ d (+ e (+ f (+ g (+ h i))))))))))
+    (- a (+ b (+ c (+ d (+ e (+ f (+ g (+ h i)))))))))
+  ;; ffi-spices-integration-plan S2: a variadic export.  The REPL shim
+  ;; folds everything past the positional prefix into a right-folded
+  ;; cons list and passes it in the trailing int64 slot; these helpers
+  ;; walk it on the compiled side.
+  (defn vhead [lst :int] #fx{Unsafe} :int
+    ```c
+    typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+    __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+    return p ? p->head : 0;
+    ```)
+  (defn vtail [lst :int] #fx{Unsafe} :int
+    ```c
+    typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+    __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+    return p ? p->tail : 0;
+    ```)
+  (defn vsum-acc [lst :int acc :int] #fx{Unsafe} :int
+    (if (= lst 0) acc (vsum-acc (vtail lst) (+ acc (vhead lst)))))
+  (defn vsum [x :int & rest :int] #fx{Unsafe} :int
+    (+ x (vsum-acc rest 0))))
 EOF
 
 PASS=0
@@ -152,6 +172,26 @@ if echo "$out" | grep -qx '=> 43' && echo "$out" | grep -qx '=> 3'; then
     pass "rp4-call-env-unaffected"
 else
     fail "rp4-call-env-unaffected" "$out"
+fi
+
+# --- S2: variadic export marshalling ------------------------------------
+# The REPL shim folds args past the positional prefix into a right-folded
+# cons list (float heads as IEEE-754 bit patterns) and passes it in the
+# trailing int64 slot -- the same list the compiled call sites build.
+
+out=$(run '(vsum 1 2 3 4)')
+if echo "$out" | grep -qx '=> 10'; then pass "s2-variadic-rest"
+else fail "s2-variadic-rest" "expected => 10 from (vsum 1 2 3 4); got: $(echo "$out" | tail -3 | tr '\n' ' ')"
+fi
+
+out=$(run '(vsum 5)')
+if echo "$out" | grep -qx '=> 5'; then pass "s2-variadic-empty-rest"
+else fail "s2-variadic-empty-rest" "expected => 5 from (vsum 5); got: $(echo "$out" | tail -3 | tr '\n' ' ')"
+fi
+
+out=$(run '(vsum)')
+if echo "$out" | grep -q 'expects at least 1'; then pass "s2-variadic-underflow"
+else fail "s2-variadic-underflow" "expected an at-least-arity error for (vsum); got: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 
 echo

@@ -383,9 +383,35 @@ static void jit_sync_config_globals (MIR_context_t ctx) {
  * -lturi and the libs `tur` already links (m, pthread, dl) are skipped --
  * their symbols are resolvable in this process by construction.  Any entry
  * that fails to load fails the whole JIT attempt, which the caller turns
- * into the step-6 fallback to cc. */
+ * into the step-6 fallback to cc (or, for the REPL spice hook, the
+ * subprocess build).
+ *
+ * ffi-spices-integration-plan S1: -L dirs are honored -- a cmake-built
+ * spice dependency lives in the build tree, not on the default search
+ * path, so each -l probes `<Ldir>/lib<name>.so` (and .dylib on Apple)
+ * before falling back to the bare soname.  A static-only dep (.a, which
+ * dlopen cannot load) therefore fails here cleanly rather than resolving
+ * against nothing. */
 static int jit_load_autolink (const char *flags) {
   if (!flags) return 0;
+  enum { MAX_LDIRS = 16 };
+  const char *ldir[MAX_LDIRS];
+  size_t ldir_len[MAX_LDIRS];
+  size_t n_ldirs = 0;
+  /* Pass 1: collect -L dirs (cc semantics: all -L apply to every -l,
+   * regardless of order). */
+  for (const char *p = flags; *p;) {
+    while (*p == ' ') p++;
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    if (e - p > 2 && p[0] == '-' && p[1] == 'L' && n_ldirs < MAX_LDIRS) {
+      ldir[n_ldirs] = p + 2;
+      ldir_len[n_ldirs] = (size_t) (e - p - 2);
+      n_ldirs++;
+    }
+    p = e;
+  }
+  /* Pass 2: dlopen each -l entry. */
   const char *p = flags;
   while (*p) {
     while (*p == ' ') p++;
@@ -399,10 +425,34 @@ static int jit_load_autolink (const char *flags) {
         name[n] = '\0';
         if (strcmp (name, "turi") != 0 && strcmp (name, "m") != 0
             && strcmp (name, "pthread") != 0 && strcmp (name, "dl") != 0) {
-          char soname[300];
-          snprintf (soname, sizeof soname, "lib%s.so", name);
-          if (dlopen (soname, RTLD_NOW | RTLD_GLOBAL) == NULL) {
-            fprintf (stderr, "tur: jit: cannot load %s: %s\n", soname, dlerror ());
+          void *h = NULL;
+          char soname[4400];
+          for (size_t d = 0; h == NULL && d < n_ldirs; d++) {
+            if (ldir_len[d] + n + 32 >= sizeof soname) continue;
+            snprintf (soname, sizeof soname, "%.*s/lib%s.so",
+                      (int) ldir_len[d], ldir[d], name);
+            h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+#if defined(__APPLE__)
+            if (h == NULL) {
+              snprintf (soname, sizeof soname, "%.*s/lib%s.dylib",
+                        (int) ldir_len[d], ldir[d], name);
+              h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+            }
+#endif
+          }
+          if (h == NULL) {
+            snprintf (soname, sizeof soname, "lib%s.so", name);
+            h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+          }
+#if defined(__APPLE__)
+          if (h == NULL) {
+            snprintf (soname, sizeof soname, "lib%s.dylib", name);
+            h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+          }
+#endif
+          if (h == NULL) {
+            fprintf (stderr, "tur: jit: cannot load lib%s: %s\n", name,
+                     dlerror ());
             return -1;
           }
         }

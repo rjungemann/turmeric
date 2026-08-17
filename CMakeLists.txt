@@ -605,6 +605,17 @@ add_test(
   COMMAND bash tests/turi/repl-spice-call.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# ffi-spices-integration-plan S1: a spice declaring its C dependency via
+# the cmake deps manifest (link_dirs/link_libs, no autolink marker) is
+# loadable and callable at the REPL -- through cc's link line on the
+# subprocess path, and through the engine's autolink dlopen (-L dir
+# probing) on the in-process TUR_ENGINE=jit path.  Hermetic: builds its
+# own .so in the test temp dir.
+add_test(
+  NAME tur_repl_spice_linklibs
+  COMMAND bash tests/turi/repl-spice-linklibs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP5: integration test for the `(reload)` REPL form. Exercises the
 # no-spice / no-changes / rebuild-after-edit / arity-check paths.
 add_test(
