@@ -2572,6 +2572,19 @@ Expr *elab_call(Elab *e, Form *call) {
     if (macro) {
         if (e->macro_expand_depth >= ELAB_MAX_MACRO_EXPANSION_DEPTH) {
             diag_emit(DIAG_ERROR, call->span, "maximum macro expansion depth exceeded");
+            /* The two ways a recursive macro's base case silently never fires,
+             * both measured in practice (see docs/guides/macros-guide.md):
+             * an empty `& ^syntax` rest is an EMPTY LIST, so `nil?` on it is
+             * always false (`empty?` is the right predicate); and the
+             * compile-time evaluator has no arithmetic, so a spliced
+             * `~(- n 1)` recurses on the unevaluated FORM `(- n 1)`, which
+             * never equals 0. */
+            diag_emit(DIAG_NOTE, call->span,
+                      "a recursive macro whose base case never fires is the "
+                      "usual cause: test an empty rest with (empty? xs), not "
+                      "(nil? xs), and note the compile-time evaluator has no "
+                      "arithmetic -- drive recursion by argument list "
+                      "structure, not by counting");
             return NULL;
         }
         /* ambiguous-dispatch-error-quality: record the OUTERMOST macro call site
@@ -2580,6 +2593,14 @@ Expr *elab_call(Elab *e, Form *call) {
          * they wrote the macro call rather than at stdlib/macros.tur. */
         if (e->macro_expand_depth == 0) e->macro_call_site_span = call->span;
         e->macro_expand_depth++;
+        /* macro-expansion provenance: template spans survive expansion, so an
+         * error inside generated code points at the DEFMACRO body -- useless
+         * to a caller who did not write the macro.  Bracket the whole
+         * expand+elaborate window with the shown-error serial and, on the
+         * OUTERMOST frame only, append one note naming the call the user
+         * actually wrote.  Inner frames stay silent so a nested-macro error
+         * gets a single note at the user-visible call, not one per layer. */
+        uint64_t mx_err_before = diag_error_serial();
         /* Expand the macro with arguments */
         /* Extract arguments (rest of list) */
         uint32_t n_args = call->as.list.len - 1;
@@ -2590,6 +2611,12 @@ Expr *elab_call(Elab *e, Form *call) {
         
         Form *expanded = elab_expand_macro(e, macro, args, n_args);
         if (!expanded) {
+            if (e->macro_expand_depth == 1 &&
+                diag_error_serial() != mx_err_before)
+                diag_emit(DIAG_NOTE, call->span,
+                          "in expansion of macro '%s' -- the diagnostics above "
+                          "are inside code this call generated",
+                          name->name);
             e->macro_expand_depth--;
             return NULL;
         }
@@ -2647,6 +2674,11 @@ Expr *elab_call(Elab *e, Form *call) {
         e->toplevel_stmt = saved_tl_stmt;
         e->macro_expansion_module = saved_expansion;
         if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--;
+        if (e->macro_expand_depth == 1 && diag_error_serial() != mx_err_before)
+            diag_emit(DIAG_NOTE, call->span,
+                      "in expansion of macro '%s' -- the diagnostics above are "
+                      "inside code this call generated",
+                      name->name);
         e->macro_expand_depth--;
         return out;
     }

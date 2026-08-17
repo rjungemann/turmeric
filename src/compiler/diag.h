@@ -461,6 +461,11 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
                          size_t secondary_count);
 
 bool diag_had_error(void);
+
+/* Monotonic count of errors actually SHOWN to the user (captured/speculative
+ * errors excluded).  Compare across a window to learn whether it surfaced an
+ * error; never reset, so only differences are meaningful. */
+uint64_t diag_error_serial(void);
 void diag_reset(void);
 
 /* Save / restore the registered-SourceFile table across a diag_reset().

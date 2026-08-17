@@ -322,6 +322,7 @@ Pinned by four `errors/` negatives and
 | Report | Severity | One line |
 | --- | --- | --- |
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
+| [ecs-defsystem-writes-fixture-expects-old-spices](ecs-defsystem-writes-fixture-expects-old-spices.md) | low | with `../turmeric-spices` present, `errors/ecs-defsystem-writes-unauthorized` fails: spices-HEAD `ecs/world.tur` errors during its own elaboration (Storage associated type), so the write-capability diagnostic the fixture pins is never reached; invisible without the optional checkout |
 
 `incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved
 to

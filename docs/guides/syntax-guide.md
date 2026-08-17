@@ -208,6 +208,7 @@ types), and `defmacro` (syntax extension). Each has a dedicated guide:
 - Binding forms (`let`, `letrec`, named let): [binding-forms-guide.md](binding-forms-guide.md)
 - Structs: [structs-guide.md](structs-guide.md)
 - Modules, `import`/`export`: [module-system-guide.md](module-system-guide.md)
+- Macros (`defmacro`): [macros-guide.md](macros-guide.md)
 
 ### Type-annotation syntax
 

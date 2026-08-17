@@ -15,6 +15,7 @@
 static const SourceFile *files_[MAX_FILES];
 static size_t            file_count_;
 static bool              had_error_;
+static uint64_t          error_serial_;   /* count of SHOWN (uncaptured) errors */
 static bool              use_color_ = false;
 static bool              json_output_ = false;  /* Phase 8: JSON diagnostics mode */
 
@@ -45,6 +46,8 @@ void diag_register_file(const SourceFile *file) {
 }
 
 bool diag_had_error(void) { return had_error_; }
+
+uint64_t diag_error_serial(void) { return error_serial_; }
 
 /* Speculative-elaboration capture frames (see diag.h). */
 #define MAX_CAPTURE_DEPTH 16
@@ -80,7 +83,15 @@ uint32_t diag_pop_capture(void) {
  * pre-capture behavior.  Errors and their subordinate notes/help are
  * suppressed together so a swallowed error never leaves orphaned notes. */
 static bool diag_intercept(DiagLevel level) {
-    if (capture_depth_ <= 0) return false;
+    if (capture_depth_ <= 0) {
+        /* An error that reaches the user.  Counted here -- the one gate every
+         * emit entry point passes through -- so callers can bracket a window
+         * and ask "did this elaboration surface an error?" without treating a
+         * captured-and-swallowed speculative error as one.  Consumed by the
+         * macro-expansion provenance note (elab_call.c). */
+        if (level == DIAG_ERROR) error_serial_++;
+        return false;
+    }
     if (level == DIAG_WARNING) return false;
     if (level == DIAG_ERROR && capture_depth_ <= MAX_CAPTURE_DEPTH)
         capture_err_[capture_depth_ - 1]++;
