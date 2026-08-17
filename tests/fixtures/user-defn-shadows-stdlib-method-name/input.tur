@@ -1,0 +1,23 @@
+;; user-defn-shadows-stdlib-method-name -- a free user defn whose name
+;; collides with a STDLIB typeclass method (`mk-box`, a MapKey method) must
+;; win bare-call resolution, in both engines.
+;;
+;; Regression for docs/archive/interp-hkt-pure-return-dispatch-elab-error.md:
+;; the interpreter preloads stdlib via `(load ...)` turns that run outside the
+;; in_stdlib_load bracket, so MapKey registered as a USER class there -- and
+;; prefer_method_dispatch (elab_call.c) then routed `(mk-box 0)` to
+;; `__inst_MapKey_mk_hybox_int` (result :int) instead of the user defn.  The
+;; declared result type collapsed accordingly, and a caller expecting the user
+;; defn's type errored with TUR-E0001 "expected (Box int), got int" under
+;; --interpret while emit-c accepted the same program.  g_turi_stdlib_preload
+;; now marks preload-registered classes stdlib-owned, restoring the documented
+;; "user defn overrides a stdlib method" pattern.
+(defopaque Box [a] :int)
+
+(defn mk-box [A] [x : A] : (Box A) (:: 40 (Box A)))
+
+(defn takes [b : (Box int)] : int 2)
+
+(defn main [] : int
+  (println (takes (mk-box 0)))
+  0)

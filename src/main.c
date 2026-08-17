@@ -6845,6 +6845,8 @@ static int cmd_eval_h(const char *path, bool use_color,
      * unconditionally preloaded under --interpret (they are gaps only relative
      * to the static prelude[] above; docs/artifacts/turi-preload-carve-out.txt). */
     {
+        extern bool g_turi_stdlib_preload;   /* stdlib-owned class marking */
+        g_turi_stdlib_preload = true;
         char pb[4096];
         tur_stdlib_path("json.tur", pb, sizeof(pb));
         char load_form[4200];
@@ -6859,6 +6861,10 @@ static int cmd_eval_h(const char *path, bool use_color,
         snprintf(load_form, sizeof(load_form), "(load \"%s\")", pb);
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
+    }
+    {
+        extern bool g_turi_stdlib_preload;
+        g_turi_stdlib_preload = false;   /* preload done: user turns follow */
     }
     /* Pin the accumulated preload (prelude + json/schema above) so an inline
      * `#lang` directive in the evaluated program truncates src_acc back to here

@@ -174,6 +174,7 @@ bool g_symbols_enabled = true;
 
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
+bool g_turi_stdlib_preload = false;
 
 /* F4 (cross-plan-followups): --Werror=deprecated promotes deprecation
  * warnings emitted by elab_lookup_sym to errors so a clean build can

@@ -184,7 +184,17 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [interp-hkt-pure-return-dispatch-elab-error](interp-hkt-pure-return-dispatch-elab-error.md) | low-medium | `--interpret` rejects `hkt-constrained-pure-return-dispatch` at elaboration (TUR-E0001: `int` vs `(m int)`) while `emit-c`/`tur run` accept and print the right answers; pre-existing at c909e790, masked by the TI7 carve-out |
+
+`interp-hkt-pure-return-dispatch-elab-error` was resolved 2026-08-17, the
+day after filing, and moved to
+[docs/archive](../archive/interp-hkt-pure-return-dispatch-elab-error.md).
+Its root-cause direction was wrong: no elaboration flag was involved -- the
+fixture's `mk-box` collides with the stdlib MapKey method of the same name,
+and the interpreter's `(load ...)`-based stdlib preload registered every
+typeclass with `from_stdlib = false`, so the "user defn overrides a stdlib
+method" resolution flipped to the method.  Fixed by marking preload turns
+(`g_turi_stdlib_preload`); the whole hand-run hkt-constrained family now
+passes under `--interpret`.
 
 The first absorbed two symptom reports on 2026-08-01
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values`,
