@@ -3586,6 +3586,12 @@ static int cmd_jit(int argc, char **argv) {
      * surviving one is `:reader-macros`, which was ignored by the same
      * ordering bug and is restored here. */
     const char *input = NULL;
+    /* B4 (post-jit-benchmark-resurrection-plan): --timing-json <path> writes
+     * {"compile_ms","run_ms","engine"} after the run, so a benchmark harness
+     * can separate compile from run (chart A) and detect the cc fallback
+     * instead of averaging it in.  The JIT knows both numbers exactly;
+     * recovering them from outside is guesswork. */
+    const char *timing_json = NULL;
     int passthrough_start = -1;
     int scan_end = argc;
     for (int i = 2; i < argc; i++)
@@ -3596,6 +3602,14 @@ static int cmd_jit(int argc, char **argv) {
     for (int i = 2; i < scan_end; i++) {
         int c;
         if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+        if (strcmp(argv[i], "--timing-json") == 0 && i + 1 < scan_end) {
+            timing_json = argv[++i];
+            continue;
+        }
+        if (strncmp(argv[i], "--timing-json=", 14) == 0) {
+            timing_json = argv[i] + 14;
+            continue;
+        }
         if (argv[i][0] != '-' && !input) input = argv[i];
     }
     for (int i = 2; i < argc; i++)
@@ -3612,6 +3626,7 @@ static int cmd_jit(int argc, char **argv) {
      * default build vendors no MIR and therefore carries no engine. */
 #ifndef TUR_HAVE_JIT
     (void)passthrough_start;   /* used only by the engine path below */
+    (void)timing_json;
     fprintf(stderr,
             "tur: this build carries no JIT engine; reconfigure with "
             "-DTUR_JIT=ON\n"
@@ -3625,8 +3640,16 @@ static int cmd_jit(int argc, char **argv) {
     g_emit_for_link = true;
     Buf csrc;
     buf_init(&csrc);
+    struct timespec _tj0, _tj1;
+    clock_gettime(CLOCK_MONOTONIC, &_tj0);
     int rc = compile_to_c(input, &csrc, (const char **)user_inc, n_user_inc,
                           (const char **)jit_rm, jit_rm_n);
+    clock_gettime(CLOCK_MONOTONIC, &_tj1);
+    /* Turmeric front-end time (read -> elaborate -> emit C); the engine's
+     * own c2mir+link time is added below so compile_ms is invocation-to-
+     * entry, the quantity chart A subtracts. */
+    double front_ms = ((double)_tj1.tv_sec - (double)_tj0.tv_sec) * 1000.0 +
+                      ((double)_tj1.tv_nsec - (double)_tj0.tv_nsec) / 1.0e6;
     free_reader_macro_paths(jit_rm, jit_rm_n);
     if (rc != 0) { buf_free(&csrc); free(user_inc); return rc; }
     hoist_tur_include_directives(&csrc);
@@ -3711,7 +3734,21 @@ static int cmd_jit(int argc, char **argv) {
     buf_free(&split_src);
     buf_free(&autolink);
     free(user_inc);
-    if (jrc == TUR_JIT_OK) return prog_rc;
+    if (jrc == TUR_JIT_OK) {
+        if (timing_json) {
+            double eng_compile_ms = 0.0, run_ms = 0.0;
+            tur_jit_last_timings(&eng_compile_ms, &run_ms);
+            FILE *tf = fopen(timing_json, "w");
+            if (tf) {
+                fprintf(tf,
+                        "{\"compile_ms\": %.3f, \"run_ms\": %.3f, "
+                        "\"engine\": \"jit\"}\n",
+                        front_ms + eng_compile_ms, run_ms);
+                fclose(tf);
+            }
+        }
+        return prog_rc;
+    }
 
     /* Plan step 6: clean per-program fallback to the cc path.  cmd_run parses
      * the same argv shape (it never looks at argv[1]), so delegate whole. */
@@ -3721,6 +3758,15 @@ static int cmd_jit(int argc, char **argv) {
             jrc == TUR_JIT_ERR_COMPILE ? "compile"
             : jrc == TUR_JIT_ERR_LINK  ? "link"
                                        : "run");
+    if (timing_json) {
+        /* B4 / plan section 3.3: a benchmark that silently falls back is
+         * measuring `tur build` with extra steps -- make it detectable. */
+        FILE *tf = fopen(timing_json, "w");
+        if (tf) {
+            fprintf(tf, "{\"engine\": \"cc-fallback\"}\n");
+            fclose(tf);
+        }
+    }
     return cmd_run(argc, argv);
 #endif /* TUR_HAVE_JIT */
 }

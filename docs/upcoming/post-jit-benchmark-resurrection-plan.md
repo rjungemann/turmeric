@@ -1,8 +1,34 @@
 # Post-JIT: resurrect the cross-language benchmark suite
 
-> **Status:** proposed (2026-07-29). **Blocked on** `tur jit` reaching phase
-> J1 -- see [`jit-engine-plan.md`](jit-engine-plan.md).
+> **Status:** B0-B4 implemented (2026-08-17); B5 (publish) pending a full
+> sweep on a dedicated machine with all toolchains.  J1 landed, so the JIT
+> blocker is gone.  Proposed 2026-07-29.
 > **Type:** Benchmarks / `performance-comparison/`
+>
+> **Implementation notes (2026-08-17):** per the maintainer's direction the
+> current language list is kept verbatim and the new columns ride on top
+> (`rust`, `haskell`, `turjit`).
+> - **B1:** `benchmarks/rust-workspace/` -- 21 binaries, one `[[bin]]` each,
+>   all validated against `results/golden/` at `small`.
+> - **B2:** `benchmarks/haskell-project/` -- 21 executables, built with
+>   plain `ghc -O2` (all deps are GHC boot packages; no Hackage needed,
+>   which also works proxy-restricted).  Strictness + ByteString decisions
+>   are in docs/methodology.md; `float_arith` needed an exact-Rational
+>   `%.6f` because GHC formats doubles via shortest-repr.  All 21 validated
+>   against golden.
+> - **B4:** `tur jit --timing-json <path>` emits `{compile_ms, run_ms,
+>   engine}` (engine: `"jit" | "cc-fallback"`); the harness embeds it per
+>   turjit row and the two-chart methodology is written.
+> - **B0/B3:** preflight matrix in check_environment.sh; absent/failed/
+>   timeout become recorded statuses and a non-zero exit; Linux peak-RSS;
+>   per-row toolchain+platform capture; `aggregate_results.py --baseline`
+>   (default rust) with the anchor recorded per row; the TUR path accepts
+>   build-rel, build-release, and build.
+> - One golden was stale: `micro_float_arith_small` matched NO current
+>   column (old sequential-update formula); regenerated from the current
+>   three-way-agreeing implementations.
+> - Found while smoking: the run_timed JSON writer never worked on Linux at
+>   all (empty RSS interpolated as a bare token) -- fixed via json.loads.
 
 ## 0. Summary
 

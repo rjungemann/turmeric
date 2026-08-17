@@ -642,14 +642,29 @@ static MIR_item_t jit_find_func (MIR_context_t ctx, const char *name) {
 /* ------------------------------------------------------------------ */
 /* the engine                                                          */
 /* ------------------------------------------------------------------ */
+/* post-jit-benchmark-resurrection-plan B4: last-execution phase timings,
+ * readable after tur_jit_execute returns.  compile covers c2mir + link
+ * (+ eager gen when TUR_JIT_GEN=eager); run is the entry thread's wall
+ * time -- which under the default LAZY gen interface includes first-call
+ * code generation, a fact the benchmark methodology records rather than
+ * hides. */
+static double g_jit_stat_compile_ms, g_jit_stat_run_ms;
+
+void tur_jit_last_timings (double *compile_ms, double *run_ms) {
+  if (compile_ms) *compile_ms = g_jit_stat_compile_ms;
+  if (run_ms) *run_ms = g_jit_stat_run_ms;
+}
+
 int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
                      const char **include_dirs, int n_include_dirs,
                      int prog_argc, char **prog_argv, int *prog_rc) {
   g_n_atexit = 0;
+  double t_start = jit_now_ms ();
   MIR_context_t ctx;
   int frc = jit_compile_and_link (csrc, csrc_len, autolink,
                                   include_dirs, n_include_dirs, &ctx);
   if (frc != TUR_JIT_OK) return frc;
+  g_jit_stat_compile_ms = jit_now_ms () - t_start;
 
   MIR_item_t main_item = jit_find_func (ctx, "main");
   if (main_item == NULL) {
@@ -678,7 +693,9 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     fprintf (stderr, "tur: jit: entry thread create failed\n");
     return TUR_JIT_ERR_RUN;
   }
+  double t_run = jit_now_ms ();
   pthread_join (entry_thread, NULL);
+  g_jit_stat_run_ms = jit_now_ms () - t_run;
   pthread_attr_destroy (&attr);
   jit_timing_mark ("run");
   jit_timing_rss ();
