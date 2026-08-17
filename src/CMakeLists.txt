@@ -113,6 +113,10 @@ set(TURI_EVAL_SOURCES
     # RP4: TuriValue<->scalar marshaling layer that installs each
     # spice export as a TuriNativeFn binding the eval loop can call.
     turi/ffi_thunk.c
+    # jit-ffi-c2mir-plan: the MIR-free half of the JIT-scoped dynamic FFI --
+    # provider hook + signature vocabulary.  The c2mir-backed provider itself
+    # lives in turi/jit_ffi.c inside tur_jit_obj (JIT builds only).
+    turi/jit_ffi_hook.c
 )
 
 # ---------------------------------------------------------------------------
@@ -423,7 +427,11 @@ if(TUR_JIT)
   # showed up as `undefined reference to MIR_set_error_func` across the
   # board.  A separate object library keeps the blast radius to the two
   # targets that actually want an engine.
-  add_library(tur_jit_obj OBJECT jit_engine.c runtime/generated/tur_rt_split_embed.c)
+  # jit-ffi-c2mir-plan F1: turi/jit_ffi.c rides in the engine's object
+  # library, not tur_core -- it calls the image API and must not drag MIR
+  # onto tur_core's eighteen consumers.
+  add_library(tur_jit_obj OBJECT jit_engine.c turi/jit_ffi.c
+              runtime/generated/tur_rt_split_embed.c)
   target_include_directories(tur_jit_obj PRIVATE ${TUR_INCLUDE_DIRS})
   target_link_libraries(tur_jit_obj PRIVATE tur_mir)
   target_compile_definitions(tur_jit_obj PRIVATE TUR_HAVE_JIT=1)

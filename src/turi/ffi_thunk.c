@@ -25,6 +25,7 @@
 #include "ffi_thunk.h"
 #include "eval.h"                  /* turi_env_register_native */
 #include "ffi_dispatch_thunk.h"    /* tur_ffi_thunk_call */
+#include "jit_ffi.h"               /* jit-ffi-c2mir-plan: runtime call thunks */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -75,6 +76,7 @@ static const char *class_name(char c) {
     switch (c) {
         case 'i': return ":int-class";
         case 'f': return ":float-class";
+        case 'F': return ":float32-class";
         case 'v': return ":void";
         default:  return "<unknown>";
     }
@@ -172,7 +174,33 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
     {
         int64_t out_i = 0;
         double  out_f = 0.0;
-        if (e->ffi_shim) {
+        /* Fallback ladder (jit-ffi-c2mir-plan section 2.4).  Step 1: a JIT
+         * build synthesizes the exact-signature thunk at runtime -- any
+         * arity, any int/float mix, no shape table.  A provider failure
+         * (c2mir error) falls through to the shim/table rungs rather than
+         * erroring, so a JIT build is never WORSE than a non-JIT one. */
+        const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+        TurJitFfiThunkFn jt = NULL;
+        if (jp) {
+            char sig[TUR_SPICE_ARITY_FASTPATH + 3];
+            char *sigp = sig;
+            char *sig_heap = NULL;
+            if ((size_t)n + 3 > sizeof sig) {
+                sig_heap = (char *)malloc((size_t)n + 3);
+                sigp = sig_heap;
+            }
+            if (sigp) {
+                sigp[0] = e->ret_class;
+                sigp[1] = ':';
+                if (n) memcpy(sigp + 2, e->arg_classes, n);
+                sigp[n + 2] = '\0';
+                jt = jp->thunk_for(sigp, NULL, 0);
+            }
+            free(sig_heap);
+        }
+        if (jt) {
+            jt(e->fn_ptr, i_vals, f_vals, NULL, &out_i, &out_f, NULL);
+        } else if (e->ffi_shim) {
             /* interpreter-arbitrary-arity-ffi (Phase 3): the spice emitted a
              * per-export shim with its concrete signature baked in.  Call it
              * directly with the marshalled buffers -- no shape table, so no
@@ -212,6 +240,128 @@ cleanup:
     free(i_heap);
     free(f_heap);
     return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* jit-ffi-c2mir-plan F2: thunk-backed extern-c natives                 */
+/* ------------------------------------------------------------------ */
+
+/* Per-registration payload.  Process-lifetime (matching every other turi
+ * native ud); the classes tail is copied at registration so it cannot
+ * dangle into elaboration arenas. */
+typedef struct ExternThunkUd {
+    void       *fn;
+    const char *name;      /* for diagnostics; borrowed (interned symbol) */
+    char        ret_class;
+    uint32_t    n_args;
+    char        classes[]; /* n_args entries, 'i'/'f'/'F' */
+} ExternThunkUd;
+
+static TuriValue extern_thunk_native(TuriEnv *env, TuriValue *args,
+                                     uint32_t n, void *ud) {
+    const ExternThunkUd *x = (const ExternThunkUd *)ud;
+
+    /* Same capability bit as dlopen/dlsym: a sandboxed env must not reach
+     * arbitrary process symbols through a declaration it evaluated. */
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_errorf(
+            "ffi: extern-c '%s' is not allowed in a sandboxed environment",
+            x->name);
+
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp)
+        return turi_errorf(
+            "ffi: calling extern-c '%s' under --interpret requires a "
+            "JIT-enabled build (-DTUR_JIT=ON)", x->name);
+
+    if (n != x->n_args)
+        return turi_errorf("ffi: '%s' expects %u arg%s, got %u", x->name,
+                           (unsigned)x->n_args, x->n_args == 1 ? "" : "s",
+                           (unsigned)n);
+
+    int64_t  i_inl[TUR_SPICE_ARITY_FASTPATH];
+    double   f_inl[TUR_SPICE_ARITY_FASTPATH];
+    int64_t *i_vals = i_inl, *i_heap = NULL;
+    double  *f_vals = f_inl, *f_heap = NULL;
+    if (n > TUR_SPICE_ARITY_FASTPATH) {
+        i_heap = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+        f_heap = (double  *)malloc((size_t)n * sizeof(double));
+        if (!i_heap || !f_heap) {
+            free(i_heap); free(f_heap);
+            return turi_error("ffi: out of memory marshalling call");
+        }
+        i_vals = i_heap; f_vals = f_heap;
+    }
+
+    TuriValue result;
+    for (uint32_t k = 0; k < n; k++) {
+        char cls = x->classes[k];
+        int rc = (cls == 'i') ? marshal_arg_i(&args[k], &i_vals[k])
+                              : marshal_arg_f(&args[k], &f_vals[k]);
+        if (rc != 0) {
+            result = turi_errorf("ffi: '%s' arg %u: expected %s, got %s",
+                                 x->name, k, class_name(cls),
+                                 tag_name(args[k].tag));
+            goto cleanup;
+        }
+    }
+
+    {
+        char sig_inl[TUR_SPICE_ARITY_FASTPATH + 3];
+        char *sig = sig_inl, *sig_heap = NULL;
+        if ((size_t)n + 3 > sizeof sig_inl) {
+            sig_heap = (char *)malloc((size_t)n + 3);
+            if (!sig_heap) {
+                result = turi_error("ffi: out of memory building signature");
+                goto cleanup;
+            }
+            sig = sig_heap;
+        }
+        sig[0] = x->ret_class;
+        sig[1] = ':';
+        if (n) memcpy(sig + 2, x->classes, n);
+        sig[n + 2] = '\0';
+
+        char errbuf[256];
+        TurJitFfiThunkFn jt = jp->thunk_for(sig, errbuf, sizeof errbuf);
+        free(sig_heap);
+        if (!jt) {
+            result = turi_errorf("ffi: '%s': %s", x->name, errbuf);
+            goto cleanup;
+        }
+
+        int64_t out_i = 0;
+        double  out_f = 0.0;
+        jt(x->fn, i_vals, f_vals, NULL, &out_i, &out_f, NULL);
+        switch (x->ret_class) {
+            case 'i': result = turi_int(out_i);   break;
+            case 'f':
+            case 'F': result = turi_float(out_f); break;
+            case 'v': result = turi_nil();        break;
+            default:  result = turi_error("ffi: internal: bad ret class"); break;
+        }
+    }
+
+cleanup:
+    free(i_heap);
+    free(f_heap);
+    return result;
+}
+
+int tur_ffi_register_extern_thunk(TuriEnv *env, const char *name, void *fn,
+                                  char ret_class, const char *arg_classes,
+                                  uint32_t n) {
+    if (!env || !name || !fn) return -1;
+    ExternThunkUd *ud =
+        (ExternThunkUd *)calloc(1, sizeof(*ud) + (size_t)n);
+    if (!ud) return -1;
+    ud->fn        = fn;
+    ud->name      = name;
+    ud->ret_class = ret_class;
+    ud->n_args    = n;
+    if (n && arg_classes) memcpy(ud->classes, arg_classes, n);
+    turi_env_register_native(env, name, extern_thunk_native, ud);
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */

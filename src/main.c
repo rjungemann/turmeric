@@ -67,6 +67,7 @@
 #include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
 #include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
 #include "turi/spice_loader.h" /* J2: the REPL's in-process jit hook */
+#include "turi/jit_ffi.h"      /* jit-ffi-c2mir-plan: dynamic-FFI provider */
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "fmt.h"
@@ -8891,6 +8892,14 @@ int main(int argc, char **argv) {
      * propagated into the process env before any subsystem (elaborator,
      * worker, interpreter) reads it. */
     (void)resolve_stdlib_root();
+
+#ifdef TUR_HAVE_JIT
+    /* jit-ffi-c2mir-plan: install the c2mir-backed dynamic-FFI provider so
+     * the interpreter's extern-c registration, call-ptr routing, and the
+     * spice FFI ladder can synthesize call thunks at runtime.  JIT builds
+     * only; without it every consumer keeps the non-JIT fallback behavior. */
+    tur_jit_ffi_install();
+#endif
 
     /* Phase 8: Check for global flags before command */
     bool no_color = parse_no_color(argc, argv);

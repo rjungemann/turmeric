@@ -211,7 +211,8 @@ static const char *const reserved_special_forms_[] = {
     "ptr-deref", "ptr-write", "ptr-add", "ptr-sub", "ptr-null?", "ptr-of",
     "unsafe-cast", "reinterpret", "transmute", "array-get-unchecked",
     "array-set-unchecked", "raw-malloc", "raw-free", "raw-realloc",
-    "raw-memcpy", "raw-memset", "c-call", "dlopen", "dlsym", "dlclose",
+    "raw-memcpy", "raw-memset", "c-call", "call-ptr", "dlopen", "dlsym",
+    "dlclose",
     /* STM */
     "stm", "retry",
     /* GC */
@@ -2462,6 +2463,7 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_raw_memset)  return elab_raw_memset(e, call);
     /* Phase U3: Unsafe primitives - FFI */
     if (name == e->sym_c_call)      return elab_c_call(e, call);
+    if (name == e->sym_call_ptr)    return elab_call_ptr(e, call);
     if (name == e->sym_dlopen)      return elab_dlopen(e, call);
     if (name == e->sym_dlsym)       return elab_dlsym(e, call);
     if (name == e->sym_dlclose)     return elab_dlclose(e, call);

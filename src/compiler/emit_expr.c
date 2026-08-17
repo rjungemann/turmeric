@@ -4091,6 +4091,56 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CALL: {
             Binding *fn_binding = e->as.call_.fn_binding;
 
+            /* jit-ffi-c2mir-plan F3: `(call-ptr p [sig] args...)` -- an
+             * indirect call through a raw address with an explicit C
+             * signature.  Pure codegen: cast the pointer to the stated
+             * function type and call it, casting each argument to its
+             * declared C parameter type.  A :void return is wrapped in a
+             * comma expression so the node stays valid in value position. */
+            if (e->as.call_.ptr_sig) {
+                const CallPtrSig *ps = e->as.call_.ptr_sig;
+                char *pv = emit_value(ctx, body, e->as.call_.fn_expr);
+                Buf cb;
+                buf_init(&cb);
+                bool is_void = (ps->return_type.kind == TY_NIL);
+                if (is_void) buf_putc(&cb, '(');
+                buf_printf(&cb, "((%s (*)(",
+                           is_void ? "void"
+                                   : emit_type_c_name(ctx, ps->return_type));
+                if (ps->n_params == 0) {
+                    buf_puts(&cb, "void");
+                } else {
+                    for (uint32_t i = 0; i < ps->n_params; i++)
+                        buf_printf(&cb, "%s%s", i ? ", " : "",
+                                   emit_type_c_name(ctx, ps->param_types[i]));
+                }
+                buf_printf(&cb, "))(intptr_t)(%s))(", pv);
+                free(pv);
+                for (uint32_t i = 0; i < ps->n_params; i++) {
+                    char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                    const char *pc = emit_type_c_name(ctx, ps->param_types[i]);
+                    TypeKind pk = ps->param_types[i].kind;
+                    /* Pointer-carrying scalars round-trip through intptr_t
+                     * (the args ride the int64 carrier); numerics cast
+                     * directly. */
+                    if (pk == TY_CSTR || pk == TY_PTR_VOID)
+                        buf_printf(&cb, "%s(%s)(intptr_t)(%s)",
+                                   i ? ", " : "", pc, av);
+                    else
+                        buf_printf(&cb, "%s(%s)(%s)", i ? ", " : "", pc, av);
+                    free(av);
+                }
+                buf_putc(&cb, ')');
+                if (is_void) buf_puts(&cb, ", INT64_C(0))");
+                buf_putc(&cb, '\0');
+                char *r = strdup(cb.data);
+                buf_free(&cb);
+                note_call_ret(ctx, is_void ? "int64_t"
+                                           : emit_type_c_name(ctx,
+                                                              ps->return_type));
+                return r;
+            }
+
             /* multiword-value boxing: `(tur-wide-byval? x)` is an EMIT-TIME type
              * query -- it folds to the int literal 1 when the argument's
              * monomorphized type is a wide (> 8 byte) by-value ADT (the same

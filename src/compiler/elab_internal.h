@@ -314,6 +314,7 @@ typedef struct Elab {
     const Symbol *sym_raw_memset;  /* raw-memset */
     /* Phase U3: Unsafe primitives - FFI */
     const Symbol *sym_c_call;      /* c-call */
+    const Symbol *sym_call_ptr;    /* call-ptr (jit-ffi-c2mir-plan F3) */
     const Symbol *sym_dlopen;      /* dlopen */
     const Symbol *sym_dlsym;       /* dlsym */
     const Symbol *sym_dlclose;     /* dlclose */
@@ -1376,6 +1377,7 @@ Expr *elab_raw_realloc(Elab *e, const Form *call);
 Expr *elab_raw_memcpy(Elab *e, const Form *call);
 Expr *elab_raw_memset(Elab *e, const Form *call);
 Expr *elab_c_call(Elab *e, const Form *call);
+Expr *elab_call_ptr(Elab *e, const Form *call);
 Expr *elab_dlopen(Elab *e, const Form *call);
 Expr *elab_dlsym(Elab *e, const Form *call);
 Expr *elab_dlclose(Elab *e, const Form *call);

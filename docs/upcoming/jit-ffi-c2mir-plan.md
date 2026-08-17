@@ -1,12 +1,43 @@
 # JIT-scoped dynamic FFI via c2mir (no new dependency)
 
-> **Status:** proposed (2026-08-17). **Track:** post-v1. Requires
-> `-DTUR_JIT=ON` builds; non-JIT builds keep today's behavior unchanged.
+> **Status:** F1-F3 implemented (2026-08-17); F4 (struct-by-value) and F5
+> (callbacks) deliberately trailing, per section 3.  Proposed 2026-08-17.
+> **Track:** post-v1. Requires `-DTUR_JIT=ON` builds; non-JIT builds keep
+> today's behavior unchanged.
 > **Type:** interpreter/JIT (`src/turi/`, `src/jit_engine.c`) + one small
 > compiled-path codegen form.
 > **Supersedes-in-spirit:** "Phase 4: retire the generated table" of
 > [docs/archive/interpreter-arbitrary-arity-ffi-plan.md](../archive/interpreter-arbitrary-arity-ffi-plan.md),
 > which contemplated libffi for the same retirement.
+>
+> **Implementation notes (F1-F3):**
+> - The provider hook lives in `src/turi/jit_ffi.h` + `jit_ffi_hook.c`
+>   (tur_core, MIR-free); the c2mir-backed provider in `src/turi/jit_ffi.c`
+>   rides in `tur_jit_obj` and is installed from `main()` under
+>   `TUR_HAVE_JIT` -- the same split as `TurSpiceJitHook`.  Thunks compile
+>   through the existing `tur_jit_compile_image` path (one resident image
+>   per unique signature, negative-cached on compile failure).
+> - `call-ptr` is NOT a new expr kind: it is `EX_CALL` with a non-NULL
+>   `ptr_sig` (`CallPtrSig`, expr.h), so every recursive walker that already
+>   visits `fn_expr` + `args` traverses it unchanged.  Both the eval_expr
+>   dispatch and the work-stack driver's descending `EX_CALL` case intercept
+>   on `ptr_sig`.
+> - Landed alongside, because the fixture forced it: the dl builtins' codegen
+>   never emitted `<dlfcn.h>` (so compiled `(unsafe (dlopen ...))` had never
+>   actually compiled), and the interpreter had no `BS_DLOPEN`/`BS_DLSYM`/
+>   `BS_DLCLOSE` eval arms at all.  Both fixed (`g_needs_dlfcn` preamble
+>   gate + `-ldl` autolink marker; real dl calls in `eval_builtin`,
+>   capability-gated as before).
+> - The signature vocabulary gained `'F'` (exact float32) over the shim
+>   mapping's widened `'f'`; `sv`/`out_s` thunk parameters are reserved for
+>   F4's struct extension.
+> - Tests: `tests/fixtures/jit-ffi-call-ptr` (portable inline-C
+>   address-of, compiled + jit paths), and `tests/run-flags.sh`'s
+>   `jit-ffi-*` cases (real `strtol` via extern-c under `--interpret`, the
+>   dlopen -> dlsym -> call-ptr loop, the non-JIT clean diagnostic, and the
+>   experiment gate); the JIT-only cases probe the binary and PASS-skip on
+>   an engine-less build (`TUR=./build-jit/tur bash tests/run-flags.sh`
+>   exercises them).
 
 ## 0. Summary
 

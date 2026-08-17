@@ -7650,6 +7650,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
     }
+    /* jit-ffi-c2mir-plan: dlopen/dlsym/dlclose (and call-ptr's pointer
+     * source) need <dlfcn.h>; the codegen for these builtins predates this
+     * include, so `(unsafe (dlopen ...))` never actually compiled before the
+     * call-ptr work made someone run it.  The autolink marker adds -ldl for
+     * pre-2.34 glibc; the JIT engine's autolink loader skips the `dl` entry
+     * (its symbols are already in-process). */
+    if (g_needs_dlfcn) {
+        buf_puts(out, "#ifndef _WIN32\n");
+        buf_puts(out, "#include <dlfcn.h>\n");
+        buf_puts(out, "#endif\n");
+        buf_puts(out, "/* __tur_autolink__: -ldl */\n");
+    }
 
     /* WIN1 (windows-support-plan): the emitted C is portable, so the platform
      * split lives in the OUTPUT as #ifdef _WIN32 rather than being decided by

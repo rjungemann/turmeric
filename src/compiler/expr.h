@@ -878,6 +878,18 @@ struct ExternC {
     const struct Form *post_cond;  /* :post predicate form, or NULL */
 };
 
+/* jit-ffi-c2mir-plan F3: the explicit C signature of a `(call-ptr ...)`
+ * form -- an indirect call through a raw address (dlsym result) whose
+ * signature is stated at the call site rather than carried by a binding.
+ * Hangs off EX_CALL's `ptr_sig` so every existing recursive walker (which
+ * already visits fn_expr + args) traverses it correctly with no new expr
+ * kind.  Scalar types only until F4 registers struct layouts. */
+typedef struct CallPtrSig {
+    Type      return_type;
+    Type     *param_types;   /* arena-owned; n_params entries */
+    uint32_t  n_params;
+} CallPtrSig;
+
 /* Phase 2: InlineC represents an inline C block. ```c ... ``` */
 struct InlineC {
     StrSlice       code;         /* the raw C code (may contain __TUR_CAP_N__ / __TUR_VAL_N__) */
@@ -1162,7 +1174,14 @@ struct Expr {
                   * size index of the constructed value (NULL otherwise). Both
                   * are elaboration-only; size indices are erased in codegen. */
                  struct CtorDef *ctor;
-                 struct SizeTerm *size_index; } call_;
+                 struct SizeTerm *size_index;
+                 /* jit-ffi-c2mir-plan F3: non-NULL marks this call as
+                  * `(call-ptr ...)` -- an indirect call through a raw
+                  * address with the explicit C signature here.  fn_expr
+                  * holds the pointer expression; fn_binding is NULL.  AOT
+                  * codegen emits the direct cast-and-call; turi routes it
+                  * through the JIT FFI thunk provider. */
+                 struct CallPtrSig *ptr_sig; } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;

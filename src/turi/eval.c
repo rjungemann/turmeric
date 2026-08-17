@@ -43,6 +43,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef _WIN32
+#  include <dlfcn.h>   /* jit-ffi-c2mir-plan: real dlopen/dlsym in turi */
+#endif
 
 #if defined(_WIN32)
 /* Windows: <sys/mman.h> and <ucontext.h> do not exist.  Both are shimmed --
@@ -88,6 +91,8 @@
 #include "../passes/effect_check.h"
 #include "../passes/borrow_check.h"
 #include "../runtime/globals.h"  /* Gap 7: g_interpret_mode (per-env snapshot) */
+#include "ffi_thunk.h"  /* jit-ffi-c2mir-plan F2: thunk-backed extern-c */
+#include "jit_ffi.h"    /* jit-ffi-c2mir-plan: provider + sig vocabulary */
 
 /* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
  * spill above it.  Keeps the per-call scratch off the C stack for the common
@@ -375,7 +380,13 @@ static TuriValue native_extern_puts(TuriEnv *env, TuriValue *args, uint32_t n, v
     return turi_int(0);
 }
 
-static void register_extern_c_known(TuriEnv *env, const char *fname) {
+/* Register the semantics-bearing overrides for well-known libc names.
+ * Returns true when `fname` was one of them.  These win over the JIT FFI
+ * thunk path deliberately: `free` must stay a no-op in turi (inline-C
+ * allocations are reproduced from the env value-arena, not raw malloc),
+ * `exit` must flush-and-_exit, and printf/puts marshal turi values rather
+ * than trusting a variadic ABI. */
+static bool register_extern_c_known(TuriEnv *env, const char *fname) {
     struct { const char *name; TuriNativeFn fn; } known[] = {
         { "exit",     native_extern_exit     },
         { "free",     native_extern_free     },
@@ -389,10 +400,173 @@ static void register_extern_c_known(TuriEnv *env, const char *fname) {
     for (int i = 0; known[i].name; i++) {
         if (strcmp(fname, known[i].name) == 0) {
             turi_env_register_native(env, fname, known[i].fn, NULL);
-            return;
+            return true;
         }
     }
+    return false;
+}
+
+/* jit-ffi-c2mir-plan F2: give an extern-c declaration a real
+ * implementation.  Precedence: the known-override table above; then, in a
+ * JIT build, a thunk-backed native calling the dlsym-resolved symbol for
+ * real; else today's nil stub.  The thunk upgrade is a correctness fix for
+ * --interpret -- the 7-entry table used to be the whole story and
+ * everything else silently returned nil. */
+static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
+                                      const char *fname) {
+    if (register_extern_c_known(env, fname)) return;
+
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (jp && ec && !ec->is_variadic) {
+        /* Classify the declared signature.  A '?' anywhere (struct-by-value,
+         * ADT, carrier) means the thunk vocabulary cannot express it yet
+         * (F4); fall back to the stub rather than mis-calling. */
+        char ret = tur_jit_ffi_class_for_kind(ec->return_type.kind, 1);
+        bool ok = (ret != '?');
+        uint32_t n = ec->n_params;
+        char inl[64];
+        char *classes = (n <= sizeof inl) ? inl : (char *)malloc(n);
+        if (!classes) ok = false;
+        for (uint32_t i = 0; ok && i < n; i++) {
+            char c = tur_jit_ffi_class_for_kind(ec->param_types[i].kind, 0);
+            if (c == '?' || c == 'v') ok = false;
+            else classes[i] = c;
+        }
+        /* Resolve against this process: the executable's exported runtime
+         * (ENABLE_EXPORTS) plus anything dlopened RTLD_GLOBAL.  A symbol
+         * from a lib the process never linked needs an explicit dlopen (or
+         * jit autolink) first -- documented resolution order. */
+        void *fn = ok ? jp->resolve(ec->c_name ? ec->c_name->name : fname)
+                      : NULL;
+        if (fn) {
+            int rc = tur_ffi_register_extern_thunk(env, fname, fn, ret,
+                                                   classes, n);
+            if (classes != inl) free(classes);
+            if (rc == 0) return;
+        } else if (classes != inl) {
+            free(classes);
+        }
+    }
+
     turi_env_register_native(env, fname, native_nil_stub, NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * jit-ffi-c2mir-plan F3: (call-ptr ...) evaluation
+ * ---------------------------------------------------------------------- */
+
+/* Evaluate an EX_CALL carrying a ptr_sig: an indirect call through a raw C
+ * address with the signature stated at the site.  Routes through the c2mir
+ * thunk provider; a non-JIT interpreter build reports a clean diagnostic,
+ * never nil.  Gated on TURI_CAP_FFI like dlopen/dlsym. */
+static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
+                               const Expr *e) {
+    const CallPtrSig *ps = e->as.call_.ptr_sig;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_error(
+            "eval: call-ptr not allowed in sandboxed environment");
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp)
+        return turi_error(
+            "call-ptr under --interpret requires a JIT-enabled build "
+            "(-DTUR_JIT=ON); the compiled path (tur build / tur run) "
+            "supports it in every build");
+
+    TuriValue pv = eval_expr(env, frame, e->as.call_.fn_expr);
+    if (turi_is_error(pv)) return pv;
+    /* dlsym results ride the int64 carrier in turi. */
+    if (pv.tag != TURI_INT || pv.as_int == 0)
+        return turi_error("call-ptr: pointer is nil or not an address");
+    void *fn = (void *)(intptr_t)pv.as_int;
+
+    uint32_t n = e->as.call_.n_args;
+    int64_t  i_inl[8];
+    double   f_inl[8];
+    int64_t *i_vals = i_inl, *i_heap = NULL;
+    double  *f_vals = f_inl, *f_heap = NULL;
+    if (n > 8) {
+        i_heap = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+        f_heap = (double  *)malloc((size_t)n * sizeof(double));
+        if (!i_heap || !f_heap) {
+            free(i_heap); free(f_heap);
+            return turi_error("call-ptr: out of memory marshalling call");
+        }
+        i_vals = i_heap; f_vals = f_heap;
+    }
+
+    TuriValue result;
+    char sig_inl[64];
+    char *sig = sig_inl, *sig_heap = NULL;
+    if ((size_t)n + 3 > sizeof sig_inl) {
+        sig_heap = (char *)malloc((size_t)n + 3);
+        if (!sig_heap) {
+            result = turi_error("call-ptr: out of memory");
+            goto cleanup;
+        }
+        sig = sig_heap;
+    }
+    sig[0] = tur_jit_ffi_class_for_kind(ps->return_type.kind, 1);
+    sig[1] = ':';
+
+    for (uint32_t k = 0; k < n; k++) {
+        char cls = tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
+        sig[2 + k] = cls;
+        TuriValue av = eval_expr(env, frame, e->as.call_.args[k]);
+        if (turi_is_error(av)) { result = av; goto cleanup; }
+        if (cls == 'i') {
+            switch (av.tag) {
+                case TURI_INT:  i_vals[k] = av.as_int; break;
+                case TURI_BOOL: i_vals[k] = av.as_bool ? 1 : 0; break;
+                case TURI_CSTR: i_vals[k] = (int64_t)(intptr_t)av.as_cstr; break;
+                case TURI_NIL:  i_vals[k] = 0; break;
+                default:
+                    result = turi_errorf(
+                        "call-ptr: arg %u is not an int-class value",
+                        (unsigned)k);
+                    goto cleanup;
+            }
+        } else {   /* 'f' / 'F' */
+            if (av.tag == TURI_FLOAT)      f_vals[k] = av.as_float;
+            else if (av.tag == TURI_INT)   f_vals[k] = (double)av.as_int;
+            else {
+                result = turi_errorf(
+                    "call-ptr: arg %u is not a float-class value",
+                    (unsigned)k);
+                goto cleanup;
+            }
+        }
+    }
+    sig[n + 2] = '\0';
+
+    {
+        char errbuf[256];
+        TurJitFfiThunkFn jt = jp->thunk_for(sig, errbuf, sizeof errbuf);
+        if (!jt) {
+            result = turi_errorf("call-ptr: %s", errbuf);
+            goto cleanup;
+        }
+        int64_t out_i = 0;
+        double  out_f = 0.0;
+        jt(fn, i_vals, f_vals, NULL, &out_i, &out_f, NULL);
+        switch (ps->return_type.kind) {
+            case TY_NIL:     result = turi_nil(); break;
+            case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                result = turi_float(out_f); break;
+            case TY_BOOL:    result = turi_bool(out_i != 0); break;
+            case TY_CSTR:
+                result = out_i ? turi_cstr((const char *)(intptr_t)out_i)
+                               : turi_nil();
+                break;
+            default:         result = turi_int(out_i); break;
+        }
+    }
+
+cleanup:
+    free(sig_heap);
+    free(i_heap);
+    free(f_heap);
+    return result;
 }
 
 /* -------------------------------------------------------------------------
@@ -2824,6 +2998,29 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         }
         return turi_nil();
     }
+
+    /* --- FFI: dynamic library loading (jit-ffi-c2mir-plan) ---------------- */
+    /* Real dlopen/dlsym/dlclose under --interpret, mirroring the compiled
+     * path's RTLD_LAZY semantics (emit_core BS_DLOPEN).  Handles and symbol
+     * addresses ride the int64 carrier, which is exactly what call-ptr and
+     * the thunk layer consume.  Capability-gated above (TURI_CAP_FFI). */
+#ifndef _WIN32
+    case BS_DLOPEN: {
+        const char *path = (args[0].tag == TURI_CSTR) ? args[0].as_cstr : NULL;
+        void *h = path ? dlopen(path, RTLD_LAZY) : NULL;
+        return turi_int((int64_t)(intptr_t)h);
+    }
+    case BS_DLSYM: {
+        void *h = (void *)(intptr_t)args[0].as_int;
+        const char *nm = (args[1].tag == TURI_CSTR) ? args[1].as_cstr : NULL;
+        void *s = (h && nm) ? dlsym(h, nm) : NULL;
+        return turi_int((int64_t)(intptr_t)s);
+    }
+    case BS_DLCLOSE: {
+        void *h = (void *)(intptr_t)args[0].as_int;
+        return turi_int(h ? (int64_t)dlclose(h) : -1);
+    }
+#endif
 
     /* --- Unsafe pointer/memory operations -------------------------------- */
     case BS_RAW_MALLOC: {
@@ -6189,6 +6386,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case EX_CALL: {
+                /* jit-ffi-c2mir-plan F3: a `(call-ptr ...)` node has no turi
+                 * callee to resolve -- the target is a raw C address.
+                 * Dispatch synchronously through the thunk provider; the
+                 * scalar args recurse via eval_expr, which is fine at FFI
+                 * arg depth. */
+                if (control->as.call_.ptr_sig) {
+                    cur = eval_call_ptr(env, cf, control);
+                    descending = false;
+                    break;
+                }
                 /* T3.2a: resolve the callee here, accumulate args on the
                  * work-stack, then apply via eval_apply (still recursive -- the
                  * body-in-loop + TCO fold is T3.2b).  The closure value rides in
@@ -8451,7 +8658,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return v;
     }
 
-    /* --- Extern C declaration -- register nil stub in interpreter mode ----- */
+    /* --- Extern C declaration -- bind a real implementation --------------- */
     case EX_EXTERN_C: {
         ExternC *ec = e->as.extern_c_.ext;
         if (ec && ec->binding) {
@@ -8459,7 +8666,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             /* Only register if not already bound (avoid overwriting native impls). */
             TuriValue existing = turi_env_get(env, fname);
             if (existing.tag == TURI_ERROR)
-                register_extern_c_known(env, fname);
+                register_extern_c_binding(env, ec, fname);
         }
         return turi_nil();
     }
@@ -8508,6 +8715,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Function call --------------------------------------------------- */
     case EX_CALL:
+        /* jit-ffi-c2mir-plan F3: a `(call-ptr ...)` call routes through the
+         * c2mir thunk provider, not the work-stack driver -- the callee is a
+         * raw C address, so there is no turi closure to apply. */
+        if (e->as.call_.ptr_sig)
+            return eval_call_ptr(env, frame, e);
         /* T3.2a: delegated to the explicit-stack driver (DK_CALL_ARG), which
          * resolves the callee and accumulates args on the work-stack, then
          * applies via eval_apply.  Semantics match the former inline loop; the
