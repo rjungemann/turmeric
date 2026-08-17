@@ -4,7 +4,21 @@
 `-O2`) dead-strips the chain and links clean; the cliff is only reachable by
 compiling `emit-c` output at `-O0` by hand, or by a (so far unobserved) live
 carrier-path invocation of the base generic.
-**Status:** OPEN.
+**Status:** OPEN, narrowed 2026-08-17.  The report's fix direction 2 (base-ctor
+forward declarations) landed -- and it was NOT merely cosmetic by then: clang
+16+ hard-errors on the implicit declaration, so under a clang toolchain the
+fixture failed to BUILD in the suite (found by the
+emitter-thunk-type-return-mismatch clang sweep, now archived).  The emitter
+(emit_expr.c, suffix-less ctor branch) now emits an extern carrier-convention
+forward declaration when a call names the base ctor of a HEAP parametric ADT --
+those never get a base definition, only per-spec clones; carrier-lowered
+parametric ADTs (Option/Result) DO define their base ctor, which is why the
+first cut's parametric-only gate broke `none` with a conflicting-types error.
+The compile is now clean on both toolchains and `-O2` links strip the dead
+chain as before.  What REMAINS open is exactly the `-O0` cliff below: the dead
+chain is still emitted, so a hand `-O0` link of `emit-c` output still dies on
+`undefined reference to ctor_Cons`.  Retiring that needs fix direction 1
+(suppress the dead base thunk chain's emission), which is unchanged.
 **Found:** 2026-08-16, while verifying the `generic-closure-return-type-app`
 fix (residue of that fix, filed the day it landed).
 

@@ -605,7 +605,14 @@
 ;;;
 ;;; Since: Phase H2
 
-(defn httpd-accept-cb [env : ptr<void> id : int events : int user : ptr<void>] : nil
+;;; NOTE: the trailing `user`/`user-data` slot is typed `: int` DELIBERATELY
+;;; (an exception to the no-lazy-:int rule): this defn is hand-packed into a
+;;; fat box's slot 0 (see the `clos[0] = ...` below / reactor.c park boxes),
+;;; and the reactor invokes slot 0 through the fat-entry CARRIER convention
+;;; (typedefs in src/async/reactor.c) -- every value parameter is int64_t.  A
+;;; `ptr<void>` spelling emits a `void *` C parameter, which -fsanitize=function
+;;; flags (and CFI/CET-BTI/WASM reject) at every dispatch.
+(defn httpd-accept-cb [env : ptr<void> id : int events : int user : int] : nil
   ```c
   (void)id; (void)events; (void)user;
   typedef struct {
@@ -2338,7 +2345,14 @@
 ;;; reads body, dispatches the handler, writes the response (parking on
 ;;; EWOULDBLOCK), and loops on keep-alive.  Mirrors httpd-handle.
 
-(defn httpd-async-fiber-body [self : ptr<void> user-data : ptr<void>] : nil
+;;; NOTE: the trailing `user`/`user-data` slot is typed `: int` DELIBERATELY
+;;; (an exception to the no-lazy-:int rule): this defn is hand-packed into a
+;;; fat box's slot 0 (see the `clos[0] = ...` below / reactor.c park boxes),
+;;; and the reactor invokes slot 0 through the fat-entry CARRIER convention
+;;; (typedefs in src/async/reactor.c) -- every value parameter is int64_t.  A
+;;; `ptr<void>` spelling emits a `void *` C parameter, which -fsanitize=function
+;;; flags (and CFI/CET-BTI/WASM reject) at every dispatch.
+(defn httpd-async-fiber-body [self : ptr<void> user-data : int] : nil
   ```c
   #include <fcntl.h>
   #include <errno.h>
@@ -2365,7 +2379,7 @@
       int   in_flight;
   } HttpdAsync;
   if (!user_data) return;
-  HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)user_data;
+  HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)(intptr_t)user_data;
   int fd = ctx->fd;
   int64_t handler = ctx->handler;
   void *group = ctx->fiber_group;
@@ -2683,10 +2697,17 @@
 ;;; the A4 in-flight cap: when ha->in_flight >= ha->max_in_flight,
 ;;; sends a quick HTTP/1.0 503 and closes instead of spawning.
 
+;;; NOTE: the trailing `user`/`user-data` slot is typed `: int` DELIBERATELY
+;;; (an exception to the no-lazy-:int rule): this defn is hand-packed into a
+;;; fat box's slot 0 (see the `clos[0] = ...` below / reactor.c park boxes),
+;;; and the reactor invokes slot 0 through the fat-entry CARRIER convention
+;;; (typedefs in src/async/reactor.c) -- every value parameter is int64_t.  A
+;;; `ptr<void>` spelling emits a `void *` C parameter, which -fsanitize=function
+;;; flags (and CFI/CET-BTI/WASM reject) at every dispatch.
 (defn httpd-async-accept-cb [env : ptr<void>
                              id : int
                              events : int
-                             user : ptr<void>] : nil
+                             user : int] : nil
   ```c
   (void)id; (void)events; (void)user;
   typedef struct {
@@ -3524,10 +3545,21 @@
 ;;; (fn [next :int] :ptr<void> ...); this performs a single fat-closure
 ;;; dispatch -- the same ascription idiom as httpd-call -- and returns the
 ;;; wrapped handler. It holds no cons-layout knowledge; the list walk lives
-;;; in httpd-mw-fold. The caller guards against a null mw, so dispatching the
-;;; already-fat handle via (:: mw (fn [int] int)) here is safe.
+;;; in httpd-mw-fold. The caller guards against a null mw.
+;;;
+;;; The dispatch ascription MUST name the middleware's REAL type,
+;;; (fn [int] ptr<void>) -- the emitted call goes through a typed-thunk
+;;; typedef derived from this ascription, and the lambda's definition is
+;;; emitted from its own declared type.  The old (fn [int] int) spelling
+;;; made the two disagree on the return type: works on every SysV/AAPCS ABI
+;;; (same return slot), but it is UB that -fsanitize=function reports and
+;;; that CFI / CET-BTI / WASM call_indirect turn into a hard failure.  The
+;;; wrapped handler then crosses back to the :int carrier via a value
+;;; ascription, which is a representation read, not a function-type cast.
+;;; See docs/archive/emitter-thunk-type-return-mismatch.md.
 
-(defn httpd-mw-apply [mw : int cur : int] : int ((:: mw (fn [int] int)) cur))
+(defn httpd-mw-apply [mw : int cur : int] : int
+  (:: ((:: mw (fn [int] ptr<void>)) cur) :int))
 ;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
 ;;; middlewares over a base handler. Each cell holds a fat closure value of
 ;;; shape (fn [next :int] :ptr<void> ...). Applied right-to-left so the list

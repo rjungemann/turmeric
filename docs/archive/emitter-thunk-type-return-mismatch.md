@@ -1,5 +1,47 @@
 # The emitted typed-thunk ABI disagrees with a lifted lambda's return type
 
+**RESOLVED 2026-08-17.**  The class is at ZERO across the full corpus under a
+clang `-fsanitize=function` sweep, and a ratchet now keeps it there.  Three
+landings, honestly scoped:
+
+- **The 2 remaining findings** were exactly the erasure this report diagnosed:
+  `httpd-mw-apply` dispatched middleware through `(:: mw (fn [int] int))`
+  while every middleware lambda is `(fn [int] ptr<void>)`.  The ascription now
+  names the REAL type and carrier-reads the result --
+  `(:: ((:: mw (fn [int] ptr<void>)) cur) :int)`.  Fix direction 1's FULL
+  retyping of the `:int` sinks (`^fat handler : int` etc.) was NOT done: the
+  sinks stay carrier-typed (the affine Handler/carrier ownership idiom is
+  built on them), and what this landing establishes instead is that every
+  DISPATCH names the true function type, which is the property the UB was
+  about.
+- **The re-sweep found 12 NEW findings, all reactor callbacks** -- absent from
+  this report's 2026-08-13 sweep because the 2026-08-16 effect-row
+  fat-normalization moved lambda callbacks onto carrier-typed fat entries and
+  reactor.c's hand-written typedefs (aligned to the pre-fat convention by the
+  parent report's fix) drifted AGAIN, exactly as their own comment warns.
+  Aligning the typedefs then surfaced the counter-population: hand-packed fat
+  boxes whose slot 0 held typed-convention entries directly (httpd's two
+  accept callbacks + async fiber body, reactor.c's two park wakes).  All five
+  now supply carrier-convention entries; the three Turmeric defns' trailing
+  `user` slots are `: int` with a documented rule-exception note (the
+  fat-entry ABI passes every value parameter in the int64 carrier -- a
+  `ptr<void>` spelling emits the mismatched `void *`).
+- **Fix direction 3 is done**: `tests/run.sh` now FAILs any fixture whose
+  captured stderr carries UBSan's "through pointer to incorrect function
+  type" (next to the pointer/integer ratchet; same `TUR_SKIP_CC_WARN_CHECK`
+  opt-out), and `tests/check-cc-warn-ratchet.sh` gained a clang-gated canary
+  that calls an emitted `int64_t(int64_t)` defn through a `void(*)(void *)`
+  pointer and asserts the report fires -- so a reworded message cannot
+  silently disarm the gate.  Under GCC the gate is inert (no
+  `-fsanitize=function`) and the canary leg skips.
+
+Verified: full clang suite 2608/3 (the 3 failures are the pre-existing clang
+divergences documented below -- complex-basics, complex-smith-div,
+load-in-imported-module -- with zero function-type findings), GCC suites
+2611/0 + turi 1796/0.  The sibling `-O0` dead-chain link cliff moved
+separately: see docs/reported/dead-base-thunk-chain-references-undefined-ctor.md,
+whose clang compile hard-failure was fixed in the same landing.
+
 **Severity: low-medium (undefined behavior, currently benign on x86-64/arm64).**
 Same class and same consequences as
 [reactor-fd-callback-fn-ptr-type-mismatch](../archive/reactor-fd-callback-fn-ptr-type-mismatch.md):

@@ -5955,6 +5955,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(suffix);
                 } else {
                     buf_printf(&out, "ctor_%s(", _mc);
+                    /* dead-base-thunk-chain-references-undefined-ctor: a
+                     * suffix-less ctor call on a HEAP parametric ADT names the
+                     * base `ctor_X`, which is never defined -- heap parametric
+                     * ADTs only get per-spec ctors (`ctor_Cons__int`), unlike
+                     * carrier-lowered parametric ADTs (Option/Result), whose
+                     * base ctor exists.  Such a call is only reachable from
+                     * the dead base generic thunk chain (every live path
+                     * routes to a spec), and `-O2` strips it, but the
+                     * reference must still COMPILE: clang 16+ hard-errors on
+                     * the implicit declaration.  Emit an extern forward
+                     * declaration in the carrier convention (base bodies are
+                     * carrier-typed); duplicates are legal C, and a genuinely
+                     * live call still fails loudly at link, which is the
+                     * desired behavior. */
+                    if (e->as.call_.ctor && e->as.call_.ctor->adt &&
+                        e->as.call_.ctor->adt->n_type_params > 0 &&
+                        e->as.call_.ctor->adt->is_heap && ctx->file) {
+                        buf_printf(ctx->file, "int64_t ctor_%s(", _mc);
+                        for (uint32_t di = 0; di < e->as.call_.n_args; di++)
+                            buf_printf(ctx->file, "%sint64_t", di ? ", " : "");
+                        buf_puts(ctx->file, ");\n");
+                    }
                 }
                 free(_mc);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {

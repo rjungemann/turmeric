@@ -700,6 +700,30 @@ run_happy() {
             write_result "FAIL" "$name" "emitted C pointer/integer warning" "$log_file"
             return
         fi
+        # Ratchet: function-pointer type confusion at a closure dispatch.
+        #
+        # clang's -fsanitize=function (part of -fsanitize=undefined since
+        # clang 17, so any clang UBSan run of the suite carries it; GCC has no
+        # equivalent) prints this when an indirect call goes through a pointer
+        # whose type disagrees with the callee's definition -- benign on
+        # SysV/AAPCS for same-slot returns, a hard fault under CFI / CET-BTI /
+        # WASM call_indirect.  UBSan default is print-and-continue, so the
+        # fixture PASSES while emitting it and the summary line never shows
+        # the class -- which is how the reactor callback typedefs drifted
+        # twice.  The corpus was sweep-verified at ZERO under clang before
+        # this landed.  See
+        # docs/archive/emitter-thunk-type-return-mismatch.md.
+        if grep -q 'through pointer to incorrect function type' "$actual_stderr"; then
+            {
+                echo "FAIL $name -- indirect call through mismatched function-pointer type"
+                grep 'through pointer to incorrect function type' \
+                    "$actual_stderr" | sed 's/^/    /'
+                echo "    UBSan continues past this, so output may still match; the type"
+                echo "    confusion is the failure.  Opt out with TUR_SKIP_CC_WARN_CHECK=1."
+            } > "$log_file"
+            write_result "FAIL" "$name" "mismatched function-pointer dispatch" "$log_file"
+            return
+        fi
     fi
 
     # Report a run-phase timeout AS a timeout.  The emit-c and build phases

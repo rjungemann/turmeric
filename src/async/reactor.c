@@ -183,26 +183,31 @@ static int64_t now_ms(void) {
  * callee's real type, and a mismatch is UB even when the two happen to share
  * an ABI slot, as `int64_t` and `void *` do on AArch64 and x86-64.
  *
- * The mapping is mechanical: a `nil` return is `void`, and a `ptr<void>`
- * parameter is `void *`.  Both were previously spelled `int64_t` -- the `:int`
- * stand-in CLAUDE.md's "No Lazy :int Stand-Ins" rule is about, here on the C
- * side calling in.  So
+ * The mapping follows the FAT-CLOSURE entry convention, not the plain-defn
+ * one: slot 0 of the fat box holds either a fatshim
+ * (`__tur_fatshim_void_int64_t...`) or a capturing lambda's lifted entry
+ * (`__fn_N(void *env, ...)`), and BOTH spell every value parameter in the
+ * int64 carrier -- a `ptr<void>` argument is `int64_t`, not `void *`.  (A
+ * bare top-level defn does emit `void *` for `ptr<void>`, but a callback
+ * never reaches this file as a bare entry: registration always wraps it in
+ * a fat box, and the box's slot-0 entry is what these typedefs must match.)
+ * Only the leading env parameter is `void *`.  A `nil` return is `void`.
  *
- *   (defn httpd-accept-cb [env : ptr<void> id : int
- *                          events : int user : ptr<void>] : nil ...)
- *
- * emits `static void httpd_hyaccept_hycb(void *, int64_t, int64_t, void *)`,
- * which is TurFdCbFn below.  If you change a callback's Turmeric signature,
- * change the matching typedef here -- nothing cross-checks them, which is how
- * these drifted in the first place.  See
- * docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md.
+ * These typedefs previously spelled the trailing `user` parameter `void *`,
+ * which matched the pre-fat-normalization era; the 2026-08-16 effect-row
+ * fat-normalization moved lambda callbacks onto the carrier-typed entries
+ * and every reactor fixture then tripped clang's -fsanitize=function here.
+ * If you change a callback's Turmeric signature, change the matching typedef
+ * -- nothing cross-checks them, which is how these drift.  See
+ * docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md and
+ * docs/archive/emitter-thunk-type-return-mismatch.md.
  */
 /* (env, id, events|signum|value, user) : nil -- fd, signal, and chan sources */
-typedef void (*TurFdCbFn)(void *, int64_t, int64_t, void *);
+typedef void (*TurFdCbFn)(void *, int64_t, int64_t, int64_t);
 /* (env, id, user) : nil -- timer sources */
-typedef void (*TurTimerCbFn)(void *, int64_t, void *);
+typedef void (*TurTimerCbFn)(void *, int64_t, int64_t);
 /* (env, user) : nil -- a fiber body */
-typedef void (*TurFiberBodyFn)(void *, void *);
+typedef void (*TurFiberBodyFn)(void *, int64_t);
 
 /*
  * Call a Turmeric closure with signature (id:int, events:int, user:ptr<void>)
@@ -214,7 +219,7 @@ static void call_tur_fd_cb(int64_t tur_cb, int64_t id, int events,
     if (!tur_cb) return;
     int64_t *fat = (int64_t *)(intptr_t)tur_cb;
     ((TurFdCbFn)(intptr_t)fat[0])((void *)fat, id, (int64_t)events,
-                                  (void *)(intptr_t)user_data);
+                                  user_data);
 }
 
 /*
@@ -224,8 +229,7 @@ static void call_tur_fd_cb(int64_t tur_cb, int64_t id, int events,
 static void call_tur_timer_cb(int64_t tur_cb, int64_t id, int64_t user_data) {
     if (!tur_cb) return;
     int64_t *fat = (int64_t *)(intptr_t)tur_cb;
-    ((TurTimerCbFn)(intptr_t)fat[0])((void *)fat, id,
-                                     (void *)(intptr_t)user_data);
+    ((TurTimerCbFn)(intptr_t)fat[0])((void *)fat, id, user_data);
 }
 
 /*
@@ -236,8 +240,7 @@ static void call_tur_chan_cb(int64_t tur_cb, int64_t id, int64_t value,
                               int64_t user_data) {
     if (!tur_cb) return;
     int64_t *fat = (int64_t *)(intptr_t)tur_cb;
-    ((TurFdCbFn)(intptr_t)fat[0])((void *)fat, id, value,
-                                  (void *)(intptr_t)user_data);
+    ((TurFdCbFn)(intptr_t)fat[0])((void *)fat, id, value, user_data);
 }
 
 /* ------------------------------------------------------------------ */
@@ -912,7 +915,8 @@ static void local_fiber_trampoline(TurFiber *tf) {
     LocalFiber *lf = g ? g->current : NULL;
     if (!lf || !lf->tur_body) return;
     int64_t *fat = (int64_t *)(intptr_t)lf->tur_body;
-    ((TurFiberBodyFn)(intptr_t)fat[0])((void *)fat, lf->user_data);
+    ((TurFiberBodyFn)(intptr_t)fat[0])((void *)fat,
+                                       (int64_t)(intptr_t)lf->user_data);
 }
 
 int64_t tur_local_spawn(void *gp, int64_t tur_body, void *user_data) {
@@ -1044,12 +1048,12 @@ static void local_park_wake(void *self, int64_t id, int64_t arg2) {
  * now matches its call site's typedef exactly.
  */
 static void local_park_wake_fd_cb(void *self, int64_t id, int64_t arg2,
-                                  void *user) {
+                                  int64_t user) {
     (void)user;
     local_park_wake(self, id, arg2);
 }
 
-static void local_park_wake_timer_cb(void *self, int64_t id, void *user) {
+static void local_park_wake_timer_cb(void *self, int64_t id, int64_t user) {
     (void)user;
     /* A timer wake carries no event mask; local_park_wake ignores arg2 on the
      * timeout path, which `id == lf->park_timer_src` selects. */

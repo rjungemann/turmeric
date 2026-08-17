@@ -281,9 +281,23 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [dead-base-thunk-chain-references-undefined-ctor](dead-base-thunk-chain-references-undefined-ctor.md) | low | residue of the generic-closure-return-type-app fix: the now-dead base thunk chain still emits a reference to the undefined base `ctor_Cons`; `-O2` strips it, a hand `-O0` compile of emitted C fails at link |
-| [emitter-thunk-type-return-mismatch](emitter-thunk-type-return-mismatch.md) | low-medium | **2 findings left, down from 3 (2026-08-13).** The `void`/`int64_t` half is fixed -- an explicit `: nil` on a lambda was indistinguishable from unannotated, so the infer-from-body step retyped it to the tail's type and the emitted fn disagreed with the thunk pointer built from the same declaration. What remains is the `:int` closure sinks in the httpd API: the call site names the thunk from the erased sink, the lambda from its real type. **GCC cannot see this class at all** (no `-fsanitize=function`); needs clang |
+| [dead-base-thunk-chain-references-undefined-ctor](dead-base-thunk-chain-references-undefined-ctor.md) | low | **narrowed 2026-08-17**: base-ctor forward decls now emitted (was a hard clang-16 BUILD failure, not cosmetic), both toolchains compile clean; only the hand `-O0` link cliff remains -- the dead chain is still emitted and needs the suppression fix |
 | [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
+
+`emitter-thunk-type-return-mismatch` was resolved 2026-08-17 and moved to
+[docs/archive](../archive/emitter-thunk-type-return-mismatch.md), with a
+correction worth reading: the clang re-sweep found the class had GROWN from 2
+findings to 14 -- the 2026-08-16 effect-row fat-normalization moved lambda
+callbacks onto carrier-typed fat entries and reactor.c's hand-written typedefs
+drifted a second time, plus five hand-packed fat boxes carried typed-convention
+entries in slot 0.  All are fixed (dispatch ascriptions name real types;
+hand-built boxes follow the carrier convention), the corpus sweeps ZERO under
+clang `-fsanitize=function`, and run.sh now FAILs any fixture whose stderr
+carries the UBSan report, backed by a clang-gated canary in
+`tests/check-cc-warn-ratchet.sh`.  The full retyping of the httpd `:int`
+sinks was deliberately NOT done -- the carrier ownership idiom keeps them --
+so the no-lazy-`:int` rule still points at that API as a preference, but no
+soundness finding remains.
 
 `struct-return-type-mismatch-unchecked-until-cc` was resolved 2026-08-06 and
 moved to

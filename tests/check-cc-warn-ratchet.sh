@@ -40,6 +40,49 @@ out=$(CC="${CC:-cc}" "$TUR" build "$tmp/canary.tur" -o "$tmp/canary.bin" 2>&1)
 
 if printf '%s' "$out" | grep -qE "$PATTERN"; then
     echo "cc-warn ratchet OK: canary trips $PATTERN"
+    # Second canary, CLANG ONLY: the mismatched-function-pointer ratchet.
+    # run.sh also FAILs a fixture whose stderr carries UBSan's "through
+    # pointer to incorrect function type" -- a message only clang's
+    # -fsanitize=function can produce (GCC has no equivalent), so under GCC
+    # this leg is skipped rather than failed: the gate is supplementary
+    # there and load-bearing on clang legs.  The canary calls an emitted
+    # int64_t(int64_t) defn through a void(*)(void*) pointer and asserts
+    # UBSan reports it, so a reworded message or a dropped sanitizer flag
+    # cannot silently disarm the run.sh check.
+    # See docs/archive/emitter-thunk-type-return-mismatch.md.
+    if "${CC:-cc}" --version 2>/dev/null | grep -qi clang; then
+        FN_PATTERN='through pointer to incorrect function type'
+        cat > "$tmp/fncanary.tur" <<'TUR_EOF'
+(defn helper [x : int] : int x)
+(defn trip [] : nil
+  ```c
+  typedef void (*wrong_fn)(void *);
+  wrong_fn f = (wrong_fn)(intptr_t)__TUR_CNAME_helper__;
+  f((void *)0);
+  ```)
+(defn main [] : int (trip) 0)
+TUR_EOF
+        # emit-c + a direct sanitized compile: `tur build` only adds
+        # -fsanitize when the SANITIZED libturi is linked, and this tiny
+        # program links nothing -- so instrument it explicitly.
+        "$TUR" emit-c "$tmp/fncanary.tur" > "$tmp/fncanary.c" 2>/dev/null
+        fnout=$("${CC:-cc}" -O0 -fsanitize=function "$tmp/fncanary.c" \
+                 -o "$tmp/fncanary.bin" -lm 2>&1)
+        if [ -x "$tmp/fncanary.bin" ]; then
+            fnrun=$("$tmp/fncanary.bin" 2>&1)
+        else
+            fnrun=""
+        fi
+        if printf '%s\n%s' "$fnout" "$fnrun" | grep -q "$FN_PATTERN"; then
+            echo "fn-ptr ratchet OK: canary trips '$FN_PATTERN'"
+        else
+            echo "check-cc-warn-ratchet: FAILED -- the clang fn-ptr canary produced no" >&2
+            echo "  'incorrect function type' report, so run.sh's mismatched-dispatch" >&2
+            echo "  ratchet cannot catch that class on this toolchain." >&2
+            printf '%s\n%s\n' "$fnout" "$fnrun" | sed 's/^/    /' >&2
+            exit 1
+        fi
+    fi
     exit 0
 fi
 
