@@ -275,6 +275,8 @@ function switchTab(id) {
     editor.focus();
     renderTabs();
     persistActiveId();
+    // The picker reflects the active tab; dialect is per-file (§3.5).
+    reconcileLangPicker();
 }
 
 function createTab({ name, content = '', activate = true } = {}) {
@@ -317,6 +319,7 @@ function closeTab(id) {
     persistTabs();
     persistActiveId();
     notifyTabsChanged();
+    reconcileLangPicker();
 }
 
 function sanitizeTabName(raw) {
@@ -949,6 +952,8 @@ async function initWasm() {
                     pending.resolve(msg.result);
                 } else if (msg.type === 'explain-result') {
                     pending.resolve(msg.result);
+                } else if (msg.type === 'lang-registry-result') {
+                    pending.resolve(msg.result);
                 } else if (msg.type === 'reset-done') {
                     pending.resolve();
                 } else if (msg.type === 'error') {
@@ -971,6 +976,7 @@ async function initWasm() {
         if (replInput) replInput.disabled = false;
 
         await fetchDocNames();
+        fetchLangRegistry();  // re-renders the picker from the C-side tables
         showStatus('Ready', 'success');
         loadFromUrlHash();
 
@@ -999,17 +1005,322 @@ async function initWasm() {
 
 /**
  * Strip a leading #lang directive from code and return the detected language
- * name plus the remaining source.  The #lang line must be the first non-
- * blank line (leading spaces/tabs are allowed but not newlines).
+ * plus the remaining source.  The #lang line must be the first non-blank
+ * line (leading spaces/tabs are allowed but not newlines).
  *
- * Returns { lang: string|null, body: string }
- *   lang -- the base language name (e.g. "turmeric/sweet") or null if no directive found
- *   body -- source text with the #lang line removed
+ * Returns { lang: string|null, layers: string[], body: string, line: string|null }
+ *   lang   -- the base language name (e.g. "turmeric/sweet") or null if no
+ *             directive found
+ *   layers -- the space-separated trailing layer tokens (e.g. ["stringed"]);
+ *             mirrors detect_lang_layered on the C side, where the old
+ *             base-only parse silently dropped them
+ *   body   -- source text with the #lang line removed
+ *   line   -- the full directive line text (no trailing newline), or null
  */
 function parseLangDirective(code) {
-    const m = code.match(/^[ \t]*#lang[ \t]+(\S+)([ \t]*\r?\n?|$)/);
-    if (!m) return { lang: null, body: code };
-    return { lang: m[1], body: code.slice(m[0].length) };
+    const m = code.match(/^[ \t]*#lang[ \t]+([^\r\n]*?)[ \t]*(\r?\n|$)/);
+    if (!m) return { lang: null, layers: [], body: code, line: null };
+    const toks = m[1].split(/[ \t]+/).filter(Boolean);
+    if (!toks.length) return { lang: null, layers: [], body: code, line: null };
+    return {
+        lang: toks[0],
+        layers: toks.slice(1),
+        body: code.slice(m[0].length),
+        line: m[0].replace(/\r?\n$/, ''),
+    };
+}
+
+// ============================================================================
+// Language picker (try-turmeric-lang-toggle-plan)
+//
+// A dialect radio group + layer checkboxes that edit the #lang line in
+// place.  The #lang line in the buffer stays the source of truth: the picker
+// is a text edit, not a hidden mode, and everything round-trips -- paste a
+// file with a #lang header and the picker updates; flip the picker and the
+// header updates.  Nothing is stored in UI state that is not also in the
+// source.
+// ============================================================================
+
+// Fallback for older deployed WASM builds that don't export
+// _turi_wasm_lang_registry.  Bases only, mirroring lang_base_from_name's
+// canonical set -- the LAYER list is never hardcoded in JS, because
+// LANG_LAYERS[] in src/compiler/lang_layers.c is the single source of truth
+// and a JS copy would drift on the next layer added or graduated.
+const LANG_REGISTRY_FALLBACK = {
+    bases: [
+        { name: 'turmeric',             label: 'S-expression' },
+        { name: 'turmeric/curly-infix', label: 'Curly-infix' },
+        { name: 'turmeric/neoteric',    label: 'Neoteric' },
+        { name: 'turmeric/sweet',       label: 'Sweet-expression' },
+    ],
+    layers: [],
+};
+
+const LANG_DEFAULT_BASE = 'turmeric';
+
+// Registry fetched from the WASM module (null until it arrives).
+let langRegistry = null;
+
+function langMenuRegistry() {
+    return langRegistry || LANG_REGISTRY_FALLBACK;
+}
+
+// The legacy alias is accepted on input but never generated; normalize it so
+// the picker treats `#lang sweet-exp` as the turmeric/sweet selection.
+function normalizeLangBase(name) {
+    return name === 'sweet-exp' ? 'turmeric/sweet' : name;
+}
+
+// Short dialect tag for the header button (the full labels live in the
+// popover, from the registry).
+function baseShortLabel(base) {
+    switch (base) {
+        case 'turmeric':             return 's-expr';
+        case 'turmeric/curly-infix': return 'curly';
+        case 'turmeric/neoteric':    return 'neoteric';
+        case 'turmeric/sweet':       return 'sweet';
+        default:                     return base || 's-expr';
+    }
+}
+
+/**
+ * Fetch the #lang registry (bases + curated layers) from the WASM module and
+ * re-render the picker.  No-op fallback when the export is absent.
+ */
+function fetchLangRegistry() {
+    if (wasmState !== WASM_STATE.READY) return Promise.resolve();
+    return new Promise((resolve) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve,
+            reject: () => resolve(null),
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'lang-registry', id });
+    }).then((json) => {
+        if (!json) return;
+        try {
+            const parsed = JSON.parse(json);
+            if (parsed && Array.isArray(parsed.bases) && Array.isArray(parsed.layers)) {
+                langRegistry = parsed;
+                renderLangMenu();
+            }
+        } catch (err) {
+            console.error('Bad lang registry JSON:', err);
+        }
+    });
+}
+
+/**
+ * The active tab's current selection, read from line 1 of its model.  The
+ * picker is per-tab: dialect is per-file in Turmeric, so nothing about it is
+ * persisted outside the tab's own text.
+ */
+function currentLangSelection() {
+    const model = editor && editor.getModel();
+    if (!model) return { base: LANG_DEFAULT_BASE, layers: [] };
+    const parsed = parseLangDirective(model.getLineContent(1));
+    if (parsed.lang === null) return { base: LANG_DEFAULT_BASE, layers: [] };
+    return { base: normalizeLangBase(parsed.lang), layers: parsed.layers };
+}
+
+// Layers are emitted in registry order so the directive text is stable
+// across toggles -- the set is order-independent to the reader, but a
+// jittering line makes a noisy diff and a noisy undo stack.  Tokens the
+// registry doesn't know (hand-typed) keep their original relative order at
+// the end rather than being dropped.
+function orderLangLayers(layers) {
+    const order = langMenuRegistry().layers.map(l => l.name);
+    const known = order.filter(n => layers.includes(n));
+    const unknown = layers.filter(n => !order.includes(n));
+    return known.concat(unknown);
+}
+
+// Tracks models whose #lang insert also added the blank separator line, so
+// removal only eats a blank line this code created (never one the user
+// typed).  WeakMap so disposed models don't pin the flag.
+const langInsertAddedBlank = new WeakMap();
+
+/**
+ * The single writer of the #lang line (§3.4 of the plan).  All paths go
+ * through one pushEditOperations call, so one Ctrl+Z undoes a language
+ * switch.
+ *
+ * - No #lang line + default selection: write nothing (don't decorate a
+ *   plain file with a redundant header).
+ * - No #lang line + non-default selection: insert `#lang ...` as line 1,
+ *   followed by a blank line.
+ * - Has a #lang line: replace exactly that line, preserving everything
+ *   after it.
+ * - Selection returns to the default: remove the line (and the blank line
+ *   after it if the insert above added one).
+ */
+function setLangDirective(model, { base, layers }) {
+    if (!model || !monaco) return;
+    const ordered = orderLangLayers(layers || []);
+    const parsed = parseLangDirective(model.getLineContent(1));
+    const isDefault = base === LANG_DEFAULT_BASE && ordered.length === 0;
+    const directive = ['#lang', base].concat(ordered).join(' ');
+
+    let edits;
+    if (parsed.lang === null) {
+        if (isDefault) return;
+        edits = [{ range: new monaco.Range(1, 1, 1, 1), text: directive + '\n\n' }];
+        langInsertAddedBlank.set(model, true);
+    } else if (isDefault) {
+        const lineCount = model.getLineCount();
+        const removeBlank = langInsertAddedBlank.get(model) === true &&
+                            lineCount >= 2 &&
+                            model.getLineContent(2).trim() === '';
+        const lastRemoved = removeBlank ? 2 : 1;
+        const range = lineCount > lastRemoved
+            ? new monaco.Range(1, 1, lastRemoved + 1, 1)
+            : new monaco.Range(1, 1, lineCount, model.getLineMaxColumn(lineCount));
+        edits = [{ range, text: '' }];
+        langInsertAddedBlank.delete(model);
+    } else {
+        if (parsed.line === directive) return;   // nothing to do
+        edits = [{
+            range: new monaco.Range(1, 1, 1, model.getLineMaxColumn(1)),
+            text: directive,
+        }];
+    }
+    // Delimit the undo stack on both sides so the switch is exactly one
+    // Ctrl+Z -- neither merged with preceding typing nor split in two.
+    model.pushStackElement();
+    model.pushEditOperations([], edits, () => null);
+    model.pushStackElement();
+}
+
+/**
+ * Render the popover's radio group + checkboxes from the registry.  The
+ * form of the control mirrors the form of the syntax: one mutually
+ * exclusive base, an order-independent set of layers.
+ */
+function renderLangMenu() {
+    const basesEl = document.getElementById('lang-bases');
+    const layersEl = document.getElementById('lang-layers');
+    if (!basesEl || !layersEl) return;
+    const reg = langMenuRegistry();
+
+    basesEl.innerHTML = reg.bases.map(b => `
+        <label class="lang-row">
+            <input type="radio" name="lang-base" value="${escapeHtml(b.name)}">
+            <span class="lang-row-name">${escapeHtml(b.label)}</span>
+        </label>`).join('');
+
+    // An unavailable layer renders disabled with the reason -- never hidden,
+    // because hiding it makes it undiscoverable and makes the picker
+    // disagree with `tur lang-layers`.
+    layersEl.innerHTML = reg.layers.length ? reg.layers.map(l => {
+        const unavailable = l.available === false;
+        const title = unavailable
+            ? `${l.summary || ''} (unavailable in this build)`
+            : (l.summary || '');
+        return `
+        <label class="lang-row${unavailable ? ' lang-row-disabled' : ''}"
+               title="${escapeHtml(title)}">
+            <input type="checkbox" value="${escapeHtml(l.name)}"${unavailable ? ' disabled' : ''}>
+            <span class="lang-row-name">${escapeHtml(l.name)}</span>${
+                l.kind === 'semantic'
+                    ? '<span class="lang-chip">experimental</span>'
+                    : ''
+            }
+            <span class="lang-row-summary">${escapeHtml(l.summary || '')}</span>
+        </label>`;
+    }).join('') : '<div class="lang-row-empty">No optional layers in this build</div>';
+
+    basesEl.querySelectorAll('input[type=radio]').forEach(r =>
+        r.addEventListener('change', onLangControlChange));
+    layersEl.querySelectorAll('input[type=checkbox]').forEach(c =>
+        c.addEventListener('change', onLangControlChange));
+
+    reconcileLangPicker();
+}
+
+/** A picker control changed: write the new selection into the buffer. */
+function onLangControlChange() {
+    const model = editor && editor.getModel();
+    if (!model) return;
+    const checkedBase = document.querySelector('#lang-bases input[type=radio]:checked');
+    const base = checkedBase ? checkedBase.value : LANG_DEFAULT_BASE;
+    const layers = Array.from(
+        document.querySelectorAll('#lang-layers input[type=checkbox]:checked'),
+        c => c.value);
+    setLangDirective(model, { base, layers });
+    reconcileLangPicker();
+}
+
+/**
+ * Reconcile the picker with the active tab's line 1.  Called on model
+ * content change (typing the header by hand and using the picker are the
+ * same operation) and on tab switch (the picker follows the tab).
+ */
+function reconcileLangPicker() {
+    const sel = currentLangSelection();
+    const btnLabel = document.getElementById('lang-btn-label');
+    if (btnLabel) btnLabel.textContent = baseShortLabel(sel.base);
+    document.querySelectorAll('#lang-bases input[type=radio]').forEach(r => {
+        r.checked = (r.value === sel.base);
+    });
+    document.querySelectorAll('#lang-layers input[type=checkbox]').forEach(c => {
+        c.checked = sel.layers.includes(c.value);
+    });
+}
+
+/**
+ * Wire the header button + popover.  Mirrors the Examples popover: reparent
+ * to <body> to escape ancestor overflow/stacking contexts, anchor with
+ * position:fixed, close on outside-click / Escape.
+ */
+function initLangPicker() {
+    const langBtn = document.getElementById('lang-btn');
+    const langMenu = document.getElementById('lang-menu');
+    if (!langBtn || !langMenu) return;
+    if (langMenu.parentElement !== document.body) {
+        document.body.appendChild(langMenu);
+    }
+    const closeLang = () => {
+        langMenu.hidden = true;
+        langBtn.setAttribute('aria-expanded', 'false');
+    };
+    const openLangAt = (anchor) => {
+        langMenu.hidden = false;
+        langBtn.setAttribute('aria-expanded', 'true');
+        const r = anchor.getBoundingClientRect();
+        langMenu.style.top = `${r.bottom + 4}px`;
+        langMenu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
+        reconcileLangPicker();
+    };
+    langBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        langMenu.hidden ? openLangAt(langBtn) : closeLang();
+    });
+    document.addEventListener('click', (e) => {
+        if (!langMenu.hidden && !langMenu.contains(e.target) && e.target !== langBtn) {
+            closeLang();
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !langMenu.hidden) closeLang();
+    });
+    // Mobile: the "Language..." item in the ⋯ overflow opens the same
+    // popover, anchored to the overflow button.  stopPropagation so the
+    // click never reaches the document-level outside-click closer (which
+    // would immediately re-hide the menu); that also bypasses the overflow
+    // menu's own close-on-click delegate, so close it here.
+    const moreBtn = document.getElementById('more-btn');
+    document.querySelectorAll('[data-action="language"]').forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const moreMenu = document.getElementById('more-menu');
+            if (moreMenu) moreMenu.hidden = true;
+            moreBtn?.setAttribute('aria-expanded', 'false');
+            openLangAt(moreBtn || langBtn);
+        });
+    });
+    renderLangMenu();
 }
 
 /**
@@ -1046,14 +1357,17 @@ function processQueue() {
 
     // turi_eval_typed detects and strips an inline #lang directive itself, so
     // pass the raw source through. Still parse it locally to keep the UI's
-    // mode indicator (currentLangMode) in sync; also forward `lang` to the
-    // Worker as a hint for runtimes that export _turi_wasm_set_lang.
-    const { lang } = parseLangDirective(code);
+    // mode indicator (currentLangMode) in sync; also forward the FULL
+    // directive tail (base + layer tokens) to the Worker as a hint for
+    // runtimes that export _turi_wasm_set_lang -- set_lang assigns the layer
+    // set, so forwarding base-only would silently drop layer toggles.
+    const { lang, layers } = parseLangDirective(code);
     if (lang !== null) currentLangMode = lang;
+    const langDirective = lang !== null ? [lang, ...layers].join(' ') : null;
 
     const id = ++evalCallId;
     pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
-    evalWorker.postMessage({ type: 'eval', id, input: code, lang });
+    evalWorker.postMessage({ type: 'eval', id, input: code, lang: langDirective });
 }
 
 /**
@@ -1495,6 +1809,9 @@ async function initEditor() {
         persistContent();
         clearTimeout(urlHashTimer);
         urlHashTimer = setTimeout(updateUrlHash, 1000);
+        // Round-trip the picker from the text: typing the header by hand and
+        // using the picker are the same operation.  Reads line 1 only.
+        reconcileLangPicker();
     });
     
     // Handle Ctrl+Enter to run code
@@ -2261,6 +2578,9 @@ function initEventListeners() {
             if (e.key === 'Escape' && !examplesMenu.hidden) closeExamples();
         });
     }
+
+    // Language picker (dialect radio group + layer checkboxes)
+    initLangPicker();
 
     // Solve button
     document.getElementById('solve-btn')?.addEventListener('click', solveStep);

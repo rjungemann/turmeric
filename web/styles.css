@@ -1601,6 +1601,73 @@ body.split-dragging * {
     padding: 6px 12px 2px;
 }
 
+/* Language picker (try-turmeric-lang-toggle-plan): a dialect radio group +
+   layer checkboxes popover that edits the #lang line in place. Reuses the
+   .more-menu popover shell. */
+.lang-wrap { position: relative; display: inline-flex; }
+.btn-lang {
+    padding: 5px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-primary);
+    min-width: 58px;
+}
+.lang-menu { min-width: 260px; max-width: 380px; }
+.lang-menu-cols { display: flex; flex-direction: row; gap: 4px; }
+.lang-menu-col { flex: 1 1 auto; min-width: 0; }
+.lang-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-primary);
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.lang-row:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
+.lang-row input { flex: 0 0 auto; margin: 0; align-self: center; accent-color: var(--gold); }
+.lang-row-name { white-space: nowrap; }
+.lang-row-summary {
+    font-size: 11px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.lang-row-disabled { opacity: 0.5; cursor: not-allowed; }
+.lang-row-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 5px 12px;
+    font-style: italic;
+}
+.lang-chip {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--gold);
+    border: 1px solid var(--gold);
+    border-radius: 3px;
+    padding: 0 4px;
+    align-self: center;
+    white-space: nowrap;
+}
+/* One-line confirm in the footer, matching how the Clear button's
+   shift-click reset already behaves: warn, don't modal. */
+.lang-menu-footer {
+    font-size: 11px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+    padding: 6px 12px 2px;
+}
+/* Narrow popovers on small screens: stack the two columns. */
+@media (max-width: 480px) {
+    .lang-menu-cols { flex-direction: column; }
+}
+
 @media (max-width: 600px) {
     /* Collapse Solve/Clear/Format/Share/Examples into the ⋯ menu so
        the tab bar has room for tabs. Run stays visible. */
@@ -1610,6 +1677,7 @@ body.split-dragging * {
     .editor-actions > #share-btn,
     .editor-actions > #download-btn,
     .editor-actions > #open-btn,
+    .editor-actions > .lang-wrap,
     .editor-actions > .examples-wrap { display: none; }
     .more-wrap { display: inline-flex; }
 }

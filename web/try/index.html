@@ -74,6 +74,33 @@
                             <input type="file" id="open-project-input" accept=".zip,application/zip"
                                    style="position:absolute; left:-9999px; width:1px; height:1px;"
                                    aria-hidden="true" tabindex="-1">
+                            <!-- Language: dialect picker + layer toggles
+                                 (try-turmeric-lang-toggle-plan). Edits the
+                                 #lang line in place -- the buffer stays the
+                                 source of truth. Options are rendered by
+                                 renderLangMenu() in main.js from the WASM
+                                 registry export, never hardcoded here. -->
+                            <div class="lang-wrap">
+                                <button class="btn btn-lang" id="lang-btn"
+                                        aria-haspopup="true" aria-expanded="false"
+                                        aria-controls="lang-menu"
+                                        title="Language dialect &amp; layers" aria-label="Language">
+                                    <span id="lang-btn-label">s-expr</span>
+                                </button>
+                                <div class="more-menu lang-menu" id="lang-menu" role="menu" hidden>
+                                    <div class="lang-menu-cols">
+                                        <div class="lang-menu-col">
+                                            <div class="more-label">Dialect</div>
+                                            <div id="lang-bases" role="radiogroup" aria-label="Dialect"></div>
+                                        </div>
+                                        <div class="lang-menu-col">
+                                            <div class="more-label">Layers</div>
+                                            <div id="lang-layers"></div>
+                                        </div>
+                                    </div>
+                                    <div class="lang-menu-footer">Switching resets the REPL environment</div>
+                                </div>
+                            </div>
                             <!-- Examples: a hamburger button that opens a popover of
                                  example programs (wired in main.js). Replaces the old
                                  <select>; reuses the .more-menu popover styling. -->
@@ -112,6 +139,7 @@
                                     <button class="more-item" role="menuitem" data-cmd="clear-btn">Clear</button>
                                     <button class="more-item" role="menuitem" data-cmd="format-btn">Format</button>
                                     <button class="more-item" role="menuitem" data-cmd="share-btn">Share</button>
+                                    <button class="more-item" role="menuitem" data-action="language">Language...</button>
                                     <button class="more-item" role="menuitem" data-cmd="download-btn">Download project</button>
                                     <button class="more-item" role="menuitem" data-cmd="open-btn">Open project...</button>
                                     <div class="more-sep" role="separator"></div>
