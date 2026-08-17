@@ -1,8 +1,20 @@
 # Rational and Complex numbers
 
-> **Status:** N0/N1/N2 landed (2026-07-29); N3 UNBLOCKED (J1 landed
-> 2026-07-29, `tur jit <file>` exists behind `-DTUR_JIT=ON` +
-> `--enable=jit`) but not started; N4 deferred by design
+> **Status:** COMPLETE 2026-08-17.  N0/N1/N2 landed 2026-07-29; N3 landed
+> 2026-08-17 -- all six rational/complex fixtures plus the three error
+> negatives pass under the MIR JIT (`tests/run-jit.sh`, TUR_JIT=ON build)
+> with ZERO cc-fallbacks, so the tower genuinely executes on all three
+> engines from one implementation; no 16-byte struct ABI problem surfaced,
+> so the by-pointer fallback sketched in section 8 was never needed.  The
+> section-1 standing rule is now enforced:
+> `tests/check-no-c-complex.sh` (wired into run.sh's startup checks)
+> fails the suite if `_Complex`, `<complex.h>`, or the
+> `__mul*c3`/`__div*c3` family appears in emitter source or generated C.
+> N4 (the `i` suffix + implicit float/Complex coercion) remains DEFERRED BY
+> DESIGN per section 5.2 -- its trigger ("after N0 has been in use long
+> enough to know what implicit coercion would cost") is recorded there and
+> survives this plan's closure; reopening N4 is a fresh decision, not
+> unfinished work.
 > **Type:** Language / stdlib / reader
 > **Hard constraint:** must run unchanged under `tur`, `turi`, and the
 > upcoming `tur jit` -- see [`jit-engine-plan.md`](jit-engine-plan.md)
@@ -14,7 +26,7 @@
 | **N0** -- `Num` de-`:int` + builtin-miss -> `Num` dispatch | **landed** | `stdlib/typeclass.tur`, `src/compiler/elab_call.c` |
 | **N1** -- `Rational` + `#rat{...}` | **landed** | `stdlib/rational.tur`, `src/compiler/reader.c` |
 | **N2** -- `Complex` + `#cx{...}` | **landed** | `stdlib/complex.tur`, `src/compiler/reader.c` |
-| **N3** -- JIT parity | **blocked** | `tur jit` (J1) does not exist yet |
+| **N3** -- JIT parity | **landed** | 2026-08-17: 9/9 fixtures under `tests/run-jit.sh`, zero cc-fallbacks; standing `_Complex` check in run.sh |
 | **N4** -- the `i` suffix | **deferred** | by design, per §5.2 |
 
 Deviations from the plan as written, and why:

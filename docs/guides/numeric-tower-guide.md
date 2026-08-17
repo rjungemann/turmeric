@@ -193,7 +193,12 @@ Both modules are written in ordinary Turmeric with **no inline C**. That is not
 an aesthetic choice: the tree-walking interpreter cannot execute inline C and
 carries hand-written native overrides to compensate, so a numeric tower written
 in Turmeric needs *zero* new natives and is byte-identical under `tur`, `turi`,
-and the upcoming `tur jit` by construction.
+and `tur jit` by construction.  JIT parity was measured, not assumed (N3,
+2026-08-17): every rational/complex fixture -- the error negatives included --
+passes under the MIR engine with zero cc-fallbacks, and `tests/run.sh` carries
+a standing check (`tests/check-no-c-complex.sh`) that `_Complex`,
+`<complex.h>`, and the `__mul*c3`/`__div*c3` compiler-runtime family never
+appear in emitter source or generated C.
 
 The one dependency on inline C is the scalar libm layer in
 [`stdlib/math.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/math.tur) -- `sqrt`, `fabs`, `exp`, `sin`,

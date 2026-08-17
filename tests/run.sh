@@ -114,6 +114,20 @@ if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
     fi
 fi
 
+# Standing rule from the numeric tower plan (section 1, made standing by N3):
+# _Complex / <complex.h> / the __mul*c3 / __div*c3 compiler-runtime family
+# never appear in generated C -- c2mir (the JIT) has no _Complex, and the
+# helper family would grow the JIT's runtime symbol boundary.  The check
+# itself predates this wiring as a ctest target (CMakeLists tur_no_c_complex);
+# running it here too puts it on the path every `bash tests/run.sh` invocation
+# takes.  Cheap (greps + a few emit-c runs); shares the ratchet opt-out.
+if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
+    if ! bash tests/check-no-c-complex.sh; then
+        echo "tests: no-C-_Complex check failed (see above); aborting." >&2
+        exit 1
+    fi
+fi
+
 # R4 (carrier-crossing-recovery-routing-plan): the audit registry is the single
 # source of truth for which carrier<->concrete crossings are routed.  A new
 # chokepoint call site that forgot its audit row (or a drifted/stale registry)
