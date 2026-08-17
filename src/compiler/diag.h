@@ -235,6 +235,12 @@ typedef enum DiagCode {
      * by experiment_warn_if_used (mirroring TUR-W0050), not through diag_emit;
      * they are registered here only so `tur explain` can describe them. */
     TUR_E0310_UNKNOWN_EXPERIMENT,
+    /* engine-selection-plan E1: build.tur's `:engine` key carries a value
+     * outside {"cc","jit","interp"}.  A hard error, unlike unknown manifest
+     * KEYS (silently ignored for forward compatibility): a typo'd engine
+     * silently running under cc is the exact failure the key exists to
+     * prevent. */
+    TUR_E0311_UNKNOWN_ENGINE,
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
     /* RT3 (refinement-types-plan): static discharge of `#refine{...}`

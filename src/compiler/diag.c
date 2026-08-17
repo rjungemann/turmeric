@@ -312,6 +312,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
+        case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
@@ -469,6 +470,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
+    if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
@@ -2135,6 +2137,23 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: run `tur experiments` to see the exact set of recognized names, then\n"
       "correct the spelling (or drop the flag if the feature has graduated and no\n"
       "longer needs a gate).\n",
+    },
+    /* engine-selection-plan: unknown :engine value */
+    { TUR_E0311_UNKNOWN_ENGINE,
+      "TUR-E0311: unknown :engine value\n"
+      "\n"
+      "build.tur's `:engine` key (or the --engine flag / TUR_ENGINE env var)\n"
+      "named an execution engine outside the recognized set: \"cc\" (compile\n"
+      "via the C emitter and run the binary -- the default and the reference),\n"
+      "\"jit\" (the in-process MIR engine; needs a -DTUR_JIT=ON build and the\n"
+      "`jit` experiment), or \"interp\" (the tree-walking interpreter).\n"
+      "\n"
+      "Unknown values are a hard error rather than a fallback: the engines\n"
+      "differ in SEMANTICS (see `#?(:tur ... :turi ...)`, inline-C carve-outs,\n"
+      "c2mir divergences), so silently substituting one is the worst outcome.\n"
+      "\n"
+      "Fix: correct the spelling.  The precedence ladder is\n"
+      "  --engine > TUR_ENGINE env > build.tur :engine > \"cc\".\n",
     },
     /* XF: prototype experimental feature in use */
     { TUR_W0060_EXPERIMENTAL_PROTOTYPE,

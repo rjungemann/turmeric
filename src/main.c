@@ -1505,6 +1505,67 @@ static int ensure_dir(const char *path) {
  * `obj/`, `bin/`, `lib/` subdirs created, and a `.gitignore` containing
  * `*\n` dropped in on first creation.  Returns NULL with a diagnostic on
  * failure.  Caller frees with free(). */
+static char *find_spice_root(const char *file_path);   /* defined below */
+
+/* engine-selection-plan E1: resolve the execution engine for `tur run`.
+ * Precedence (highest first), mirroring resolve_build_dir's ladder:
+ *   1. --engine <name> on the command line.
+ *   2. TUR_ENGINE env var.
+ *   3. The nearest `build.tur`'s `:engine` (walking up from input_or_root).
+ *   4. "cc" -- compile via the C emitter and run the binary (the reference).
+ *
+ * Returns a static string ("cc" | "jit" | "interp"), or NULL after printing
+ * TUR-E0311 for an unknown CLI/env value.  A manifest value is validated at
+ * parse time (pkg.c, same code), so an invalid manifest never reaches here.
+ * The engines differ in SEMANTICS, not just speed (#?(:tur ... :turi ...),
+ * inline-C carve-outs, c2mir divergences), which is why an unknown value is
+ * a hard error and never a fallback. */
+static const char *resolve_engine(const char *input_or_root,
+                                  const char *cli_flag) {
+    const char *cand = NULL;
+    const char *from = NULL;
+    if (cli_flag && *cli_flag) {
+        cand = cli_flag;
+        from = "--engine";
+    } else if (getenv("TUR_ENGINE") && *getenv("TUR_ENGINE")) {
+        cand = getenv("TUR_ENGINE");
+        from = "TUR_ENGINE";
+    }
+    if (!cand) {
+        const char *start = (input_or_root && *input_or_root) ? input_or_root
+                                                              : ".";
+        /* find_spice_root handles both file and directory inputs, relative
+         * or absolute -- the same walker the RM4 manifest discovery uses. */
+        char *root = find_spice_root(start);
+        if (root) {
+            char mp[4096];
+            (void)pkg_resolve_manifest_path(root, mp, sizeof(mp));
+            PkgManifest m;
+            memset(&m, 0, sizeof(m));
+            const char *resolved = NULL;
+            if (pkg_manifest_read(mp, &m) && m.engine && *m.engine) {
+                if (strcmp(m.engine, "jit") == 0)         resolved = "jit";
+                else if (strcmp(m.engine, "interp") == 0) resolved = "interp";
+                else                                      resolved = "cc";
+            }
+            pkg_manifest_free(&m);
+            free(root);
+            if (resolved) return resolved;
+        }
+        return "cc";
+    }
+    if (strcmp(cand, "cc") == 0)     return "cc";
+    if (strcmp(cand, "jit") == 0)    return "jit";
+    if (strcmp(cand, "interp") == 0) return "interp";
+    fprintf(stderr,
+            "tur: error TUR-E0311: unknown engine '%s' (from %s); expected "
+            "\"cc\", \"jit\", or \"interp\"\n"
+            "     precedence: --engine > TUR_ENGINE > build.tur :engine > "
+            "\"cc\"; see `tur explain TUR-E0311`\n",
+            cand, from);
+    return NULL;
+}
+
 static char *resolve_build_dir(const char *input_or_root, const char *cli_flag) {
     /* Step 1: pick the raw (unresolved) path string. */
     char raw[4096] = {0};
@@ -3347,6 +3408,9 @@ static int decode_exit_status(int status) {
 }
 
 static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
+static int cmd_eval(const char *path, bool use_color,
+                    char **extra_argv, int extra_argc, bool debug);
+static int cmd_jit(int argc, char **argv);
 
 #ifdef TUR_HAVE_JIT
 /* S2 (findings 25): swap an emitted TU's fixed preamble for the committed
@@ -3494,22 +3558,12 @@ static int cmd_emit_rt_split(int argc, char **argv) {
  *
  * Usage: tur jit [-I <dir>...] <file> [-- <args>...]  */
 static int cmd_jit(int argc, char **argv) {
-    if (!g_opt_jit) {
-        fprintf(stderr,
-                "tur: 'jit' is an experimental feature; enable it with "
-                "--enable=jit\n"
-                "     (see docs/upcoming/jit-engine-plan.md, and `tur "
-                "experiments` for status)\n");
-        return 2;
-    }
-    experiment_warn_if_used("jit");
-#ifndef TUR_HAVE_JIT
-    fprintf(stderr,
-            "tur: this build carries no JIT engine; reconfigure with "
-            "-DTUR_JIT=ON\n"
-            "     (vendors MIR at configure time -- see cmake/mir.cmake)\n");
-    return 2;
-#else
+    /* engine-selection-plan P0: locate the input FIRST so the enclosing
+     * manifest's `:experiments [jit]` can open the gate below -- previously
+     * the g_opt_jit check ran before any manifest was read, so the manifest
+     * spelling could never enable `tur jit` (and its `:reader-macros` were
+     * ignored, restored here too).  CLI --enable= precedence is unchanged:
+     * apply_manifest_experiments ranks below XF_SRC_CLI. */
     const char *input = NULL;
     int passthrough_start = -1;
     int scan_end = argc;
@@ -3530,13 +3584,38 @@ static int cmd_jit(int argc, char **argv) {
         free(user_inc);
         return 2;
     }
+    int jit_rm_n = 0;
+    char **jit_rm = discover_manifest_reader_macros(input, &jit_rm_n);
+    if (!g_opt_jit) {
+        fprintf(stderr,
+                "tur: 'jit' is an experimental feature; enable it with "
+                "--enable=jit\n"
+                "     (or `:experiments [jit]` in build.tur; see "
+                "docs/upcoming/jit-engine-plan.md, and `tur experiments` "
+                "for status)\n");
+        free_reader_macro_paths(jit_rm, jit_rm_n);
+        free(user_inc);
+        return 2;
+    }
+    experiment_warn_if_used("jit");
+#ifndef TUR_HAVE_JIT
+    (void)passthrough_start;   /* used only by the engine path below */
+    fprintf(stderr,
+            "tur: this build carries no JIT engine; reconfigure with "
+            "-DTUR_JIT=ON\n"
+            "     (vendors MIR at configure time -- see cmake/mir.cmake)\n");
+    free_reader_macro_paths(jit_rm, jit_rm_n);
+    free(user_inc);
+    return 2;
+#else
 
     refine_discharge_reset();
     g_emit_for_link = true;
     Buf csrc;
     buf_init(&csrc);
     int rc = compile_to_c(input, &csrc, (const char **)user_inc, n_user_inc,
-                          NULL, 0);
+                          (const char **)jit_rm, jit_rm_n);
+    free_reader_macro_paths(jit_rm, jit_rm_n);
     if (rc != 0) { buf_free(&csrc); free(user_inc); return rc; }
     hoist_tur_include_directives(&csrc);
     Buf autolink;
@@ -3907,11 +3986,75 @@ static const TurSpiceJitHook g_repl_jit_hook = {
 };
 #endif /* TUR_HAVE_JIT */
 
+/* engine-selection-plan E2/E3: delegate a resolved non-cc engine.
+ * The subcommand arms keep their existing bodies (`cmd_jit` / `cmd_eval`);
+ * this adapts `tur run`'s normalized "entry + includes + program args"
+ * request to each.  Unsatisfiable configurations are HARD errors -- a
+ * project that declares an engine has declared a semantic requirement,
+ * and quietly running a different one is the worst available outcome
+ * (the JIT's own runtime TUR-W0070 cc fallback is unchanged: that one is
+ * a per-program capability miss with a warning attached, not a
+ * misconfiguration). */
+static int run_delegate_engine(const char *engine, const char *entry,
+                               char **user_inc, int n_user_inc,
+                               int argc, char **argv,
+                               int passthrough_start) {
+    if (getenv("TUR_VERBOSE") && *getenv("TUR_VERBOSE"))
+        fprintf(stderr, "tur run: engine '%s' for %s\n", engine, entry);
+    if (strcmp(engine, "interp") == 0) {
+        /* The tree-walker discovers the enclosing spice itself (per-file
+         * auto-spice), so user -I dirs are not threaded; program args after
+         * `--` become *args*. */
+        char **prog_argv = (passthrough_start >= 0) ? argv + passthrough_start
+                                                    : NULL;
+        int    prog_argc = (passthrough_start >= 0) ? argc - passthrough_start
+                                                    : 0;
+        return cmd_eval(entry, stderr_is_tty(), prog_argv, prog_argc,
+                        /*debug=*/false);
+    }
+    /* jit */
+#ifndef TUR_HAVE_JIT
+    (void)user_inc; (void)n_user_inc;
+    fprintf(stderr,
+            "tur run: engine \"jit\" is configured, but this build carries "
+            "no JIT engine\n"
+            "     reconfigure with -DTUR_JIT=ON (vendors MIR at configure "
+            "time -- see cmake/mir.cmake),\n"
+            "     or override the engine: --engine cc / TUR_ENGINE=cc\n");
+    return 2;
+#else
+    /* Rebuild a `tur jit` argv: {argv0, "jit", -I <d>..., entry, --, rest}.
+     * cmd_jit performs its own manifest discovery (P0), experiment gate,
+     * and TUR-W0070 cc fallback. */
+    int cap = 3 + 2 * n_user_inc + 1 +
+              (passthrough_start >= 0 ? 1 + (argc - passthrough_start) : 0);
+    char **jargv = (char **)malloc((size_t)(cap + 1) * sizeof(char *));
+    if (!jargv) return 2;
+    int n = 0;
+    jargv[n++] = argv[0];
+    jargv[n++] = (char *)"jit";
+    for (int i = 0; i < n_user_inc; i++) {
+        jargv[n++] = (char *)"-I";
+        jargv[n++] = user_inc[i];
+    }
+    jargv[n++] = (char *)entry;
+    if (passthrough_start >= 0) {
+        jargv[n++] = (char *)"--";
+        for (int i = passthrough_start; i < argc; i++) jargv[n++] = argv[i];
+    }
+    jargv[n] = NULL;
+    int rc = cmd_jit(n, jargv);
+    free(jargv);
+    return rc;
+#endif
+}
+
 static int cmd_run(int argc, char **argv) {
     /* tur run [-I <dir>...] [--release] [--offline] [<file>] [-- <args>...] */
     bool        release           = false;
     bool        offline           = false;
     const char *explicit_file     = NULL;
+    const char *engine_flag       = NULL;   /* engine-selection-plan E1 */
     int         passthrough_start = -1;
 
     /* SC2: collect -I flags up front (stops scanning at `--`, since
@@ -3935,6 +4078,11 @@ static int cmd_run(int argc, char **argv) {
             release = true;
         } else if (strcmp(argv[i], "--offline") == 0) {
             offline = true;
+        } else if (strcmp(argv[i], "--engine") == 0 && i + 1 < scan_end) {
+            /* engine-selection-plan E1: CLI rung of the ladder. */
+            engine_flag = argv[++i];
+        } else if (strncmp(argv[i], "--engine=", 9) == 0) {
+            engine_flag = argv[i] + 9;
         } else if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
             if (!explicit_file) explicit_file = argv[i];
         }
@@ -4081,6 +4229,26 @@ static int cmd_run(int argc, char **argv) {
                 }
                 pkg_manifest_free(&sm);
                 free(sroot);
+            }
+        }
+        /* engine-selection-plan E3: a resolved non-cc engine delegates to
+         * that engine's own arm; "cc" continues into RUN_ENTRY unchanged. */
+        {
+            const char *eng = resolve_engine(explicit_file, engine_flag);
+            if (!eng) {
+                free(user_inc);
+                free_reader_macro_paths(rm_paths_owned, n_rm_paths);
+                ls2_resolver_ctx_dispose(&run_ls2);
+                return 2;
+            }
+            if (strcmp(eng, "cc") != 0) {
+                int drc = run_delegate_engine(eng, explicit_file,
+                                              user_inc, n_user_inc,
+                                              argc, argv, passthrough_start);
+                free(user_inc);
+                free_reader_macro_paths(rm_paths_owned, n_rm_paths);
+                ls2_resolver_ctx_dispose(&run_ls2);
+                return drc;
             }
         }
         RUN_ENTRY(explicit_file);
@@ -4317,6 +4485,31 @@ static int cmd_run(int argc, char **argv) {
 
     pkg_manifest_free(&m);
     free(root);
+
+    /* engine-selection-plan E3: project-mode engine dispatch.  The entry is
+     * now known, so a manifest `:engine "interp"` makes a bare `tur run`
+     * tree-walk this project (and --engine / TUR_ENGINE override it). */
+    {
+        const char *eng = resolve_engine(entry, engine_flag);
+        if (!eng) {
+            for (int _i = 0; _i < n_spice_inc_dirs; _i++)
+                free((char *)spice_inc_dirs[_i]);
+            free(spice_inc_dirs);
+            free(user_inc);
+            free_reader_macro_paths(rm_paths_owned, n_rm_paths);
+            return 2;
+        }
+        if (strcmp(eng, "cc") != 0) {
+            int drc = run_delegate_engine(eng, entry, user_inc, n_user_inc,
+                                          argc, argv, passthrough_start);
+            for (int _i = 0; _i < n_spice_inc_dirs; _i++)
+                free((char *)spice_inc_dirs[_i]);
+            free(spice_inc_dirs);
+            free(user_inc);
+            free_reader_macro_paths(rm_paths_owned, n_rm_paths);
+            return drc;
+        }
+    }
 
     RUN_ENTRY(entry);
 #undef RUN_ENTRY
@@ -9648,7 +9841,11 @@ int main(int argc, char **argv) {
             }
             if (strcmp(argv[i], "--release") == 0 ||
                 strcmp(argv[i], "--offline") == 0  ||
+                strcmp(argv[i], "--engine") == 0   ||
+                strncmp(argv[i], "--engine=", 9) == 0 ||
                 strncmp(argv[i], "-I", 2) == 0) {
+                /* --engine is a classic-path (compile/run) flag; without this
+                 * arm its VALUE would be taken as a Justfile task name. */
                 use_classic = true;
                 break;
             }
@@ -9666,6 +9863,30 @@ int main(int argc, char **argv) {
         }
         if (use_classic)
             return cmd_run(argc, argv);
+        /* engine-selection-plan E3: a BARE `tur run` (no recipe, no file) in
+         * a Justfile-less build.tur project takes the classic project-run
+         * path -- which resolves the manifest's `:engine` -- instead of the
+         * historical hard 127.  A named recipe keeps the task-runner error:
+         * a typo'd task silently compiling-and-running would be worse. */
+        {
+            bool bare = true;
+            for (int i = 2; i < argc; i++) {
+                if (strcmp(argv[i], "--") == 0) break;
+                if (argv[i][0] != '-') { bare = false; break; }
+                if (strcmp(argv[i], "--justfile") == 0 ||
+                    strcmp(argv[i], "--chdir") == 0) i++;   /* skip value */
+            }
+            if (bare && !justrun_finds_justfile()) {
+                char _cwd[4096];
+                if (getcwd(_cwd, sizeof(_cwd))) {
+                    char *_root = find_project_root(_cwd);
+                    if (_root) {
+                        free(_root);
+                        return cmd_run(argc, argv);
+                    }
+                }
+            }
+        }
         return cmd_justrun(argc, argv);
     }
     if (strcmp(cmd, "repl") == 0) {

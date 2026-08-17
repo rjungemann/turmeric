@@ -68,10 +68,15 @@ TUR="${TUR:-./build-turjit/tur}"
 [ -x "$TUR" ] || { echo "run-jit: no tur binary found" >&2; exit 2; }
 
 # Capability probe -- capture, don't pipe into grep -q (pipefail SIGPIPE).
-probe=$("$TUR" --enable=jit jit 2>&1 || true)
+# Probed with a nonexistent input: P0 (engine-selection-plan) moved cmd_jit's
+# input scan ahead of its gates, so a bare `tur jit` prints usage on EVERY
+# build and no longer discriminates.  A non-JIT binary answers "carries no
+# JIT engine" before touching the file; a JIT binary proceeds to (and fails)
+# the compile.
+probe=$("$TUR" --enable=jit jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
 case "$probe" in
-  *"usage: tur jit"*) ;;
-  *) echo "run-jit: SKIP ($TUR carries no JIT engine; configure -DTUR_JIT=ON)"
+  *"carries no JIT"*)
+     echo "run-jit: SKIP ($TUR carries no JIT engine; configure -DTUR_JIT=ON)"
      exit 0 ;;
 esac
 

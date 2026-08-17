@@ -340,6 +340,15 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# engine-selection-plan E1-E3: `tur run` engine resolution ladder
+# (--engine > TUR_ENGINE > build.tur :engine > cc), the unsatisfiable-engine
+# hard errors, and the P0 manifest-experiment gate.  Runs on every build --
+# the jit rows assert whichever outcome (run vs hard error) this binary has.
+add_test(
+  NAME tur_engine_select
+  COMMAND bash tests/run-engine-select.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Off-tree (load "stdlib/<file>") resolution: a freestanding script run from
 # outside the repo resolves the stdlib via the exe-relative root, not just
 # cwd-relative. See docs/archive/history/one-off-script-print-and-annotation-ergonomics.md

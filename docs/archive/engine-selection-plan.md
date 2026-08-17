@@ -1,6 +1,49 @@
 # Engine Selection Plan (`:engine` in `build.tur`)
 
-Status: PLANNED, not started. Written 2026-08-02. Depends on the `jit`
+Status: LANDED 2026-08-17 -- P0, E1, E2, and E3 all shipped; every exit
+criterion in section 12 is met and pinned by `tests/run-engine-select.sh`
+(ctest `tur_engine_select`, runs on every build -- the jit rows assert
+whichever outcome the binary has).  Notes against the plan as written:
+
+- P0 took the per-command form the plan offered as the alternative:
+  `cmd_jit` locates its input and calls `discover_manifest_reader_macros`
+  BEFORE its gates, which both opens the gate for `:experiments [jit]` and
+  restores `:reader-macros` for `tur jit`.  The startup hoist was not
+  needed and its listed risk (reading manifests for commands that never
+  did) is avoided entirely.  Side effect worth knowing: a bare `tur jit`
+  now prints usage on EVERY build, so capability probes must key on the
+  "carries no JIT" answer to a nonexistent input -- `tests/run-jit.sh`'s
+  probe was updated accordingly.
+- E1: `:engine` on PkgManifest, validated at parse with the new TUR-E0311
+  (unknown VALUES hard-error; unknown KEYS stay silently ignored, which is
+  the documented compatibility story).  `resolve_engine` mirrors
+  `resolve_build_dir`'s ladder and uses `find_spice_root` (the RM4 walker)
+  so explicit-file mode resolves the same manifest project mode does.
+- E2: all three unsatisfiability rows behave per the table -- no-JIT-build
+  and experiment-off are hard errors (the former with its own message
+  naming -DTUR_JIT=ON and the override spellings), and the runtime
+  TUR-W0070 cc fallback is untouched.
+- E3: the seam is `run_delegate_engine` -- smaller than the sketched
+  request struct; the subcommand arms keep their bodies (`cmd_jit` is
+  re-entered with a rebuilt argv, the tree-walker via `cmd_eval`).  A
+  BARE `tur run` in a Justfile-less build.tur project now falls back to
+  the classic project-run path (previously a hard 127), which is what
+  makes exit criterion 2's "bare tur run tree-walks the project" reachable
+  at all -- a named recipe keeps the task-runner error.  Verbose naming of
+  the resolved engine rides TUR_VERBOSE.
+- Docs: performance guide (selection row under the engine triangle),
+  developing-spices guide (manifest key), and the STALE turi-parity-guide
+  claim that turi backs `tur run` is corrected (criterion 7).
+
+The `jit` experiment's graduation remains a separate decision; until then
+`:engine "jit"` needs `:experiments [jit]` beside it, which P0 made
+sufficient.
+
+Original plan follows.
+
+---
+
+Formerly: PLANNED, not started. Written 2026-08-02. Depends on the `jit`
 experiment graduating (currently prototype, expires 0.36.0) for the `jit`
 value to be selectable without `--enable=jit`; every other part of this plan
 is independent of that graduation.

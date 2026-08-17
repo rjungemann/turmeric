@@ -9,8 +9,12 @@ description: Feature-by-feature parity matrix between the compiled Turmeric path
 This guide answers one question: **"does feature X behave the same under the
 interpreter as it does compiled?"** It pairs the compiled path (`tur build` /
 `tur emit-c`, which lowers to C) against the tree-walking interpreter
-(`turi`, which backs `tur interpret`, `tur run`, `tur repl`, sandboxed
-`turi_env_new`, and the `tests/run-turi.sh` leg of the suite).
+(`turi`, which backs `tur interpret`, `tur repl`, sandboxed
+`turi_env_new`, and the `tests/run-turi.sh` leg of the suite).  `tur run`
+compiles via `cc` BY DEFAULT; it reaches the tree-walker only when the
+engine ladder selects it (`--engine interp`, `TUR_ENGINE=interp`, or
+`:engine "interp"` in `build.tur` -- see the performance guide's engine
+section).
 
 ---
 
