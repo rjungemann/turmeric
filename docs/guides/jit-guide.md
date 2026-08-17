@@ -18,18 +18,24 @@ permanent constraints, and the harness rules. For how fast it is and when to
 prefer it, see the execution-engine triangle in
 [performance-guide.md](performance-guide.md).
 
-Two gates, both off by default:
+One gate, off by default:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON   # build time (fetches MIR)
-tur --enable=jit jit hello.tur                              # run time (experiment gate)
+tur jit hello.tur                                           # no run-time flag
 ```
 
-The run-time gate is the `jit` row in `EXPERIMENTS[]`
-(`src/runtime/experiments.c`), reading `g_opt_jit`, so the usual experiment
-lifecycle warnings apply -- see
-[experimental-flags-guide.md](experimental-flags-guide.md). Both gates must be
-open; with either shut, `tur jit` prints which one and exits 2.
+There used to be a second, run-time gate: the `jit` row in `EXPERIMENTS[]`,
+requiring `--enable=jit`. **It graduated in 0.34.0** and the row is gone; a
+command line or `build.tur` that still names it gets a `TUR-W0063` no-op rather
+than an error. What remains is the build-time gate, because the engine vendors
+MIR at configure time and a default build carries neither the fetch nor the
+dependency. On a binary built without it, `tur jit` says so and exits 2.
+
+Graduating the flag did **not** change which engine you get by default. `cc` is
+still the default; the JIT runs when you invoke `tur jit` directly, or when
+engine selection asks for it (`--engine jit`, `TUR_ENGINE=jit`, or
+`:engine "jit"` in `build.tur`).
 
 ---
 
@@ -56,7 +62,7 @@ emits C. c2mir means the entire existing codegen path is reused verbatim and
 **no per-architecture instruction selection is written at all**. The engine
 choice table and the rejected alternatives (AsmJit, libtcc, libjit, sljit,
 LLVM ORC, Cranelift, QBE, copy-and-patch) are in
-`docs/upcoming/jit-engine-plan.md`.
+`docs/archive/jit-engine-plan.md`.
 
 ### The IR, briefly
 
@@ -153,7 +159,6 @@ variable; an existing build dir silently keeps fetching the old one, even after
 | `src/jit_engine.c` (~700 lines) | **the engine** -- c2mir compile, MIR link, MIR gen, run `main` on a sized-stack thread; also the persistent-image API |
 | `src/jit_engine.h` | public API and embedding contract (`tur_jit_execute`, `TurJitImage`, `TUR_JIT_ERR_*`). Included **unconditionally**; capability is probed with `#ifdef TUR_HAVE_JIT` |
 | `src/main.c` | the driver: `cmd_jit`, `jit_try_split_preamble`, `jit_sdk_include_dirs`, `cmd_emit_rt_split`, and the REPL's `repl_jit_build` hook |
-| `src/runtime/experiments.c` | the `"jit"` row, pointing at `g_opt_jit` |
 | `cmake/mir.cmake` | FetchContent of the MIR fork; defines the `tur_mir` static library |
 | `src/CMakeLists.txt` | the `tur_jit_obj` object library and how it is wired onto `tur` and `libturi` |
 | `src/runtime/generated/tur_rt_split*.{c,h}`, `src/runtime/rt_split_embed.h` | the S2 split runtime (see below) |
@@ -187,8 +192,8 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
 
 ### What happens when you run `tur jit hello.tur`
 
-1. **Gates.** `cmd_jit` checks `g_opt_jit`, fires
-   `experiment_warn_if_used("jit")`, then checks `TUR_HAVE_JIT`.
+1. **Gate.** `cmd_jit` checks `TUR_HAVE_JIT` -- the only gate left since the
+   `jit` experiment graduated in 0.34.0.
 2. **Front half, identical to `tur build`.** `compile_to_c` (reader,
    elaborate, kind/effect/CPS/borrow, emit C into memory) with
    `g_emit_for_link = true`, then `hoist_tur_include_directives`, then
@@ -301,7 +306,7 @@ disagree.
 
 ### Where else the engine is used
 
-- **The spice REPL** (`tur --enable=jit repl`). `src/turi/spice_loader.c`
+- **The spice REPL** (`tur repl --engine jit`). `src/turi/spice_loader.c`
   carries a `TurSpiceJitHook` function-pointer vtable -- a vtable because the
   loader lives in `tur_core` while the engine is only linked into `tur`. With
   the hook installed, `tur_spice_image_load` skips the rebuild-check, the
@@ -502,7 +507,7 @@ the top-level `CLAUDE.md`.
 
 ## Tuning knobs
 
-All environment variables -- deliberately not `--enable=` experiments, because
+All environment variables -- deliberately never `--enable=` experiments, because
 they are diagnostics rather than semantics.
 
 | variable | default | effect |
@@ -525,12 +530,12 @@ end-to-end wall time.
   loops are actually loops.
 - [c-integration-guide.md](c-integration-guide.md) -- inline-C rules, several
   of which only bite under the JIT.
-- [experimental-flags-guide.md](experimental-flags-guide.md) -- the
-  `--enable=jit` gate and its lifecycle.
+- [experimental-flags-guide.md](experimental-flags-guide.md) -- the mechanism
+  the retired `--enable=jit` gate came from, and what a graduated name does now.
 - [repl.md](repl.md) -- the spice REPL the J2 image path backs.
-- `docs/upcoming/jit-engine-plan.md` -- why MIR, the engine-choice table, and
+- `docs/archive/jit-engine-plan.md` -- why MIR, the engine-choice table, and
   the phase-by-phase status.
-- `docs/upcoming/jit-engine-j0-findings.md` -- the numbered findings log; the
+- `docs/archive/jit-engine-j0-findings.md` -- the numbered findings log; the
   empirical record behind nearly every claim in this guide.
 - `docs/archive/mir-interp-tier-plan.md` -- why there is no interpreter tier.
 

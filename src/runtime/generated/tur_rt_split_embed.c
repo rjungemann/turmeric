@@ -2,7 +2,7 @@
  * Regenerate (and commit, same PR) when the runtime preamble changes; cmd_jit
  * verifies the recorded hash before trusting these artifacts, so a stale copy
  * is never wrong -- it just forfeits the split and falls back to full-preamble
- * emission.  See docs/upcoming/jit-engine-plan.md (S2) and findings 19.4/23. */
+ * emission.  See docs/archive/jit-engine-plan.md (S2) and findings 19.4/23. */
 #include <stdint.h>
 #include <stddef.h>
 

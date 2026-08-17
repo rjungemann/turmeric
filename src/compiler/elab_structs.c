@@ -1,6 +1,5 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
-#include "experiments.h"  /* sealed-opaque: experiment_warn_if_used */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
@@ -1213,9 +1212,6 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             return NULL;
         }
     }
-    /* Lifecycle warning (TUR-W0060/W0061) fires where the feature is USED --
-     * declaring a sealed opaque -- not where the check happens to run. */
-    if (opaque_sealed) experiment_warn_if_used("sealed-opaque");
     if (opaque_linear && opaque_affine) {
         diag_emit(DIAG_ERROR, call->span,
                   "defopaque: :linear and :affine are mutually exclusive "

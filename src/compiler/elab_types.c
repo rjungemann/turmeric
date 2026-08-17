@@ -2846,7 +2846,8 @@ static bool ascribe_type_is_word_carrier(const Type *t) {
     return t && (t->kind == TY_INT || t->kind == TY_PTR_VOID);
 }
 
-/* sealed-opaque: the AdtDef behind a `:sealed` defopaque, or NULL.  Descends a
+/* sealed-opaque (GRADUATED 2026-08-17): the AdtDef behind a `:sealed`
+ * defopaque, or NULL.  Descends a
  * parameterised head so a phantom-parameterised sealed opaque `(H A)` is caught
  * as well as a bare `H`. */
 static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
@@ -2861,7 +2862,8 @@ static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
 
 /* Reject a `::` that crosses a sealed opaque's representation boundary from
  * outside the module that declared it.  Returns true if a diagnostic was
- * emitted.  See docs/upcoming/sealed-opaque-plan.md.
+ * emitted.  Unconditional since the sealed-opaque graduation (2026-08-17); see
+ * docs/archive/sealed-opaque-plan.md.
  *
  * The rule is "exactly one side is this sealed type": an identity relabel
  * (`(:: w H)` where w is already an H) crosses nothing and stays legal, while
@@ -2870,8 +2872,6 @@ static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
  * rather than merely hard to rebuild -- see the plan's "why both directions". */
 static bool ascribe_check_sealed(Elab *e, const Form *call,
                                  const Type *from, const Type *to) {
-    if (!g_opt_sealed_opaque) return false;   /* experiment off: parses, imposes nothing */
-
     const AdtDef *sf = ascribe_sealed_opaque_def(from);
     const AdtDef *st = ascribe_sealed_opaque_def(to);
     if (sf == st) return false;               /* both sides same sealed def, or neither */

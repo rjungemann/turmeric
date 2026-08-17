@@ -4702,7 +4702,7 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
  * `__attribute__((constructor))` is registered here instead and called from an
  * explicit `__tur_static_init()` at the top of `main`.  The motivation is the
  * JIT: c2mir parses GCC attributes and discards them with NO diagnostic
- * (docs/upcoming/jit-engine-j0-findings.md section 3.1), so a dropped
+ * (docs/archive/jit-engine-j0-findings.md section 3.1), so a dropped
  * `constructor` cost a SIGSEGV in effectful code and wrong output in dynamic
  * variables -- silently.  An ordinary call survives any C11 front end.
  *
@@ -4763,7 +4763,7 @@ uint32_t static_init_count(void) { return g_n_static_inits; }
  * runtime preamble instead. */
 void static_init_emit(Buf *out) {
     buf_puts(out,
-        "/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.\n"
+        "/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.\n"
         " * Called from main(); the constructor below covers the no-main cases\n"
         " * (separate compilation, --shared).  Whichever runs first wins. */\n"
         "static void __tur_static_init(void) {\n");

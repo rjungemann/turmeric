@@ -1,11 +1,38 @@
 # Cycle-Collecting GC -- Follow-up (automatic collection, observability, last replica)
 
-**Status:** open -- CG5, CG6, CG7, DEDUP-5 and PT1/PT2 (pause time) are done;
-CG3's residue is closed as a compiler bug (filed, not linted); CG8
-(graduation) is deliberately held until `cycle-gc` has baked to its 0.34.0
-review point, and two of the three things it said to weigh are now measured.
+**Status: COMPLETE 2026-08-17, shipping in v0.34.0.** CG5, CG6, CG7, DEDUP-5
+and PT1/PT2 (pause time) were done; CG3's residue is closed as a compiler bug
+(filed, not linted); **CG8 landed at the 0.34.0 review point it was held for**
+-- `cycle-gc` graduated, so `(gc-auto!)` is an ordinary call form.
+
+**Read CG8's scope before reading anything else here.** What graduated is the
+CALL FORM. `GC_AUTO` is **not** the default collection mode, was never going to
+be, and is not now: a program that does not call `(gc-auto!)` still runs the
+pure-RC path with no collector overhead, and the AUTO-only alloc-path cost is
+conditional on `GC_AUTO` mode at run time. Automatic GC is opt-in in this
+language, permanently, before and after v1. Ungating cost a non-calling program
+exactly nothing, which is why the two decisions were separable at all.
+
+`"cycle-gc"` is in `GRADUATED[]` (`src/runtime/experiments.c`), so
+`--enable=cycle-gc` and `:experiments [cycle-gc]` are `TUR-W0063` no-ops for one
+minor line rather than the hard `TUR-E0310` an unknown name gets. Fixture:
+`cycle-gc-graduated-enable-noop`. `gc-auto-collects-without-gc-call` lost its
+now-redundant `flags` file.
+
+**What the graduation weighed**, against the three items CG8 named -- all three
+measured rather than assumed. Pause time: the quadratic is gone (PT1/PT2) and a
+collection no longer walks the live heap with nothing to sweep; one linear
+whole-registry pass remains, uncapped, and is documented rather than discovered.
+The `rc_cb_alloc_kinded` payload zeroing: ~10% of the rc allocation path, and
+the delta *shrinks* as payload grows, so it is fixed overhead rather than memset
+bytes -- and it is AUTO-only, so it is paid by exactly the programs that asked
+for it. CG6 on a real-shape workload: 63 collections, 7938 blocks freed, ~60
+live at exit, after the unrelated `set!` refcount leak that workload surfaced
+was itself fixed. Nothing in that argued for shelving, and none of it argues for
+a default either.
+
 Successor to
-[docs/archive/gc-cycle-collection-plan.md](../../archive/gc-cycle-collection-plan.md),
+[docs/archive/gc-cycle-collection-plan.md](gc-cycle-collection-plan.md),
 which shipped CG0--CG4 and the DEDUP-1--4b de-duplication and is now archived.
 
 The collector works and compiled executables run the maintained copy of it.
@@ -234,7 +261,7 @@ inside the closure body that nothing dropped.)
 
 That is a better outcome than the fixtures would have been, but it comes with a
 real expressiveness hole, filed as
-[docs/archive/history/collections-cannot-hold-rc-values.md](../../archive/history/collections-cannot-hold-rc-values.md).
+[docs/archive/history/collections-cannot-hold-rc-values.md](history/collections-cannot-hold-rc-values.md).
 The blind spot documented in the GC guide reopens the moment collections accept
 `rc<T>`, and the fixtures become writable and necessary at the same instant.
 
@@ -273,7 +300,7 @@ freed blocks stay accounted in `malloc_zone_statistics`, so the fixture printed
 probe-output fixture is now excluded from **both** output checks and prints a
 visible SKIP line for each; `tests/run.sh` (unsanitized) remains where that
 assertion actually lives. See
-[docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md](../../archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md).
+[docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md](history/gc-leak-gate-darwin-sanitized-probe-drift.md).
 
 Result: 14 passed, 2 skipped, 0 failed (was 11 passed when first measured; the
 fixture set has grown since). Opt-in (`bash tests/run-gc-leak-gate.sh`) -- a
@@ -400,7 +427,7 @@ and the walker cannot trace through the box (a blind spot with it on).
 corner.
 
 **Fixed 2026-07-25**, archived at
-[docs/archive/rc-of-sum-type-drops-no-glue.md](../../archive/rc-of-sum-type-drops-no-glue.md).
+[docs/archive/rc-of-sum-type-drops-no-glue.md](rc-of-sum-type-drops-no-glue.md).
 The glue now dispatches on the tag, and -- the part that was easy to miss --
 the boxing had the same double-indirection as the `:heap` bug, so emitting glue
 alone did not fix the leak. Both halves verified: the field is released, and a
@@ -492,7 +519,15 @@ not quadratic, and removing it needs lazy per-block seeding behind an epoch
 stamp -- a new field, in a struct pinned by the DEDUP-1 layout guard, in both
 copies. Not worth it at these numbers; the note is here if it ever is.
 
-### CG8 -- Ungating `(gc-auto!)` [NOT YET -- deliberately]
+### CG8 -- Ungating `(gc-auto!)` [DONE 2026-08-17]
+
+**Landed at the 0.34.0 cut.** The `cycle-gc` row is deleted, `g_opt_cycle_gc`
+and the `elab_gc_auto` gate are gone, and `(gc-auto!)` elaborates like any other
+intrinsic. Decision (2) below -- making `GC_AUTO` the default -- was **not**
+taken and never will be; the phase's whole point was that the two are separable,
+and only (1) happened.
+
+
 
 **Scope, decided 2026-07-30 -- read this before anything below.** This phase
 was originally titled "graduation toward default-on", which conflated two
@@ -516,14 +551,15 @@ program exactly nothing, and no amount of bake time on (1) ever adds up to (2).
 Read the measurements below accordingly: they are inputs to "is this call form
 ready to be unflagged", never to "should everyone get it".
 
-That settled, what remains for CG8 is timing. `cycle-gc` was introduced at
+That settled, what remained for CG8 was timing. `cycle-gc` was introduced at
 **0.30.8**, the same day CG5 landed, and graduating an experiment on its
-introduction day defeats the point of having gated it. Its `expires_at` is
+introduction day defeats the point of having gated it. Its `expires_at` was
 **0.34.0**, which the release-cut skills surface as a review point (advisory --
-per CLAUDE.md it never blocks a release), and that is the right moment to
-decide, with several releases of bake behind it.
+per CLAUDE.md it never blocks a release), and that was the right moment to
+decide, with the 0.31, 0.32 and 0.33 lines of bake behind it. **That is the cut
+where it graduated**, on the schedule this paragraph named.
 
-What ungating should weigh when it comes up:
+What ungating weighed, and what the numbers said (all three measured):
 
 - **Pause time** -- **measured and fixed, see PT1/PT2 above.** No longer the
   open risk it was: the quadratic is gone and a collection no longer walks the
@@ -562,7 +598,7 @@ What ungating should weigh when it comes up:
   `rc<T>` never releasing the overwritten value: 4000 rounds x 4 assignments,
   exactly. Acyclic and `strong_count > 0`, so no collector could reclaim it.
   **Since FIXED** -- archived at
-  [docs/archive/history/set-bang-does-not-release-old-rc-value.md](../../archive/history/set-bang-does-not-release-old-rc-value.md).
+  [docs/archive/history/set-bang-does-not-release-old-rc-value.md](history/set-bang-does-not-release-old-rc-value.md).
   Re-measured after the fix, same workload:
 
   | half of the workload | collections | freed | live at exit |
@@ -615,7 +651,7 @@ baseline."
   **FIXED 2026-07-26** -- a closure that CONSUMES a captured linear/unique value
   now inherits its `copy_kind`, so the double call is TUR-E0101, `(rc/of f)` is
   TUR-E0103, and dropping it is TUR-E0100. Archived at
-  [docs/archive/history/closure-capture-escapes-linearity.md](../../archive/history/closure-capture-escapes-linearity.md).
+  [docs/archive/history/closure-capture-escapes-linearity.md](history/closure-capture-escapes-linearity.md).
   The fix was in the substructural checker, not the collector, so it never gated
   CG8.
 - **Two collectors in one process.** **VERIFIED 2026-07-26 -- sound, but for a
@@ -630,9 +666,9 @@ baseline."
   `gc_buffered` on a foreign block) has been hardened in both collector copies.
   Cross-boundary *cycles* remain uncollectable by either collector -- a leak, same
   class as the `Vec`/HAMT blind spot. Written up for users in
-  [docs/guides/gc-guide.md](../../guides/gc-guide.md) ("Two collectors in one
+  [docs/guides/gc-guide.md](../guides/gc-guide.md) ("Two collectors in one
   process") and archived at
-  [docs/archive/history/two-collectors-dlopen-boundary.md](../../archive/history/two-collectors-dlopen-boundary.md).
+  [docs/archive/history/two-collectors-dlopen-boundary.md](history/two-collectors-dlopen-boundary.md).
 
 ## Filed on the way (not collector bugs)
 
@@ -640,7 +676,7 @@ Three defects surfaced while measuring the above. None is in the collector; all
 three were hit *because* the measurements drove the rc path harder than the
 fixtures do.
 
-- [set-bang-does-not-release-old-rc-value.md](../../archive/history/set-bang-does-not-release-old-rc-value.md)
+- [set-bang-does-not-release-old-rc-value.md](history/set-bang-does-not-release-old-rc-value.md)
   -- was **high**, now **FIXED** (archived). `set!` on an `^mut` binding holding
   `rc<T>` never released the overwritten value. Acyclic, so no collector could
   reclaim it -- it was the whole of the residue in CG8's real-workload run
@@ -650,7 +686,7 @@ fixtures do.
   rather than a decrement. Pinned by `tests/fixtures/set-bang-releases-old-rc`
   and `tests/set-bang-rc-release-check.sh`.
 
-- [rc-free-queue-drain-is-quadratic.md](../../archive/history/rc-free-queue-drain-is-quadratic.md)
+- [rc-free-queue-drain-is-quadratic.md](history/rc-free-queue-drain-is-quadratic.md)
   -- was **medium**, now **FIXED** (archived). `rc_free_queue_drain` memmoved
   the whole queue per pop, in both copies; it dominated the payload-zeroing
   measurement so completely that the memset was invisible until the queue was
@@ -662,7 +698,7 @@ fixtures do.
   blocks; 2M alloc/drop pairs 11,563 ms -> 70 ms. Pinned by
   `tests/fixtures/rc-free-queue-deep-cascade`.
 
-- [rc-scalar-default-glue-invalid-free.md](../../archive/history/rc-scalar-default-glue-invalid-free.md)
+- [rc-scalar-default-glue-invalid-free.md](history/rc-scalar-default-glue-invalid-free.md)
   -- was **medium**, now **FIXED** (archived). `rc_cb_alloc(size, <scalar>,
   NULL)` got default drop glue that `free()`d its own inline payload. Scalars
   now default to a no-op inline glue; the fix flushed out that "C-API-only" was
@@ -673,12 +709,12 @@ fixtures do.
 
 ## Related plans
 
-- [stdlib-weak-ref-audit-plan.md](../../archive/history/stdlib-weak-ref-audit-plan.md)
+- [stdlib-weak-ref-audit-plan.md](history/stdlib-weak-ref-audit-plan.md)
   -- COMPLETE (WR0--WR4 landed 2026-07-26) and archived; its cycle inventory
   seeded CG7's corpus.
-- [turi-interp-incremental-reclamation-plan.md](../../archive/turi-interp-incremental-reclamation-plan.md)
+- [turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)
   -- COMPLETE (2026-07-27) and archived: incremental elaboration default-on,
   scratch promotion in the REPL, and the TR3 eval-boundary collection sweep;
   only TR1 (carrier relocation) stays shelved as demand-driven.
-- [docs/guides/gc-guide.md](../../guides/gc-guide.md) -- user-facing behaviour,
+- [docs/guides/gc-guide.md](../guides/gc-guide.md) -- user-facing behaviour,
   including which copy of the collector each build path runs.

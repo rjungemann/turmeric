@@ -3546,7 +3546,7 @@ static int cmd_emit_rt_split(int argc, char **argv) {
     return 0;
 }
 
-/* J1 (docs/upcoming/jit-engine-plan.md section 3.2): `tur jit <file>` --
+/* J1 (docs/archive/jit-engine-plan.md section 3.2): `tur jit <file>` --
  * compile and execute in process via c2mir + MIR-gen, no cc subprocess, no
  * disk artifacts.  Front half is cmd_build's exactly: run_core_passes via
  * compile_to_c, then the same in-memory post-passes.  The back half hands the
@@ -3558,12 +3558,11 @@ static int cmd_emit_rt_split(int argc, char **argv) {
  *
  * Usage: tur jit [-I <dir>...] <file> [-- <args>...]  */
 static int cmd_jit(int argc, char **argv) {
-    /* engine-selection-plan P0: locate the input FIRST so the enclosing
-     * manifest's `:experiments [jit]` can open the gate below -- previously
-     * the g_opt_jit check ran before any manifest was read, so the manifest
-     * spelling could never enable `tur jit` (and its `:reader-macros` were
-     * ignored, restored here too).  CLI --enable= precedence is unchanged:
-     * apply_manifest_experiments ranks below XF_SRC_CLI. */
+    /* engine-selection-plan P0: locate the input FIRST, before anything that
+     * depends on the enclosing manifest.  The original reason was the
+     * `:experiments [jit]` gate (which graduated away 2026-08-17); the
+     * surviving one is `:reader-macros`, which was ignored by the same
+     * ordering bug and is restored here. */
     const char *input = NULL;
     int passthrough_start = -1;
     int scan_end = argc;
@@ -3586,18 +3585,9 @@ static int cmd_jit(int argc, char **argv) {
     }
     int jit_rm_n = 0;
     char **jit_rm = discover_manifest_reader_macros(input, &jit_rm_n);
-    if (!g_opt_jit) {
-        fprintf(stderr,
-                "tur: 'jit' is an experimental feature; enable it with "
-                "--enable=jit\n"
-                "     (or `:experiments [jit]` in build.tur; see "
-                "docs/upcoming/jit-engine-plan.md, and `tur experiments` "
-                "for status)\n");
-        free_reader_macro_paths(jit_rm, jit_rm_n);
-        free(user_inc);
-        return 2;
-    }
-    experiment_warn_if_used("jit");
+    /* The `jit` experiment GRADUATED 2026-08-17 -- `tur jit` no longer needs
+     * `--enable=jit`.  The BUILD-TIME gate below is the one that remains: a
+     * default build vendors no MIR and therefore carries no engine. */
 #ifndef TUR_HAVE_JIT
     (void)passthrough_start;   /* used only by the engine path below */
     fprintf(stderr,
@@ -4024,8 +4014,8 @@ static int run_delegate_engine(const char *engine, const char *entry,
     return 2;
 #else
     /* Rebuild a `tur jit` argv: {argv0, "jit", -I <d>..., entry, --, rest}.
-     * cmd_jit performs its own manifest discovery (P0), experiment gate,
-     * and TUR-W0070 cc fallback. */
+     * cmd_jit performs its own manifest discovery (P0) and TUR-W0070 cc
+     * fallback. */
     int cap = 3 + 2 * n_user_inc + 1 +
               (passthrough_start >= 0 ? 1 + (argc - passthrough_start) : 0);
     char **jargv = (char **)malloc((size_t)(cap + 1) * sizeof(char *));
@@ -8409,12 +8399,17 @@ static int usage_test(void) {
 static int usage_repl(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur repl [--watch]   start the interactive REPL\n"
+        "  tur repl [--watch] [--engine <name>]   start the interactive REPL\n"
         "\n"
         "flags:\n"
         "  --watch         auto-reload the enclosing spice between prompts\n"
         "                  when any source .tur file's mtime advances\n"
         "                  (RP6; equivalent to typing (reload) each turn)\n"
+        "  --engine <name> engine for building the enclosing spice:\n"
+        "                  \"cc\" (default -- build --shared subprocess) or\n"
+        "                  \"jit\" (in-process MIR, needs -DTUR_JIT=ON).\n"
+        "                  Precedence: --engine > TUR_ENGINE > build.tur\n"
+        "                  :engine > \"cc\"\n"
         "\n"
         "REPL commands:\n"
         "  :help           print help\n"
@@ -9895,6 +9890,7 @@ int main(int argc, char **argv) {
          * spice source file changes mtime. No background thread --
          * the freshness check runs synchronously each turn. */
         bool watch_mode = false;
+        const char *repl_engine_flag = NULL;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 return usage_repl();
@@ -9903,19 +9899,45 @@ int main(int argc, char **argv) {
                 watch_mode = true;
                 continue;
             }
+            if (strcmp(argv[i], "--engine") == 0 && i + 1 < argc) {
+                repl_engine_flag = argv[++i];
+                continue;
+            }
+            if (strncmp(argv[i], "--engine=", 9) == 0) {
+                repl_engine_flag = argv[i] + 9;
+                continue;
+            }
             fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
             return usage_repl();
         }
+        /* J2 (jit-engine-plan 3.3): spice auto-discovery can build in process
+         * through the MIR engine instead of the `tur build --shared`
+         * subprocess + dlopen.  This used to hang off `--enable=jit`; that
+         * experiment graduated 2026-08-17, so it hangs off ENGINE SELECTION
+         * now -- `--engine jit`, `TUR_ENGINE=jit`, or `:engine "jit"` in the
+         * enclosing build.tur, the same ladder `tur run` resolves.
+         *
+         * Graduating the experiment deliberately did NOT make this the
+         * default: unset, the engine resolves to "cc" and the subprocess path
+         * is byte-for-byte what it was. */
+        {
+            const char *eng = resolve_engine(".", repl_engine_flag);
+            if (!eng) return 2;    /* TUR-E0311 already printed */
+            if (strcmp(eng, "jit") == 0) {
 #ifdef TUR_HAVE_JIT
-        /* J2 (jit-engine-plan 3.3): with the jit experiment enabled, spice
-         * auto-discovery builds in process through the MIR engine instead
-         * of the `tur build --shared` subprocess + dlopen.  Off (the
-         * default) keeps the subprocess path byte-for-byte. */
-        if (g_opt_jit) {
-            experiment_warn_if_used("jit");
-            tur_spice_set_jit_hook(&g_repl_jit_hook);
-        }
+                tur_spice_set_jit_hook(&g_repl_jit_hook);
+#else
+                fprintf(stderr,
+                        "tur repl: engine \"jit\" is configured, but this "
+                        "build carries no JIT engine\n"
+                        "     reconfigure with -DTUR_JIT=ON (vendors MIR at "
+                        "configure time -- see cmake/mir.cmake),\n"
+                        "     or override the engine: --engine cc / "
+                        "TUR_ENGINE=cc\n");
+                return 2;
 #endif
+            }
+        }
         return cmd_repl(watch_mode);
     }
     /* Tier 3: persistent fixture worker for the test suite. */

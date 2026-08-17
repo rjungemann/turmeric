@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase J0 spike driver -- docs/upcoming/jit-engine-plan.md
+# Phase J0 spike driver -- docs/archive/jit-engine-plan.md
 #
 # For each fixture: `tur emit-c` -> C11-subset normalize -> in-process
 # c2mir + MIR-gen -> run -> diff against the fixture's COMPILED expectation

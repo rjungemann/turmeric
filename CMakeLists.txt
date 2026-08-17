@@ -86,7 +86,7 @@ include(cmake/CPM.cmake)
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
-# J0 JIT spike (docs/upcoming/jit-engine-plan.md) -- OFF by default.
+# J0 JIT spike (docs/archive/jit-engine-plan.md) -- OFF by default.
 # ---------------------------------------------------------------------------
 # The spike harness vendors MIR (c2mir + MIR-gen) via FetchContent, which means
 # a network fetch at configure time.  Same posture as the Z3 oracle block
@@ -98,9 +98,10 @@ option(TUR_JIT_SPIKE
   OFF)
 
 # J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`).
-# Same network posture as the spike: OFF by default, opt-in fetch.  The
-# subcommand additionally sits behind the `jit` experiment (--enable=jit) at
-# run time, per the experimental-features rule.
+# Same network posture as the spike: OFF by default, opt-in fetch.  Since the
+# `jit` experiment graduated (2026-08-17) this is the ONLY gate on `tur jit`:
+# the run-time `--enable=jit` requirement is gone, so a binary built with this
+# ON runs `tur jit` unprompted, and one built without it says so.
 option(TUR_JIT
   "build tur with the in-process MIR JIT engine (tur jit; fetches MIR)"
   OFF)
@@ -634,7 +635,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # J2 (jit-engine-plan 3.3): the IN-PROCESS spice build behind
-# `--enable=jit repl` -- load with no .so artifact, calls (incl. the
+# `repl --engine jit` -- load with no .so artifact, calls (incl. the
 # __ffi high-arity shim and a fractional float), the compile-error
 # surface, and (reload) self-heal.  The script self-skips on a binary
 # without the engine; the registration is gated the same way.
@@ -647,7 +648,7 @@ if(TUR_JIT)
   )
   set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
-  # `tur --enable=jit jit`.  RUN_SERIAL like the other whole-corpus
+  # `tur jit`.  RUN_SERIAL like the other whole-corpus
   # harnesses -- it fans out across nproc internally.  TUR is pinned to
   # THIS build's binary (the script's default would probe a sibling
   # build dir).  Note a fully green run needs a Debug binary (refine-*

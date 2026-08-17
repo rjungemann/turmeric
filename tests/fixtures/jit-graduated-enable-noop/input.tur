@@ -1,0 +1,19 @@
+;; J1-J3 graduation compatibility promise (2026-08-17): `jit` graduated, so its
+;; EXPERIMENTS[] row is gone -- but a downstream `build.tur`,
+;; `~/.config/turmeric/experiments.tur`, or CLI invocation that still names it
+;; must keep compiling.  `GRADUATED[]` in src/runtime/experiments.c is what
+;; makes `--enable=jit` a TUR-W0063 no-op instead of the hard TUR-E0310 an
+;; unknown experiment name gets.
+;;
+;; This one matters more than the other two graduated shims, because the JIT's
+;; enable spelling lived in MANIFESTS as much as on the command line
+;; (`:experiments [jit]` alongside `:engine "jit"`), and a manifest is exactly
+;; the config nobody edits when they upgrade a compiler.
+;;
+;; Note the shim is independent of `-DTUR_JIT=ON`: accepting the NAME is a
+;; registry question, so this fixture passes in a build that carries no engine.
+;; `tests/run-engine-select.sh` covers the manifest spelling and the build-time
+;; gate; `tests/run-jit.sh` runs the corpus through the engine itself.
+(defn main [] : int
+  (println "jit-graduated-enable-noop")
+  0)

@@ -4,7 +4,7 @@
  * pick up (I4, docs/archive/mir-interp-tier-plan.md section 2.4).  cmd_jit
  * in main.c compiles against this header unconditionally and reports the
  * missing capability when TUR_HAVE_JIT is not defined.  See jit_engine.c and
- * docs/upcoming/jit-engine-plan.md section 3.2.
+ * docs/archive/jit-engine-plan.md section 3.2.
  *
  * ---------------------------------------------------------------------
  * EMBEDDING (I4)

@@ -12,6 +12,8 @@ description: Reference guide for the `tur repl` interactive read-eval-print loop
 tur repl              # interactive Turmeric prompt
 tur repl --watch      # also auto-reload spice exports when source changes
                       # (see "Working with spices in the REPL" below)
+tur repl --engine jit # build the enclosing spice in process via MIR
+                      # (see "Building the spice in process" below)
 ```
 
 ---
@@ -380,6 +382,35 @@ skips the rebuild entirely:
 $ tur repl                    # rebuild + load (~1s)
 $ tur repl                    # nothing changed -- instant load
 ```
+
+### Building the spice in process (`--engine jit`)
+
+By default the loader shells out to `tur build --shared` and `dlopen`s the
+result -- the `.tur-repl-cache/` flow above. On a binary built with
+`-DTUR_JIT=ON`, the whole spice can instead be compiled as one translation
+unit **in process** through the MIR engine, skipping the subprocess, the
+`.so`, and the `dlopen`:
+
+```sh
+tur repl --engine jit            # this session only
+TUR_ENGINE=jit tur repl          # every session in this shell
+```
+
+...or `:engine "jit"` in the project's `build.tur`, which makes it the default
+for anyone working in that project. Precedence is the same ladder `tur run`
+uses: `--engine` > `TUR_ENGINE` > `build.tur :engine` > `"cc"`.
+
+Cold spice load is roughly 3x faster this way, and every load compiles fresh
+so there is no cached artifact to go stale. The trade is that it is a
+different execution engine -- see
+[jit-guide.md](jit-guide.md) for what differs from the `cc` path. On a binary
+built without `-DTUR_JIT=ON`, asking for the `jit` engine is a hard error
+rather than a silent fallback, because the two engines differ in semantics and
+guessing which one you got is worse than being told.
+
+> Before 0.34.0 this was spelled `tur --enable=jit repl`, behind the `jit`
+> experiment. That experiment graduated; the flag is now a warning-only no-op
+> and engine selection is the supported spelling.
 
 ### (reload) -- pick up edits without restarting
 

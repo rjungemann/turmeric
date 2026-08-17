@@ -91,12 +91,13 @@ walker — cycles that route through them will not be reclaimed.
 - `GC_MANUAL` — collection runs only when user code calls `(gc!)`.
 - `GC_THRESHOLD` — collection runs when the suspect buffer reaches 128
   entries (forced at 4096).
-- `GC_AUTO` (CG5, experimental) -- collection runs at **allocation
-  checkpoints**, with no `(gc!)` call anywhere in the program. Two triggers:
-  the candidate buffer reaching `GC_SUSPECT_THRESHOLD`, or
-  `GC_AUTO_ALLOC_INTERVAL` allocations since the last collection. Behind
-  `--enable=cycle-gc`, because it makes collection *timing* implicit -- pause
-  behaviour changes without any call site showing it.
+- `GC_AUTO` (CG5) -- collection runs at **allocation checkpoints**, with no
+  `(gc!)` call anywhere in the program. Two triggers: the candidate buffer
+  reaching `GC_SUSPECT_THRESHOLD`, or `GC_AUTO_ALLOC_INTERVAL` allocations
+  since the last collection. You get it by calling `(gc-auto!)`, and only by
+  calling it -- automatic collection is opt-in in this language and is never
+  the default, before or after v1. A program that never makes that call runs
+  the pure-RC path with no collector overhead at all.
 
 There is no background thread and no time-based sweep. Outside `GC_AUTO`, user
 code drives collection.
@@ -113,7 +114,7 @@ Runtime knobs surface as three compiler intrinsics wired in
 | `(gc!)`        | Force one collection cycle now  |
 | `(gc-enable!)` | Enable, defaulting the mode to `GC_MANUAL` |
 | `(gc-disable!)`| Return to `GC_DISABLED`         |
-| `(gc-auto!)`   | Enable in `GC_AUTO` -- collect automatically (needs `--enable=cycle-gc`) |
+| `(gc-auto!)`   | Enable in `GC_AUTO` -- collect automatically at allocation checkpoints |
 
 ### Seeing what the collector did
 
@@ -152,11 +153,11 @@ survives it.
 > routed through an `RCK_OPAQUE` handle is still not reclaimed. Collection is
 > driven by user code -- `(gc!)`, or the suspect threshold under
 > `(gc-enable!)` -- **unless** `(gc-auto!)` is in play, which collects at
-> allocation checkpoints on its own (CG5, `--enable=cycle-gc`). Breaking cycles
+> allocation checkpoints on its own (CG5). Breaking cycles
 > with `weak<T>`, as in Rust, remains valid and is still the only option with the
 > collector disabled (the default). See
-> `docs/archive/gc-cycle-collection-plan.md` (shipped) and
-> `docs/upcoming/v1/gc-cycle-collection-followup-plan.md` (remaining).
+> `docs/archive/gc-cycle-collection-plan.md` and
+> `docs/archive/gc-cycle-collection-followup-plan.md`.
 
 ---
 

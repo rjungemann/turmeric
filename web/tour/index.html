@@ -513,7 +513,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <span class="pnc">(</span>println <span class="pnc">(</span>gc-live-blocks<span class="pnc">))</span>      <span class="cmt">;; => 0</span>
 
 <span class="cmt">;; ...or hand the timing over entirely.</span>
-<span class="cmt">;; Requires: --enable=cycle-gc</span>
+<span class="cmt">;; Opt-in, always: nothing collects until you call this.</span>
 <span class="pnc">(</span>gc-auto!<span class="pnc">)</span>
 
 <span class="cmt">;; Back to no collector at all, any time</span>

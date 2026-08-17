@@ -143,19 +143,22 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * is crash- and leak-clean under the always-on ABI (forced-on suite verified
      * before graduation).  The name moves to GRADUATED[] below (a lingering
      * --enable is a TUR-W0063 no-op).  See docs/archive/closure-drop-glue-plan.md. */
-    /* CG5: automatic, allocation-driven cycle collection -- `(gc-auto!)`.
-     * Gated because it changes runtime TIMING rather than accepting new syntax:
-     * with it on, collections happen at allocation checkpoints the program
-     * never asked for, so pause behaviour becomes implicit.  Everything else in
-     * the collector (`(gc!)`, `(gc-enable!)`) already ships ungated. */
-    { "cycle-gc",
-      "automatic allocation-driven rc<T> cycle collection ((gc-auto!))",
-      "docs/upcoming/v1/gc-cycle-collection-followup-plan.md",
-      "0.30.8",                  /* introduced */
-      "0.34.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_cycle_gc },
+    /* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is now an ordinary
+     * call form, available without `--enable`.  Read the scope narrowly, the
+     * way CG8 decided it: what graduated is the CALL FORM, not a default.
+     * `GC_AUTO` remains strictly opt-in -- a program that never calls
+     * `(gc-auto!)` still gets the pure-RC path with no collector overhead, and
+     * automatic collection is never going to be the default in this language
+     * (CG8 (2), rejected permanently, before or after v1).  Ungating costs a
+     * non-calling program exactly nothing, because the gate was on the call
+     * form while the `rc_cb_alloc_kinded` payload zeroing is conditional on
+     * GC_AUTO mode at RUN time.  Baked from 0.30.8 through the whole 0.31-0.33
+     * lines; pause time measured and fixed (PT1/PT2), the alloc-path cost
+     * measured (~10%, fixed overhead, AUTO-only), and the real-shape workload
+     * re-measured after the `set!` refcount leak it surfaced was fixed
+     * (steady-state residue ~60 blocks).  The name moves to GRADUATED[] below
+     * (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/gc-cycle-collection-followup-plan.md. */
     /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
      * predicates is now unconditional.  The runtime contract half was always
      * on; what became unconditional is the STATIC half, so the one
@@ -167,44 +170,33 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * a lingering --enable is a TUR-W0063 no-op, and a lingering
      * `#lang turmeric refined` a TUR-W0064 one.  See
      * docs/archive/refined-graduation-plan.md. */
-    /* J1 (docs/upcoming/jit-engine-plan.md): the in-process MIR JIT engine.
-     * Gated because it is a third execution engine whose semantics must stay
-     * identical to `tur build` output while the J3 parity sweep is still to
-     * come -- and because the capability itself is opt-in at build time
-     * (-DTUR_JIT=ON vendors MIR; a default build carries no fetch and no
-     * dependency).  `tur jit` errors out unless BOTH gates are open. */
-    { "jit",
-      "in-process MIR JIT execution engine (tur jit <file>)",
-      "docs/upcoming/jit-engine-plan.md",
-      "0.32.2",                  /* introduced */
-      "0.36.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_jit },
-    /* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `::` is a COERCING
-     * cast, so a `defopaque` handle can always be unwrapped to its carrier and
-     * re-wrapped as a fresh value -- which bounds every guarantee built on top
-     * of one (the motivating case is the ECS spice's `frozen` region, whose
-     * uniqueness argument an alias walks straight around; see
-     * docs/reported/frozen-region-aliasing-via-coercing-cast.md).  `:sealed`
-     * makes `::` refuse both directions outside the declaring module.
-     *
-     * Gated because it is a NEW ENCAPSULATION CLAIM whose two-direction rule is
-     * the part most likely to be wrong: sealing the unwrap direction as well as
-     * fabrication is what makes the representation genuinely private, but if
-     * real spices turn out to need cross-module unwraps, the right answer is to
-     * seal only fabrication.  That is the question the gate exists to answer.
-     * With it off, `:sealed` still parses and imposes nothing, so adoption is
-     * not a breaking change for consumers who have not opted in. */
-    { "sealed-opaque",
-      "`(defopaque H :int :sealed)` -- `::` cannot cross the H/representation "
-      "boundary outside H's declaring module",
-      "docs/upcoming/sealed-opaque-plan.md",
-      "0.32.2",                  /* introduced */
-      "0.35.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_sealed_opaque },
+    /* J1-J3 jit GRADUATED 2026-08-17 -- `tur jit <file>` no longer needs
+     * `--enable=jit`.  The gate existed to hold a third execution engine until
+     * its parity sweep landed; J3 landed 2026-07-30 and closed every defect it
+     * surfaced (three latent product bugs, all fixed), the harness denylist is
+     * empty, and tests/run-jit.sh runs the whole corpus through the engine on
+     * both hosts.  The remaining gate is the BUILD-TIME one and it stays:
+     * `-DTUR_JIT=ON` vendors MIR, a default build carries no fetch and no
+     * dependency, and `tur jit` in such a build still says so.  Engine
+     * SELECTION is likewise unchanged and is not a default flip -- `cc` is
+     * still what you get unless `--engine jit` / `TUR_ENGINE=jit` /
+     * `:engine "jit"` says otherwise, and the REPL's in-process JIT loader now
+     * hangs off that same selector rather than off this row.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/jit-engine-plan.md. */
+    /* sealed-opaque GRADUATED 2026-08-17 -- `(defopaque H :int :sealed)` now
+     * enforces unconditionally: outside H's declaring module, `::` refuses both
+     * the unwrap and the fabricate direction (TUR-E0302).  Both of the plan's
+     * graduation criteria were met -- the ECS spice shipped on it with no
+     * in-module pattern needing an escape, and the moduleless-top-level
+     * limitation was accepted (not closed) in opaques-guide.md 2026-08-13 --
+     * and the two-direction rule the gate existed to question survived that
+     * adoption, so it graduates as designed rather than narrowed to
+     * fabrication-only.  Unusually low-risk for a graduation: with the gate off
+     * `:sealed` already parsed and imposed nothing, so becoming unconditional
+     * reaches only code that deliberately wrote `:sealed`.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/sealed-opaque-plan.md. */
     /* write-frames: step 2 of the trajectory stateful-refinements-guide.md
      * sketches ("trusted now -> checkable later -> effect-row eventually").
      * `#reads` is step 1 and graduated with `refined`; this is the checked
@@ -277,6 +269,9 @@ static const char *const GRADUATED[] = {
     "owning-cloneable-capture", /* graduated 2026-07-20; owning capture into a multi-shot cloneable continuation is always-on */
     "closure-drop-glue", /* graduated 2026-07-22; Model R drop-glue header ABI is unconditional */
     "refined",       /* graduated 2026-08-01; static discharge of #refine{...} is unconditional */
+    "cycle-gc",      /* graduated 2026-08-17; (gc-auto!) is an ordinary call form -- GC_AUTO is still opt-in, never a default */
+    "jit",           /* graduated 2026-08-17; `tur jit` needs only the -DTUR_JIT=ON build gate */
+    "sealed-opaque", /* graduated 2026-08-17; `:sealed` enforcement is unconditional */
     NULL,
 };
 

@@ -992,7 +992,7 @@ anyway.
   was always the enforcement, and that remains intact for ordinary code). A
   hard guarantee needs module-private construction / a `::`-sealed newtype --
   an independent language feature, tracked in
-  `docs/reported/frozen-region-aliasing-via-coercing-cast.md`. See the
+  `docs/archive/frozen-region-aliasing-via-coercing-cast.md`. See the
   [Stateful Refinements guide](stateful-refinements-guide.md).
 
 Every one of these fails toward a runtime check, never toward a wrong answer

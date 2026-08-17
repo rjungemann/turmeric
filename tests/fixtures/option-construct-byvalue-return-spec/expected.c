@@ -8136,7 +8136,7 @@ static void __tur_module_def_init(void) {
     PI_1360 = 3.14159265358979;
 }
 
-/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.
+/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */
 static void __tur_static_init(void) {

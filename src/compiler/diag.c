@@ -1294,9 +1294,11 @@ static const DiagExplanation diag_explanations_[] = {
       "representation outside, that module should export a function for it --\n"
       "which makes the escape explicit and reviewable instead of implicit.\n"
       "\n"
-      "This check is part of the `sealed-opaque` experiment; without\n"
-      "--enable=sealed-opaque, `:sealed` parses but imposes nothing.  See\n"
-      "docs/upcoming/sealed-opaque-plan.md.\n",
+      "This check is unconditional.  It was the `sealed-opaque` experiment\n"
+      "until 0.34.0, where `:sealed` parsed but imposed nothing unless you\n"
+      "passed --enable=sealed-opaque; it now enforces in every build.  Only\n"
+      "code that deliberately wrote `:sealed` is affected.  See\n"
+      "docs/archive/sealed-opaque-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
       "TUR-E0296: `with` requires a :copy type\n"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FULL-corpus JIT sweep -- docs/upcoming/jit-engine-j0-findings.md section 8.4.2
+# FULL-corpus JIT sweep -- docs/archive/jit-engine-j0-findings.md section 8.4.2
 #
 # Runs every eligible fixture, in parallel, with no sampling.  This is the
 # script that produced the 84.8% figure, and it exists because the stride

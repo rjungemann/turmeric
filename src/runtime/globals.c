@@ -237,14 +237,14 @@ bool g_opt_cps_tramp_resume = true;
  * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
 bool g_opt_owning_cloneable_capture = true;
 
-/* CG5 (cycle-gc experiment): admit `(gc-auto!)` -- automatic, allocation-driven
- * cycle collection.  Off by default; the collector's timing becomes implicit
- * when it is on, which is exactly what the experiment gate exists for.  See
- * docs/upcoming/v1/gc-cycle-collection-followup-plan.md. */
-bool g_opt_cycle_gc = false;
-/* J1 (jit-engine-plan): the `jit` experiment's enable bit -- gates the
- * `tur jit` subcommand until graduation. */
-bool g_opt_jit = false;
+/* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is an ordinary call
+ * form; the enable bit and the elab_gc_auto gate are gone.  What did NOT change
+ * is the default: a program that never calls `(gc-auto!)` still runs the
+ * pure-RC path with no collector overhead.  See
+ * docs/archive/gc-cycle-collection-followup-plan.md. */
+
+/* J1-J3 jit GRADUATED 2026-08-17 -- `tur jit` needs only -DTUR_JIT=ON; the
+ * enable bit is gone.  See docs/archive/jit-engine-plan.md. */
 
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI is
  * unconditional; the enable bit and its codegen gates are gone.  See
@@ -254,13 +254,10 @@ bool g_opt_jit = false;
  * unconditional; the g_opt_refined enable bit and its elaboration gates are
  * gone.  See docs/archive/refined-graduation-plan.md. */
 
-/* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `(defopaque H :int
- * :sealed)` makes `::` refuse to convert between H and its representation type
- * outside the module that declared H, closing the extract-reconstruct aliasing
- * hole that bounds every guarantee built on an opaque handle.  Off by default;
- * when off, `:sealed` still PARSES but imposes nothing, so a spice can adopt it
- * without breaking consumers who have not enabled the experiment. */
-bool g_opt_sealed_opaque = false;
+/* sealed-opaque GRADUATED 2026-08-17 -- `(defopaque H :int :sealed)` makes `::`
+ * refuse to convert between H and its representation type outside the module
+ * that declared H, unconditionally.  The enable bit and its gate are gone.  See
+ * docs/archive/sealed-opaque-plan.md. */
 
 /* write-frames (docs/upcoming/checked-write-frames-plan.md): `#writes w` /
  * `#writes [a b]` declares which of a function's arguments its body may write.

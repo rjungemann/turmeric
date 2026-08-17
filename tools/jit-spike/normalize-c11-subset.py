@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Replay `tur build`'s __tur_include__ hoist on bare `tur emit-c` output.
 
-Phase J0 scaffolding for docs/upcoming/jit-engine-plan.md -- and, since
+Phase J0 scaffolding for docs/archive/jit-engine-plan.md -- and, since
 findings 16, ONLY the hoist.  This file used to be the c2mir subset
 normalizer, carrying three rewrite rules plus a prototype table; every rule
 has been retired into the emitter, in the order the findings record:

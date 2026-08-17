@@ -236,11 +236,15 @@ extern bool g_opt_cps_tramp_resume;
  * codegen (emit_cps_ir.c). Gated by the `owning-cloneable-capture` experiment. */
 extern bool g_opt_owning_cloneable_capture;
 
-/* CG5: `(gc-auto!)` -- automatic allocation-driven cycle collection. Gated by
- * the `cycle-gc` experiment; read by elab_gc_auto (elab_memory.c). */
-extern bool g_opt_cycle_gc;
-/* J1: `tur jit` experiment enable bit (jit-engine-plan). */
-extern bool g_opt_jit;
+/* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is an ordinary call
+ * form; the g_opt_cycle_gc enable bit and the elab_gc_auto gate are gone.
+ * GC_AUTO itself is still opt-in (you must CALL `(gc-auto!)`) and is never a
+ * default.  See docs/archive/gc-cycle-collection-followup-plan.md. */
+
+/* J1-J3 jit GRADUATED 2026-08-17 -- `tur jit` needs only the -DTUR_JIT=ON
+ * build-time gate; the g_opt_jit enable bit is gone and the REPL's in-process
+ * JIT loader hangs off engine selection instead.  See
+ * docs/archive/jit-engine-plan.md. */
 
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI
  * (env[-1] -> drop_glue_env_N, released via TUR_CLOSURE_DROP) is now
@@ -252,11 +256,10 @@ extern bool g_opt_jit;
  * elaboration gates are gone.  See
  * docs/archive/refined-graduation-plan.md. */
 
-/* sealed-opaque: gates the `:sealed` defopaque attribute's ENFORCEMENT.  When
- * off, `:sealed` parses and is recorded but the `::` check never fires, so
- * adopting it downstream is not a breaking change for consumers who have not
- * enabled the experiment.  See docs/upcoming/sealed-opaque-plan.md. */
-extern bool g_opt_sealed_opaque;
+/* sealed-opaque GRADUATED 2026-08-17 -- the `:sealed` defopaque attribute's
+ * ENFORCEMENT is unconditional; the g_opt_sealed_opaque enable bit and the
+ * ascribe_check_sealed gate are gone.  See
+ * docs/archive/sealed-opaque-plan.md. */
 
 /* write-frames (WF1/WF2, docs/upcoming/checked-write-frames-plan.md): gates the
  * `#writes` write-frame annotation -- its CHECKING (WF2's TUR-E0382) and every

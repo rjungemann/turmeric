@@ -386,7 +386,7 @@ expected and fails to elaborate.
 > bypass can despawn inside the region. That is the same trust boundary `#reads`
 > already carries (sound for ordinary code, not adversarial code); a hard
 > guarantee needs a language feature (module-private construction / a `::`-sealed
-> newtype). Filed as `docs/reported/frozen-region-aliasing-via-coercing-cast.md`.
+> newtype). Filed as `docs/archive/frozen-region-aliasing-via-coercing-cast.md`.
 >
 > **Update 2026-07-26 -- (a) tooling built, but auto-running BLOCKED by a
 > compiler bug; (c) pattern proven.**

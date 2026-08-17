@@ -8438,7 +8438,7 @@ static void __tur_fatbox_init(void) {
       __s[1] = (int64_t)(intptr_t)__fn_1439; }
 }
 
-/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.
+/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */
 static void __tur_static_init(void) {

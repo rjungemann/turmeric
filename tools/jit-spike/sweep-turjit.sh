@@ -25,10 +25,13 @@ OUT="${OUT:-$ROOT/build-jit/sweep-turjit}"
 [ -x "$TURJIT" ] || { echo "no tur at $TURJIT (build with -DTUR_JIT=ON)"; exit 1; }
 # Capture, don't pipe into grep -q: under pipefail the early close SIGPIPEs
 # tur and the pipeline reads as failure even on a match.
-probe=$("$TURJIT" --enable=jit jit 2>&1 || true)
+# Probed with a NONEXISTENT input: a bare `tur jit` prints usage on every
+# build (P0 moved the input scan ahead of everything), so only the "carries no
+# JIT engine" answer discriminates.
+probe=$("$TURJIT" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
 case "$probe" in
-  *"usage: tur jit"*) ;;
-  *) echo "$TURJIT does not carry the JIT engine"; exit 1 ;;
+  *"carries no JIT"*)
+     echo "$TURJIT does not carry the JIT engine"; exit 1 ;;
 esac
 
 mkdir -p "$OUT/w"
@@ -40,7 +43,7 @@ run_one() {
   local W="$OUT/w"
   local stdin_file=/dev/null
   [ -f "$dir/input.stdin" ] && stdin_file="$dir/input.stdin"
-  timeout 90 "$TURJIT" --enable=jit jit "$dir/input.tur" \
+  timeout 90 "$TURJIT" jit "$dir/input.tur" \
       < "$stdin_file" > "$W/$name.out" 2> "$W/$name.err"
   local rc=$?
   local fell_back=""

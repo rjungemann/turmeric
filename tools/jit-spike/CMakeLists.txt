@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# J0 JIT spike harness (docs/upcoming/jit-engine-plan.md, Phase J0)
+# J0 JIT spike harness (docs/archive/jit-engine-plan.md, Phase J0)
 # ---------------------------------------------------------------------------
 # Off by default and never reached by a normal build; the parent guards this
 # whole subdirectory on TUR_JIT_SPIKE.

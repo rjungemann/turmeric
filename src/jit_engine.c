@@ -1,6 +1,6 @@
 /* jit_engine.c -- the in-process MIR JIT engine behind `tur jit`.
  *
- * Phase J1 of docs/upcoming/jit-engine-plan.md.  Consumes the same emitted C
+ * Phase J1 of docs/archive/jit-engine-plan.md.  Consumes the same emitted C
  * that `tur build` hands to cc -- after the same in-process post-passes
  * (hoist_tur_include_directives, scan_autolink_markers) -- and executes it
  * with no cc subprocess and no disk artifacts:

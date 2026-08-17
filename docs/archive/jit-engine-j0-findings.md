@@ -7,7 +7,7 @@ are the original Linux write-up; **section 8 corrects three of their claims**,
 and **section 9 corrects three of section 8's** from the full-corpus macOS run
 -- read 9 first. Current Linux full-corpus coverage: **1647/1680 (98.0%)**,
 every remaining failure a recorded decision or a filed report (12.6).
-Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
+Plan: [docs/archive/jit-engine-plan.md](jit-engine-plan.md)
 
 ## 0. Verdict
 

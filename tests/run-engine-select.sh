@@ -29,7 +29,7 @@ unset TUR_ENGINE
 # Does this binary carry the JIT engine?  (Probe with a nonexistent input:
 # a bare `tur jit` prints usage on every build since P0 moved the input scan
 # ahead of the gates; only the "carries no JIT" answer discriminates.)
-probe=$("$TUR_ABS" --enable=jit jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
+probe=$("$TUR_ABS" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
 have_jit=1
 case "$probe" in *"carries no JIT"*) have_jit=0 ;; esac
 
@@ -99,6 +99,9 @@ out=$(cd "$tmp/bad" && "$TUR_ABS" run 2>&1; echo "rc=$?")
 chk "unknown-manifest-value-errors" "TUR-E0311" "$out"
 
 # 9. :engine jit -- outcome depends on the build, both are asserted.
+#    The `:experiments [jit]` key is deliberately still here: `jit` graduated
+#    2026-08-17, so this manifest is the shape a downstream project that opted
+#    in BEFORE graduation still has on disk, and it must keep working.
 mk_project "$tmp/mj" ':engine  "jit"' ':experiments [jit]'
 if [ "$have_jit" = "1" ]; then
     out=$(cd "$tmp/mj" && "$TUR_ABS" run 2>&1)
@@ -109,15 +112,26 @@ else
     chk "manifest-jit-no-engine-nonzero" "rc=2" "$out"
 fi
 
-# 10. P0: :experiments [jit] alone opens the `tur jit` gate (jit builds);
-#     without the key the gate stays closed on every build.
-if [ "$have_jit" = "1" ]; then
-    out=$(cd "$tmp/mj" && "$TUR_ABS" jit src/main.tur 2>&1)
-    chk "p0-manifest-experiments-open-gate" "compiled" "$out"
-fi
+# 10. `jit` GRADUATED 2026-08-17 -- there is no experiment gate left to open,
+#     so `tur jit` runs in a project with no :experiments key at all, and a
+#     manifest that still carries the old key is a TUR-W0063 no-op rather than
+#     the hard TUR-E0310 an unknown experiment name gets.  (The inverse of what
+#     this case asserted before graduation: it used to pin that the gate stayed
+#     CLOSED without the key.)  What still gates `tur jit` is the BUILD, which
+#     is why the no-engine arm asserts the -DTUR_JIT=ON message instead.
 mk_project "$tmp/ng" "" ""
-out=$(cd "$tmp/ng" && "$TUR_ABS" jit src/main.tur 2>&1; echo "rc=$?")
-chk "jit-gate-closed-without-key" "experimental feature" "$out"
+if [ "$have_jit" = "1" ]; then
+    out=$(cd "$tmp/ng" && "$TUR_ABS" jit src/main.tur 2>&1)
+    chk "jit-runs-without-experiments-key" "compiled" "$out"
+
+    out=$(cd "$tmp/mj" && "$TUR_ABS" jit src/main.tur 2>&1)
+    chk "graduated-manifest-experiments-key-still-runs" "compiled" "$out"
+    chk "graduated-manifest-experiments-key-warns" "TUR-W0063" "$out"
+else
+    out=$(cd "$tmp/ng" && "$TUR_ABS" jit src/main.tur 2>&1; echo "rc=$?")
+    chk "jit-no-engine-hard-error" "-DTUR_JIT=ON" "$out"
+    chk "jit-no-engine-nonzero" "rc=2" "$out"
+fi
 
 # 11. Program args pass through to the interp arm as *args*.
 cat > "$tmp/mi/src/args.tur" <<'TUR_EOF'

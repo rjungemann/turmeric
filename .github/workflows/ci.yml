@@ -140,8 +140,11 @@ jobs:
     #      the engine.  It is fast (~2 min on Apple Silicon, run serially and
     #      fanned out internally), but it is a second full corpus pass and
     #      belongs on its own clock.
-    #   3. `jit` is still an experiment (--enable=jit, TUR-W0060), so it should
-    #      not gate merges at the same strength as the AOT suite.
+    #   3. The `jit` experiment graduated 2026-08-17, but the ENGINE is still
+    #      opt-in at build time (-DTUR_JIT=ON) and `cc` is still the default
+    #      engine, so this leg exercises a configuration most builds do not
+    #      have.  It should not gate merges at the same strength as the AOT
+    #      suite, which covers what everyone actually ships.
     timeout-minutes: 45
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache

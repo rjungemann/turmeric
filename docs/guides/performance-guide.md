@@ -707,7 +707,7 @@ what you are optimizing for -- startup latency or steady-state throughput:
 | engine | invocation | compile step | best for |
 |---|---|---|---|
 | interpreter | `tur --interpret f.tur` | none | tiny scripts, REPL turns, debugging |
-| MIR JIT | `tur --enable=jit jit f.tur` | in-process (c2mir) | run-edit-run loops, spice REPL reloads |
+| MIR JIT | `tur jit f.tur` | in-process (c2mir) | run-edit-run loops, spice REPL reloads |
 | cc | `tur build f.tur` + run | subprocess cc -O2 | long-running programs, deployment |
 
 A project can select its default engine for `tur run` declaratively:

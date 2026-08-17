@@ -147,11 +147,12 @@ Conventions worth following:
 
 ## Sealing an opaque: `:sealed`
 
-> **Experiment.** Requires `--enable=sealed-opaque` (or `:experiments` in
-> `build.tur`). Without it `:sealed` still parses but imposes nothing --
-> deliberately, so adopting it in a library is not a breaking change for
-> consumers who have not opted in. See
-> [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/sealed-opaque-plan.md).
+> **Since 0.34.0**, `:sealed` enforces unconditionally. It shipped as the
+> `sealed-opaque` experiment in 0.32.2, where `--enable=sealed-opaque` was
+> needed to make it do anything; that flag is now a no-op that warns
+> (`TUR-W0063`), so a `build.tur` still naming it keeps working. Only code that
+> deliberately wrote `:sealed` is affected by the change. See
+> [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/sealed-opaque-plan.md).
 
 `::` is a **coercing** cast, not a checked one. That means a plain
 `defopaque` does *not* encapsulate its handle: any module can unwrap a

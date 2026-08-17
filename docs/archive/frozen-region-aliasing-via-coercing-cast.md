@@ -147,3 +147,25 @@ The severity stays low and the scope-of-claim paragraph above stands unchanged:
 `:sealed` is a compile-time discipline over the `::` surface, inline-C can still
 cast an `int64_t` to anything, and the `frozen` region remains a trust boundary
 rather than an adversarial guarantee.
+
+## RESOLVED 2026-08-17 -- `sealed-opaque` graduated; archived
+
+The release-time call this report was waiting on ("graduate or shelve -- which
+belongs to a release cut, not to this report") was made at the **v0.34.0** cut:
+**graduate.** `:sealed` now enforces unconditionally. The `EXPERIMENTS[]` row,
+`g_opt_sealed_opaque` and the `ascribe_check_sealed` gate are deleted;
+`--enable=sealed-opaque` survives one minor line as a `TUR-W0063` no-op so the
+ECS spice's `build.tur` keeps building.
+
+The low-risk observation this report offered to whoever made the call held up:
+with the gate off `:sealed` parsed and imposed nothing, so making it
+unconditional reached only code that had already written `:sealed`.
+
+**The scope-of-claim paragraphs above are unchanged by this and remain the
+honest statement of the limit.** `:sealed` is a compile-time discipline over
+the `::` surface; inline-C can still cast an `int64_t` to anything in any
+module. Graduation moved the bypass not at all -- it was "requires deliberate
+inline-C" behind the flag and is that without it. The `frozen` region is still
+a trust boundary, not an adversarial guarantee, and the severity stays low.
+
+Record: [docs/archive/sealed-opaque-plan.md](sealed-opaque-plan.md).

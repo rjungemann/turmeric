@@ -71,7 +71,7 @@ static void __tur_module_def_init(void) {
     ratio_1328   = 1.5;
 }
 
-/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md. */
+/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md. */
 static void __tur_static_init(void) {
     static int __tur_static_init_done = 0;
     if (__tur_static_init_done) return;

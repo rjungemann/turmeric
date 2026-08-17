@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Indicative J0 coverage sample -- docs/upcoming/jit-engine-plan.md
+# Indicative J0 coverage sample -- docs/archive/jit-engine-plan.md
 #
 # NOT the J3 parity sweep.  This walks an evenly-spaced sample of the fixture
 # corpus through emit-c -> normalize -> c2mir -> MIR-gen -> run and tallies why

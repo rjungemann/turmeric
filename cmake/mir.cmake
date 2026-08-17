@@ -1,7 +1,7 @@
 include_guard(GLOBAL)
 # ---------------------------------------------------------------------------
 # MIR (c2mir + MIR-gen) -- vendored for the J0 JIT spike.
-# docs/upcoming/jit-engine-plan.md, Phase J0.
+# docs/archive/jit-engine-plan.md, Phase J0.
 # ---------------------------------------------------------------------------
 # MIR is the engine chosen in section 2 of the plan: a C11 front end (c2mir)
 # plus an optimizing JIT back end, so `tur`'s existing emit-C path is reused

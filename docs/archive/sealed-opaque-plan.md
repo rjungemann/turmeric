@@ -1,10 +1,53 @@
 # `:sealed` opaque newtypes -- encapsulation the `::` cast cannot fabricate
 
-**Experiment:** `sealed-opaque` (`--enable=sealed-opaque`, or `:experiments`
-in `build.tur`).
-**Status:** in-flight prototype. Introduced 0.32.2; `expires_at` 0.35.0.
+**Status: GRADUATED 2026-08-17, shipping in v0.34.0.** `:sealed` enforces
+unconditionally; the `EXPERIMENTS[]` row, `g_opt_sealed_opaque`, the
+`ascribe_check_sealed` gate and the `experiment_warn_if_used` call are all
+deleted. Introduced 0.32.2, graduated one minor line ahead of its `expires_at`
+of 0.35.0 -- routine, since `expires_at` is a deadline rather than an earliest
+date. What follows is the design record; the staging checklist below is done.
+
+`"sealed-opaque"` is in `GRADUATED[]` (`src/runtime/experiments.c`), so
+`--enable=sealed-opaque` and `:experiments [sealed-opaque]` are `TUR-W0063`
+no-ops for one minor line rather than the hard `TUR-E0310` an unknown name
+gets. That shim is what keeps the ECS spice -- the one consumer that adopted
+this deliberately -- building across the boundary.
+
+**Why this graduation was low-risk, stated plainly.** With the gate off,
+`:sealed` already parsed and imposed nothing. Making it unconditional therefore
+reaches only code that *wrote* `:sealed`, which is the ECS spice and nothing
+else. The usual graduation fear -- a program that compiled yesterday failing
+today -- has no surface here.
+
+**The question the gate existed to answer, answered.** The row was gated on the
+two-direction rule: sealing the *unwrap* direction as well as fabrication is the
+stronger claim, and the shelve condition was "real spices routinely need to
+unwrap a sealed handle across a module boundary." They did not. The ECS spice
+shipped on `RGWorld` with no in-module pattern needing an escape and no
+cross-module unwrap wanted, so the rule graduates as designed rather than
+narrowed to fabrication-only.
+
+**Fixtures.** `sealed-opaque-gate-off` was repurposed rather than deleted: it
+pinned the promise that `:sealed` imposes nothing without the flag, and
+graduation is precisely what retires that promise, so it became
+`sealed-opaque-graduated-enable-noop` -- same program, now asserting the
+`TUR-W0063` compatibility shim. `sealed-opaque-in-module`,
+`errors/sealed-opaque-cross-module-fabricate` and
+`errors/sealed-opaque-cross-module-unwrap` kept their programs and lost their
+now-redundant `flags` files.
+
+**What did NOT change**, and is worth restating because it is the honest limit
+of the claim: `:sealed` is a compile-time discipline over the `::` surface.
+inline-C can still cast an `int64_t` to anything in any module, so the
+motivating `frozen` region is still a trust boundary rather than an adversarial
+guarantee. Graduation moves nothing here -- the bypass was "requires deliberate
+inline-C" before and is that now.
+
+**Original header, for the record:** experiment `sealed-opaque`
+(`--enable=sealed-opaque`, or `:experiments` in `build.tur`); in-flight
+prototype, introduced 0.32.2, `expires_at` 0.35.0.
 **Motivating report:**
-[docs/reported/frozen-region-aliasing-via-coercing-cast.md](../reported/frozen-region-aliasing-via-coercing-cast.md).
+[docs/archive/frozen-region-aliasing-via-coercing-cast.md](frozen-region-aliasing-via-coercing-cast.md).
 
 ## The problem
 
@@ -130,8 +173,8 @@ unused.)
   out-of-module unwrap rejected; gate-off compiles clean; `:sealed` composes
   with `:affine`.
 - **S5** -- guide paragraph
-  ([experimental-flags-guide](guides/experimental-flags-guide.md),
-  [syntax-guide](guides/syntax-guide.md)).
+  ([experimental-flags-guide](../guides/experimental-flags-guide.md),
+  [syntax-guide](../guides/syntax-guide.md)).
 - **S6** (separate repo) -- ECS spice adopts `:sealed` on `RGWorld` and its
   TRUST BOUNDARY docstring is rewritten to the narrower, true claim.
 
@@ -149,17 +192,14 @@ Graduate (delete the row, behavior unconditional) when:
   only for this check, and a library with something worth sealing already lives
   in a `defmodule`.
 
-**Both graduation criteria are therefore met**, and what remains is the
-release-time call itself -- graduate (delete the row, make `:sealed` always
-enforced) or shelve. Note this graduation is unusually low-risk for one: with
-the experiment off `:sealed` parses and imposes nothing, so making it
-unconditional affects only code that already *wrote* `:sealed`, which today is
-the ECS spice that adopted it deliberately. It is not a change that reaches
-programs which never opted in.
+**Both graduation criteria were met**, and the release-time call was made on
+**2026-08-17: graduate.** The row is deleted and `:sealed` is always enforced.
+See the status block at the top of this document for what landed.
 
-Shelve if it turns out that real spices routinely need to unwrap a sealed
-handle across a module boundary -- that would mean the two-direction rule is
-wrong and only fabrication should be sealed.
+The shelve condition -- "real spices routinely need to unwrap a sealed handle
+across a module boundary, so the two-direction rule is wrong and only
+fabrication should be sealed" -- did not fire. The one adopting spice needed no
+cross-module unwrap.
 
 ## Alternatives considered
 

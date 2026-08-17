@@ -1,6 +1,47 @@
 # JIT Execution Engine Plan (`tur jit`)
 
-Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); S1/S1b/6(a)/TLS landed;
+**Status: COMPLETE 2026-08-17 -- the `jit` experiment GRADUATED, shipping in
+v0.34.0.** J0 through J3 all landed; the `EXPERIMENTS[]` row, `g_opt_jit`, the
+`cmd_jit` gate and the `experiment_warn_if_used` calls are deleted. `tur jit`
+now needs only `-DTUR_JIT=ON`.
+
+The row existed for one reason -- section 3.1's "the `tur jit` subcommand errors
+out unless the experiment is enabled, **until graduation**", holding a third
+execution engine until its semantics were proven identical to `tur build`
+output. **J3 is what discharged that** (landed 2026-07-30): the whole corpus
+runs through the engine on both hosts, the harness denylist is empty, and the
+three latent product bugs J3 surfaced -- none of them JIT bugs, all of them
+defects the `cc` path was surviving by luck -- are fixed. There was nothing left
+for the gate to be waiting on.
+
+**The build-time gate stays, and is now the only one.** `-DTUR_JIT=ON` vendors
+MIR at configure time; a default build carries no fetch and no dependency, and
+`tur jit` on such a binary says so and exits 2. Graduating the experiment did
+not change that, and did not change the DEFAULT ENGINE either: `cc` is still
+what you get unless engine selection says otherwise.
+
+**One thing had to move rather than merely be deleted.** `--enable=jit` was the
+only switch that turned on the J2 in-process REPL loader, so removing it would
+have forced a choice between making that path the default and losing it. Neither
+is right, so the loader now hangs off **engine selection** -- `tur repl
+--engine jit`, `TUR_ENGINE=jit`, or `:engine "jit"` in `build.tur`, the same
+ladder `tur run` resolves. `tur repl` gained `--engine` for this. Unset, the
+engine resolves to `cc` and the subprocess path is byte-for-byte what it was;
+asking for `jit` on a binary with no engine is a hard error, not a silent
+fallback, because the engines differ in semantics.
+
+`"jit"` is in `GRADUATED[]` (`src/runtime/experiments.c`), so `--enable=jit` and
+`:experiments [jit]` are `TUR-W0063` no-ops for one minor line. That shim
+matters more here than for the other two names graduated the same day, because
+the JIT's enable spelling lived in *manifests* next to `:engine "jit"`, and a
+manifest is exactly the config nobody edits when they upgrade a compiler.
+Fixture: `jit-graduated-enable-noop`; `tests/run-engine-select.sh` covers the
+manifest spelling and both build shapes.
+
+---
+
+**Phase record.** J0 COMPLETE (x86-64 Linux + arm64 macOS); S1/S1b/6(a)/TLS
+landed;
 **J1 LANDED 2026-07-29** (findings 18): `tur jit <file>` exists behind
 `-DTUR_JIT=ON` + `--enable=jit`, with the step-6 fallback wired.
 **S2 COMPLETE 2026-07-30** (findings 23-25): the runtime preamble is split
@@ -51,8 +92,8 @@ Linux's 1,647, and the S2 split proof passes **8/8**. All three genuine
 failures are **pre-existing Turmeric defects the `cc` path was surviving by
 luck**, not JIT or MIR defects: a missing `tur_hamt_hash_xxh64` prototype and
 two wrong `TaskGroupBlock` layouts in the emitter -- **both FIXED on Linux
-2026-07-29** ([archived](../archive/jit-xxh64-missing-prototype.md),
-[archived](../archive/emitted-taskgroupblock-layout-mismatch.md)), and
+2026-07-29** ([archived](jit-xxh64-missing-prototype.md),
+[archived](emitted-taskgroupblock-layout-mismatch.md)), and
 **confirmed fixed on Apple Silicon 2026-07-29** -- macOS now sweeps
 **1,668/1,701, matching Linux exactly** (findings 21). One result
 revises this plan: **S2 buys 17% of engine time on Apple Silicon, not Linux's
@@ -210,6 +251,9 @@ not a v1 blocker).
   g_opt_jit`, lifecycle + `expires_at` populated), and
   `experiment_warn_if_used("jit")` at the engine entry point. The `tur jit`
   subcommand errors out unless the experiment is enabled, until graduation.
+  **Graduated 2026-08-17** -- the row and both call sites are gone, and the
+  `tur repl --jit` spelling above became `tur repl --engine jit`. See the
+  status block at the top of this document.
 
 ### 3.2 Execution flow (Phase J1)
 

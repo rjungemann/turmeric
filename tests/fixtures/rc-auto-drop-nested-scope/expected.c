@@ -7844,7 +7844,7 @@ int main(int argc, char **argv) {
     SCHEMA_unAP_unFAT_1232 = INT64_C(16);
     return 0;
 }
-/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.
+/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */
 static void __tur_static_init(void) {

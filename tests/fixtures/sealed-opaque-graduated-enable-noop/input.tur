@@ -1,0 +1,27 @@
+;; sealed-opaque graduation compatibility promise (2026-08-17): `sealed-opaque`
+;; graduated, so its EXPERIMENTS[] row is gone -- but a downstream `build.tur`,
+;; `~/.config/turmeric/experiments.tur`, or CLI invocation that still names it
+;; must keep compiling.  `GRADUATED[]` in src/runtime/experiments.c is what
+;; makes `--enable=sealed-opaque` a TUR-W0063 no-op instead of the hard
+;; TUR-E0310 an unknown experiment name gets.
+;;
+;; Without this fixture graduation is a breaking change for exactly the people
+;; who adopted the feature deliberately, which is the wrong population to
+;; break.  The flag is in `flags`; the warning is asserted on stderr and the
+;; program still runs, with enforcement on (it is unconditional now).
+;;
+;; This fixture WAS `sealed-opaque-gate-off`, which pinned the opposite promise
+;; -- that `:sealed` parses and imposes nothing without the flag.  That promise
+;; existed so adopting `:sealed` in a spice would not break consumers who had
+;; not opted in; graduation is what retires it, so the fixture is repurposed
+;; rather than deleted.  The casts below are unchanged and still in the
+;; declaring module, where `::` is legal either way -- what moved is only which
+;; claim the fixture makes about the flag.
+(defopaque Tok :int :sealed)
+
+(defn tok-new [n : int] : Tok (:: n Tok))
+(defn tok-num [t : Tok] : int (:: t :int))
+
+(defn main [] : int
+  (println (tok-num (tok-new 42)))
+  0)

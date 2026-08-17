@@ -241,7 +241,7 @@ states the boundary.
   descriptors contradicts monomorphization, which erases types by construction.
   One documented cost is accepted as a consequence: the `RCK_OPAQUE` blind spot
   in the cycle collector is "permanent without runtime type reflection"
-  (`docs/upcoming/v1/gc-cycle-collection-followup-plan.md:565`). If that needs
+  (`docs/archive/gc-cycle-collection-followup-plan.md:565`). If that needs
   closing, do it with a per-opaque trace callback -- a value supplying its own
   behavior, not a type descriptor.
 

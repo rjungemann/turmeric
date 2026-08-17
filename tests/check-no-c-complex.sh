@@ -5,7 +5,7 @@
 # The emitted C must never contain C's `_Complex` type, `<complex.h>`, or the
 # `__mul*c3` / `__div*c3` compiler-runtime helpers.  Two independent reasons:
 #
-#   * `c2mir` (the JIT front end selected by docs/upcoming/jit-engine-plan.md)
+#   * `c2mir` (the JIT front end selected by docs/archive/jit-engine-plan.md)
 #     implements a C11 subset, and `_Complex` is an OPTIONAL C11 feature that is
 #     not part of it.  Emitting it would simply not compile under the JIT.
 #   * Even on a C compiler that does support `_Complex`, `a * b` and `a / b` on

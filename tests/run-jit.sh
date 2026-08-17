@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/run-jit.sh -- MIR JIT fixture runner (J3, jit-engine-plan section 5).
 #
-# Runs EVERY tests/fixtures/ through `tur --enable=jit jit` -- the in-process
+# Runs EVERY tests/fixtures/ through `tur jit` -- the in-process
 # MIR engine (src/jit_engine.c) -- instead of compiling each to a native
 # binary through cc.  The engine's own step-6 fallback to the cc path is a
 # first-class outcome here: a fixture whose inline C c2mir rejects still runs
@@ -73,7 +73,7 @@ TUR="${TUR:-./build-turjit/tur}"
 # build and no longer discriminates.  A non-JIT binary answers "carries no
 # JIT engine" before touching the file; a JIT binary proceeds to (and fails)
 # the compile.
-probe=$("$TUR" --enable=jit jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
+probe=$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
 case "$probe" in
   *"carries no JIT"*)
      echo "run-jit: SKIP ($TUR carries no JIT engine; configure -DTUR_JIT=ON)"
@@ -237,11 +237,11 @@ run_jit_fixture() {
 
     local rc=0
     if [ "${#run_args_arr[@]}" -gt 0 ]; then
-        _run_timed "$fixture_timeout" "$TUR" $fixture_flags --enable=jit jit "$input" \
+        _run_timed "$fixture_timeout" "$TUR" $fixture_flags jit "$input" \
             -- "${run_args_arr[@]}" \
             < "$stdin_file" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
     else
-        _run_timed "$fixture_timeout" "$TUR" $fixture_flags --enable=jit jit "$input" \
+        _run_timed "$fixture_timeout" "$TUR" $fixture_flags jit "$input" \
             < "$stdin_file" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
     fi
 
@@ -328,7 +328,7 @@ run_jit_error_fixture() {
     # compiler had stopped emitting diagnostics.  A Mac with Homebrew coreutils
     # on PATH does not reproduce it, which is why the local baseline was green
     # while macOS CI was not.
-    _run_timed 15 "$TUR" $flags --enable=jit jit "$dir/input.tur" \
+    _run_timed 15 "$TUR" $flags jit "$dir/input.tur" \
         >/dev/null 2>"$err" || true
 
     local missing=0 needle
