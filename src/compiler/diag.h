@@ -283,6 +283,16 @@ typedef enum DiagCode {
      *          code is entitled to believe the declaration. */
     TUR_E0381_WRITES_FRAME_INVALID,
     TUR_E0382_WRITES_FRAME_EXCEEDED,
+    /* mutable-globals-plan section 12.3, shipped warning-first per section
+     * 13.1: a `#reads <param>` frame is TRUSTED, and its one consumer grants
+     * congruence -- so a frame that omits mutable state the body reads buys a
+     * proof it has not earned (the caller-side crossing check is elided on a
+     * predicate that may be false).  This warns when the body DEMONSTRABLY
+     * reads a mutable global: positive evidence only, so an inline-C body --
+     * which is every measure that predates this -- stays silent.  Gateless
+     * because it reports a live trust-boundary fact and changes no behavior;
+     * escalating warn -> refuse-the-override is a later, gated step. */
+    TUR_W0383_READS_FRAME_OMITS_MUTABLE,
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */

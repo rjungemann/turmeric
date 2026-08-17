@@ -528,6 +528,92 @@ static bool rt_expr_definitely_impure(const Expr *x) {
     return rt_classify_expr(&c, x) == RT_P_IMPURE;
 }
 
+/* mutable-globals-plan section 12.3, shipped as the warning tier (section
+ * 13.1): does this elaborated body READ a mutable global?  Returns the first
+ * such binding, or NULL.
+ *
+ * Positive evidence only.  The walk descends the kinds it models and simply
+ * does not look inside the rest, so an inline-C body -- which is every
+ * `#reads` measure that predates this -- yields no evidence and no warning.
+ * Under-warning is the designed posture: this feeds a WARNING about a trusted
+ * promise, never a proof, so a missed read costs one diagnostic while a false
+ * positive would cost trust in the diagnostic.
+ *
+ * Direct reads only -- a global read inside a CALLEE is not followed.  The
+ * transitive walk belongs to the gated refuse-the-override step if that ever
+ * lands, where "could not see" must be distinguishable from "saw nothing"
+ * (the same WG_UNKNOWN discipline the G1 write walk needed).
+ *
+ * A `(set! g ...)` TARGET deliberately does not count: writing a global from
+ * a measure is a different defect, and this classifier is about what the
+ * measure's ANSWER depends on.  The read half of `(set! g (+ g 1))` is still
+ * seen -- it is an EX_VAR in the value expression. */
+static const Binding *reads_scan_mut_global(const Expr *x, uint32_t *budget) {
+    if (!x || *budget == 0) return NULL;
+    (*budget)--;
+    switch (x->kind) {
+    case EX_VAR: {
+        Binding *b = x->as.var.binding;
+        return (b && b->is_mut && b->is_global) ? b : NULL;
+    }
+    case EX_LET: case EX_LETREC: {
+        for (uint32_t i = 0; i < x->as.let_.n; i++) {
+            const Binding *r =
+                reads_scan_mut_global(x->as.let_.bindings[i].init, budget);
+            if (r) return r;
+        }
+        return reads_scan_mut_global(x->as.let_.body, budget);
+    }
+    case EX_IF: {
+        const Binding *r = reads_scan_mut_global(x->as.if_.cond, budget);
+        if (!r) r = reads_scan_mut_global(x->as.if_.then_, budget);
+        if (!r) r = reads_scan_mut_global(x->as.if_.else_or_null, budget);
+        return r;
+    }
+    case EX_DO: {
+        for (uint32_t i = 0; i < x->as.do_.n; i++) {
+            const Binding *r = reads_scan_mut_global(x->as.do_.items[i], budget);
+            if (r) return r;
+        }
+        return NULL;
+    }
+    case EX_WHILE: {
+        const Binding *r = reads_scan_mut_global(x->as.while_.cond, budget);
+        return r ? r : reads_scan_mut_global(x->as.while_.body, budget);
+    }
+    case EX_SET:
+        return reads_scan_mut_global(x->as.set_.value, budget);
+    case EX_MATCH: {
+        const Binding *r = reads_scan_mut_global(x->as.match_.scrutinee, budget);
+        for (uint32_t i = 0; !r && i < x->as.match_.n_arms; i++) {
+            r = reads_scan_mut_global(x->as.match_.arms[i].guard, budget);
+            if (!r) r = reads_scan_mut_global(x->as.match_.arms[i].body, budget);
+        }
+        return r;
+    }
+    case EX_GET_FIELD:
+        return reads_scan_mut_global(x->as.get_field_.struct_expr, budget);
+    case EX_BUILTIN: {
+        for (uint32_t i = 0; i < x->as.builtin.n; i++) {
+            const Binding *r = reads_scan_mut_global(x->as.builtin.args[i], budget);
+            if (r) return r;
+        }
+        return NULL;
+    }
+    case EX_CALL: {
+        const Binding *r = reads_scan_mut_global(x->as.call_.fn_expr, budget);
+        for (uint32_t i = 0; !r && i < x->as.call_.n_args; i++)
+            r = reads_scan_mut_global(x->as.call_.args[i], budget);
+        return r;
+    }
+    case EX_ASCRIBE: return reads_scan_mut_global(x->as.ascribe_.inner, budget);
+    case EX_CAST:    return reads_scan_mut_global(x->as.cast_.expr, budget);
+    case EX_RETURN:  return reads_scan_mut_global(x->as.return_.value, budget);
+    default:
+        return NULL;   /* unmodeled kind: no evidence, no warning */
+    }
+}
+
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
  * by the elaborator because it is the only side that can look a name up in the
  * global scope; refine_collect.c reaches it through a function pointer so it
@@ -5502,6 +5588,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
     uint32_t reads_param_plus1_defn = 0;
+    const Form *reads_annot_defn = NULL;    /* for the W0383 diagnostic's span */
     /* WF1 / #writes: the write frame, captured here and stamped alongside.
      * `declared` is separate from the mask because an empty mask is a real
      * frame ("writes nothing"), not the absence of one -- see expr.h. */
@@ -5575,6 +5662,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                               psym->as.sym->name);
                 } else {
                     reads_param_plus1_defn = found;
+                    reads_annot_defn       = maybe;
                 }
             }
             body_start++;  /* skip past the #reads annotation */
@@ -7211,6 +7299,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
      * refinements, so this must not sit inside the block above. */
     b->reads_param_plus1 = reads_param_plus1_defn;
+    /* mutable-globals-plan section 12.3, warning tier (section 13.1): a
+     * `#reads` frame is TRUSTED and its one consumer GRANTS congruence, so a
+     * frame that omits mutable state the body reads buys proofs it has not
+     * earned (the elided caller-side crossing check --
+     * tests/fixtures/refine-reads-frame-omits-global pins the cost).  Warn at
+     * the definition: the frame is the broken promise, whether or not any
+     * call site currently exercises the override.  Gateless -- it reports a
+     * fact and changes nothing proved; escalating to refusing the override is
+     * a later, gated step.  The bare_fat guard keeps a monomorphization clone
+     * from repeating its original's warning. */
+    if (reads_param_plus1_defn != 0 && body && !e->bare_fat_spec_active) {
+        uint32_t scan_budget = 4096;
+        const Binding *gb = reads_scan_mut_global(body, &scan_budget);
+        if (gb && gb->name) {
+            const Binding *rp = params[reads_param_plus1_defn - 1];
+            diag_emit_with_code(DIAG_WARNING,
+                                reads_annot_defn ? reads_annot_defn->span
+                                                 : name_f->span,
+                                TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                "`#reads %s` omits mutable state the body reads: "
+                                "the mutable global '%s' can change between two "
+                                "calls this frame lets the solver treat as one "
+                                "value; thread the state through a parameter the "
+                                "frame can name, or make the global immutable",
+                                (rp && rp->name) ? rp->name->name : "?",
+                                gb->name->name);
+        }
+    }
     /* WF1 / #writes: same placement rationale as `#reads` -- a write frame is
      * independent of param refinements.  `writes_checked` starts false and is
      * raised by the DEFERRED WF2 pass (wf_resolve_write_frames), which is where

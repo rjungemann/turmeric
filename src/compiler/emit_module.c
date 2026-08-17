@@ -11902,8 +11902,20 @@ int emit_program(Buf *out, const Expr *program) {
                     "        frame = prev;\n"
                     "    }\n"
                     "}\n"
+                    /* mutable-globals-plan 13.3: the mechanism's one failure
+                     * mode, checked rather than ignored.  On EAGAIN (the
+                     * process key budget -- PTHREAD_KEYS_MAX, 1024 on glibc,
+                     * one key per dynvar plus one for ^thread-local -- is
+                     * exhausted) an unchecked create leaves the key
+                     * uninitialized and every later getspecific is UB: a
+                     * silent wrong-value failure.  Mirrors __tur_tl_key_init. */
                     "static void _dynvar_init_%s(void) {\n"
-                    "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
+                    "    if (pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s) != 0) {\n"
+                    "        fprintf(stderr, \"tur: pthread_key_create failed for dynamic \"\n"
+                    "                        \"variable (process key limit, PTHREAD_KEYS_MAX, \"\n"
+                    "                        \"exhausted?)\\n\");\n"
+                    "        abort();\n"
+                    "    }\n"
                     "}\n"
                     /* S1b/cleanup: idempotent.  The emitter now calls this
                      * explicitly at the end of the binding block AND leaves
@@ -12091,8 +12103,8 @@ int emit_program(Buf *out, const Expr *program) {
             buf_puts(&file, "static void __tur_tl_key_init(void) {\n");
             /* The one failure mode of this mechanism, checked rather than
              * ignored -- an unchecked pthread_key_create leaves the key
-             * uninitialized and every later getspecific undefined.  (The dynvar
-             * path still ignores it; see docs/reported/.) */
+             * uninitialized and every later getspecific undefined.  (The
+             * dynvar path checks it the same way; see _dynvar_init_*.) */
             buf_puts(&file, "    if (pthread_key_create(&__tur_tl_key, __tur_tl_block_free) != 0) {\n");
             buf_puts(&file, "        fprintf(stderr, \"tur: pthread_key_create failed for ^thread-local globals\\n\");\n");
             buf_puts(&file, "        abort();\n    }\n}\n");

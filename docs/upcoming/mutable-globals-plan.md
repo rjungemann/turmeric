@@ -1,8 +1,13 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
 > **Status:** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see §10, §15,
-> §16, §17). **G4b LANDED** (§18) and **G5a LANDED** (§19). Only G5b
-> (graduation) remains -- a judgement wanting adoption evidence, not work.
+> §16, §17). **G4b LANDED** (§18) and **G5a LANDED** (§19). **The adjacent
+> small items closed 2026-08-17** (see §20): §12.3's classifier shipped as the
+> §13.1 warning (`TUR-W0383`), §13.3's unchecked dynvar `pthread_key_create`
+> fixed, and §14's read-side plan drafted
+> ([`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md)).
+> Only G5b (graduation) remains -- a judgement wanting adoption evidence, not
+> work.
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
@@ -1618,3 +1623,66 @@ Only the judgement. The docs are written, so "a feature should not graduate
 undocumented" is discharged -- and §5's G5b entry now carries the sweep table
 for deleting the gating language if and when the row is retired, because every
 "behind `--enable=global-state`" stops being true at that moment.
+
+---
+
+## 20. Adjacent-items execution record (2026-08-17)
+
+The three small pieces this plan recommended but did not count as phases, all
+closed in one change.  None of them touches the `global-state` experiment, so
+G5b's soak clock is unaffected.
+
+### 20.1 §12.3's classifier, shipped as §13.1's warning -- `TUR-W0383`
+
+Landed **gateless**, exactly per §13.1: a `#reads` measure whose body
+directly reads a mutable global warns at its definition ("`#reads w` omits
+mutable state the body reads"), and nothing proved changes -- the congruence
+override still pays out.  `reads_scan_mut_global` (`src/compiler/elab_fns.c`,
+beside the `rt_classify_expr` walk it borrows its shape from) is
+default-deny in both of the ways that matter:
+
+- **Positive evidence only.**  Unmodeled expression kinds are not descended,
+  so an inline-C body -- every pre-existing measure -- yields no evidence and
+  no warning.  §13.1's zero-risk claim for the nine strict fixtures was
+  verified by running them: no `TUR-W0383` on any.
+- **Direct reads only.**  A global read inside a callee is not followed;
+  the transitive walk belongs to the gated refusal step, where "could not
+  see" must become a distinct answer first (the `WG_UNKNOWN` discipline G1's
+  write walk needed).
+
+Mutable *locals* and parameters deliberately do not warn: they are fresh per
+call, so they cannot make two calls differ -- the cross-call state §12.2's
+hole turns on is global by construction.  A negative probe (immutable global
+plus `^mut` local accumulator) stays silent.
+
+`refine-reads-frame-omits-global` now asserts the warning via
+`expected.stderr`, and its header was rewritten from "EXPECTED TO CHANGE" to
+"PARTIALLY CHANGED, DELIBERATELY" -- the program still prints 7, because
+warning-first means the elision survives; the header now says the *refusal*
+landing is what should flip it.  The warning fires identically under
+`--interpret` (shared elaborator).  `tur --explain TUR-W0383` carries the
+full story, including the §12.2 example.
+
+### 20.2 §13.3's defect: dynvar `pthread_key_create` is now checked
+
+`_dynvar_init_*` aborts with a message naming the process key limit instead
+of ignoring the return code -- the exact mirror of what G4b's
+`__tur_tl_key_init` already did (§18.2), so the mechanism this plan
+recommends no longer ships with its one failure mode unhandled on the older
+path.  No fixture snapshot carries `_dynvar_init_` (checked), so no regen.
+The stale "(The dynvar path still ignores it)" comment beside the
+thread-local emitter was corrected in the same change.
+
+### 20.3 §14's read-side plan: drafted
+
+[`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md),
+named for the tier rather than the annotation, seeded from §§12.1-12.3 and
+§13.5 as §14 specified.  Its phases: R1 the warning (landed, above), R2 the
+gated refusal (which `refine-reads-frame-omits-global` is now written to
+flip on), R3 the bracket form, R4 the general checked `#reads` -- recorded as
+a pointer whose real bill is the ECS/spice measure layer, not this compiler.
+
+### 20.4 What remains of this plan
+
+G5b alone, unchanged: graduate / shelve / bump `global-state` at the 0.38.0
+review, on adoption evidence.

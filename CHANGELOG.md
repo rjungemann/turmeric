@@ -6,6 +6,18 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`TUR-W0383`: a `#reads` frame that omits mutable state the body reads now
+  warns at the definition.** `#reads` is trusted, and its one consumer grants
+  congruence -- so a measure declared `#reads w` whose body also reads a
+  mutable global was silently buying proofs it had not earned (the elided
+  caller-side crossing check the `refine-reads-frame-omits-global` fixture
+  pair pins). The warning is gateless and changes nothing proved: it reports
+  positive evidence of the broken promise (a direct read of a `^mut` global in
+  the elaborated body) without yet refusing the override. An inline-C body
+  yields no evidence and stays silent, so every pre-existing measure is
+  unaffected. `tur --explain TUR-W0383` has the full story; the gated
+  refuse-the-override step remains future work
+  (docs/upcoming/mutable-globals-plan.md section 12.3).
 - **An execution engine can be selected per project.** `:engine "cc" | "jit" |
   "interp"` in `build.tur`, `--engine <name>` on the command line, or
   `TUR_ENGINE` in the environment, resolved in that precedence with `"cc"`
@@ -173,6 +185,14 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A dynamic variable's `pthread_key_create` failure now aborts with a
+  message instead of being ignored.** On `EAGAIN` (the process key budget --
+  `PTHREAD_KEYS_MAX`, 1024 on glibc, one key per `defdynamic` plus one shared
+  by every `^thread-local` -- is exhausted) the key was left uninitialized and
+  every later `pthread_getspecific` on it was undefined behaviour: a silent
+  wrong-value failure. The emitted `_dynvar_init_*` now checks and aborts,
+  mirroring what `^thread-local`'s key init already did
+  (docs/upcoming/mutable-globals-plan.md section 13.3).
 - **The rational/complex numeric tower now runs on all three engines.** Measured
   under the MIR engine for the first time: every rational and complex fixture
   passes with **zero** `cc` fallbacks, from one pure-Turmeric implementation

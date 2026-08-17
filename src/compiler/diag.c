@@ -284,6 +284,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0380_REFINE_TYPE_ARG_UNENFORCED: return "TUR-W0380";
         case TUR_E0381_WRITES_FRAME_INVALID:       return "TUR-E0381";
         case TUR_E0382_WRITES_FRAME_EXCEEDED:      return "TUR-E0382";
+        case TUR_W0383_READS_FRAME_OMITS_MUTABLE:  return "TUR-W0383";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
@@ -442,6 +443,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0380") == 0) return TUR_W0380_REFINE_TYPE_ARG_UNENFORCED;
     if (strcmp(s, "TUR-E0381") == 0) return TUR_E0381_WRITES_FRAME_INVALID;
     if (strcmp(s, "TUR-E0382") == 0) return TUR_E0382_WRITES_FRAME_EXCEEDED;
+    if (strcmp(s, "TUR-W0383") == 0) return TUR_W0383_READS_FRAME_OMITS_MUTABLE;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
@@ -1597,6 +1599,34 @@ static const DiagExplanation diag_explanations_[] = {
       "Only a body with no inline C is checked.  An inline-C body cannot be\n"
       "walked, so its frame stays trusted-with-declaration and never reports\n"
       "this code -- checked-when-checkable, never checked-by-pretending.\n" },
+    { TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+      "TUR-W0383: `#reads` frame omits mutable state the body reads\n"
+      "\n"
+      "A measure declared `#reads <param>` promises that the named parameter\n"
+      "is the only mutable state it depends on.  The promise is TRUSTED, not\n"
+      "checked, and it pays out in proofs: inside a `frozen` region the\n"
+      "refinement solver treats two calls of the measure as one value and\n"
+      "elides the caller-side crossing check.\n"
+      "\n"
+      "This body also reads a mutable global, which the frame cannot name --\n"
+      "so the promise is broken as written:\n"
+      "\n"
+      "    (def ^mut fudge 1)\n"
+      "    (defn alive? [^borrow w : World e : int] #reads w : bool\n"
+      "      (> fudge 0))   ;; TUR-W0383: reads `fudge`, frame says only `w`\n"
+      "\n"
+      "Another function can `set!` the global between two calls the solver\n"
+      "proved identical, and the elided check will not catch it -- the program\n"
+      "silently crosses on a predicate that is false.  The measure's own\n"
+      "internal safety check (if it has one) still runs; only the caller-side\n"
+      "proof is unearned.\n"
+      "\n"
+      "Fix it by threading the state through a parameter the frame can name,\n"
+      "or by making the global immutable.  Only a demonstrable read warns:\n"
+      "an inline-C body yields no evidence and stays silent, and today the\n"
+      "warning does not change what is proved.  A later, gated step may\n"
+      "refuse the congruence override on this evidence -- see\n"
+      "docs/upcoming/mutable-globals-plan.md section 12.3.\n" },
     { TUR_W0373_REFINE_NONLINEAR,
       "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
       "\n"

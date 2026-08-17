@@ -1,0 +1,7 @@
+(gc-auto!) resolves to a native C runtime implementation, which the
+tree-walking interpreter cannot run ("inline-C not supported in interpreter
+mode").  The TI7 inline-c carve-out in run-turi.sh cannot auto-detect this
+fixture because the native code is behind the builtin form, not a ```c block
+in the fixture or a one-level (load ...) -- hence this explicit marker.
+What the fixture pins (a graduated experiment's --enable is a TUR-W0063
+no-op, not TUR-E0310) is asserted on the compiled path by run.sh.
