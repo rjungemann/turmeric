@@ -11,16 +11,36 @@ by sabotage measurement the same day:
   `207 207`) -- so the DictBind path is what carries the return-directed
   shapes now, which is exactly this plan's retirement criterion.  Deleted
   with the measurement recorded at its former definition in eval.c.
-- **`gde_reresolve_method` (receiver-directed) STAYS, at reduced load**:
-  2 fixtures rely on it, down from 5 after the plain-constrained dict path
-  landed (below, same day).  The remaining two (generic-show-dispatch-opaque,
-  string-slice) use the `[^Show a]` defn spelling, which registers NO
-  TypeConstraint on the FnDef -- the caret token is misparsed into a
-  KIND_ARROW type param named after the class (see
-  docs/reported/caret-constraint-vector-not-registered.md) -- so there is
-  no constraint metadata for the apply-time dict push to read.  Retiring
-  the heuristic now needs that parse gap fixed (a ~66-file blast radius),
-  not more turi work.
+- **`gde_reresolve_method` (receiver-directed) is RETIRED, 2026-08-17.**
+  The 2026-08-16 measurement had it at 2 reliant fixtures, both using the
+  `[^Show a]` defn spelling that registered no TypeConstraint (the caret
+  token was misparsed into a KIND_ARROW type param named after the class).
+  Fixing that parse gap
+  (docs/archive/caret-constraint-vector-not-registered.md) gave the dict
+  push its missing input; two follow-on mechanisms then closed the last
+  reliers found by re-sabotage:
+  - **tyvar-keyed DictBinds**: `map-show-loop [^Show K ^Show V]` pushes a
+    Show dictionary for EACH of K and V, and the dispatch site keys the
+    lookup by its own tyvar name (`frame_lookup_dict_tyvar`).  The interim
+    class-only key handed V's dictionary to a K-directed method -- map keys
+    rendered via the value instance -- caught by
+    tests/turi/show-collection-elems.c under sabotage.
+  - **by-name canonical-class retry in the push**: after a `#lang` reader
+    switch the constraint's TypeClass pointer is a dead registry's copy, so
+    every pointer-keyed lookup misses; the push re-resolves the class BY
+    NAME (unique per program) and retries, keeping the DictBind keyed on
+    the original pointer the body's baked dict_arg carries.  This absorbs
+    the heuristic's `tc_stale` arm
+    (docs/archive/lang-switch-breaks-generic-instance-resolution.md),
+    caught by tur_repl_smoke's reader-switch scenarios under sabotage.
+
+  Final measurement with the heuristic disabled: run-turi 1794/0, all 28
+  interpreter-side ctest targets green (repl smoke + show-collection
+  included), hand-run constrained/hkt family green.  Deleted with the
+  record at its former definition in eval.c.  Residual risk consciously
+  accepted: the heuristic's duplicate-typeclass instance-by-name retry had
+  no measurable reliance (the by-name CLASS retry covers the same shapes
+  more precisely).
 - **`gde_reresolve_method_by_value` STAYS**: 1 fixture
   (constrained-generic-instance-vec-element-unascribed).  The receiver's
   ELABORATED type is the collapsed int carrier (the unascribed-carrier
@@ -28,8 +48,10 @@ by sabotage measurement the same day:
   either; only the runtime tag knows the element type.  Retiring it needs
   the elaboration to keep the tyvar (see the archived
   unascribed-carrier-helper report), not more turi work.
-- **map-show seeding STAYS** (tests/turi/show-collection-elems.c passes;
-  auto-show element rendering does not go through dict clones at all).
+- **map-show seeding STAYS -- reclassified, not superseded**: the seeding
+  (frame_bind_instance_constraint_tyvars from the retained result Type in
+  turi_try_show) is the PIN SOURCE the dict push reads on the C auto-show
+  tier; the dict path consumes it rather than replacing it.
 
 **Plain constrained generics LANDED, 2026-08-16** -- the extension the
 first measurement prescribed.  `frame_bind_constraint_dicts` (eval.c): at

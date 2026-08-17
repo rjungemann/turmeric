@@ -4294,17 +4294,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * machinery is reached below. */
     const Form *constraint_forms[8];
     uint8_t n_constraint_forms = 0;
+    /* caret-constraint-vector-not-registered: `^Class binder` pairs collected
+     * from the defn TYPE-PARAM vector (`(defn f [^Show a] [x : a] ...)`).
+     * Previously `^Show` was silently minted as a KIND_ARROW type parameter
+     * named after the class and NO TypeConstraint existed anywhere, so
+     * call-site discharge and the interpreter's apply-time dict binding never
+     * saw the obligation.  Materialized into constraint_list next to the
+     * middle-vector constraints below. */
+    TypeClass    *tpv_con_class[MAX_FN_CONSTRAINTS];
+    const Symbol *tpv_con_binder[MAX_FN_CONSTRAINTS];
+    uint8_t       n_tpv_cons = 0;
     if (call->as.list.len > name_idx + 2 &&
         call->as.list.items[name_idx + 1]->tag == F_VEC &&
         call->as.list.items[name_idx + 2]->tag == F_VEC) {
         Form *type_params_f = call->as.list.items[name_idx + 1];
-        if (type_params_f->as.list.len > 8) {
-            diag_emit(DIAG_ERROR, type_params_f->span,
-                      "defn: too many type parameters (max 8)");
-            return NULL;
-        }
-        n_fn_type_params = (uint8_t)type_params_f->as.list.len;
-        for (uint8_t i = 0; i < n_fn_type_params; i++) {
+        /* Classes awaiting their binder: `^Show ^Eq a` constrains `a` twice. */
+        TypeClass *tpv_pending[MAX_FN_CONSTRAINTS];
+        uint8_t    n_tpv_pending = 0;
+        for (uint32_t i = 0; i < type_params_f->as.list.len; i++) {
             Form *tp = type_params_f->as.list.items[i];
             if (tp->tag != F_SYM) {
                 diag_emit(DIAG_ERROR, tp->span,
@@ -4320,24 +4327,107 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * validation (check_row_type_arg_kind) and uses in `#row{...}`
              * elements both see kind [*]. */
             if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '&') {
+                if (n_fn_type_params >= 8) {
+                    diag_emit(DIAG_ERROR, tp->span,
+                              "defn: too many type parameters (max 8)");
+                    return NULL;
+                }
                 const Symbol *bare = symtab_intern(e->st,
                     strslice(psym->name + 2, psym->len - 2));
-                fn_type_params[i] = bare;
-                fn_type_param_kinds[i] = KIND_TYPEROW;
+                fn_type_params[n_fn_type_params] = bare;
+                fn_type_param_kinds[n_fn_type_params] = KIND_TYPEROW;
+                n_fn_type_params++;
             } else if (psym->len > 1 && psym->name[0] == '^') {
+                /* An UPPERCASE name after the caret that resolves to a defined
+                 * typeclass is a constraint on the NEXT binder symbol -- the
+                 * type-param-vector spelling of the params-vector `^Class`
+                 * annotation (elab_defn's pending_constraints path below).  An
+                 * unknown uppercase name keeps the legacy behavior (a
+                 * higher-kinded type parameter) rather than erroring. */
+                if (psym->name[1] >= 'A' && psym->name[1] <= 'Z') {
+                    const Symbol *tc_sym = symtab_intern(e->st,
+                        strslice(psym->name + 1, psym->len - 1));
+                    TypeClass *tc = typeclass_env_lookup_typeclass(
+                        &e->typeclass_env, tc_sym);
+                    if (tc) {
+                        if (n_tpv_pending >= MAX_FN_CONSTRAINTS) {
+                            diag_emit(DIAG_ERROR, tp->span,
+                                      "defn: too many class constraints (max %d)",
+                                      MAX_FN_CONSTRAINTS);
+                            return NULL;
+                        }
+                        tpv_pending[n_tpv_pending++] = tc;
+                        continue;
+                    }
+                }
                 /* MB2 (constrained-hkt-forall-mode-b-plan): a `^f` type parameter
                  * is higher-kinded (`* -> *`), the defn analog of the
                  * `(defclass Functor [^f] ...)` marker -- so the body may use it
                  * applied as `(f a)`.  Strip the caret; annotations reference the
                  * bare name.  (Higher arities via `^^f` are not needed yet.) */
+                if (n_fn_type_params >= 8) {
+                    diag_emit(DIAG_ERROR, tp->span,
+                              "defn: too many type parameters (max 8)");
+                    return NULL;
+                }
                 const Symbol *bare = symtab_intern(e->st,
                     strslice(psym->name + 1, psym->len - 1));
-                fn_type_params[i] = bare;
-                fn_type_param_kinds[i] = KIND_ARROW;
+                fn_type_params[n_fn_type_params] = bare;
+                fn_type_param_kinds[n_fn_type_params] = KIND_ARROW;
+                n_fn_type_params++;
             } else {
-                fn_type_params[i] = psym;
-                fn_type_param_kinds[i] = KIND_STAR;
+                /* Bare symbol: a type parameter.  Deduplicate --
+                 * `[^Hash K ^MapKey K V]` names K twice -- and derive the
+                 * binder's kind from a pending class's own param kind, so an
+                 * HKT class constraint yields an arrow-kinded binder. */
+                bool already = false;
+                for (uint8_t k = 0; k < n_fn_type_params; k++)
+                    if (fn_type_params[k] == psym) { already = true; break; }
+                if (!already) {
+                    Kind bk = KIND_STAR;
+                    for (uint8_t p = 0; p < n_tpv_pending && bk == KIND_STAR; p++) {
+                        const TypeClass *ptc = tpv_pending[p];
+                        if (!ptc->type_param_kinds) continue;
+                        for (uint8_t k = 0; k < ptc->n_type_params; k++)
+                            if (ptc->type_param_kinds[k] != KIND_STAR) {
+                                bk = KIND_ARROW;
+                                break;
+                            }
+                    }
+                    if (n_fn_type_params >= 8) {
+                        diag_emit(DIAG_ERROR, tp->span,
+                                  "defn: too many type parameters (max 8)");
+                        return NULL;
+                    }
+                    fn_type_params[n_fn_type_params] = psym;
+                    fn_type_param_kinds[n_fn_type_params] = bk;
+                    n_fn_type_params++;
+                }
+                for (uint8_t p = 0; p < n_tpv_pending; p++) {
+                    if (n_tpv_cons >= MAX_FN_CONSTRAINTS) {
+                        diag_emit(DIAG_ERROR, tp->span,
+                                  "defn: too many class constraints (max %d)",
+                                  MAX_FN_CONSTRAINTS);
+                        return NULL;
+                    }
+                    tpv_con_class[n_tpv_cons]  = tpv_pending[p];
+                    tpv_con_binder[n_tpv_cons] = psym;
+                    n_tpv_cons++;
+                }
+                n_tpv_pending = 0;
             }
+        }
+        /* A dangling `^Class` with no following binder keeps the legacy
+         * meaning: a higher-kinded type parameter named after the class. */
+        for (uint8_t p = 0; p < n_tpv_pending; p++) {
+            if (n_fn_type_params >= 8) {
+                diag_emit(DIAG_ERROR, type_params_f->span,
+                          "defn: too many type parameters (max 8)");
+                return NULL;
+            }
+            fn_type_params[n_fn_type_params] = tpv_pending[p]->name;
+            fn_type_param_kinds[n_fn_type_params] = KIND_ARROW;
+            n_fn_type_params++;
         }
         params_idx = name_idx + 2;
 
@@ -4485,6 +4575,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         constraint_list = new_list;
         n_constraints = n_constraint_forms;
+    }
+
+    /* caret-constraint-vector-not-registered: materialize the `^Class binder`
+     * pairs collected from the type-param vector, in the same layout as the
+     * middle-vector constraints above -- type_arg resolves later from the
+     * call site; `tyvar` carries the binder for constraint-driven dispatch
+     * and the interpreter's apply-time dict binding. */
+    if (n_tpv_cons > 0) {
+        uint8_t new_count = (uint8_t)(n_constraints + n_tpv_cons);
+        TypeConstraint *new_list = (TypeConstraint *)arena_alloc(e->arena,
+            new_count * sizeof(TypeConstraint));
+        if (constraint_list && n_constraints > 0)
+            memcpy(new_list, constraint_list,
+                   n_constraints * sizeof(TypeConstraint));
+        for (uint8_t ci = 0; ci < n_tpv_cons; ci++) {
+            new_list[n_constraints + ci].typeclass       = tpv_con_class[ci];
+            new_list[n_constraints + ci].type_arg        = TYPE_UNKNOWN;
+            new_list[n_constraints + ci].param_idx       = -1;
+            new_list[n_constraints + ci].tyvar           = tpv_con_binder[ci];
+            new_list[n_constraints + ci].return_resolved = false;
+        }
+        constraint_list = new_list;
+        n_constraints = new_count;
     }
 
     /* Phase G3: Equality constraint env built from (: a T) param items */

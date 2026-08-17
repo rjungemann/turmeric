@@ -1,6 +1,31 @@
 # `[^Class a]` defn type-param vector registers no typeclass constraint
 
-**Severity:** medium (expressiveness/metadata hole; behavior is currently
+**RESOLVED 2026-08-17**, same-day as filed, by the fix direction below:
+`elab_defn`'s type-param-vector branch now treats an uppercase `^Name` that
+resolves to a defined typeclass as a constraint on the NEXT binder symbol
+(mirroring the params-vector distinction), materialized into the same
+`constraint_list` the middle-vector form uses.  An unknown uppercase name
+and a dangling trailing `^Class` keep the legacy higher-kinded-param
+meaning, so nothing that compiled before errors now.  The feared blast
+radius did not materialize: the genuinely two-vector corpus was 12 files
+(8 fixtures + 4 stdlib), the rest of the ~66 matches were single-vector
+spellings already handled by the params-vector path, and both suites plus
+all interpreter-side ctest targets pass unchanged (compiled stays
+monomorphized -- the dict-clone rerouting in elab_call.c is gated to
+higher-kinded constraints).  Binder kind is derived from the class's own
+type-param kinds, and binders are deduplicated (`[^Hash K ^MapKey K V]`).
+Pinned by `tests/fixtures/constrained-caret-two-tyvar-dict/` (both
+engines).
+
+Registering the constraints was the missing input for the interpreter's
+apply-time dict path, and retired `gde_reresolve_method` outright -- see
+docs/upcoming/turi-dict-passing-plan.md for the measurement record,
+including the two mechanisms that had to ride along (tyvar-keyed DictBinds
+for `[^Show K ^Show V]`, and a by-name canonical-class retry in the dict
+push for the session-reset case the heuristic's `tc_stale` arm used to
+carry).
+
+**Severity:** medium (expressiveness/metadata hole; behavior was
 rescued by the ABI specializer + turi recovery heuristics)
 
 ## Summary

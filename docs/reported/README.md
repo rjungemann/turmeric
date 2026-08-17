@@ -229,7 +229,17 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [caret-constraint-vector-not-registered](caret-constraint-vector-not-registered.md) | medium | the `[^Class a]` defn spelling (~66 files) registers NO TypeConstraint -- the class name becomes a bogus KIND_ARROW type param -- so call-site discharge and turi's constraint-dict path never see the obligation; dispatch survives only via ABI specs + gde heuristics |
+
+`caret-constraint-vector-not-registered` was resolved 2026-08-17, the day
+after filing, and moved to
+[docs/archive](../archive/caret-constraint-vector-not-registered.md). The
+`[^Class a]` defn type-param-vector spelling now registers real
+TypeConstraints (uppercase `^Name` resolving to a defined class constrains
+the next binder; unknown names keep the legacy HKT-param meaning). The
+archived note corrects the filing's blast-radius estimate -- only 12 of the
+~66 matched files were genuinely the broken two-vector shape -- and records
+that this was the missing input that let the interpreter's constraint-dict
+path retire `gde_reresolve_method` entirely.
 
 `lsp-completion-internal-symbols` was resolved 2026-08-05 (a
 `Binding.is_synthesized` bit filtered in the LSP collector) and moved to

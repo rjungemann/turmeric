@@ -1,0 +1,27 @@
+;; constrained-caret-two-tyvar-dict -- the `[^Class a]` type-param-vector
+;; spelling registers REAL TypeConstraints (one per `^Class binder` pair), and
+;; two same-class constraints on different tyvars dispatch through their own
+;; dictionaries.
+;;
+;; Pins two fixes at once:
+;; - caret-constraint-vector-not-registered (docs/archive/): `^Code` here used
+;;   to be silently misparsed as a higher-kinded type param named `Code`, with
+;;   no constraint metadata anywhere.
+;; - the tyvar-keyed DictBind (turi-dict-passing-plan): under the interpreter,
+;;   `[^Code A ^Code B]` pushes a Code dictionary for EACH of A and B; the
+;;   dispatch site's own tyvar picks the right one.  A class-only key handed
+;;   B's dictionary to an A-directed method (this is how map keys once
+;;   rendered via the value instance's Show).
+(defclass Code [a] (code [x : a] : int))
+(definstance Code [int]   (code [x] 1))
+(definstance Code [cstr]  (code [x] 2))
+(definstance Code [float] (code [x] 3))
+
+(defn pair-code [^Code A ^Code B] [x : A y : B] : int
+  (+ (* 10 (code x)) (code y)))
+
+(defn main [] : int
+  (println (pair-code "s" 7.1))   ;; 23: cstr then float
+  (println (pair-code 7.1 "s"))   ;; 32: float then cstr
+  (println (pair-code 4 4))       ;; 11: int both
+  0)
