@@ -4,7 +4,7 @@
 > in the execution environment (no `emcc`); see [§6 Execution record](#6-execution-record).
 > **Type:** Web playground / `src/lsp` / WASM glue
 > **Related:** [`lsp-client-gaps-plan.md`](lsp-client-gaps-plan.md) (executed),
-> [`try-turmeric-lang-toggle-plan.md`](../upcoming/try-turmeric-lang-toggle-plan.md)
+> [`try-turmeric-lang-toggle-plan.md`](try-turmeric-lang-toggle-plan.md)
 
 ## 0. Summary
 

@@ -540,6 +540,7 @@ const char *turi_wasm_lang_registry(void) {
         buf_puts(&b, "}");
     }
     buf_puts(&b, "]}");
+    buf_putc(&b, '\0');   /* Buf does not NUL-terminate; strdup needs it */
 
     cached = turi_wasm_strdup(b.data ? b.data : "{\"bases\":[],\"layers\":[]}");
     buf_free(&b);

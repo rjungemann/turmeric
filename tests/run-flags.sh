@@ -942,6 +942,53 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# try-turmeric-lang-toggle-plan T0: #lang layer toggle + canonical reader name
+# ---------------------------------------------------------------------------
+
+# lang-layer-toggle-off: within ONE interpreter session, `#lang turmeric
+# stringed` must activate the #s"..." dispatch and a later `#lang turmeric`
+# must genuinely deactivate it (the layer set is assigned, not accumulated,
+# and turi_env_apply_lang wipes the session reader-macro registry). Before
+# the fix the second #s"..." kept reading as a String.
+out=$(printf '#lang turmeric stringed\n#s"on"\n#lang turmeric\n#s"off"\n:quit\n' \
+      | "$TUR" repl 2>&1); rc=$?
+if ! echo "$out" | grep -q '=> "on"'; then
+    fail "lang-layer-toggle-off" "stringed layer did not activate (#s\"on\" not evaluated)"
+elif echo "$out" | grep -q '=> "off"'; then
+    fail "lang-layer-toggle-off" "#s\"...\" still dispatched after the layer was dropped"
+elif ! echo "$out" | grep -q "unknown reader string macro '#s'"; then
+    fail "lang-layer-toggle-off" "expected an unknown-reader-macro error once stringed is off"
+else
+    pass "lang-layer-toggle-off"
+fi
+
+# reader-name-canonical: reader_type_name(READER_SWEET) reports the canonical
+# slash-namespaced spelling; the legacy `sweet-exp` alias is accepted on
+# input but never generated, so the round-trip is stable.
+out=$(printf '#lang sweet-exp\n#lang turmeric/sweet\n:quit\n' | "$TUR" repl 2>&1); rc=$?
+if ! echo "$out" | grep -q "; reader set to turmeric/sweet (session reset)"; then
+    fail "reader-name-canonical" "legacy alias did not report canonical 'turmeric/sweet'"
+elif ! echo "$out" | grep -q "; reader already set to turmeric/sweet"; then
+    fail "reader-name-canonical" "canonical spelling not recognized as the same reader"
+elif echo "$out" | grep -q "reader (set to\|already set to) sweet-exp"; then
+    fail "reader-name-canonical" "legacy 'sweet-exp' spelling was generated"
+else
+    pass "reader-name-canonical"
+fi
+
+# lang-layer-same-set-no-reset: repeating the SAME base+layer line must not
+# reset the session (turi_env_apply_lang is a no-op when nothing changes).
+out=$(printf '#lang turmeric stringed\n(def keep 41)\n#lang turmeric stringed\n(+ keep 1)\n:quit\n' \
+      | "$TUR" repl 2>&1); rc=$?
+if ! echo "$out" | grep -q "; reader already set to turmeric"; then
+    fail "lang-layer-same-set-no-reset" "identical #lang line was not treated as a no-op"
+elif ! echo "$out" | grep -q "=> 42"; then
+    fail "lang-layer-same-set-no-reset" "binding did not survive an identical #lang line"
+else
+    pass "lang-layer-same-set-no-reset"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

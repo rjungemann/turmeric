@@ -1363,6 +1363,36 @@ set_target_properties(tur_lsp_wasm_backend_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# ---------------------------------------------------------------------------
+# try-turmeric-lang-toggle-plan T0/T1: the browser's language-mode entry
+# points (turi_wasm_set_lang / get_lang / lang_registry), run natively via
+# libturi_wasm for the same reason as the analysis backend above -- nothing
+# in wasm_glue.c is actually wasm-specific, and inside a wasm module nothing
+# in CI can look at it.
+# ---------------------------------------------------------------------------
+add_executable(tur_wasm_glue_lang_unit
+    ${CMAKE_SOURCE_DIR}/tests/wasm_glue_lang_unit.c
+)
+target_include_directories(tur_wasm_glue_lang_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_wasm_glue_lang_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_wasm_glue_lang_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_wasm_glue_lang_unit PRIVATE libturi_wasm m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_wasm_glue_lang_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_wasm_glue_lang_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Injective name-mangler round-trip + injectivity unit test
 # (reversible-name-mangling-plan, task T2).
 add_executable(tur_mangle_unit

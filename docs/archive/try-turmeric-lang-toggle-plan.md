@@ -1,9 +1,23 @@
 # Try Turmeric: visual `#lang` picker
 
-> **Status:** proposed (2026-07-29)
+> **Status:** implemented (2026-08-17); proposed 2026-07-29
 > **Type:** Web playground / `#lang` plumbing
 > **Related:** [`lang-layers-plan.md`](lang-layers-plan.md),
-> [`try-turmeric-lsp-plan.md`](../archive/try-turmeric-lsp-plan.md)
+> [`try-turmeric-lsp-plan.md`](try-turmeric-lsp-plan.md)
+>
+> **Implementation notes:** all four phases landed. Beyond the plan: the
+> §2.2 fix went deeper than assigning `env->lang_layers` -- the persistent
+> session reader-macro registry retained a dropped layer's `#`-dispatch, so
+> the honest switch (`turi_env_apply_lang` in `src/turi/env.c`) also
+> re-initializes the registry; the REPL's `#lang` handler had the same bug
+> and now shares the helper. `refined` graduated (2026-08-01) between
+> proposal and implementation, so `stringed` is the only layer the picker
+> currently renders; the experimental-chip / unavailable-row handling (§3.3)
+> is implemented generically against the registry export for future
+> semantic layers. C-side assertions live in `tests/run-flags.sh`
+> (`lang-layer-toggle-off`, `reader-name-canonical`,
+> `lang-layer-same-set-no-reset`); the UI spec is
+> `web/tests/lang-picker.spec.js`.
 
 ## 0. Summary
 
