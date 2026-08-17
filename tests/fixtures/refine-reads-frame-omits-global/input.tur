@@ -32,11 +32,17 @@
 ;; warning-first per section 13.1) landed -- `alive?` now draws TUR-W0383 at
 ;; its definition, asserted via expected.stderr.  The program still prints 7:
 ;; the override still grants the proof and the crossing check is still
-;; elided, because the warning reports the broken promise without yet
-;; refusing it.  If the gated refusal step ever lands, THIS fixture should
-;; stop proving (the crossing becomes TUR-W0372).  That would be the fix
-;; landing, not a regression.  Update it deliberately; do not "repair" it
-;; back to silence.
+;; elided, because the warning reports the broken promise without refusing
+;; it BY DEFAULT.
+;;
+;; The refusal exists now, behind `--enable=checked-reads` (R2 of
+;; docs/upcoming/trusted-refinement-claims-plan.md):
+;; errors/r2-checked-reads-refuses-broken-frame runs THIS program under the
+;; gate plus --strict-refine and pins the crossing becoming an undischarged
+;; TUR-W0372.  This fixture deliberately stays gate-off, pinning the default:
+;; trusted grant, warning, program prints 7.  If `checked-reads` ever
+;; graduates, this fixture is the one that flips -- fold the two together
+;; then, deliberately; do not "repair" either back toward the other.
 (load "stdlib/refine.tur")
 
 (def ^mut fudge 1)

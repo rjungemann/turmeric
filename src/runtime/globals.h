@@ -284,6 +284,15 @@ extern bool g_opt_write_frames;
  * With it off, G1's rule stands: any global write blocks VERIFIED, silently. */
 extern bool g_opt_global_state;
 
+/* `checked-reads` experiment (docs/upcoming/trusted-refinement-claims-plan.md,
+ * R2): on positive evidence that a `#reads` measure's body reads a mutable
+ * global (the same evidence TUR-W0383 reports gatelessly), REFUSE the
+ * congruence override instead of merely warning -- the crossing then gets the
+ * ordinary TUR-W0372 an unframed impure measure gets.  Refusal keys on "saw a
+ * read", never on "could not see": an inline-C body yields no evidence and
+ * keeps today's trusted behaviour even with the gate on. */
+extern bool g_opt_checked_reads;
+
 /* `jit-ffi` experiment (docs/upcoming/jit-ffi-c2mir-plan.md, F3): the
  * `(unsafe (call-ptr p [T1 T2 -> R] args...))` form -- call an arbitrary
  * function pointer with a signature stated at the site.  Gated because the

@@ -9,6 +9,8 @@
 
 #include "refine_collect.h"
 
+#include "../runtime/globals.h"   /* g_opt_checked_reads (R2) */
+
 #include <stdio.h>
 #include <stdlib.h>   /* getenv -- TUR_REFINE_NO_DISCHARGE test seam */
 #include <string.h>
@@ -466,7 +468,15 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
      * is never elided (this proof elides the caller-side crossing check, not
      * the safety check) -- see docs/guides/stateful-refinements-guide.md.  It
      * never turns a proof INTO impurity, so it cannot lose an existing one. */
+    /* R2 (trusted-refinement-claims-plan, `--enable=checked-reads`): refuse
+     * the grant on positive evidence that the frame omits mutable state the
+     * body reads (TUR-W0383's finding, carried on the resolved info).  The
+     * measure then encodes fresh-per-occurrence like any unframed impure
+     * callee, and the crossing gets the ordinary TUR-W0372.  Keys on "saw a
+     * read", never "could not see" -- an unwalkable (inline-C) body carries
+     * no evidence and keeps the trusted grant even under the gate. */
     if (!pure && info.reads_param_plus1 != 0 &&
+        !(g_opt_checked_reads && info.reads_omits_mut_global) &&
         enc_reads_arg_frozen(E, f, info.reads_param_plus1))
         pure = true;
 

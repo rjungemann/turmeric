@@ -406,6 +406,17 @@ worth reporting even before any decision to refuse it. An inline-C body
 yields no evidence and stays silent, so every measure from before mutable
 globals existed is unaffected. `tur --explain TUR-W0383` has the full story.
 
+Behind `--enable=checked-reads`, the same evidence **refuses the override**:
+the measure encodes fresh-per-occurrence like any unframed impure callee, the
+crossing that used to be proved from the broken promise becomes `TUR-W0372`
+(with wording that says the frame failed, not the region -- the "guard it
+inside a `frozen` region" advice would be misleading when the region is
+present), and `--strict-refine` makes it a hard error. Refusal keys on "saw a
+read", never "could not see", so an inline-C measure keeps the trusted grant
+even under the gate. See
+[`trusted-refinement-claims-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/trusted-refinement-claims-plan.md)
+(R2).
+
 ## Quick reference
 
 | you have | you want | use |

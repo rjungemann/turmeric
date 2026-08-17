@@ -737,8 +737,11 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
                                                           : b->type.kind);
 
     /* C2 / #reads: publish the read-frame param so the encoder can grant
-     * congruence when that argument is frozen at the call site. */
-    out->reads_param_plus1 = b->reads_param_plus1;
+     * congruence when that argument is frozen at the call site.  R2: the
+     * broken-promise evidence rides along so `--enable=checked-reads` can
+     * refuse the grant. */
+    out->reads_param_plus1      = b->reads_param_plus1;
+    out->reads_omits_mut_global = b->reads_omits_mut_global;
 
     /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
      * CHECKED.  A consumer that acts on the frame (WF3, WF4) must gate on
@@ -900,6 +903,28 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f) {
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
         if (rt_pred_reads_measure(e, f->as.list.items[i])) return true;
+    return false;
+}
+
+/* R2 (`--enable=checked-reads`): same walk, narrowed to a `#reads` measure
+ * carrying broken-frame evidence (reads_omits_mut_global) -- i.e. one whose
+ * congruence grant the encoder will refuse under the gate.  Feeds only the
+ * W0372 wording at the crossing, so the "guard it inside a `frozen` region"
+ * advice is not given for a crossing where the region is present and the
+ * FRAME is what failed. */
+static bool rt_pred_reads_measure_refused(Elab *e, const Form *f) {
+    if (!f) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head->tag == F_SYM && head->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        if (rt_resolve_fn(e, head->as.sym->name, &info) &&
+            info.reads_param_plus1 != 0 && info.reads_omits_mut_global)
+            return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_reads_measure_refused(e, f->as.list.items[i])) return true;
     return false;
 }
 
@@ -3142,6 +3167,10 @@ void refine_resolve_call_sites(Elab *e) {
             bool reads_crossing = rt_pred_reads_measure(e, pred);
             ob->runtime_guarded = !reads_crossing;
             ob->reads_no_runtime = reads_crossing;
+            /* R2: only consulted for the W0372 wording; computed only when
+             * the crossing is a #reads one at all and the gate is on. */
+            ob->reads_grant_refused = reads_crossing && g_opt_checked_reads &&
+                                      rt_pred_reads_measure_refused(e, pred);
             bool inst_ok = refine_discharge_one(ob, e->arena);
 
             /* Reading B + lint: the obligation above is the resolved INSTANCE's,
@@ -7309,22 +7338,35 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * fact and changes nothing proved; escalating to refusing the override is
      * a later, gated step.  The bare_fat guard keeps a monomorphization clone
      * from repeating its original's warning. */
-    if (reads_param_plus1_defn != 0 && body && !e->bare_fat_spec_active) {
+    if (reads_param_plus1_defn != 0 && body) {
         uint32_t scan_budget = 4096;
         const Binding *gb = reads_scan_mut_global(body, &scan_budget);
         if (gb && gb->name) {
-            const Binding *rp = params[reads_param_plus1_defn - 1];
-            diag_emit_with_code(DIAG_WARNING,
-                                reads_annot_defn ? reads_annot_defn->span
-                                                 : name_f->span,
-                                TUR_W0383_READS_FRAME_OMITS_MUTABLE,
-                                "`#reads %s` omits mutable state the body reads: "
-                                "the mutable global '%s' can change between two "
-                                "calls this frame lets the solver treat as one "
-                                "value; thread the state through a parameter the "
-                                "frame can name, or make the global immutable",
-                                (rp && rp->name) ? rp->name->name : "?",
-                                gb->name->name);
+            /* R2 (trusted-refinement-claims-plan): the evidence is stamped on
+             * EVERY elaboration of the defn -- clones included -- because the
+             * encoder's refusal must see it whichever binding a call resolves
+             * to.  Only the WARNING is deduped by the bare_fat guard below. */
+            b->reads_omits_mut_global = true;
+            /* The refusal is the experiment's behaviour, so its lifecycle
+             * warning fires where the refusal becomes live: evidence found
+             * AND the gate on.  A gate enabled over a clean program stays
+             * quiet -- it changed nothing. */
+            if (g_opt_checked_reads)
+                experiment_warn_if_used("checked-reads");
+            if (!e->bare_fat_spec_active) {
+                const Binding *rp = params[reads_param_plus1_defn - 1];
+                diag_emit_with_code(DIAG_WARNING,
+                                    reads_annot_defn ? reads_annot_defn->span
+                                                     : name_f->span,
+                                    TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                    "`#reads %s` omits mutable state the body reads: "
+                                    "the mutable global '%s' can change between two "
+                                    "calls this frame lets the solver treat as one "
+                                    "value; thread the state through a parameter the "
+                                    "frame can name, or make the global immutable",
+                                    (rp && rp->name) ? rp->name->name : "?",
+                                    gb->name->name);
+            }
         }
     }
     /* WF1 / #writes: same placement rationale as `#reads` -- a write frame is

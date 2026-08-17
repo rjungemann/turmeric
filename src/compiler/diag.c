@@ -1623,10 +1623,12 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix it by threading the state through a parameter the frame can name,\n"
       "or by making the global immutable.  Only a demonstrable read warns:\n"
-      "an inline-C body yields no evidence and stays silent, and today the\n"
-      "warning does not change what is proved.  A later, gated step may\n"
-      "refuse the congruence override on this evidence -- see\n"
-      "docs/upcoming/mutable-globals-plan.md section 12.3.\n" },
+      "an inline-C body yields no evidence and stays silent, and by default\n"
+      "the warning does not change what is proved.  Under\n"
+      "`--enable=checked-reads` the same evidence REFUSES the congruence\n"
+      "override, so the crossing must be proven some other way (TUR-W0372,\n"
+      "an error under --strict-refine) -- see\n"
+      "docs/upcoming/trusted-refinement-claims-plan.md.\n" },
     { TUR_W0373_REFINE_NONLINEAR,
       "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
       "\n"

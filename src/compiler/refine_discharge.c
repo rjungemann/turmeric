@@ -497,7 +497,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                                 "refinement on %s could not be decided statically "
                                 "(%s); %s",
                                 what, reason ? reason : "outside the supported fragment",
-                                ob->reads_no_runtime
+                                ob->reads_grant_refused
+                                  ? "no runtime fallback for an impure #reads "
+                                    "measure, and its congruence grant was refused "
+                                    "(--enable=checked-reads): the frame omits "
+                                    "mutable state the body reads (TUR-W0383) -- "
+                                    "fix the frame, not the region"
+                                : ob->reads_no_runtime
                                   ? "no runtime fallback for an impure #reads "
                                     "measure -- the crossing must be proven (guard "
                                     "it inside a `frozen` region)"
@@ -619,7 +625,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                                     TUR_W0372_REFINE_UNKNOWN,
                                     "solver returned unknown for the refinement on %s; "
                                     "%s", what,
-                                    ob->reads_no_runtime
+                                    ob->reads_grant_refused
+                                      ? "no runtime fallback for an impure #reads "
+                                        "measure, and its congruence grant was refused "
+                                        "(--enable=checked-reads): the frame omits "
+                                        "mutable state the body reads (TUR-W0383) -- "
+                                        "fix the frame, not the region"
+                                    : ob->reads_no_runtime
                                       ? "no runtime fallback for an impure #reads "
                                         "measure -- the crossing must be proven (guard "
                                         "it inside a `frozen` region)"

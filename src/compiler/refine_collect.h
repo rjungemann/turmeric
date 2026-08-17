@@ -88,6 +88,12 @@ typedef struct RefineFnInfo {
      * body is impure.  Sound only because the callee's own entry check is never
      * elided; see docs/guides/stateful-refinements-guide.md. */
     uint32_t     reads_param_plus1;
+    /* R2 (trusted-refinement-claims-plan): positive evidence the `#reads`
+     * frame above is broken (the body directly reads a mutable global).
+     * Mirrors Binding.reads_omits_mut_global.  Consulted only under
+     * `--enable=checked-reads`, where it refuses the congruence grant; false
+     * means "no evidence", never "verified clean". */
+    bool         reads_omits_mut_global;
     /* WF1/WF2 / #writes: this callee's declared write frame, mirroring the
      * Binding fields of the same names.  `writes_declared` distinguishes "the
      * frame is empty" from "there is no frame" -- see expr.h.  WF3 uses these
@@ -175,6 +181,12 @@ typedef struct RefineObligation {
      * kept".  When set, runtime_guarded is false (the crossing is proof-only)
      * and the W0372 text branches to the no-fallback wording. */
     bool         reads_no_runtime;
+    /* R2 (`--enable=checked-reads`): the `#reads` measure this crossing
+     * depends on carries broken-frame evidence and the gate is on, so the
+     * congruence grant was REFUSED.  Only refines the W0372 wording: "guard
+     * it inside a `frozen` region" is misleading advice when the crossing IS
+     * frozen and the frame is what failed. */
+    bool         reads_grant_refused;
     /* A speculative probe (RT4 template inference): decide it, report nothing,
      * count nothing.  The caller only wants the verdict. */
     bool         speculative;

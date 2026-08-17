@@ -4,8 +4,9 @@
 > mutable-globals work, exactly where
 > [`mutable-globals-plan.md`](mutable-globals-plan.md) section 14 said it
 > should be: after G2 landed, from findings that came out of doing that work
-> rather than from guessing at them.  R1 (the warning) landed the same day
-> this was written; R2+ are unscheduled.
+> rather than from guessing at them.  **R1 (the warning) and R2 (the gated
+> refusal, `--enable=checked-reads`) LANDED 2026-08-17** (see section 4).
+> R3 waits on a real two-resource measure; R4 belongs to the ECS/spice side.
 > **Type:** Language / refinement checking
 > **Depends on:** nothing.  Section 14 of the mutable-globals plan is explicit
 > that the read side blocks nothing and must not become a precondition.
@@ -124,7 +125,7 @@ anything outside this plan.
 
 See 1.4.  Remaining follow-through lives in R2's fixture note.
 
-### R2 -- the gated refusal
+### R2 -- the gated refusal (LANDED 2026-08-17; see section 4)
 
 Escalate positive evidence from "warn" to "refuse the congruence override":
 when `reads_scan_mut_global` (or its R2 extension) finds an outside mutable
@@ -172,3 +173,63 @@ is a pointer, not work.
 - **A per-heap-location `reads` clause** (Dafny-style footprints).  The
   coarse per-argument shape is the language's chosen slice; refining it below
   argument granularity is research, not a phase.
+
+## 4. R2 execution record (2026-08-17)
+
+**Landed**, behind `--enable=checked-reads`.  `tests/run.sh` -> 2618 passed,
+0 failed; `tests/run-turi.sh` green.  No fixture snapshot moved and the nine
+strict-refine `#reads` fixtures are byte-identical under the gate (checked by
+running two of them with `--enable=checked-reads` added; the fixture below
+pins the property structurally).
+
+### 4.1 Shape
+
+Exactly the sketch above, plus one addition it did not anticipate:
+
+- `Binding.reads_omits_mut_global` is stamped where the frame is stamped, on
+  **every** elaboration of the defn (clones included) -- the encoder's
+  refusal must see the evidence whichever binding a call resolves to.  Only
+  the W0383 *warning* is deduped by the bare_fat guard.  The flag mirrors
+  onto `RefineFnInfo` in `rt_resolve_fn`.
+- The refusal itself is three lines in `refine_collect.c`:
+  `!(g_opt_checked_reads && info.reads_omits_mut_global)` conjoined into the
+  existing grant condition.  Refusal keys on positive evidence only, so the
+  "could not see" discipline the sketch worried about needs no new
+  tri-state yet: the walk never reports "saw" for an unwalkable body, and
+  nothing consults its silence as a verdict.
+- `experiment_warn_if_used("checked-reads")` fires where the refusal becomes
+  live -- evidence found AND gate on -- so enabling the gate over a clean
+  program stays quiet (it changed nothing).
+- **The addition: honest W0372 wording at a refused crossing.**  The
+  standard impure-`#reads` message says "guard it inside a `frozen` region",
+  which is misleading advice when the region is present and the *frame* is
+  what failed.  A `reads_grant_refused` flag on the obligation (computed by
+  a narrowed sibling of `rt_pred_reads_measure`) branches the message to
+  "its congruence grant was refused (--enable=checked-reads): the frame
+  omits mutable state the body reads (TUR-W0383) -- fix the frame, not the
+  region".  Both W0372 emission sites branch.
+
+### 4.2 Fixtures
+
+- `errors/r2-checked-reads-refuses-broken-frame` -- the
+  `refine-reads-frame-omits-global` program under
+  `--enable=checked-reads --strict-refine`: the crossing that proves by
+  default is an undischarged hard error, with the refusal wording asserted.
+- `r2-checked-reads-inline-c-still-trusted` -- the
+  `refine-stateful-guard-discharges` program (inline-C measure, frozen
+  region, strict) with the gate ADDED: still proves, still prints 42.  Pins
+  no-refusal-without-evidence; its header names the failure mode it guards
+  against (refusal acting on "could not see").
+- `refine-reads-frame-omits-global` deliberately stays gate-off and pins the
+  default (trusted grant + W0383 + prints 7); its header now points at the
+  errors sibling and says the two fold together if `checked-reads`
+  graduates.
+
+### 4.3 What R3/R4 inherit
+
+Unchanged.  R3 still waits on a real measure over two frozen resources; R4
+still belongs to the measure layer.  If `checked-reads` graduates, the
+default flips from "trusted grant + warning" to "refusal on evidence" -- the
+sweep at that point is the fixture fold-together above plus retiring the
+gate language in stateful-refinements-guide.md and the TUR-W0383 --explain
+text.

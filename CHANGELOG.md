@@ -15,9 +15,19 @@ All notable changes to Turmeric are documented here.
   positive evidence of the broken promise (a direct read of a `^mut` global in
   the elaborated body) without yet refusing the override. An inline-C body
   yields no evidence and stays silent, so every pre-existing measure is
-  unaffected. `tur --explain TUR-W0383` has the full story; the gated
-  refuse-the-override step remains future work
-  (docs/upcoming/mutable-globals-plan.md section 12.3).
+  unaffected. `tur --explain TUR-W0383` has the full story.
+- **`--enable=checked-reads`: refuse the `#reads` congruence override on
+  broken-frame evidence.** The gated escalation of TUR-W0383: on the same
+  positive evidence (the measure's body directly reads a mutable global), the
+  refinement encoder declines the congruence grant, so a crossing that used to
+  be proved from the broken promise becomes an undischarged TUR-W0372 -- with
+  wording that says the *frame* failed, not the region ("fix the frame, not
+  the region"), since the usual "guard it inside a `frozen` region" advice is
+  misleading when the region is present. A hard error under `--strict-refine`.
+  Refusal keys on "saw a read", never "could not see": an inline-C measure --
+  essentially every measure that predates mutable globals -- carries no
+  evidence and keeps today's trusted behavior even with the gate on. R2 of
+  docs/upcoming/trusted-refinement-claims-plan.md.
 - **An execution engine can be selected per project.** `:engine "cc" | "jit" |
   "interp"` in `build.tur`, `--engine <name>` on the command line, or
   `TUR_ENGINE` in the environment, resolved in that precedence with `"cc"`
