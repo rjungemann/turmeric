@@ -52,6 +52,35 @@ if printf '%s' "$out" | grep -qE "$PATTERN"; then
     # See docs/archive/emitter-thunk-type-return-mismatch.md.
     if "${CC:-cc}" --version 2>/dev/null | grep -qi clang; then
         FN_PATTERN='through pointer to incorrect function type'
+        # Capability probe, pure C: not every clang can produce this report
+        # even in principle -- Apple clang (macOS CI) accepts
+        # -fsanitize=function but emits no instrumentation for C on arm64
+        # (upstream grew that in LLVM 17), so the canary would fail for a
+        # toolchain reason, not a disarm.  If a PLAIN-C mismatched call
+        # through a wrong-typed pointer produces no report, this clang
+        # cannot catch the class at all and run.sh's grep is supplementary
+        # there (exactly the GCC case): skip the leg.  Only a toolchain
+        # that trips on the probe but NOT on the tur-emitted canary is a
+        # broken ratchet.
+        cat > "$tmp/fnprobe.c" <<'C_EOF'
+#include <stdint.h>
+static int64_t helper(int64_t x) { return x; }
+typedef void (*wrong_fn)(void *);
+int main(void) {
+    wrong_fn f = (wrong_fn)(intptr_t)helper;
+    f((void *)0);
+    return 0;
+}
+C_EOF
+        probe_out=$("${CC:-cc}" -O0 -fsanitize=function "$tmp/fnprobe.c" \
+                     -o "$tmp/fnprobe.bin" -lm 2>&1)
+        probe_run=""
+        [ -x "$tmp/fnprobe.bin" ] && probe_run=$("$tmp/fnprobe.bin" 2>&1)
+        if ! printf '%s\n%s' "$probe_out" "$probe_run" | grep -q "$FN_PATTERN"; then
+            echo "fn-ptr ratchet SKIP: this clang produces no '$FN_PATTERN'" \
+                 "report even for plain C (unsupported target); leg skipped."
+            exit 0
+        fi
         cat > "$tmp/fncanary.tur" <<'TUR_EOF'
 (defn helper [x : int] : int x)
 (defn trip [] : nil
