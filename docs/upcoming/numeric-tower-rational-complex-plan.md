@@ -1,7 +1,8 @@
 # Rational and Complex numbers
 
-> **Status:** N0/N1/N2 landed (2026-07-29); N3 blocked on `tur jit` (J1),
-> N4 deferred by design
+> **Status:** N0/N1/N2 landed (2026-07-29); N3 UNBLOCKED (J1 landed
+> 2026-07-29, `tur jit <file>` exists behind `-DTUR_JIT=ON` +
+> `--enable=jit`) but not started; N4 deferred by design
 > **Type:** Language / stdlib / reader
 > **Hard constraint:** must run unchanged under `tur`, `turi`, and the
 > upcoming `tur jit` -- see [`jit-engine-plan.md`](jit-engine-plan.md)

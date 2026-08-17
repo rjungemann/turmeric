@@ -1,8 +1,11 @@
 # Plan: make `--interpret` use the dict clones the elaborator already builds
 
-**Status:** PIECES 1 AND 2 LANDED, 2026-08-16 -- for the rank-2 path, plus a
-compiled-path SIGSEGV the first probe found.  Step 4 is HALF done, decided
-by sabotage measurement the same day:
+**Status:** PIECES 1 AND 2 LANDED 2026-08-16 (rank-2 path, plus a
+compiled-path SIGSEGV the first probe found); plain constrained generics
+followed the same day, and the caret-constraint parse fix finished the job
+2026-08-17.  Step 4 is now MOSTLY done: two of the three recovery
+heuristics are retired on sabotage evidence, decided per the measurements
+below:
 
 - **`gde_reresolve_return_directed` is RETIRED.**  Disabled, the full
   interpreter corpus passes (run-turi 1793/0 plus the hand-run
