@@ -560,6 +560,19 @@ void turi_env_pin_prelude(TuriEnv *env);
  * set-lang entry point) previously open-coded and had to keep in sync. */
 void turi_env_reset_to_prelude(TuriEnv *env);
 
+/* Honest full language switch (try-turmeric-lang-toggle-plan T0): assign the
+ * base reader AND the complete layer set, resetting the session when either
+ * changes.  Unlike the inline `#lang` eval path (which unions layers turn by
+ * turn), the layer set here is the caller's total desired state, so a layer
+ * absent from `layers` genuinely turns OFF: the persistent session
+ * reader-macro registry is re-initialized (its arena storage is
+ * env-lifetime, reclaimed at teardown) and the still-active layers
+ * re-register their dispatches on the next read via
+ * lang_layers_apply_readers.  A no-op when nothing changes.  Used by the
+ * REPL `#lang` handler and the WASM set-lang entry point. */
+void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
+                         LangLayerSet layers);
+
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);
 

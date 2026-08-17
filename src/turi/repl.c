@@ -1580,13 +1580,12 @@ int turi_repl_run(bool watch_mode) {
                     fprintf(stderr, "unknown #lang layer: '%.*s'\n",
                             (int)bad_len, bad);
                 } else if (rt != env->reader_type || layers != env->lang_layers) {
-                    env->reader_type      = rt;
-                    env->lang_layers      = layers;
-                    /* Accumulated USER source may be incompatible with the new
-                     * reader, but the pinned stdlib preload is not: rewind to
-                     * the pin rather than emptying, or the next collection
-                     * literal fails as "unknown ... 'hamt-of'". */
-                    turi_env_reset_to_prelude(env);
+                    /* Full switch: rewinds to the pinned stdlib preload
+                     * (accumulated USER source may be incompatible with the
+                     * new reader, the preload is not) and wipes the session
+                     * reader-macro registry so a dropped layer's dispatch
+                     * genuinely turns off. */
+                    turi_env_apply_lang(env, rt, layers);
                     printf("; reader set to %s (session reset)\n", reader_type_name(rt));
                 } else {
                     printf("; reader already set to %s\n", reader_type_name(rt));

@@ -601,6 +601,26 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
     }
 }
 
+void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
+                         LangLayerSet layers) {
+    if (!env) return;
+    if (reader_type == env->reader_type && layers == env->lang_layers) return;
+    turi_env_reset_to_prelude(env);
+    /* Reader layers register `#`-dispatch macros into the persistent session
+     * registry (RM Q#5), and nothing unregisters them -- so an assignment
+     * that drops a layer must wipe the registry or the dispatch survives the
+     * switch (e.g. `#s"..."` kept reading as a String after `stringed` was
+     * turned off).  User macros registered by discarded session source go
+     * with it, which matches the reset semantics: the `#use-reader-macros`
+     * form that registered them is no longer part of the session either.
+     * The old entries' arena storage is env-lifetime and reclaimed at
+     * teardown, matching the interpreter's process-lifetime policy. */
+    if (env->reader_macros)
+        reader_macros_init(env->reader_macros, &env->sym_arena);
+    env->reader_type = reader_type;
+    env->lang_layers = layers;
+}
+
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {
     if (!env) return;
     /* Replace any image we currently OWN (a borrowed one is the prototype's to
