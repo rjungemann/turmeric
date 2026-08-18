@@ -2588,7 +2588,25 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
      * region's `(& w)` borrow is active); recovering it syntactically later
      * would risk treating an already-ended borrow as live.  A binding borrowed
      * here cannot be `^unique ^mut`-mutated (UT2) or `set!` (borrow-checked),
-     * so a `#reads`-it measure is a function of frozen state in this obligation. */
+     * so a `#reads`-it measure is a function of frozen state in this obligation.
+     *
+     * reads-grant-survives-callee-global-write: that argument is about LOCALS.
+     * A mutable GLOBAL is written by NAME rather than passed, so a callee can
+     * write one with no syntactic trace at the call site -- and the staleness
+     * scan that drops guard hypotheses (rt_collect_set_targets, via
+     * rt_push_cs_path_conds) walks only the CALLER body, so it never sees it.
+     * Borrowing a global does not stop that: `(& *g*)` followed by a callee's
+     * `(set! *g* ...)` compiles today.
+     *
+     * Publishing such a name here made the `#reads` grant believe a hypothesis
+     * over mutable global state, which is exactly what rt_collect_set_targets'
+     * own soundness note says never happens -- it leans on rt_classify_expr
+     * answering UNKNOWN for a read of any `is_mut` binding (pinned by
+     * errors/refine-impure-global-not-congruent).  That covers a global READ
+     * inside a predicate; it does not cover a global passed as the ARGUMENT of
+     * a `#reads` measure, which reaches congruence by a different door.
+     * Withholding mutable globals from the frozen set restores the invariant
+     * that note depends on. */
     cs->frozen_names = NULL;
     cs->n_frozen     = 0;
     {
@@ -2611,6 +2629,8 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                      * fixture pins.  Comparing to scope_lookup's innermost
                      * result closes it. */
                     if (scope_lookup(e->scope, b->name) != b) continue;
+                    /* A mutable global is never frozen -- see the note above. */
+                    if (b->is_global && b->is_mut) continue;
                     fn[k++] = b->name->name;
                 }
             if (k) { cs->frozen_names = fn; cs->n_frozen = k; }

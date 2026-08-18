@@ -165,8 +165,8 @@ needs deciding is whether globals share this mask or get a parallel one.
 
 The note above left "whether globals share this mask or get a parallel one"
 open. Researching it turned up a soundness bug in the **existing**
-single-parameter grant, filed as
-[`reads-grant-survives-callee-global-write`](../reported/reads-grant-survives-callee-global-write.md):
+single-parameter grant, filed and fixed as
+[`reads-grant-survives-callee-global-write`](reads-grant-survives-callee-global-write.md):
 a frozen GLOBAL can be written by a callee with no trace at the call site, so
 the congruence hypothesis is never invalidated and a refinement precondition
 that is false at the crossing gets statically proven.

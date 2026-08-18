@@ -1,5 +1,6 @@
 # The `#reads` congruence grant survives a callee's write to a frozen global
 
+**Status:** RESOLVED 2026-08-18.
 **Severity:** high (unsound -- a refinement precondition that is FALSE at the
 crossing is statically "proven", and the runtime entry check is suppressed for
 exactly these measures, so there is no backstop)
@@ -133,3 +134,54 @@ guarantee, and the only one worth having.
 Either way the global entry's *purpose* differs from the parameter entry's,
 which is one more argument for the parallel-field representation rather than a
 shared mask.
+
+## RESOLVED (2026-08-18)
+
+Took fix direction (1), and the investigation sharpened *why* it is the right
+one rather than merely the cheaper one.
+
+`rt_collect_set_targets` already carries a soundness note covering this exact
+territory. It concedes that its by-value argument is about locals and does not
+extend to globals, then argues the scan is sound anyway because **a hypothesis
+that depends on a mutable global is never believed** -- `rt_classify_expr`
+answers UNKNOWN for a read of any `is_mut` binding, which is the flag a `^mut`
+global carries. `errors/refine-impure-global-not-congruent` pins that.
+
+The note is right about a global READ inside a predicate. It does not cover a
+global passed as the **argument** of a `#reads` measure: that reaches
+congruence through `enc_reads_args_frozen`, a different door, and the frozen
+set was publishing mutable globals into it. So the invariant the note leans on
+was quietly false.
+
+The fix withholds a mutable global from the frozen set
+(`b->is_global && b->is_mut` in the frozen snapshot, `elab_fns.c`), restoring
+that invariant rather than adding a new rule alongside it. The note's own
+closing advice -- "widen the two together or not at all" -- is why fix
+direction (2) was not taken: routing `wf_fn_writes_global` into the path-cond
+staleness would *widen* what may be believed about globals, which is a
+deliberate feature decision, not a bug fix, and it contradicts the invariant
+until both sides move together.
+
+Verified in both directions: the repro now reports TUR-W0372, and the
+legitimate local cases (including the two-parameter frame from the
+multi-param work) still prove. Regression fixture
+`tests/fixtures/errors/refine-reads-frozen-global-callee-write/`, confirmed to
+print `7` -- the unsound behaviour -- against the pre-fix compiler.
+
+Suite: 2626 passed, 0 failed.
+
+### What this costs
+
+Freezing a mutable global now grants nothing. That is the correct default and
+matches the rest of the refinement system's treatment of mutable globals, but
+it does mean a `#reads` measure over global state can never discharge a
+crossing. If that capability is wanted later, fix direction (2) is the route
+-- and it should land together with whatever widens purity to admit a global
+read, per the standing "widen the two together" rule.
+
+### Consequence for the globals feature
+
+Unchanged from the filing, and now enforced by code rather than by intent: a
+`#reads [*cache*]` entry cannot grant congruence on the strength of a frozen
+region. Its semantics differ from a parameter entry's, which is a further
+argument for the parallel-field representation over a shared mask.
