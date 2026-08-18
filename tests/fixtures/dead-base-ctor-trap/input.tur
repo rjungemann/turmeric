@@ -1,0 +1,24 @@
+;; dead-base-thunk-chain-references-undefined-ctor -- pin for the trap
+;; stand-in that closes the -O0 link cliff.
+;;
+;; A generic fn returning a closure over a type application leaves a DEAD
+;; base thunk chain in the emitted C: base `pure` stores base `__fn_N`,
+;; whose body calls base `tcons`, whose body names the base `ctor_Cons` --
+;; a symbol that is never defined for a heap parametric ADT (only per-spec
+;; monomorphs like `ctor_Cons__int` exist).  Every live call routes through
+;; the per-spec clones (generic-closure-return-type-app Defect B), so `-O2`
+;; strips the chain -- but a hand `-O0` compile of `tur emit-c` output used
+;; to die at link with `undefined reference to ctor_Cons`.
+;;
+;; The emitter now registers each suffix-less base-ctor reference and
+;; flushes a static trap definition into the forward-decl band (before all
+;; bodies), so the emitted C is self-contained at any -O level.  The
+;; expected.c snapshot pins that trap definition; expected.stdout pins that
+;; the live spec-routed path still computes.  A genuinely live base-ctor
+;; call (a compiler defect -- it was an unconditional link error before)
+;; aborts loudly at runtime naming the ctor.
+(defn pure [A] [x : A] : (fn [] (Cons A))
+  (fn [] (tcons x (tnil))))
+(defn main [] : int
+  (println (thead ((pure 5))))
+  0)

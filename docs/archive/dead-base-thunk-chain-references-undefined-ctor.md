@@ -4,21 +4,31 @@
 `-O2`) dead-strips the chain and links clean; the cliff is only reachable by
 compiling `emit-c` output at `-O0` by hand, or by a (so far unobserved) live
 carrier-path invocation of the base generic.
-**Status:** OPEN, narrowed 2026-08-17.  The report's fix direction 2 (base-ctor
-forward declarations) landed -- and it was NOT merely cosmetic by then: clang
-16+ hard-errors on the implicit declaration, so under a clang toolchain the
-fixture failed to BUILD in the suite (found by the
-emitter-thunk-type-return-mismatch clang sweep, now archived).  The emitter
-(emit_expr.c, suffix-less ctor branch) now emits an extern carrier-convention
-forward declaration when a call names the base ctor of a HEAP parametric ADT --
-those never get a base definition, only per-spec clones; carrier-lowered
-parametric ADTs (Option/Result) DO define their base ctor, which is why the
-first cut's parametric-only gate broke `none` with a conflicting-types error.
-The compile is now clean on both toolchains and `-O2` links strip the dead
-chain as before.  What REMAINS open is exactly the `-O0` cliff below: the dead
-chain is still emitted, so a hand `-O0` link of `emit-c` output still dies on
-`undefined reference to ctor_Cons`.  Retiring that needs fix direction 1
-(suppress the dead base thunk chain's emission), which is unchanged.
+**Status:** FIXED 2026-08-18.  The `-O0` cliff is closed by a *narrowed* fix
+direction 1: instead of suppressing the dead chain's emission, the emitter
+gives the never-defined symbol itself a definition.  Each suffix-less
+reference to the base ctor of a heap parametric ADT registers on the emit
+context (`emit_note_dead_base_ctor`, both the n-arg and the previously
+uncovered 0-arg branch in `emit_expr.c`), and
+`emit_flush_dead_base_ctor_traps` flushes **static trap definitions**
+(fprintf + abort, naming the ctor) into the forward-decl band of both
+drivers (`emit_program` / per-TU `emit_implementation` in
+`emit_module.c`) -- before every function body, so no block-scope
+declaration is needed; the earlier extern forward decl (fix direction 2) is
+retired.  A hand `cc -O0` of `emit-c` output now links and runs
+(`tests/fixtures/dead-base-ctor-trap/` pins the trap in an `expected.c`
+snapshot plus the live spec-routed output).
+
+Why not suppress the chain (the original fix direction 1): a shell-result
+lifted thunk can be live-and-correct on the carrier path when its body never
+constructs the ADT directly (e.g. `(fn [] c)` returning a *captured*
+`(Cons A)` carrier) -- suppressing or trapping the thunk itself would turn
+that working path into an abort.  The trap-the-ctor shape cannot regress
+anything: every reference to the symbol was an unconditional
+`undefined reference` at link before, so the change only turns a dead symbol
+into a clean link, or a compiler-defect invocation (never observed) into a
+loud runtime abort instead of a link error.  Internal linkage keeps the
+per-TU stubs from colliding in project mode.
 **Found:** 2026-08-16, while verifying the `generic-closure-return-type-app`
 fix (residue of that fix, filed the day it landed).
 

@@ -362,6 +362,21 @@ typedef struct EmitCtx {
     const Binding **carrier_call_bindings;
     uint32_t        n_carrier_call_bindings;
     uint32_t        cap_carrier_call_bindings;
+    /* dead-base-thunk-chain-references-undefined-ctor (fix direction 1,
+     * narrowed): a HEAP parametric ADT never gets a base `ctor_X` definition
+     * (only per-spec monomorphs), yet the dead base generic thunk chain still
+     * emits suffix-less references to it -- `-O2` strips the chain, but a hand
+     * `-O0` compile of emit-c output died at link on the undefined symbol.
+     * Each such reference registers its mangled ctor name + arity here; the
+     * traps are flushed as static file-scope definitions into the
+     * forward-decl band (which precedes every function body), so the emitted
+     * C is fully self-contained at any -O level.  A genuinely live call --
+     * a compiler defect; it was an unconditional link error before -- now
+     * aborts loudly at runtime with the ctor named. */
+    char    **dead_base_ctor_names;
+    uint32_t *dead_base_ctor_arities;
+    uint32_t  n_dead_base_ctors;
+    uint32_t  cap_dead_base_ctors;
     const EmitAbiSpecialization *current_abi_specialization;
     const char *current_fn_ret_ctype;
     /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): set while
@@ -940,6 +955,13 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* ------------ emit_fns.c: function-definition emission ------------ */
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
+
+/* dead-base-thunk-chain-references-undefined-ctor: register a suffix-less
+ * reference to the (never-defined) base ctor of a heap parametric ADT, and
+ * flush the accumulated static trap definitions into a pre-body band.  See
+ * the EmitCtx.dead_base_ctor_* comment. */
+void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args);
+void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out);
 /* G4: reset the per-module shared-driver group registry. */
 void gs_reset_group_registry(void);
 

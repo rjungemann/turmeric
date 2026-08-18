@@ -279,10 +279,27 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 ## Soundness limits and UB
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [dead-base-thunk-chain-references-undefined-ctor](dead-base-thunk-chain-references-undefined-ctor.md) | low | **narrowed 2026-08-17**: base-ctor forward decls now emitted (was a hard clang-16 BUILD failure, not cosmetic), both toolchains compile clean; only the hand `-O0` link cliff remains -- the dead chain is still emitted and needs the suppression fix |
-| [frozen-region-aliasing-via-coercing-cast](frozen-region-aliasing-via-coercing-cast.md) | low | `::` can mint an alias past a `frozen` region; **addressed** behind `--enable=sealed-opaque`, open until that experiment graduates or is shelved |
+No open findings in this family.
+
+`dead-base-thunk-chain-references-undefined-ctor` was resolved 2026-08-18 and
+moved to
+[docs/archive](../archive/dead-base-thunk-chain-references-undefined-ctor.md).
+The hand `-O0` link cliff is closed by a narrowed fix direction 1: the
+never-defined base ctors of heap parametric ADTs now get **static trap
+definitions** flushed into the forward-decl band (fprintf + abort naming the
+ctor), so the emitted C is self-contained at any -O level; the dead chain is
+still emitted but harmless, and a genuinely live base-ctor call (a compiler
+defect -- previously an unconditional link error) aborts loudly at runtime
+instead.  Pinned by `tests/fixtures/dead-base-ctor-trap/` (expected.c
+snapshot + live output).  Deliberately NOT done: suppressing/trapping the
+dead base *thunk* itself -- a shell-result thunk returning a captured carrier
+value can be live-and-correct on the carrier path, and trapping it would
+regress that.
+
+`frozen-region-aliasing-via-coercing-cast` was archived when
+`sealed-opaque` graduated (2026-08-17) and lives at
+[docs/archive](../archive/frozen-region-aliasing-via-coercing-cast.md); the
+sealing that closes the `::` alias mint is now always-on.
 
 `emitter-thunk-type-return-mismatch` was resolved 2026-08-17 and moved to
 [docs/archive](../archive/emitter-thunk-type-return-mismatch.md), with a

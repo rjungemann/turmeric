@@ -195,6 +195,19 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`tur emit-c` output now links at `-O0`.** The dead base generic thunk
+  chain (a generic fn returning a closure over a type application, e.g.
+  `(fn [] (Cons A))`) referenced the base `ctor_X` of a heap parametric ADT,
+  a symbol that is never defined -- only per-spec monomorphs are.  `-O2`
+  dead-stripped the chain, but a hand `-O0` compile of `emit-c` output died
+  with `undefined reference to ctor_Cons`.  The emitter now flushes static
+  trap stand-ins (fprintf + abort naming the ctor) for those never-defined
+  base ctors into the forward-decl band, covering the n-arg and 0-arg ctor
+  branches and both drivers (whole-program and per-TU), so the emitted C is
+  self-contained at any -O level.  A genuinely live base-ctor call -- a
+  compiler defect, previously an unconditional link error -- now aborts
+  loudly at runtime instead
+  (docs/archive/dead-base-thunk-chain-references-undefined-ctor.md).
 - **A dynamic variable's `pthread_key_create` failure now aborts with a
   message instead of being ignored.** On `EAGAIN` (the process key budget --
   `PTHREAD_KEYS_MAX`, 1024 on glibc, one key per `defdynamic` plus one shared

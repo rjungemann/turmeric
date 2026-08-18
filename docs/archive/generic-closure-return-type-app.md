@@ -41,11 +41,12 @@ is sharp and easy to regress). Doc follow-up done in the same change:
 `docs/guides/logic-programming-guide.md`'s Backtrack Monad is now the
 parametric version, casts dropped, re-run before publishing.
 
-Known residue, filed the same day: the now-dead base thunk chain is still
-*emitted* and references the undefined base `ctor_Cons` -- harmless under the
-standard `-O2` pipeline (dead-stripped), a link error if the emitted C is
-compiled at `-O0`. See
-[docs/reported/dead-base-thunk-chain-references-undefined-ctor.md](../reported/dead-base-thunk-chain-references-undefined-ctor.md).
+Known residue, filed the same day and resolved 2026-08-18: the now-dead base
+thunk chain is still *emitted* and referenced the undefined base `ctor_Cons` --
+harmless under the standard `-O2` pipeline (dead-stripped), a link error if
+the emitted C was compiled at `-O0`.  Closed by static trap stand-ins for the
+never-defined base ctors, flushed into the forward-decl band. See
+[docs/archive/dead-base-thunk-chain-references-undefined-ctor.md](dead-base-thunk-chain-references-undefined-ctor.md).
 
 ## Defect A -- type application erased through a generic closure return type
 

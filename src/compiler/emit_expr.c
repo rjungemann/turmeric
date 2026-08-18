@@ -5465,6 +5465,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(suffix);
                 } else {
                     buf_printf(&out, "ctor_%s()", _mc);
+                    /* dead-base-thunk-chain-references-undefined-ctor: same
+                     * dead-chain shape as the n-arg branch below -- a
+                     * suffix-less 0-arg ctor of a heap parametric ADT names a
+                     * base symbol that is never defined.  Register the trap
+                     * stand-in so the reference compiles and links. */
+                    if (e->as.call_.ctor && e->as.call_.ctor->adt &&
+                        e->as.call_.ctor->adt->n_type_params > 0 &&
+                        e->as.call_.ctor->adt->is_heap) {
+                        emit_note_dead_base_ctor(ctx, _mc, 0);
+                    }
                 }
                 free(_mc);
                 buf_putc(&out, '\0');
@@ -6012,20 +6022,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * carrier-lowered parametric ADTs (Option/Result), whose
                      * base ctor exists.  Such a call is only reachable from
                      * the dead base generic thunk chain (every live path
-                     * routes to a spec), and `-O2` strips it, but the
-                     * reference must still COMPILE: clang 16+ hard-errors on
-                     * the implicit declaration.  Emit an extern forward
-                     * declaration in the carrier convention (base bodies are
-                     * carrier-typed); duplicates are legal C, and a genuinely
-                     * live call still fails loudly at link, which is the
-                     * desired behavior. */
+                     * routes to a spec).  Register it so a static trap
+                     * definition lands in the forward-decl band (before every
+                     * body, in the carrier convention -- base bodies are
+                     * carrier-typed): the call then compiles on clang 16+
+                     * (no implicit declaration) AND a hand -O0 compile of
+                     * emit-c output links clean, while a genuinely live call
+                     * -- a compiler defect -- aborts loudly at runtime. */
                     if (e->as.call_.ctor && e->as.call_.ctor->adt &&
                         e->as.call_.ctor->adt->n_type_params > 0 &&
-                        e->as.call_.ctor->adt->is_heap && ctx->file) {
-                        buf_printf(ctx->file, "int64_t ctor_%s(", _mc);
-                        for (uint32_t di = 0; di < e->as.call_.n_args; di++)
-                            buf_printf(ctx->file, "%sint64_t", di ? ", " : "");
-                        buf_puts(ctx->file, ");\n");
+                        e->as.call_.ctor->adt->is_heap) {
+                        emit_note_dead_base_ctor(ctx, _mc, e->as.call_.n_args);
                     }
                 }
                 free(_mc);
