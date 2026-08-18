@@ -740,7 +740,7 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * congruence when that argument is frozen at the call site.  R2: the
      * broken-promise evidence rides along so `--enable=checked-reads` can
      * refuse the grant. */
-    out->reads_param_plus1      = b->reads_param_plus1;
+    out->reads_params_mask      = b->reads_params_mask;
     out->reads_omits_mut_global = b->reads_omits_mut_global;
 
     /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
@@ -884,7 +884,7 @@ static bool rt_pred_is_impure(Elab *e, const Form *f) {
  *
  * Mirrors rt_pred_is_impure, but keys on the reads grant rather than impurity:
  * a measure declared `#reads w` resolves to a RefineFnInfo with a non-zero
- * reads_param_plus1.  rt_inject_param_checks uses this to skip the (impossible)
+ * reads_params_mask.  rt_inject_param_checks uses this to skip the (impossible)
  * runtime entry contract for such a param -- see the comment at its call site.
  *
  * The recursive walk matches a `#reads` measure anywhere in a compound
@@ -898,7 +898,7 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f) {
         RefineFnInfo info;
         memset(&info, 0, sizeof(info));
         if (rt_resolve_fn(e, head->as.sym->name, &info) &&
-            info.reads_param_plus1 != 0)
+            info.reads_params_mask != 0)
             return true;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
@@ -920,7 +920,7 @@ static bool rt_pred_reads_measure_refused(Elab *e, const Form *f) {
         RefineFnInfo info;
         memset(&info, 0, sizeof(info));
         if (rt_resolve_fn(e, head->as.sym->name, &info) &&
-            info.reads_param_plus1 != 0 && info.reads_omits_mut_global)
+            info.reads_params_mask != 0 && info.reads_omits_mut_global)
             return true;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
@@ -2588,7 +2588,25 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
      * region's `(& w)` borrow is active); recovering it syntactically later
      * would risk treating an already-ended borrow as live.  A binding borrowed
      * here cannot be `^unique ^mut`-mutated (UT2) or `set!` (borrow-checked),
-     * so a `#reads`-it measure is a function of frozen state in this obligation. */
+     * so a `#reads`-it measure is a function of frozen state in this obligation.
+     *
+     * reads-grant-survives-callee-global-write: that argument is about LOCALS.
+     * A mutable GLOBAL is written by NAME rather than passed, so a callee can
+     * write one with no syntactic trace at the call site -- and the staleness
+     * scan that drops guard hypotheses (rt_collect_set_targets, via
+     * rt_push_cs_path_conds) walks only the CALLER body, so it never sees it.
+     * Borrowing a global does not stop that: `(& *g*)` followed by a callee's
+     * `(set! *g* ...)` compiles today.
+     *
+     * Publishing such a name here made the `#reads` grant believe a hypothesis
+     * over mutable global state, which is exactly what rt_collect_set_targets'
+     * own soundness note says never happens -- it leans on rt_classify_expr
+     * answering UNKNOWN for a read of any `is_mut` binding (pinned by
+     * errors/refine-impure-global-not-congruent).  That covers a global READ
+     * inside a predicate; it does not cover a global passed as the ARGUMENT of
+     * a `#reads` measure, which reaches congruence by a different door.
+     * Withholding mutable globals from the frozen set restores the invariant
+     * that note depends on. */
     cs->frozen_names = NULL;
     cs->n_frozen     = 0;
     {
@@ -2611,6 +2629,8 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                      * fixture pins.  Comparing to scope_lookup's innermost
                      * result closes it. */
                     if (scope_lookup(e->scope, b->name) != b) continue;
+                    /* A mutable global is never frozen -- see the note above. */
+                    if (b->is_global && b->is_mut) continue;
                     fn[k++] = b->name->name;
                 }
             if (k) { cs->frozen_names = fn; cs->n_frozen = k; }
@@ -5611,7 +5631,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     bool defn_has_byval_attr = false;
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
-    uint32_t reads_param_plus1_defn = 0;
+    uint64_t reads_params_mask_defn = 0;
+    bool     reads_declared_defn    = false;
     const Form *reads_annot_defn = NULL;    /* for the W0383 diagnostic's span */
     /* WF1 / #writes: the write frame, captured here and stamped alongside.
      * `declared` is separate from the mask because an empty mask is a real
@@ -5667,12 +5688,42 @@ Expr *elab_defn(Elab *e, const Form *call) {
         Form *maybe = call->as.list.items[body_start];
         if (maybe->tag != F_LIST) break;
         if (maybe->fx_prov == (uint8_t)PROV_READS) {
-            const Form *psym = (maybe->as.list.len == 2)
-                                   ? maybe->as.list.items[1] : NULL;
-            if (!psym || psym->tag != F_SYM || !psym->as.sym) {
-                diag_emit(DIAG_ERROR, maybe->span,
-                          "#reads must name a parameter: `#reads <param>`");
-            } else {
+            /* multiple-reads-params: one frame per function, naming any number
+             * of parameters.  The two annotation slots exist so `#reads` and
+             * `#writes` may appear in either order, NOT so two `#reads` may --
+             * before TUR-E0024 the second silently overwrote the first, which
+             * handed the refinement solver a trusted claim the author never
+             * wrote.  `#writes` rejects its own duplicate the same way. */
+            if (reads_declared_defn) {
+                diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                    TUR_E0024_READS_FRAME_INVALID,
+                                    "duplicate `#reads` frame on this function; "
+                                    "name every read parameter in one "
+                                    "`#reads [...]`");
+            }
+            reads_declared_defn = true;
+            reads_annot_defn    = maybe;
+            if (maybe->as.list.len < 2) {
+                /* `#reads []` / `#reads` with no names.  Unlike `#writes []`,
+                 * which usefully asserts "writes nothing", an empty read frame
+                 * says exactly what omitting the annotation says -- and giving
+                 * one claim two spellings would give the encoder two ways to
+                 * ask the same question. */
+                diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                    TUR_E0024_READS_FRAME_INVALID,
+                                    "empty `#reads` frame; omit the annotation "
+                                    "to declare that a measure reads no "
+                                    "parameter's mutable state");
+            }
+            for (uint32_t ai = 1; ai < maybe->as.list.len; ai++) {
+                const Form *psym = maybe->as.list.items[ai];
+                if (!psym || psym->tag != F_SYM || !psym->as.sym) {
+                    diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                        TUR_E0024_READS_FRAME_INVALID,
+                                        "#reads must name parameters: "
+                                        "`#reads <param>` or `#reads [<param> ...]`");
+                    continue;
+                }
                 uint32_t found = 0;
                 for (uint32_t pi = 0; pi < n_params; pi++) {
                     if (params[pi] && params[pi]->name == psym->as.sym) {
@@ -5681,12 +5732,27 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     }
                 }
                 if (!found) {
-                    diag_emit(DIAG_ERROR, psym->span,
-                              "#reads names '%s', which is not a parameter of this function",
-                              psym->as.sym->name);
+                    diag_emit_with_code(DIAG_ERROR, psym->span,
+                                        TUR_E0024_READS_FRAME_INVALID,
+                                        "#reads names '%s', which is not a "
+                                        "parameter of this function",
+                                        psym->as.sym->name);
+                } else if (found - 1 >= 64) {
+                    /* The mask is 64 bits wide.  Reaching this needs a 65+
+                     * parameter function, which TUR-W0041 already flags. */
+                    diag_emit_with_code(DIAG_ERROR, psym->span,
+                                        TUR_E0024_READS_FRAME_INVALID,
+                                        "#reads cannot name '%s': only the "
+                                        "first 64 parameters can carry a read "
+                                        "frame",
+                                        psym->as.sym->name);
+                } else if (reads_params_mask_defn & (UINT64_C(1) << (found - 1))) {
+                    diag_emit_with_code(DIAG_ERROR, psym->span,
+                                        TUR_E0024_READS_FRAME_INVALID,
+                                        "#reads names '%s' twice",
+                                        psym->as.sym->name);
                 } else {
-                    reads_param_plus1_defn = found;
-                    reads_annot_defn       = maybe;
+                    reads_params_mask_defn |= (UINT64_C(1) << (found - 1));
                 }
             }
             body_start++;  /* skip past the #reads annotation */
@@ -7318,7 +7384,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     }
     /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
      * refinements, so this must not sit inside the block above. */
-    b->reads_param_plus1 = reads_param_plus1_defn;
+    b->reads_params_mask = reads_params_mask_defn;
     /* mutable-globals-plan section 12.3, warning tier (section 13.1): a
      * `#reads` frame is TRUSTED and its one consumer GRANTS congruence, so a
      * frame that omits mutable state the body reads buys proofs it has not
@@ -7329,7 +7395,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * fact and changes nothing proved; escalating to refusing the override is
      * a later, gated step.  The bare_fat guard keeps a monomorphization clone
      * from repeating its original's warning. */
-    if (reads_param_plus1_defn != 0 && body) {
+    if (reads_params_mask_defn != 0 && body) {
         uint32_t scan_budget = 4096;
         const Binding *gb = reads_scan_mut_global(body, &scan_budget);
         if (gb && gb->name) {
@@ -7345,7 +7411,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (g_opt_checked_reads)
                 experiment_warn_if_used("checked-reads");
             if (!e->bare_fat_spec_active) {
-                const Binding *rp = params[reads_param_plus1_defn - 1];
+                /* The frame may name several parameters, so render the whole
+                 * list -- quoting just the first would misreport which claim
+                 * is broken on a multi-param frame. */
+                char frame_txt[256];
+                size_t fo = 0;
+                frame_txt[0] = '\0';
+                for (uint32_t pi = 0; pi < n_params && pi < 64; pi++) {
+                    if (!(reads_params_mask_defn & (UINT64_C(1) << pi))) continue;
+                    const char *pn = (params[pi] && params[pi]->name)
+                                         ? params[pi]->name->name : "?";
+                    int wrote = snprintf(frame_txt + fo, sizeof(frame_txt) - fo,
+                                         "%s%s", fo ? " " : "", pn);
+                    if (wrote < 0 || (size_t)wrote >= sizeof(frame_txt) - fo) break;
+                    fo += (size_t)wrote;
+                }
                 diag_emit_with_code(DIAG_WARNING,
                                     reads_annot_defn ? reads_annot_defn->span
                                                      : name_f->span,
@@ -7355,7 +7435,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                     "calls this frame lets the solver treat as one "
                                     "value; thread the state through a parameter the "
                                     "frame can name, or make the global immutable",
-                                    (rp && rp->name) ? rp->name->name : "?",
+                                    frame_txt[0] ? frame_txt : "?",
                                     gb->name->name);
             }
         }

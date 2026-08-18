@@ -1,21 +1,45 @@
-;; ECS Phase I regression: a defsystem declaring :writes [Pos] that
-;; tries to write Vel via the cap-gated set-Vel! accessor fails to
-;; elaborate. Vel-write-cap is not bound in the body's scope because
-;; Vel was not declared in :writes -- the load-bearing v1 promise from
-;; docs/archive/history/ecs-defsystem-write-caps-not-enforced.md, now
-;; shipped.
+;; ECS Phase I regression: a defsystem declaring :writes [Pos] cannot reach a
+;; write capability for a component it did not declare. Vel-write-cap is not
+;; bound in the body's scope because Vel was not in :writes -- the load-bearing
+;; v1 promise from docs/archive/history/ecs-defsystem-write-caps-not-enforced.md.
+;;
+;; The world and its accessors are still declared here so the fixture keeps
+;; exercising the real defworld / defcomponent-accessors surface of the sibling
+;; ecs spice; only the system BODY is minimal.
+;;
+;; Why the body does not call set-Vel! (as it originally did, and as the spice's
+;; own tests/errors/defsystem-set-undeclared.tur still does): plain `defsystem`
+;; expands to `(defn <name>-impl [w : int] : nil ...)` and takes no world-type
+;; argument, so `w` is an untyped int, while the generated accessors take
+;; `^borrow w : GameWorld` -- a by-value struct. Bridging them needs
+;; `(:: w GameWorld)`, which is now TUR-E0295 ("cannot reinterpret by-value
+;; aggregate as a one-word carrier"). That diagnostic fires BEFORE the cap
+;; check, so an accessor-route body silently stops testing the thing this
+;; fixture exists to pin. `sized-defsystem` does take the world type and so can
+;; reach the accessor route; the spice covers that in
+;; tests/errors/sized-defsystem-undeclared-write.tur.
+;;
+;; See docs/archive/ecs-defsystem-writes-fixture-expects-old-spices.md.
 
 (defmodule ecs_defsystem_writes_unauthorized
   (export)
 
 (import ecs/entity  :refer [entity-index])
 (import ecs/storage :refer [dense-new])
-(import ecs/world   :refer [defworld defcomponent-accessors world-alloc-entity!])
+(import ecs/world   :refer [defcomponent defworld defcomponent-accessors
+                            world-alloc-entity!])
 (import ecs/system  :refer [System make-system system-run! defsystem])
 (import ecs/cap     :refer [WriteCap ReadCap make-write-cap make-read-cap use-cap!])
 
 (defstruct Pos [x : int y : int])
 (defstruct Vel [x : int y : int])
+
+;; E2d-P4: register each component's storage so (Storage C) projects to
+;; (Dense C) in the world struct field and the generated accessors. Without
+;; these the defworld expansion below fails on the associated type, and the
+;; cap check this fixture pins is never reached.
+(defcomponent Pos)
+(defcomponent Vel)
 
 (defworld GameWorld [Pos Vel])
 (defcomponent-accessors GameWorld Pos)
@@ -24,11 +48,11 @@
 (def Pos-cid 0)
 (def Vel-cid 1)
 
+;; Declares :writes [Pos], so the body has Pos-write-cap in scope but no
+;; Vel-write-cap.
 (defsystem rogue
-  []
-  [Pos]
-  (let [gw : GameWorld (:: w GameWorld)
-        e               (world-alloc-entity! (.gens gw))]
-    (set-Vel! Vel-write-cap gw (entity-index e) (make-struct Vel 0 0))))
+  []                          ;; :reads
+  [Pos]                       ;; :writes -- Vel is NOT declared
+  (use-cap! Vel-write-cap))   ;; ERROR: Vel-write-cap not in scope
 
 ) ;; end defmodule

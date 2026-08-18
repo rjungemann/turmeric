@@ -3226,6 +3226,28 @@ static bool needs_heap_join(const CTerm *t) {
                 CapSet _cs;
                 if (!collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &_cs))
                     return true;
+                /* cps-join-point-emits-invalid-assignment: the lifted frame fn
+                 * has NO enclosing join in scope -- only its own `__kont` (a
+                 * KK_RET delivery) and joins it defines itself.  A jbody that
+                 * delivers to an OUTER join (KK_VAR) therefore has nowhere to
+                 * go, and the emitter used to fall through to its
+                 * "unreachable when the term is well-formed" placeholders:
+                 * join_param() returned the literal "0", producing
+                 *
+                 *     0 = __t5;      <- not an lvalue
+                 *     goto L4;      <- label lives in the PARENT function
+                 *
+                 * This is the same closedness requirement the lifted
+                 * reset/handler bodies already carry (joins_closed_rec, whose
+                 * header comment states it); heap joins were simply never
+                 * checked against it.  Reject with a FRESH def set so any join
+                 * reference that escapes the jbody evicts the function to the
+                 * direct emitter. */
+                {
+                    uint32_t _jdef[CC_MAX_BOUND];
+                    if (!joins_closed_rec(t->as.letcont.jbody, _jdef, 0))
+                        return true;
+                }
                 return needs_heap_join(t->as.letcont.jbody);
             }
             return needs_heap_join(t->as.letcont.jbody)
@@ -6343,8 +6365,45 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          * cast through intptr_t so the store is a clean integer, not a
          * -Wint-conversion pointer->int assignment. */
         ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs ? rhs : "0");
-    } else
-        ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
+    } else {
+        /* cps-result-unbox-dropped: mirror the direct emitter's
+         * `init_carrier_to_byval` bridge (emit_expr.c, EX_LET).
+         *
+         * An inline-C defn whose result is a by-value ADT app -- `(Result T E)`
+         * / `(Option T)` under lowering -- is EMITTED as the int64 carrier (a
+         * malloc'd `tur_result_box_t *`), while the binder that receives it is
+         * declared as the by-value aggregate.  The direct emitter derefs the
+         * carrier into the aggregate at the initializer; this delegated path
+         * assigned it raw, so `cc` rejected
+         *
+         *   error: assigning to 'tur_adt_Result__T__E' from incompatible type
+         *          'int64_t'
+         *
+         * and every caller of a higher-order function (which is what forces the
+         * CPS transform) hit it.  Same gate as the direct site, so it is inert
+         * whenever the init already yields the aggregate. */
+        const char *bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty,
+                                            t->as.letraw.x.type);
+        Type init_bv = fn_body_tail_byvalue_carrier_type(ce->ctx, t->as.letraw.e);
+        bool bridged_ok = false;
+        if (rhs && bct && strcmp(bct, "int64_t") != 0 &&
+            strchr(bct, '*') == NULL &&
+            init_bv.kind != TY_UNKNOWN &&
+            !fn_body_tail_emits_byvalue_carrier_abi(ce->ctx, t->as.letraw.e)) {
+            int saved = ce->ctx->indent;
+            ce->ctx->indent = ce->indent;
+            char *br = emit_carrier_bridge(ce->ctx, ce->out, strdup(rhs),
+                                           CK_CARRIER, CK_CONCRETE, init_bv);
+            ce->ctx->indent = saved;
+            if (br) {
+                ce_line(ce, "%s = %s;", bn, br);
+                free(br);
+                bridged_ok = true;
+            }
+        }
+        if (!bridged_ok)
+            ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
+    }
     /* reap_env (cps_closure_env_freeable): a leaf-admitted, provably non-escaping
      * capturing closure whose heap fat-env the direct emitter did NOT free at
      * this leaf position (only emit_value(EX_LET) applies the scoped free).  The

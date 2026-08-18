@@ -744,6 +744,44 @@ char *emit_carrier_reinterpret(EmitCtx *ctx, char *val, const Type *t,
  * a call resolving to a concrete-by-value ABI specialization. */
 static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr, Type *out);
 
+/* result-block-value-double-unboxed: true when `t` is a LOWERED PARAMETRIC
+ * by-value product app -- `(Result H cstr)` -> `tur_adt_Result__H__cstr`,
+ * `(Box2 int cstr)` -> `tur_adt_Box2__int__cstr` -- which is held in C as a
+ * concrete by-value AGGREGATE, never the int64 carrier.
+ *
+ * This is a different question from `type_uses_carrier_abi`, and for this
+ * family the two are opposites.  `type_uses_carrier_abi` asks "does this ride
+ * the int64 carrier ABI"; such an app answers NO, via the
+ * `adt_app_is_byvalue_product` early-out.  A binding of that type therefore
+ * also gets `emit_byvalue_carrier_abi = false`, since that flag means "a
+ * CARRIER-ABI type that is, in this instance, held by-value".
+ *
+ * So a tail that is a bare var of such a type answered "no" to both, the
+ * if-branch merge in emit_if concluded the arm was a carrier producer, and
+ * bridged carrier->concrete over an already-concrete struct:
+ *
+ *   error: operand of type 'tur_adt_Result__H__cstr' where arithmetic or
+ *          pointer type is required
+ *
+ * Call-shaped tails escaped this because the call predicates above answer from
+ * the matched ABI spec instead; only a bare-var tail fell through.
+ *
+ * Restricted to TY_APP on purpose.  Extending it to a NON-parametric by-value
+ * product (a plain `defstruct Pt`, lowered to `tur_adt_Pt`) regresses 10
+ * fixtures -- the vec/map multiword-struct element paths and the assoc-type
+ * returns -- because such a product DOES need the carrier treatment at those
+ * seams, and reporting it as already-by-value suppresses a bridge it requires.
+ * The same bare-var-tail bug is therefore still reachable for a non-parametric
+ * product; closing it needs a predicate that distinguishes the two positions,
+ * not a broader type test.  See
+ * docs/reported/byvalue-product-tail-var-double-unboxed-nonparametric.md. */
+static bool type_is_byvalue_product_app(EmitCtx *ctx, Type t) {
+    Type rt = emit_resolve_type(ctx, t);
+    if (rt.kind != TY_APP) return false;
+    if (type_is_heap_adt(rt)) return false;
+    return adt_app_is_byvalue_product(rt);
+}
+
 static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
     if (!e) return false;
@@ -774,6 +812,14 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         if (!type_uses_carrier_abi(e->type)) return false;
         return call_returns_byvalue_aggregate(ctx, e);
     }
+    /* See type_is_byvalue_product_app: such a var answers "no" to
+     * type_uses_carrier_abi (correctly -- it is not a carrier) and carries
+     * emit_byvalue_carrier_abi = false (also correctly), yet is a concrete
+     * aggregate in C.  It must report true here or the caller deref-unboxes
+     * it.  Checked before the carrier guard, which would otherwise reject it. */
+    if (e->kind == EX_VAR && e->as.var.binding &&
+        type_is_byvalue_product_app(ctx, e->as.var.binding->type))
+        return true;
     if (!type_uses_carrier_abi(e->type)) return false;
     if (e->kind == EX_MAKE_STRUCT) return true;
     /* G3 (instance-method by-value struct-field receiver): post-#482 a by-value

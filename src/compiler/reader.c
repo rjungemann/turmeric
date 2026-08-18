@@ -948,11 +948,19 @@ static Form *read_fx_row(Reader *r) {
     return m;
 }
 
-/* C2 / #reads: `#reads <sym>` names a ^borrow parameter whose mutable state a
- * measure reads.  It sits at the effect-row position of a defn signature and is
- * consumed by elab_defn.  Returns `(reads <sym>)` stamped PROV_READS so the
- * signature walk distinguishes it from a body expression.  A read-frame is not
- * an effect row; see docs/guides/stateful-refinements-guide.md. */
+/* C2 / #reads: `#reads <sym>` or `#reads [<sym> ...]` names the ^borrow
+ * parameters whose mutable state a measure reads.  It sits at the effect-row
+ * position of a defn signature and is consumed by elab_defn.  Returns
+ * `(reads <sym> ...)` stamped PROV_READS so the signature walk distinguishes it
+ * from a body expression.  A read-frame is not an effect row; see
+ * docs/guides/stateful-refinements-guide.md.
+ *
+ * The bracketed form mirrors `#writes` below, for the same reason its comment
+ * gives: the annotation is followed by the return marker `:`, which reads as a
+ * symbol, so a greedy symbol run could not tell where the frame ends.  Unlike
+ * `#writes`, an EMPTY `#reads []` is rejected in elab_defn rather than here --
+ * "reads nothing" is the absence of the annotation, and spelling it two ways
+ * would give the solver two encodings of one claim. */
 static Form *read_reads_annot(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col  = r->col;
@@ -960,14 +968,27 @@ static Form *read_reads_annot(Reader *r) {
     advance(r); advance(r); advance(r);   /* '#' 'r' 'e' */
     advance(r); advance(r); advance(r);   /* 'a' 'd' 's' */
     skip_ws_and_comments(r);
-    Form *param = read_symbol_or_minus(r);   /* the parameter name */
-    if (!param) return NULL;                 /* error already emitted */
+    Form *vec = NULL;
+    Form *one = NULL;
+    if (peek(r) == '[') {
+        vec = read_seq(r, '[', ']', F_VEC,
+                       "unterminated #reads frame (missing ']')");
+        if (!vec) return NULL;               /* error already emitted */
+    } else {
+        one = read_symbol_or_minus(r);       /* the single parameter name */
+        if (!one) return NULL;               /* error already emitted */
+    }
+    uint32_t n = vec ? vec->as.list.len : 1;
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
     Form *head = form_sym(r->arena, span, symtab_intern(r->st, strslice("reads", 5)));
-    Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    Form **items = (Form **)arena_alloc(r->arena, (n + 1) * sizeof(Form *));
     items[0] = head;
-    items[1] = param;
-    Form *lst = form_list(r->arena, span, items, 2);
+    if (vec) {
+        for (uint32_t i = 0; i < n; i++) items[i + 1] = vec->as.list.items[i];
+    } else {
+        items[1] = one;
+    }
+    Form *lst = form_list(r->arena, span, items, n + 1);
     lst->fx_prov = (uint8_t)PROV_READS;
     return lst;
 }

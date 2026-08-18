@@ -44,8 +44,7 @@ the plan links. File a new repr cell there as well as here.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-
-*(No open repr cells -- the guide's open-cells table emptied 2026-08-16.)*
+| [byvalue-product-tail-var-double-unboxed-nonparametric](byvalue-product-tail-var-double-unboxed-nonparametric.md) | medium | residue of `result-block-value-double-unboxed`: a bare-var tail of a NON-parametric by-value product (`tur_adt_Pt`) is still deref-unboxed by the `emit_if` merge. Not widenable -- the same type rides the carrier at the vec/map element and assoc-type seams, so extending the type test regresses 10 named fixtures. Needs a position-sensitive predicate (the `emit_localvar_lookup_ctype` trick) moved to the merge site, where the arm's emitted text exists |
 
 `mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
 and fixed the same day, both defects along its own fix directions) and moved
@@ -240,6 +239,15 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 | Report | Severity | One line |
 | --- | --- | --- |
 
+`reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
+and moved to
+[docs/archive](../archive/reads-frame-cannot-name-multiple-params.md).
+`#reads` now takes `w` or `[w g ...]` like `#writes`; the backing field went
+from a single param index to a 64-bit mask. The congruence grant over a
+multi-parameter frame is CONJUNCTIVE -- every named parameter must be frozen
+-- which is the arm that had to be decided rather than refactored, and is
+pinned by a partial-frozen negative fixture so relaxing it fails loudly.
+
 `caret-constraint-vector-not-registered` was resolved 2026-08-17, the day
 after filing, and moved to
 [docs/archive](../archive/caret-constraint-vector-not-registered.md). The
@@ -280,6 +288,17 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 ## Soundness limits and UB
 
 No open findings in this family.
+
+`reads-grant-survives-callee-global-write` was filed and resolved 2026-08-18,
+and moved to
+[docs/archive](../archive/reads-grant-survives-callee-global-write.md).  The
+C2 `#reads` grant was publishing mutable globals into the frozen set, so a
+callee could write one by name with no trace at the call site and a
+refinement precondition false at the crossing was statically proven -- with
+no backstop, since the runtime entry check is suppressed for `#reads`
+measures.  Mutable globals are now withheld from the frozen set, restoring
+the invariant `rt_collect_set_targets`' own soundness note already depended
+on.
 
 `dead-base-thunk-chain-references-undefined-ctor` was resolved 2026-08-18 and
 moved to
@@ -338,7 +357,17 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ecs-defsystem-writes-fixture-expects-old-spices](ecs-defsystem-writes-fixture-expects-old-spices.md) | low | with `../turmeric-spices` present, `errors/ecs-defsystem-writes-unauthorized` fails: spices-HEAD `ecs/world.tur` errors during its own elaboration (Storage associated type), so the write-capability diagnostic the fixture pins is never reached; invisible without the optional checkout |
+
+`ecs-defsystem-writes-fixture-expects-old-spices` was resolved 2026-08-18 and
+moved to
+[docs/archive](../archive/ecs-defsystem-writes-fixture-expects-old-spices.md).
+Two layers: the fixture predated `defworld`'s `(defcomponent C)` storage
+registration, and -- once past that -- `defsystem` binds `w : int` while the
+generated accessors take `^borrow w : GameWorld`, so the fixture's
+`(:: w GameWorld)` bridge is now TUR-E0295 and fires before the cap check.
+The fixture's body became `(use-cap! Vel-write-cap)`, reaching its unchanged
+`expected.diag`. Note `ecs/world.tur` itself elaborates cleanly -- this was
+never a turmeric-vs-spice feature gap.
 
 `macos-jit-leg-intermittent-45min-hang` was resolved 2026-08-18 and moved to
 [docs/archive](../archive/macos-jit-leg-intermittent-45min-hang.md).  The

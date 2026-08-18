@@ -1,0 +1,56 @@
+;; SOUNDNESS REGRESSION FIXTURE -- reads-grant-survives-callee-global-write.
+;;
+;; The C2 `#reads` grant treats a frozen argument as pinned. For a LOCAL that
+;; holds: an in-function `set!` stales the guard hypothesis, and a callee
+;; cannot reach the local (turmeric passes by value, so even `^mut` cannot
+;; write the caller's slot). A mutable GLOBAL is written by NAME rather than
+;; passed, so a callee can write one with no syntactic trace at the call site
+;; -- and rt_collect_set_targets walks only the CALLER body, so it never sees
+;; it.
+;;
+;; Before the fix this compiled and printed 7: the guard proved `alive?` when
+;; n was 42, `sneaky` set n to 7 making `alive?` FALSE, and the crossing was
+;; taken anyway with its precondition violated. There is no backstop --
+;; rt_pred_reads_measure suppresses the runtime entry contract for exactly
+;; these measures, so the static proof was the only check.
+;;
+;; The fix withholds mutable globals from the frozen set, restoring the
+;; invariant rt_collect_set_targets' own soundness note leans on: a hypothesis
+;; over mutable global state is never believed. That note covers a global READ
+;; inside a predicate (errors/refine-impure-global-not-congruent); this covers
+;; a global passed as the ARGUMENT of a `#reads` measure, which reached
+;; congruence by a different door.
+;;
+;; The correct outcome is TUR-W0372 -- the crossing is not proven.
+(defstruct Wld [n : int])
+(def ^mut *g* (Wld 42))
+
+(defn wld-n [^borrow w : Wld] : int
+  (.n w))
+
+;; Opaque to the purity walk, but genuinely reads w's state: true iff n != 7.
+(defn alive? [^borrow w : Wld e : int] #reads w : bool
+  ```c
+  (void)e;
+  return __TUR_CNAME_wld-n__(w) != 7;
+  ```)
+
+(defn get-Pos! [^borrow w : Wld e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+;; Mutates the global. Nothing at the call site says so.
+(defn sneaky [] : int
+  (set! *g* (Wld 7))
+  0)
+
+(defn run [] : int
+  (let [__frz (& *g*)]           ;; frozen region over a GLOBAL
+    (if (alive? *g* 0)           ;; TRUE here (n = 42)
+      (do
+        (sneaky)                 ;; n becomes 7 -> alive? is now FALSE
+        (get-Pos! *g* 0))        ;; precondition violated AT the crossing
+      -1)))
+
+(defn main [] : int
+  (println (run))
+  0)

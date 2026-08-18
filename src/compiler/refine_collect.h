@@ -80,14 +80,19 @@ typedef struct RefineFnInfo {
      * VS_INT is the zero value, so a resolver that never touches this field
      * keeps the old behaviour. */
     VCSort       ret_sort;
-    /* C2 / #reads: 1-based index of the ^borrow parameter this measure reads
-     * the mutable state of (`#reads w`), or 0 for none.  When that argument at
-     * a call site is a value FROZEN in scope (a live borrow -- the `(& w)` a
-     * `frozen` region holds), the measure is a function of frozen state and its
-     * pure arguments, so the encoder may treat it as congruent even though its
-     * body is impure.  Sound only because the callee's own entry check is never
-     * elided; see docs/guides/stateful-refinements-guide.md. */
-    uint32_t     reads_param_plus1;
+    /* C2 / #reads: bitmask of the ^borrow parameters this measure reads the
+     * mutable state of (`#reads w` / `#reads [w g]`), bit i == param i, or 0
+     * for none.  When EVERY such argument at a call site is a value FROZEN in
+     * scope (a live borrow -- the `(& w)` a `frozen` region holds), the measure
+     * is a function of frozen state and its pure arguments, so the encoder may
+     * treat it as congruent even though its body is impure.
+     *
+     * The quantifier is the load-bearing part: one unfrozen named parameter is
+     * enough for two occurrences to denote different values, so the grant is
+     * conjunctive over the mask, never disjunctive.  Sound only because the
+     * callee's own entry check is never elided; see
+     * docs/guides/stateful-refinements-guide.md. */
+    uint64_t     reads_params_mask;
     /* R2 (trusted-refinement-claims-plan): positive evidence the `#reads`
      * frame above is broken (the body directly reads a mutable global).
      * Mirrors Binding.reads_omits_mut_global.  Consulted only under

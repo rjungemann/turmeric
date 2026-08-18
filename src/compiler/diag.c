@@ -316,6 +316,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
+        case TUR_E0023_BIND_VOID_EXPRESSION:      return "TUR-E0023";
+        case TUR_E0024_READS_FRAME_INVALID:       return "TUR-E0024";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
         case TUR_E0621_TUR_VERSION_BELOW_FLOOR:   return "TUR-E0621";
         case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
@@ -475,6 +477,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
+    if (strcmp(s, "TUR-E0023") == 0) return TUR_E0023_BIND_VOID_EXPRESSION;
+    if (strcmp(s, "TUR-E0024") == 0) return TUR_E0024_READS_FRAME_INVALID;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
     if (strcmp(s, "TUR-E0621") == 0) return TUR_E0621_TUR_VERSION_BELOW_FLOOR;
     if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
@@ -2215,6 +2219,61 @@ static const DiagExplanation diag_explanations_[] = {
       "code written against the beta surface keeps compiling.  The warning fires\n"
       "regardless of how the experiment was enabled -- there is no gate to\n"
       "silence it.\n",
+    },
+    /* multiple-reads-params */
+    { TUR_E0024_READS_FRAME_INVALID,
+      "TUR-E0024: malformed or duplicated `#reads` frame\n"
+      "\n"
+      "`#reads` names the `^borrow` parameters whose mutable state a measure\n"
+      "reads.  It takes one name or a vector, exactly like `#writes`:\n"
+      "\n"
+      "  (defn alive? [^borrow w : W e : int] #reads w : bool ...)        ; ok\n"
+      "  (defn f [^borrow w : W ^borrow g : G] #reads [w g] : bool ...)   ; ok\n"
+      "\n"
+      "Rejected shapes:\n"
+      "\n"
+      "  #reads w #reads g   two frames -- name every parameter in ONE frame\n"
+      "  #reads [w w]        a name repeated\n"
+      "  #reads [w zz]       a name that is not a parameter\n"
+      "  #reads []           an empty frame\n"
+      "\n"
+      "An empty frame is rejected where `#writes []` is allowed, because the two\n"
+      "annotations claim different things.  `#writes []` usefully asserts *this\n"
+      "body writes nothing*; an empty read frame says exactly what omitting the\n"
+      "annotation says, and one claim with two spellings gives the solver two\n"
+      "ways to ask the same question.\n"
+      "\n"
+      "A multi-parameter frame is CONJUNCTIVE where it matters: the congruence\n"
+      "grant applies only when EVERY named parameter is frozen at the call site.\n"
+      "One unfrozen parameter is enough for two occurrences of the measure to\n"
+      "denote different values, which is the crossing check the grant elides.\n",
+    },
+    /* let-binding-void-call-emits-invalid-c */
+    { TUR_E0023_BIND_VOID_EXPRESSION,
+      "TUR-E0023: cannot bind an expression of type :void\n"
+      "\n"
+      "A `let` binding names a value, and a `:void` expression does not produce\n"
+      "one -- there is nothing for the name to refer to, and the binding could\n"
+      "never be legally read.\n"
+      "\n"
+      "This usually comes up when sequencing a side effect inside a binding\n"
+      "list, which is natural to reach for when the `let` body has to end in a\n"
+      "particular value:\n"
+      "\n"
+      "  (let [buf (alloc-buf 32)\n"
+      "        _   (fill-buf! buf 32 255)]   ; :void -- rejected\n"
+      "    (check buf))\n"
+      "\n"
+      "Sequence it with `do` instead:\n"
+      "\n"
+      "  (let [buf (alloc-buf 32)]\n"
+      "    (do\n"
+      "      (fill-buf! buf 32 255)\n"
+      "      (check buf)))\n"
+      "\n"
+      "Or give the helper a return value it is useful to bind (a count, a\n"
+      "status, the buffer itself), which also lets it be threaded through a\n"
+      "binding list.\n",
     },
     /* exports-map-syntax-tighten-plan */
     { TUR_E0620_EXPORTS_FX_ROW,

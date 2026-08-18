@@ -710,6 +710,27 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         if (!init) { rc = -1; break; }
 
+        /* let-binding-void-call-emits-invalid-c: a `:void` init has no value to
+         * name.  Left to run, the emitter writes `void x = ...;` -- "variable
+         * has incomplete type 'void'", a cc error with no .tur attribution,
+         * several frames from anything the author wrote.  EVERY :void init
+         * fails that way today (checked: void defn call, while, println, and a
+         * non-first binding), so rejecting here breaks nothing that currently
+         * compiles -- it only moves the report to the binding that caused it.
+         *
+         * Sequencing a side effect in a binding list is a natural thing to
+         * reach for when the `let` body must end in a particular value (an
+         * `it` body that has to yield a bool, say), so the message names `do`
+         * as the fix rather than only stating the rule. */
+        if (init->type.kind == TY_NIL) {
+            diag_emit_with_code(DIAG_ERROR, init_form->span,
+                TUR_E0023_BIND_VOID_EXPRESSION,
+                "cannot bind '%s' to an expression of type :void; "
+                "sequence it with `do` instead of binding it",
+                name && name->name ? name->name : "_");
+            rc = -1; break;
+        }
+
         /* Verify the optional type annotation against the elaborated init type.
          * For now we compare TypeKind for the common primitive cases (int,
          * float, bool, cstr, nil/void, ptr) -- enough to reject obvious

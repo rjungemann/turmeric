@@ -357,15 +357,19 @@ struct Binding {
     const char        **refine_param_vars;
     const char        **refine_param_names;
     uint32_t            n_refine_params;
-    /* C2 / #reads: 1-based index of the ^borrow parameter whose mutable state
-     * this function's body reads (a `#reads w` annotation), or 0 for none.
-     * 1-based so a memset-zeroed Binding defaults to "no #reads" -- do NOT
-     * switch to a 0-based index without auditing every Binding allocation.
-     * The refinement encoder reads this to grant a measure congruence inside a
-     * frozen region; see docs/guides/stateful-refinements-guide.md. Stamped on
-     * the same forward-declared Binding as the refine_* fields, so it is
-     * visible to call sites elaborated before the defn. */
-    uint32_t            reads_param_plus1;
+    /* C2 / #reads: bitmask of the ^borrow parameters whose mutable state this
+     * function's body reads (`#reads w` or `#reads [w g]`), bit i == param i,
+     * or 0 for none.  A zeroed Binding therefore defaults to "no #reads".
+     * Parameters beyond bit 63 cannot be named (TUR-E0024); an arity that high
+     * is already a TUR-W0041 lint.
+     *
+     * Was a single 1-based index until 2026-08-18 -- see
+     * docs/archive/reads-frame-cannot-name-multiple-params.md.  The encoder
+     * grants a measure congruence inside a frozen region only when EVERY
+     * named parameter is frozen; see docs/guides/stateful-refinements-guide.md.
+     * Stamped on the same forward-declared Binding as the refine_* fields, so
+     * it is visible to call sites elaborated before the defn. */
+    uint64_t            reads_params_mask;
     /* R2 (trusted-refinement-claims-plan): positive evidence that this
      * function's `#reads` frame is broken -- the elaborated body directly
      * reads a mutable global the frame cannot name.  Stamped where the frame

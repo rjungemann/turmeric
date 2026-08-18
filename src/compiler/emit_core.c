@@ -3312,10 +3312,8 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
          * C names of module-local stdlib globals. */
         if (!matched && i + 14 <= len && memcmp(code + i, "__TUR_CNAME_", 12) == 0) {
             uint32_t name_start = i + 12;
-            uint32_t j = name_start;
-            while (j + 1 < len && !(code[j] == '_' && code[j+1] == '_')) j++;
-            if (j + 1 < len && code[j] == '_' && code[j+1] == '_' && j > name_start) {
-                uint32_t name_len = j - name_start;
+            uint32_t name_len = tur_cname_name_len(code, len, name_start);
+            if (name_len > 0) {
                 size_t k = 0;
                 char *mangled = (char *)malloc(tur_mangle_bound(name_len) + 1);
                 if (!mangled) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -3323,7 +3321,7 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
                 mangled[k] = '\0';
                 buf_puts(&result, mangled);
                 free(mangled);
-                i = j + 2; matched = true;
+                i = name_start + name_len + 2; matched = true;
             }
         }
         if (!matched) { buf_putc(&result, code[i++]); }

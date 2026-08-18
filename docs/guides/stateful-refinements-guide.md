@@ -116,12 +116,30 @@ argument whose mutable state it reads:
   ...)
 ```
 
-`#reads w` names a `^borrow` parameter. With it, the encoder's congruence rule
-gains one arm:
+`#reads w` names a `^borrow` parameter. A measure that reads more than one
+borrowed state names them all in one frame, the same way `#writes` does:
+
+```turmeric
+(defn linked? [^borrow w : World ^borrow g : Grid e : Entity] #reads [w g] : bool
+  ...)
+```
+
+The grant over such a frame is **conjunctive**: it applies only when *every*
+named parameter is frozen at the call site. One unfrozen parameter is enough
+for the measure to differ between two occurrences -- which is exactly the
+crossing the grant elides -- so "any frozen" would be unsound. Freezing `w` but
+not `g` above leaves `linked?` fresh-per-occurrence, and the crossing reports
+`unknown` as it should.
+
+Write one frame, not several: `#reads w #reads g` is `TUR-E0024`, as is an
+empty `#reads []`. (`#writes []` *is* allowed, because "writes nothing" is a
+real claim; "reads nothing" is just the absence of the annotation.)
+
+With it, the encoder's congruence rule gains one arm:
 
 - a call `(alive? w e)` whose callee declares `#reads w` is given a **stable**
-  (congruent) symbol **when a live borrow of `w` is in scope** -- i.e. inside
-  `(frozen w ...)`;
+  (congruent) symbol **when a live borrow of every named parameter is in
+  scope** -- i.e. inside `(frozen w ...)`;
 - and a **fresh** symbol everywhere else, exactly as an impure measure gets
   today.
 

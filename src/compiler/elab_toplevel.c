@@ -1,7 +1,8 @@
 /* elab_toplevel.c -- top-level form dispatch and the elaborate_program entry point. */
 #include "elab_internal.h"
 #include "platform_fs.h"  /* realpath() on Windows */
-#include "globals.h"      /* g_opt_cps_tramp_resume (top-level-main synthesis gate) */
+#include "globals.h"
+#include "mangle.h"   /* tur_cname_name_len */      /* g_opt_cps_tramp_resume (top-level-main synthesis gate) */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
@@ -229,12 +230,10 @@ static StrSlice elab_cblock_resolve_cnames(Elab *e, StrSlice code, Span span,
     for (uint32_t i = 0; i + 14 <= len; ) {
         if (memcmp(src + i, "__TUR_CNAME_", 12) != 0) { i++; continue; }
         uint32_t name_start = i + 12;
-        uint32_t j = name_start;
-        while (j + 1 < len && !(src[j] == '_' && src[j + 1] == '_')) j++;
-        if (!(j + 1 < len && src[j] == '_' && src[j + 1] == '_' && j > name_start)) {
-            i = name_start; continue;
-        }
-        uint32_t name_len = j - name_start;
+        /* tur_cname_name_len handles a <name> that itself begins with `__`. */
+        uint32_t name_len = tur_cname_name_len(src, len, name_start);
+        if (name_len == 0) { i = name_start; continue; }
+        uint32_t j = name_start + name_len;
         const Symbol *sym = symtab_intern(e->st, strslice(src + name_start, name_len));
         bool qual_err = false;
         Binding *b = elab_lookup_sym(e, sym, span, &qual_err);
@@ -257,10 +256,9 @@ static StrSlice elab_cblock_resolve_cnames(Elab *e, StrSlice code, Span span,
     for (uint32_t i = 0; i < len; ) {
         if (i + 14 <= len && memcmp(src + i, "__TUR_CNAME_", 12) == 0) {
             uint32_t name_start = i + 12;
-            uint32_t j = name_start;
-            while (j + 1 < len && !(src[j] == '_' && src[j + 1] == '_')) j++;
-            if (j + 1 < len && src[j] == '_' && src[j + 1] == '_' && j > name_start) {
-                uint32_t name_len = j - name_start;
+            uint32_t name_len = tur_cname_name_len(src, len, name_start);
+            if (name_len > 0) {
+                uint32_t j = name_start + name_len;
                 const Symbol *sym = symtab_intern(e->st,
                                                   strslice(src + name_start, name_len));
                 bool qual_err = false;
