@@ -317,6 +317,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0023_BIND_VOID_EXPRESSION:      return "TUR-E0023";
+        case TUR_E0024_READS_FRAME_INVALID:       return "TUR-E0024";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
         case TUR_E0621_TUR_VERSION_BELOW_FLOOR:   return "TUR-E0621";
         case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
@@ -477,6 +478,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0023") == 0) return TUR_E0023_BIND_VOID_EXPRESSION;
+    if (strcmp(s, "TUR-E0024") == 0) return TUR_E0024_READS_FRAME_INVALID;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
     if (strcmp(s, "TUR-E0621") == 0) return TUR_E0621_TUR_VERSION_BELOW_FLOOR;
     if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
@@ -2217,6 +2219,28 @@ static const DiagExplanation diag_explanations_[] = {
       "code written against the beta surface keeps compiling.  The warning fires\n"
       "regardless of how the experiment was enabled -- there is no gate to\n"
       "silence it.\n",
+    },
+    /* multiple-reads-params */
+    { TUR_E0024_READS_FRAME_INVALID,
+      "TUR-E0024: malformed or duplicated `#reads` frame\n"
+      "\n"
+      "`#reads` names the ONE `^borrow` parameter whose mutable state a measure\n"
+      "reads.  Unlike `#writes`, it takes a single parameter and has no vector\n"
+      "spelling -- a function records exactly one read parameter, so a second\n"
+      "`#reads` has nowhere to go.\n"
+      "\n"
+      "  (defn alive? [^borrow w : World e : int] #reads w : bool ...)   ; ok\n"
+      "  (defn f [^borrow w : W ^borrow g : G] #reads w #reads g : bool ...) ; TUR-E0024\n"
+      "  (defn f [^borrow w : W ^borrow g : G] #reads [w g] : bool ...)      ; TUR-E0024\n"
+      "\n"
+      "This is a real expressiveness limit, not just a syntax rule: there is\n"
+      "currently no way to declare that a measure reads two parameters.  Until\n"
+      "there is, the honest options are to split the measure so each reads one\n"
+      "parameter, or to pass a single receiver that owns both pieces of state.\n"
+      "\n"
+      "Before this diagnostic existed a second `#reads` was accepted and\n"
+      "SILENTLY dropped -- the last one won -- which quietly handed the\n"
+      "refinement solver a trusted claim the author did not write.\n",
     },
     /* let-binding-void-call-emits-invalid-c */
     { TUR_E0023_BIND_VOID_EXPRESSION,

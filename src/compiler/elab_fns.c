@@ -5684,6 +5684,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, psym->span,
                               "#reads names '%s', which is not a parameter of this function",
                               psym->as.sym->name);
+                } else if (reads_param_plus1_defn != 0) {
+                    /* multiple-reads-params: a function records exactly ONE
+                     * read parameter (`reads_param_plus1`, a 1-based index),
+                     * so a second `#reads` has nowhere to go.  The two
+                     * annotation slots below exist to accept `#reads` and
+                     * `#writes` in either order, not to accept two `#reads`
+                     * -- and before this guard the second silently OVERWROTE
+                     * the first, handing the refinement solver a trusted
+                     * claim the author did not write.  `#writes` already
+                     * rejects its own duplicate (TUR-E0381); this is the
+                     * missing other half. */
+                    diag_emit_with_code(DIAG_ERROR, maybe->span,
+                                        TUR_E0024_READS_FRAME_INVALID,
+                                        "duplicate `#reads` frame on this "
+                                        "function; a measure may name only one "
+                                        "read parameter, and there is no "
+                                        "`#reads [...]` vector form");
                 } else {
                     reads_param_plus1_defn = found;
                     reads_annot_defn       = maybe;

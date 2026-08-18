@@ -960,6 +960,19 @@ static Form *read_reads_annot(Reader *r) {
     advance(r); advance(r); advance(r);   /* '#' 'r' 'e' */
     advance(r); advance(r); advance(r);   /* 'a' 'd' 's' */
     skip_ws_and_comments(r);
+    /* multiple-reads-params: `#writes` takes `<sym>` or `[<sym> ...]`, so the
+     * bracketed spelling is the natural thing to reach for here too -- but a
+     * function records exactly one read parameter, so there is no vector form.
+     * Without this the reader falls through to a bare "unexpected character
+     * '['", which says nothing about `#reads`. */
+    if (peek(r) == '[') {
+        Span sp = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit_with_code(DIAG_ERROR, sp, TUR_E0024_READS_FRAME_INVALID,
+                            "`#reads` takes a single parameter name, not a "
+                            "vector; a measure may name only one read "
+                            "parameter (unlike `#writes [...]`)");
+        return NULL;
+    }
     Form *param = read_symbol_or_minus(r);   /* the parameter name */
     if (!param) return NULL;                 /* error already emitted */
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);

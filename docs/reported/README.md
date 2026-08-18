@@ -239,6 +239,7 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [reads-frame-cannot-name-multiple-params](reads-frame-cannot-name-multiple-params.md) | medium | `#reads` names exactly one `^borrow` param (`reads_param_plus1` is a single index) and has no `[...]` vector form, unlike `#writes`; a measure over two borrowed states is inexpressible. The adjacent silent-drop bug -- a second `#reads` overwrote the first, feeding the solver an unwritten trusted claim -- is FIXED (TUR-E0024); the expressiveness hole is not |
 
 `caret-constraint-vector-not-registered` was resolved 2026-08-17, the day
 after filing, and moved to
@@ -338,7 +339,17 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ecs-defsystem-writes-fixture-expects-old-spices](ecs-defsystem-writes-fixture-expects-old-spices.md) | low | with `../turmeric-spices` present, `errors/ecs-defsystem-writes-unauthorized` fails: spices-HEAD `ecs/world.tur` errors during its own elaboration (Storage associated type), so the write-capability diagnostic the fixture pins is never reached; invisible without the optional checkout |
+
+`ecs-defsystem-writes-fixture-expects-old-spices` was resolved 2026-08-18 and
+moved to
+[docs/archive](../archive/ecs-defsystem-writes-fixture-expects-old-spices.md).
+Two layers: the fixture predated `defworld`'s `(defcomponent C)` storage
+registration, and -- once past that -- `defsystem` binds `w : int` while the
+generated accessors take `^borrow w : GameWorld`, so the fixture's
+`(:: w GameWorld)` bridge is now TUR-E0295 and fires before the cap check.
+The fixture's body became `(use-cap! Vel-write-cap)`, reaching its unchanged
+`expected.diag`. Note `ecs/world.tur` itself elaborates cleanly -- this was
+never a turmeric-vs-spice feature gap.
 
 `macos-jit-leg-intermittent-45min-hang` was resolved 2026-08-18 and moved to
 [docs/archive](../archive/macos-jit-leg-intermittent-45min-hang.md).  The
