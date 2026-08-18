@@ -44,6 +44,7 @@
 #define TUR_COMPILER_MANGLE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Upper bound on the mangled length (excluding NUL) of a `src_len`-byte source
  * name component. The worst case per byte is the hex escape "_xHH" = 4 chars. */
@@ -117,5 +118,42 @@ int tur_name_is_c_keyword(const char *name, size_t len);
  * "_un", so `tur_u_double` mangles to `tur_unu_undouble`). */
 #define TUR_NAME_GUARD_PREFIX     "tur_u_"
 #define TUR_NAME_GUARD_PREFIX_LEN 6
+
+/* Length of <name> in a `__TUR_CNAME_<name>__` splice.
+ *
+ * `buf`/`len` are the whole inline-C body; `name_start` indexes the byte just
+ * after the 12-character `__TUR_CNAME_` prefix.  Returns the length of <name>,
+ * or 0 when the splice is malformed (the caller then leaves the text alone).
+ *
+ * <name> may itself begin with `__`.  That is the established convention for a
+ * private helper right across stdlib and the spices (`__cons`, `__gzbuf`,
+ * `__db-prepare-raw`, `__functor_*`) -- which makes it exactly the name an
+ * author reaches for when calling a sibling from inline C.  Scanning naively
+ * for "the first __" terminates at offset zero for such a name, so the splice
+ * is left unexpanded and the emitted C either calls a nonexistent
+ * `__TUR_CNAME_...` function or, when the name contains a hyphen, is tokenized
+ * as a subtraction -- producing a `cc` error that names a fragment appearing
+ * nowhere in the source (`alloc__` for `__secret-alloc`).
+ *
+ * So a leading run of underscores is skipped when a real name character
+ * follows it.  A run with no name character after it is left alone, keeping
+ * the old no-match behaviour for a degenerate splice.  An interior `__` still
+ * terminates the name; that ambiguity is inherent to the delimiter and
+ * unchanged here. */
+static inline uint32_t tur_cname_name_len(const char *buf, uint32_t len,
+                                          uint32_t name_start) {
+    uint32_t j = name_start;
+    uint32_t lead = j;
+    while (lead < len && buf[lead] == '_') lead++;
+    if (lead < len && ((buf[lead] >= 'a' && buf[lead] <= 'z') ||
+                       (buf[lead] >= 'A' && buf[lead] <= 'Z') ||
+                       (buf[lead] >= '0' && buf[lead] <= '9') ||
+                        buf[lead] == '-'))
+        j = lead;
+    while (j + 1 < len && !(buf[j] == '_' && buf[j + 1] == '_')) j++;
+    if (j + 1 < len && buf[j] == '_' && buf[j + 1] == '_' && j > name_start)
+        return j - name_start;
+    return 0;
+}
 
 #endif /* TUR_COMPILER_MANGLE_H */

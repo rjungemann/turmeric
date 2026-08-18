@@ -1,5 +1,6 @@
 # `__TUR_CNAME_<name>__` does not expand when `<name>` starts with `__`
 
+**Status:** RESOLVED 2026-08-18.
 **Severity:** medium (silently emits a call to a nonexistent C function; the
 resulting error names a mangled fragment that appears nowhere in the source)
 **Found:** 2026-08-18, writing `spices/secret` against `tur` v0.35.0
@@ -74,3 +75,30 @@ Name inline-C-callable helpers without a leading `__`.
 `spices/secret/src/secret/core.tur` uses a `-raw` suffix instead
 (`secret-alloc-raw`, `secret-free-raw!`, `secret-data-raw`), keeping them
 unexported for privacy rather than relying on the name.
+
+## RESOLVED (2026-08-18)
+
+Root cause: the `__TUR_CNAME_<name>__` terminator scan starts at the name's
+first character, so a name beginning with `__` matched the closing delimiter
+at offset zero, the splice was left unexpanded, and the emitted C either
+called a nonexistent `__TUR_CNAME_...` function or -- with a hyphen in the
+name -- was tokenized as a subtraction (`__TUR_CNAME___secret - alloc__(n)`),
+which is where the phantom `alloc__` came from.
+
+The scan was duplicated at **three** sites: the emit-time mangle-only path
+(`emit_core.c`) and both passes of the elaboration-time module-prefix
+resolver (`elab_toplevel.c`). Fixing only the first is not enough -- it
+mangles the name but drops the module prefix, so the call still does not
+resolve. All three now share `tur_cname_name_len` in `mangle.h`, which skips
+a leading underscore run when a real name character follows it.
+
+An interior `__` still terminates the name; that ambiguity is inherent to the
+delimiter and is unchanged.
+
+Regression fixture: `tests/fixtures/inline-c-cname-leading-underscores/`,
+covering all three shapes -- leading `__`, leading `__` plus a hyphen (the
+mis-tokenizing variant), and a plain name as the control -- and asserting on
+computed values rather than merely on compiling. Verified to FAIL against the
+pre-fix compiler.
+
+Full fixture suite: 2621 passed, 0 failed.

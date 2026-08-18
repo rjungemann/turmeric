@@ -1,5 +1,6 @@
 # `let`-binding a `:void` call emits `void x = ...;` instead of a diagnostic
 
+**Status:** RESOLVED 2026-08-18.
 **Severity:** medium (easy to hit, trivial to work around once understood,
 but the failure surfaces as a `cc` error with no `.tur` attribution)
 **Found:** 2026-08-18, writing `spices/secret`'s test suite against
@@ -75,3 +76,29 @@ Sequence with `do` instead:
 Or give the helper a non-void return. `spices/secret/tests/hygiene_test.tur`
 does both, and carries a note so the pattern is not "cleaned up" back into a
 binding list.
+
+## RESOLVED (2026-08-18)
+
+Took option (1) -- reject in the elaborator. `elab_let` now emits
+**TUR-E0023** when a binding's init elaborates to `:void`, pointing at the
+init form and naming `do` as the fix:
+
+```
+b2.tur:7:11: error [TUR-E0023]: cannot bind '_' to an expression of type
+  :void; sequence it with `do` instead of binding it
+7 |   (let [_ (noop)]
+  |           ^^^^^^
+```
+
+`tur explain TUR-E0023` carries the longer form with a before/after example.
+
+**Not a breaking change.** Every `:void` init already failed -- checked
+against a void defn call, a `while`, a `println`, and a non-first binding, all
+four of which produced "variable has incomplete type 'void'". So the rejected
+set is exactly the set that could not compile; the change only moves the
+report from the generated C to the binding that caused it. The full fixture
+suite confirms nothing in stdlib or the corpus binds a void expression
+(2621 passed, 0 failed).
+
+Regression fixture: `tests/fixtures/errors/let-binds-void-expression/`,
+verified not to produce TUR-E0023 against the pre-fix compiler.

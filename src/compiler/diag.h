@@ -50,6 +50,8 @@ typedef enum DiagCode {
     /* CF6 (control-flow-completeness-plan): async Send-across-await soundness */
     TUR_E0022_AWAIT_LIVE_NOT_SEND,                /* non-Send binding in scope at await in async body */
     /* Phase B: mixed-width numeric arithmetic (no implicit coercion) */
+    TUR_E0023_BIND_VOID_EXPRESSION,               /* `let` binding whose init has type :void */
+
     TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */
     TUR_W0030_STRICT_EFFECTS_UNANNOTATED,  /* unannotated fn has non-empty inferred row (--strict-effects) */
