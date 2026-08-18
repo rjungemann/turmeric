@@ -195,6 +195,17 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A runaway macro on a sanitizer-instrumented (Debug) build now reports
+  `maximum macro expansion depth exceeded` instead of aborting with an ASan
+  stack-overflow.** The 256-level depth counter is a proxy for stack
+  headroom, and ASan's redzone-inflated frames could exhaust the real stack
+  first (observed on macOS/arm64 Debug; reproducible anywhere with
+  `ulimit -s 4096`).  The guard now also measures the thread's actual
+  remaining stack (glibc/macOS/Windows queries; the SP register is read
+  directly because ASan's fake stack makes local addresses useless for this)
+  and raises the same diagnostic pair -- plus a note naming the early stop --
+  when headroom is nearly gone
+  (docs/archive/macro-depth-guard-loses-race-with-asan-stack.md).
 - **`tur emit-c` output now links at `-O0`.** The dead base generic thunk
   chain (a generic fn returning a closure over a type application, e.g.
   `(fn [] (Cons A))`) referenced the base `ctor_X` of a heap parametric ADT,

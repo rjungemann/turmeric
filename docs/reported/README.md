@@ -341,6 +341,17 @@ Pinned by four `errors/` negatives and
 | [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [ecs-defsystem-writes-fixture-expects-old-spices](ecs-defsystem-writes-fixture-expects-old-spices.md) | low | with `../turmeric-spices` present, `errors/ecs-defsystem-writes-unauthorized` fails: spices-HEAD `ecs/world.tur` errors during its own elaboration (Storage associated type), so the write-capability diagnostic the fixture pins is never reached; invisible without the optional checkout |
 
+`macro-depth-guard-loses-race-with-asan-stack` was resolved 2026-08-18 and
+moved to
+[docs/archive](../archive/macro-depth-guard-loses-race-with-asan-stack.md);
+it was filed 2026-08-17 and never got a row here.  Fix direction 2 landed:
+the macro-expansion guard now also measures real stack headroom (per-platform
+thread-stack query + reading the SP register -- a local's address is on
+ASan's fake stack and useless for this) and raises the same diagnostic when
+the stack is nearly gone, so the ASan-inflated Debug build reports the
+runaway macro instead of aborting with a sanitizer stack-overflow.
+Verified by reproducing the race on Linux under `ulimit -s 4096`.
+
 `incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved
 to
 [docs/archive](../archive/incremental-elab-loses-span-file-provenance.md). Its
