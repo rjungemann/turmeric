@@ -1,6 +1,6 @@
-write-frame one-level: UNVERIFIED mask=0x0 frame=VERIFIED global=YES
-write-frame two-level: UNVERIFIED mask=0x0 frame=VERIFIED global=YES
-write-frame calls-dirty-cycle: UNVERIFIED mask=0x0 frame=VERIFIED global=YES
+write-frame one-level: VERIFIED mask=0x0 frame=VERIFIED global=YES declared=[hidden]
+write-frame two-level: VERIFIED mask=0x0 frame=VERIFIED global=YES declared=[hidden]
+write-frame calls-dirty-cycle: VERIFIED mask=0x0 frame=VERIFIED global=YES declared=[hidden]
 write-frame calls-clean-cycle: VERIFIED mask=0x0 frame=VERIFIED global=NO
 1
 2

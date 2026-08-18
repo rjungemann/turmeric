@@ -278,12 +278,6 @@ extern bool g_opt_owning_cloneable_capture;
  * so this feature needs its own lifecycle home rather than a retired one. */
 extern bool g_opt_write_frames;
 
-/* `global-state` experiment (docs/upcoming/mutable-globals-plan.md, G2):
- * lets a `#writes` frame NAME a mutable global, so a body that maintains
- * global state can carry a checked frame instead of being declined outright.
- * With it off, G1's rule stands: any global write blocks VERIFIED, silently. */
-extern bool g_opt_global_state;
-
 /* `checked-reads` experiment (docs/upcoming/trusted-refinement-claims-plan.md,
  * R2): on positive evidence that a `#reads` measure's body reads a mutable
  * global (the same evidence TUR-W0383 reports gatelessly), REFUSE the

@@ -10,18 +10,30 @@
 ;; Covered here: one level, two levels, a mutually-recursive cycle that DOES
 ;; write a global (the cycle guard must not swallow it), and a
 ;; mutually-recursive cycle that does NOT (the guard must not poison it).
+;;
+;; SINCE GRADUATION (G5b, section 21): G2 is unconditional, so the writers here
+;; DECLARE the global they reach through their callees.  That makes this a
+;; stronger assertion than the pre-graduation `#writes []` version, not a
+;; weaker one: VERIFIED now requires the walk to have found the global AND
+;; matched it against the declared name, where before it only had to notice
+;; that some global was written.  `declared=[hidden]` on a VERIFIED line is the
+;; propagation, observed.  The undeclared direction -- transitive reach through
+;; a parameterless callee raising TUR-E0382 -- is pinned by
+;; errors/g2-writes-global-undeclared.
 (def ^mut hidden 0)
 
 (defn leaf [] : void (set! hidden (+ hidden 1)))
 (defn mid [] : void (leaf))
 
-(defn one-level [x : int] #writes [] : int (leaf) x)
-(defn two-level [x : int] #writes [] : int (mid) x)
+(defn one-level [x : int] #writes [hidden] : int (leaf) x)
+(defn two-level [x : int] #writes [hidden] : int (mid) x)
 
 (defn ping [n : int] : void (if (> n 0) (pong (- n 1)) (set! hidden 1)))
 (defn pong [n : int] : void (ping n))
-(defn calls-dirty-cycle [x : int] #writes [] : int (ping 2) x)
+(defn calls-dirty-cycle [x : int] #writes [hidden] : int (ping 2) x)
 
+;; The clean cycle keeps an EMPTY frame: the guard must not poison a cycle that
+;; writes no global, so this line must stay VERIFIED with global=NO.
 (defn ping2 [n : int] : int (if (> n 0) (pong2 (- n 1)) 0))
 (defn pong2 [n : int] : int (ping2 n))
 (defn calls-clean-cycle [x : int] #writes [] : int (ping2 2))

@@ -219,33 +219,11 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
                                   *   shelve, or bump */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_write_frames },
-    /* global-state: G2 of docs/upcoming/mutable-globals-plan.md.  A `#writes`
-     * frame's vocabulary is PARAMETERS, so a body that writes a mutable global
-     * cannot be VERIFIED (G1) -- correct, and the wrong end state: a function
-     * that legitimately maintains global state should be able to SAY so and be
-     * checked, the way it can already say it writes an argument.  This lets a
-     * frame name a global.
-     *
-     * Gated because it TIGHTENS: with it on, writing a global the frame does
-     * not name is TUR-E0382, where G1 merely declined to verify.  A body that
-     * compiles quietly today can become an error, which must not arrive
-     * unasked-for.  Off, the frame grammar rejects a non-parameter name exactly
-     * as before.
-     *
-     * Deliberately `#writes` only.  `#reads` is the annotation that GRANTS
-     * congruence, so letting it name a global would let a promise about mutable
-     * global state pay out in proofs -- see the plan's sections 12.2 and 12.4,
-     * and the fixtures refine-reads-frame-omits-global{,-no-region} that pin
-     * what a broken read-side promise costs. */
-    { "global-state",
-      "`#writes [a *cache*]` -- a write frame may name a mutable global, so a "
-      "body that maintains global state can carry a CHECKED frame",
-      "docs/upcoming/mutable-globals-plan.md",
-      "0.34.0",                  /* introduced */
-      "0.38.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_global_state },
+    /* global-state GRADUATED 2026-08-18 (G5b of mutable-globals-plan) -- a
+     * `#writes` frame may name a mutable global, an exported global is
+     * read-only outside its defining module, and `^atomic` / `^thread-local`
+     * are ordinary global annotations.  All unconditional; the name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op). */
     /* checked-reads: R2 of docs/upcoming/trusted-refinement-claims-plan.md.
      * `#reads` is the one TRUSTED claim the refinement solver believes, and
      * its consumer GRANTS congruence -- so a frame that omits mutable state
@@ -319,6 +297,7 @@ static const char *const GRADUATED[] = {
     "cycle-gc",      /* graduated 2026-08-17; (gc-auto!) is an ordinary call form -- GC_AUTO is still opt-in, never a default */
     "jit",           /* graduated 2026-08-17; `tur jit` needs only the -DTUR_JIT=ON build gate */
     "sealed-opaque", /* graduated 2026-08-17; `:sealed` enforcement is unconditional */
+    "global-state",  /* graduated 2026-08-18; globals in write frames, read-only exported globals, ^atomic / ^thread-local */
     NULL,
 };
 

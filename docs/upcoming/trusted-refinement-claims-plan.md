@@ -57,8 +57,8 @@ probes live there.
 
 | | `#reads` | `#writes` |
 |---|---|---|
-| Arity | exactly one parameter | a bitmask, `#writes [a b]`, globals under `--enable=global-state` |
-| Non-parameter name | hard error | `TUR-E0381` / global allowed behind gate |
+| Arity | exactly one parameter | a bitmask, `#writes [a b]`, and mutable globals |
+| Non-parameter name | hard error | `TUR-E0381`, except a mutable global, which is allowed |
 | Checked? | **no -- trusted** (but see 1.4) | WF2-checked behind `--enable=write-frames` |
 | Consumers | congruence grant at frozen call sites | WF3 invalidation |
 

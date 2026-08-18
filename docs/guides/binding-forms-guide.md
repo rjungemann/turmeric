@@ -115,9 +115,8 @@ that `set!` may write:
 Without `^mut`, a global is immutable and `set!` on it is an error.
 
 A `^mut` global is process-wide mutable state with **no synchronization** --
-nothing checks that you share one safely across threads. Behind
-`--enable=global-state`, adding `^atomic` makes every read and every `set!`
-sequentially consistent:
+nothing checks that you share one safely across threads. Adding `^atomic` makes
+every read and every `set!` sequentially consistent:
 
 ```turmeric
 (def ^atomic ^mut ready 0)
@@ -131,9 +130,9 @@ updates. Use `stdlib/atomic.tur`'s CAS or fetch-add for a counter, or
 `stdlib/mutex.tur` for anything wider. `^atomic` is eight-byte scalars only and
 does not imply `^mut`.
 
-`^thread-local` (same gate) goes the other way: instead of synchronising one
-shared value, each thread gets **its own copy**, initialized by running the
-declared initializer on that thread.
+`^thread-local` goes the other way: instead of synchronising one shared value,
+each thread gets **its own copy**, initialized by running the declared
+initializer on that thread.
 
 ```turmeric
 (def ^thread-local scratch (make-buffer))   ;; one buffer per thread, not shared

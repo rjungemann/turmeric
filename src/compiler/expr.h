@@ -152,7 +152,7 @@ struct Binding {
     bool          is_continuation;
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
-    /* G3 (mutable-globals-plan §4.3), behind `--enable=global-state`: this
+    /* G3 (mutable-globals-plan §4.3): this
      * global was exported as `(export (mut g))`, i.e. its module explicitly
      * permits writes from outside.  A plain `(export g)` exports it READ-ONLY:
      * importers may read it, only the defining module may `set!` it.
@@ -162,7 +162,7 @@ struct Binding {
      * `:sealed` is declared on the opaque rather than asserted by its
      * consumers. */
     bool          is_export_mut;
-    /* G4a (mutable-globals-plan §4.4), behind `--enable=global-state`: a
+    /* G4a (mutable-globals-plan §4.4): a
      * `^atomic ^mut` global.  Every read lowers to TUR_ATOMIC_LOAD_* and every
      * `set!` to TUR_ATOMIC_STORE_*, sequentially consistent.
      *
@@ -175,7 +175,7 @@ struct Binding {
      * for `set!`, and a second route would make `^atomic` the only annotation
      * conferring write permission as a side effect. */
     bool          is_atomic;
-    /* G4b (mutable-globals-plan §4.4, §11.4), behind `--enable=global-state`:
+    /* G4b (mutable-globals-plan §4.4, §11.4):
      * a `^thread-local` global.  Each thread gets its own copy, materialized on
      * first access and initialized by running the declared initializer ON THAT
      * THREAD -- which is the whole point: `(def ^thread-local buf (make-buf))`
@@ -435,7 +435,7 @@ struct Binding {
         WG_UNKNOWN,         /* something could not be vouched for */
         WG_IN_PROGRESS,     /* on the current recursion stack (cycle guard) */
     }                   writes_global;
-    /* G2 (mutable-globals-plan §4.2), behind `--enable=global-state`: the
+    /* G2 (mutable-globals-plan §4.2): the
      * globals this function's `#writes` frame DECLARES, and (memoized beside
      * the verdict above) the globals its body actually writes.
      *

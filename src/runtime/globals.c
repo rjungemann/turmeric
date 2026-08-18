@@ -266,7 +266,6 @@ bool g_opt_owning_cloneable_capture = true;
  * nothing checks it and nothing acts on it, so a spice can adopt it without
  * breaking consumers who have not enabled the experiment. */
 bool g_opt_write_frames = false;
-bool g_opt_global_state  = false;
 /* checked-reads (docs/upcoming/trusted-refinement-claims-plan.md, R2):
  * refuse the #reads congruence override on positive broken-promise evidence. */
 bool g_opt_checked_reads = false;

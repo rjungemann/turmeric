@@ -1716,12 +1716,8 @@ static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn, WgSet *out) {
 /* The global half of a frame verdict, kept separate from wf_walk's parameter
  * half because they speak different vocabularies (mutable-globals-plan §4.2).
  *
- * G1 (gate off): a frame cannot NAME a global, so any global write blocks
- * VERIFIED.  UNVERIFIED, not EXCEEDED, and no diagnostic -- the write is
- * outside the vocabulary rather than outside the declared frame.
- *
- * G2 (`--enable=global-state`): the frame CAN name globals, so the question
- * becomes coverage, exactly as for parameters:
+ * G2: the frame can NAME globals, so the question is coverage, exactly as for
+ * parameters:
  *   - every written global declared  -> VERIFIED (the frame holds)
  *   - a written global not declared  -> EXCEEDED, and `*uncovered` names it
  *   - cannot tell (UNKNOWN/overflow) -> UNVERIFIED
@@ -1735,8 +1731,7 @@ static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovere
     enum WritesGlobal g = wf_fn_writes_global(e, fn, &seen);
     if (g == WG_NO)      return WF_VERIFIED;
     if (g == WG_UNKNOWN) return WF_UNVERIFIED;
-    if (!g_opt_global_state) return WF_UNVERIFIED;   /* G1: no vocabulary */
-    if (seen.overflow)       return WF_UNVERIFIED;   /* coverage unanswerable */
+    if (seen.overflow)   return WF_UNVERIFIED;   /* coverage unanswerable */
     for (uint32_t i = 0; i < seen.n; i++) {
         bool covered = false;
         for (uint32_t j = 0; j < fn->n_writes_globals_declared; j++) {
@@ -5730,18 +5725,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     /* G2 (mutable-globals-plan §4.2): a frame entry that is not
                      * a parameter may name a MUTABLE GLOBAL, so a body that
                      * maintains global state can carry a checked frame instead
-                     * of being declined outright (G1).  Gated: with
-                     * `global-state` off this stays the pre-G2 hard error, so
-                     * the grammar is unchanged for anyone who has not opted in.
+                     * of being declined outright (G1).
                      *
                      * An IMMUTABLE global is rejected with its own reason
                      * rather than folded into "not a parameter": naming one in
                      * a write frame is a statement that cannot be true, and
                      * saying so beats a message about parameters. */
-                    Binding *gb = g_opt_global_state
-                                ? scope_lookup(&e->global, psym->as.sym) : NULL;
+                    Binding *gb = scope_lookup(&e->global, psym->as.sym);
                     if (gb && gb->is_global && gb->is_mut) {
-                        experiment_warn_if_used("global-state");
                         bool dup = false;
                         for (uint32_t gi = 0; gi < n_writes_globals_defn; gi++)
                             if (writes_globals_defn[gi] == psym->as.sym) { dup = true; break; }
@@ -9243,13 +9234,6 @@ Expr *elab_def(Elab *e, const Form *call) {
         /* G4b: `^thread-local` -- each thread gets its own copy, initialized
          * on first access by running the initializer on that thread. */
         if (s == e->sym_caret_thread_local) {
-            if (!g_opt_global_state) {
-                diag_emit(DIAG_ERROR, cur->span,
-                          "%s: '^thread-local' needs --enable=global-state "
-                          "(docs/upcoming/mutable-globals-plan.md)", kw);
-                return NULL;
-            }
-            experiment_warn_if_used("global-state");
             is_thread_local = true; name_idx++; continue;
         }
 
@@ -9257,13 +9241,6 @@ Expr *elab_def(Elab *e, const Form *call) {
          * consistent.  Scalars only; the type check happens below, once the
          * initializer has been elaborated and the type is known. */
         if (s == e->sym_caret_atomic) {
-            if (!g_opt_global_state) {
-                diag_emit(DIAG_ERROR, cur->span,
-                          "%s: '^atomic' needs --enable=global-state "
-                          "(docs/upcoming/mutable-globals-plan.md)", kw);
-                return NULL;
-            }
-            experiment_warn_if_used("global-state");
             is_atomic = true; name_idx++; continue;
         }
 

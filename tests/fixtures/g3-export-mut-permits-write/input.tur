@@ -1,6 +1,5 @@
-;; G3 (docs/upcoming/mutable-globals-plan.md section 4.3), behind
-;; --enable=global-state: an exported global is READ-ONLY outside its defining
-;; module.  A module that exports a counter for reading should not thereby
+;; G3 (docs/upcoming/mutable-globals-plan.md section 4.3): an exported global
+;; is READ-ONLY outside its defining module.  A module that exports a counter for reading should not thereby
 ;; export it for writing -- the same argument :sealed makes about an opaque's
 ;; representation.
 ;;

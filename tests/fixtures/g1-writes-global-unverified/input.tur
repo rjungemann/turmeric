@@ -1,21 +1,32 @@
-;; G1 (docs/upcoming/mutable-globals-plan.md): a `#writes` frame speaks about
-;; PARAMETERS.  A global is written by name rather than passed, so it is
-;; outside the frame's vocabulary -- which meant a body declaring `#writes []`
-;; ("writes nothing") could mutate global state and still be stamped VERIFIED.
-;; VERIFIED is what an optimization may act on, so that claim has to stop
-;; being available to a body that writes a global.
+;; G1 (docs/upcoming/mutable-globals-plan.md): a global is written by NAME
+;; rather than passed, so it sits outside the parameter half of a `#writes`
+;; frame -- which meant a body declaring `#writes []` ("writes nothing") could
+;; mutate global state and still be stamped VERIFIED.  VERIFIED is what an
+;; optimization may act on, so that claim has to stop being available to a body
+;; that writes a global.
 ;;
-;; The `frame=` column is the frame walk's own verdict and the `global=` column
-;; is what downgrades it: `sneaky` shows frame=VERIFIED global=YES, which is
-;; exactly the combination this fixture exists to pin.  Asserting only "no
-;; diagnostic" would pass just as well if the guard were deleted.
+;; The `frame=` column is the frame walk's own verdict and `global=` is the
+;; separate answer that can downgrade it.  Asserting only "no diagnostic" would
+;; pass just as well if the guard were deleted, so this fixture pins the full
+;; line -- and specifically all three answers the `global=` column can give.
 ;;
-;; NO diagnostic is emitted: a global write is outside the vocabulary, not
-;; outside the declared frame, so the honest verdict is "cannot verify".
+;; SINCE GRADUATION (G5b, section 21): G2 is unconditional, so an UNDECLARED
+;; global write is `TUR-E0382` rather than a silent UNVERIFIED -- that case
+;; lives in errors/g2-writes-global-undeclared now.  What survives here is the
+;; route that is still silent: the walk cannot SEE whether a global is written,
+;; which must read as "cannot verify" and never as "verified".
 (def ^mut hidden 0)
 (defstruct Ctr [n : int])
 
-(defn sneaky [x : int] #writes [] : int
+;; global=UNKNOWN.  A call through a fn-typed PARAMETER is opaque to the walk:
+;; the callee is whatever the caller passed, so the honest answer is "could not
+;; see", and a frame is not a fact you may build on when the answer is that.
+;; No diagnostic -- nothing was exceeded, the question was unanswerable.
+(defn via-callback [f : (fn [] int)] #writes [] : int (f))
+
+;; global=YES, and covered.  The write is named by the frame, so the verdict is
+;; VERIFIED -- the vocabulary can SAY what the body does (G2).
+(defn declared [x : int] #writes [hidden] : int
   (set! hidden (+ hidden 1))
   x)
 
@@ -30,8 +41,11 @@
 (defn calls-clean [] #writes [] : int (helper))
 (defn helper [] : int 7)
 
+(defn bump [] : int (set! hidden 5) hidden)
+
 (defn main [] : int
-  (println (sneaky 1))
+  (println (via-callback bump))
+  (println (declared 1))
   (println (local-only))
   (println (calls-clean))
   0)

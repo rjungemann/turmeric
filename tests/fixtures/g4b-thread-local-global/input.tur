@@ -1,6 +1,5 @@
-;; G4b (docs/upcoming/mutable-globals-plan.md sections 4.4 and 11.4), behind
-;; --enable=global-state: `^thread-local` gives each thread its own copy of a
-;; global, materialized on first access and initialized by running the declared
+;; G4b (docs/upcoming/mutable-globals-plan.md sections 4.4 and 11.4):
+;; `^thread-local` gives each thread its own copy of a global, materialized on first access and initialized by running the declared
 ;; initializer ON THAT THREAD.
 ;;
 ;; Running the initializer per thread is the whole point, and it is what a

@@ -205,8 +205,8 @@ under strict mode is an error like any other W-to-E promotion.
 
 Per the CLAUDE.md rule, in-flight semantics ship behind `--enable=<name>`.
 `refined` has graduated and its row is gone, so this needs a fresh row --
-`loop-invariants` -- modelled on the two live rows (`write-frames`,
-`global-state`, `src/runtime/experiments.c:213-248`; all seven descriptor
+`loop-invariants` -- modelled on the live rows (`write-frames`,
+`checked-reads` in `src/runtime/experiments.c`; all seven descriptor
 fields, `g_opt_loop_invariants`, `expires_at` one minor line out per current
 convention, i.e. set `introduced`/`expires_at` when work starts). Follow the
 `#writes` precedent exactly: **the annotation always parses; the gate

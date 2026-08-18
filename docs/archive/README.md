@@ -540,8 +540,8 @@ finding rather than a closed one:
 
 Each of these declares itself executed/landed with nothing outstanding, so it
 is a record rather than open work. `docs/upcoming/` holds only unfinished
-plans; plans whose experiment has not graduated yet (`write-frames`,
-`global-state`, `jit`) stay there because the graduation is still ahead.
+plans; a plan whose experiment has not graduated yet stays there, because the
+graduation is still ahead of it.
 
 - **[def-define-consolidation-plan.md](def-define-consolidation-plan.md)** -- one `def` form for top-level and body positions; EXECUTED 2026-08-05 (D1-D4)
 - **[lsp-client-gaps-plan.md](lsp-client-gaps-plan.md)** -- `tur lsp` gaps found by writing a real client (Trowel); everything scheduled in its SS6 has landed

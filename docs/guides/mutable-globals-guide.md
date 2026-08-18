@@ -6,10 +6,9 @@ description: def ^mut, what the compiler checks about a global write, and the co
 
 # Mutable Globals Guide
 
-> **Status: experimental.** Everything past plain `^mut` -- naming a global in a
-> write frame, the read-only-outside-the-module rule, `^atomic`, and
-> `^thread-local` -- is behind `--enable=global-state`. Plain `(def ^mut g v)`
-> itself is unconditional. The design of record is
+> Everything on this page is unconditional -- naming a global in a write frame,
+> the read-only-outside-the-module rule, `^atomic`, and `^thread-local`
+> graduated from `--enable=global-state` in 0.35.0. The design of record is
 > [`docs/upcoming/mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/mutable-globals-plan.md).
 
 ## The form
@@ -61,9 +60,9 @@ below exists instead.
 
 ### A `#writes` frame may name a global
 
-By default a `#writes` frame speaks only about **parameters**, so a body that
-writes a global can never be VERIFIED -- the frame has no way to name what it
-writes. With `--enable=global-state` it does:
+A `#writes` frame names **parameters and mutable globals**, so a body that
+maintains global state can say so and be checked, instead of being declined
+outright for writing something the frame had no way to name:
 
 ```turmeric
 (def ^mut hits 0)
@@ -81,9 +80,9 @@ writes. With `--enable=global-state` it does:
 Declared-but-never-written is fine -- a frame is an *upper bound*. Frames may
 mix parameters and globals: `#writes [a hits]`.
 
-Two gates are involved and they do different jobs: `global-state` lets the frame
-*name* a global, and `write-frames` is what *checks* frames at all. Naming one
-without `--enable=write-frames` parses and imposes nothing.
+Naming a global is unconditional, but `write-frames` is what *checks* frames at
+all: without `--enable=write-frames` a frame naming a global parses and imposes
+nothing.
 
 `#reads` is deliberately **not** part of this and still rejects a non-parameter
 name. It is the annotation that *grants* congruence, so a global there would let
@@ -191,10 +190,10 @@ discipline for you.
 | Annotation | Position | Effect | Gate |
 |---|---|---|---|
 | `^mut` | top level | `set!` is allowed | none |
-| `^atomic` | top level | accesses are sequentially consistent; needs `^mut`; 8-byte scalars | `global-state` |
-| `^thread-local` | top level | one copy per thread, initialized per thread | `global-state` |
-| `#writes [g]` | on a `defn` | the frame may name a global | `global-state` (+ `write-frames` to check) |
-| `(export (mut g))` | in `defmodule` | importers may write `g` | `global-state` |
+| `^atomic` | top level | accesses are sequentially consistent; needs `^mut`; 8-byte scalars | none |
+| `^thread-local` | top level | one copy per thread, initialized per thread | none |
+| `#writes [g]` | on a `defn` | the frame may name a global | `write-frames` to check it |
+| `(export (mut g))` | in `defmodule` | importers may write `g` | none |
 
 ## See also
 

@@ -360,9 +360,9 @@ writes global state, so the frame is not a fact you may build on."
 
 ### Naming a global in the frame
 
-Behind `--enable=global-state`, a `#writes` frame **may name a mutable global**,
-so a body that legitimately maintains global state can carry a checked frame
-instead of being declined outright:
+A `#writes` frame **may name a mutable global**, so a body that legitimately
+maintains global state can carry a checked frame instead of being declined
+outright:
 
 ```turmeric
 (def ^mut hits 0)

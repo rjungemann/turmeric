@@ -1,7 +1,0 @@
-;; G4b is gated: without --enable=global-state, `^thread-local` is refused by
-;; name rather than accepted and ignored.  A silently-inert `^thread-local`
-;; would be a global every thread shares while the program believes each has
-;; its own -- the exact failure the pthread_key_t lowering exists to prevent.
-(def ^thread-local ^mut n 0)
-
-(defn main [] : int 0)

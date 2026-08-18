@@ -1,6 +1,5 @@
-;; G2 (docs/upcoming/mutable-globals-plan.md section 4.2), behind
-;; --enable=global-state: a `#writes` frame may NAME a mutable global, so a
-;; body that legitimately maintains global state can carry a CHECKED frame
+;; G2 (docs/upcoming/mutable-globals-plan.md section 4.2): a `#writes` frame
+;; may NAME a mutable global, so a body that legitimately maintains global state can carry a CHECKED frame
 ;; instead of being declined outright.
 ;;
 ;; G1 made any global write block VERIFIED, which is the right default and the
