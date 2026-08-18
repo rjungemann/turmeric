@@ -2,6 +2,79 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.35.0] -- 2026-08-18
+
+### Added
+
+- **`(unsafe (call-ptr p [T1 T2 -> R] args...))` -- call a raw function pointer
+  through a JIT-compiled thunk**, behind `--enable=jit-ffi`. The thunk is
+  rendered from the signature string, compiled through c2mir, and cached per
+  unique signature, so a JIT build calls a C function of any arity with no
+  `--max-arity` ceiling. It is not a new expression kind -- the signature hangs
+  off the ordinary call node, so every walker traverses it unchanged. F1-F3 of
+  docs/upcoming/jit-ffi-c2mir-plan.md; struct-by-value (F4) and callbacks (F5)
+  deliberately trail.
+- **`extern-c` stops lying under `--interpret`.** In a JIT build an `extern-c`
+  registration resolves the symbol via `dlsym` and binds a thunk-backed native,
+  so `(strtol "123abc" 0 10)` is `123` where everything outside a 7-entry known
+  table used to silently return nil. The known table stays as the
+  semantics-bearing override (`free` no-op, `exit`, `printf` marshalling).
+- **A dialect picker and layer toggles in Try Turmeric.** The editor header
+  gains a Language control -- a radio group for the four base dialects and
+  checkboxes for the curated `#lang` layers -- rendered from a new WASM registry
+  export so the UI never becomes a second source of truth. The `#lang` line
+  stays authoritative: typing it by hand and using the picker are the same
+  operation, and one Ctrl+Z undoes a switch. Turning a reader layer off now
+  genuinely deactivates its `#`-dispatch, where `#s"..."` used to keep reading
+  as `String` after `stringed` was switched off.
+- **Variadic spice exports are callable from the REPL**, and a spice that
+  declares its C dependency the recommended way (`:cmake-deps` / `:link-libs`,
+  no `__tur_autolink__` marker) now loads through the REPL's in-process JIT
+  hook, falling back to the subprocess build when the hook cannot handle it
+  (vendored `:c-sources`, static-only cmake deps).
+- **Rust and Haskell benchmark columns, and `tur jit --timing-json`.** 21
+  programs each, validated byte-for-byte against the existing goldens, plus a
+  phase record (`compile_ms` / `run_ms` / `engine`) so a chart can subtract
+  compile time and a `cc` fallback is detected rather than averaged in. The
+  existing language list is unchanged; the new columns ride on top.
+
+### Changed
+
+- **`global-state` graduated -- four mutable-global features work without a
+  flag.** A `#writes` frame may name a mutable global, an exported global is
+  read-only outside its defining module (write it from another module and you
+  get a diagnostic naming the owner and `(export (mut g))`), and `^atomic` /
+  `^thread-local` are ordinary annotations on a top-level `def`. Every phase of
+  docs/upcoming/mutable-globals-plan.md had landed, so the row had nothing left
+  to decide. A lingering `--enable=global-state` is a `TUR-W0063` no-op for one
+  minor line, not an error.
+
+  One tightening rides along, and it is confined to `--enable=write-frames`
+  (still experimental, and what *checks* a frame at all): a body that declares a
+  frame and writes a global the frame does not name is now `TUR-E0382`, where it
+  previously just declined to verify.
+
+### Fixed
+
+- **The macOS CI 45-minute hang.** `httpd-stop-async` left the listen fd open
+  until `httpd-async-free`, so the kernel kept completing handshakes into the
+  backlog after the stop; a client that got one blocked forever in `recv()`,
+  deadlocking `main` in `pthread_join`. Both stop paths now close the listener,
+  so pending backlog connections are reset and late connects refused rather than
+  black-holed. Reproduced 100% by delaying one client 300ms, 0% after, and
+  stressed 200 runs at 6x thread oversubscription.
+- **`kqueue` write knotes were never deleted.** `EV_DELETE` passed
+  `EVFILT_READ | EVFILT_WRITE`, but kqueue filters are enum values (-1, -2), not
+  a bitmask, so the OR collapsed to `EVFILT_READ` and a stale WRITE knote could
+  deliver a wake on a reused fd.
+- **`:build-opts :link-libs` reaches the link line.** It was parsed, documented,
+  and round-tripped by `tur init` -- and consumed by nothing.
+
+### Docs
+
+- **A dynamic FFI guide**, with a worked `libzmq` example, plus a plan for
+  spice-level FFI integration.
+
 ## [0.34.0] -- 2026-08-17
 
 ### Added

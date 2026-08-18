@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.34.0` -- three experiments graduate: `(gc-auto!)`, `:sealed` opaque newtypes, and `tur jit` all work without a flag (automatic GC stays opt-in and `cc` stays the default engine); plus per-project engine selection via `:engine` in `build.tur`, `--engine`, or `TUR_ENGINE`.
+**Latest release:** `v0.35.0` -- `global-state` graduates: a `#writes` frame may name a mutable global, an exported global is read-only outside its defining module, and `^atomic` / `^thread-local` work without a flag; plus JIT-backed FFI call thunks that make `extern-c` real under `--interpret`, and a dialect/layer picker in Try Turmeric.
 
 ## What
 
