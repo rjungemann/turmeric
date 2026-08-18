@@ -2,6 +2,18 @@
 ;;;
 ;;; Implements the Random capability typeclass for real random values.
 ;;;
+;;; NOT CRYPTOGRAPHICALLY SECURE. This is libc `rand()` seeded with
+;;; `time(NULL)`. Its output is fully predictable to anyone who can guess the
+;;; second the process started -- a few thousand candidate streams, trivially
+;;; enumerable. It is the right tool for simulation, sampling, shuffling,
+;;; jitter, and procedural generation, and the wrong tool for anything an
+;;; attacker benefits from predicting: session tokens, password-reset links,
+;;; nonces, salts, IVs, or key material.
+;;;
+;;; For those, use `crypto-random-bytes!` from the `secret` spice
+;;; (`spices/secret` in turmeric-spices), which draws from the OS CSPRNG --
+;;; `getrandom(2)` / `arc4random_buf` / `BCryptGenRandom` / `/dev/urandom`.
+;;;
 ;;; Since: Phase 16
 ;; Phase 16: Real Random implementation
 ;;
