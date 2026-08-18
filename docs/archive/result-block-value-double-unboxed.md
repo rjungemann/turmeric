@@ -1,5 +1,6 @@
 # A `let`/`do` block evaluating to a `Result` is unboxed a second time
 
+**Status:** RESOLVED 2026-08-18.
 **Severity:** high (emits C that cannot compile, with no `.tur` attribution;
 hits the most natural way to write "compute, clean up, return the result")
 **Found:** 2026-08-18, building `spices/secret` (`secret/kdf`, `secret/hex`)
@@ -116,8 +117,29 @@ comments so they are not "simplified" back inline.
 Same session, same area:
 - [`cps-result-unbox-dropped.md`](cps-result-unbox-dropped.md) -- the unbox
   omitted where it *is* needed (CPS-transformed functions).
-- [`cps-join-point-emits-invalid-assignment.md`](cps-join-point-emits-invalid-assignment.md)
+- [`cps-join-point-emits-invalid-assignment.md`](../reported/cps-join-point-emits-invalid-assignment.md)
 
 There is also a fourth symptom, not separately filed because the workaround
 is the same: passing a Turmeric-built `(Result T E)` as a **function
 parameter** produces the identical double-unbox error at the callee.
+
+## RESOLVED (2026-08-18)
+
+Fixed in `src/compiler/emit_expr.c`: `expr_emits_byvalue_carrier_abi` now
+reports true for a bare `EX_VAR` whose binding is a lowered Option/Result
+monomorph, checked BEFORE the `type_uses_carrier_abi` guard that was
+rejecting it.
+
+The scope of that check matters. A first attempt keyed on "any by-value
+product ADT" and regressed **10 fixtures** (the vec/map multiword-struct
+element paths and assoc-type returns): a plain non-parametric product like
+`tur_adt_Point` genuinely DOES need the carrier treatment at those seams, so
+reporting it as already-by-value suppressed a bridge it required. The landed
+predicate is narrowed to Option/Result apps -- which is also exactly the
+family `emit_carrier_bridge`'s canonical readback special-cases.
+
+Regression fixture:
+`tests/fixtures/result-byvalue-tail-var-no-double-unbox/`, verified to FAIL
+against the pre-fix compiler.
+
+Full fixture suite after both fixes: 2616 passed, 0 failed.

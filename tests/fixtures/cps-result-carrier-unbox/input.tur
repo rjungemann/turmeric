@@ -1,0 +1,55 @@
+;; cps-result-unbox-dropped regression.
+;;
+;; An inline-C defn whose result is a by-value ADT app -- (Result H cstr)
+;; under lowering -- is EMITTED as the int64 carrier (a malloc'd
+;; tur_result_box_t *), while the binder receiving it is the by-value
+;; aggregate.  The direct emitter derefs the carrier at the initializer; the
+;; CPS/trampoline delegation assigned it raw:
+;;
+;;   error: assigning to 'tur_adt_Result__H__cstr' from incompatible type
+;;          'int64_t'
+;;
+;; The CPS transform is forced here by calling a higher-order function, which
+;; is why this hit every caller of one -- e.g. anything using a `with-...`
+;; scoped-access combinator.
+
+(defmodule cps_result_carrier_unbox
+  (export)
+
+(defopaque H :int)
+
+;; Inline-C constructor: returns the BOXED Result carrier.
+(defn mk [n : int] : (Result H cstr)
+  ```c
+  if (n <= 0) return tur_err_ptr((void *)"bad");
+  return tur_ok_ptr((void *)(intptr_t)n);
+  ```)
+
+;; Takes a function value, so its callers are CPS-transformed.
+(defn hof [h : H f : (fn [int] int)] : int
+  (f 7))
+
+(defn cb [x : int] : int
+  x)
+
+;; Binds the inline-C Result AND makes a higher-order call.
+(defn with-hof [n : int] : int
+  (let [r (mk n)]
+    (if (ok? r)
+      (hof (ok-val r) cb)
+      0)))
+
+;; Control: same binding, no higher-order call (never CPS-transformed).
+(defn no-hof [n : int] : int
+  (let [r (mk n)]
+    (if (ok? r) 1 0)))
+
+(defn main [] : int
+  (do
+    (println (with-hof 3))
+    (println (with-hof 0))
+    (println (no-hof 3))
+    (println (no-hof 0))
+    0))
+
+) ;; end defmodule cps_result_carrier_unbox

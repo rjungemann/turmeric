@@ -1,0 +1,56 @@
+;; result-block-value-double-unboxed regression.
+;;
+;; A `let`/`do` block that EVALUATES TO a (Result A B) and is returned through
+;; an `if` branch used to have the boxed-carrier->struct conversion applied to
+;; a value that was already a struct:
+;;
+;;   error: operand of type 'tur_adt_Result__H__cstr' where arithmetic or
+;;          pointer type is required
+;;
+;; The tail is a bare VAR, which answered "no" to both type_uses_carrier_abi
+;; (correctly -- an Option/Result monomorph is not a carrier) and to the
+;; binding's emit_byvalue_carrier_abi flag (also correctly -- that flag is
+;; about carrier-ABI types held by-value), so emit_if treated the arm as a
+;; carrier producer.  Call-shaped tails were unaffected, which is why this
+;; survived: only a bare-var tail reached the bad path.
+
+(defmodule result_byvalue_tail_var
+  (export)
+
+(defopaque H :int)
+
+(defn mkh [n : int] : H
+  ```c
+  return n;
+  ```)
+
+(defn mk [n : int] : (Result H cstr)
+  (if (< n 1) (err "bad") (ok (mkh n))))
+
+(defn side [x : int] : int x)
+
+;; The shape that broke: if-branch -> let -> do -> bare var of Result type.
+(defn via-block [n : int] : (Result H cstr)
+  (if (= n 0)
+    (err "zero")
+    (let [r (mk n)
+          _ (side n)]
+      (do
+        (side n)
+        r))))
+
+;; The shape that always worked, kept as the control.
+(defn via-call [n : int] : (Result H cstr)
+  (if (= n 0)
+    (err "zero")
+    (mk n)))
+
+(defn main [] : int
+  (do
+    (println (if (ok? (via-block 3)) "block-ok" "block-err"))
+    (println (if (ok? (via-block 0)) "block-ok" "block-err"))
+    (println (if (ok? (via-call 3))  "call-ok"  "call-err"))
+    (println (if (ok? (via-call 0))  "call-ok"  "call-err"))
+    0))
+
+) ;; end defmodule result_byvalue_tail_var

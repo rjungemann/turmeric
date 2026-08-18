@@ -111,4 +111,4 @@ nothing warns you.
 ## Related
 
 Same session, same CPS emitter, distinct defect:
-[`cps-result-unbox-dropped.md`](cps-result-unbox-dropped.md).
+[`cps-result-unbox-dropped.md`](../archive/cps-result-unbox-dropped.md).

@@ -1,5 +1,6 @@
 # CPS-transformed functions drop the box->struct unbox for an inline-C `Result`
 
+**Status:** RESOLVED 2026-08-18.
 **Severity:** high (silent-until-`cc` miscompile; blocks the natural inline-C
 constructor idiom the guide documents, and the failure mode is a wall of C
 type errors with no `.tur` line attribution)
@@ -127,3 +128,20 @@ work and constructs all `Result` values in Turmeric with `ok`/`err`:
 This is arguably the better factoring anyway, but it should be a choice, not
 a requirement -- `docs/guides/inline-c-results-guide.md` actively recommends
 the pattern that breaks, so the guide is currently steering people into this.
+
+## RESOLVED (2026-08-18)
+
+Fixed in `src/compiler/emit_cps_ir.c`, at the CT_LETRAW binder assignment:
+the delegated path now mirrors the direct emitter's `init_carrier_to_byval`
+bridge (`emit_expr.c`, EX_LET), gated identically so it is inert whenever the
+initializer already yields the aggregate.
+
+Regression fixture: `tests/fixtures/cps-result-carrier-unbox/`, verified to
+FAIL against the pre-fix compiler.
+
+The related symptom noted at the bottom of
+[`result-block-value-double-unboxed.md`](result-block-value-double-unboxed.md)
+-- passing a Turmeric-built `(Result T E)` as a function parameter -- is also
+resolved by the sibling fix.
+
+Full fixture suite after both fixes: 2616 passed, 0 failed.
