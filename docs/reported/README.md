@@ -288,7 +288,9 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 ## Soundness limits and UB
 
-No open findings in this family.
+| Report | Severity | One line |
+| --- | --- | --- |
+| [reads-grant-survives-callee-global-write](reads-grant-survives-callee-global-write.md) | high | the C2 `#reads` congruence grant treats a frozen GLOBAL as pinned, but a callee can write it by name with no trace at the call site; a refinement precondition false at the crossing is statically proven, and the runtime entry check is suppressed for `#reads` measures so nothing catches it. Reachable today with single-param `#reads`; `--enable=checked-reads` does not cover it (R2 looks at the measure's body, not the caller's callees) |
 
 `dead-base-thunk-chain-references-undefined-ctor` was resolved 2026-08-18 and
 moved to

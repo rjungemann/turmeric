@@ -160,3 +160,18 @@ Left for whoever lands `docs/upcoming/mutable-globals-plan.md`: that plan
 writes `#reads [*cache*]` -- a bracketed frame over *globals* rather than
 parameters. The bracket syntax now exists and is free to reuse; what still
 needs deciding is whether globals share this mask or get a parallel one.
+
+### Follow-up: the open question was researched and it is NOT safe
+
+The note above left "whether globals share this mask or get a parallel one"
+open. Researching it turned up a soundness bug in the **existing**
+single-parameter grant, filed as
+[`reads-grant-survives-callee-global-write`](../reported/reads-grant-survives-callee-global-write.md):
+a frozen GLOBAL can be written by a callee with no trace at the call site, so
+the congruence hypothesis is never invalidated and a refinement precondition
+that is false at the crossing gets statically proven.
+
+That settles the design question. A global entry must not grant congruence on
+the strength of a frozen region alone, so its semantics differ from a
+parameter entry's -- which is a further argument for the parallel-field
+representation rather than a shared mask.
