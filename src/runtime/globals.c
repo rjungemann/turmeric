@@ -53,6 +53,7 @@ uint32_t g_unsafe_total_lines = 0;
 
 /* Phase P3: HAMT lowering - track if HAMT is needed for this compilation */
 bool g_needs_hamt = false;
+bool g_needs_dlfcn = false;   /* jit-ffi: program uses dlopen/dlsym/call-ptr */
 
 /* stdlib/re.tur: track when any inline-C in this compilation references
  * <regex.h>. When true, the emitter hoists `#include <regex.h>` into the
@@ -266,6 +267,11 @@ bool g_opt_owning_cloneable_capture = true;
  * breaking consumers who have not enabled the experiment. */
 bool g_opt_write_frames = false;
 bool g_opt_global_state  = false;
+/* checked-reads (docs/upcoming/trusted-refinement-claims-plan.md, R2):
+ * refuse the #reads congruence override on positive broken-promise evidence. */
+bool g_opt_checked_reads = false;
+/* jit-ffi (docs/upcoming/jit-ffi-c2mir-plan.md): gates the call-ptr form. */
+bool g_opt_jit_ffi = false;
 
 /* --strict-refine: hard-fail on any obligation the chain could not prove. */
 bool g_strict_refine = false;

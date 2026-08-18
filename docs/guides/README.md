@@ -230,6 +230,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Interoperability
 
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
+- **[ffi-guide.md](ffi-guide.md)** -- Dynamic FFI: dlopen/dlsym, the experimental `call-ptr` form, extern-c under the interpreter, and the JIT thunk engine (with a worked libzmq example)
 - **[eval-api.md](eval-api.md)** -- C embedding API for evaluating Turmeric expressions and calling Turmeric functions from within a C program using `libturi.a`
 - **[inline-c-results-guide.md](inline-c-results-guide.md)** -- Build typed Result/Option values inside inline-C bodies with the preamble helpers instead of hand-rolling structs or returning sentinel ints
 - **[sandboxing-guide.md](sandboxing-guide.md)** -- Running untrusted Turmeric code safely inside a C host using `turi_env_new_sandboxed`, capability flags, and resource limits
@@ -261,7 +262,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
 - Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
 - Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
-- Interoperability → [c-integration-guide.md](c-integration-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
+- Interoperability → [c-integration-guide.md](c-integration-guide.md), [ffi-guide.md](ffi-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)
 
 **By level:**

@@ -63,6 +63,13 @@ int tur_jit_execute(const char *csrc, size_t csrc_len, const char *autolink,
                     const char **include_dirs, int n_include_dirs,
                     int prog_argc, char **prog_argv, int *prog_rc);
 
+/* B4 (post-jit-benchmark-resurrection-plan): phase timings of the most
+ * recent tur_jit_execute in this process.  compile_ms covers c2mir +
+ * MIR_link (+ eager generation when TUR_JIT_GEN=eager); run_ms is the entry
+ * thread's wall time, which under the default lazy gen interface includes
+ * first-call code generation.  Backs `tur jit --timing-json`. */
+void tur_jit_last_timings(double *compile_ms, double *run_ms);
+
 /* ------------------------------------------------------------------ */
 /* J2 (plan section 3.3): persistent image mode for the REPL.          */
 /* ------------------------------------------------------------------ */

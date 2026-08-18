@@ -38,6 +38,19 @@ extern "C" {
  * with NULL img -- returns 0. */
 uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img);
 
+/* jit-ffi-c2mir-plan F2: bind `name` to a thunk-backed native that calls
+ * the resolved C function `fn` with the signature described by `ret_class`
+ * + `arg_classes[n]` (the 'i'/'f'/'F'/'v' vocabulary of turi/jit_ffi.h).
+ * The call goes through the JIT provider's per-signature thunk at each
+ * invocation, so registration is cheap and a provider that appears later
+ * (or a compile failure) surfaces per-call, as a clean error value.  The
+ * classes buffer is copied; `name` must outlive the env (interned symbol
+ * name).  Calls are gated on TURI_CAP_FFI.  Returns 0 on success, -1 on
+ * OOM. */
+int tur_ffi_register_extern_thunk(TuriEnv *env, const char *name, void *fn,
+                                  char ret_class, const char *arg_classes,
+                                  uint32_t n);
+
 /* RP5: register the `reload` native so the user can type `(reload)`
  * at the prompt. Available even when no spice is currently loaded
  * (the call surfaces a clean "no spice loaded" error in that case).

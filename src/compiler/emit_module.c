@@ -2002,6 +2002,79 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
     ctx->carrier_call_bindings[ctx->n_carrier_call_bindings++] = binding;
 }
 
+/* dead-base-thunk-chain-references-undefined-ctor: register a suffix-less
+ * reference to the base ctor of a heap parametric ADT.  Such a ctor is never
+ * defined (only per-spec monomorphs are), and every reference sits on the
+ * dead base generic chain -- so instead of leaving an undefined symbol that
+ * only `-O2` dead-stripping can survive, a static trap definition is flushed
+ * into the forward-decl band (emit_flush_dead_base_ctor_traps below). */
+void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args) {
+    if (!ctx || !mangled) return;
+    for (uint32_t i = 0; i < ctx->n_dead_base_ctors; i++) {
+        if (strcmp(ctx->dead_base_ctor_names[i], mangled) == 0) return;
+    }
+    if (ctx->n_dead_base_ctors >= ctx->cap_dead_base_ctors) {
+        uint32_t new_cap = ctx->cap_dead_base_ctors
+                           ? ctx->cap_dead_base_ctors * 2 : 4;
+        char **grown_n = (char **)realloc(ctx->dead_base_ctor_names,
+            new_cap * sizeof(char *));
+        uint32_t *grown_a = (uint32_t *)realloc(ctx->dead_base_ctor_arities,
+            new_cap * sizeof(uint32_t));
+        if (!grown_n || !grown_a) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->dead_base_ctor_names = grown_n;
+        ctx->dead_base_ctor_arities = grown_a;
+        ctx->cap_dead_base_ctors = new_cap;
+    }
+    char *dup = strdup(mangled);
+    if (!dup) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->dead_base_ctor_names[ctx->n_dead_base_ctors] = dup;
+    ctx->dead_base_ctor_arities[ctx->n_dead_base_ctors] = n_args;
+    ctx->n_dead_base_ctors++;
+}
+
+/* Flush the registered dead-base-ctor traps as static file-scope definitions.
+ * `out` must be a band the final assembly places BEFORE the function bodies
+ * (the forward-decl band), so the definition is in scope at every reference
+ * without any block-scope declaration.  Static: in project mode each TU
+ * carries its own copy of the dead chain, and internal linkage keeps the
+ * per-TU stubs from colliding at link.  A genuinely live call was an
+ * unconditional `undefined reference` before this existed, so nothing that
+ * links today can regress -- it can only turn a dead symbol into a clean
+ * link, or a compiler-defect invocation into a loud abort. */
+void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
+    if (!ctx) return;
+    for (uint32_t i = 0; i < ctx->n_dead_base_ctors; i++) {
+        const char *nm = ctx->dead_base_ctor_names[i];
+        uint32_t arity = ctx->dead_base_ctor_arities[i];
+        if (i == 0)
+            buf_puts(out,
+                "/* Trap stand-ins for base ctors of parametric heap ADTs: never\n"
+                " * defined (only per-spec monomorphs are), referenced only from the\n"
+                " * dead base generic chain.  Defined so a -O0 compile links clean. */\n");
+        buf_printf(out, "static int64_t ctor_%s(", nm);
+        if (arity == 0) {
+            buf_puts(out, "void");
+        } else {
+            for (uint32_t a = 0; a < arity; a++)
+                buf_printf(out, "%sint64_t _%u", a ? ", " : "", a);
+        }
+        buf_printf(out,
+            ") {\n"
+            "    fprintf(stderr, \"tur: internal error: base constructor "
+            "'ctor_%s' of a parametric type has no definition; a call reached "
+            "the dead base generic path instead of a per-spec clone\\n\");\n"
+            "    abort();\n"
+            "}\n", nm);
+        free(ctx->dead_base_ctor_names[i]);
+    }
+    free(ctx->dead_base_ctor_names);
+    free(ctx->dead_base_ctor_arities);
+    ctx->dead_base_ctor_names = NULL;
+    ctx->dead_base_ctor_arities = NULL;
+    ctx->n_dead_base_ctors = 0;
+    ctx->cap_dead_base_ctors = 0;
+}
+
 /* Mark a typeclass instance LIVE for dead-instance elimination: a reference to
  * its dict singleton (EX_DICT dispatch, or an existential witness table that
  * stores `&dict_<Class>_<T>_singleton`) keeps the dict alive, so its method
@@ -7650,6 +7723,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
     }
+    /* jit-ffi-c2mir-plan: dlopen/dlsym/dlclose (and call-ptr's pointer
+     * source) need <dlfcn.h>; the codegen for these builtins predates this
+     * include, so `(unsafe (dlopen ...))` never actually compiled before the
+     * call-ptr work made someone run it.  The autolink marker adds -ldl for
+     * pre-2.34 glibc; the JIT engine's autolink loader skips the `dl` entry
+     * (its symbols are already in-process). */
+    if (g_needs_dlfcn) {
+        buf_puts(out, "#ifndef _WIN32\n");
+        buf_puts(out, "#include <dlfcn.h>\n");
+        buf_puts(out, "#endif\n");
+        buf_puts(out, "/* __tur_autolink__: -ldl */\n");
+    }
 
     /* WIN1 (windows-support-plan): the emitted C is portable, so the platform
      * split lives in the OUTPUT as #ifdef _WIN32 rather than being decided by
@@ -11890,8 +11975,20 @@ int emit_program(Buf *out, const Expr *program) {
                     "        frame = prev;\n"
                     "    }\n"
                     "}\n"
+                    /* mutable-globals-plan 13.3: the mechanism's one failure
+                     * mode, checked rather than ignored.  On EAGAIN (the
+                     * process key budget -- PTHREAD_KEYS_MAX, 1024 on glibc,
+                     * one key per dynvar plus one for ^thread-local -- is
+                     * exhausted) an unchecked create leaves the key
+                     * uninitialized and every later getspecific is UB: a
+                     * silent wrong-value failure.  Mirrors __tur_tl_key_init. */
                     "static void _dynvar_init_%s(void) {\n"
-                    "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
+                    "    if (pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s) != 0) {\n"
+                    "        fprintf(stderr, \"tur: pthread_key_create failed for dynamic \"\n"
+                    "                        \"variable (process key limit, PTHREAD_KEYS_MAX, \"\n"
+                    "                        \"exhausted?)\\n\");\n"
+                    "        abort();\n"
+                    "    }\n"
                     "}\n"
                     /* S1b/cleanup: idempotent.  The emitter now calls this
                      * explicitly at the end of the binding block AND leaves
@@ -12079,8 +12176,8 @@ int emit_program(Buf *out, const Expr *program) {
             buf_puts(&file, "static void __tur_tl_key_init(void) {\n");
             /* The one failure mode of this mechanism, checked rather than
              * ignored -- an unchecked pthread_key_create leaves the key
-             * uninitialized and every later getspecific undefined.  (The dynvar
-             * path still ignores it; see docs/reported/.) */
+             * uninitialized and every later getspecific undefined.  (The
+             * dynvar path checks it the same way; see _dynvar_init_*.) */
             buf_puts(&file, "    if (pthread_key_create(&__tur_tl_key, __tur_tl_block_free) != 0) {\n");
             buf_puts(&file, "        fprintf(stderr, \"tur: pthread_key_create failed for ^thread-local globals\\n\");\n");
             buf_puts(&file, "        abort();\n    }\n}\n");
@@ -12891,6 +12988,13 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase E: fn-ptr typedefs for concrete fn fields in parametric structs */
     Buf concrete_fn_ptr_typedefs; buf_init(&concrete_fn_ptr_typedefs);
     type_codegen_emit_fn_ptr_typedefs(&concrete_fn_ptr_typedefs);
+
+    /* dead-base-thunk-chain-references-undefined-ctor: static trap stand-ins
+     * for base ctors of heap parametric ADTs referenced by the dead base
+     * generic chain.  Into fwd_decls (written before every function body).
+     * Must run after ALL body emission -- including the defer thunks above,
+     * whose bodies can register too. */
+    emit_flush_dead_base_ctor_traps(&ctx, &fwd_decls);
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
@@ -14308,6 +14412,11 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     if (impl_fn_ptr_typedefs.len) { buf_write(out, impl_fn_ptr_typedefs.data, impl_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     buf_free(&impl_fn_ptr_typedefs);
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
+    /* dead-base-thunk-chain-references-undefined-ctor: per-TU static trap
+     * stand-ins for base ctors of heap parametric ADTs referenced by the dead
+     * base generic chain in THIS TU's bodies (all emitted above).  Internal
+     * linkage keeps the copies from colliding across TUs at link. */
+    emit_flush_dead_base_ctor_traps(&ctx, &impl_fwd_decls);
     /* J2: Clone forward decls precede function definitions. */
     if (impl_fwd_decls.len) { buf_write(out, impl_fwd_decls.data, impl_fwd_decls.len); buf_putc(out, '\n'); }
     /* Defer thunk env-structs + functions, before the bodies that reference them. */

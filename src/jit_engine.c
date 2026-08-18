@@ -383,9 +383,35 @@ static void jit_sync_config_globals (MIR_context_t ctx) {
  * -lturi and the libs `tur` already links (m, pthread, dl) are skipped --
  * their symbols are resolvable in this process by construction.  Any entry
  * that fails to load fails the whole JIT attempt, which the caller turns
- * into the step-6 fallback to cc. */
+ * into the step-6 fallback to cc (or, for the REPL spice hook, the
+ * subprocess build).
+ *
+ * ffi-spices-integration-plan S1: -L dirs are honored -- a cmake-built
+ * spice dependency lives in the build tree, not on the default search
+ * path, so each -l probes `<Ldir>/lib<name>.so` (and .dylib on Apple)
+ * before falling back to the bare soname.  A static-only dep (.a, which
+ * dlopen cannot load) therefore fails here cleanly rather than resolving
+ * against nothing. */
 static int jit_load_autolink (const char *flags) {
   if (!flags) return 0;
+  enum { MAX_LDIRS = 16 };
+  const char *ldir[MAX_LDIRS];
+  size_t ldir_len[MAX_LDIRS];
+  size_t n_ldirs = 0;
+  /* Pass 1: collect -L dirs (cc semantics: all -L apply to every -l,
+   * regardless of order). */
+  for (const char *p = flags; *p;) {
+    while (*p == ' ') p++;
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    if (e - p > 2 && p[0] == '-' && p[1] == 'L' && n_ldirs < MAX_LDIRS) {
+      ldir[n_ldirs] = p + 2;
+      ldir_len[n_ldirs] = (size_t) (e - p - 2);
+      n_ldirs++;
+    }
+    p = e;
+  }
+  /* Pass 2: dlopen each -l entry. */
   const char *p = flags;
   while (*p) {
     while (*p == ' ') p++;
@@ -399,10 +425,34 @@ static int jit_load_autolink (const char *flags) {
         name[n] = '\0';
         if (strcmp (name, "turi") != 0 && strcmp (name, "m") != 0
             && strcmp (name, "pthread") != 0 && strcmp (name, "dl") != 0) {
-          char soname[300];
-          snprintf (soname, sizeof soname, "lib%s.so", name);
-          if (dlopen (soname, RTLD_NOW | RTLD_GLOBAL) == NULL) {
-            fprintf (stderr, "tur: jit: cannot load %s: %s\n", soname, dlerror ());
+          void *h = NULL;
+          char soname[4400];
+          for (size_t d = 0; h == NULL && d < n_ldirs; d++) {
+            if (ldir_len[d] + n + 32 >= sizeof soname) continue;
+            snprintf (soname, sizeof soname, "%.*s/lib%s.so",
+                      (int) ldir_len[d], ldir[d], name);
+            h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+#if defined(__APPLE__)
+            if (h == NULL) {
+              snprintf (soname, sizeof soname, "%.*s/lib%s.dylib",
+                        (int) ldir_len[d], ldir[d], name);
+              h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+            }
+#endif
+          }
+          if (h == NULL) {
+            snprintf (soname, sizeof soname, "lib%s.so", name);
+            h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+          }
+#if defined(__APPLE__)
+          if (h == NULL) {
+            snprintf (soname, sizeof soname, "lib%s.dylib", name);
+            h = dlopen (soname, RTLD_NOW | RTLD_GLOBAL);
+          }
+#endif
+          if (h == NULL) {
+            fprintf (stderr, "tur: jit: cannot load lib%s: %s\n", name,
+                     dlerror ());
             return -1;
           }
         }
@@ -592,14 +642,29 @@ static MIR_item_t jit_find_func (MIR_context_t ctx, const char *name) {
 /* ------------------------------------------------------------------ */
 /* the engine                                                          */
 /* ------------------------------------------------------------------ */
+/* post-jit-benchmark-resurrection-plan B4: last-execution phase timings,
+ * readable after tur_jit_execute returns.  compile covers c2mir + link
+ * (+ eager gen when TUR_JIT_GEN=eager); run is the entry thread's wall
+ * time -- which under the default LAZY gen interface includes first-call
+ * code generation, a fact the benchmark methodology records rather than
+ * hides. */
+static double g_jit_stat_compile_ms, g_jit_stat_run_ms;
+
+void tur_jit_last_timings (double *compile_ms, double *run_ms) {
+  if (compile_ms) *compile_ms = g_jit_stat_compile_ms;
+  if (run_ms) *run_ms = g_jit_stat_run_ms;
+}
+
 int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
                      const char **include_dirs, int n_include_dirs,
                      int prog_argc, char **prog_argv, int *prog_rc) {
   g_n_atexit = 0;
+  double t_start = jit_now_ms ();
   MIR_context_t ctx;
   int frc = jit_compile_and_link (csrc, csrc_len, autolink,
                                   include_dirs, n_include_dirs, &ctx);
   if (frc != TUR_JIT_OK) return frc;
+  g_jit_stat_compile_ms = jit_now_ms () - t_start;
 
   MIR_item_t main_item = jit_find_func (ctx, "main");
   if (main_item == NULL) {
@@ -628,7 +693,9 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     fprintf (stderr, "tur: jit: entry thread create failed\n");
     return TUR_JIT_ERR_RUN;
   }
+  double t_run = jit_now_ms ();
   pthread_join (entry_thread, NULL);
+  g_jit_stat_run_ms = jit_now_ms () - t_run;
   pthread_attr_destroy (&attr);
   jit_timing_mark ("run");
   jit_timing_rss ();

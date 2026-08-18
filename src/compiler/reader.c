@@ -4559,14 +4559,17 @@ ReaderType reader_type_from_extension(const char *path) {
     return READER_TURMERIC;
 }
 
-/* Get reader type name as string */
+/* Get reader type name as string.  Always the canonical slash-namespaced
+ * spelling: the legacy `sweet-exp` alias is accepted on input
+ * (lang_base_from_name) but never generated, so a round-trip through
+ * detect_lang -> reader_type_name is stable. */
 const char *reader_type_name(ReaderType type) {
     switch (type) {
         case READER_UNKNOWN: return "unknown";
         case READER_TURMERIC: return "turmeric";
         case READER_CURLY_INFIX: return "turmeric/curly-infix";
         case READER_NEOTERIC: return "turmeric/neoteric";
-        case READER_SWEET: return "sweet-exp";
+        case READER_SWEET: return "turmeric/sweet";
         default: return "<invalid>";
     }
 }

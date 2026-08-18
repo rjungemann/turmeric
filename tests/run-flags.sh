@@ -23,7 +23,10 @@ cd "$(dirname "$0")/.."
 # docs/asan-debug-leaks-plan.md.
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
-TUR="./build/tur"
+# Overridable so the jit-ffi cases below can be exercised against a
+# -DTUR_JIT=ON build (`TUR=./build-jit/tur bash tests/run-flags.sh`),
+# matching run-jit.sh's convention.  Default unchanged.
+TUR="${TUR:-./build/tur}"
 PASS=0
 FAIL=0
 
@@ -939,6 +942,130 @@ elif [[ "$out" == *"cps-fn twice "* ]]; then
     fail "dump-cps-bridge" "uncolored twice must stay direct (not CPS-lowered)"
 else
     pass "dump-cps-bridge"
+fi
+
+# ---------------------------------------------------------------------------
+# try-turmeric-lang-toggle-plan T0: #lang layer toggle + canonical reader name
+# ---------------------------------------------------------------------------
+
+# lang-layer-toggle-off: within ONE interpreter session, `#lang turmeric
+# stringed` must activate the #s"..." dispatch and a later `#lang turmeric`
+# must genuinely deactivate it (the layer set is assigned, not accumulated,
+# and turi_env_apply_lang wipes the session reader-macro registry). Before
+# the fix the second #s"..." kept reading as a String.
+out=$(printf '#lang turmeric stringed\n#s"on"\n#lang turmeric\n#s"off"\n:quit\n' \
+      | "$TUR" repl 2>&1); rc=$?
+if ! echo "$out" | grep -q '=> "on"'; then
+    fail "lang-layer-toggle-off" "stringed layer did not activate (#s\"on\" not evaluated)"
+elif echo "$out" | grep -q '=> "off"'; then
+    fail "lang-layer-toggle-off" "#s\"...\" still dispatched after the layer was dropped"
+elif ! echo "$out" | grep -q "unknown reader string macro '#s'"; then
+    fail "lang-layer-toggle-off" "expected an unknown-reader-macro error once stringed is off"
+else
+    pass "lang-layer-toggle-off"
+fi
+
+# reader-name-canonical: reader_type_name(READER_SWEET) reports the canonical
+# slash-namespaced spelling; the legacy `sweet-exp` alias is accepted on
+# input but never generated, so the round-trip is stable.
+out=$(printf '#lang sweet-exp\n#lang turmeric/sweet\n:quit\n' | "$TUR" repl 2>&1); rc=$?
+if ! echo "$out" | grep -q "; reader set to turmeric/sweet (session reset)"; then
+    fail "reader-name-canonical" "legacy alias did not report canonical 'turmeric/sweet'"
+elif ! echo "$out" | grep -q "; reader already set to turmeric/sweet"; then
+    fail "reader-name-canonical" "canonical spelling not recognized as the same reader"
+elif echo "$out" | grep -q "reader (set to\|already set to) sweet-exp"; then
+    fail "reader-name-canonical" "legacy 'sweet-exp' spelling was generated"
+else
+    pass "reader-name-canonical"
+fi
+
+# lang-layer-same-set-no-reset: repeating the SAME base+layer line must not
+# reset the session (turi_env_apply_lang is a no-op when nothing changes).
+out=$(printf '#lang turmeric stringed\n(def keep 41)\n#lang turmeric stringed\n(+ keep 1)\n:quit\n' \
+      | "$TUR" repl 2>&1); rc=$?
+if ! echo "$out" | grep -q "; reader already set to turmeric"; then
+    fail "lang-layer-same-set-no-reset" "identical #lang line was not treated as a no-op"
+elif ! echo "$out" | grep -q "=> 42"; then
+    fail "lang-layer-same-set-no-reset" "binding did not survive an identical #lang line"
+else
+    pass "lang-layer-same-set-no-reset"
+fi
+
+# ---------------------------------------------------------------------------
+# jit-ffi-c2mir-plan: dynamic FFI (call thunks, extern-c, call-ptr)
+# ---------------------------------------------------------------------------
+
+# The interpreter halves of the feature exist only in -DTUR_JIT=ON builds;
+# probe the binary once and PASS-skip those cases against a JIT-less tur
+# (mirroring how run-jit.sh treats an engine-less binary).  The non-JIT
+# diagnostics ARE asserted either way.
+TMP_FFI=$(mktemp -t tur-jit-ffi.XXXXXX.tur)
+trap 'rm -f "$TMP_FFI"' EXIT
+# NOTE: captured via command substitution, not a pipeline -- this script
+# runs `set -o pipefail`, and `tur jit`'s non-zero exit (or the SIGPIPE from
+# grep -q's early close) would mask a successful match.
+HAS_JIT=1
+printf '(defn main [] : int 0)\n' > "$TMP_FFI"
+probe_out=$("$TUR" jit "$TMP_FFI" 2>&1 || true)
+case "$probe_out" in *"no JIT engine"*) HAS_JIT=0 ;; esac
+
+# jit-ffi-extern-c-real: under --interpret in a JIT build, an extern-c
+# declaration beyond the known-override table resolves via dlsym and gets
+# CALLED for real -- the old behavior silently returned nil (printed 0).
+printf '(extern-c strtol [s :cstr endp :int base :int] :int)\n(defn main [] : int (println (strtol "123abc" 0 10)) 0)\n' > "$TMP_FFI"
+if [ "$HAS_JIT" = "1" ]; then
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
+    if ! echo "$out" | grep -q "^123$"; then
+        fail "jit-ffi-extern-c-real" "expected strtol to return 123 under --interpret, got: $out"
+    else
+        pass "jit-ffi-extern-c-real"
+    fi
+else
+    echo "SKIP jit-ffi-extern-c-real (no JIT engine in this build)"
+fi
+
+# jit-ffi-call-ptr-interp: the call-ptr form routed through the c2mir thunk
+# provider under --interpret (dlopen -> dlsym -> call-ptr, the full loop).
+# Linux-only: the fixture names a soname; macOS spells libm differently and
+# the portable half is covered by tests/fixtures/jit-ffi-call-ptr.
+if [ "$HAS_JIT" = "1" ] && [ "$(uname)" = "Linux" ]; then
+    printf '(defn main [] : int\n  (unsafe\n    (let [h (dlopen "libm.so.6")\n          p (dlsym h "cbrt")]\n      (println (call-ptr p [:float -> :float] 27.0))))\n  0)\n' > "$TMP_FFI"
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+    if ! echo "$out" | grep -q "^3$"; then
+        fail "jit-ffi-call-ptr-interp" "expected cbrt(27) = 3 via call-ptr under --interpret, got: $out"
+    else
+        pass "jit-ffi-call-ptr-interp"
+    fi
+else
+    echo "SKIP jit-ffi-call-ptr-interp (needs a JIT build on Linux)"
+fi
+
+# jit-ffi-call-ptr-nonjit-diag: a JIT-less interpreter reports a clean
+# "requires a JIT-enabled build" diagnostic for call-ptr -- never nil, never
+# a crash.  (In a JIT build the call succeeds instead, so only the JIT-less
+# side of the fork is asserted here.)
+if [ "$HAS_JIT" = "0" ]; then
+    printf '(defn main [] : int\n  (unsafe (println (call-ptr 1 [-> :int])))\n  0)\n' > "$TMP_FFI"
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
+    if ! echo "$out" | grep -q "requires a JIT-enabled build"; then
+        fail "jit-ffi-call-ptr-nonjit-diag" "expected the clean non-JIT diagnostic, got: $out"
+    else
+        pass "jit-ffi-call-ptr-nonjit-diag"
+    fi
+else
+    echo "SKIP jit-ffi-call-ptr-nonjit-diag (this build has the engine)"
+fi
+
+# jit-ffi-gate: without --enable=jit-ffi the form is a hard error pointing
+# at the experiment, on every build.
+printf '(defn main [] : int\n  (unsafe (println (call-ptr 1 [-> :int])))\n  0)\n' > "$TMP_FFI"
+out=$("$TUR" emit-c "$TMP_FFI" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "jit-ffi-gate" "call-ptr compiled without --enable=jit-ffi"
+elif ! echo "$out" | grep -q "enable=jit-ffi"; then
+    fail "jit-ffi-gate" "gate diagnostic did not point at --enable=jit-ffi"
+else
+    pass "jit-ffi-gate"
 fi
 
 # ---------------------------------------------------------------------------

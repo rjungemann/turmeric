@@ -113,6 +113,10 @@ set(TURI_EVAL_SOURCES
     # RP4: TuriValue<->scalar marshaling layer that installs each
     # spice export as a TuriNativeFn binding the eval loop can call.
     turi/ffi_thunk.c
+    # jit-ffi-c2mir-plan: the MIR-free half of the JIT-scoped dynamic FFI --
+    # provider hook + signature vocabulary.  The c2mir-backed provider itself
+    # lives in turi/jit_ffi.c inside tur_jit_obj (JIT builds only).
+    turi/jit_ffi_hook.c
 )
 
 # ---------------------------------------------------------------------------
@@ -423,7 +427,11 @@ if(TUR_JIT)
   # showed up as `undefined reference to MIR_set_error_func` across the
   # board.  A separate object library keeps the blast radius to the two
   # targets that actually want an engine.
-  add_library(tur_jit_obj OBJECT jit_engine.c runtime/generated/tur_rt_split_embed.c)
+  # jit-ffi-c2mir-plan F1: turi/jit_ffi.c rides in the engine's object
+  # library, not tur_core -- it calls the image API and must not drag MIR
+  # onto tur_core's eighteen consumers.
+  add_library(tur_jit_obj OBJECT jit_engine.c turi/jit_ffi.c
+              runtime/generated/tur_rt_split_embed.c)
   target_include_directories(tur_jit_obj PRIVATE ${TUR_INCLUDE_DIRS})
   target_link_libraries(tur_jit_obj PRIVATE tur_mir)
   target_compile_definitions(tur_jit_obj PRIVATE TUR_HAVE_JIT=1)
@@ -1363,6 +1371,36 @@ set_target_properties(tur_lsp_wasm_backend_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# ---------------------------------------------------------------------------
+# try-turmeric-lang-toggle-plan T0/T1: the browser's language-mode entry
+# points (turi_wasm_set_lang / get_lang / lang_registry), run natively via
+# libturi_wasm for the same reason as the analysis backend above -- nothing
+# in wasm_glue.c is actually wasm-specific, and inside a wasm module nothing
+# in CI can look at it.
+# ---------------------------------------------------------------------------
+add_executable(tur_wasm_glue_lang_unit
+    ${CMAKE_SOURCE_DIR}/tests/wasm_glue_lang_unit.c
+)
+target_include_directories(tur_wasm_glue_lang_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_wasm_glue_lang_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_wasm_glue_lang_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_wasm_glue_lang_unit PRIVATE libturi_wasm m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_wasm_glue_lang_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_wasm_glue_lang_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Injective name-mangler round-trip + injectivity unit test
 # (reversible-name-mangling-plan, task T2).
 add_executable(tur_mangle_unit
@@ -1459,7 +1497,7 @@ if(TUR_WASM)
                 -sSTACK_SIZE=16777216
                 -sDEFAULT_PTHREAD_STACK_SIZE=8388608
                 -sINITIAL_MEMORY=67108864
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_doc_lookup,_turi_type_of,_turi_explain,_malloc,_free
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_doc_lookup,_turi_type_of,_turi_explain,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1

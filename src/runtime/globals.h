@@ -52,6 +52,12 @@ extern uint32_t g_unsafe_total_lines;
 /* Phase P3: HAMT lowering */
 extern bool g_needs_hamt;
 
+/* jit-ffi-c2mir-plan: the program elaborated a dlopen/dlsym/dlclose builtin
+ * (or a call-ptr), so the emitted C needs <dlfcn.h> and the link needs -ldl
+ * (a no-op on glibc >= 2.34 / macOS, required on older glibc).  Same
+ * lifecycle as g_needs_hamt: set during elaboration, read by the preamble. */
+extern bool g_needs_dlfcn;
+
 /* AR8: Variadic rest parameters -- set when any variadic defn is compiled */
 extern bool g_has_variadics;
 
@@ -277,6 +283,23 @@ extern bool g_opt_write_frames;
  * global state can carry a checked frame instead of being declined outright.
  * With it off, G1's rule stands: any global write blocks VERIFIED, silently. */
 extern bool g_opt_global_state;
+
+/* `checked-reads` experiment (docs/upcoming/trusted-refinement-claims-plan.md,
+ * R2): on positive evidence that a `#reads` measure's body reads a mutable
+ * global (the same evidence TUR-W0383 reports gatelessly), REFUSE the
+ * congruence override instead of merely warning -- the crossing then gets the
+ * ordinary TUR-W0372 an unframed impure measure gets.  Refusal keys on "saw a
+ * read", never on "could not see": an inline-C body yields no evidence and
+ * keeps today's trusted behaviour even with the gate on. */
+extern bool g_opt_checked_reads;
+
+/* `jit-ffi` experiment (docs/upcoming/jit-ffi-c2mir-plan.md, F3): the
+ * `(unsafe (call-ptr p [T1 T2 -> R] args...))` form -- call an arbitrary
+ * function pointer with a signature stated at the site.  Gated because the
+ * surface is young and the turi routing depends on a JIT build; the F1/F2
+ * plumbing (spice-export thunks, thunk-backed extern-c) is behavior-neutral
+ * upgrade and is NOT behind this flag. */
+extern bool g_opt_jit_ffi;
 
 /* lang-layers L4: true once a project manifest declared an `:experiments`
  * key (even the empty list), i.e. the project owner scoped the experiment set.

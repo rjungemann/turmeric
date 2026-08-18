@@ -1,7 +1,100 @@
 /* elab_call.c -- function-call elaboration, partial application, polymorphic dispatch. */
+/* For pthread_getattr_np (the glibc branch of elab_stack_headroom below);
+ * must precede every include so <pthread.h> sees it wherever it is first
+ * pulled in. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
 #include "elab_internal.h"
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
+
+/* macro-depth-guard-loses-race-with-asan-stack: platform stack introspection
+ * for the second trigger of the macro-expansion depth guard below. */
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
+/* Approximate the REAL stack pointer.  The obvious probe -- the address of a
+ * local -- is wrong under ASan: with use-after-return detection (default in
+ * modern toolchains) address-taken locals live on the sanitizer's heap-side
+ * FAKE stack, so their addresses fall outside the thread stack entirely and
+ * say nothing about real consumption.  The SP register itself still tracks
+ * the real stack (it is the real stack that overflows), so read it directly
+ * on the architectures we build for and fall back to the local's address
+ * (correct whenever no fake stack is in play) elsewhere. */
+static uintptr_t elab_approx_sp(void) {
+#if defined(__GNUC__) && defined(__x86_64__)
+    uintptr_t sp; __asm__ ("movq %%rsp, %0" : "=r"(sp)); return sp;
+#elif defined(__GNUC__) && defined(__aarch64__)
+    uintptr_t sp; __asm__ ("mov %0, sp" : "=r"(sp)); return sp;
+#elif defined(__GNUC__) && defined(__i386__)
+    uintptr_t sp; __asm__ ("movl %%esp, %0" : "=r"(sp)); return sp;
+#else
+    volatile char probe = 0;
+    return (uintptr_t)&probe;
+#endif
+}
+
+/* Remaining C-stack headroom (bytes) for the calling thread, or SIZE_MAX when
+ * the platform cannot tell us.  `total_out` gets the thread's total stack
+ * size (0 when unknown).  The SP approximation is exact enough for a
+ * "nearly gone" test with a generous margin. */
+static size_t elab_stack_headroom(size_t *total_out) {
+    if (total_out) *total_out = 0;
+    uintptr_t sp = elab_approx_sp();
+#if defined(_WIN32)
+    ULONG_PTR lo = 0, hi = 0;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    if (hi <= lo || sp <= (uintptr_t)lo || sp > (uintptr_t)hi) return SIZE_MAX;
+    if (total_out) *total_out = (size_t)(hi - lo);
+    return (size_t)(sp - (uintptr_t)lo);
+#elif defined(__APPLE__)
+    pthread_t self = pthread_self();
+    uintptr_t hi = (uintptr_t)pthread_get_stackaddr_np(self); /* HIGH end */
+    size_t size = pthread_get_stacksize_np(self);
+    if (!hi || !size) return SIZE_MAX;
+    uintptr_t lo = hi - size;
+    if (sp <= lo || sp > hi) return SIZE_MAX;
+    if (total_out) *total_out = size;
+    return (size_t)(sp - lo);
+#elif defined(__GLIBC__)
+    /* glibc reports the main thread's stack from RLIMIT_STACK + /proc maps,
+     * so a `ulimit -s` shrink is seen too. */
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) return SIZE_MAX;
+    void *lo_addr = NULL; size_t size = 0;
+    int rc = pthread_attr_getstack(&attr, &lo_addr, &size);
+    pthread_attr_destroy(&attr);
+    if (rc != 0 || !lo_addr || size == 0) return SIZE_MAX;
+    uintptr_t lo = (uintptr_t)lo_addr;
+    if (sp <= lo || sp > lo + size) return SIZE_MAX;
+    if (total_out) *total_out = size;
+    return (size_t)(sp - lo);
+#else
+    (void)sp;
+    return SIZE_MAX;
+#endif
+}
+
+/* True when so little stack remains that another macro-expansion level (an
+ * elab_call -> elab_form recursion cycle, ASan-inflated in Debug) risks a
+ * hard stack-overflow abort before the depth counter can trip.  The margin
+ * scales with the thread's stack (an eighth), clamped to [256 KiB, 1 MiB]:
+ * far above one recursion cycle, far below a healthy stack, and lenient
+ * enough that a deliberately tiny `ulimit -s` does not trip it at trivial
+ * macro depth. */
+static bool elab_stack_nearly_exhausted(void) {
+    size_t total = 0;
+    size_t headroom = elab_stack_headroom(&total);
+    if (headroom == SIZE_MAX) return false;   /* unknown: depth counter only */
+    size_t margin = total ? total / 8 : (size_t)1 << 20;
+    if (margin > ((size_t)1 << 20)) margin = (size_t)1 << 20;
+    if (margin < ((size_t)256 << 10)) margin = (size_t)256 << 10;
+    return headroom < margin;
+}
 
 /* --- Slice 3 (constrained-hkt-forall-plan): higher-kinded rank-2 helpers ----
  *
@@ -211,7 +304,8 @@ static const char *const reserved_special_forms_[] = {
     "ptr-deref", "ptr-write", "ptr-add", "ptr-sub", "ptr-null?", "ptr-of",
     "unsafe-cast", "reinterpret", "transmute", "array-get-unchecked",
     "array-set-unchecked", "raw-malloc", "raw-free", "raw-realloc",
-    "raw-memcpy", "raw-memset", "c-call", "dlopen", "dlsym", "dlclose",
+    "raw-memcpy", "raw-memset", "c-call", "call-ptr", "dlopen", "dlsym",
+    "dlclose",
     /* STM */
     "stm", "retry",
     /* GC */
@@ -2462,6 +2556,7 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_raw_memset)  return elab_raw_memset(e, call);
     /* Phase U3: Unsafe primitives - FFI */
     if (name == e->sym_c_call)      return elab_c_call(e, call);
+    if (name == e->sym_call_ptr)    return elab_call_ptr(e, call);
     if (name == e->sym_dlopen)      return elab_dlopen(e, call);
     if (name == e->sym_dlsym)       return elab_dlsym(e, call);
     if (name == e->sym_dlclose)     return elab_dlclose(e, call);
@@ -2570,7 +2665,30 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 6: Check if it's a macro call */
     MacroDef *macro = elab_lookup_macro(e, name);
     if (macro) {
-        if (e->macro_expand_depth >= ELAB_MAX_MACRO_EXPANSION_DEPTH) {
+        /* macro-depth-guard-loses-race-with-asan-stack: the depth counter is a
+         * proxy for stack headroom, and on an ASan-instrumented build the
+         * redzone-inflated frames can exhaust the real stack before 256 levels
+         * -- the process then aborts with a sanitizer stack-overflow report
+         * instead of this diagnostic.  So measure the real thing too: once a
+         * genuine macro recursion is under way (depth >= 16 -- a runaway hits
+         * that instantly, and the floor keeps a legitimately shallow nest on a
+         * deliberately tiny `ulimit -s` from tripping), nearly-exhausted
+         * headroom raises the SAME diagnostic pair the counter does. */
+        bool stack_low = e->macro_expand_depth >= 16 &&
+                         e->macro_expand_depth < ELAB_MAX_MACRO_EXPANSION_DEPTH &&
+                         elab_stack_nearly_exhausted();
+        /* TUR_DEBUG_STACK_GUARD=1: trace what the guard sees (used to verify
+         * the trigger on a platform where the race reproduces). */
+        {
+            static int dbg = -1;
+            if (dbg < 0) dbg = getenv("TUR_DEBUG_STACK_GUARD") != NULL;
+            if (dbg) {
+                size_t t = 0, h = elab_stack_headroom(&t);
+                fprintf(stderr, "[stack-guard] depth=%u headroom=%zu total=%zu low=%d\n",
+                        e->macro_expand_depth, h, t, (int)stack_low);
+            }
+        }
+        if (e->macro_expand_depth >= ELAB_MAX_MACRO_EXPANSION_DEPTH || stack_low) {
             diag_emit(DIAG_ERROR, call->span, "maximum macro expansion depth exceeded");
             /* The two ways a recursive macro's base case silently never fires,
              * both measured in practice (see docs/guides/macros-guide.md):
@@ -2585,6 +2703,15 @@ Expr *elab_call(Elab *e, Form *call) {
                       "(nil? xs), and note the compile-time evaluator has no "
                       "arithmetic -- drive recursion by argument list "
                       "structure, not by counting");
+            if (stack_low)
+                diag_emit(DIAG_NOTE, call->span,
+                          "expansion stopped at depth %u (limit %u): the "
+                          "compiler's C stack is nearly exhausted -- oversized "
+                          "native frames (e.g. a sanitizer-instrumented debug "
+                          "build) or a small stack limit reach the stack "
+                          "before the depth limit",
+                          e->macro_expand_depth,
+                          (unsigned)ELAB_MAX_MACRO_EXPANSION_DEPTH);
             return NULL;
         }
         /* ambiguous-dispatch-error-quality: record the OUTERMOST macro call site

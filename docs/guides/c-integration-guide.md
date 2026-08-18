@@ -11,6 +11,12 @@ the compilation target itself. There is no runtime library to link against and
 no interpreter to embed. Instead, you write Turmeric code that reaches into C
 (and vice-versa) by making the generated C source do what you need.
 
+This guide covers the *static* story -- the library is known at build time
+and the generated C calls it by name. For loading libraries at **runtime**
+(`dlopen`/`dlsym`, the experimental `call-ptr` form) and for how C calls
+work under `--interpret` and the REPL, see the
+[Dynamic FFI Guide](ffi-guide.md).
+
 This guide covers the two directions:
 
 1. **Calling C from Turmeric** -- importing symbols with `extern-c`, writing

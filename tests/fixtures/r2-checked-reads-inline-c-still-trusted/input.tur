@@ -1,0 +1,30 @@
+;; R2 (docs/upcoming/trusted-refinement-claims-plan.md): the refusal keys on
+;; "saw a read", never "could not see".  This is the
+;; refine-stateful-guard-discharges program -- an inline-C `#reads` measure
+;; whose crossing discharges from the guard inside a frozen region, under
+;; --strict-refine -- with `--enable=checked-reads` ADDED.  The inline-C body
+;; is unwalkable, so the classifier has no evidence, no refusal happens, and
+;; the program must compile and print 42 exactly as it does without the gate.
+;; If this fixture ever fails under the gate, the refusal has started acting
+;; on "could not see" -- the failure mode the plan's R2 rules out, because it
+;; would kill every pre-existing measure in the tree.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 42)]
+    (let [__frz (& w)]                 ;; frozen region: w borrowed
+      (if (alive? w 0)
+        (get-Pos! w 0)                 ;; discharges from the guard
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

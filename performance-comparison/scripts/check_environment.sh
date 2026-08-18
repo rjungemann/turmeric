@@ -142,3 +142,45 @@ with open("results/processed/environment.json", "w") as f:
 print("Environment data written to: results/processed/environment.json")
 PYEOF
 fi
+
+# ── B0 (post-jit-benchmark-resurrection-plan): preflight matrix ──────────────
+# What will actually run, per (benchmark, language), printed BEFORE a
+# multi-hour sweep starts -- a missing column shows up here, not as a silent
+# four-column result table.
+echo
+echo "── preflight matrix (source/binary present per language) ──"
+BENCH_DIR="$(cd "$(dirname "$0")/.." && pwd)/benchmarks"
+RUST_DIR="$BENCH_DIR/rust-workspace/target/release"
+HS_DIR="$BENCH_DIR/haskell-project/bin"
+printf '%-18s %-17s %-3s %-4s %-5s %-4s %-4s %-8s %-8s %-7s %-7s\n' \
+    CATEGORY BENCHMARK c tur turi jit rust haskell clojure racket python
+for cat_dir in "$BENCH_DIR"/*/; do
+    cat=$(basename "$cat_dir")
+    [ "$cat" = "rust-workspace" ] && continue
+    [ "$cat" = "haskell-project" ] && continue
+    for tsrc in "$cat_dir"turmeric/*.tur; do
+        [ -f "$tsrc" ] || continue
+        b=$(basename "$tsrc" .tur)
+        have() { [ -e "$1" ] && echo "y" || echo "-"; }
+        printf '%-18s %-17s %-3s %-4s %-5s %-4s %-4s %-8s %-8s %-7s %-7s\n' \
+            "$cat" "$b" \
+            "$(have "$cat_dir/c/$b")" \
+            "$(have "$cat_dir/turmeric/$b")" \
+            "$(have "$cat_dir/turi/$b.tur")" \
+            "$(have "$cat_dir/turmeric/$b.tur")" \
+            "$(have "$RUST_DIR/$b")" \
+            "$(have "$HS_DIR/$b")" \
+            "$(have "$cat_dir/clojure/$b.clj")" \
+            "$(have "$cat_dir/racket/$b.rkt")" \
+            "$(have "$cat_dir/python/$b.py")"
+    done
+done
+echo
+echo "toolchains: $(command -v cc >/dev/null && echo cc || echo 'NO cc') |" \
+     "$(command -v cargo >/dev/null && echo cargo || echo 'NO cargo') |" \
+     "$(command -v ghc >/dev/null && echo ghc || echo 'NO ghc') |" \
+     "$(command -v racket >/dev/null && echo racket || echo 'NO racket') |" \
+     "$(command -v clojure >/dev/null && echo clojure || echo 'NO clojure') |" \
+     "$(command -v python3 >/dev/null && echo python3 || echo 'NO python3')"
+echo "note: 'tur'/'jit' columns list the prebuilt binary / jit-able source;"
+echo "      binaries build during run_all.sh's build phase."

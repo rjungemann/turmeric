@@ -397,6 +397,26 @@ mutable global state pay out in proofs -- see
 sections 12.2 and 12.4, and the `refine-reads-frame-omits-global` fixture pair
 that pins what a broken read-side promise costs.
 
+The compiler does now **tell you** when that promise is demonstrably broken:
+a `#reads` measure whose body directly reads a mutable global draws
+`TUR-W0383` at its definition ("`#reads w` omits mutable state the body
+reads"). The warning is gateless and changes nothing proved -- the override
+still grants congruence -- because positive evidence of the broken promise is
+worth reporting even before any decision to refuse it. An inline-C body
+yields no evidence and stays silent, so every measure from before mutable
+globals existed is unaffected. `tur --explain TUR-W0383` has the full story.
+
+Behind `--enable=checked-reads`, the same evidence **refuses the override**:
+the measure encodes fresh-per-occurrence like any unframed impure callee, the
+crossing that used to be proved from the broken promise becomes `TUR-W0372`
+(with wording that says the frame failed, not the region -- the "guard it
+inside a `frozen` region" advice would be misleading when the region is
+present), and `--strict-refine` makes it a hard error. Refusal keys on "saw a
+read", never "could not see", so an inline-C measure keeps the trusted grant
+even under the gate. See
+[`trusted-refinement-claims-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/trusted-refinement-claims-plan.md)
+(R2).
+
 ## Quick reference
 
 | you have | you want | use |

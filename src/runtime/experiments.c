@@ -246,6 +246,53 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
                                   *   shelve, or bump */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_global_state },
+    /* checked-reads: R2 of docs/upcoming/trusted-refinement-claims-plan.md.
+     * `#reads` is the one TRUSTED claim the refinement solver believes, and
+     * its consumer GRANTS congruence -- so a frame that omits mutable state
+     * the body reads buys a proof it has not earned, with no runtime fallback
+     * at the crossing it enables.  TUR-W0383 already reports the broken
+     * promise gatelessly; this gate ESCALATES the same positive evidence (a
+     * direct read of a mutable global in the elaborated body) from warn to
+     * refuse-the-override, so the crossing becomes the ordinary TUR-W0372 an
+     * unframed impure measure gets.
+     *
+     * Gated because it can only ever turn a currently-proving program into a
+     * diagnostic.  Refusal keys on "saw a read", never "could not see": an
+     * inline-C measure -- essentially every measure that predates mutable
+     * globals -- yields no evidence and keeps trusted behaviour even with the
+     * gate on, which is what keeps the nine strict-refine #reads fixtures
+     * green under the flag. */
+    { "checked-reads",
+      "refuse the `#reads` congruence override when the body demonstrably "
+      "reads a mutable global the frame omits (escalates TUR-W0383 from "
+      "warn to refuse)",
+      "docs/upcoming/trusted-refinement-claims-plan.md",
+      "0.34.0",                  /* introduced */
+      "0.38.0",                  /* expires_at -- review at that cut: graduate,
+                                  *   shelve, or bump */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_checked_reads },
+    /* jit-ffi: the `(unsafe (call-ptr p [T1 T2 -> R] args...))` form of
+     * docs/upcoming/jit-ffi-c2mir-plan.md -- invoke an arbitrary function
+     * pointer (typically a dlsym result) with a signature stated at the
+     * call site.  AOT codegen is a pure cast-and-call; under --interpret it
+     * routes through the c2mir thunk provider, so it works only in
+     * -DTUR_JIT=ON builds there (a clean diagnostic otherwise).  Gated
+     * because the signature vocabulary is young (scalars only; the
+     * struct-by-value "{...}" extension is the plan's F4) and should be
+     * able to move without breaking early adopters.  The plan's F1/F2
+     * plumbing -- runtime spice-export thunks and thunk-backed extern-c
+     * under --interpret -- is a behavior-preserving upgrade and is NOT
+     * behind this flag. */
+    { "jit-ffi",
+      "`(unsafe (call-ptr p [T1 T2 -> R] args...))` -- call an arbitrary "
+      "function pointer with a signature stated at the call site",
+      "docs/upcoming/jit-ffi-c2mir-plan.md",
+      "0.34.0",                  /* introduced */
+      "0.38.0",                  /* expires_at -- review at that cut: graduate,
+                                  *   shelve, or bump */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_jit_ffi },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

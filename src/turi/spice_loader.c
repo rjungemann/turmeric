@@ -368,7 +368,7 @@ static char *skip_ws(char *p) {
 static int append_export(TurSpiceImage *img, char *module, char *name,
                          char *mangled, char ret_class,
                          char *arg_classes, uint32_t n_args,
-                         bool is_variadic, void *fn_ptr,
+                         bool is_variadic, char rest_class, void *fn_ptr,
                          TurFfiShimFn ffi_shim) {
     if (img->n_exports == img->cap_exports) {
         uint32_t nc = img->cap_exports ? img->cap_exports * 2 : 8;
@@ -387,6 +387,7 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
     e->ret_class = ret_class;
     e->n_args = n_args;
     e->is_variadic = is_variadic;
+    e->rest_class = rest_class;
     e->fn_ptr = fn_ptr;
     e->ffi_shim = ffi_shim;
     e->arg_classes = arg_classes;  /* owned; freed in spice_export_free */
@@ -442,6 +443,7 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
     uint32_t n_args = 0;
     uint32_t cap_args = 0;
     bool is_variadic = false;
+    char rest_class = 'i';
     #define ARG_PUSH(cls)                                                     \
         do {                                                                  \
             if (n_args == cap_args) {                                         \
@@ -457,11 +459,26 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
     while (tok) {
         if (strcmp(tok, "&") == 0) {
             is_variadic = true;
-            /* The next token is the rest-arg's element tag. The
-             * dispatcher receives a single cons-list pointer (int64_t)
-             * regardless, so we still add one ':int'-class slot. */
-            (void)strtok(NULL, " \t");
-            ARG_PUSH('i');
+            /* The next token is the rest-arg's element tag.  The callee
+             * receives a single cons-list pointer (int64_t) regardless, so
+             * the SLOT class is 'i' -- the ELEMENT class only decides how
+             * the REPL marshaller packs each cons head (S2: floats go in as
+             * IEEE-754 bit patterns, mirroring the compiled call sites'
+             * union reinterpret).
+             *
+             * The rest formal is already in the emitted positional tags --
+             * fd->n_params includes it, so a variadic line reads e.g.
+             * `(:int :int & :int)` for one positional + rest.  The slot was
+             * therefore pushed by the loop above; OVERWRITE its class with
+             * 'i' rather than pushing a second one (the old push-again
+             * over-counted the arity by one, latent while variadic exports
+             * were rejected outright, and would also have classed a :float
+             * rest slot 'f' when the callee takes a pointer). */
+            char *rt = strtok(NULL, " \t");
+            if (rt) rest_class = class_for_tag(rt, /*is_return=*/false);
+            if (rest_class != 'f') rest_class = 'i';  /* unknown/poly -> 'i' */
+            if (n_args > 0) arg_classes[n_args - 1] = 'i';
+            else ARG_PUSH('i');   /* defensive: foreign manifest shape */
             break;
         }
         ARG_PUSH(class_for_tag(tok, /*is_return=*/false));
@@ -535,7 +552,8 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
     }
     /* Ownership of arg_classes transfers to the export. */
     return append_export(img, module, name, mangled, ret_class,
-                          arg_classes, n_args, is_variadic, fn_ptr, ffi_shim);
+                          arg_classes, n_args, is_variadic, rest_class,
+                          fn_ptr, ffi_shim);
 }
 
 /* J2: parse manifest TEXT (the jit hook returns it in memory; there is no
@@ -667,8 +685,18 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
         char *manifest = NULL;
         int64_t stamp = newest_tur_mtime(build_dir, 0);
         if (g_jit_hook->build(build_dir, &jimg, &manifest) != 0) {
-            free(root);
-            return -1;
+            /* ffi-spices-integration-plan S1: a hook failure used to fail
+             * the whole load, stranding spices the engine cannot handle
+             * (vendored :c-sources it cannot MIR-link, a static-only cmake
+             * dep it cannot dlopen).  The subprocess + .so + dlopen path
+             * handles all of those; take it instead.  A genuine compile
+             * error in the spice will fail again below with the same
+             * diagnostic, which is the same end state as before, one build
+             * slower. */
+            fprintf(stderr,
+                    "tur repl: in-process jit load failed; falling back to "
+                    "the subprocess build.\n");
+            goto subprocess_path;
         }
         TurSpiceImage *img = calloc(1, sizeof(*img));
         if (!img) {
@@ -691,6 +719,7 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
         return 0;
     }
 
+subprocess_path:
     if (needs_rebuild(build_dir, lib_path)) {
         if (run_build(tur_bin, build_dir, lib_path, manifest_path) != 0) {
             free(root);

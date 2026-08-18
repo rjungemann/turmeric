@@ -605,6 +605,17 @@ add_test(
   COMMAND bash tests/turi/repl-spice-call.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# ffi-spices-integration-plan S1: a spice declaring its C dependency via
+# the cmake deps manifest (link_dirs/link_libs, no autolink marker) is
+# loadable and callable at the REPL -- through cc's link line on the
+# subprocess path, and through the engine's autolink dlopen (-L dir
+# probing) on the in-process TUR_ENGINE=jit path.  Hermetic: builds its
+# own .so in the test temp dir.
+add_test(
+  NAME tur_repl_spice_linklibs
+  COMMAND bash tests/turi/repl-spice-linklibs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP5: integration test for the `(reload)` REPL form. Exercises the
 # no-spice / no-changes / rebuild-after-edit / arity-check paths.
 add_test(
@@ -967,6 +978,20 @@ add_test(
   NAME tur_lsp_wasm_backend_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_lsp_wasm_backend_unit" "${CMAKE_SOURCE_DIR}/stdlib"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The browser's language-mode entry points (set_lang / get_lang /
+# lang_registry), run natively against libturi_wasm
+# (try-turmeric-lang-toggle-plan).  cwd matters: the glue preloads the
+# stdlib from the cwd-relative "stdlib" root, mirroring the MEMFS mount.
+# The interpreter env's closures/natives are process-lifetime by design, so
+# leak detection is off, matching the other turi-driving harnesses.
+add_test(
+  NAME tur_wasm_glue_lang_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_wasm_glue_lang_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_wasm_glue_lang_unit PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 # Injective name-mangler round-trip + injectivity unit test
 add_test(

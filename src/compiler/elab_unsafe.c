@@ -1,6 +1,10 @@
 /* elab_unsafe.c -- unsafe pointer ops, casts, raw memory, and C FFI primitives. */
 #include "elab_internal.h"
 
+#include "experiments.h"        /* jit-ffi: experiment gate + lifecycle warn */
+#include "globals.h"            /* g_opt_jit_ffi */
+#include "turi/jit_ffi.h"       /* signature vocabulary (class_for_kind) */
+
 /* Phase U3: Unsafe primitives implementations */
 
 Expr *elab_ptr_deref(Elab *e, const Form *call) {
@@ -709,7 +713,152 @@ Expr *elab_c_call(Elab *e, const Form *call) {
     return out;
 }
 
+/* jit-ffi-c2mir-plan F3: `(call-ptr p [T1 T2 -> R] args...)` -- call an
+ * arbitrary function pointer with a signature stated at the site.  The
+ * pointer typically comes from dlsym, which until this form existed had no
+ * way to be invoked at all.  AOT codegen is a pure cast-and-call; turi
+ * routes through the JIT FFI thunk provider.  Requires an `unsafe` block
+ * (exactly like c-call) and the `jit-ffi` experiment. */
+Expr *elab_call_ptr(Elab *e, const Form *call) {
+    if (!g_opt_jit_ffi) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "call-ptr is experimental; enable it with --enable=jit-ffi "
+                  "(or :experiments [:jit-ffi] in build.tur)");
+        return NULL;
+    }
+    experiment_warn_if_used("jit-ffi");
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
+    if (e->unsafe_depth == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "call-ptr requires an enclosing (unsafe ...) block");
+        return NULL;
+    }
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "call-ptr requires a pointer and a signature: "
+                  "(call-ptr p [T1 T2 -> R] args...)");
+        return NULL;
+    }
+
+    /* The signature vector: scalar type keywords, `->`, return keyword.
+     * Zero-arg form is `[-> R]`.  Struct-by-value ("{...}") is F4. */
+    const Form *sig_f = call->as.list.items[2];
+    if (sig_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, sig_f->span,
+                  "call-ptr: signature must be a vector [T1 T2 -> R]");
+        return NULL;
+    }
+    uint32_t sig_len = sig_f->as.list.len;
+    uint32_t arrow_at = sig_len;
+    for (uint32_t i = 0; i < sig_len; i++) {
+        const Form *t = sig_f->as.list.items[i];
+        if (t->tag == F_SYM && t->as.sym->len == 2 &&
+            memcmp(t->as.sym->name, "->", 2) == 0) {
+            arrow_at = i;
+            break;
+        }
+    }
+    if (arrow_at == sig_len || arrow_at + 2 != sig_len) {
+        diag_emit(DIAG_ERROR, sig_f->span,
+                  "call-ptr: signature needs `->` followed by exactly one "
+                  "return type: [T1 T2 -> R]");
+        return NULL;
+    }
+
+    /* Resolve each signature slot to a scalar type.  The vocabulary is the
+     * FFI thunk's (turi/jit_ffi.h): int-class scalars, floats, cstr, ptr,
+     * and (return position only) :void / :nil. */
+    uint32_t n_params = arrow_at;
+    Type *param_types =
+        (Type *)arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(Type));
+    Type ret_type = type_from_kind(TY_NIL);
+    for (uint32_t i = 0; i <= n_params; i++) {
+        bool is_return = (i == n_params);
+        const Form *t = sig_f->as.list.items[is_return ? n_params + 1 : i];
+        TypeKind k = TY_UNKNOWN;
+        if (t->tag == F_KEYWORD || t->tag == F_SYM) {
+            const char *nm = t->as.sym->name;
+            k = typekind_from_symbol(nm);
+            if (k == TY_UNKNOWN) {
+                if (strcmp(nm, "void") == 0)      k = TY_NIL;
+                else if (strcmp(nm, "ptr") == 0)  k = TY_PTR_VOID;
+            }
+        }
+        char cls = (k == TY_UNKNOWN)
+                       ? '?'
+                       : tur_jit_ffi_class_for_kind(k, is_return);
+        if (cls == '?') {
+            diag_emit(DIAG_ERROR, t->span,
+                      "call-ptr: unsupported %s type in signature -- only "
+                      "scalar types (:int, :float, :float32, :bool, :cstr, "
+                      ":ptr, sized ints%s) are representable "
+                      "(struct-by-value is a later phase of the jit-ffi "
+                      "experiment)",
+                      is_return ? "return" : "parameter",
+                      is_return ? ", :void" : "");
+            return NULL;
+        }
+        if (is_return) ret_type = type_from_kind(k);
+        else           param_types[i] = type_from_kind(k);
+    }
+
+    /* The pointer expression: a dlsym result (:ptr<void>) or a raw :int
+     * address. */
+    Expr *pexpr = elab_form(e, call->as.list.items[1]);
+    if (!pexpr) return NULL;
+    if (pexpr->type.kind != TY_PTR_VOID && pexpr->type.kind != TY_INT) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "call-ptr: pointer must be ptr<void> (dlsym result) or "
+                  ":int, got %s", type_name(pexpr->type));
+        return NULL;
+    }
+
+    /* Arguments, checked count- and class-wise against the signature; each
+     * is cast to its stated C parameter type by codegen. */
+    uint32_t n_args = call->as.list.len - 3;
+    if (n_args != n_params) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "call-ptr: signature declares %u parameter%s, got %u "
+                  "argument%s", (unsigned)n_params, n_params == 1 ? "" : "s",
+                  (unsigned)n_args, n_args == 1 ? "" : "s");
+        return NULL;
+    }
+    Expr **args =
+        (Expr **)arena_alloc(e->arena, (n_args ? n_args : 1) * sizeof(Expr *));
+    for (uint32_t a = 0; a < n_args; a++) {
+        args[a] = elab_form(e, call->as.list.items[3 + a]);
+        if (!args[a]) return NULL;
+        char want = tur_jit_ffi_class_for_kind(param_types[a].kind, 0);
+        char got  = tur_jit_ffi_class_for_kind(args[a]->type.kind, 0);
+        /* int-class accepts any int-class value; float-class also accepts
+         * ints (widened, matching the interpreter's marshaller). */
+        bool okc = (want == got) ||
+                   ((want == 'f' || want == 'F') && got == 'i');
+        if (!okc) {
+            diag_emit(DIAG_ERROR, call->as.list.items[3 + a]->span,
+                      "call-ptr: argument %u is %s, but the signature "
+                      "declares %s", (unsigned)a, type_name(args[a]->type),
+                      type_name(param_types[a]));
+            return NULL;
+        }
+    }
+
+    CallPtrSig *ps = (CallPtrSig *)arena_alloc(e->arena, sizeof(CallPtrSig));
+    ps->return_type = ret_type;
+    ps->param_types = param_types;
+    ps->n_params    = n_params;
+
+    Expr *out = expr_new(e->arena, EX_CALL, ret_type, call->span);
+    out->as.call_.fn_binding = NULL;
+    out->as.call_.fn_expr    = pexpr;
+    out->as.call_.args       = args;
+    out->as.call_.n_args     = n_args;
+    out->as.call_.ptr_sig    = ps;
+    return out;
+}
+
 Expr *elab_dlopen(Elab *e, const Form *call) {
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
     /* (dlopen path) - dynamic library open
      * For v1, we emit a call to dlopen with RTLD_LAZY flag
      * Returns ptr<void> (the library handle) */
@@ -746,6 +895,7 @@ Expr *elab_dlopen(Elab *e, const Form *call) {
 }
 
 Expr *elab_dlsym(Elab *e, const Form *call) {
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
     /* (dlsym handle symbol) - get symbol address from dynamic library
      * For v1, we emit a call to dlsym
      * Returns ptr<void> (the symbol address) */
@@ -791,6 +941,7 @@ Expr *elab_dlsym(Elab *e, const Form *call) {
 }
 
 Expr *elab_dlclose(Elab *e, const Form *call) {
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
     /* (dlclose handle) - close dynamic library
      * For v1, we emit a call to dlclose
      * Returns int (0 on success, non-zero on error) */

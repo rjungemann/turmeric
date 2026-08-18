@@ -8,6 +8,9 @@ A web-based REPL for the [Turmeric programming language](https://github.com/turm
 - **Monaco Editor** - Professional code editing with syntax highlighting
 - **Interactive Console** - ANSI-colored output with execution history
 - **Code Examples** - Pre-loaded examples covering key language features
+- **Language picker** - Dialect radio group + `#lang` layer toggles that edit
+  the `#lang` line in place (the buffer stays the source of truth); options
+  are rendered from the runtime's registry export, never hardcoded in JS
 - **URL Sharing** - Share your code via compressed URL hash
 - **Editor intelligence** - Diagnostics, completion, hover, signature help,
   go-to-definition, and document symbols, served by the real `tur lsp` running
@@ -121,6 +124,12 @@ The WASM module exposes the following functions:
 - `turi_wasm_eval(input)` - Evaluate code and return result as string
 - `turi_wasm_eval_ex(input, out_result, out_error)` - Evaluate with separate result/error
 - `turi_wasm_version()` - Get version string
+- `turi_wasm_set_lang(name)` - Set the reader dialect + layer set from a full
+  `#lang` directive tail (e.g. `"turmeric/sweet stringed"`); assigns the
+  layer set and resets the session when it changes
+- `turi_wasm_get_lang()` - Current reader name (canonical spelling)
+- `turi_wasm_lang_registry()` - JSON registry of base dialects and curated
+  `#lang` layers, exported from the C tables for the language picker
 - `turi_wasm_lsp_request(json)` - Feed one JSON-RPC message to the language
   server; returns a JSON array of the messages it produced
 - `turi_wasm_lsp_flush()` - Analyze documents with pending edits

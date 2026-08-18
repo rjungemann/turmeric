@@ -6,6 +6,28 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`TUR-W0383`: a `#reads` frame that omits mutable state the body reads now
+  warns at the definition.** `#reads` is trusted, and its one consumer grants
+  congruence -- so a measure declared `#reads w` whose body also reads a
+  mutable global was silently buying proofs it had not earned (the elided
+  caller-side crossing check the `refine-reads-frame-omits-global` fixture
+  pair pins). The warning is gateless and changes nothing proved: it reports
+  positive evidence of the broken promise (a direct read of a `^mut` global in
+  the elaborated body) without yet refusing the override. An inline-C body
+  yields no evidence and stays silent, so every pre-existing measure is
+  unaffected. `tur --explain TUR-W0383` has the full story.
+- **`--enable=checked-reads`: refuse the `#reads` congruence override on
+  broken-frame evidence.** The gated escalation of TUR-W0383: on the same
+  positive evidence (the measure's body directly reads a mutable global), the
+  refinement encoder declines the congruence grant, so a crossing that used to
+  be proved from the broken promise becomes an undischarged TUR-W0372 -- with
+  wording that says the *frame* failed, not the region ("fix the frame, not
+  the region"), since the usual "guard it inside a `frozen` region" advice is
+  misleading when the region is present. A hard error under `--strict-refine`.
+  Refusal keys on "saw a read", never "could not see": an inline-C measure --
+  essentially every measure that predates mutable globals -- carries no
+  evidence and keeps today's trusted behavior even with the gate on. R2 of
+  docs/upcoming/trusted-refinement-claims-plan.md.
 - **An execution engine can be selected per project.** `:engine "cc" | "jit" |
   "interp"` in `build.tur`, `--engine <name>` on the command line, or
   `TUR_ENGINE` in the environment, resolved in that precedence with `"cc"`
@@ -173,6 +195,38 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A runaway macro on a sanitizer-instrumented (Debug) build now reports
+  `maximum macro expansion depth exceeded` instead of aborting with an ASan
+  stack-overflow.** The 256-level depth counter is a proxy for stack
+  headroom, and ASan's redzone-inflated frames could exhaust the real stack
+  first (observed on macOS/arm64 Debug; reproducible anywhere with
+  `ulimit -s 4096`).  The guard now also measures the thread's actual
+  remaining stack (glibc/macOS/Windows queries; the SP register is read
+  directly because ASan's fake stack makes local addresses useless for this)
+  and raises the same diagnostic pair -- plus a note naming the early stop --
+  when headroom is nearly gone
+  (docs/archive/macro-depth-guard-loses-race-with-asan-stack.md).
+- **`tur emit-c` output now links at `-O0`.** The dead base generic thunk
+  chain (a generic fn returning a closure over a type application, e.g.
+  `(fn [] (Cons A))`) referenced the base `ctor_X` of a heap parametric ADT,
+  a symbol that is never defined -- only per-spec monomorphs are.  `-O2`
+  dead-stripped the chain, but a hand `-O0` compile of `emit-c` output died
+  with `undefined reference to ctor_Cons`.  The emitter now flushes static
+  trap stand-ins (fprintf + abort naming the ctor) for those never-defined
+  base ctors into the forward-decl band, covering the n-arg and 0-arg ctor
+  branches and both drivers (whole-program and per-TU), so the emitted C is
+  self-contained at any -O level.  A genuinely live base-ctor call -- a
+  compiler defect, previously an unconditional link error -- now aborts
+  loudly at runtime instead
+  (docs/archive/dead-base-thunk-chain-references-undefined-ctor.md).
+- **A dynamic variable's `pthread_key_create` failure now aborts with a
+  message instead of being ignored.** On `EAGAIN` (the process key budget --
+  `PTHREAD_KEYS_MAX`, 1024 on glibc, one key per `defdynamic` plus one shared
+  by every `^thread-local` -- is exhausted) the key was left uninitialized and
+  every later `pthread_getspecific` on it was undefined behaviour: a silent
+  wrong-value failure. The emitted `_dynvar_init_*` now checks and aborts,
+  mirroring what `^thread-local`'s key init already did
+  (docs/upcoming/mutable-globals-plan.md section 13.3).
 - **The rational/complex numeric tower now runs on all three engines.** Measured
   under the MIR engine for the first time: every rational and complex fixture
   passes with **zero** `cc` fallbacks, from one pure-Turmeric implementation

@@ -22,13 +22,62 @@ cd "$(dirname "$0")/.."
 BENCHMARK_DIR="$(pwd)/benchmarks"
 INPUT_DIR="$(pwd)/inputs"
 RESULTS_DIR="$(pwd)/results/raw"
-TUR="${TUR:-$(pwd)/../build-rel/tur}"  # Turmeric build binary (override with TUR env var)
+# Turmeric binary (override with TUR).  The docs spell the release dir two
+# ways (Justfile: build-rel, CLAUDE.md bootstrap: build-release); accept
+# both, then the plain Debug build, rather than silently SKIPping every
+# Turmeric row for someone who followed the other document.
+if [ -z "${TUR:-}" ]; then
+    for _cand in "$(pwd)/../build-rel/tur" "$(pwd)/../build-release/tur" "$(pwd)/../build/tur"; do
+        if [ -x "$_cand" ]; then TUR="$_cand"; break; fi
+    done
+    TUR="${TUR:-$(pwd)/../build-rel/tur}"
+fi
+TURJIT_TIMING_FILE="$(pwd)/results/raw/.turjit_timing.json"
 RUST_RELEASE_DIR="$(pwd)/benchmarks/rust-workspace/target/release"  # Rust release binaries
+HASKELL_BIN_DIR="$(pwd)/benchmarks/haskell-project/bin"  # cabal install --installdir target
 WARMUP_RUNS=3
 MEASURE_RUNS=10
 BENCHMARK_TIMEOUT_S=60   # per-invocation timeout (seconds)
 
 mkdir -p "$RESULTS_DIR"
+
+# A Debug-configured tur carries ASan/LSan; the tree-walking interpreter
+# intentionally never frees its process-lifetime closures, so leak
+# detection would fail every turi row.  Same default as tests/run-turi.sh;
+# a Release tur (the documented benchmark configuration) is unaffected.
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+
+# B0 (post-jit-benchmark-resurrection-plan): nothing disappears silently.
+# Every absent/failed/timed-out cell writes a status JSON and bumps this
+# counter; a run that skipped anything exits non-zero at the end.
+SKIP_COUNT=0
+
+# write_status_json <path> <language> <category> <benchmark> <size> <status>
+write_status_json() {
+    python3 - "$1" "$2" "$3" "$4" "$5" "$6" <<'PY'
+import json, sys
+path, language, category, benchmark, size, status = sys.argv[1:7]
+with open(path, 'w') as f:
+    json.dump({'language': language, 'category': category,
+               'benchmark': benchmark, 'size': size,
+               'status': status, 'timing_s': None}, f, indent=2)
+PY
+}
+
+# lang_version <language> -- toolchain version string for the results JSON
+# (B3: versions are data, captured at run time, not prose).
+lang_version() {
+    case "$1" in
+        turmeric|turi|turjit) "$TUR" --version 2>/dev/null | head -1 ;;
+        rust)    rustc --version 2>/dev/null ;;
+        haskell) ghc --version 2>/dev/null ;;
+        racket)  racket --version 2>/dev/null ;;
+        clojure) clojure --version 2>/dev/null ;;
+        python)  python3 --version 2>/dev/null ;;
+        c)       cc --version 2>/dev/null | head -1 ;;
+        *)       echo "" ;;
+    esac
+}
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -71,9 +120,14 @@ else:
 "
 }
 
-# peak_rss_kb <cmd> [args...] -- peak RSS in KB (macOS /usr/bin/time -l)
+# peak_rss_kb <cmd> [args...] -- peak RSS in KB.  Platform branch (B3):
+# macOS /usr/bin/time -l reports bytes; GNU time -v reports KB.
 peak_rss_kb() {
-    /usr/bin/time -l "$@" 2>&1 | awk '/maximum resident/{print int($1/1024)}'
+    if [ "$(uname)" = "Darwin" ]; then
+        /usr/bin/time -l "$@" 2>&1 | awk '/maximum resident/{print int($1/1024)}'
+    else
+        /usr/bin/time -v "$@" 2>&1 | awk -F': ' '/Maximum resident set size/{print int($2)}'
+    fi
 }
 
 # run_timed <output_json> <language> <category> <benchmark> <size> <cmd> [args...]
@@ -85,12 +139,21 @@ run_timed() {
 
     echo "  → $language/$benchmark [$size]..."
 
-    # Correctness check — run once, capture stdout
-    local output
-    output=$(with_timeout "${cmd[@]}" 2>/dev/null) || {
-        echo "    SKIP: command failed or timed out"
+    # Correctness check — run once, capture stdout.  Failure and timeout
+    # are distinct recorded statuses, not silence (B0).
+    local output rc
+    set +e
+    output=$(with_timeout "${cmd[@]}" 2>/dev/null)
+    rc=$?
+    set -e
+    if [ $rc -ne 0 ]; then
+        local status="failed"
+        [ $rc -eq 124 ] && status="timeout"
+        echo "    SKIP ($status): $language/$benchmark"
+        write_status_json "$out_json" "$language" "$category" "$benchmark" "$size" "$status"
+        SKIP_COUNT=$((SKIP_COUNT + 1))
         return
-    }
+    fi
 
     # Warm-up
     local i
@@ -109,6 +172,16 @@ run_timed() {
     # Peak RSS (single run)
     local rss
     rss=$(peak_rss_kb "${cmd[@]}" 2>/dev/null) || rss="null"   # peak_rss_kb uses /usr/bin/time; timeout applies inside elapsed_s
+    [ -z "$rss" ] && rss="null"
+
+    # B4: the turjit row's per-run phase timings + engine field, from
+    # --timing-json (detects the cc fallback instead of averaging it in).
+    local jit_timing="null"
+    if [ "$language" = "turjit" ] && [ -f "$TURJIT_TIMING_FILE" ]; then
+        jit_timing=$(cat "$TURJIT_TIMING_FILE")
+    fi
+    local toolchain
+    toolchain=$(lang_version "$language")
 
     # Build JSON
     local times_json
@@ -131,9 +204,13 @@ data = {
     'category':  '$category',
     'benchmark': '$benchmark',
     'size':      '$size',
+    'status':    'ok',
+    'toolchain': $(python3 -c "import json; print(json.dumps('$toolchain'))"),
+    'platform':  $(python3 -c "import json, platform; print(json.dumps(platform.platform()))"),
     'output':    $(python3 -c "import json; print(json.dumps('''$output'''.strip()))"),
     'timing_s':  $times_json,
-    'peak_rss_kb': $([ "$rss" = "null" ] && echo "null" || echo "$rss"),
+    'jit_timing': json.loads('''$jit_timing'''),
+    'peak_rss_kb': json.loads('''$rss''' if '''$rss'''.strip() else 'null'),
 }
 with open('$out_json', 'w') as f:
     json.dump(data, f, indent=2)
@@ -188,7 +265,9 @@ _run_numerical() {
         racket    "racket $dir/racket/fibonacci.rkt" \
         turi      "$TUR --interpret $dir/turi/fibonacci.tur" \
         rust      "$RUST_RELEASE_DIR/fibonacci" \
-        python    "python3 $dir/python/fibonacci.py"
+        python    "python3 $dir/python/fibonacci.py" \
+        turjit    "$TUR jit $dir/turmeric/fibonacci.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/fibonacci"
 
     # primes (sieve)
     local primes_n
@@ -201,7 +280,9 @@ _run_numerical() {
         racket    "racket $dir/racket/primes.rkt" \
         turi      "$TUR --interpret $dir/turi/primes.tur" \
         rust      "$RUST_RELEASE_DIR/primes" \
-        python    "python3 $dir/python/primes.py"
+        python    "python3 $dir/python/primes.py" \
+        turjit    "$TUR jit $dir/turmeric/primes.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/primes"
     unset TURI_ARG
 
     # matrix_multiply
@@ -214,7 +295,9 @@ _run_numerical() {
         racket    "racket $dir/racket/matrix_multiply.rkt" \
         turi      "$TUR --interpret $dir/turi/matrix_multiply.tur" \
         rust      "$RUST_RELEASE_DIR/matrix_multiply" \
-        python    "python3 $dir/python/matrix_multiply.py"
+        python    "python3 $dir/python/matrix_multiply.py" \
+        turjit    "$TUR jit $dir/turmeric/matrix_multiply.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/matrix_multiply"
 
     # monte_carlo_pi
     local mc_n
@@ -227,7 +310,9 @@ _run_numerical() {
         racket    "racket $dir/racket/monte_carlo_pi.rkt" \
         turi      "$TUR --interpret $dir/turi/monte_carlo_pi.tur" \
         rust      "$RUST_RELEASE_DIR/monte_carlo_pi" \
-        python    "python3 $dir/python/monte_carlo_pi.py"
+        python    "python3 $dir/python/monte_carlo_pi.py" \
+        turjit    "$TUR jit $dir/turmeric/monte_carlo_pi.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/monte_carlo_pi"
     unset TURI_ARG
 }
 
@@ -244,7 +329,9 @@ _run_data_structures() {
         racket    "racket $dir/racket/list_ops.rkt" \
         turi      "$TUR --interpret $dir/turi/list_ops.tur" \
         rust      "$RUST_RELEASE_DIR/list_ops" \
-        python    "python3 $dir/python/list_ops.py"
+        python    "python3 $dir/python/list_ops.py" \
+        turjit    "$TUR jit $dir/turmeric/list_ops.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/list_ops"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/hash_map.json')); print(d['$size']['n'])")
     _bench_lang data_structures hash_map "$size" "$n" \
@@ -254,7 +341,9 @@ _run_data_structures() {
         racket    "racket $dir/racket/hash_map.rkt" \
         turi      "$TUR --interpret $dir/turi/hash_map.tur" \
         rust      "$RUST_RELEASE_DIR/hash_map" \
-        python    "python3 $dir/python/hash_map.py"
+        python    "python3 $dir/python/hash_map.py" \
+        turjit    "$TUR jit $dir/turmeric/hash_map.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/hash_map"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/sort.json')); print(d['$size']['n'])")
     TURI_ARG=$(python3 -c "import json; d=json.load(open('$idir/sort.json')); print(d.get('turi', d['$size'])['n'])")
@@ -265,7 +354,9 @@ _run_data_structures() {
         racket    "racket $dir/racket/sort.rkt" \
         turi      "$TUR --interpret $dir/turi/sort.tur" \
         rust      "$RUST_RELEASE_DIR/sort" \
-        python    "python3 $dir/python/sort.py"
+        python    "python3 $dir/python/sort.py" \
+        turjit    "$TUR jit $dir/turmeric/sort.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/sort"
     unset TURI_ARG
 }
 
@@ -282,7 +373,9 @@ _run_string_processing() {
         racket    "racket $dir/racket/string_concat.rkt" \
         turi      "$TUR --interpret $dir/turi/string_concat.tur" \
         rust      "$RUST_RELEASE_DIR/string_concat" \
-        python    "python3 $dir/python/string_concat.py"
+        python    "python3 $dir/python/string_concat.py" \
+        turjit    "$TUR jit $dir/turmeric/string_concat.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/string_concat"
 
     local hs_n
     hs_n=$(python3 -c "import json; d=json.load(open('$idir/text_search.json')); print(d['$size']['haystack_size'])")
@@ -293,7 +386,9 @@ _run_string_processing() {
         racket    "racket $dir/racket/text_search.rkt" \
         turi      "$TUR --interpret $dir/turi/text_search.tur" \
         rust      "$RUST_RELEASE_DIR/text_search" \
-        python    "python3 $dir/python/text_search.py"
+        python    "python3 $dir/python/text_search.py" \
+        turjit    "$TUR jit $dir/turmeric/text_search.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/text_search"
 }
 
 # ── concurrency ──────────────────────────────────────────────────────────────
@@ -310,7 +405,9 @@ _run_concurrency() {
         racket    "racket $dir/racket/thread_ring.rkt" \
         turi      "$TUR --interpret $dir/turi/thread_ring.tur" \
         rust      "$RUST_RELEASE_DIR/thread_ring" \
-        python    "python3 $dir/python/thread_ring.py"
+        python    "python3 $dir/python/thread_ring.py" \
+        turjit    "$TUR jit $dir/turmeric/thread_ring.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/thread_ring"
 }
 
 # ── memory ───────────────────────────────────────────────────────────────────
@@ -326,7 +423,9 @@ _run_memory() {
         racket    "racket $dir/racket/alloc_churn.rkt" \
         turi      "$TUR --interpret $dir/turi/alloc_churn.tur" \
         rust      "$RUST_RELEASE_DIR/alloc_churn" \
-        python    "python3 $dir/python/alloc_churn.py"
+        python    "python3 $dir/python/alloc_churn.py" \
+        turjit    "$TUR jit $dir/turmeric/alloc_churn.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/alloc_churn"
 }
 
 # ── recursion ────────────────────────────────────────────────────────────────
@@ -342,7 +441,9 @@ _run_recursion() {
         racket    "racket $dir/racket/fib_recursive.rkt" \
         turi      "$TUR --interpret $dir/turi/fib_recursive.tur" \
         rust      "$RUST_RELEASE_DIR/fib_recursive" \
-        python    "python3 $dir/python/fib_recursive.py"
+        python    "python3 $dir/python/fib_recursive.py" \
+        turjit    "$TUR jit $dir/turmeric/fib_recursive.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/fib_recursive"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/factorial.json')); print(d['$size']['n'])")
     _bench_lang recursion factorial "$size" "$n" \
@@ -352,7 +453,9 @@ _run_recursion() {
         racket    "racket $dir/racket/factorial.rkt" \
         turi      "$TUR --interpret $dir/turi/factorial.tur" \
         rust      "$RUST_RELEASE_DIR/factorial" \
-        python    "python3 $dir/python/factorial.py"
+        python    "python3 $dir/python/factorial.py" \
+        turjit    "$TUR jit $dir/turmeric/factorial.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/factorial"
 }
 
 # ── io ───────────────────────────────────────────────────────────────────────
@@ -368,7 +471,9 @@ _run_io() {
         racket    "racket $dir/racket/file_write.rkt" \
         turi      "$TUR --interpret $dir/turi/file_write.tur" \
         rust      "$RUST_RELEASE_DIR/file_write" \
-        python    "python3 $dir/python/file_write.py"
+        python    "python3 $dir/python/file_write.py" \
+        turjit    "$TUR jit $dir/turmeric/file_write.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/file_write"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/file_read.json')); print(d['$size']['n'])")
     _bench_lang io file_read "$size" "$n" \
@@ -378,7 +483,9 @@ _run_io() {
         racket    "racket $dir/racket/file_read.rkt" \
         turi      "$TUR --interpret $dir/turi/file_read.tur" \
         rust      "$RUST_RELEASE_DIR/file_read" \
-        python    "python3 $dir/python/file_read.py"
+        python    "python3 $dir/python/file_read.py" \
+        turjit    "$TUR jit $dir/turmeric/file_read.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/file_read"
 
     local fsize nreads
     fsize=$(python3 -c "import json; d=json.load(open('$idir/random_access.json')); print(d['$size']['file_size'])")
@@ -390,7 +497,9 @@ _run_io() {
         racket    "racket $dir/racket/random_access.rkt" \
         turi      "$TUR --interpret $dir/turi/random_access.tur" \
         rust      "$RUST_RELEASE_DIR/random_access" \
-        python    "python3 $dir/python/random_access.py"
+        python    "python3 $dir/python/random_access.py" \
+        turjit    "$TUR jit $dir/turmeric/random_access.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/random_access"
 }
 
 # ── real_world ───────────────────────────────────────────────────────────────
@@ -407,7 +516,9 @@ _run_real_world() {
         racket    "racket $dir/racket/nbody.rkt" \
         turi      "$TUR --interpret $dir/turi/nbody.tur" \
         rust      "$RUST_RELEASE_DIR/nbody" \
-        python    "python3 $dir/python/nbody.py"
+        python    "python3 $dir/python/nbody.py" \
+        turjit    "$TUR jit $dir/turmeric/nbody.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/nbody"
 
     local rt_w rt_h
     rt_w=$(python3 -c "import json; d=json.load(open('$idir/ray_tracing.json')); print(d['$size']['width'])")
@@ -419,7 +530,9 @@ _run_real_world() {
         racket    "racket $dir/racket/ray_tracing.rkt" \
         turi      "$TUR --interpret $dir/turi/ray_tracing.tur" \
         rust      "$RUST_RELEASE_DIR/ray_tracing" \
-        python    "python3 $dir/python/ray_tracing.py"
+        python    "python3 $dir/python/ray_tracing.py" \
+        turjit    "$TUR jit $dir/turmeric/ray_tracing.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/ray_tracing"
 }
 
 # ── micro ────────────────────────────────────────────────────────────────────
@@ -436,7 +549,9 @@ _run_micro() {
         racket    "racket $dir/racket/int_arith.rkt" \
         turi      "$TUR --interpret $dir/turi/int_arith.tur" \
         rust      "$RUST_RELEASE_DIR/int_arith" \
-        python    "python3 $dir/python/int_arith.py"
+        python    "python3 $dir/python/int_arith.py" \
+        turjit    "$TUR jit $dir/turmeric/int_arith.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/int_arith"
     unset TURI_ARG
 
     n=$(python3 -c "import json; d=json.load(open('$idir/float_arith.json')); print(d['$size']['n'])")
@@ -448,7 +563,9 @@ _run_micro() {
         racket    "racket $dir/racket/float_arith.rkt" \
         turi      "$TUR --interpret $dir/turi/float_arith.tur" \
         rust      "$RUST_RELEASE_DIR/float_arith" \
-        python    "python3 $dir/python/float_arith.py"
+        python    "python3 $dir/python/float_arith.py" \
+        turjit    "$TUR jit $dir/turmeric/float_arith.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/float_arith"
     unset TURI_ARG
 
     n=$(python3 -c "import json; d=json.load(open('$idir/function_call.json')); print(d['$size']['n'])")
@@ -460,7 +577,9 @@ _run_micro() {
         racket    "racket $dir/racket/function_call.rkt" \
         turi      "$TUR --interpret $dir/turi/function_call.tur" \
         rust      "$RUST_RELEASE_DIR/function_call" \
-        python    "python3 $dir/python/function_call.py"
+        python    "python3 $dir/python/function_call.py" \
+        turjit    "$TUR jit $dir/turmeric/function_call.tur --timing-json $TURJIT_TIMING_FILE --" \
+        haskell   "$HASKELL_BIN_DIR/function_call"
     unset TURI_ARG
 }
 
@@ -491,9 +610,9 @@ _bench_lang() {
         # For clojure/racket/python, check the script file (last .clj/.rkt/.py arg)
         local impl_file
         case "$lang" in
-            c|turmeric|rust)
+            c|turmeric|rust|haskell)
                 impl_file="$primary" ;;
-            turi)
+            turjit|turi)
                 # turi runs via $TUR --interpret <file.tur>; find the .tur arg
                 for w in "${cmd_arr[@]}"; do
                     case "$w" in *.tur) impl_file="$w" ;; esac
@@ -506,7 +625,12 @@ _bench_lang() {
         esac
 
         if [ -z "${impl_file:-}" ] || [ ! -f "$impl_file" ] && [ ! -x "$impl_file" ]; then
-            echo "  SKIP $lang/$benchmark (not implemented)"
+            echo "  SKIP $lang/$benchmark (absent: not implemented / not built)"
+            local ts_abs
+            ts_abs=$(date +%Y%m%d_%H%M%S)
+            write_status_json "${RESULTS_DIR}/${category}_${benchmark}_${lang}_${size}_${ts_abs}.json" \
+                "$lang" "$category" "$benchmark" "$size" "absent"
+            SKIP_COUNT=$((SKIP_COUNT + 1))
             continue
         fi
 
@@ -554,6 +678,32 @@ build_turmeric_binaries() {
     done
 }
 
+build_haskell_binaries() {
+    echo "── building Haskell binaries ────────────────────────"
+    local hdir="$BENCHMARK_DIR/haskell-project"
+    if [ -d "$hdir" ] && command -v ghc >/dev/null 2>&1; then
+        # Direct ghc -O2: every dependency is a GHC boot package, so no
+        # cabal/Hackage round-trip is needed (and none is possible on an
+        # offline or proxy-restricted machine).  The .cabal file remains
+        # for IDE/tooling use.
+        (cd "$hdir" && mkdir -p bin obj && {
+            ok=1
+            for src in src/*.hs; do
+                base=$(basename "$src" .hs)
+                # Module names are CamelCase of the benchmark name.
+                bin=$(echo "$base" | sed 's/\([A-Z]\)/_\l\1/g;s/^_//')
+                extra=""
+                [ "$bin" = "thread_ring" ] && extra="-threaded"
+                ghc -O2 $extra -outputdir obj -o "bin/$bin" "$src" >/dev/null 2>&1 \
+                    || { echo "  WARN: ghc failed on $src"; ok=0; }
+            done
+            [ $ok -eq 1 ] && echo "  Haskell project built"
+        })
+    else
+        echo "  SKIP: haskell-project not found or ghc missing"
+    fi
+}
+
 build_rust_binaries() {
     echo "── building Rust binaries ───────────────────────────"
     local rwdir="$BENCHMARK_DIR/rust-workspace"
@@ -575,6 +725,7 @@ TARGET_SIZE="${2:-small}"
 build_c_binaries
 build_turmeric_binaries
 build_rust_binaries
+build_haskell_binaries
 
 if [ "$TARGET_CATEGORY" = "all" ]; then
     for cat in "${ALL_CATEGORIES[@]}"; do
@@ -587,3 +738,7 @@ fi
 echo
 echo "── done ─────────────────────────────────────────────────"
 echo "Results written to: $RESULTS_DIR"
+if [ "$SKIP_COUNT" -gt 0 ]; then
+    echo "WARNING: $SKIP_COUNT cell(s) absent/failed/timed out -- see the status JSONs."
+    exit 1
+fi

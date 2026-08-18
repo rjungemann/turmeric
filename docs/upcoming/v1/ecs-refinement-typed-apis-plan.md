@@ -251,6 +251,29 @@ question is answered.~~
 > promoted to the real sized-world stack as `ecs/sized-refined`; see the RE1
 > phase banners below.
 
+> **Trigger note 2026-08-17 -- the `#reads` trust tier now has its own plan,
+> and ONE ECS DECISION IS ITS TRIGGER.**
+> [`trusted-refinement-claims-plan.md`](../trusted-refinement-claims-plan.md)
+> covers the promise C2's answer rests on. Two pieces are already live and
+> cost the ECS nothing today: `TUR-W0383` warns, gatelessly, when a `#reads`
+> measure's body *demonstrably* reads a mutable global, and
+> `--enable=checked-reads` refuses the congruence grant on that same
+> evidence -- every ECS measure is inline-C, which yields no evidence, so
+> both stay silent for the spice as it stands.
+>
+> The piece that waits on this plan is **R4, the general checked `#reads`**:
+> it is blocked on the measure layer holding its state in Turmeric-visible
+> structs instead of a malloc'd block behind inline C -- which is *exactly*
+> option "(b) making the RE0 unwrappers pure primitives" in the C1 purity
+> caveat above, reached from the other direction. **If that rewrite is ever
+> undertaken** (RE0 unwrappers become pure, the `gens` block becomes a
+> struct field or vec), do it with R4 in hand: the same change that makes
+> the accessor predicates congruent-as-pure is the one that makes `#reads`
+> *checkable*, and the two should land as one design rather than
+> rediscover each other. Conversely, a new pure-Turmeric ECS measure that
+> reads a `^mut` global will draw `TUR-W0383` immediately -- that is the
+> trust boundary being reported, not a lint to silence.
+
 **C3 is blocking for RE2 only.** RE1 does not need it.
 
 ### Spice-side prerequisite: real types at the API surface
@@ -563,7 +586,10 @@ it becomes an ordinary path-splitting obligation.
 > decline (unblocking the `while` form), and `frozen` + `#reads` extends
 > bounds elimination to RESIZABLE storage, where `(in-bounds? buf i)` reads
 > mutable capacity (see stateful-refinements-guide.md "Where this
-> generalizes").
+> generalizes"). The trajectory's trusted-tier half now has its own plan --
+> [`trusted-refinement-claims-plan.md`](../trusted-refinement-claims-plan.md);
+> see the trigger note under C2 above before touching how measures hold
+> state.
 
 Deliberately sequenced last: it is the only phase whose payoff is measured in
 nanoseconds, and the parent plan's benchmarking section is a standing warning

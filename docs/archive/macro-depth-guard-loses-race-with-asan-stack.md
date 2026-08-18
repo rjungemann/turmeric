@@ -2,6 +2,31 @@
 
 **Severity:** low (Debug/ASan only; the diagnostic is correct, it just never
 gets to print). One fixture red: `errors/macro-depth-hint`.
+**Status:** FIXED 2026-08-18 -- fix direction 2, as the report recommended.
+The guard in `elab_call.c` now has a second trigger: once a genuine macro
+recursion is under way (depth >= 16), `elab_stack_nearly_exhausted()` measures
+the calling thread's real remaining stack (glibc `pthread_getattr_np`, macOS
+`pthread_get_stackaddr_np`/`pthread_get_stacksize_np`, Windows
+`GetCurrentThreadStackLimits`; depth-counter-only elsewhere) and raises the
+SAME diagnostic pair when headroom drops below a margin of total/8 clamped to
+[256 KiB, 1 MiB], plus one extra note naming the early stop and the depth it
+reached.  The race reproduces on Linux by shrinking the stack (`ulimit -s
+4096` aborted identically pre-fix); post-fix, 2 MiB and 4 MiB stacks emit the
+full diagnostic at depth 77 / 159 respectively, and a healthy 8 MiB stack
+still trips the plain 256-depth counter with no extra note.  Suites green on
+both engines.  `TUR_DEBUG_STACK_GUARD=1` traces what the guard sees, for
+verifying on a platform where the race reproduces natively (macOS/arm64).
+
+The one non-obvious part, worth keeping for the next stack probe anyone
+writes: under ASan with use-after-return detection (default in modern
+toolchains), **the address of a local does NOT approximate the stack
+pointer** -- address-taken locals live on the sanitizer's heap-side fake
+stack, outside the thread stack entirely (visible in the original abort:
+`bp 0x0fec...` fake vs `sp 0x7ffe...` real).  The first cut probed a local's
+address, concluded "cannot tell", and silently fell back to the depth
+counter -- reproducing the bug it was fixing.  The fix reads the SP register
+itself (inline asm on x86-64/aarch64/i386; the local-address fallback
+remains for toolchains without GNU asm, where no fake stack is in play).
 
 ## Summary
 

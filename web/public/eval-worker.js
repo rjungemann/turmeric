@@ -118,6 +118,21 @@ function handleMessage(msg) {
             self.postMessage({ type: 'explain-result', id, result: 'Error: ' + String(err) });
         }
 
+    } else if (msg.type === 'lang-registry') {
+        // #lang dialect/layer registry (try-turmeric-lang-toggle-plan T1).
+        // Returns the raw JSON string exported by the C tables, or null on an
+        // older WASM build without the export -- the main thread then falls
+        // back to a minimal bases-only list.
+        try {
+            const fn = turiModule._turi_wasm_lang_registry;
+            if (!fn) { self.postMessage({ type: 'lang-registry-result', id, result: null }); return; }
+            const resultPtr = fn();
+            const result = resultPtr ? turiModule.UTF8ToString(resultPtr) : null;
+            self.postMessage({ type: 'lang-registry-result', id, result });
+        } catch (_) {
+            self.postMessage({ type: 'lang-registry-result', id, result: null });
+        }
+
     } else if (msg.type === 'reset') {
         try {
             turiModule._turi_wasm_reset();

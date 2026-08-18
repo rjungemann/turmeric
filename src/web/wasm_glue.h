@@ -111,14 +111,18 @@ void turi_wasm_free_string(char *s);
 /* Set the reader language mode for subsequent evaluations.
  *
  * Arguments:
- *   name - one of: "turmeric", "turmeric/curly-infix",
- *                  "turmeric/neoteric", "sweet-exp"
+ *   name - the full `#lang` directive tail: a base name ("turmeric",
+ *          "turmeric/curly-infix", "turmeric/neoteric", "turmeric/sweet",
+ *          or the legacy alias "sweet-exp"), optionally followed by
+ *          space-separated layer tokens, e.g. "turmeric/sweet stringed".
  *
  * Returns:
- *   0 on success, 1 if name is not a recognised language.
+ *   0 on success, 1 if the base or any layer token is not recognised.
  *
- * When the mode changes the accumulated session source is cleared (same
- * behaviour as typing '#lang ...' in the interactive REPL).
+ * When the base or the layer set changes the accumulated session source is
+ * cleared (same behaviour as typing '#lang ...' in the interactive REPL).
+ * The layer set is assigned, not accumulated, so a previously-enabled layer
+ * absent from `name` is turned off.
  * This function is equivalent to including a '#lang <name>' line at the top
  * of a submitted code block and is useful for programmatic mode-switching
  * (e.g. a language selector in the web REPL UI).
@@ -128,6 +132,18 @@ int turi_wasm_set_lang(const char *name);
 /* Return the current reader language name as a static string.
  * The returned pointer must NOT be freed. */
 const char *turi_wasm_get_lang(void);
+
+/* Return the `#lang` registry (base dialects + curated layers) as a JSON
+ * string:
+ *
+ *   {"bases":[{"name":"turmeric","label":"S-expression"},...],
+ *    "layers":[{"name":"stringed","kind":"reader","summary":"...",
+ *               "since":"v1","available":true},...]}
+ *
+ * Built live from the C-side tables (lang_base_from_name's canonical set and
+ * LANG_LAYERS[]) so a UI rendering it never becomes a second source of
+ * truth.  The returned pointer is owned by the module; do NOT free it. */
+const char *turi_wasm_lang_registry(void);
 
 /* ---------------------------------------------------------------------------
  * Doc lookup (D6: autodoc bridge)
