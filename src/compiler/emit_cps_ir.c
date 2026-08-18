@@ -3226,6 +3226,28 @@ static bool needs_heap_join(const CTerm *t) {
                 CapSet _cs;
                 if (!collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &_cs))
                     return true;
+                /* cps-join-point-emits-invalid-assignment: the lifted frame fn
+                 * has NO enclosing join in scope -- only its own `__kont` (a
+                 * KK_RET delivery) and joins it defines itself.  A jbody that
+                 * delivers to an OUTER join (KK_VAR) therefore has nowhere to
+                 * go, and the emitter used to fall through to its
+                 * "unreachable when the term is well-formed" placeholders:
+                 * join_param() returned the literal "0", producing
+                 *
+                 *     0 = __t5;      <- not an lvalue
+                 *     goto L4;      <- label lives in the PARENT function
+                 *
+                 * This is the same closedness requirement the lifted
+                 * reset/handler bodies already carry (joins_closed_rec, whose
+                 * header comment states it); heap joins were simply never
+                 * checked against it.  Reject with a FRESH def set so any join
+                 * reference that escapes the jbody evicts the function to the
+                 * direct emitter. */
+                {
+                    uint32_t _jdef[CC_MAX_BOUND];
+                    if (!joins_closed_rec(t->as.letcont.jbody, _jdef, 0))
+                        return true;
+                }
                 return needs_heap_join(t->as.letcont.jbody);
             }
             return needs_heap_join(t->as.letcont.jbody)

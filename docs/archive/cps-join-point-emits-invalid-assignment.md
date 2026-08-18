@@ -1,5 +1,6 @@
 # CPS join point emits `0 = <value>;` and jumps to an undeclared label
 
+**Status:** RESOLVED 2026-08-18.
 **Severity:** high (emits C that cannot compile; no `.tur`-level diagnostic,
 so it reads as a mysterious `cc invocation failed`)
 **Found:** 2026-08-18, writing `spices/secret`'s test suite against
@@ -111,4 +112,34 @@ nothing warns you.
 ## Related
 
 Same session, same CPS emitter, distinct defect:
-[`cps-result-unbox-dropped.md`](../archive/cps-result-unbox-dropped.md).
+[`cps-result-unbox-dropped.md`](cps-result-unbox-dropped.md).
+
+## RESOLVED (2026-08-18)
+
+Root cause: a non-tail cps->cps call reifies its join continuation as a DK
+frame, and the lifted frame fn has **no enclosing join in scope** -- only its
+own `__kont` (a KK_RET delivery) and joins it defines itself. That invariant
+is already stated in `jbody_has_cps_tailcall`'s header comment, and the
+lifted reset/handler bodies already enforce the matching closedness rule via
+`joins_closed_rec`. Heap joins were simply never checked against it.
+
+A jbody delivering to an OUTER join therefore reached the emitter's
+"unreachable when the term is well-formed" placeholders: `join_param()`
+returns the literal `"0"` when the join id is not in scope, producing
+`0 = <value>;` and a `goto` to a label that lives in the parent function.
+
+Fixed in `needs_heap_join` (`src/compiler/emit_cps_ir.c`) by running
+`joins_closed_rec` over the jbody with a FRESH def set. Failing it evicts the
+function to the direct emitter -- the established handling, and the same
+mechanism `collect_caps` failure already uses.
+
+**Eviction cost: none measured.** The gate fires on 0 of the 308 CPS-related
+fixtures (`cps|effect|generator|fiber|handle|shift|reset|async|await`), and
+on the repro. That is expected rather than lucky: any function reaching this
+gate previously emitted C that could not compile, so the eviction set is
+exactly the set of functions that were already broken.
+
+Regression fixture: `tests/fixtures/cps-heap-join-outer-join-escape/`,
+verified to FAIL against the pre-fix compiler.
+
+Full fixture suite: 2619 passed, 0 failed.

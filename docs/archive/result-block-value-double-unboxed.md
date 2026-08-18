@@ -117,7 +117,7 @@ comments so they are not "simplified" back inline.
 Same session, same area:
 - [`cps-result-unbox-dropped.md`](cps-result-unbox-dropped.md) -- the unbox
   omitted where it *is* needed (CPS-transformed functions).
-- [`cps-join-point-emits-invalid-assignment.md`](../reported/cps-join-point-emits-invalid-assignment.md)
+- [`cps-join-point-emits-invalid-assignment.md`](cps-join-point-emits-invalid-assignment.md)
 
 There is also a fourth symptom, not separately filed because the workaround
 is the same: passing a Turmeric-built `(Result T E)` as a **function
