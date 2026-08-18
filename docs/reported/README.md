@@ -338,8 +338,21 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [macos-jit-leg-intermittent-45min-hang](macos-jit-leg-intermittent-45min-hang.md) | medium | **root cause found.** The macOS legs ran fixtures UNTIMED -- no `timeout(1)` on stock macOS, `gtimeout` needs coreutils, and CI installed only `libedit ccache` -- so one flaky networking fixture (`httpd-async-limit`) ate the whole 45-min job timeout instead of FAILing. Contained by installing coreutils; the fixture's own flakiness is still open |
 | [ecs-defsystem-writes-fixture-expects-old-spices](ecs-defsystem-writes-fixture-expects-old-spices.md) | low | with `../turmeric-spices` present, `errors/ecs-defsystem-writes-unauthorized` fails: spices-HEAD `ecs/world.tur` errors during its own elaboration (Storage associated type), so the write-capability diagnostic the fixture pins is never reached; invisible without the optional checkout |
+
+`macos-jit-leg-intermittent-45min-hang` was resolved 2026-08-18 and moved to
+[docs/archive](../archive/macos-jit-leg-intermittent-45min-hang.md).  The
+45-minute silent hang had already been contained (coreutils in CI so
+per-fixture timeouts fire); the remaining flake -- `httpd-async-limit`
+deadlocking outright -- was root-caused to the fixture stopping the async
+server while a straggler client's connect could still land in a listen
+backlog that `httpd-stop-async` left open (the listen fd only closed at
+`httpd-async-free`, after the client joins).  Fixed in `httpd-stop-async`
+(close the listener at stop), the fixture (handlers hold their slots until
+both 503s are observed; clients joined before stop), and `io_kqueue.c`
+(EV_DELETE used `EVFILT_READ | EVFILT_WRITE`, which collapses to
+`EVFILT_READ` -- filters are values, not flags -- so WRITE knotes were never
+deleted).
 
 `macro-depth-guard-loses-race-with-asan-stack` was resolved 2026-08-18 and
 moved to

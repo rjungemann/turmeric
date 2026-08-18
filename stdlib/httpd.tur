@@ -937,6 +937,12 @@
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
+  /* Close the listener NOW, not at httpd-free (same rationale as
+   * httpd-stop-async): the kernel completes handshakes into the backlog
+   * whether or not accept() ever runs, so a connection racing the stop
+   * would otherwise sit ESTABLISHED, unanswered, until httpd-free -- and a
+   * peer blocked in recv() on it may be what the caller is joining first. */
+  if (hb->listen_fd >= 0) { close(hb->listen_fd); hb->listen_fd = -1; }
   if (hb->reactor) {
       tur_reactor_stop(hb->reactor);
       tur_reactor_wake(hb->reactor);
@@ -2919,6 +2925,12 @@
       tur_reactor_remove(ha->reactor, ha->listen_src_id);
       ha->listen_src_id = -1;
   }
+  /* Close the listener NOW, not at httpd-async-free: the kernel completes
+   * TCP handshakes into the backlog whether or not accept() ever runs, so a
+   * connection that races the stop would otherwise sit ESTABLISHED with no
+   * one ever answering, and the client blocks in recv() forever. Closing
+   * the fd resets the pending backlog and refuses late connects instead. */
+  if (ha->listen_fd >= 0) { close(ha->listen_fd); ha->listen_fd = -1; }
   tur_reactor_stop(ha->reactor);
   tur_reactor_wake(ha->reactor);
   ```)

@@ -156,7 +156,57 @@ failure mode -- a red line you can read beats a 45-minute stall that tells you
 nothing -- but it does mean the fixture's flakiness is now everyone's problem
 until it is fixed.
 
-## Still open: why `httpd-async-limit` hangs at all
+## RESOLVED (2026-08-18): the fixture deadlock, root-caused and fixed
+
+The remaining open question below -- why `httpd-async-limit` hangs at all --
+is answered. The deadlock is a race between the fixture's shutdown ordering
+and a stdlib gap, and suspect 2 below was closest (a client stuck against a
+backlog the server never drains -- in `recv()` after the connect succeeded,
+not in `connect()` itself):
+
+1. The fixture's `main` called `httpd-stop-async` as soon as the two
+   permitted handlers finished (~130ms in), and only *then* joined the four
+   client threads.
+2. `httpd-stop-async` removed the listener source from the reactor but
+   **left the listen fd open** -- it was only closed in `httpd-async-free`,
+   which the fixture reaches *after* the client joins.
+3. The kernel completes TCP handshakes into the listen backlog whether or
+   not `accept()` ever runs. So a client thread descheduled long enough to
+   connect after the stop (>100ms late -- routine on an oversubscribed
+   2-core CI runner, which is why it never reproduced locally) got an
+   ESTABLISHED connection that nothing would ever answer, blocked forever
+   in `recv()`, and deadlocked `main` in `pthread_join()`.
+
+Reproduced deterministically by giving one client a 300ms connect delay
+against the old code: 100% hang (killed at 10s), and 0% hang with the fix.
+
+Three fixes landed together (branch `macos-fixes`):
+
+- **`stdlib/httpd.tur`**: `httpd-stop-async` now closes the listen fd at
+  stop time. Pending backlog connections are reset and late connects are
+  refused, instead of black-holing the peer until `httpd-async-free`.
+- **`tests/fixtures/httpd-async-limit/input.tur`**: made deterministic.
+  The handlers now hold their in-flight slots until both over-cap clients
+  have observably counted their 503s (gating on the busy counter instead
+  of a fixed 100ms delay), and `main` joins all clients *before* stopping
+  the server. This removes both the hang window and the latent wrong-count
+  flake (a slow client sneaking into a freed slot and getting a 200).
+  Clients also carry an 8s `SO_RCVTIMEO` backstop so any regression fails
+  inside the fixture's own 10s window even on a host with no timeout(1).
+- **`src/async/io_kqueue.c`** (spotted during the investigation, macOS
+  only): `EV_SET(fd, EVFILT_READ | EVFILT_WRITE, EV_DELETE, ...)` in
+  unregister/modify never deleted WRITE filters -- kqueue filters are enum
+  *values* (-1, -2), not a bitmask, so the OR collapses to `EVFILT_READ`.
+  Stale `EVFILT_WRITE` knotes survived until the fd was closed and could
+  deliver spurious wakes to a later parked fiber on a reused fd. Each
+  filter is now deleted individually.
+
+Validation: 200 concurrent stress runs (8 instances x 25 batches, 6x
+thread oversubscription on an 8-core box) -- 200 pass, 0 mismatch, 0 hang.
+
+The original analysis is preserved below.
+
+## Formerly open: why `httpd-async-limit` hangs at all
 
 The flakiness itself is unfixed and is the real bug.
 

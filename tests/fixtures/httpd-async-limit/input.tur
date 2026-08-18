@@ -1,9 +1,15 @@
 ;; A4: httpd-async-limit -- in-flight cap returns 503 when exceeded.
 ;;
-;; The async server is configured with max-in-flight=2 and a 100ms slow
-;; handler. Four clients connect simultaneously; the first two grab the
-;; available slots and succeed; the remaining two should be rejected
-;; with 503 + "server at capacity" without the handler running for them.
+;; The async server is configured with max-in-flight=2. Four clients
+;; connect; two grab the available slots and their handlers HOLD the
+;; slots until the other two have been rejected with 503 + "server at
+;; capacity" (observed via the busy counter). Only then do the held
+;; handlers respond 200. Gating on the observed rejections (rather
+;; than a fixed handler delay) makes ok=2/busy=2 independent of
+;; scheduling: a client thread descheduled for hundreds of ms on a
+;; loaded CI box can neither sneak into a freed slot nor connect after
+;; the server stopped (the latter used to deadlock the fixture -- see
+;; docs/archive/macos-jit-leg-intermittent-45min-hang.md).
 ;;
 ;; Expected output:
 ;;   ok=2
@@ -29,6 +35,12 @@
   free(arg);
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return NULL;
+  /* Backstop: if the server ever fails to answer, fail the counts inside
+   * the fixture's own 10s window instead of blocking in recv() forever
+   * (a hung client hangs main's pthread_join, and on a host without a
+   * timeout(1) binary that used to eat the whole CI job). */
+  struct timeval rcv_to = { 8, 0 };
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to));
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family      = AF_INET;
@@ -92,7 +104,11 @@
         ok        (alloc-counter)
         busy      (alloc-counter)
         handler   (fn [c : ptr<void>] : nil
-                    (httpd-await-timer c 100)
+                    ;; Hold this in-flight slot until both over-cap
+                    ;; clients have received their 503 and counted it,
+                    ;; then respond. Guarantees exactly two rejections.
+                    (while (< (read-counter busy) 2)
+                      (httpd-await-timer c 10))
                     (httpd-resp-status! c 200)
                     (httpd-resp-body! c "served")
                     (chan-send donech 1))
@@ -106,12 +122,17 @@
         c4        (spawn-client port ok busy)]
     ;; Wait for the two handler runs that the cap permits.
     (let [_ (chan-recv donech)] (let [_ (chan-recv donech)] 0))
-    (httpd-stop-async h)
-    (join-thread server)
+    ;; Join the clients BEFORE stopping the server: both 503s are
+    ;; already counted (the handlers gate on that) and both 200s are in
+    ;; flight on a still-running server, so every client terminates.
+    ;; Stopping first would race a slow client's connect into a listen
+    ;; backlog that nobody drains.
     (join-thread c1)
     (join-thread c2)
     (join-thread c3)
     (join-thread c4)
+    (httpd-stop-async h)
+    (join-thread server)
     ;; Now all clients have finished receiving + counting. Print stats.
     (print-tag "ok"          (read-counter ok))
     (print-tag "busy"        (read-counter busy))
