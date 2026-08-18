@@ -143,3 +143,20 @@ Regression fixture:
 against the pre-fix compiler.
 
 Full fixture suite after both fixes: 2616 passed, 0 failed.
+
+### Follow-up: the narrowing left a residue, now reported
+
+The scope note above said the predicate was "narrowed to Option/Result apps".
+Re-checking that on 2026-08-18 showed it was two steps too tight in one
+direction and correct in the other:
+
+- **Too tight:** every OTHER parametric by-value product (`(Box2 int cstr)`)
+  hit the identical bug. The predicate now keys on `adt_app_is_byvalue_product`
+  rather than the names `Option`/`Result`, which fixes them all and regresses
+  nothing (suite: 2628 passed, 0 failed). Pinned by
+  `tests/fixtures/byvalue-product-tail-var-parametric/`.
+- **Correct:** the 10 regressions came specifically from the NON-parametric
+  `TY_ADT` arm, not from dropping the name check. That case is still broken,
+  and is not widenable -- the same type rides the carrier at the vec/map
+  element seams, so it needs a position-sensitive predicate. Filed as
+  [`byvalue-product-tail-var-double-unboxed-nonparametric`](../reported/byvalue-product-tail-var-double-unboxed-nonparametric.md).

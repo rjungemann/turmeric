@@ -44,8 +44,7 @@ the plan links. File a new repr cell there as well as here.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-
-*(No open repr cells -- the guide's open-cells table emptied 2026-08-16.)*
+| [byvalue-product-tail-var-double-unboxed-nonparametric](byvalue-product-tail-var-double-unboxed-nonparametric.md) | medium | residue of `result-block-value-double-unboxed`: a bare-var tail of a NON-parametric by-value product (`tur_adt_Pt`) is still deref-unboxed by the `emit_if` merge. Not widenable -- the same type rides the carrier at the vec/map element and assoc-type seams, so extending the type test regresses 10 named fixtures. Needs a position-sensitive predicate (the `emit_localvar_lookup_ctype` trick) moved to the merge site, where the arm's emitted text exists |
 
 `mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
 and fixed the same day, both defects along its own fix directions) and moved
