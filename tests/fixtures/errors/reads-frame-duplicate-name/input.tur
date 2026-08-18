@@ -1,0 +1,14 @@
+;; multiple-reads-params: naming a parameter twice in one frame is a typo, not
+;; a stronger claim -- the mask cannot represent it and silently absorbing it
+;; would hide the mistake.
+(defstruct Wld [n : int])
+(defstruct Grd [m : int])
+
+(defn alive? [^borrow w : Wld ^borrow g : Grd e : int] #reads [w w] : bool
+  ```c
+  (void)w; (void)g; (void)e; return 1;
+  ```)
+
+(defn main [] : int
+  (println "ok")
+  0)

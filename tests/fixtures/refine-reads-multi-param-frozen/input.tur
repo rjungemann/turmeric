@@ -1,0 +1,36 @@
+;; multiple-reads-params: a `#reads [w g]` frame naming TWO borrowed parameters
+;; is congruent when BOTH are frozen, so the guard discharges the crossing it
+;; protects. Under --strict-refine this compiles only because the obligation
+;; proves.
+;;
+;; The negative half -- freeze only one of the two and the grant is correctly
+;; withheld -- is tests/fixtures/errors/refine-reads-multi-param-partial-frozen.
+;; Both are needed: this fixture alone would also pass under an "ANY named
+;; param frozen" rule, which is unsound.
+;;
+;; Before 2026-08-18 `#reads` held a single param index and this frame had no
+;; spelling at all; see docs/archive/reads-frame-cannot-name-multiple-params.md.
+(defstruct Wld [n : int])
+(defstruct Grd [m : int])
+
+(defn alive? [^borrow w : Wld ^borrow g : Grd e : int] #reads [w g] : bool
+  ```c
+  (void)w; (void)g; (void)e; return 1;
+  ```)
+
+(defn get-Pos! [^borrow w : Wld ^borrow g : Grd
+                e : #refine{ x : int | (alive? w g x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (Wld 42)
+        ^mut g (Grd 7)]
+    (let [__frz1 (& w)
+          __frz2 (& g)]                ;; BOTH frozen -- grant applies
+      (if (alive? w g 0)
+        (get-Pos! w g 0)               ;; discharges from the guard
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

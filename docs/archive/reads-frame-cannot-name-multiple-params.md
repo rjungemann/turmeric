@@ -1,5 +1,6 @@
 # `#reads` cannot name more than one parameter
 
+**Status:** RESOLVED 2026-08-18.
 **Severity:** medium (a real expressiveness hole in the refinement surface --
 a measure that reads two `^borrow` parameters has no way to say so; the
 adjacent silent-drop bug is fixed, this is not)
@@ -104,3 +105,58 @@ the two should agree on one syntax rather than arriving separately.
 Both are honest but lossy: the first cannot express a predicate that is
 genuinely joint over two states, and the second forces a data-model change to
 satisfy an annotation limit.
+
+## RESOLVED (2026-08-18)
+
+Implemented, following the three fix directions above.
+
+**Representation.** `uint32_t reads_param_plus1` (a single 1-based index) ->
+`uint64_t reads_params_mask` (bit i == param i), on both `Binding` and
+`RefineFnInfo`. Parameters past bit 63 are rejected with TUR-E0024; an arity
+that high already trips the TUR-W0041 lint.
+
+**Reader.** `read_reads_annot` now mirrors `read_writes_annot`: `#reads w`
+or `#reads [w g ...]`. The single-symbol form is unchanged.
+
+**The semantic decision -- conjunctive.** `enc_reads_arg_frozen` became
+`enc_reads_args_frozen`, requiring **every** named parameter to be frozen at
+the call site. This is the arm the report flagged as the one real decision,
+and it is verified in all four quadrants rather than asserted:
+
+| frozen | result |
+|---|---|
+| `w` and `g` | proves (prints 42) |
+| `w` only | TUR-W0372, grant withheld |
+| `g` only | TUR-W0372, grant withheld |
+| neither | TUR-W0372, grant withheld |
+
+Under the unsound "any named param frozen" reading, rows 2 and 3 would have
+compiled -- silently eliding a crossing check that is not justified. Both the
+positive and the partial-frozen negative are pinned as fixtures
+(`refine-reads-multi-param-frozen`,
+`errors/refine-reads-multi-param-partial-frozen`), and the negative's header
+says why it exists, so a future change that relaxes the quantifier fails
+loudly.
+
+**Empty frames stay rejected.** `#writes []` usefully asserts "this body
+writes nothing"; an empty read frame says exactly what omitting the
+annotation says, and one claim with two spellings would give the encoder two
+ways to ask the same question. `#reads []` is TUR-E0024.
+
+**Diagnostics kept** from the interim commit, retargeted: duplicate frame,
+repeated name, unknown name, empty frame -- all TUR-E0024, all with fixtures.
+The `tur explain TUR-E0024` text and
+`docs/guides/stateful-refinements-guide.md` now document the vector form and
+the conjunctive rule.
+
+**Also fixed as a consequence:** TUR-W0383's message rendered only
+`params[reads_param_plus1 - 1]`, so on a multi-parameter frame it would have
+quoted just the first name and misreported which claim is broken. It now
+renders the whole frame.
+
+Suite: **2626 passed, 0 failed.**
+
+Left for whoever lands `docs/upcoming/mutable-globals-plan.md`: that plan
+writes `#reads [*cache*]` -- a bracketed frame over *globals* rather than
+parameters. The bracket syntax now exists and is free to reuse; what still
+needs deciding is whether globals share this mask or get a parallel one.

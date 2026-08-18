@@ -1,0 +1,14 @@
+;; multiple-reads-params: unlike `#writes []`, which usefully asserts "this
+;; body writes nothing", an EMPTY read frame says exactly what omitting the
+;; annotation says. Giving one claim two spellings would hand the encoder two
+;; ways to ask the same question, so it is rejected.
+(defstruct Wld [n : int])
+
+(defn alive? [^borrow w : Wld e : int] #reads [] : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+
+(defn main [] : int
+  (println "ok")
+  0)

@@ -239,7 +239,15 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [reads-frame-cannot-name-multiple-params](reads-frame-cannot-name-multiple-params.md) | medium | `#reads` names exactly one `^borrow` param (`reads_param_plus1` is a single index) and has no `[...]` vector form, unlike `#writes`; a measure over two borrowed states is inexpressible. The adjacent silent-drop bug -- a second `#reads` overwrote the first, feeding the solver an unwritten trusted claim -- is FIXED (TUR-E0024); the expressiveness hole is not |
+
+`reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
+and moved to
+[docs/archive](../archive/reads-frame-cannot-name-multiple-params.md).
+`#reads` now takes `w` or `[w g ...]` like `#writes`; the backing field went
+from a single param index to a 64-bit mask. The congruence grant over a
+multi-parameter frame is CONJUNCTIVE -- every named parameter must be frozen
+-- which is the arm that had to be decided rather than refactored, and is
+pinned by a partial-frozen negative fixture so relaxing it fails loudly.
 
 `caret-constraint-vector-not-registered` was resolved 2026-08-17, the day
 after filing, and moved to
