@@ -451,123 +451,6 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
     turi_env_register_native(env, fname, native_nil_stub, NULL);
 }
 
-/* -------------------------------------------------------------------------
- * jit-ffi-c2mir-plan F3: (call-ptr ...) evaluation
- * ---------------------------------------------------------------------- */
-
-/* Evaluate an EX_CALL carrying a ptr_sig: an indirect call through a raw C
- * address with the signature stated at the site.  Routes through the c2mir
- * thunk provider; a non-JIT interpreter build reports a clean diagnostic,
- * never nil.  Gated on TURI_CAP_FFI like dlopen/dlsym. */
-static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
-                               const Expr *e) {
-    const CallPtrSig *ps = e->as.call_.ptr_sig;
-
-    if (!(env->caps & TURI_CAP_FFI))
-        return turi_error(
-            "eval: call-ptr not allowed in sandboxed environment");
-    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
-    if (!jp)
-        return turi_error(
-            "call-ptr under --interpret requires a JIT-enabled build "
-            "(-DTUR_JIT=ON); the compiled path (tur build / tur run) "
-            "supports it in every build");
-
-    TuriValue pv = eval_expr(env, frame, e->as.call_.fn_expr);
-    if (turi_is_error(pv)) return pv;
-    /* dlsym results ride the int64 carrier in turi. */
-    if (pv.tag != TURI_INT || pv.as_int == 0)
-        return turi_error("call-ptr: pointer is nil or not an address");
-    void *fn = (void *)(intptr_t)pv.as_int;
-
-    uint32_t n = e->as.call_.n_args;
-    int64_t  i_inl[8];
-    double   f_inl[8];
-    int64_t *i_vals = i_inl, *i_heap = NULL;
-    double  *f_vals = f_inl, *f_heap = NULL;
-    if (n > 8) {
-        i_heap = (int64_t *)malloc((size_t)n * sizeof(int64_t));
-        f_heap = (double  *)malloc((size_t)n * sizeof(double));
-        if (!i_heap || !f_heap) {
-            free(i_heap); free(f_heap);
-            return turi_error("call-ptr: out of memory marshalling call");
-        }
-        i_vals = i_heap; f_vals = f_heap;
-    }
-
-    TuriValue result;
-    char sig_inl[64];
-    char *sig = sig_inl, *sig_heap = NULL;
-    if ((size_t)n + 3 > sizeof sig_inl) {
-        sig_heap = (char *)malloc((size_t)n + 3);
-        if (!sig_heap) {
-            result = turi_error("call-ptr: out of memory");
-            goto cleanup;
-        }
-        sig = sig_heap;
-    }
-    sig[0] = tur_jit_ffi_class_for_kind(ps->return_type.kind, 1);
-    sig[1] = ':';
-
-    for (uint32_t k = 0; k < n; k++) {
-        char cls = tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
-        sig[2 + k] = cls;
-        TuriValue av = eval_expr(env, frame, e->as.call_.args[k]);
-        if (turi_is_error(av)) { result = av; goto cleanup; }
-        if (cls == 'i') {
-            switch (av.tag) {
-                case TURI_INT:  i_vals[k] = av.as_int; break;
-                case TURI_BOOL: i_vals[k] = av.as_bool ? 1 : 0; break;
-                case TURI_CSTR: i_vals[k] = (int64_t)(intptr_t)av.as_cstr; break;
-                case TURI_NIL:  i_vals[k] = 0; break;
-                default:
-                    result = turi_errorf(
-                        "call-ptr: arg %u is not an int-class value",
-                        (unsigned)k);
-                    goto cleanup;
-            }
-        } else {   /* 'f' / 'F' */
-            if (av.tag == TURI_FLOAT)      f_vals[k] = av.as_float;
-            else if (av.tag == TURI_INT)   f_vals[k] = (double)av.as_int;
-            else {
-                result = turi_errorf(
-                    "call-ptr: arg %u is not a float-class value",
-                    (unsigned)k);
-                goto cleanup;
-            }
-        }
-    }
-    sig[n + 2] = '\0';
-
-    {
-        char errbuf[256];
-        TurJitFfiThunkFn jt = jp->thunk_for(sig, errbuf, sizeof errbuf);
-        if (!jt) {
-            result = turi_errorf("call-ptr: %s", errbuf);
-            goto cleanup;
-        }
-        int64_t out_i = 0;
-        double  out_f = 0.0;
-        jt(fn, i_vals, f_vals, NULL, &out_i, &out_f, NULL);
-        switch (ps->return_type.kind) {
-            case TY_NIL:     result = turi_nil(); break;
-            case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-                result = turi_float(out_f); break;
-            case TY_BOOL:    result = turi_bool(out_i != 0); break;
-            case TY_CSTR:
-                result = out_i ? turi_cstr((const char *)(intptr_t)out_i)
-                               : turi_nil();
-                break;
-            default:         result = turi_int(out_i); break;
-        }
-    }
-
-cleanup:
-    free(sig_heap);
-    free(i_heap);
-    free(f_heap);
-    return result;
-}
 
 /* -------------------------------------------------------------------------
  * Local variable frame (stack-allocated linked list)
@@ -1001,6 +884,403 @@ TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, ui
 
 static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
     return make_struct_val_def(env, name, n, fields);
+}
+
+/* -------------------------------------------------------------------------
+ * jit-ffi-c2mir-plan F3: (call-ptr ...) evaluation
+ * ---------------------------------------------------------------------- */
+
+/* F4 struct-by-value.  The compiled path passes a record by naming its type
+ * (a defstruct already emits as the exact by-value C struct), but turi holds
+ * a TuriStruct -- a boxed array of tagged TuriValues -- so it has to build
+ * the C bytes itself.  The layout comes from the shared engine in
+ * jit_ffi_hook.c, which is also what renders the thunk's struct declaration,
+ * so both sides are computing offsets from one description.
+ *
+ * The per-field TYPES come from the record's own CtorFields rather than from
+ * the sig, which carries layout only -- that is what lets a :bool field read
+ * back as a boolean and a :cstr field as a string instead of both collapsing
+ * to an integer. */
+
+/* Number of sig bytes an aggregate for `def` needs, including braces. */
+static size_t agg_sig_len(const AdtDef *def) {
+    return (size_t)def->ctors[0]->n_fields + 2;
+}
+
+/* Render `{...}` for a record ADT into buf (which must hold agg_sig_len
+ * bytes).  Returns the number of bytes written, or 0 if any field has no
+ * by-value member code (which elaboration already rejected). */
+static size_t agg_sig_render(const AdtDef *def, char *buf) {
+    const CtorDef *ct = def->ctors[0];
+    size_t pos = 0;
+    buf[pos++] = '{';
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
+        if (!c) return 0;
+        buf[pos++] = c;
+    }
+    buf[pos++] = '}';
+    return pos;
+}
+
+/* Store one TuriValue into `base + off` as member code `code`. */
+static void agg_store_member(void *base, size_t off, char code, TuriValue v) {
+    unsigned char *p = (unsigned char *)base + off;
+    int64_t iv = 0;
+    double  dv = 0.0;
+    switch (v.tag) {
+        case TURI_INT:   iv = v.as_int;  dv = (double)v.as_int; break;
+        case TURI_BOOL:  iv = v.as_bool ? 1 : 0; dv = (double)iv; break;
+        case TURI_FLOAT: dv = v.as_float; iv = (int64_t)v.as_float; break;
+        case TURI_CSTR:  iv = (int64_t)(intptr_t)v.as_cstr; break;
+        default:         iv = 0; break;   /* TURI_NIL and friends -> zero */
+    }
+    switch (code) {
+        case 'b': { int8_t  x = (int8_t)iv;  memcpy(p, &x, sizeof x); break; }
+        case 'h': { int16_t x = (int16_t)iv; memcpy(p, &x, sizeof x); break; }
+        case 'w': { int32_t x = (int32_t)iv; memcpy(p, &x, sizeof x); break; }
+        case 'q': { int64_t x = iv;          memcpy(p, &x, sizeof x); break; }
+        case 'p': { void   *x = (void *)(intptr_t)iv;
+                    memcpy(p, &x, sizeof x); break; }
+        case 'F': { float   x = (float)dv;   memcpy(p, &x, sizeof x); break; }
+        case 'f': { double  x = dv;          memcpy(p, &x, sizeof x); break; }
+        default:  break;
+    }
+}
+
+/* Read `base + off` back as a TuriValue, typed by the FIELD's declared kind
+ * (the sig code only says how many bytes to read and whether they are FP). */
+static TuriValue agg_load_member(const void *base, size_t off, char code,
+                                 TypeKind field_kind) {
+    const unsigned char *p = (const unsigned char *)base + off;
+    switch (code) {
+        case 'F': { float  x; memcpy(&x, p, sizeof x); return turi_float(x); }
+        case 'f': { double x; memcpy(&x, p, sizeof x); return turi_float(x); }
+        case 'p': {
+            void *x; memcpy(&x, p, sizeof x);
+            if (field_kind == TY_CSTR)
+                return x ? turi_cstr((const char *)x) : turi_nil();
+            return turi_int((int64_t)(intptr_t)x);
+        }
+        default: break;
+    }
+    /* Integer widths: sign- or zero-extend by the DECLARED field type, so a
+     * :uint32 0xFFFFFFFF reads back as 4294967295 rather than -1. */
+    bool is_unsigned = (field_kind == TY_UINT8  || field_kind == TY_UINT16 ||
+                        field_kind == TY_UINT32 || field_kind == TY_UINT64);
+    int64_t out = 0;
+    switch (code) {
+        case 'b': if (is_unsigned) { uint8_t x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  else             { int8_t  x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  break;
+        case 'h': if (is_unsigned) { uint16_t x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  else             { int16_t  x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  break;
+        case 'w': if (is_unsigned) { uint32_t x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  else             { int32_t  x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  break;
+        case 'q': { int64_t x; memcpy(&x, p, sizeof x); out = x; break; }
+        default:  break;
+    }
+    if (field_kind == TY_BOOL) return turi_bool(out != 0);
+    return turi_int(out);
+}
+
+/* jit-ffi-c2mir-plan F5: `(callback-ptr f [sig])` under the interpreter.
+ * Builds a process-lifetime context pinning the Turmeric function and asks
+ * the provider for a C function pointer whose generated body calls
+ * tur_ffi_cb_dispatch with that context's address baked in.  Gated on
+ * TURI_CAP_FFI like the rest of the FFI surface. */
+static TuriValue eval_callback_ptr(TuriEnv *env, EvalFrame *frame,
+                                   const Expr *e) {
+    const CallPtrSig *ps = e->as.call_.ptr_sig;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_error(
+            "eval: callback-ptr not allowed in sandboxed environment");
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp || !jp->callback_for)
+        return turi_error(
+            "callback-ptr under --interpret requires a JIT-enabled build "
+            "(-DTUR_JIT=ON); the compiled path (tur build / tur run) "
+            "supports it in every build");
+
+    TuriValue fv = eval_expr(env, frame, e->as.call_.fn_expr);
+    if (turi_is_error(fv)) return fv;
+
+    uint32_t n = ps->n_params;
+    char  sig_inl[64];
+    char *sig = sig_inl, *sig_heap = NULL;
+    if ((size_t)n + 3 > sizeof sig_inl) {
+        sig_heap = (char *)malloc((size_t)n + 3);
+        if (!sig_heap) return turi_error("callback-ptr: out of memory");
+        sig = sig_heap;
+    }
+    sig[0] = tur_jit_ffi_class_for_kind(ps->return_type.kind, 1);
+    sig[1] = ':';
+    for (uint32_t k = 0; k < n; k++)
+        sig[2 + k] = tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
+    sig[n + 2] = '\0';
+
+    /* The context is never freed: its ADDRESS is compiled into the callback
+     * body, and a C library holding that pointer has no way to tell us it is
+     * done.  Same policy as turi's closures. */
+    TurFfiCbCtx *ctx = tur_ffi_cb_ctx_new(env, fv, sig[0], sig + 2, n);
+    if (!ctx) { free(sig_heap); return turi_error("callback-ptr: out of memory"); }
+
+    char errbuf[256];
+    void *fn = jp->callback_for(sig, ctx, errbuf, sizeof errbuf);
+    free(sig_heap);
+    if (!fn) return turi_errorf("callback-ptr: %s", errbuf);
+    return turi_int((int64_t)(intptr_t)fn);
+}
+
+/* Evaluate an EX_CALL carrying a ptr_sig: an indirect call through a raw C
+ * address with the signature stated at the site.  Routes through the c2mir
+ * thunk provider; a non-JIT interpreter build reports a clean diagnostic,
+ * never nil.  Gated on TURI_CAP_FFI like dlopen/dlsym. */
+static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
+                               const Expr *e) {
+    const CallPtrSig *ps = e->as.call_.ptr_sig;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_error(
+            "eval: call-ptr not allowed in sandboxed environment");
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp)
+        return turi_error(
+            "call-ptr under --interpret requires a JIT-enabled build "
+            "(-DTUR_JIT=ON); the compiled path (tur build / tur run) "
+            "supports it in every build");
+
+    TuriValue pv = eval_expr(env, frame, e->as.call_.fn_expr);
+    if (turi_is_error(pv)) return pv;
+    /* dlsym results ride the int64 carrier in turi. */
+    if (pv.tag != TURI_INT || pv.as_int == 0)
+        return turi_error("call-ptr: pointer is nil or not an address");
+    void *fn = (void *)(intptr_t)pv.as_int;
+
+    uint32_t n = e->as.call_.n_args;
+    TuriValue result;
+
+    /* Position-indexed marshalling buffers, one slot per parameter: arg k
+     * rides iv[k], fv[k] or sv[k] by its class.  sv[k]'s bytes are owned by
+     * agg_bufs[k] and freed on the way out; the return aggregate's buffer is
+     * out_s_buf. */
+    int64_t *i_vals    = NULL;
+    double  *f_vals    = NULL;
+    void   **s_vals    = NULL;
+    void   **agg_bufs  = NULL;
+    char    *sig       = NULL;
+    void    *out_s_buf = NULL;
+    /* Offset into `sig` where each aggregate parameter's '{' sits, so the
+     * pack step can read the layout back out of the sig it just wrote. */
+    size_t  *agg_at    = NULL;
+
+    /* Size the sig: one byte per scalar slot, `{fields}` per aggregate. */
+    size_t sig_cap = 2 + 1;   /* ret + ':' + NUL, ret widened below */
+    if (ps->return_type.kind == TY_ADT && ps->return_type.as.adt_.def)
+        sig_cap += agg_sig_len(ps->return_type.as.adt_.def) - 1;
+    for (uint32_t k = 0; k < n; k++) {
+        if (ps->param_types[k].kind == TY_ADT &&
+            ps->param_types[k].as.adt_.def)
+            sig_cap += agg_sig_len(ps->param_types[k].as.adt_.def);
+        else
+            sig_cap += 1;
+    }
+
+    i_vals   = (int64_t *)calloc(n ? n : 1, sizeof(int64_t));
+    f_vals   = (double  *)calloc(n ? n : 1, sizeof(double));
+    s_vals   = (void   **)calloc(n ? n : 1, sizeof(void *));
+    agg_bufs = (void   **)calloc(n ? n : 1, sizeof(void *));
+    agg_at   = (size_t  *)calloc(n ? n : 1, sizeof(size_t));
+    sig      = (char    *)malloc(sig_cap);
+    if (!i_vals || !f_vals || !s_vals || !agg_bufs || !agg_at || !sig) {
+        result = turi_error("call-ptr: out of memory marshalling call");
+        goto cleanup;
+    }
+
+    size_t sp = 0;
+    if (ps->return_type.kind == TY_ADT && ps->return_type.as.adt_.def) {
+        size_t w = agg_sig_render(ps->return_type.as.adt_.def, sig);
+        if (!w) {
+            result = turi_error("call-ptr: return record has a field with no "
+                                "by-value C member type");
+            goto cleanup;
+        }
+        sp = w;
+    } else {
+        sig[sp++] = tur_jit_ffi_class_for_kind(ps->return_type.kind, 1);
+    }
+    sig[sp++] = ':';
+
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *adef = (ps->param_types[k].kind == TY_ADT)
+                                 ? ps->param_types[k].as.adt_.def : NULL;
+        char cls = adef ? '{'
+                        : tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
+        agg_at[k] = sp;
+        if (adef) {
+            size_t w = agg_sig_render(adef, sig + sp);
+            if (!w) {
+                result = turi_errorf("call-ptr: arg %u's record has a field "
+                                     "with no by-value C member type",
+                                     (unsigned)k);
+                goto cleanup;
+            }
+            sp += w;
+        } else {
+            sig[sp++] = cls;
+        }
+
+        TuriValue av = eval_expr(env, frame, e->as.call_.args[k]);
+        if (turi_is_error(av)) { result = av; goto cleanup; }
+
+        if (cls == '{') {
+            if (av.tag != TURI_STRUCT || !av.as_struct) {
+                result = turi_errorf("call-ptr: arg %u is not a record value",
+                                     (unsigned)k);
+                goto cleanup;
+            }
+            size_t size = 0, align = 1, offs[64];
+            char   codes[64];
+            int    nleaf = 0;
+            if (!tur_jit_ffi_struct_layout(sig + agg_at[k], &size, &align,
+                                           offs, codes, 64, &nleaf)) {
+                result = turi_errorf("call-ptr: arg %u has an unrepresentable "
+                                     "aggregate layout", (unsigned)k);
+                goto cleanup;
+            }
+            const CtorDef *ct = adef->ctors[0];
+            if ((uint32_t)nleaf != ct->n_fields ||
+                av.as_struct->n_fields != ct->n_fields) {
+                result = turi_errorf("call-ptr: arg %u has %u field(s) but "
+                                     "'%s' declares %u", (unsigned)k,
+                                     (unsigned)av.as_struct->n_fields,
+                                     adef->name ? adef->name : "?",
+                                     (unsigned)ct->n_fields);
+                goto cleanup;
+            }
+            /* calloc, not malloc: tail padding is passed too, and handing
+             * the callee uninitialized padding bytes is exactly the kind of
+             * nondeterminism that makes an FFI bug unreproducible. */
+            void *bytes = calloc(1, size ? size : 1);
+            if (!bytes) {
+                result = turi_error("call-ptr: out of memory");
+                goto cleanup;
+            }
+            agg_bufs[k] = bytes;
+            s_vals[k]   = bytes;
+            for (int i = 0; i < nleaf; i++)
+                agg_store_member(bytes, offs[i], codes[i],
+                                 av.as_struct->fields[i]);
+        } else if (cls == 'i') {
+            switch (av.tag) {
+                case TURI_INT:  i_vals[k] = av.as_int; break;
+                case TURI_BOOL: i_vals[k] = av.as_bool ? 1 : 0; break;
+                case TURI_CSTR: i_vals[k] = (int64_t)(intptr_t)av.as_cstr; break;
+                case TURI_NIL:  i_vals[k] = 0; break;
+                default:
+                    result = turi_errorf(
+                        "call-ptr: arg %u is not an int-class value",
+                        (unsigned)k);
+                    goto cleanup;
+            }
+        } else {   /* 'f' / 'F' */
+            if (av.tag == TURI_FLOAT)      f_vals[k] = av.as_float;
+            else if (av.tag == TURI_INT)   f_vals[k] = (double)av.as_int;
+            else {
+                result = turi_errorf(
+                    "call-ptr: arg %u is not a float-class value",
+                    (unsigned)k);
+                goto cleanup;
+            }
+        }
+    }
+    sig[sp] = '\0';
+
+    {
+        char errbuf[256];
+        TurJitFfiThunkFn jt = jp->thunk_for(sig, errbuf, sizeof errbuf);
+        if (!jt) {
+            result = turi_errorf("call-ptr: %s", errbuf);
+            goto cleanup;
+        }
+        int64_t out_i = 0;
+        double  out_f = 0.0;
+
+        const AdtDef *rdef = (ps->return_type.kind == TY_ADT)
+                                 ? ps->return_type.as.adt_.def : NULL;
+        size_t roffs[64];
+        char   rcodes[64];
+        int    rleaf = 0;
+        if (rdef) {
+            size_t rsize = 0, ralign = 1;
+            if (!tur_jit_ffi_struct_layout(sig, &rsize, &ralign, roffs,
+                                           rcodes, 64, &rleaf)) {
+                result = turi_error("call-ptr: return record has an "
+                                    "unrepresentable aggregate layout");
+                goto cleanup;
+            }
+            out_s_buf = calloc(1, rsize ? rsize : 1);
+            if (!out_s_buf) {
+                result = turi_error("call-ptr: out of memory");
+                goto cleanup;
+            }
+        }
+
+        jt(fn, i_vals, f_vals, s_vals, &out_i, &out_f, out_s_buf);
+
+        if (rdef) {
+            const CtorDef *ct = rdef->ctors[0];
+            TuriValue *fields = (TuriValue *)calloc(rleaf ? (size_t)rleaf : 1,
+                                                    sizeof(TuriValue));
+            if (!fields) {
+                result = turi_error("call-ptr: out of memory");
+                goto cleanup;
+            }
+            for (int i = 0; i < rleaf; i++)
+                fields[i] = agg_load_member(out_s_buf, roffs[i], rcodes[i],
+                                            ct->fields[i].kind);
+            result = make_struct_val(env, ct->name, (uint32_t)rleaf, fields);
+            /* Carry the ctor so field access and `type-of` see a struct, the
+             * same thing adt_ctor_native does for a value built in turi. */
+            if (result.tag == TURI_STRUCT && result.as_struct)
+                result.as_struct->ctor = ct;
+            free(fields);
+            goto cleanup;
+        }
+
+        switch (ps->return_type.kind) {
+            case TY_NIL:     result = turi_nil(); break;
+            case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                result = turi_float(out_f); break;
+            case TY_BOOL:    result = turi_bool(out_i != 0); break;
+            case TY_CSTR:
+                result = out_i ? turi_cstr((const char *)(intptr_t)out_i)
+                               : turi_nil();
+                break;
+            default:         result = turi_int(out_i); break;
+        }
+    }
+
+cleanup:
+    if (agg_bufs)
+        for (uint32_t k = 0; k < n; k++) free(agg_bufs[k]);
+    free(agg_bufs);
+    free(agg_at);
+    free(out_s_buf);
+    free(s_vals);
+    free(sig);
+    free(i_vals);
+    free(f_vals);
+    return result;
 }
 
 /* panic? : (val) -> bool — true if val is the (panic) struct from catch-unwind */
@@ -6386,13 +6666,15 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case EX_CALL: {
-                /* jit-ffi-c2mir-plan F3: a `(call-ptr ...)` node has no turi
+                /* jit-ffi-c2mir-plan F3/F5: a `(call-ptr ...)` node has no turi
                  * callee to resolve -- the target is a raw C address.
                  * Dispatch synchronously through the thunk provider; the
                  * scalar args recurse via eval_expr, which is fine at FFI
                  * arg depth. */
                 if (control->as.call_.ptr_sig) {
-                    cur = eval_call_ptr(env, cf, control);
+                    cur = control->as.call_.ptr_sig->is_callback
+                              ? eval_callback_ptr(env, cf, control)
+                              : eval_call_ptr(env, cf, control);
                     descending = false;
                     break;
                 }
@@ -8715,11 +8997,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Function call --------------------------------------------------- */
     case EX_CALL:
-        /* jit-ffi-c2mir-plan F3: a `(call-ptr ...)` call routes through the
+        /* jit-ffi-c2mir-plan F3/F5: a `(call-ptr ...)` call routes through the
          * c2mir thunk provider, not the work-stack driver -- the callee is a
          * raw C address, so there is no turi closure to apply. */
         if (e->as.call_.ptr_sig)
-            return eval_call_ptr(env, frame, e);
+            return e->as.call_.ptr_sig->is_callback
+                       ? eval_callback_ptr(env, frame, e)
+                       : eval_call_ptr(env, frame, e);
         /* T3.2a: delegated to the explicit-stack driver (DK_CALL_ARG), which
          * resolves the callee and accumulates args on the work-stack, then
          * applies via eval_apply.  Semantics match the former inline loop; the

@@ -1,0 +1,67 @@
+;; jit-ffi-c2mir-plan F4: struct-by-value through (call-ptr ...).  A signature
+;; slot may name a single-constructor record; a defstruct already emits as the
+;; exact by-value C struct with the declared field types
+;; (`struct tur_adt_IPair { int32_t a; int32_t b; }`), so the compiled path
+;; passes one by naming the type -- no marshalling, no layout guesswork.
+;;
+;; The callees are Turmeric functions whose addresses inline-C takes, which
+;; keeps the fixture portable: libc declares almost nothing that takes a
+;; struct by value.  Names avoid `-` and `_` so the emitted C symbol is the
+;; source name unmangled.
+;;
+;; requires.compiled: inline-C address-of has no interpreter path at all, and
+;; the interpreter's own struct marshaller is asserted by tests/run-flags.sh
+;; (where the aarch64 HFA refusal can be platform-guarded).
+(defstruct IPair [a : int32 b : int32])
+(defstruct Mixed [n : int   d : float])
+(defstruct Vec2  [x : float y : float])
+
+(defn ipairsum [p : IPair] : int
+  (:: (+ (:: (.a p) :int) (:: (.b p) :int)) :int))
+
+;; Two accessors rather than one fold: mixing the fields would need an
+;; int->float conversion, and `::` reinterprets rather than converts there
+;; (docs/reported/ascribe-int-to-float-reinterprets.md).
+(defn mixedn [m : Mixed] : int   (.n m))
+(defn mixedd [m : Mixed] : float (.d m))
+
+(defn veclensq [v : Vec2] : float
+  (+ (* (.x v) (.x v)) (* (.y v) (.y v))))
+
+(defn mkpair [a : int b : int] : IPair
+  (IPair (:: a :int32) (:: b :int32)))
+
+(defn addrofipairsum [] : int ```c
+  return (int64_t)(intptr_t)&ipairsum;
+  ```)
+(defn addrofmixedn [] : int ```c
+  return (int64_t)(intptr_t)&mixedn;
+  ```)
+(defn addrofmixedd [] : int ```c
+  return (int64_t)(intptr_t)&mixedd;
+  ```)
+(defn addrofveclensq [] : int ```c
+  return (int64_t)(intptr_t)&veclensq;
+  ```)
+(defn addrofmkpair [] : int ```c
+  return (int64_t)(intptr_t)&mkpair;
+  ```)
+
+(defn main [] : int
+  (unsafe
+    ;; all-integer aggregate argument
+    (println (call-ptr (addrofipairsum) [IPair -> :int]
+                       (IPair (:: 20 :int32) (:: 22 :int32))))
+    ;; mixed int/float aggregate -- not an HFA, so every backend agrees
+    (println (call-ptr (addrofmixedn) [Mixed -> :int]   (Mixed 3 0.25)))
+    (println (call-ptr (addrofmixedd) [Mixed -> :float] (Mixed 3 0.25)))
+    ;; a floating-point aggregate (AAPCS64 HFA).  The COMPILED path is
+    ;; correct here on every target because cc implements the ABI; the
+    ;; interpreter refuses it on aarch64 rather than miscall it (see
+    ;; docs/reported/mir-aarch64-fp-aggregate-abi.md).
+    (println (call-ptr (addrofveclensq) [Vec2 -> :float] (Vec2 3.0 4.0)))
+    ;; aggregate RETURN, unpacked back into a record
+    (let [r (call-ptr (addrofmkpair) [:int :int -> IPair] 8 9)]
+      (println (:: (.a r) :int))
+      (println (:: (.b r) :int))))
+  0)

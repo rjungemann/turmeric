@@ -895,11 +895,19 @@ struct ExternC {
  * signature is stated at the call site rather than carried by a binding.
  * Hangs off EX_CALL's `ptr_sig` so every existing recursive walker (which
  * already visits fn_expr + args) traverses it correctly with no new expr
- * kind.  Scalar types only until F4 registers struct layouts. */
+ * kind.  F4: a slot may also name a by-value record (TY_ADT).
+ *
+ * F5 reuses the same node for the REVERSE direction.  With `is_callback`
+ * set the node is `(callback-ptr f [T1 T2 -> R])`: `fn_expr` is the Turmeric
+ * closure rather than a target address, `n_args` is 0, and the node's value
+ * is a C function pointer that calls back into that closure.  Sharing the
+ * node keeps F3's property that no walker had to learn a new kind -- the
+ * closure sits exactly where the address sat, and both are just `fn_expr`. */
 typedef struct CallPtrSig {
     Type      return_type;
     Type     *param_types;   /* arena-owned; n_params entries */
     uint32_t  n_params;
+    bool      is_callback;   /* F5: (callback-ptr f [sig]), not (call-ptr ...) */
 } CallPtrSig;
 
 /* Phase 2: InlineC represents an inline C block. ```c ... ``` */

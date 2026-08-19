@@ -4143,6 +4143,72 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * function type and call it, casting each argument to its
              * declared C parameter type.  A :void return is wrapped in a
              * comma expression so the node stays valid in value position. */
+            /* jit-ffi-c2mir-plan F5: `(callback-ptr f [sig])` -- the reverse
+             * direction.  A C library needs a plain function pointer with the
+             * signature IT declares, which is rarely the C signature the
+             * Turmeric function emits as (an :int32 parameter arrives as
+             * int32_t but the callee takes int64_t, a :bool return leaves as
+             * bool but the slot wants int).  So codegen emits a per-site
+             * adapter with the C signature on the outside and the callee's
+             * own carrier types on the inside, and hands out its address.
+             *
+             * Elaboration has already restricted `f` to a named top-level
+             * function, so this is a direct call by C name -- no environment
+             * to recover and no closure representation to guess at.
+             *
+             * Emitted into pending_handler_fns (the buffer generator and
+             * handler helpers use) so it lands at file scope ahead of the
+             * enclosing function. */
+            if (e->as.call_.ptr_sig && e->as.call_.ptr_sig->is_callback) {
+                const CallPtrSig *ps = e->as.call_.ptr_sig;
+                const Expr *fx = e->as.call_.fn_expr;
+                uint32_t id = (uint32_t)ctx->tmp_n++;
+                Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns
+                                                    : ctx->file;
+                bool ret_void = (ps->return_type.kind == TY_NIL);
+                const char *rc = ret_void
+                                     ? "void"
+                                     : emit_type_c_name(ctx, ps->return_type);
+                TypeKind trk = fx->type.as.fn.result_kind;
+                char *callee = raw_name_for_binding(fx->as.var.binding);
+
+                buf_printf(out, "static %s __tur_cb_%u(", rc, id);
+                if (ps->n_params == 0) {
+                    buf_puts(out, "void");
+                } else {
+                    for (uint32_t i = 0; i < ps->n_params; i++)
+                        buf_printf(out, "%s%s a%u", i ? ", " : "",
+                                   emit_type_c_name(ctx, ps->param_types[i]),
+                                   i);
+                }
+                buf_puts(out, ") {\n    ");
+                if (!ret_void && trk != TY_NIL) buf_printf(out, "return (%s)", rc);
+                buf_printf(out, "%s(", callee);
+                for (uint32_t i = 0; i < ps->n_params; i++) {
+                    TypeKind ak = (TypeKind)fx->type.as.fn.arg_kinds[i];
+                    const char *ac =
+                        emit_type_c_name(ctx, emit_type_from_kind(ak));
+                    /* Pointer-carrying scalars round-trip through intptr_t,
+                     * matching the outbound direction in call-ptr. */
+                    if (ak == TY_CSTR || ak == TY_PTR_VOID)
+                        buf_printf(out, "%s(%s)(intptr_t)a%u",
+                                   i ? ", " : "", ac, i);
+                    else
+                        buf_printf(out, "%s(%s)a%u", i ? ", " : "", ac, i);
+                }
+                buf_puts(out, ");\n}\n");
+                free(callee);
+
+                Buf cb;
+                buf_init(&cb);
+                buf_printf(&cb, "((void *)(intptr_t)&__tur_cb_%u)", id);
+                buf_putc(&cb, '\0');
+                char *r = strdup(cb.data);
+                buf_free(&cb);
+                note_call_ret(ctx, "void *");
+                return r;
+            }
+
             if (e->as.call_.ptr_sig) {
                 const CallPtrSig *ps = e->as.call_.ptr_sig;
                 char *pv = emit_value(ctx, body, e->as.call_.fn_expr);
@@ -4172,6 +4238,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (pk == TY_CSTR || pk == TY_PTR_VOID)
                         buf_printf(&cb, "%s(%s)(intptr_t)(%s)",
                                    i ? ", " : "", pc, av);
+                    /* F4: an aggregate argument is passed AS IS -- a defstruct
+                     * already emits as the exact by-value C struct the
+                     * signature names, and C has no cast to a struct type
+                     * anyway. */
+                    else if (pk == TY_ADT)
+                        buf_printf(&cb, "%s(%s)", i ? ", " : "", av);
                     else
                         buf_printf(&cb, "%s(%s)(%s)", i ? ", " : "", pc, av);
                     free(av);

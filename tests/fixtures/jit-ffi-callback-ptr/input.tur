@@ -1,0 +1,43 @@
+;; jit-ffi-c2mir-plan F5: (unsafe (callback-ptr f [T1 T2 -> R])) -- a raw C
+;; function pointer that calls back into Turmeric, so a C API that TAKES a
+;; callback can be driven from here.  The plan's acceptance case is qsort(3)
+;; with a Turmeric comparator, which is what this runs.
+;;
+;; Codegen emits a per-site adapter with the C signature on the outside and
+;; the callee's carrier types on the inside, then hands out its address.  The
+;; callback must be a named top-level function: a C callback slot is a bare
+;; function pointer with no room for a captured environment.
+;;
+;; The address comes from inline-C (`&qsort`, which the emitted preamble
+;; already declares) so the fixture is portable; the dlopen/dlsym form and
+;; the interpreter's own c2mir-generated callback are asserted by
+;; tests/run-flags.sh.  requires.compiled: inline-C address-of has no
+;; interpreter path.
+(defn addrofqsort [] : int
+  ```c
+  return (int64_t)(intptr_t)&qsort;
+  ```)
+
+;; qsort reads only the SIGN of the result, and ptr-deref yields a unique
+;; value that may be used at most once -- so subtract rather than compare
+;; each operand twice.
+(defn intcmp [a : ptr b : ptr] : int
+  (unsafe (- (ptr-deref a) (ptr-deref b))))
+
+(defn main [] : int
+  (unsafe
+    (let [buf (raw-malloc 40)
+          cmp (callback-ptr intcmp [:ptr :ptr -> :int])]
+      (ptr-write buf 50)
+      (ptr-write (ptr-add buf 8)  20)
+      (ptr-write (ptr-add buf 16) 40)
+      (ptr-write (ptr-add buf 24) 10)
+      (ptr-write (ptr-add buf 32) 30)
+      (call-ptr (addrofqsort) [:ptr :int :int :ptr -> :void] buf 5 8 cmp)
+      (println (ptr-deref buf))
+      (println (ptr-deref (ptr-add buf 8)))
+      (println (ptr-deref (ptr-add buf 16)))
+      (println (ptr-deref (ptr-add buf 24)))
+      (println (ptr-deref (ptr-add buf 32)))
+      (raw-free buf)))
+  0)

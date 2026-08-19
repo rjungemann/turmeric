@@ -557,3 +557,82 @@ uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img) {
     }
     return count;
 }
+
+/* ------------------------------------------------------------------ */
+/* jit-ffi-c2mir-plan F5: callbacks (C calling back into Turmeric)     */
+/* ------------------------------------------------------------------ */
+
+TurFfiCbCtx *tur_ffi_cb_ctx_new(TuriEnv *env, TuriValue fn, char ret_class,
+                                const char *arg_classes, uint32_t n) {
+    TurFfiCbCtx *c = (TurFfiCbCtx *)calloc(1, sizeof(*c));
+    if (!c) return NULL;
+    c->env        = env;
+    c->fn         = fn;
+    c->ret_class  = ret_class;
+    c->n_args     = n;
+    if (n) {
+        c->arg_classes = (char *)malloc(n);
+        if (!c->arg_classes) { free(c); return NULL; }
+        memcpy(c->arg_classes, arg_classes, n);
+    }
+    return c;
+}
+
+void tur_ffi_cb_dispatch(void *ctxp, const long long *iv, const double *fv,
+                         long long *out_i, double *out_f) {
+    TurFfiCbCtx *c = (TurFfiCbCtx *)ctxp;
+    if (out_i) *out_i = 0;
+    if (out_f) *out_f = 0.0;
+    if (!c) return;
+
+    uint32_t n = c->n_args;
+    TuriValue  inl[8];
+    TuriValue *args = inl;
+    TuriValue *heap = NULL;
+    if (n > 8) {
+        heap = (TuriValue *)calloc(n, sizeof(TuriValue));
+        if (!heap) {
+            fprintf(stderr,
+                    "tur: callback dispatch: out of memory marshalling %u "
+                    "argument(s)\n", (unsigned)n);
+            return;
+        }
+        args = heap;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        switch (c->arg_classes[i]) {
+            case 'f': case 'F': args[i] = turi_float(fv[i]); break;
+            default:            args[i] = turi_int((int64_t)iv[i]); break;
+        }
+    }
+
+    TuriValue r = turi_call(c->env, c->fn, args, n);
+    free(heap);
+
+    /* A C callback slot has no error channel, and unwinding a Turmeric error
+     * through the foreign frames between here and the Turmeric caller is not
+     * something we can do safely -- so report and return a zero result. */
+    if (turi_is_error(r)) {
+        fprintf(stderr, "tur: error inside an FFI callback: %s\n",
+                turi_error_message(r));
+        return;
+    }
+    switch (c->ret_class) {
+        case 'v': break;
+        case 'f': case 'F':
+            if (out_f)
+                *out_f = (r.tag == TURI_FLOAT) ? r.as_float
+                       : (r.tag == TURI_INT)   ? (double)r.as_int : 0.0;
+            break;
+        default:
+            if (out_i) {
+                switch (r.tag) {
+                    case TURI_INT:   *out_i = r.as_int; break;
+                    case TURI_BOOL:  *out_i = r.as_bool ? 1 : 0; break;
+                    case TURI_CSTR:  *out_i = (long long)(intptr_t)r.as_cstr; break;
+                    default:         *out_i = 0; break;
+                }
+            }
+            break;
+    }
+}

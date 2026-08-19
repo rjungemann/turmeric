@@ -1916,6 +1916,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase U3: Unsafe primitives - FFI */
     e->sym_c_call = intern_cstr(st, "c-call");
     e->sym_call_ptr = intern_cstr(st, "call-ptr");
+    e->sym_callback_ptr = intern_cstr(st, "callback-ptr");
     e->sym_dlopen = intern_cstr(st, "dlopen");
     e->sym_dlsym = intern_cstr(st, "dlsym");
     e->sym_dlclose = intern_cstr(st, "dlclose");

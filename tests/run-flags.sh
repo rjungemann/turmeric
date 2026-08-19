@@ -1052,8 +1052,143 @@ if [ "$HAS_JIT" = "0" ]; then
     else
         pass "jit-ffi-call-ptr-nonjit-diag"
     fi
+    # F5's half of the same contract: callback-ptr also needs the engine to
+    # synthesize its callback, and must say so rather than return nil.
+    cat > "$TMP_FFI" <<'TURFFI'
+(defn cb [x : int] : int x)
+(defn main [] : int
+  (unsafe (println (call-ptr 1 [:ptr -> :int] (callback-ptr cb [:int -> :int]))))
+  0)
+TURFFI
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
+    if ! echo "$out" | grep -q "requires a JIT-enabled build"; then
+        fail "jit-ffi-callback-nonjit-diag" "expected the clean non-JIT diagnostic, got: $out"
+    else
+        pass "jit-ffi-callback-nonjit-diag"
+    fi
 else
     echo "SKIP jit-ffi-call-ptr-nonjit-diag (this build has the engine)"
+    echo "SKIP jit-ffi-callback-nonjit-diag (this build has the engine)"
+fi
+
+# jit-ffi-call-ptr-struct-interp: F4 struct-by-value through the interpreter's
+# own marshaller (TuriStruct -> C bytes -> TuriStruct), for the aggregate
+# classes every backend agrees on: all-integer, and mixed int/float.  Covers
+# both an aggregate ARGUMENT and an aggregate RETURN.  The compiled half --
+# including the floating-point aggregate the interpreter refuses below -- is
+# tests/fixtures/jit-ffi-call-ptr-struct.
+#
+# `div` is the portable choice of callee: every libc declares it, and it
+# RETURNS div_t {int quot; int rem;} by value -- an all-integer aggregate.
+# Only the soname differs per platform (turi's dlopen has no spelling for
+# "this process", so the library is named explicitly).
+case "$(uname)" in
+  Darwin) LIBC_SO="/usr/lib/libSystem.B.dylib" ;;
+  Linux)  LIBC_SO="libc.so.6" ;;
+  *)      LIBC_SO="" ;;
+esac
+if [ "$HAS_JIT" = "1" ] && [ -n "$LIBC_SO" ]; then
+    cat > "$TMP_FFI" <<TURFFI
+(defstruct IPair [a : int32 b : int32])
+(defn main [] : int
+  (unsafe
+    (let [h  (dlopen "$LIBC_SO")
+          pd (dlsym h "div")]
+      (let [r (call-ptr pd [:int :int -> IPair] 47 10)]
+        (println (:: (.a r) :int))
+        (println (:: (.b r) :int)))))
+  0)
+TURFFI
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+    if [ "$(echo "$out" | tr '\n' ' ')" != "4 7 " ]; then
+        fail "jit-ffi-call-ptr-struct-interp" "expected div(47,10) = {4,7} unpacked from an aggregate return, got: $out"
+    else
+        pass "jit-ffi-call-ptr-struct-interp"
+    fi
+else
+    echo "SKIP jit-ffi-call-ptr-struct-interp (needs a JIT build on a known libc)"
+fi
+
+# jit-ffi-call-ptr-hfa-refused: on aarch64 the interpreter must REFUSE a
+# floating-point aggregate rather than emit a thunk that mis-passes it --
+# MIR has no HFA class and would put it in x0..x7 where a natively compiled
+# callee reads v0..v7.  See docs/reported/mir-aarch64-fp-aggregate-abi.md.
+# The failure mode this guards against is a silent wrong ANSWER, so the
+# assertion is that the diagnostic appears, not that the call fails.
+case "$(uname -m)" in
+  arm64|aarch64) HFA_HOST=1 ;;
+  *)             HFA_HOST=0 ;;
+esac
+if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ]; then
+    cat > "$TMP_FFI" <<'TURFFI'
+(defstruct Vec2 [x : float y : float])
+(defn main [] : int
+  (unsafe (println (call-ptr 1 [Vec2 -> :float] (Vec2 3.0 4.0))))
+  0)
+TURFFI
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
+    if ! echo "$out" | grep -q "AAPCS64 HFA"; then
+        fail "jit-ffi-call-ptr-hfa-refused" "expected the aarch64 HFA refusal, got: $out"
+    else
+        pass "jit-ffi-call-ptr-hfa-refused"
+    fi
+else
+    echo "SKIP jit-ffi-call-ptr-hfa-refused (needs a JIT build on aarch64)"
+fi
+
+# jit-ffi-callback-interp: F5 in the direction only the interpreter exercises
+# -- a c2mir-generated callback with the context address baked in as a
+# literal, calling back through tur_ffi_cb_dispatch into a Turmeric function.
+# The plan's acceptance case: qsort(3) with a Turmeric comparator.
+if [ "$HAS_JIT" = "1" ] && [ -n "$LIBC_SO" ]; then
+    cat > "$TMP_FFI" <<TURFFI
+(defn intcmp [a : ptr b : ptr] : int
+  (unsafe (- (ptr-deref a) (ptr-deref b))))
+(defn main [] : int
+  (unsafe
+    (let [h   (dlopen "$LIBC_SO")
+          pq  (dlsym h "qsort")
+          buf (raw-malloc 24)
+          cmp (callback-ptr intcmp [:ptr :ptr -> :int])]
+      (ptr-write buf 30)
+      (ptr-write (ptr-add buf 8) 10)
+      (ptr-write (ptr-add buf 16) 20)
+      (call-ptr pq [:ptr :int :int :ptr -> :void] buf 3 8 cmp)
+      (println (ptr-deref buf))
+      (println (ptr-deref (ptr-add buf 8)))
+      (println (ptr-deref (ptr-add buf 16)))))
+  0)
+TURFFI
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+    if [ "$(echo "$out" | tr '\n' ' ')" != "10 20 30 " ]; then
+        fail "jit-ffi-callback-interp" "expected qsort driven by a Turmeric comparator to sort 30,10,20, got: $out"
+    else
+        pass "jit-ffi-callback-interp"
+    fi
+else
+    echo "SKIP jit-ffi-callback-interp (needs a JIT build on a known libc)"
+fi
+
+# jit-ffi-callback-needs-toplevel: a CAPTURING closure cannot become a C
+# callback -- the slot is a bare function pointer with no room for the
+# environment.  (A non-capturing lambda IS accepted: it lifts to a plain C
+# function, which is the whole criterion.)  Enforced in ELABORATION so both
+# paths agree; asserted on the compiled path, which every build has.
+cat > "$TMP_FFI" <<'TURFFI'
+(defn main [] : int
+  (unsafe
+    (let [n  3
+          cb (callback-ptr (fn [x : int] : int (+ x n)) [:int -> :int])]
+      (println (call-ptr 1 [:ptr -> :int] cb))))
+  0)
+TURFFI
+out=$("$TUR" --enable=jit-ffi emit-c "$TMP_FFI" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "jit-ffi-callback-needs-toplevel" "a lambda was accepted as a C callback"
+elif ! echo "$out" | grep -q "captured environment"; then
+    fail "jit-ffi-callback-needs-toplevel" "expected the top-level-function diagnostic, got: $out"
+else
+    pass "jit-ffi-callback-needs-toplevel"
 fi
 
 # jit-ffi-gate: without --enable=jit-ffi the form is a hard error pointing

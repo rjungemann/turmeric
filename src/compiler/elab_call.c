@@ -2557,6 +2557,7 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase U3: Unsafe primitives - FFI */
     if (name == e->sym_c_call)      return elab_c_call(e, call);
     if (name == e->sym_call_ptr)    return elab_call_ptr(e, call);
+    if (name == e->sym_callback_ptr) return elab_callback_ptr(e, call);
     if (name == e->sym_dlopen)      return elab_dlopen(e, call);
     if (name == e->sym_dlsym)       return elab_dlsym(e, call);
     if (name == e->sym_dlclose)     return elab_dlclose(e, call);
