@@ -1,13 +1,14 @@
-;; multiple-reads-params: a function records exactly ONE read parameter
-;; (reads_param_plus1, a 1-based index), so a second `#reads` has nowhere to
-;; go. The two annotation slots in the signature walk exist to accept `#reads`
-;; and `#writes` in EITHER ORDER, not to accept two `#reads` -- and before
-;; TUR-E0024 the second silently OVERWROTE the first, handing the refinement
-;; solver a trusted claim the author never wrote.
+;; multiple-reads-params: a function carries exactly ONE `#reads` frame --
+;; name every parameter inside it (`#reads [w g]`), never via a second
+;; annotation. The two annotation slots in the signature walk exist to accept
+;; `#reads` and `#writes` in EITHER ORDER, not to accept two `#reads` -- and
+;; before TUR-E0024 the second silently OVERWROTE the first, handing the
+;; refinement solver a trusted claim the author never wrote.
 ;;
 ;; `#writes` already rejects its own duplicate (TUR-E0381); this is the other
-;; half. See docs/reported/reads-frame-cannot-name-multiple-params.md for the
-;; underlying expressiveness gap, which is NOT fixed by this diagnostic.
+;; half. See docs/archive/reads-frame-cannot-name-multiple-params.md -- the
+;; expressiveness gap it reports is fixed by the bracket form (R3,
+;; 2026-08-18), while this fixture pins the duplicate-frame diagnostic.
 
 (defstruct Wld [n : int])
 (defstruct Grd [m : int])

@@ -380,8 +380,8 @@ struct Binding {
     bool                reads_omits_mut_global;
     /* WF1 / #writes: the per-argument WRITE frame -- which parameters' mutable
      * state this function's body may write.  A bitmask (bit i = parameter i is
-     * in the frame) rather than `#reads`'s single 1-based index, because a
-     * function may legitimately write more than one of its arguments.
+     * in the frame), the same shape `reads_params_mask` above has carried
+     * since 2026-08-18 (it was a single 1-based index before that).
      *
      * `writes_declared` is what carries the meaning, and the two states are NOT
      * interchangeable:

@@ -315,7 +315,7 @@ passes.
 
 - Publish reflection through the resolver seam: `RefineFnInfo` gains
   `is_reflected` plus access to the site's body form and parameter names
-  (via `rt_resolve_fn`, exactly as `reads_param_plus1` travels today,
+  (via `rt_resolve_fn`, exactly as `reads_params_mask` travels today,
   `elab_fns.c:653-655`).
 - In `enc_measure`, alongside the propagation block: for a
   reflected-and-total callee whose encoded argument forms are

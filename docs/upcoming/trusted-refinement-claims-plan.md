@@ -6,9 +6,8 @@
 > should be: after G2 landed, from findings that came out of doing that work
 > rather than from guessing at them.  **R1 (the warning) and R2 (the gated
 > refusal, `--enable=checked-reads`) LANDED 2026-08-17** (see section 4).
-> **R3 is TO DO (decided 2026-08-19)** -- the wait-for-demand posture is
-> dropped; implement the bracket form next.  R4 belongs to the ECS/spice
-> side.
+> **R3 LANDED 2026-08-18** (commit 9376c6c3; see its section).  R4 belongs
+> to the ECS/spice side.
 > **Type:** Language / refinement checking
 > **Depends on:** nothing.  Section 14 of the mutable-globals plan is explicit
 > that the read side blocks nothing and must not become a precondition.
@@ -69,6 +68,13 @@ permanent shape (mutable-globals plan 13.5): the design commit and the guide
 both frame it as "the minimal, trusted, refinement-only slice, shaped so a
 stronger version can grow from it without a rename or a semantics break".  A
 measure over two frozen resources cannot be expressed today.
+
+> **Update 2026-08-18:** the arity row above is stale as of R3 -- `#reads`
+> now takes the bracket form too (`#reads [a b]`, a bitmask internally), and
+> a measure over two frozen resources IS expressible.  The rest of the table
+> still holds: `#reads` remains trusted, remains parameter-only (a
+> non-parameter name is still a hard error), and its consumer is still the
+> congruence grant.  See the R3 section.
 
 ### 1.2 What a broken promise costs
 
@@ -148,20 +154,42 @@ the ordinary `TUR-W0372` a measure without the frame would get.
   flip here -- its header says a landed refusal should make it stop proving.
   Update it deliberately in the same change.
 
-### R3 -- `#reads [a b]`: the bracket form (TO DO, decided 2026-08-19)
+### R3 -- `#reads [a b]`: the bracket form (LANDED 2026-08-18)
 
 Lift the one-parameter limit to a vector, matching `#writes`.  Costs nothing
 semantically (13.5); the congruence grant requires *every* named parameter
 frozen at the site.
 
-The original posture was "worth doing whenever a real measure over two
-frozen resources shows up; not worth doing speculatively before then".
-Decided 2026-08-19: do it now rather than waiting for the demand signal --
-the form's absence is itself a reason multi-resource measures do not get
-written, and the semantics were already settled above.  Scope stays as 13.5
-sketched: parse the vector, stamp one frame per named parameter, and require
-every named parameter frozen before `enc_reads_arg_frozen` grants
-congruence.  R2's evidence walk and refusal apply per-frame unchanged.
+**Landed 2026-08-18** (commit 9376c6c3, "refine: let #reads name multiple
+parameters"), implementing `docs/archive/reads-frame-cannot-name-multiple-
+params.md` -- the demand signal arrived as a filed expressiveness hole
+rather than a shipped measure, and the fix followed the same day.  What
+shipped matches the sketch above exactly:
+
+- **Representation:** `Binding.reads_param_plus1` /
+  `RefineFnInfo.reads_param_plus1` (a single 1-based index) became
+  `reads_params_mask`, a `uint64_t` bitmask over parameter indices.  Params
+  past bit 63 are rejected (that arity already trips TUR-W0041).
+- **Reader:** `read_reads_annot` mirrors `read_writes_annot` -- `#reads w`
+  or `#reads [w g ...]`; the single-symbol form is unchanged.  TUR-E0024
+  covers the malformed shapes (two frames, a repeated name, a non-parameter
+  name, an empty frame -- `#reads []` stays illegal because, unlike
+  `#writes []`, "reads no mutable state" is spelled by omitting the frame).
+- **The grant is CONJUNCTIVE:** `enc_reads_arg_frozen` became
+  `enc_reads_args_frozen` and requires every named parameter frozen at the
+  site.  One unfrozen named parameter is enough for two occurrences of the
+  measure to denote different values -- precisely the crossing the grant
+  elides -- so "any frozen" would have been silently unsound.  Verified in
+  all four quadrants: both-frozen proves (`refine-reads-multi-param-frozen`),
+  and w-only / g-only / neither each withhold the grant
+  (`errors/refine-reads-multi-param-partial-frozen`).
+- R2's evidence walk and refusal apply per-frame unchanged, as this section
+  predicted -- the evidence is about mutable globals, which no frame can
+  name, so the mask's width never enters it.
+
+(A 2026-08-19 note briefly marked this phase "TO DO" -- it was written
+against this file's stale status block, one day after the code had already
+landed.  Corrected same day.)
 
 ### R4 -- the general checked `#reads`
 
@@ -238,10 +266,10 @@ which narrows the phase considerably.
    typed pointer builtins instead of inline C, and `::` becomes a modeled
    form".
 
-4. **Ordering.**  R3 (now slated) is a natural first step from this
-   direction too: a visible-body aliveness measure over world-plus-entity is
-   exactly the two-frozen-resource shape the bracket form serves.  Then the
-   compiler side decides the footprint walk's vocabulary (including the
+4. **Ordering.**  R3 (landed 2026-08-18) already supplies the first step
+   from this direction too: a visible-body aliveness measure over
+   world-plus-entity is exactly the two-frozen-resource shape the bracket
+   form serves.  Next the compiler side decides the footprint walk's vocabulary (including the
    cast-modeling above) BEFORE any spice rewrite, and the spice side
    converts only the two measure bodies.  Incidental: the spice's
    `refined-world.tur` header still says `:sealed` is "only ENFORCED under
@@ -312,9 +340,8 @@ Exactly the sketch above, plus one addition it did not anticipate:
 
 ### 4.3 What R3/R4 inherit
 
-Unchanged mechanically; R3 is now slated to be done (see its section -- the
-wait-for-demand posture was dropped 2026-08-19).  R4 still belongs to the
-measure layer.  If `checked-reads` graduates, the
+Unchanged mechanically; R3 landed 2026-08-18 (see its section).  R4 still
+belongs to the measure layer.  If `checked-reads` graduates, the
 default flips from "trusted grant + warning" to "refusal on evidence" -- the
 sweep at that point is the fixture fold-together above plus retiring the
 gate language in stateful-refinements-guide.md and the TUR-W0383 --explain

@@ -1612,8 +1612,9 @@ static const DiagExplanation diag_explanations_[] = {
     { TUR_W0383_READS_FRAME_OMITS_MUTABLE,
       "TUR-W0383: `#reads` frame omits mutable state the body reads\n"
       "\n"
-      "A measure declared `#reads <param>` promises that the named parameter\n"
-      "is the only mutable state it depends on.  The promise is TRUSTED, not\n"
+      "A measure declared `#reads <param>` (or `#reads [a b]`) promises that\n"
+      "the named parameters are the only mutable state it depends on.  The\n"
+      "promise is TRUSTED, not\n"
       "checked, and it pays out in proofs: inside a `frozen` region the\n"
       "refinement solver treats two calls of the measure as one value and\n"
       "elides the caller-side crossing check.\n"
