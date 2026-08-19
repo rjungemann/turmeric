@@ -280,7 +280,7 @@ extern bool g_opt_owning_cloneable_capture;
  * ascribe_check_sealed gate are gone.  See
  * docs/archive/sealed-opaque-plan.md. */
 
-/* write-frames (WF1/WF2, docs/upcoming/checked-write-frames-plan.md): gates the
+/* write-frames (WF1/WF2, docs/archive/checked-write-frames-plan.md): gates the
  * `#writes` write-frame annotation -- its CHECKING (WF2's TUR-E0382) and every
  * consumer that acts on a checked frame (WF3's callee-frame widening, WF4's
  * entry-check elision).  The annotation itself always PARSES so that adding one

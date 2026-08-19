@@ -336,7 +336,7 @@ Treat today's `#reads` as step 1 of that path, not as a finished `reads`-clause
 feature. **Step 2 has landed behind `--enable=write-frames`** --
 `#writes w` / `#writes [a b]` declares which arguments a body may write, and a
 frame on a body with no inline C is *checked* rather than believed. See
-[`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/checked-write-frames-plan.md).
+[`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/checked-write-frames-plan.md).
 
 `#reads` itself is unchanged by it: still trusted, still refinement-only,
 still step 1. What a checked `#writes` frame buys today is on the

@@ -266,7 +266,7 @@ bool g_opt_owning_cloneable_capture = true;
  * that declared H, unconditionally.  The enable bit and its gate are gone.  See
  * docs/archive/sealed-opaque-plan.md. */
 
-/* write-frames (docs/upcoming/checked-write-frames-plan.md): `#writes w` /
+/* write-frames (docs/archive/checked-write-frames-plan.md): `#writes w` /
  * `#writes [a b]` declares which of a function's arguments its body may write.
  * Off by default; when off the annotation still PARSES and is recorded but
  * nothing checks it and nothing acts on it, so a spice can adopt it without

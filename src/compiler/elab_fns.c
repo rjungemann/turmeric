@@ -1029,7 +1029,7 @@ static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
  * `while`), so the helpers below let a hypothesis survive an assignment that
  * provably cannot touch what it mentions.
  *
- * The slice is deliberately narrow (docs/upcoming/checked-write-frames-plan.md,
+ * The slice is deliberately narrow (docs/archive/checked-write-frames-plan.md,
  * WF3).  A hypothesis survives only when EVERY assignment in the body targets a
  * PLAIN SYMBOL that the hypothesis does not mention and that the body never
  * borrows.  Anything else -- a place expression (`(set! (.n w) 9)`), an

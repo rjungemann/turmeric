@@ -4,7 +4,6 @@
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
-#include "experiments.h" /* experiment_warn_if_used (closure-drop-glue) */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
 #include "rc.h"        /* DEDUP-4b: RC_VT_* -- pinned against TypeKind below */

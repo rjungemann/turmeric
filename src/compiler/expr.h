@@ -397,7 +397,7 @@ struct Binding {
      *
      * Capped at 32 parameters by the mask width; a `#writes` naming a parameter
      * beyond that is rejected (TUR-E0378) rather than silently dropped.
-     * See docs/upcoming/checked-write-frames-plan.md (WF1/WF2). */
+     * See docs/archive/checked-write-frames-plan.md (WF1/WF2). */
 #define WF_MAX_FRAME_PARAMS 32u   /* mask width; see writes_param_mask below */
 /* G2: globals in a write frame are a list, not a mask -- there is no natural
  * index for them -- so the cap is a list length rather than a word width.

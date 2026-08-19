@@ -6,7 +6,9 @@
 > should be: after G2 landed, from findings that came out of doing that work
 > rather than from guessing at them.  **R1 (the warning) and R2 (the gated
 > refusal, `--enable=checked-reads`) LANDED 2026-08-17** (see section 4).
-> R3 waits on a real two-resource measure; R4 belongs to the ECS/spice side.
+> **R3 is TO DO (decided 2026-08-19)** -- the wait-for-demand posture is
+> dropped; implement the bracket form next.  R4 belongs to the ECS/spice
+> side.
 > **Type:** Language / refinement checking
 > **Depends on:** nothing.  Section 14 of the mutable-globals plan is explicit
 > that the read side blocks nothing and must not become a precondition.
@@ -146,12 +148,20 @@ the ordinary `TUR-W0372` a measure without the frame would get.
   flip here -- its header says a landed refusal should make it stop proving.
   Update it deliberately in the same change.
 
-### R3 -- `#reads [a b]`: the bracket form
+### R3 -- `#reads [a b]`: the bracket form (TO DO, decided 2026-08-19)
 
 Lift the one-parameter limit to a vector, matching `#writes`.  Costs nothing
 semantically (13.5); the congruence grant requires *every* named parameter
-frozen at the site.  Worth doing whenever a real measure over two frozen
-resources shows up; not worth doing speculatively before then.
+frozen at the site.
+
+The original posture was "worth doing whenever a real measure over two
+frozen resources shows up; not worth doing speculatively before then".
+Decided 2026-08-19: do it now rather than waiting for the demand signal --
+the form's absence is itself a reason multi-resource measures do not get
+written, and the semantics were already settled above.  Scope stays as 13.5
+sketched: parse the vector, stamp one frame per named parameter, and require
+every named parameter frozen before `enc_reads_arg_frozen` grants
+congruence.  R2's evidence walk and refusal apply per-frame unchanged.
 
 ### R4 -- the general checked `#reads`
 
@@ -170,6 +180,73 @@ that fires this phase -- its C1 purity caveat's option "(b) making the RE0
 unwrappers pure primitives" is the same rewrite viewed from the other side,
 so whoever picks that up finds this plan waiting and lands the two as one
 design.
+
+#### R4 investigation record (2026-08-19, against turmeric-spices head)
+
+Read the actual measure layer to size the trigger.  Four findings, one of
+which narrows the phase considerably.
+
+1. **The premise is confirmed, and the blast radius is smaller than "the
+   measure layer".**  Every `#reads` measure in the spice bottoms out in
+   inline C over a calloc'd `int64_t` block: `ecs/refined-world`'s
+   `rgworld-alive?` reads through `rgw-gen` (inline C over the 129-slot
+   control block), and `ecs/sized-world`'s `sized-alive?` is itself inline C
+   over the `WorldState` handle (`(defopaque WorldState :int)`;
+   `(defopaque SizedDense [n A] :int)` is the same shape).  But `#reads`
+   appears in only two src modules and five tests, and the measures involved
+   are exactly the two aliveness predicates.  A frame claim is about what
+   the ANSWER depends on, so only the measure bodies need Turmeric-visible
+   reads -- spawn/despawn/get/set can stay inline C.  "Rewrite the measure
+   layer" is really "rewrite two measure bodies plus the entity unwrapper
+   family they lean on".
+
+2. **Struct-ification alone would NOT light up the purity walk -- and that
+   is fine, because R4 does not need purity.**  `rt_classify_expr` declines
+   `EX_GET_FIELD` behind any reference type (TY_REF / TY_RC / TY_PTR_VOID /
+   TY_REF_IMMUT / TY_REF_MUT -> UNKNOWN; the aliasing rationale in
+   elab_fns.c).  ECS measures take `^borrow w` by design -- the borrow is
+   what the frozen region freezes -- so even a fully struct-ified world
+   reads UNKNOWN under the purity walk.  The C1 option-(b) framing
+   ("make the unwrappers pure") is therefore not reachable by data-layout
+   change alone.  What R4 wants is a different question: FOOTPRINT
+   ATTRIBUTION ("every read in this body roots in a named frame parameter"),
+   which may legitimately accept borrowed-receiver field reads precisely
+   because the frozen region, not the classifier, excludes aliased writers
+   at the crossing.  `reads_scan_mut_global` is the right skeleton for that
+   walk -- it already models VAR / LET / IF / DO / WHILE / SET / MATCH /
+   GET_FIELD / BUILTIN / CALL / ASCRIBE / CAST / RETURN with the
+   positive-evidence discipline -- extended with the WG_UNKNOWN tri-state
+   for calls it cannot follow.
+
+3. **Two concrete compiler gaps stand between here and a walkable measure
+   body, both small:**
+   - `EX_CAST` / `EX_ASCRIBE` are unmodeled in `rt_classify_expr` (they fall
+     to the UNKNOWN default), so even a trivially pure body that touches a
+     `defopaque` newtype via `::` is UNKNOWN.  Modeling the coercing cast as
+     exactly-as-pure-as-its-operand would let the RE0 unwrappers
+     (`slot->int`, `generation->int`, ... -- inline-C identity casts today)
+     be DELETED in favour of `::` rather than blessed as primitives.
+   - A Turmeric-visible read primitive for the existing calloc'd block
+     already exists: `array-get-unchecked` (BS_ARRAY_GET_UNCHECKED, over
+     `:ptr<void>`), currently UNKNOWN to the purity walk.  A measure written
+     as `(array-get-unchecked (gens-ptr w) slot)` puts the read IN THE TREE
+     where a footprint walk can see and attribute it -- no data-layout
+     rewrite required, though a typed `:ptr<T>` (or a real struct field)
+     attributes more soundly than a void pointer.
+   So the cheapest R4-enabling shape is NOT "gens becomes a struct field or
+   vec" (the trigger note's sketch) but "the two aliveness bodies read via
+   typed pointer builtins instead of inline C, and `::` becomes a modeled
+   form".
+
+4. **Ordering.**  R3 (now slated) is a natural first step from this
+   direction too: a visible-body aliveness measure over world-plus-entity is
+   exactly the two-frozen-resource shape the bracket form serves.  Then the
+   compiler side decides the footprint walk's vocabulary (including the
+   cast-modeling above) BEFORE any spice rewrite, and the spice side
+   converts only the two measure bodies.  Incidental: the spice's
+   `refined-world.tur` header still says `:sealed` is "only ENFORCED under
+   `--enable=sealed-opaque`" -- stale since sealed-opaque graduated
+   2026-08-17; fix on the spice side when the measure bodies are touched.
 
 ## 3. Explicitly not doing
 
@@ -235,8 +312,9 @@ Exactly the sketch above, plus one addition it did not anticipate:
 
 ### 4.3 What R3/R4 inherit
 
-Unchanged.  R3 still waits on a real measure over two frozen resources; R4
-still belongs to the measure layer.  If `checked-reads` graduates, the
+Unchanged mechanically; R3 is now slated to be done (see its section -- the
+wait-for-demand posture was dropped 2026-08-19).  R4 still belongs to the
+measure layer.  If `checked-reads` graduates, the
 default flips from "trusted grant + warning" to "refusal on evidence" -- the
 sweep at that point is the fixture fold-together above plus retiring the
 gate language in stateful-refinements-guide.md and the TUR-W0383 --explain
