@@ -2,10 +2,29 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.36.0] -- 2026-08-19
 
 ### Added
 
+- **`defmacro*` -- procedural macros that run on a macro-time interpreter
+  environment.** A macro body is ordinary Turmeric evaluated at expansion time
+  over a first-class `Syntax` value (a new `TY_SYNTAX` compile-time kind, syntax
+  natives, and quasiquote that produces `Syntax`), with the stdlib preloaded
+  into the macro env; the derive-family migrated onto it as proof.
+- **`(import m :for-macros)` -- cross-module macro-time dependencies.** A module
+  imported for macros is loaded into the expansion env rather than the runtime
+  one, so a procedural macro can call helpers defined elsewhere. Macro-time I/O
+  is denied by default.
+- **Procedural reader macros by composition, plus R3-bounded reflection** -- a
+  reader macro is an ordinary `defmacro*` composed into the read step.
+- **`tur expand` and REPL `:expand`** -- one expansion step at the command line
+  and at the prompt. `defmacro` bodies may now hold multiple forms, and gensym
+  is unified across the expander.
+- **jit-ffi F4/F5 -- struct-by-value through `call-ptr`, and callbacks.** A
+  `(unsafe (call-ptr ...))` signature can now pass and return structs by value,
+  and a Turmeric function can be handed to C as a callback on both the compiled
+  and the interpreted path. The aarch64 FP-aggregate ABI wall F4 hit is
+  reported in `docs/reported/mir-aarch64-fp-aggregate-abi.md`.
 - **`tur completion <zsh|bash>` -- shell completion.** Completes subcommands,
   per-subcommand flags, and `.tur` file arguments; for `tur run` it completes
   recipe names out of whatever Justfile encloses the directory being completed,
@@ -14,8 +33,25 @@ All notable changes to Turmeric are documented here.
   install-prefix lookup. The Homebrew formula installs both.
 - **`tur run --list --all`** shows recipes that are normally hidden.
 
+### Changed
+
+- **`#reads` may name multiple parameters** (`#reads [a b]`), and a mutable
+  global is never frozen by a `#reads` frame -- a callee's write to a global the
+  frame named no longer survives as an unearned congruence grant (soundness).
+- **`[private]` and `_`-prefixed recipes are honored rather than rejected**,
+  matching `just`: hidden from `tur run --list`, still runnable by name.
+
 ### Fixed
 
+- **Two Result box/struct bridging codegen bugs** -- a CPS-path Result unbox was
+  dropped, and a by-value product tail in a `result` block was double-unboxed.
+  Every parametric by-value product tail is now covered; the remaining
+  non-parametric shape is reported rather than miscompiled.
+- **A heap join whose body escapes to an enclosing join** emitted an invalid
+  assignment; it is now evicted to the direct emitter.
+- **`__TUR_CNAME_` broke on leading underscores**, and a `let` binding of a
+  `:void` expression emitted invalid C -- now a clean TUR-E0023.
+- **Malformed or duplicated `#reads` frames** are diagnosed (TUR-E0024).
 - **`tur run --list` omitted aliases.** `alias b := build` is runnable --
   `find_recipe` resolves it, and the "recipe not found" error even printed
   aliases in its `available:` line -- but the listing walked only the recipe
@@ -28,11 +64,6 @@ All notable changes to Turmeric are documented here.
 - **`tur run --list --json` escaped only `doc`.** Recipe names and parameter
   defaults were emitted raw and control characters passed through, so a default
   like `flags='-DFOO="bar"'` produced invalid JSON.
-
-### Changed
-
-- **`[private]` and `_`-prefixed recipes are honored rather than rejected**,
-  matching `just`: hidden from `tur run --list`, still runnable by name.
 
 ## [0.35.0] -- 2026-08-18
 

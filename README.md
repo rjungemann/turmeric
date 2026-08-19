@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.35.0` -- `global-state` graduates: a `#writes` frame may name a mutable global, an exported global is read-only outside its defining module, and `^atomic` / `^thread-local` work without a flag; plus JIT-backed FFI call thunks that make `extern-c` real under `--interpret`, and a dialect/layer picker in Try Turmeric.
+**Latest release:** `v0.36.0` -- `defmacro*` procedural macros: a macro body is ordinary Turmeric run at expansion time over first-class `Syntax`, with `(import m :for-macros)` for macro-time deps, `tur expand` and REPL `:expand`, and reader macros by composition; plus jit-ffi struct-by-value and callbacks, and `tur completion` for zsh and bash.
 
 ## What
 
