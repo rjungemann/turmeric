@@ -170,7 +170,15 @@ total accessors if ever, never a general evaluator.)
   template vocabulary.  Nested quasiquote and `~@`-into-vector are
   clear diagnostics.  The `tur expand` trace now suppresses the macro
   env's internal preload expansions.
-- Still deferred: REPL `expand-1`.
+- REPL `expand-1` (follow-up, LANDED): `:expand <form>` at the prompt
+  expands the form's head macro exactly once and prints the result --
+  template and defmacro* macros alike, including ones defined at earlier
+  prompts (the accumulated session source re-elaborates through a
+  throwaway ElabSession whose macro registry survives for the manual
+  expansion; cmd_expand, src/turi/repl.c).
+
+Every Stage 0-2 item and every follow-up is now landed; the next
+unscheduled work is Stage 3.
 
 ## Stage 3 -- cross-module macro-time deps (unscheduled, post-v1 unless
 a concrete stdlib need appears)

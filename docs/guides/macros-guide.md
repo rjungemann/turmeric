@@ -351,6 +351,9 @@ is [macro-system-direction-plan.md](../upcoming/macro-system-direction-plan.md).
   Nested expansions print too (inner-first, in elaboration order), so a
   recursive macro's whole unfolding is visible.  Diagnostics stay on
   stderr, so the stdout trace is golden-file-able.
+- **`:expand <form>`** at the REPL expands the form's head macro exactly
+  ONCE and prints the result -- one step at a time, for template and
+  `defmacro*` macros alike, including macros defined at earlier prompts.
 - A diagnostic inside generated code carries the note
   `in expansion of macro '<name>' ...` pointing at the outermost call you
   wrote.  Inner nested-macro frames are deliberately silent -- one note
