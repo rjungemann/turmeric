@@ -329,8 +329,11 @@ The 2026-08-19 investigation's item-3 gaps are now closed or de-risked:
 every read in a walkable measure body to a named frame parameter, with
 the WG_UNKNOWN discipline for calls it cannot follow -- skeleton:
 `reads_scan_mut_global`), the decision of what a VERIFIED frame buys its
-consumers, and the real spice-side landing of the prototype.  Those stay
-one design, landed together, per the trigger note in
+consumers, and the sized-world half of the spice conversion.  The facade
+half of the spice-side prototype is up as turmeric-spices PR #54
+(2026-08-19), verified byte-identical on both the new and the old purity
+walk, so it carries no new `tur` floor.  The walk and the sized-world
+conversion stay one design, landed together, per the trigger note in
 `ecs-refinement-typed-apis-plan.md`.
 
 ## 3. Explicitly not doing
