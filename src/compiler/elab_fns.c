@@ -423,6 +423,20 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
     case EX_RETURN:
         return rt_classify_expr(c, x->as.return_.value);
 
+    /* R4 groundwork (trusted-refinement-claims-plan): `::` and `(as T ...)`
+     * are value computations -- an ascription is erased at codegen and a
+     * numeric cast reads nothing but its operand -- so each is exactly as
+     * pure as the expression under it.  Before this case they fell to the
+     * UNKNOWN default, which made any measure that touches a defopaque
+     * newtype via `::` unclassifiable and forced the RE0 pattern of
+     * inline-C identity-cast unwrappers (themselves IMPURE by EX_INLINE_C).
+     * Widening UNKNOWN -> operand's answer only ever removes diagnostics
+     * and grows congruence, same as the EX_MATCH widening above. */
+    case EX_ASCRIBE:
+        return rt_classify_expr(c, x->as.ascribe_.inner);
+    case EX_CAST:
+        return rt_classify_expr(c, x->as.cast_.expr);
+
     /* A `match` computes a value from its scrutinee and one arm; nothing about
      * dispatching on a constructor is observable.  Pattern BINDINGS are not
      * walked -- they are introduced by the pattern, not evaluated -- so an arm

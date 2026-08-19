@@ -1,0 +1,38 @@
+;; R4 shape (trusted-refinement-claims-plan): an aliveness measure whose body
+;; is fully Turmeric-VISIBLE -- the generation table is read via
+;; array-get-unchecked on a struct field, no inline C anywhere in the read
+;; path -- still earns the #reads congruence grant inside a frozen region,
+;; and the refined crossing proves under --strict-refine.
+;;
+;; This pins that the grant is representation-agnostic: R4's "rewrite the
+;; measure bodies so a footprint walk can see the reads" does not cost the
+;; trusted tier anything on the way. The negative half (same measure, no
+;; freeze, grant withheld) is errors/refine-reads-visible-body-unfrozen; it
+;; guards the OTHER direction -- a future purity widening must not classify
+;; this body pure and let the crossing prove without the region.
+(defstruct Wld [gens : ptr<void>])
+
+(defn wld-new [] : Wld
+  (unsafe
+    (let [p (raw-malloc 64)]
+      (array-set-unchecked p 0 0)   ;; slot 0: generation 0 (alive)
+      (array-set-unchecked p 1 1)   ;; slot 1: generation 1 (despawned)
+      (Wld p))))
+
+(defn alive? [^borrow w : Wld slot : int gen : int] #reads w : bool
+  (= (unsafe (array-get-unchecked (.gens w) slot)) gen))
+
+(defn get-val! [^borrow w : Wld
+                s : #refine{ x : int | (alive? w x 0) }] : int
+  (+ s 100))
+
+(defn run [] : int
+  (let [^mut w (wld-new)]
+    (let [__frz (& w)]              ;; freeze w -- the #reads grant applies
+      (if (alive? w 0 0)
+        (get-val! w 0)              ;; discharges from the guard
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

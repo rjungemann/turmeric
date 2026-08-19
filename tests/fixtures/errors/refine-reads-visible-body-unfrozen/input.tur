@@ -1,0 +1,35 @@
+;; Negative half of refine-reads-visible-body-measure: the same
+;; Turmeric-visible #reads measure OUTSIDE a frozen region. The congruence
+;; grant must be withheld and the crossing must fail under --strict-refine.
+;;
+;; This fixture guards a specific future failure mode: if a purity-walk
+;; widening ever classifies this body PURE (it reads mutable memory through
+;; array-get-unchecked, so it must not be), the guard would discharge the
+;; crossing WITHOUT the frozen region and this file would silently start
+;; compiling -- an unsound proof. The visible representation must stay
+;; !pure; only the frozen #reads grant may make it congruent.
+(defstruct Wld [gens : ptr<void>])
+
+(defn wld-new [] : Wld
+  (unsafe
+    (let [p (raw-malloc 64)]
+      (array-set-unchecked p 0 0)
+      (array-set-unchecked p 1 1)
+      (Wld p))))
+
+(defn alive? [^borrow w : Wld slot : int gen : int] #reads w : bool
+  (= (unsafe (array-get-unchecked (.gens w) slot)) gen))
+
+(defn get-val! [^borrow w : Wld
+                s : #refine{ x : int | (alive? w x 0) }] : int
+  (+ s 100))
+
+(defn run [] : int
+  (let [^mut w (wld-new)]
+    (if (alive? w 0 0)              ;; NOT frozen -- grant withheld
+      (get-val! w 0)
+      -1)))
+
+(defn main [] : int
+  (println (run))
+  0)

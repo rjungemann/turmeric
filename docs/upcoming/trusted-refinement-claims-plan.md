@@ -276,6 +276,63 @@ which narrows the phase considerably.
    `--enable=sealed-opaque`" -- stale since sealed-opaque graduated
    2026-08-17; fix on the spice side when the measure bodies are touched.
 
+#### R4 execution record, part 1 (2026-08-19): the compiler enabler landed, the rewrite validated
+
+The 2026-08-19 investigation's item-3 gaps are now closed or de-risked:
+
+- **`EX_CAST` / `EX_ASCRIBE` are modeled in the purity walk** (landed;
+  `rt_classify_expr`, elab_fns.c): each classifies exactly as pure as its
+  operand -- an ascription is erased at codegen and a numeric cast reads
+  nothing but its operand, so UNKNOWN -> operand's answer only removes
+  diagnostics and grows congruence (same argument as the EX_MATCH
+  widening).  Consequence, verified by fixture
+  `refine-ascribe-pure-measure`: a measure whose only "impurity" was
+  newtype traffic through `::` is PURE and discharges a refined crossing
+  from an if-guard with no `#reads` frame and no frozen region.  Before
+  the widening the same file was a TUR-W0372 under `--strict-refine`.
+  This deletes the C1 purity caveat's premise: RE0-style unwrappers no
+  longer need to be inline C OR blessed primitives -- they are ordinary
+  pure defns spelled with `::`.
+
+- **The R4 target shape works end-to-end today**, pinned by two fixtures:
+  `refine-reads-visible-body-measure` (an aliveness measure whose
+  generation-table read is `array-get-unchecked` on a struct field -- no
+  inline C anywhere in the read path -- still earns the `#reads` grant
+  inside a frozen region and proves under `--strict-refine`) and
+  `errors/refine-reads-visible-body-unfrozen` (the same measure outside
+  the region is refused; this also guards against a future purity
+  widening ever classifying a raw-memory read as pure, which would let
+  the crossing prove without the region -- unsound).
+
+- **The spice-side rewrite was prototyped in a local turmeric-spices
+  checkout and is a no-op behaviorally.**  All eight `ecs/entity` bodies
+  (`slot->int`, `generation->int`, `slot-new`, `generation-new`,
+  `entity-new`, `entity-index`, `entity-generation`, `entity=?`) rewrote
+  to pure Turmeric (`::` plus the bit-op builtins, which are BS_BIN_INFIX
+  and hence walk-PURE), and `refined-world`'s `rgw-ctrl` / `rgw-gen`
+  rewrote to `(:: w :int)` and an `array-get-unchecked` load.  The
+  spice's full test set -- 87 per-file runs including the expected-error
+  negatives, honoring each file's `tur-test-flags` -- diffed
+  byte-identical against the pre-rewrite baseline (modulo the TUR-W0033
+  noise below).  The conversion is mechanical; the sized-world stack
+  (`sized-alive?`, whose inline C also bounds-checks) is the remaining,
+  slightly larger half.
+
+- **Papercut filed:** every `unsafe` block the visible shape needs draws
+  a contradictory TUR-W0033 ("handler clause unreachable") because the
+  raw builtins require the block syntactically but never perform the
+  `Unsafe` effect.  See
+  `docs/reported/unsafe-block-w0033-on-raw-builtins.md`; worth fixing
+  before the spice rewrite lands or the ECS build output gets noisy.
+
+**What remains for R4 proper:** the footprint walk itself (attribute
+every read in a walkable measure body to a named frame parameter, with
+the WG_UNKNOWN discipline for calls it cannot follow -- skeleton:
+`reads_scan_mut_global`), the decision of what a VERIFIED frame buys its
+consumers, and the real spice-side landing of the prototype.  Those stay
+one design, landed together, per the trigger note in
+`ecs-refinement-typed-apis-plan.md`.
+
 ## 3. Explicitly not doing
 
 - **Making `--strict-refine` refuse trust-based proofs.**  Evaluated and
