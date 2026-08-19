@@ -1,0 +1,31 @@
+;; R4 slice 3: the refine-reads-callee-frame-omits-param program under
+;; `--enable=checked-reads --strict-refine`. The call-shape evidence -- the
+;; body reaches g's state through gen-at's own verified `#reads` frame,
+;; and the `#reads w` frame omits g -- refuses the congruence override,
+;; so the crossing that proves gate-off becomes an undischarged TUR-W0372
+;; with the fix-the-frame refusal wording. Pins that the verification
+;; pass's evidence sweep runs BEFORE crossing resolution and stamps every
+;; binding the encoder might resolve to.
+(defstruct Wld [gens : ptr<void>])
+(defn wld-new [] : Wld
+  (unsafe (let [p (raw-malloc 32)]
+            (array-set-unchecked p 0 0)
+            (Wld p))))
+(defn gen-at [^borrow w : Wld i : int] #reads w : int
+  (unsafe (array-get-unchecked (.gens w) i)))
+(defn cross? [^borrow w : Wld ^borrow g : Wld i : int] #reads w : bool
+  (= (gen-at g i) 0))
+(defn get-it [^borrow w : Wld ^borrow g : Wld
+              e : #refine{ x : int | (cross? w g x) }] : int
+  (+ e 100))
+(defn run [] : int
+  (let [^mut w (wld-new)
+        ^mut g (wld-new)]
+    (let [__f1 (& w)
+          __f2 (& g)]
+      (if (cross? w g 0)
+        (get-it w g 0)
+        -1))))
+(defn main [] : int
+  (println (run))
+  0)

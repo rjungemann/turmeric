@@ -464,14 +464,35 @@ the same day's work.
   baseline -- zero behavioral cost, and this time zero warning deltas
   (the W0033 papercut was fixed first).
 
-**What remains for R4 proper:** wiring the walk's call-shape EXCEEDED
-into the W0383/refusal evidence tier (today it is dump-only), local
-alias tracking in the root chase if real measures need it, the first
-behavioral consumer of `reads_checked` -- now genuinely unblocked, since
-the real measure layer speaks the vocabulary -- and keeping the guides
-in step as those land.  The facade half of the spice conversion merged
-as turmeric-spices PR #54; the sized-world half is the PR that carries
-this record's spice-side changes.
+#### R4 execution record, part 5 (2026-08-19): slice 3 -- call-shape EXCEEDED joins the evidence tier
+
+The last dump-only finding is now a real finding.  `rf_resolve_read_frames`
+runs GATELESSLY (the fixed point plus an evidence sweep; only the dump
+stays behind its flag), and a frame whose verdict is EXCEEDED -- reached
+through a verified callee's frame, the shape the defn-site scans
+structurally cannot see -- is stamped `reads_frame_omits_state` exactly
+like the direct findings: gateless TUR-W0383 (a new call-shape wording
+that names the omitted root and the callee-frame route, witness threaded
+out of the walk), refusal under `--enable=checked-reads`, one finding and
+one warning per declared frame whichever tier saw it first.  Clones now
+register in the pass (silently -- no dump line, no repeated warning) so
+the encoder's refusal sees the late-stamped evidence whichever binding a
+crossing resolves to; the pass already ran before
+`refine_resolve_call_sites`, so no ordering change was needed.  Fixtures:
+`refine-reads-callee-frame-omits-param` (gateless warn + still proves),
+`errors/r4-checked-reads-refuses-callee-frame-read` (gated refusal), and
+`read-frames-dump-verdicts` now pins the call-shape W0383 in stderr
+alongside its EXCEEDED dump line.
+
+**What remains for R4 proper:** local alias tracking in the root chase if
+real measures ever need it (none does today -- the shipping ECS chain
+verifies without it), and the first behavioral consumer of
+`reads_checked` -- genuinely unblocked now that the real measure layer
+speaks the vocabulary (facade merged as turmeric-spices PR #54, the
+sized-world half as PR #56), but deliberately a post-v1 optimization
+decision: CSE / safe-parallelization / incremental-recompute each want
+their own design, and nothing on the v1 track blocks on them.  The
+evidence and verification tiers themselves are complete.
 
 ## 3. Explicitly not doing
 

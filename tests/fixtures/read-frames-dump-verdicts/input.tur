@@ -7,10 +7,14 @@
 ;;                         our framed parameter (the fixed-point round)
 ;;   cross?    EXCEEDED    the verified callee's framed slot is fed by an
 ;;                         UNFRAMED parameter -- the callee's verified read is
-;;                         this frame's omitted read. NOTE: slice 1's direct
+;;                         this frame's omitted read. Slice 1's direct
 ;;                         evidence scan cannot see this one (it is behind a
-;;                         call), so the dump is currently its only surface;
-;;                         no TUR-W0383 fires and the stderr stays clean of it.
+;;                         call); since slice 3 the verification pass's
+;;                         evidence sweep feeds it to the same gateless
+;;                         TUR-W0383 tier (expected.stderr pins the call-shape
+;;                         wording), and under --enable=checked-reads the same
+;;                         evidence refuses the congruence grant
+;;                         (errors/r4-checked-reads-refuses-callee-frame-read).
 ;;   opaque?   UNVERIFIED  an inline-C body -- unwalkable, stays trusted;
 ;;                         "could not see" is a distinct verdict from clean.
 ;;

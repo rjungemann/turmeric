@@ -1052,10 +1052,17 @@ typedef struct RfReadsSite {
     Binding  *fn;         /* the `#reads`-annotated function */
     Binding **params;     /* its parameters, for root -> frame-bit mapping */
     uint32_t  n_params;
+    Span      span;       /* the `#reads` annotation (or name), for W0383 */
+    /* A monomorphization clone: verified and evidence-stamped like its
+     * original (the encoder's refusal must see the evidence whichever
+     * binding a call resolves to, same rule as the defn-site stamp), but
+     * silent -- no dump line, no repeated warning. */
+    bool      is_clone;
 } RfReadsSite;
 
 /* Record a `#reads`-annotated function for the deferred verification pass. */
-void rf_note_reads_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params);
+void rf_note_reads_site(Elab *e, Binding *fn, Binding **params,
+                        uint32_t n_params, Span span, bool is_clone);
 
 /* Verify every recorded `#reads` frame against its elaborated body, stamping
  * `reads_checked` on the ones where every read of mutable state attributes to

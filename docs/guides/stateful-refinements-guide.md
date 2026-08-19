@@ -446,10 +446,10 @@ evidence -- the fixture triple `refine-reads-frame-omits-param`,
 `errors/r4-checked-reads-refuses-param-read`,
 `refine-reads-multi-param-visible-quiet` pins warn / refuse / fixed-frame).
 
-There is also a **verification** tier now, distinct from the evidence tier:
-`--dump-read-frames` (a diagnostic knob, usable with or without the
-experiment) runs a deferred footprint walk over each `#reads` function's
-elaborated body and prints one of three verdicts per frame:
+There is also a **verification** tier now, layered on the evidence tier:
+a deferred footprint walk runs gatelessly over each `#reads` function's
+elaborated body, and `--dump-read-frames` (a diagnostic knob, usable with
+or without the experiment) prints one of three verdicts per frame:
 
 - `VERIFIED` -- the walk saw the whole body and every read of mutable state
   attributes to a frame-named parameter. This includes reads made *through*
@@ -457,9 +457,12 @@ elaborated body and prints one of three verdicts per frame:
   framed parameter is covered (the pass iterates to a fixed point, so
   definition order does not matter).
 - `EXCEEDED` -- a read the frame omits, possibly reached through a verified
-  callee's frame; that last shape is one the definition-site evidence scan
-  cannot see (it is behind a call), so the dump is currently its only
-  surface.
+  callee's frame. That last shape is one the definition-site evidence scan
+  cannot see (it is behind a call), so the verification pass feeds it into
+  the same evidence tier itself: the finding draws the gateless `TUR-W0383`
+  (with wording that names the callee-frame route), and under
+  `--enable=checked-reads` it refuses the congruence grant exactly like the
+  direct findings. One finding, one warning, whichever tier saw it first.
 - `UNVERIFIED` -- something could not be vouched for: an inline-C body, an
   indirect or unframed call, an unmodeled form. Not a finding -- the frame
   simply stays at the trusted tier it is at today.
