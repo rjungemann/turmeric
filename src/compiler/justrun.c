@@ -16,7 +16,8 @@
  *   - Built-in functions: env_var, env_var_or_default, os, arch,
  *     justfile_directory, invocation_directory, uppercase, lowercase,
  *     trim, quote
- *   - Listing: tur run / tur run --list [--json]
+ *   - Listing: tur run / tur run --list [--json] [--all]; aliases are listed
+ *     alongside recipes, [private] and _-prefixed names are hidden
  *   - The default recipe
  *   - Dotenv loading: .env file from the Justfile's directory
  *   - Unsupported-feature detection with clear error messages
@@ -52,6 +53,7 @@ extern _Bool use_json_output;
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,6 +75,7 @@ extern _Bool use_json_output;
 #define JR_MAX_VARS    128
 #define JR_MAX_ALIASES 64
 #define JR_MAX_SHELL     8
+#define JR_MAX_ISSUES   32
 
 /* ================================================================== */
 /* Data structures                                                     */
@@ -100,6 +103,7 @@ typedef struct {
 typedef struct {
     char   *name;
     char   *doc;   /* accumulated doc comment, or NULL */
+    int     hidden; /* [private] attribute or a leading '_': omit from --list */
     JParam  params[JR_MAX_PARAMS];
     int     n_params;
     JDep    deps[JR_MAX_DEPS];
@@ -135,6 +139,11 @@ typedef struct {
     int      n_aliases;
     JSettings settings;
     char    *justfile_dir;
+    /* Unsupported-feature diagnostics collected during the parse. Listing
+     * tolerates them (and reports them on stderr) so shell completion still
+     * gets candidates; executing a recipe is still a hard error. */
+    char    *issues[JR_MAX_ISSUES];
+    int      n_issues;
 } JFile;
 
 /* ================================================================== */
@@ -298,8 +307,24 @@ static void load_dotenv(const char *dir) {
 /* Unsupported-feature detection                                       */
 /* ================================================================== */
 
-static int check_unsupported(const char *line, int lineno, const char *path) {
+/* Format an unsupported-feature message into a fresh heap string. */
+static char *jr_issuef(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    char buf[1024];
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    return jr_strdup(buf);
+}
+
+/* Returns NULL when the line uses nothing unsupported, else a heap-allocated
+ * message describing what is unsupported (caller owns it).  `*is_private` is
+ * set to 1 for the `[private]` attribute, which we support natively by hiding
+ * the recipe from listings -- it is not an issue. */
+static char *check_unsupported(const char *line, int lineno, const char *path,
+                                int *is_private) {
     const char *p = jr_ltrim(line);
+    if (is_private) *is_private = 0;
 
     /* Recipe attributes: [private], [unix], [windows], [no-cd], etc.
      * Distinguish from array values (which appear after := on the same line). */
@@ -310,19 +335,24 @@ static int check_unsupported(const char *line, int lineno, const char *path) {
             char attr[64] = {0};
             if (alen < sizeof(attr)) {
                 memcpy(attr, p + 1, alen);
-                if (strcmp(attr, "private") == 0 || strcmp(attr, "unix") == 0 ||
+                /* [private] is honored: the recipe stays runnable by name but
+                 * drops out of `--list`, which is exactly `just` semantics. */
+                if (strcmp(attr, "private") == 0) {
+                    if (is_private) *is_private = 1;
+                    return NULL;
+                }
+                if (strcmp(attr, "unix") == 0 ||
                     strcmp(attr, "windows") == 0 || strcmp(attr, "no-cd") == 0 ||
                     strcmp(attr, "no-exit-message") == 0 ||
                     strcmp(attr, "confirm") == 0 ||
                     jr_starts_with(attr, "group:")) {
-                    fprintf(stderr,
-                        "tur run: unsupported Justfile feature at %s:%d: "
+                    return jr_issuef(
+                        "unsupported Justfile feature at %s:%d: "
                         "recipe attribute [%s]\n"
                         "        Install `just` (https://just.systems) to run "
                         "this recipe, or remove the [%s] attribute if the "
-                        "recipe is portable.\n",
+                        "recipe is portable.",
                         path, lineno, attr, attr);
-                    return 1;
                 }
             }
         }
@@ -331,12 +361,10 @@ static int check_unsupported(const char *line, int lineno, const char *path) {
     /* Module / import directives */
     if (jr_starts_with(p, "mod ") || jr_starts_with(p, "import '") ||
         jr_starts_with(p, "import \"")) {
-        fprintf(stderr,
-            "tur run: unsupported Justfile feature at %s:%d: "
-            "module/import directive\n"
-            "        Install `just` (https://just.systems) to use modules.\n",
+        return jr_issuef(
+            "unsupported Justfile feature at %s:%d: module/import directive\n"
+            "        Install `just` (https://just.systems) to use modules.",
             path, lineno);
-        return 1;
     }
 
     /* Backtick command substitution in assignment RHS */
@@ -346,13 +374,12 @@ static int check_unsupported(const char *line, int lineno, const char *path) {
             const char *rhs = assign + 2;
             while (*rhs == ' ' || *rhs == '\t') rhs++;
             if (*rhs == '`') {
-                fprintf(stderr,
-                    "tur run: unsupported Justfile feature at %s:%d: "
+                return jr_issuef(
+                    "unsupported Justfile feature at %s:%d: "
                     "backtick command substitution in assignment\n"
                     "        Install `just` (https://just.systems) for this "
-                    "feature.\n",
+                    "feature.",
                     path, lineno);
-                return 1;
             }
         }
     }
@@ -364,7 +391,7 @@ static int check_unsupported(const char *line, int lineno, const char *path) {
 
     /* Alias is handled directly in the parse loop now (see parse_justfile). */
 
-    return 0;
+    return NULL;
 }
 
 /* ================================================================== */
@@ -782,8 +809,9 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
     const char *p = text;
     int lineno    = 0;
 
-    char    *pending_doc = NULL;
-    JRecipe *cur_recipe  = NULL;
+    char    *pending_doc     = NULL;
+    JRecipe *cur_recipe      = NULL;
+    int      pending_private = 0;
 
     while (*p) {
         lineno++;
@@ -816,7 +844,8 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
         const char *t = jr_ltrim(line);
         if (*t == '\0') {
             free(pending_doc);
-            pending_doc = NULL;
+            pending_doc     = NULL;
+            pending_private = 0;
             free(line);
             continue;
         }
@@ -853,11 +882,25 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             continue;
         }
 
-        /* ---- Unsupported feature check ---- */
-        if (check_unsupported(line, lineno, path)) {
-            free(line);
-            free(pending_doc);
-            return 2;
+        /* ---- Unsupported feature check ----
+         * Never fatal here: the issue is recorded and the line skipped, so a
+         * listing (and therefore shell completion) still sees every recipe the
+         * parser CAN handle.  cmd_justrun turns a recorded issue into a hard
+         * error when a recipe is actually being executed. */
+        {
+            int   is_private = 0;
+            char *issue = check_unsupported(line, lineno, path, &is_private);
+            if (is_private) pending_private = 1;
+            if (issue) {
+                if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
+                else free(issue);
+            }
+            if (issue || is_private) {
+                /* pending_doc deliberately survives: a doc comment above an
+                 * attribute still belongs to the recipe below it. */
+                free(line);
+                continue;
+            }
         }
 
         /* ---- Comment / doc accumulation ---- */
@@ -974,7 +1017,11 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             memset(r, 0, sizeof(*r));
             if (parse_recipe_header(t, r)) {
                 r->doc = pending_doc;
-                pending_doc = NULL;
+                /* `just` omits both [private] recipes and '_'-prefixed ones
+                 * from --list; they stay runnable by name. */
+                r->hidden = pending_private || (r->name && r->name[0] == '_');
+                pending_doc     = NULL;
+                pending_private = 0;
                 jf->n_recipes++;
                 cur_recipe = r;
                 free(line);
@@ -984,7 +1031,8 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
 
         /* Unrecognised non-comment line -- reset doc accumulation */
         free(pending_doc);
-        pending_doc = NULL;
+        pending_doc     = NULL;
+        pending_private = 0;
         free(line);
     }
 
@@ -1122,6 +1170,7 @@ static void jfile_free(JFile *jf) {
         free(jf->aliases[i].target);
     }
     for (int i = 0; i < jf->settings.n_shell; i++) free(jf->settings.shell[i]);
+    for (int i = 0; i < jf->n_issues; i++) free(jf->issues[i]);
     free(jf->justfile_dir);
 }
 
@@ -1530,36 +1579,104 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
 /* Listing                                                             */
 /* ================================================================== */
 
-static int list_recipes(const JFile *jf, int json_mode) {
+/* Write `s` to stdout as the body of a JSON string (no surrounding quotes),
+ * escaping everything RFC 8259 requires.  Every string field in the --list
+ * --json output goes through this -- a recipe name or a parameter default is
+ * just as capable of containing a quote as a doc comment is. */
+static void jr_json_puts(const char *s) {
+    if (!s) return;
+    for (const unsigned char *q = (const unsigned char *)s; *q; q++) {
+        switch (*q) {
+            case '"':  fputs("\\\"", stdout); break;
+            case '\\': fputs("\\\\", stdout); break;
+            case '\n': fputs("\\n",  stdout); break;
+            case '\r': fputs("\\r",  stdout); break;
+            case '\t': fputs("\\t",  stdout); break;
+            case '\b': fputs("\\b",  stdout); break;
+            case '\f': fputs("\\f",  stdout); break;
+            default:
+                if (*q < 0x20) printf("\\u%04x", (unsigned)*q);
+                else           putchar((char)*q);
+                break;
+        }
+    }
+}
+
+/* Resolve an alias name to its target recipe, or NULL. */
+static const JRecipe *alias_target(const JFile *jf, const char *target) {
+    for (int i = 0; i < jf->n_recipes; i++)
+        if (jf->recipes[i].name && strcmp(jf->recipes[i].name, target) == 0)
+            return &jf->recipes[i];
+    return NULL;
+}
+
+/* An alias inherits its target's visibility, and hides on its own name too. */
+static int alias_hidden(const JFile *jf, const JAlias *a) {
+    if (a->name && a->name[0] == '_') return 1;
+    const JRecipe *t = alias_target(jf, a->target);
+    return t ? t->hidden : 0;
+}
+
+static int list_recipes(const JFile *jf, int json_mode, int show_all) {
     if (json_mode) {
+        /* Count first so the trailing-comma logic stays correct across the
+         * two sections (recipes, then aliases). */
+        int total = 0;
+        for (int i = 0; i < jf->n_recipes; i++)
+            if (show_all || !jf->recipes[i].hidden) total++;
+        for (int i = 0; i < jf->n_aliases; i++)
+            if (show_all || !alias_hidden(jf, &jf->aliases[i])) total++;
+
+        int emitted = 0;
         printf("[\n");
         for (int i = 0; i < jf->n_recipes; i++) {
             const JRecipe *r = &jf->recipes[i];
-            printf("  {\"name\":\"%s\"", r->name);
+            if (!show_all && r->hidden) continue;
+            printf("  {\"name\":\"");
+            jr_json_puts(r->name);
+            printf("\"");
+            if (r->hidden) printf(",\"hidden\":true");
             if (r->doc) {
-                /* Escape doc for JSON -- basic version */
                 printf(",\"doc\":\"");
-                for (const char *q = r->doc; *q; q++) {
-                    if (*q == '"') printf("\\\"");
-                    else if (*q == '\n') printf("\\n");
-                    else if (*q == '\\') printf("\\\\");
-                    else putchar(*q);
-                }
+                jr_json_puts(r->doc);
                 printf("\"");
             }
             if (r->n_params > 0) {
                 printf(",\"params\":[");
                 for (int j = 0; j < r->n_params; j++) {
                     if (j) printf(",");
-                    printf("{\"name\":\"%s\"", r->params[j].name);
-                    if (r->params[j].default_val)
-                        printf(",\"default\":\"%s\"", r->params[j].default_val);
+                    printf("{\"name\":\"");
+                    jr_json_puts(r->params[j].name);
+                    printf("\"");
+                    if (r->params[j].default_val) {
+                        printf(",\"default\":\"");
+                        jr_json_puts(r->params[j].default_val);
+                        printf("\"");
+                    }
                     if (r->params[j].variadic) printf(",\"variadic\":true");
                     printf("}");
                 }
                 printf("]");
             }
-            printf("}%s\n", (i + 1 < jf->n_recipes) ? "," : "");
+            printf("}%s\n", (++emitted < total) ? "," : "");
+        }
+        /* Aliases are runnable names (find_recipe resolves them), so they
+         * belong in the machine-readable listing that drives completion. */
+        for (int i = 0; i < jf->n_aliases; i++) {
+            const JAlias  *a = &jf->aliases[i];
+            if (!show_all && alias_hidden(jf, a)) continue;
+            const JRecipe *t = alias_target(jf, a->target);
+            printf("  {\"name\":\"");
+            jr_json_puts(a->name);
+            printf("\",\"alias\":\"");
+            jr_json_puts(a->target);
+            printf("\"");
+            if (t && t->doc) {
+                printf(",\"doc\":\"");
+                jr_json_puts(t->doc);
+                printf("\"");
+            }
+            printf("}%s\n", (++emitted < total) ? "," : "");
         }
         printf("]\n");
         return 0;
@@ -1568,6 +1685,7 @@ static int list_recipes(const JFile *jf, int json_mode) {
     /* Plain text */
     for (int i = 0; i < jf->n_recipes; i++) {
         const JRecipe *r = &jf->recipes[i];
+        if (!show_all && r->hidden) continue;
         printf("  %s", r->name);
         for (int j = 0; j < r->n_params; j++) {
             const JParam *p = &r->params[j];
@@ -1582,6 +1700,11 @@ static int list_recipes(const JFile *jf, int json_mode) {
             else    printf("  # %s", r->doc);
         }
         printf("\n");
+    }
+    for (int i = 0; i < jf->n_aliases; i++) {
+        const JAlias *a = &jf->aliases[i];
+        if (!show_all && alias_hidden(jf, a)) continue;
+        printf("  %s  # alias for `%s`\n", a->name, a->target);
     }
     return 0;
 }
@@ -1731,6 +1854,7 @@ int usage_justrun(void) {
         "  tur run                        list recipes (or run 'default')\n"
         "  tur run --list                 list all recipes with doc + params\n"
         "  tur run --list --json          machine-readable recipe list\n"
+        "  tur run --list --all           include [private] / _-prefixed recipes\n"
         "  tur run <recipe> [args...]     run a Justfile recipe\n"
         "  tur run --dry-run <recipe>     print resolved commands, don't exec\n"
         "  tur run --verbose <recipe>     echo recipe metadata to stderr\n"
@@ -1741,7 +1865,8 @@ int usage_justrun(void) {
         "  tur run <file.tur> [-- <args>] compile and run a .tur file\n"
         "\n"
         "flags (task-runner mode):\n"
-        "  --list, -l          list recipes\n"
+        "  --list, -l          list recipes (aliases included; hidden ones are not)\n"
+        "  --all, -a           with --list: also show [private] / _-prefixed recipes\n"
         "  --json              JSON output (with --list)\n"
         "  --dry-run           print resolved commands; do not execute\n"
         "  --verbose           echo recipe metadata to stderr\n"
@@ -1782,6 +1907,7 @@ int cmd_justrun(int argc, char **argv) {
     int         verbose          = 0;
     int         init_mode        = 0;
     int         force            = 0;
+    int         show_all         = 0;
     const char *explicit_just    = NULL;
     const char *chdir_to         = NULL;
     const char *recipe_name      = NULL;
@@ -1804,6 +1930,9 @@ int cmd_justrun(int argc, char **argv) {
                 return usage_justrun();
             if (strcmp(argv[i], "--list") == 0 || strcmp(argv[i], "-l") == 0) {
                 list_mode = 1; continue;
+            }
+            if (strcmp(argv[i], "--all") == 0 || strcmp(argv[i], "-a") == 0) {
+                show_all = 1; continue;
             }
             if (strcmp(argv[i], "--json") == 0) { json_output = 1; continue; }
             if (strcmp(argv[i], "--dry-run") == 0) { dry_run = 1; continue; }
@@ -1883,10 +2012,26 @@ int cmd_justrun(int argc, char **argv) {
 
     /* --list or no recipe + no default */
     if (list_mode || (!recipe_name && !find_recipe(&jf, "default"))) {
-        int r = list_recipes(&jf, json_output || use_json_output);
+        /* Unsupported features degrade a listing rather than killing it: the
+         * recipes we could parse are still worth reporting (shell completion
+         * depends on this), and the notes go to stderr so stdout stays clean
+         * for a JSON consumer. */
+        for (int i = 0; i < jf.n_issues; i++)
+            fprintf(stderr, "tur run: note: %s\n", jf.issues[i]);
+        int r = list_recipes(&jf, json_output || use_json_output, show_all);
         jfile_free(&jf);
         free(justfile_path);
         return r;
+    }
+
+    /* Executing a recipe out of a Justfile we only partly understand would run
+     * the wrong thing, so here the recorded issues are fatal. */
+    if (jf.n_issues > 0) {
+        for (int i = 0; i < jf.n_issues; i++)
+            fprintf(stderr, "tur run: %s\n", jf.issues[i]);
+        jfile_free(&jf);
+        free(justfile_path);
+        return 2;
     }
 
     /* Run the target recipe */
