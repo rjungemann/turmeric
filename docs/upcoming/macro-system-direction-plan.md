@@ -160,7 +160,17 @@ total accessors if ever, never a general evaluator.)
   ports derive-show-cstr as a defmacro* -- a letrec'd, typed, recursive
   field walker building the same emitted `Show` instance; the
   template-derived and procedurally-derived structs render identically.
-- Still deferred: quasiquote producing Syntax, and REPL `expand-1`.
+- Quasiquote producing Syntax (follow-up, LANDED): a quasiquote in a
+  defmacro* body lowers -- purely syntactically, in elab_defmacro_star
+  before the body reaches the macro env (`sxqq_walk`/`sxqq_lower`,
+  elab_macros.c) -- into syntax-constructor calls.  `~expr` splices a
+  Syntax-valued expression verbatim; `~@expr` splices a list-shaped
+  Syntax via the new `syntax-append` native; new natives `kw->syntax`,
+  `nil->syntax`, `syntax-type-ann`, `syntax-quote` round out the
+  template vocabulary.  Nested quasiquote and `~@`-into-vector are
+  clear diagnostics.  The `tur expand` trace now suppresses the macro
+  env's internal preload expansions.
+- Still deferred: REPL `expand-1`.
 
 ## Stage 3 -- cross-module macro-time deps (unscheduled, post-v1 unless
 a concrete stdlib need appears)

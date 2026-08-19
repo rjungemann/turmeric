@@ -4457,6 +4457,69 @@ static TuriValue native_syntax_cons(TuriEnv *e, TuriValue *a, uint32_t n, void *
     return turi_syntax_val(form_list(&e->sym_arena, hd->span, items, tail_len + 1));
 }
 
+static TuriValue native_kw_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("kw->syntax: expected a name string (without the colon), got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    StrSlice sl = { a[0].as_cstr, (uint32_t)strlen(a[0].as_cstr) };
+    const Symbol *sym = symtab_intern(&e->st, sl);
+    return turi_syntax_val(form_keyword(&e->sym_arena, SPAN_UNKNOWN, sym));
+}
+
+static TuriValue native_nil_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)a; (void)n; (void)ud;
+    return turi_syntax_val(form_nil(&e->sym_arena, SPAN_UNKNOWN));
+}
+
+static TuriValue native_syntax_type_ann(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *inner = sx_arg(a, n, 0);
+    if (!inner)
+        return turi_errorf("syntax-type-ann: expected a syntax object, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_type_ann(&e->sym_arena, inner->span, inner));
+}
+
+static TuriValue native_syntax_quote(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *inner = sx_arg(a, n, 0);
+    if (!inner)
+        return turi_errorf("syntax-quote: expected a syntax object, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_quote(&e->sym_arena, inner->span, inner));
+}
+
+/* syntax-append: concatenate list-shaped syntax objects into one list form.
+ * The lowering target for `~@` splices inside a defmacro* quasiquote:
+ * `(a ~@xs b)` lowers to
+ * (syntax-append (syntax-list <a>) xs (syntax-list <b>)). */
+static TuriValue native_syntax_append(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *p = sx_arg(a, n, i);
+        if (!p || (p->tag != F_LIST && p->tag != F_NIL))
+            return turi_errorf("syntax-append: part %u is %s, not a list-shaped "
+                               "syntax object (a ~@ splice needs a list)",
+                               i, (a[i].tag == TURI_SYNTAX && a[i].as_syntax)
+                                      ? form_tag_name(a[i].as_syntax->tag)
+                                      : sx_tag_name(a[i].tag));
+        if (p->tag == F_LIST) total += p->as.list.len;
+    }
+    Form **items = (total == 0) ? NULL
+        : (Form **)arena_alloc(&e->sym_arena, total * sizeof(Form *));
+    uint32_t out = 0;
+    Span span = SPAN_UNKNOWN;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *p = a[i].as_syntax;
+        if (p->tag != F_LIST) continue;
+        if (span.line == 0 && p->span.line > 0) span = p->span;
+        for (uint32_t j = 0; j < p->as.list.len; j++) items[out++] = p->as.list.items[j];
+    }
+    return turi_syntax_val(form_list(&e->sym_arena, span, items, total));
+}
+
 static TuriValue native_syntax_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     /* Deep structural equality, same semantics as the CT evaluator's `=`
@@ -4527,6 +4590,11 @@ static void wk_register_syntax_natives(TuriEnv *env) {
     turi_env_register_native_typed(env, "syntax-vec",      native_syntax_seq,      (void *)1, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax-cons",     native_syntax_cons,     NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax=?",        native_syntax_eq,       NULL, TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "kw->syntax",      native_kw_to_syntax,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "nil->syntax",     native_nil_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-type-ann", native_syntax_type_ann, NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-quote",    native_syntax_quote,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-append",   native_syntax_append,   NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax-gensym",   native_syntax_gensym,   NULL, TUR_NRT_SYNTAX);
     /* syntax-error never returns normally (its value is a propagating
      * error), but it types as Syntax so `(if p good-stx (syntax-error ...))`

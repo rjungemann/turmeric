@@ -163,11 +163,28 @@ as a Syntax.
 
 (const-sum 40 2)   ; compiles to the literal 42
 
-(defmacro* twice [e]
-  (syntax-list (sym->syntax "+") e e))
+(defmacro* twice [e] `(+ ~e ~e))
 
 (twice (f))        ; expands to (+ (f) (f))
 ```
+
+Quasiquote inside a `defmacro*` body is sugar for the syntax
+constructors -- `~expr` splices a Syntax-valued expression (any
+computation, not just a parameter), and `~@expr` splices the elements of
+a list-shaped Syntax:
+
+```turmeric
+(defmacro* sum-first-last [& xs]
+  `(+ ~(syntax-first xs) ~(syntax-nth xs (- (syntax-len xs) 1))))
+
+(defmacro* call-all [f & xs] `(~f ~@xs 100))
+(call-all add3 1 2)   ; expands to (add3 1 2 100)
+```
+
+The lowering is purely syntactic (`` `(+ ~e ~e) `` becomes
+`(syntax-list (sym->syntax "+") e e)`), so the body stays ordinary typed
+Turmeric.  Nested quasiquote and `~@` into vector templates are not
+supported -- build those with the constructors.
 
 Facts that matter in practice:
 

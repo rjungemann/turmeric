@@ -56,6 +56,11 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
     size_t n_saved = diag_files_save(saved_files,
                                      sizeof(saved_files) / sizeof(saved_files[0]));
     bool saved_interp = g_interpret_mode;
+    /* `tur expand` traces expansions; the macro env's own preload expands
+     * plenty of stdlib macros, which are not the user's program -- keep
+     * them out of the trace. */
+    bool saved_dump = g_dump_expansion;
+    g_dump_expansion = false;
 
     TuriEnv *env = turi_env_new();   /* sets g_interpret_mode = true */
     g_interpret_mode = saved_interp;
@@ -110,6 +115,7 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
     for (size_t i = 0; i < n_saved; i++)
         if (saved_files[i]) diag_register_file(saved_files[i]);
     if (saved_had) diag_force_had_error();
+    g_dump_expansion = saved_dump;
     /* Re-stamp the builtin table's name_sym pointers to the compile's
      * symtab (the preload's nested elaborations stamped it against the
      * macro env's).  A bare session (e.g. the ctest) has no symtab yet;
@@ -223,9 +229,14 @@ bool elab_macro_env_define_proc(Elab *e, const char *fn_name,
     const SourceFile *saved_files[64];
     size_t n_saved = diag_files_save(saved_files,
                                      sizeof(saved_files) / sizeof(saved_files[0]));
+    /* Keep the macro env's internal expansions out of the `tur expand`
+     * trace; only the user program's expansions belong there. */
+    bool saved_dump = g_dump_expansion;
+    g_dump_expansion = false;
 
     TuriValue r = turi_eval_with_path(env, src.data, path);
     buf_free(&src);
+    g_dump_expansion = saved_dump;
 
     for (size_t i = 0; i < n_saved; i++)
         if (saved_files[i]) diag_register_file(saved_files[i]);

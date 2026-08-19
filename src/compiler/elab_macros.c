@@ -1616,6 +1616,196 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
+/* ---------------------------------------------------------------------------
+ * Stage 2 follow-up: quasiquote producing Syntax inside defmacro* bodies.
+ *
+ * A quasiquote in a defmacro* body is sugar for the syntax constructors:
+ *
+ *   `(+ ~e ~e)        lowers to  (syntax-list (sym->syntax "+") e e)
+ *   `(f ~@xs 9)       lowers to  (syntax-append (syntax-list (sym->syntax "f"))
+ *                                               xs
+ *                                               (syntax-list (int->syntax 9)))
+ *
+ * `~expr` splices a Syntax-valued expression verbatim; `~@expr` splices the
+ * elements of a list-shaped Syntax.  The lowering is purely syntactic and
+ * happens BEFORE the body is handed to the macro-time env, so the env's
+ * elaborator sees only ordinary calls -- no evaluator-mode special cases.
+ * ------------------------------------------------------------------------- */
+
+static Form *sxqq_callv(Elab *e, Span sp, const char *fn,
+                        Form **args, uint32_t n_args) {
+    Form **items = (Form **)arena_alloc(e->arena, (n_args + 1) * sizeof(Form *));
+    items[0] = form_sym(e->arena, sp,
+                        symtab_intern(e->st, strslice(fn, (uint32_t)strlen(fn))));
+    for (uint32_t i = 0; i < n_args; i++) items[i + 1] = args[i];
+    return form_list(e->arena, sp, items, n_args + 1);
+}
+
+static Form *sxqq_call1(Elab *e, Span sp, const char *fn, Form *arg) {
+    return sxqq_callv(e, sp, fn, &arg, 1);
+}
+
+static Form *sxqq_call_strlit(Elab *e, Span sp, const char *fn,
+                              const char *s, uint32_t len) {
+    Form *lit = form_str(e->arena, sp, s, len);
+    return sxqq_call1(e, sp, fn, lit);
+}
+
+static Form *sxqq_lower(Elab *e, Form *f, bool *ok);
+
+/* Lower the items of a list/vec template body.  With no `~@` present the
+ * result is one (syntax-list ...) / (syntax-vec ...) call; a splice turns
+ * the list case into (syntax-append seg...) where runs of plain items group
+ * into (syntax-list ...) segments and each `~@e` contributes `e` verbatim. */
+static Form *sxqq_lower_seq(Elab *e, Form *f, bool is_vec, bool *ok) {
+    uint32_t n = f->as.list.len;
+    bool has_splice = false;
+    for (uint32_t i = 0; i < n; i++)
+        if (f->as.list.items[i]->tag == F_UNQUOTE_SPLICING) { has_splice = true; break; }
+
+    if (!has_splice) {
+        Form **items = (n == 0) ? NULL
+            : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+        for (uint32_t i = 0; i < n; i++) {
+            items[i] = sxqq_lower(e, f->as.list.items[i], ok);
+            if (!*ok) return f;
+        }
+        return sxqq_callv(e, f->span, is_vec ? "syntax-vec" : "syntax-list",
+                          items, n);
+    }
+    if (is_vec) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "defmacro* quasiquote: '~@' splicing into a vector template "
+                  "is not supported; build it with syntax-vec explicitly");
+        *ok = false;
+        return f;
+    }
+    /* Segment the items around the splices. */
+    Form **parts = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    Form **seg   = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    uint32_t n_parts = 0, seg_len = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *item = f->as.list.items[i];
+        if (item->tag == F_UNQUOTE_SPLICING) {
+            if (seg_len > 0) {
+                parts[n_parts++] = sxqq_callv(e, f->span, "syntax-list", seg, seg_len);
+                seg = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                seg_len = 0;
+            }
+            parts[n_parts++] = item->as.list.items[0];  /* the spliced expr, verbatim */
+        } else {
+            seg[seg_len++] = sxqq_lower(e, item, ok);
+            if (!*ok) return f;
+        }
+    }
+    if (seg_len > 0)
+        parts[n_parts++] = sxqq_callv(e, f->span, "syntax-list", seg, seg_len);
+    return sxqq_callv(e, f->span, "syntax-append", parts, n_parts);
+}
+
+static Form *sxqq_lower(Elab *e, Form *f, bool *ok) {
+    switch (f->tag) {
+        case F_SYM:
+            return sxqq_call_strlit(e, f->span, "sym->syntax",
+                                    f->as.sym->name, f->as.sym->len);
+        case F_KEYWORD:
+            return sxqq_call_strlit(e, f->span, "kw->syntax",
+                                    f->as.sym->name, f->as.sym->len);
+        case F_STR:
+            return sxqq_call_strlit(e, f->span, "str->syntax",
+                                    f->as.s.p, f->as.s.len);
+        case F_INT:
+            return sxqq_call1(e, f->span, "int->syntax",
+                              form_int(e->arena, f->span, f->as.i));
+        case F_FLOAT:
+            return sxqq_call1(e, f->span, "float->syntax",
+                              form_float(e->arena, f->span, f->as.f));
+        case F_BOOL:
+            return sxqq_call1(e, f->span, "bool->syntax",
+                              form_bool(e->arena, f->span, f->as.b));
+        case F_NIL:
+            return sxqq_callv(e, f->span, "nil->syntax", NULL, 0);
+        case F_UNQUOTE:
+            /* `~expr` -- the expression itself, evaluated by the macro body
+             * (must be Syntax-typed; checked at definition time). */
+            return f->as.list.items[0];
+        case F_UNQUOTE_SPLICING:
+            diag_emit(DIAG_ERROR, f->span,
+                      "defmacro* quasiquote: '~@' is only meaningful inside a "
+                      "list template");
+            *ok = false;
+            return f;
+        case F_LIST:
+            return sxqq_lower_seq(e, f, false, ok);
+        case F_VEC:
+            return sxqq_lower_seq(e, f, true, ok);
+        case F_TYPE_ANN:
+            return sxqq_call1(e, f->span, "syntax-type-ann",
+                              sxqq_lower(e, f->as.list.items[0], ok));
+        case F_QUOTE:
+            return sxqq_call1(e, f->span, "syntax-quote",
+                              sxqq_lower(e, f->as.list.items[0], ok));
+        case F_QUASIQUOTE:
+            diag_emit(DIAG_ERROR, f->span,
+                      "defmacro* quasiquote: nested quasiquote is not "
+                      "supported; build the inner template with the syntax "
+                      "constructors");
+            *ok = false;
+            return f;
+        default:
+            diag_emit(DIAG_ERROR, f->span,
+                      "defmacro* quasiquote: a %s template is not supported "
+                      "here; build it with the syntax constructors (or use a "
+                      "template defmacro)",
+                      form_tag_name(f->tag));
+            *ok = false;
+            return f;
+    }
+}
+
+/* Walk a defmacro* body form, lowering every quasiquote.  Quoted data is
+ * left untouched; everything list-shaped recurses. */
+static Form *sxqq_walk(Elab *e, Form *f, bool *ok) {
+    switch (f->tag) {
+        case F_QUASIQUOTE:
+            return sxqq_lower(e, f->as.list.items[0], ok);
+        case F_QUOTE:
+            return f;
+        case F_LIST:
+        case F_VEC:
+        case F_MAP:
+        case F_SET:
+        case F_MAP_LITERAL:
+        case F_SET_LITERAL:
+        case F_ROW_LITERAL:
+        case F_TYPE_ANN:
+        case F_CONTRACT_TYPE:
+        case F_READER_COND:
+        case F_RANGE_VAR:
+        case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING: {
+            uint32_t n = f->as.list.len;
+            Form **items = (n == 0) ? NULL
+                : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+            bool changed = false;
+            for (uint32_t i = 0; i < n; i++) {
+                items[i] = sxqq_walk(e, f->as.list.items[i], ok);
+                if (!*ok) return f;
+                if (items[i] != f->as.list.items[i]) changed = true;
+            }
+            if (!changed) return f;
+            Form *out = form_new(e->arena, f->tag, f->span);
+            out->lit_suffix = f->lit_suffix;
+            out->fx_prov    = f->fx_prov;
+            out->as.list.items = items;
+            out->as.list.len   = n;
+            return out;
+        }
+        default:
+            return f;
+    }
+}
+
 /* Stage 2 (macro-system-direction-plan): defmacro* -- procedural macros.
  *
  *   (defmacro* name [params...] body...)
@@ -1741,8 +1931,13 @@ Expr *elab_defmacro_star(Elab *e, const Form *call) {
     items[1] = form_sym(e->arena, sp, fn_sym);
     items[2] = form_vec(e->arena, params_f->span, pv, pvn);
     items[3] = form_type_ann(e->arena, sp, syntax_ann_proto);
-    for (uint32_t i = 0; i < body_count; i++)
-        items[4 + i] = call->as.list.items[3 + i];
+    /* Quasiquote sugar: lower every `template` in the body into syntax
+     * constructor calls before the body reaches the macro-time env. */
+    bool qq_ok = true;
+    for (uint32_t i = 0; i < body_count; i++) {
+        items[4 + i] = sxqq_walk(e, call->as.list.items[3 + i], &qq_ok);
+        if (!qq_ok) return NULL;
+    }
     Form *defn_form = form_list(e->arena, sp, items, defn_len);
 
     if (!elab_macro_env_define_proc(e, fn_name, defn_form, name_f->span))
