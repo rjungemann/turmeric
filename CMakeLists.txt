@@ -172,6 +172,14 @@ add_test(
   COMMAND bash tests/run-tur-run-rhs-eval.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `tur completion` and the `tur run --list` contract it is built on: aliases
+# listed, hidden recipes withheld but runnable, unsupported features degrading
+# the listing rather than blanking it, and well-formed JSON.
+add_test(
+  NAME tur_completion
+  COMMAND bash tests/run-tur-completion.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_fmt_tests
   COMMAND bash tests/run-fmt.sh

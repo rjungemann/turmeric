@@ -14,6 +14,12 @@ class Turmeric < Formula
     system "cmake", "--build", "build", "-j"
     bin.install "build/tur"
     (share/"turmeric").install "stdlib"
+
+    # Runs `tur completion zsh` / `tur completion bash` -- the default
+    # shell_parameter_format passes the shell name as a positional argument,
+    # which is exactly the CLI shape.
+    generate_completions_from_executable(bin/"tur", "completion",
+                                         shells: [:zsh, :bash])
   end
 
   test do

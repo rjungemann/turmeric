@@ -284,6 +284,7 @@ set(TUR_CORE_SOURCES
     lsp/lsp_session.c
     # cli/ -- standalone subcommands
     cli/lsp_lite.c
+    cli/completion.c
 )
 
 # ---------------------------------------------------------------------------
