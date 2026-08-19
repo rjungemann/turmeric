@@ -107,6 +107,8 @@
 #include "turi/dap.h"
 /* lsp-lite: lightweight completion/calltip backend for editors */
 #include "cli/lsp_lite.h"
+/* tur completion <zsh|bash>: emit a shell completion script */
+#include "cli/completion.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -8230,6 +8232,7 @@ static int usage(void) {
         "  tur parse-check <a> <b>           exit 0 if both files read to the same AST\n"
         "  tur experiments                   list experimental features (--enable=<name>)\n"
         "  tur lang-layers                   list the `#lang` layers a file may request\n"
+        "  tur completion <zsh|bash>         print a shell completion script\n"
         "\n"
         "package management (Spice, Phase PKG-1):\n"
         "  tur init [--bin|--lib] <name>     create a new project\n"
@@ -10293,6 +10296,9 @@ int main(int argc, char **argv) {
     /* L5: `#lang` layer registry listing */
     if (strcmp(cmd, "lang-layers") == 0)
         return cmd_lang_layers(argc, argv);
+    /* Shell completion scripts (zsh/bash) */
+    if (strcmp(cmd, "completion") == 0)
+        return cmd_completion(argc, argv);
 
     /* GS-M2: subcommand fallthrough — `tur foo bar` execs `tur-foo bar`
      * from $PATH when "foo" isn't a built-in. Built-ins always win.

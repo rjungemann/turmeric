@@ -33,14 +33,40 @@ The generated `Justfile` contains the standard spice recipes: `build`,
 
 ```sh
 tur run --list           # plain text
-tur run --list --json    # machine-readable (editor integrations)
+tur run --list --json    # machine-readable (editor integrations, completion)
+tur run --list --all     # include hidden recipes
 ```
+
+The listing includes **aliases** alongside recipes, since an alias is a name
+you can actually run:
+
+```
+  build         # Build the spice (debug profile).
+  b             # alias for `build`
+```
+
+It **excludes** recipes marked `[private]` and recipes whose name starts with
+`_`, matching `just`. Hidden means hidden, not disabled: `tur run _helper`
+still runs. Pass `--all` to list them.
+
+A Justfile feature `tur run` does not support (see
+[Deferred](#deferred-clear-error-with-upgrade-hint)) does **not** blank the
+listing. The offending line is skipped, a note goes to stderr, and every
+recipe that did parse is still listed -- so shell completion keeps working in
+a project that also uses features only real `just` handles. Executing a recipe
+out of such a Justfile is still a hard error.
+
+The JSON form is the one to build tooling on. Each entry carries `name`, and
+optionally `doc`, `params` (each with `name`, `default`, `variadic`), and
+`alias` (the target recipe, for alias entries). All strings are properly
+escaped.
 
 ## Flags
 
 | Flag | Description |
 |------|-------------|
 | `--list`, `-l` | List all recipes with doc comment and parameters |
+| `--all`, `-a` | With `--list`: also show `[private]` and `_`-prefixed recipes |
 | `--json` | JSON output for `--list` |
 | `--dry-run` | Print resolved commands; do not execute them |
 | `--verbose` | Echo recipe metadata (start, end) to stderr |
@@ -85,6 +111,12 @@ upstream `just` 1.x. For any Justfile that uses only this subset,
   `env_var("NAME")`, `env_var_or_default("NAME", "fallback")`,
   `os()`, `arch()`, `justfile_directory()`, `invocation_directory()`,
   `uppercase(s)`, `lowercase(s)`, `trim(s)`, `quote(s)`
+- **Aliases**: `alias b := build`, resolved on invocation and shown in
+  `tur run --list`
+- **The `[private]` attribute**, and the `_name` convention: both hide a
+  recipe from `--list` while leaving it runnable by name
+- **Conditional expressions** in assignment right-hand sides:
+  `x := if os() == "macos" { "brew" } else { "apt" }`
 - **Listing**: `tur run` with no recipe lists recipes; `tur run --list`
   is the explicit form
 - **The `default` recipe**: if a recipe named `default` exists, `tur run`
@@ -92,19 +124,47 @@ upstream `just` 1.x. For any Justfile that uses only this subset,
 
 ### Deferred (clear error with upgrade hint)
 
-- Recipe attributes (`[private]`, `[unix]`, `[windows]`, `[no-cd]`, ...)
-- Conditional expressions (`if ... { ... } else { ... }`)
+- Recipe attributes other than `[private]` -- `[unix]`, `[windows]`,
+  `[no-cd]`, `[no-exit-message]`, `[confirm]`, `[group: '...']`
 - Modules and imports (`mod foo`, `import 'subfile'`)
 - Backtick command substitution in assignments
-- Aliases (`alias b := build`)
 
-When `tur run` encounters an unsupported feature it prints:
+When `tur run` runs a recipe out of a Justfile using an unsupported feature
+it prints this and exits 2:
 
 ```
 tur run: unsupported Justfile feature at Justfile:14: recipe attribute [unix]
         Install `just` (https://just.systems) to run this recipe, or
         remove the [unix] attribute if the recipe is portable.
 ```
+
+Under `--list` the same text appears on stderr prefixed `tur run: note:`, and
+the listing still prints the recipes that parsed.
+
+## Shell completion
+
+`tur completion` prints a completion script for `zsh` or `bash`. Both complete
+subcommands, per-subcommand flags, and `.tur` file arguments -- and for
+`tur run`, the recipe names of whatever Justfile encloses the directory you
+are completing in, with their doc comments as descriptions.
+
+```sh
+# zsh -- install into your fpath
+tur completion zsh > "${fpath[1]}/_tur" && compinit
+# zsh -- or source it directly from ~/.zshrc
+source <(tur completion zsh)
+
+# bash
+tur completion bash > /usr/local/etc/bash_completion.d/tur
+source <(tur completion bash)          # or straight from ~/.bashrc
+```
+
+The Homebrew formula installs both automatically.
+
+Recipe candidates come from `tur run --list`, so everything above applies:
+aliases complete, hidden recipes do not, and a Justfile with unsupported
+features still completes for the recipes that parse. `tur run <TAB>` also
+offers `.tur` files, because `tur run` accepts either.
 
 ## Disambiguation with `tur run <file.tur>`
 

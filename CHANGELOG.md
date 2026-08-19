@@ -2,6 +2,38 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`tur completion <zsh|bash>` -- shell completion.** Completes subcommands,
+  per-subcommand flags, and `.tur` file arguments; for `tur run` it completes
+  recipe names out of whatever Justfile encloses the directory being completed,
+  using their doc comments as descriptions. The scripts are embedded in the
+  binary, so `source <(tur completion zsh)` bootstraps anywhere with no
+  install-prefix lookup. The Homebrew formula installs both.
+- **`tur run --list --all`** shows recipes that are normally hidden.
+
+### Fixed
+
+- **`tur run --list` omitted aliases.** `alias b := build` is runnable --
+  `find_recipe` resolves it, and the "recipe not found" error even printed
+  aliases in its `available:` line -- but the listing walked only the recipe
+  table, so aliases were invisible to any tooling built on it.
+- **One unsupported Justfile feature blanked the whole listing.** A `[private]`
+  recipe or a `mod` line -- both fine under real `just` -- aborted the parse
+  with exit 2 and no output. Unsupported features now degrade `--list` (note on
+  stderr, remaining recipes still listed) while staying fatal when a recipe is
+  actually executed.
+- **`tur run --list --json` escaped only `doc`.** Recipe names and parameter
+  defaults were emitted raw and control characters passed through, so a default
+  like `flags='-DFOO="bar"'` produced invalid JSON.
+
+### Changed
+
+- **`[private]` and `_`-prefixed recipes are honored rather than rejected**,
+  matching `just`: hidden from `tur run --list`, still runnable by name.
+
 ## [0.35.0] -- 2026-08-18
 
 ### Added
