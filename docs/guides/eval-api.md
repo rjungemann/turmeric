@@ -159,6 +159,7 @@ typedef struct TuriValue {
 | `TURI_STRUCT` | Struct instance |
 | `TURI_THROW`  | In-flight exception (catchable by `try/catch`) |
 | `TURI_FUTURE` | Async future handle |
+| `TURI_SYNTAX` | Syntax object (wraps a compiler `Form*`) -- produced by `read-string` and the `syntax-*` natives; the value vocabulary of `defmacro*` macro bodies (see [macros-guide.md](macros-guide.md)) |
 
 ### Constructors
 

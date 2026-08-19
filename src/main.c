@@ -8252,6 +8252,7 @@ static int usage(void) {
         "\n"
         "global flags:\n"
         "  --enable=<name>[,<name>...]      turn on an experimental feature; see 'tur experiments'\n"
+        "  --macro-caps=io                  grant macro-time (defmacro*) code I/O; default deny\n"
         "  --no-color                       disable colored diagnostics\n"
         "  --json                           structured JSON output (tur doc, tur test, tur check)\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"

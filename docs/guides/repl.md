@@ -110,6 +110,7 @@ Meta-commands:
   :help               show this help
   :quit  :q           exit the REPL
   :type <expr>        print inferred type without evaluating
+  :expand <form>      expand the form's head macro once and print it
   :doc  <sym>         print documentation for a symbol or builtin
   :reload <file>      evaluate a .tur file into the current session
   :load-string "<src>"  evaluate source directly (\n for newlines)
@@ -194,6 +195,24 @@ Elaborates `<expr>` and prints the inferred type without evaluating it.
 > :type (fn [x :int] :int x)
 (:int -> :int)
 ```
+
+### `:expand <form>`
+
+Expands the form's head macro exactly ONCE and prints the result --
+template and `defmacro*` macros alike, including macros defined at
+earlier prompts.
+
+```
+> (defmacro plus1 [x] `(+ ~x 1))
+> :expand (plus1 41)
+(+ 41 1)
+> :expand (cond a 1 :else 2)
+(if a 1 (cond :else 2))
+```
+
+One step at a time: run `:expand` again on the printed result to walk a
+recursive macro's unfolding (or use `tur expand <file>` for the full
+trace of a whole file).
 
 ### `:doc <sym>`
 
