@@ -27,6 +27,15 @@
 (defn gen-at [^borrow w : Wld i : int] #reads w : int
   (unsafe (array-get-unchecked (.gens w) i)))
 
+;; two-level: the pointer loaded OUT of w's block points at state reachable
+;; from w, so a load through it still roots at w (the ECS control-block
+;; shape: gens = state[6]; gens[slot]). The chase also crosses the
+;; EX_REINTERPRET the int->ptr `::` builds.
+(defn gen2-at [^borrow w : Wld i : int] #reads w : int
+  (unsafe (array-get-unchecked
+            (:: (array-get-unchecked (.gens w) 0) :ptr<void>)
+            i)))
+
 (defn alive2? [^borrow w : Wld i : int] #reads w : bool
   (= (gen-at w i) 0))
 

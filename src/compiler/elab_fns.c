@@ -436,6 +436,8 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
         return rt_classify_expr(c, x->as.ascribe_.inner);
     case EX_CAST:
         return rt_classify_expr(c, x->as.cast_.expr);
+    case EX_REINTERPRET:   /* the compiler-built bitwise half of `::` */
+        return rt_classify_expr(c, x->as.reinterpret_.expr);
 
     /* A `match` computes a value from its scrutinee and one arm; nothing about
      * dispatching on a constructor is observable.  Pattern BINDINGS are not
@@ -622,6 +624,8 @@ static const Binding *reads_scan_mut_global(const Expr *x, uint32_t *budget) {
     }
     case EX_ASCRIBE: return reads_scan_mut_global(x->as.ascribe_.inner, budget);
     case EX_CAST:    return reads_scan_mut_global(x->as.cast_.expr, budget);
+    case EX_REINTERPRET:
+        return reads_scan_mut_global(x->as.reinterpret_.expr, budget);
     case EX_RETURN:  return reads_scan_mut_global(x->as.return_.value, budget);
     /* R4 slice 1: `(unsafe ...)` desugars to a handle whose body is where
      * every raw-memory read lives (the gated builtins REQUIRE the block),
@@ -647,17 +651,31 @@ static const Binding *reads_scan_mut_global(const Expr *x, uint32_t *budget) {
  * Anything else (a CALL above all) returns NULL: no root, no evidence.
  * Interprocedural attribution belongs to the footprint walk proper, where
  * "could not see" must become a distinct verdict before it can back
- * anything stronger than silence. */
+ * anything stronger than silence.
+ *
+ * The chase also follows a raw LOAD (ptr-deref / array-get-unchecked)
+ * through its pointer operand: a pointer loaded OUT of state reachable
+ * from `s` points at state reachable from `s`, so a load through it still
+ * roots at `s`.  This is what attributes the real ECS control-block shape
+ * -- `gens = state[6]; gens[slot]` -- rather than only single-level
+ * blocks.  Attribution is REACHABILITY-based on purpose: a block that
+ * stores a pointer into state shared with some other root is the owning
+ * module's aliasing discipline, the same documented trust boundary the
+ * whole `frozen`+`#reads` tier already stands on (see
+ * stateful-refinements-guide.md's trust-boundary section). */
 static const Binding *reads_read_root(const Expr *x) {
     while (x) {
         switch (x->kind) {
         case EX_VAR:       return x->as.var.binding;
         case EX_ASCRIBE:   x = x->as.ascribe_.inner; break;
         case EX_CAST:      x = x->as.cast_.expr; break;
+        case EX_REINTERPRET: x = x->as.reinterpret_.expr; break;
         case EX_GET_FIELD: x = x->as.get_field_.struct_expr; break;
         case EX_BUILTIN:
             if (x->as.builtin.spec &&
-                x->as.builtin.spec->shape == BS_PTR_ARITH &&
+                (x->as.builtin.spec->shape == BS_PTR_ARITH ||
+                 x->as.builtin.spec->shape == BS_PTR_DEREF ||
+                 x->as.builtin.spec->shape == BS_ARRAY_GET_UNCHECKED) &&
                 x->as.builtin.n >= 1) {
                 x = x->as.builtin.args[0];
                 break;
@@ -786,6 +804,7 @@ static const Binding *reads_scan_unframed_param(const Expr *x,
     }
     case EX_ASCRIBE: return RSUP(x->as.ascribe_.inner);
     case EX_CAST:    return RSUP(x->as.cast_.expr);
+    case EX_REINTERPRET: return RSUP(x->as.reinterpret_.expr);
     case EX_RETURN:  return RSUP(x->as.return_.value);
     case EX_HANDLE: {   /* see reads_scan_mut_global's EX_HANDLE rationale */
         const HandleExpr *h = x->as.handle_.handle;
@@ -2266,6 +2285,7 @@ static WfVerdict rf_scan(const Expr *x, Binding **params, uint32_t n_params,
     }
     case EX_ASCRIBE: return RFS(x->as.ascribe_.inner);
     case EX_CAST:    return RFS(x->as.cast_.expr);
+    case EX_REINTERPRET: return RFS(x->as.reinterpret_.expr);
     case EX_RETURN:  return RFS(x->as.return_.value);
     case EX_HANDLE: {
         const HandleExpr *h = x->as.handle_.handle;
