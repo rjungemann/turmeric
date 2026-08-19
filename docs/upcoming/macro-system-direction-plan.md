@@ -1,6 +1,6 @@
 # Macro System Direction -- procedural macros on turi, not phases
 
-Status: direction adopted; Stages 0-2 landed; Stage 3+ unscheduled.
+Status: direction adopted; Stages 0-3 landed (with every follow-up); Stage 4 unscheduled.
 
 ## The question
 
@@ -177,20 +177,46 @@ total accessors if ever, never a general evaluator.)
   throwaway ElabSession whose macro registry survives for the manual
   expansion; cmd_expand, src/turi/repl.c).
 
-Every Stage 0-2 item and every follow-up is now landed; the next
-unscheduled work is Stage 3.
+Every Stage 0-3 item and every follow-up is now landed; the only
+remaining roadmap work is the demand-driven Stage 4 convergence items.
 
-## Stage 3 -- cross-module macro-time deps (unscheduled, post-v1 unless
-a concrete stdlib need appears)
+## Stage 3 -- cross-module macro-time deps (LANDED)
 
-- Explicit `(import m :for-macros)` -- evaluates m's defns into the macro
-  env (transient `TURI_CAP_IMPORT`); `exported_macros` carries the
-  PROCEDURAL kind.  Explicit, never implicit: implicit would mean any
-  imported module's code may run at compile time (determinism and
-  supply-chain surface).
-- `--macro-caps=io` for the rare legitimately effectful macro
-  (embed-file style); default deny; never FFI/Unsafe/inline-C at macro
-  time.
+- `(import m :for-macros)` -- a defmodule import-spec option
+  (`ImportSpec.for_macros`, parsed in elab_module.c's parse_import_spec)
+  that evaluates module m into the macro-time env so defmacro* bodies can
+  call its functions at expansion time.  Macro-time ONLY: no runtime load,
+  no scope injection, and combining with :as/:refer is a diagnostic (a
+  module needed in both phases is imported twice).  Explicit, never
+  implicit: which code runs at compile time is always visible in the
+  source.
+- Mechanism (`elab_macro_env_import`, src/turi/macro_env.c): the module
+  path resolves through `elab_module_resolve_path` (a probe-only mirror of
+  elab_load_module's search order -- importing file's dir -> stdlib ->
+  -I dirs, kept in lockstep), then the macro env evaluates
+  `(load "<path>")` with TURI_CAP_IMPORT granted for exactly that eval and
+  only that grant taken back (a --macro-caps=io grant survives).  Repeat
+  imports dedup via a sentinel binding in the env's own table (the load
+  splice does NOT dedup across eval turns -- measured).  The shared
+  mid-compile bracket (diag registry incl. id 0 + had-error flag +
+  expansion-trace mute + builtins_init re-stamp) is factored into
+  macro_env_bracket_enter/exit, used by creation, definition, and import.
+- Module functions bind under their BARE names in the macro env
+  (qualified m/name does not resolve there); documented in the guide.
+- A defmacro* DEFINED in another module needs no :for-macros: export +
+  :refer works through the existing whole-MacroDef clone (the PROCEDURAL
+  kind and closure binding ride along; one compile-wide registry, one
+  per-compile env).  Pinned by tests/fixtures/macro-cross-module-procedural/.
+- `--macro-caps=io` (global flag, main parser + worker replay): re-grants
+  exactly TURI_CAP_IO at macro-env creation for the rare effectful macro;
+  any other name is a hard flag error -- ffi/unsafe/inline-C/async are
+  never offered.  Default deny pinned by
+  tests/fixtures/errors/macro-io-denied/; grant + import-still-denied
+  pinned in the tur_macro_env_nested ctest.
+- Fixtures: macro-for-macros-import (multi-file, incl. repeat-import
+  dedup), macro-cross-module-procedural,
+  errors/macro-for-macros-combined, errors/macro-for-macros-missing,
+  errors/macro-io-denied.
 
 ## Stage 4 -- convergence (post-v1, demand order)
 

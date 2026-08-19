@@ -1070,6 +1070,12 @@ typedef struct {
     uint32_t n_refer;
     const Symbol **refer_effect_syms; /* PR5-3-D: (effect Name) entries from :refer list */
     uint32_t       n_refer_effects;
+    /* Stage 3 (macro-system-direction-plan): `(import m :for-macros)` --
+     * macro-time only.  The module is evaluated into the compile's
+     * macro-time env so defmacro* bodies can call its functions at
+     * expansion time; NO runtime import happens.  Mutually exclusive with
+     * :as / :refer (a module needed in both phases is imported twice). */
+    bool for_macros;
     Span span;
 } ImportSpec;
 

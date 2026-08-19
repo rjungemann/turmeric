@@ -577,6 +577,7 @@ typedef struct Elab {
     const Symbol *sym_load;       /* load */
     const Symbol *kw_as;          /* :as */
     const Symbol *kw_refer;       /* :refer */
+    const Symbol *kw_for_macros;  /* :for-macros (Stage 3 macro-time imports) */
     bool has_defmodule;           /* whether defmodule has been seen in this file */
     /* Phase M1: Module namespace system */
     const Symbol    *current_module_name; /* name of module being elaborated, or NULL */
@@ -1263,6 +1264,21 @@ bool  elab_macro_env_define_proc(Elab *e, const char *fn_name,
                                  const Form *defn_form, Span err_span);
 Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
                                Form **args, uint32_t n_args, Span call_span);
+
+/* Stage 3: `(import m :for-macros)` -- evaluate module m into the macro-time
+ * env (TURI_CAP_IMPORT granted transiently for the load) so defmacro* bodies
+ * can call its functions at expansion time.  `path` is the resolved module
+ * file.  Emits a diagnostic at `span` and returns false on failure.
+ * Implemented in src/turi/macro_env.c. */
+bool elab_macro_env_import(Elab *e, const Symbol *module_name,
+                           const char *path, Span span);
+
+/* Stage 3: resolve a module name to its file path using the same search
+ * order elab_load_module uses (importing file's dir -> stdlib dir -> each
+ * -I include dir), probing for existence only -- no read, no registry
+ * side effects.  Returns false when no candidate exists.  elab_module.c. */
+bool elab_module_resolve_path(Elab *e, const Symbol *name,
+                              char *out, size_t cap);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);

@@ -41,26 +41,53 @@
 #include "elab_internal.h"
 #include "globals.h"
 
+/* Bracket for every nested evaluation the macro env runs mid-compile
+ * (creation/preload, defmacro* definition, :for-macros import).  Each
+ * nested eval resets the diagnostic slate, registers its own source at
+ * file id 0 (replacing the compile's main file -- diag_files_restore alone
+ * deliberately skips id 0, so entries are re-registered directly), and
+ * re-stamps the global builtin table's name_sym pointers against the macro
+ * env's own symbol table (builtins_init runs at every elaborate entry;
+ * un-restored, every later pointer-keyed builtin lookup in the enclosing
+ * compile misses -- "unknown function or operator 'println'").  The
+ * `tur expand` trace is also silenced: the macro env's internal expansions
+ * are not the user's program. */
+typedef struct MacroEnvBracket {
+    bool              saved_had;
+    const SourceFile *saved_files[64];
+    size_t            n_saved;
+    bool              saved_dump;
+} MacroEnvBracket;
+
+static void macro_env_bracket_enter(MacroEnvBracket *b) {
+    b->saved_had = diag_had_error();
+    b->n_saved = diag_files_save(b->saved_files,
+                                 sizeof(b->saved_files) / sizeof(b->saved_files[0]));
+    b->saved_dump = g_dump_expansion;
+    g_dump_expansion = false;
+}
+
+static void macro_env_bracket_exit(MacroEnvBracket *b, Elab *e) {
+    for (size_t i = 0; i < b->n_saved; i++)
+        if (b->saved_files[i]) diag_register_file(b->saved_files[i]);
+    if (b->saved_had) diag_force_had_error();
+    g_dump_expansion = b->saved_dump;
+    /* A bare session (e.g. the ctest) has no symtab yet; its next
+     * elaborate entry re-stamps anyway. */
+    if (e->st) builtins_init(e->st);
+}
+
 struct TuriEnv *elab_macro_env_get(ElabSession *session) {
     Elab *e = (Elab *)session;
     if (!e) return NULL;
     if (e->macro_env) return e->macro_env;
 
-    /* Creation runs several nested evaluations (the stdlib preload below),
-     * each of which resets the diagnostic slate, registers its own source
-     * at file id 0, and re-stamps the global builtin table against the
-     * macro env's symbol table.  Bracket ALL of it here -- creation is
-     * lazy, so it fires mid-compile at the first defmacro*. */
-    bool saved_had = diag_had_error();
-    const SourceFile *saved_files[64];
-    size_t n_saved = diag_files_save(saved_files,
-                                     sizeof(saved_files) / sizeof(saved_files[0]));
+    /* Creation runs several nested evaluations (the stdlib preload below);
+     * bracket ALL of it -- creation is lazy, so it fires mid-compile at the
+     * first defmacro*. */
+    MacroEnvBracket br;
+    macro_env_bracket_enter(&br);
     bool saved_interp = g_interpret_mode;
-    /* `tur expand` traces expansions; the macro env's own preload expands
-     * plenty of stdlib macros, which are not the user's program -- keep
-     * them out of the trace. */
-    bool saved_dump = g_dump_expansion;
-    g_dump_expansion = false;
 
     TuriEnv *env = turi_env_new();   /* sets g_interpret_mode = true */
     g_interpret_mode = saved_interp;
@@ -110,17 +137,12 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
          * granted here. */
         turi_env_deny(env, TURI_CAP_ALL);
         turi_env_set_fuel(env, TURI_DEFAULT_SANDBOX_FUEL);
+        /* Stage 3: --macro-caps=io re-grants exactly I/O for the rare
+         * legitimately-effectful macro.  Nothing else is ever granted. */
+        if (g_macro_caps_io) turi_env_allow(env, TURI_CAP_IO);
     }
 
-    for (size_t i = 0; i < n_saved; i++)
-        if (saved_files[i]) diag_register_file(saved_files[i]);
-    if (saved_had) diag_force_had_error();
-    g_dump_expansion = saved_dump;
-    /* Re-stamp the builtin table's name_sym pointers to the compile's
-     * symtab (the preload's nested elaborations stamped it against the
-     * macro env's).  A bare session (e.g. the ctest) has no symtab yet;
-     * its next elaborate entry re-stamps anyway. */
-    if (e->st) builtins_init(e->st);
+    macro_env_bracket_exit(&br, e);
 
     e->macro_env = env;
     return env;
@@ -220,34 +242,11 @@ bool elab_macro_env_define_proc(Elab *e, const char *fn_name,
     char *path = (char *)arena_alloc(e->arena, path_len);
     snprintf(path, path_len, "<defmacro* %s>", fn_name);
 
-    /* The nested eval resets the diagnostic slate and registers its own
-     * source at file id 0, replacing the compile's main file.  Snapshot the
-     * whole registry and the error flag, and put both back afterward --
-     * diag_files_restore alone deliberately skips id 0, so re-register the
-     * saved entries directly. */
-    bool saved_had = diag_had_error();
-    const SourceFile *saved_files[64];
-    size_t n_saved = diag_files_save(saved_files,
-                                     sizeof(saved_files) / sizeof(saved_files[0]));
-    /* Keep the macro env's internal expansions out of the `tur expand`
-     * trace; only the user program's expansions belong there. */
-    bool saved_dump = g_dump_expansion;
-    g_dump_expansion = false;
-
+    MacroEnvBracket br;
+    macro_env_bracket_enter(&br);
     TuriValue r = turi_eval_with_path(env, src.data, path);
     buf_free(&src);
-    g_dump_expansion = saved_dump;
-
-    for (size_t i = 0; i < n_saved; i++)
-        if (saved_files[i]) diag_register_file(saved_files[i]);
-    if (saved_had) diag_force_had_error();
-
-    /* The nested elaboration re-stamped the global builtin table's name_sym
-     * pointers against the macro env's own symbol table (builtins_init runs
-     * at every elaborate entry), which would make every later pointer-keyed
-     * builtin lookup in the enclosing compile miss ("unknown function or
-     * operator 'println'").  Stamp it back to the compile's symtab. */
-    builtins_init(e->st);
+    macro_env_bracket_exit(&br, e);
 
     if (turi_is_error(r)) {
         diag_emit(DIAG_ERROR, err_span,
@@ -345,4 +344,76 @@ Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
         return NULL;
     }
     return import_form(e, r.as_syntax, call_span);
+}
+
+/* ---------------------------------------------------------------------------
+ * Stage 3: `(import m :for-macros)` -- macro-time-only imports.
+ * ------------------------------------------------------------------------- */
+
+bool elab_macro_env_import(Elab *e, const Symbol *module_name,
+                           const char *path, Span span) {
+    TuriEnv *env = elab_macro_env_get((ElabSession *)e);
+    if (!env) {
+        diag_emit(DIAG_ERROR, span,
+                  ":for-macros: could not create the macro-time environment");
+        return false;
+    }
+
+    /* Repeat :for-macros of the same module in one compile must be a no-op
+     * -- the load splice does NOT dedup across eval turns (measured: the
+     * second import spliced the file again, which would trip "already
+     * defined" for any macro the module defines).  The env's own global
+     * binding table is the dedup set: no extra teardown plumbing. */
+    {
+        /* turi_env_set retains the binding NAME pointer -- the key handed to
+         * it must outlive the env's hash table, so allocate it from the
+         * compile arena (the lookup alone may use stack memory). */
+        char dedup_key[4400];
+        int klen = snprintf(dedup_key, sizeof(dedup_key),
+                            "__mx_for_macros_loaded:%s", path);
+        if (klen < 0 || (size_t)klen >= sizeof(dedup_key)) klen = (int)sizeof(dedup_key) - 1;
+        TuriValue seen = turi_env_get(env, dedup_key);
+        if (seen.tag == TURI_BOOL && seen.as_bool) return true;
+        char *stable_key = (char *)arena_alloc(e->arena, (size_t)klen + 1);
+        memcpy(stable_key, dedup_key, (size_t)klen + 1);
+        turi_env_set(env, stable_key, turi_bool(true));
+    }
+
+    /* Evaluate the resolved module file into the macro env via the load
+     * splice -- the same mechanism the stdlib preload uses.  The env is
+     * capability-denied after creation, and (load ...) is gated on
+     * TURI_CAP_IMPORT (via the sandboxed flag the nested elaboration
+     * derives from it), so grant IMPORT for exactly this eval and take
+     * back only that grant afterward -- a --macro-caps=io grant must
+     * survive. */
+    char src[4352];
+    int n = snprintf(src, sizeof(src), "(load \"%s\")", path);
+    if (n < 0 || (size_t)n >= sizeof(src)) {
+        diag_emit(DIAG_ERROR, span,
+                  ":for-macros module path too long for '%s'",
+                  module_name->name);
+        return false;
+    }
+
+    /* The path label is retained by the env's SourceFile -- arena, not
+     * stack. */
+    size_t label_len = module_name->len + 16;
+    char *label = (char *)arena_alloc(e->arena, label_len);
+    snprintf(label, label_len, "<for-macros %s>", module_name->name);
+
+    MacroEnvBracket br;
+    macro_env_bracket_enter(&br);
+    turi_env_allow(env, TURI_CAP_IMPORT);
+    TuriValue r = turi_eval_with_path(env, src, label);
+    turi_env_deny(env, TURI_CAP_IMPORT);
+    macro_env_bracket_exit(&br, e);
+
+    if (turi_is_error(r)) {
+        diag_emit(DIAG_ERROR, span,
+                  ":for-macros import of '%s' failed at macro time: %s",
+                  module_name->name,
+                  turi_error_message(r) ? turi_error_message(r) : "unknown error");
+        return false;
+    }
+    return true;
 }

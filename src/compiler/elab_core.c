@@ -2105,6 +2105,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_is_q    = intern_cstr(st, "is?");       /* TY3: (is? x T) type test */
     e->kw_as = intern_cstr(st, "as");   /* same interned symbol, used as :as keyword */
     e->kw_refer = intern_cstr(st, "refer");
+    e->kw_for_macros = intern_cstr(st, "for-macros"); /* Stage 3 macro-time imports */
     e->has_defmodule = false;
     e->current_module_name = NULL;
     e->current_module = NULL;

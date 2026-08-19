@@ -1,0 +1,3 @@
+(defmodule prog
+  (import nosuchmod :for-macros)
+  (defn main [] : int 0))

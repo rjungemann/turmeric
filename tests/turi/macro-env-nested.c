@@ -94,6 +94,23 @@ int main(void) {
     elab_session_free(sess);
     check("session freed with macro env", 1);
 
+    /* Stage 3: --macro-caps=io re-grants exactly I/O.  A fresh session's
+     * macro env created under the flag runs println; everything else stays
+     * denied (spot-check: import still refused without the transient
+     * :for-macros grant). */
+    g_macro_caps_io = true;
+    ElabSession *sess2 = elab_session_new();
+    struct TuriEnv *me2 = elab_macro_env_get(sess2);
+    check("macro env created under --macro-caps=io", me2 != NULL);
+    TuriValue io2 = turi_eval((TuriEnv *)me2, "(println \"granted\")");
+    check("I/O allowed under --macro-caps=io", !turi_is_error(io2));
+    TuriValue imp2 = turi_eval((TuriEnv *)me2, "(import definitely/absent)");
+    check("import still denied under --macro-caps=io", turi_is_error(imp2));
+    check("g_interpret_mode still false after caps-granted evals",
+          g_interpret_mode == false);
+    g_macro_caps_io = false;
+    elab_session_free(sess2);
+
     if (failures) {
         printf("%d check(s) FAILED\n", failures);
         return 1;

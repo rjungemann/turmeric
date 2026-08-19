@@ -161,6 +161,14 @@ extern bool g_interpret_mode;
  * the expansion site in elab_call.c. */
 extern bool g_dump_expansion;
 
+/* Stage 3 (macro-system-direction-plan): --macro-caps=io grants the
+ * macro-time env TURI_CAP_IO for the rare legitimately-effectful macro
+ * (embed-file style).  Default deny; io is the only grantable capability
+ * -- FFI/Unsafe/inline-C/async at macro time are never offered.  Set by
+ * the global flag parser in main.c; read at macro-env creation in
+ * src/turi/macro_env.c. */
+extern bool g_macro_caps_io;
+
 /* interp-stdlib-class-method-shadows-user-defn: true while an interpreter
  * entry point (--interpret / REPL / WASM) is preloading stdlib modules via
  * `(load ...)` turns.  Those turns run with stdlib_prefix == 0, so

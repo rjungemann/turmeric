@@ -1,0 +1,4 @@
+(defmodule mhelp
+  (export mx-add mx-label)
+  (defn mx-add [a : int b : int] : int (+ a b))
+  (defn mx-label [name : cstr] : cstr (str-concat "gen-" name)))

@@ -7470,6 +7470,11 @@ static void wk_apply_flags(const char *flags_str) {
              * just re-applies them so gated features elaborate identically. */
             (void)enable_experiment_list(tok + 9, XF_SRC_CLI);
         }
+        else if (strcmp(tok, "--macro-caps=io") == 0) {
+            /* Stage 3: grant the macro-time env I/O (validated by the
+             * parent's parser). */
+            g_macro_caps_io = true;
+        }
         tok = strtok(NULL, " \t");
     }
 }
@@ -9358,6 +9363,25 @@ int main(int argc, char **argv) {
             /* XF1: opt in to one or more experimental features (comma list).
              * An unknown name is a hard TUR-E0310 error. */
             if (!enable_experiment_list(argv[i] + 9, XF_SRC_CLI)) return 2;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strncmp(argv[i], "--macro-caps=", 13) == 0) {
+            /* Stage 3 (macro-system-direction-plan): grant the macro-time
+             * env extra capabilities.  Only `io` exists; anything else --
+             * including a plea for ffi/unsafe -- is a hard error, because
+             * those are never offered at macro time. */
+            if (strcmp(argv[i] + 13, "io") != 0) {
+                fprintf(stderr,
+                        "error: --macro-caps only accepts 'io' "
+                        "(got '%s'); ffi/unsafe/inline-c/async are never "
+                        "available at macro-expansion time\n",
+                        argv[i] + 13);
+                return 2;
+            }
+            g_macro_caps_io = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

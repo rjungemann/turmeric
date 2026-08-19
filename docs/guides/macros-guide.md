@@ -223,9 +223,55 @@ Facts that matter in practice:
   `tests/fixtures/macro-procedural-derive/`, where a `defmacro*` builds
   the same `Show` instance the stdlib template `derive-show-cstr` emits,
   with a typed recursive field walker instead of macro-recursion
-  contortions.  (Quasiquote producing Syntax is still a planned follow-up
-  -- see
-  [macro-system-direction-plan.md](../upcoming/macro-system-direction-plan.md).)
+  contortions.
+
+## Macro-time imports (`:for-macros`)
+
+`(import m :for-macros)` inside a `defmodule` evaluates module `m` into
+the macro-time env, so `defmacro*` bodies can call its functions at
+expansion time -- shared macro-time helper libraries:
+
+```turmeric
+;; mhelp.tur
+(defmodule mhelp
+  (export mx-add)
+  (defn mx-add [a : int b : int] : int (+ a b)))
+
+;; main.tur
+(defmodule prog
+  (import mhelp :for-macros)
+  (defmacro* csum [a b]
+    (int->syntax (mx-add (syntax->int a) (syntax->int b))))
+  (defn main [] : int (println (csum 40 2)) 0))   ; compiles to 42
+```
+
+The rules:
+
+- **Macro-time ONLY.**  `:for-macros` never imports the module at
+  runtime, and it cannot combine with `:as`/`:refer` -- a module needed
+  in both phases is imported twice: `(import m)` and
+  `(import m :for-macros)`.  This is the deliberate, Racket-inspired
+  phase distinction: which code runs at compile time is always explicit
+  in the source, never inferred.
+- The module's functions bind under their **bare names** in the macro
+  env (qualified `m/name` forms do not resolve there).
+- Repeat `:for-macros` imports of the same module in one compile are
+  deduped.
+- Resolution uses the compiler's own module search (importing file's
+  directory, then the stdlib, then `-I` include dirs).
+- A `defmacro*` DEFINED in another module needs no `:for-macros` at all
+  -- export it and `:refer` it like any macro
+  (`tests/fixtures/macro-cross-module-procedural/`).
+
+## Effectful macros (`--macro-caps=io`)
+
+Macro-time code runs with every capability denied.  For the rare
+legitimately-effectful macro (an embed-file style generator), the global
+flag `--macro-caps=io` re-grants exactly I/O; anything else -- ffi,
+unsafe, inline-C, async -- is refused by the flag parser and never
+available at expansion time.  Without the flag, an I/O call in a macro
+body is a plain expansion-time diagnostic
+(`tests/fixtures/errors/macro-io-denied/`).
 - **Unhygienic like `defmacro`** -- mint bindings with `syntax-gensym`.
 
 Prefer a plain `defmacro` template when substitution is all you need; it
