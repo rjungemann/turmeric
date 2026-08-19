@@ -185,6 +185,12 @@ typedef enum TypeKind {
      * `#row{Pos Vel}`); never the type of a runtime value, so it erases at
      * codegen like TY_TYPECLASS / TY_GLOBAL. */
     TY_TYPEROW,
+    /* Stage 1 (macro-system-direction-plan): compile-time syntax object.
+     * A Syntax value wraps a reader Form*.  It exists only in the
+     * interpreter (TURI_SYNTAX) and, later, in macro-time evaluation --
+     * never as the type of a compiled runtime value, so it erases at
+     * codegen like TY_TYPECLASS / TY_TYPEROW. */
+    TY_SYNTAX,
 } TypeKind;
 
 /* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
@@ -1133,6 +1139,10 @@ static inline Type type_ptr(struct Type *inner) {
 }
 /* SYM0: interned runtime symbol type (-Xsymbols) */
 #define TYPE_SYM      (type_simple(TY_SYM, CK_COPY))
+
+/* Stage 1 (macro-system-direction-plan): compile-time syntax object type.
+ * Interpreter/macro-time only; never a compiled runtime value. */
+#define TYPE_SYNTAX   (type_simple(TY_SYNTAX, CK_COPY))
 
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {

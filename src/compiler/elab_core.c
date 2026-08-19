@@ -75,6 +75,9 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "any") == 0) return TY_ANY;
     /* SYM0: interned runtime symbol type (-Xsymbols) */
     if (strcmp(name, "Sym") == 0) return TY_SYM;
+    /* Stage 1 (macro-system-direction-plan): compile-time syntax object.
+     * Interpreter/macro-time only; a compiled runtime value never has it. */
+    if (strcmp(name, "Syntax") == 0) return TY_SYNTAX;
     return TY_UNKNOWN;
 }
 
