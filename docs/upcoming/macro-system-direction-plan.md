@@ -1,6 +1,6 @@
 # Macro System Direction -- procedural macros on turi, not phases
 
-Status: direction adopted; Stages 0-3 landed (with every follow-up); Stage 4 unscheduled.
+Status: direction adopted; Stages 0-3 landed with every follow-up; of Stage 4, RM5 and R3 reflection are landed and the JIT fast path stays shelved pending demand.
 
 ## The question
 
@@ -218,15 +218,32 @@ remaining roadmap work is the demand-driven Stage 4 convergence items.
   errors/macro-for-macros-combined, errors/macro-for-macros-missing,
   errors/macro-io-denied.
 
-## Stage 4 -- convergence (post-v1, demand order)
+## Stage 4 -- convergence (demand order)
 
-- Reader-macro RM5 (function expanders) becomes a small feature over
-  `Syntax`.
-- Bounded type reflection per R3: total, structurally-recursive
-  accessors as natives -- never a general `Type` value.
-- JIT fast path (`tur_jit_compile_image`) as a transparent cache for hot
-  procedural macros -- only after a syntax calling convention exists (the
-  current FFI export ABI is scalars-only).
+- Reader-macro RM5, function expanders (LANDED, by subsumption): a
+  template reader macro expanding into a defmacro* call gives read-time
+  syntax a full-language procedural expander with no second expander
+  mechanism -- `#csum[1 2 3 4 5]` folds to the literal 15 at compile time
+  (tests/fixtures/reader-macros-procedural/).  The archived plan's
+  "expander : Form -> Form once compile-time eval is available" is
+  thereby closed without new code.
+- Bounded type reflection per R3 (LANDED): `syntax-struct-fields`, a
+  macro-env-only native (src/turi/macro_env.c) returning a
+  single-constructor record's field names as a Syntax list of symbols --
+  a bounded, TOTAL, flat projection of the compile's ADT registry, per
+  R3's ruling (hold/row-types-followups-plan.md): no Type value ever
+  crosses into an evaluator.  The registry is reached through a
+  reflection window (a saved/restored current-Elab pointer) that
+  call_proc opens around each expansion, since Elab is a stack local of
+  elaborate_program_session; the native refuses to run outside one.
+  Unknown names, opaque newtypes, and multi-constructor/positional data
+  types are expansion-time diagnostics.  Payoff pinned by
+  tests/fixtures/macro-reflect-derive/: `(derive-show3 P3)` derives Show
+  with NO field list.
+- JIT fast path (`tur_jit_compile_image` as a transparent cache for hot
+  procedural macros): still shelved -- a pure optimization with no
+  demonstrated demand, blocked on a syntax-object calling convention
+  regardless.
 
 ## What NOT to do
 

@@ -77,6 +77,76 @@ static void macro_env_bracket_exit(MacroEnvBracket *b, Elab *e) {
     if (e->st) builtins_init(e->st);
 }
 
+/* ---------------------------------------------------------------------------
+ * Stage 4 / R3: bounded type reflection -- syntax-struct-fields.
+ *
+ * R3 of docs/upcoming/hold/row-types-followups-plan.md rules that if
+ * type-level metaprogramming is ever built, it must be a bounded, TOTAL,
+ * structurally-recursive accessor -- never a general Type value in an
+ * evaluator.  This native is exactly that: given a Syntax symbol naming a
+ * single-constructor record (a defstruct, post structdef-retirement a
+ * record ADT), it returns the field names as a Syntax list of symbols.
+ * No Type value ever crosses into the macro env; the accessor is a flat,
+ * finite projection of the compile's ADT registry.
+ *
+ * The registry lives on the enclosing compile's Elab, which is a stack
+ * local of elaborate_program_session -- its address is only meaningful
+ * while an expansion is actually running, so elab_macro_env_call_proc
+ * opens a reflection window around each turi_call (save/set/restore, so
+ * nested expansions stay correct) and the native refuses to run outside
+ * one.
+ * ------------------------------------------------------------------------- */
+static Elab *g_reflect_elab = NULL;
+
+static TuriValue native_syntax_struct_fields(TuriEnv *e, TuriValue *a,
+                                             uint32_t n, void *ud) {
+    (void)ud;
+    if (!g_reflect_elab)
+        return turi_errorf("syntax-struct-fields: only available while a "
+                           "macro expansion is running");
+    if (n < 1 || a[0].tag != TURI_SYNTAX || !a[0].as_syntax ||
+        a[0].as_syntax->tag != F_SYM)
+        return turi_errorf("syntax-struct-fields: expected a syntax symbol "
+                           "naming a struct");
+    const Symbol *name = a[0].as_syntax->as.sym;
+
+    Elab *ce = g_reflect_elab;
+    const AdtDef *adt = NULL;
+    for (uint32_t i = 0; i < ce->n_adt_defs; i++) {
+        const AdtDef *d = ce->adt_defs[i];
+        if (d->superseded) continue;
+        if (strlen(d->name) == name->len &&
+            memcmp(d->name, name->name, name->len) == 0) {
+            adt = d;
+            break;
+        }
+    }
+    if (!adt)
+        return turi_errorf("syntax-struct-fields: no struct or data type "
+                           "named '%s' is defined at this point in the "
+                           "compile", name->name);
+    if (adt->is_opaque)
+        return turi_errorf("syntax-struct-fields: '%s' is an opaque newtype "
+                           "with no fields", name->name);
+    if (adt->n_ctors != 1 || !adt->ctors[0]->is_record)
+        return turi_errorf("syntax-struct-fields: '%s' is not a "
+                           "single-constructor record (walk its variants "
+                           "explicitly)", name->name);
+
+    const CtorDef *ctor = adt->ctors[0];
+    Form **items = (ctor->n_fields == 0) ? NULL
+        : (Form **)arena_alloc(&e->sym_arena,
+                               ctor->n_fields * sizeof(Form *));
+    for (uint32_t i = 0; i < ctor->n_fields; i++) {
+        const char *fname = ctor->fields[i].name;
+        StrSlice sl = { fname, (uint32_t)strlen(fname) };
+        const Symbol *fsym = symtab_intern(&e->st, sl);
+        items[i] = form_sym(&e->sym_arena, SPAN_UNKNOWN, fsym);
+    }
+    return turi_syntax_val(form_list(&e->sym_arena, SPAN_UNKNOWN,
+                                     items, ctor->n_fields));
+}
+
 struct TuriEnv *elab_macro_env_get(ElabSession *session) {
     Elab *e = (Elab *)session;
     if (!e) return NULL;
@@ -128,6 +198,12 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
         }
         turi_env_pin_prelude(env);
         turi_env_register_interpreter_natives(env);
+        /* Stage 4 / R3: bounded type reflection, macro-env only -- the
+         * native reads the enclosing compile's ADT registry through the
+         * reflection window call_proc opens around each expansion. */
+        turi_env_register_native_typed(env, "syntax-struct-fields",
+                                       native_syntax_struct_fields, NULL,
+                                       TUR_NRT_SYNTAX);
 
         /* Macro expansion must be deterministic and effect-free: deny every
          * capability (no I/O, FFI, inline-C, async, unsafe, import) and
@@ -320,7 +396,13 @@ Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
     turi_env_set_fuel(env, env->step_fuel_limit);
     bool saved_interp = g_interpret_mode;
     g_interpret_mode = true;
+    /* Stage 4 / R3: open the reflection window (save/restore, so nested
+     * expansions stay correct) -- syntax-struct-fields reads the compile's
+     * ADT registry only while an expansion is actually running. */
+    Elab *saved_reflect = g_reflect_elab;
+    g_reflect_elab = e;
     TuriValue r = turi_call(env, fnv, argv, argc);
+    g_reflect_elab = saved_reflect;
     g_interpret_mode = saved_interp;
 
     if (turi_is_error(r)) {

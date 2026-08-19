@@ -263,6 +263,43 @@ The rules:
   -- export it and `:refer` it like any macro
   (`tests/fixtures/macro-cross-module-procedural/`).
 
+## Bounded type reflection (`syntax-struct-fields`)
+
+`(syntax-struct-fields T)` -- available only inside a running macro
+expansion -- takes a Syntax symbol naming a single-constructor record (a
+`defstruct`) and returns its field names as a Syntax list of symbols.
+This is the R3-sanctioned shape of type reflection: a bounded, total,
+flat projection of the compile's registry; no Type value ever becomes a
+macro-time value.  It is what lets a derive macro take just the type:
+
+```turmeric
+(defmacro* derive-show3 [TypeName]
+  (letrec [fields (syntax-struct-fields TypeName)
+           ...]
+    `(definstance Show [~TypeName] ...)))
+
+(derive-show3 P3)   ; no field list -- see tests/fixtures/macro-reflect-derive/
+```
+
+An unknown name, an opaque newtype, or a multi-constructor/positional
+data type is a plain expansion-time diagnostic ("walk its variants
+explicitly").
+
+## Procedural reader macros (by composition)
+
+A reader macro whose template expands into a `defmacro*` call gives the
+read-time syntax a full-language expander -- the RM5 "function expanders"
+plan point, delivered by composition instead of a second mechanism:
+
+```turmeric
+(defmacro* csum* [& xs] ...compile-time fold...)
+(reader-macros/define 'csum :datum-bracket '(csum* $body))
+
+(println #csum[1 2 3 4 5])   ; compiles to the literal 15
+```
+
+See `tests/fixtures/reader-macros-procedural/`.
+
 ## Effectful macros (`--macro-caps=io`)
 
 Macro-time code runs with every capability denied.  For the rare
