@@ -175,6 +175,9 @@ bool g_symbols_enabled = true;
 
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
+
+/* `tur expand`: dump macro expansions during elaboration. */
+bool g_dump_expansion = false;
 bool g_turi_stdlib_preload = false;
 
 /* F4 (cross-plan-followups): --Werror=deprecated promotes deprecation

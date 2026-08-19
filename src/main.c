@@ -8073,7 +8073,7 @@ static void list_external_subcommands(void) {
     static const char *const builtins[] = {
         "build", "compile", "link",
         "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
-        "eval", "doc", "explain", "test", "check", "format", "fmt",
+        "eval", "doc", "explain", "test", "check", "expand", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
         "init", "add", "add-cmake", "fetch",
         "install", "uninstall", "list", "upgrade",
@@ -8162,7 +8162,7 @@ cleanup:
  * resolve_command() can prefix-match against them; the actual dispatch
  * chain in main() still uses strcmp against these same names. */
 static const char *const CANONICAL_COMMANDS[] = {
-    "emit-c", "emit-h", "emit-cmake", "check", "audit-spans",
+    "emit-c", "emit-h", "emit-cmake", "check", "expand", "audit-spans",
     "lsp", "mcp", "dap", "lsp-lite",
     "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
     "eval", "doc", "image-info", "image-verify", "explain",
@@ -8219,6 +8219,7 @@ static int usage(void) {
         "  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
+        "  tur expand <input.tur>            trace macro expansions to stdout while checking\n"
         "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
         "  tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking\n"
         "  tur parse-check <a> <b>           exit 0 if both files read to the same AST\n"
@@ -8346,6 +8347,22 @@ static int usage_run(void) {
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
+}
+
+static int usage_expand(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur expand [-I <dir>...] [--no-auto-spice] [--no-auto-stdlib] <file.tur>\n"
+        "                                       elaborate the file and print each macro\n"
+        "                                       expansion to stdout as it happens\n"
+        "\n"
+        "Each expansion prints as a `;; <macro-name> @ <line>:<col>` header (the\n"
+        "call site) followed by the expanded form.  Nested expansions print too,\n"
+        "inner-first, in elaboration order.  Diagnostics still go to stderr, so\n"
+        "stdout is suitable for golden-file comparison.\n"
+        "\n"
+        "flags: same as `tur check` (see `tur check --help`)\n");
+    return 2;
 }
 
 static int usage_check(void) {
@@ -9580,6 +9597,56 @@ int main(int argc, char **argv) {
         for (int i = 0; i < n_ck_owned; i++) free(ck_owned[i]);
         free(ck_owned);
         free(check_inc);
+        return rc;
+    }
+    if (strcmp(cmd, "expand") == 0) {
+        /* `tur expand`: type-check like `tur check`, but with the expansion
+         * trace on -- every macro expansion outside the stdlib preload prints
+         * to stdout (see the g_dump_expansion site in elab_call.c).  Same
+         * include-path plumbing as `tur check`. */
+        char       **exp_inc = NULL;
+        int          n_exp_inc = parse_include_flags(argc, argv, 2, &exp_inc);
+        if (n_exp_inc < 0) { free(exp_inc); return usage_expand(); }
+        const char *input = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(exp_inc); return usage_expand();
+            }
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (strcmp(argv[i], "--no-auto-spice") == 0) continue;
+            if (strcmp(argv[i], "--no-auto-stdlib") == 0) {
+                g_no_auto_stdlib = true;
+                continue;
+            }
+            if (argv[i][0] != '-') {
+                if (input) { free(exp_inc); return usage_expand(); }
+                input = argv[i];
+                continue;
+            }
+            free(exp_inc); return usage_expand();
+        }
+        if (!input) { free(exp_inc); return usage_expand(); }
+        char **exp_owned = NULL; int n_exp_owned = 0;
+        Ls2ResolverCtx exp_ls2 = {0};
+        auto_append_spice_includes(input, &exp_inc, &n_exp_inc,
+                                   &exp_owned, &n_exp_owned, &exp_ls2);
+        ls2_resolver_ctx_set(&exp_ls2);
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
+        g_dump_expansion = true;
+        Buf out;
+        buf_init(&out);
+        int rc = compile_to_c(input, &out, (const char **)exp_inc, n_exp_inc,
+                              (const char **)rm_p, rm_n);
+        buf_free(&out);
+        g_dump_expansion = false;
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&exp_ls2);
+        free_reader_macro_paths(rm_p, rm_n);
+        for (int i = 0; i < n_exp_owned; i++) free(exp_owned[i]);
+        free(exp_owned);
+        free(exp_inc);
         return rc;
     }
     if (strcmp(cmd, "audit-spans") == 0) {

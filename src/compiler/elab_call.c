@@ -2749,6 +2749,27 @@ Expr *elab_call(Elab *e, Form *call) {
             return NULL;
         }
 
+        /* `tur expand`: trace each expansion as it happens.  Nested
+         * expansions print too (inner-first is elaboration order), each
+         * labeled with the macro name and the call site's line:col.
+         * Expansions inside the stdlib preload are noise, skip them. */
+        if (g_dump_expansion && !e->in_stdlib_load) {
+            Buf mb;
+            buf_init(&mb);
+            form_print(&mb, expanded);
+            /* Basename only: a full path would embed the build environment
+             * into output meant for golden-file comparison.  A recursive
+             * macro's inner calls carry the macro-definition file's spans,
+             * so the file name is what disambiguates them from user code. */
+            const char *dump_path = diag_file_path(call->span.file_id);
+            const char *dump_base = dump_path ? strrchr(dump_path, '/') : NULL;
+            dump_base = dump_base ? dump_base + 1 : (dump_path ? dump_path : "?");
+            printf(";; %s @ %s:%u:%u\n%.*s\n", name->name, dump_base,
+                   call->span.line, call->span.col_start,
+                   (int)mb.len, mb.data);
+            buf_free(&mb);
+        }
+
         /* Re-attribute a macro-emitted top-level `definstance` to the macro
          * CALL SITE rather than the macro-definition file.  The orphan-instance
          * check (TUR-E0013) and inst->origin_file_id key off the definstance

@@ -1096,6 +1096,10 @@ typedef struct MacroDef {
      * but defining_module_name still holds the original module so private
      * helpers of that module remain accessible during expansion. */
     bool is_referred;
+    /* Multi-form bodies: the body was synthesized as (do setup... template),
+     * which only has meaning under the compile-time evaluator -- route the
+     * substituted template through it unconditionally. */
+    bool force_ct_eval;
 } MacroDef;
 
 typedef enum CtValueTag {

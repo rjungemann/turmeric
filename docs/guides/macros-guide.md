@@ -66,6 +66,16 @@ Rule of thumb: any `let`, `fn` parameter, or loop variable your template
 creates gets a `gensym`.  Capture is occasionally what you want (anaphoric
 macros); when you rely on it, say so in the macro's docstring.
 
+`gensym` freshness is real, not just a counter: a candidate name is checked
+against the symbol table -- every symbol the reader has seen, including the
+whole current file -- and already-interned names are skipped.  So a
+hand-written `tmp_0` in your code cannot be captured by `(gensym "tmp")`;
+the macro simply receives `tmp_1` (or later).
+
+`(gensym)` only means something inside macro machinery (templates and
+quasiquote), where it is expanded at compile time.  In ordinary runtime
+code it is a hard error -- a fresh symbol has no runtime value.
+
 ## `^syntax` parameters: receiving raw AST
 
 By default a macro argument is substituted into the template as code.  A
@@ -121,7 +131,37 @@ compile-time evaluator provides:
 
 Plus calls to other macros and to compile-time-evaluable functions inside
 splices.  That is the whole set -- notably absent: arithmetic, string
-comparison beyond `=`, and any type inspection (see Limitations).
+comparison beyond `=`, and any type inspection (see Limitations).  The set
+is defined once, in `CT_BUILTIN_TABLE` in `src/compiler/elab_macros.c`,
+which drives both the evaluator's dispatch and the decision to route a
+substituted template through the evaluator at all.
+
+One subtlety of that routing: a template runs through the compile-time
+evaluator when it still carries quasiquote machinery or calls one of the
+builtins above -- EXCEPT `=` and `not`, which appear in templates that are
+pure runtime code and therefore do not trigger evaluation on their own.
+A macro body whose only compile-time work is `=`/`not`/`if` should thread
+it through a form that does trigger (in practice any real body has a
+quasiquote, which always triggers).
+
+## Multi-form bodies
+
+A `defmacro` body may be several forms: every form before the last is
+compile-time SETUP, evaluated in order by the compile-time evaluator's
+`do` (with `(def x v)` spliced into let bindings), and the LAST form's
+value is the template.
+
+```turmeric
+(defmacro square-sum [a b]
+  (def a2 (list * a a))
+  (def b2 (list * b b))
+  `(+ ~a2 ~b2))
+
+(square-sum 3 4)   ; => 25
+```
+
+A multi-form body always runs through the compile-time evaluator -- a
+`(do setup... template)` sequence has no meaning as a literal template.
 
 ## Generating names, and whole typed declarations
 
@@ -183,8 +223,10 @@ emitted like any other.  Remember the repo style rule: the closing
 ## Limitations, stated plainly
 
 These are design boundaries, not bugs.  Each has a written rationale in
-[row-types-followups-plan.md](../upcoming/row-types-followups-plan.md) (R3)
-and the documents it cites.
+[row-types-followups-plan.md](../upcoming/hold/row-types-followups-plan.md)
+(R3) and the documents it cites; the forward direction -- procedural
+macros running the full language on turi, with this evaluator frozen --
+is [macro-system-direction-plan.md](../upcoming/macro-system-direction-plan.md).
 
 - **No compile-time arithmetic.**  The evaluator's logic is `=`/`not`/`if`
   over forms; there is no `+`, `-`, or `<` at expansion time.  Repetition
@@ -214,14 +256,21 @@ and the documents it cites.
 
 ## Debugging expansions
 
+- **`tur expand <file.tur>`** type-checks the file and prints every macro
+  expansion to stdout as it happens, each under a
+  `;; <macro-name> @ <file>:<line>:<col>` header naming the call site.
+  Nested expansions print too (inner-first, in elaboration order), so a
+  recursive macro's whole unfolding is visible.  Diagnostics stay on
+  stderr, so the stdout trace is golden-file-able.
 - A diagnostic inside generated code carries the note
   `in expansion of macro '<name>' ...` pointing at the outermost call you
   wrote.  Inner nested-macro frames are deliberately silent -- one note
   per user-visible call.
-- To see what a macro produces, expand it in a scratch file and inspect
-  the emitted C with `tur emit-c` (generated defns appear under their
-  synthesized names), or evaluate the expansion under
-  `tur --interpret` for the fastest iteration loop.
+- To see what a macro produces in context, `tur expand` is the first
+  stop; to see the final compiled shape, inspect the emitted C with
+  `tur emit-c` (generated defns appear under their synthesized names), or
+  evaluate the expansion under `tur --interpret` for the fastest
+  iteration loop.
 - `maximum macro expansion depth exceeded` -> re-read "Recursion over
   arguments" above; the answer is nearly always `empty?` or the
   no-arithmetic rule.

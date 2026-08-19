@@ -1,0 +1,7 @@
+;; (gensym) in ordinary runtime code has no value: template substitution and
+;; quasiquote expansion intercept every gensym inside macro machinery, so one
+;; that reaches elaboration is a misuse and gets a plain diagnostic (the old
+;; behavior minted an unbound TYPE_INT variable that died later in codegen).
+(defn main [] : int
+  (println (gensym))
+  0)
