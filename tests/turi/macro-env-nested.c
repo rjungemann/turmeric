@@ -62,6 +62,17 @@ int main(void) {
     check("syntax natives usable in macro env",
           sx.tag == TURI_INT && sx.as_int == 41);
 
+    /* The stdlib is preloaded (REPL sequence + the string files), so macro
+     * bodies get real string building and the core macros. */
+    TuriValue sc = turi_eval((TuriEnv *)me, "(str-concat \"ab\" \"cd\")");
+    check("stdlib preloaded: str-concat works in macro env",
+          sc.tag == TURI_CSTR && sc.as_cstr && strcmp(sc.as_cstr, "abcd") == 0);
+    TuriValue cw = turi_eval((TuriEnv *)me, "(cond (= 1 2) 10 :else 20)");
+    check("stdlib preloaded: cond macro works in macro env",
+          cw.tag == TURI_INT && cw.as_int == 20);
+    check("g_interpret_mode still false after preloaded evals",
+          g_interpret_mode == false);
+
     /* Capability posture: TURI_CAP_NONE -- an I/O builtin is refused. */
     TuriValue io = turi_eval((TuriEnv *)me, "(println \"nope\")");
     check("I/O denied under TURI_CAP_NONE", turi_is_error(io));

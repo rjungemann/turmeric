@@ -184,12 +184,31 @@ Facts that matter in practice:
   offending argument's span with your message.
 - **Kinds mix freely**: a procedural expansion may call template macros
   and vice versa; `tur expand` traces both identically.
-- **The macro-time env has the interpreter's natives but (today) not the
-  loaded stdlib**; helper functions are `(def helper (fn ...))` forms in
-  the body (self-calls resolve by runtime dispatch, with a TUR-W0040
-  note).  Quasiquote producing Syntax and stdlib preload are planned
-  follow-ups -- see
-  [macro-system-direction-plan.md](../upcoming/macro-system-direction-plan.md).
+- **The stdlib is loaded at macro time.**  The macro env gets the REPL's
+  full preload (core macros like `cond`/`when`/`for`, the typed
+  collections, typeclasses) plus the string files (`cstr.tur`,
+  `str-build.tur`) -- so `str-concat`, `int->str`, and friends work in
+  macro bodies, which is what name-synthesis macros live on.
+- **Recursive helpers use `letrec`**, which types the self-call
+  correctly:
+  ```turmeric
+  (defmacro* sum-lits [& xs]
+    (letrec [walk (fn [i : int acc : int] : int
+                    (if (< i (syntax-len xs))
+                      (walk (+ i 1) (+ acc (syntax->int (syntax-nth xs i))))
+                      acc))]
+      (int->syntax (walk 0 0))))
+  ```
+  A `(def helper (fn ...))` also works, but its self-call resolves by
+  runtime dispatch (a TUR-W0040 note) and types `:int`, so an
+  `(if p stx (helper ...))` will not unify -- prefer `letrec`.
+- **The derive pattern ports cleanly**: see
+  `tests/fixtures/macro-procedural-derive/`, where a `defmacro*` builds
+  the same `Show` instance the stdlib template `derive-show-cstr` emits,
+  with a typed recursive field walker instead of macro-recursion
+  contortions.  (Quasiquote producing Syntax is still a planned follow-up
+  -- see
+  [macro-system-direction-plan.md](../upcoming/macro-system-direction-plan.md).)
 - **Unhygienic like `defmacro`** -- mint bindings with `syntax-gensym`.
 
 Prefer a plain `defmacro` template when substitution is all you need; it

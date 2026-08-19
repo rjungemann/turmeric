@@ -142,10 +142,25 @@ total accessors if ever, never a general evaluator.)
   macro -- the CT evaluator's designed-out case),
   `errors/macro-procedural-non-syntax`,
   `errors/macro-procedural-syntax-error`.
-- Deferred to follow-ups: stdlib preload into the macro env (macro-time
-  string building is currently limited to the syntax natives -- the
-  derive-family proof-of-migration port WAITS on this), quasiquote
-  producing Syntax, and REPL `expand-1`.
+- Stdlib preload (follow-up, LANDED): the macro env now runs the REPL's
+  exact preload sequence (macros -> native stubs -> collections ->
+  typeclasses -> pin -> re-register natives) plus the string files
+  (cstr.tur, str-build.tur), with capabilities denied only AFTER the
+  preload (`(load ...)` is import-gated) and the whole creation
+  self-bracketed (diag registry + builtins_init re-stamp) since it fires
+  lazily mid-compile.  ~0.4s added to the first defmacro*-using compile.
+  Enablers fixed along the way: elab_fn's return-keyword ladder gained
+  elab_defn's typekind_from_symbol fallback (a fn LITERAL returning
+  `: Syntax` -- or `: int32`, `: Sym` -- typed as a tyvar/int carrier
+  before), the letrec pre-bind return peek learned Syntax, and the
+  str-concat interpreter native allocates from the env value pool
+  instead of malloc (a real leak under the leak-checked compile path
+  once macros run it at expansion time).
+- Proof-of-migration (LANDED): `tests/fixtures/macro-procedural-derive/`
+  ports derive-show-cstr as a defmacro* -- a letrec'd, typed, recursive
+  field walker building the same emitted `Show` instance; the
+  template-derived and procedurally-derived structs render identically.
+- Still deferred: quasiquote producing Syntax, and REPL `expand-1`.
 
 ## Stage 3 -- cross-module macro-time deps (unscheduled, post-v1 unless
 a concrete stdlib need appears)

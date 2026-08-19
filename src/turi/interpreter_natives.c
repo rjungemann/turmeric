@@ -488,16 +488,19 @@ static TuriValue native_int_to_str(TuriEnv *env, TuriValue *a, uint32_t n, void 
     return turi_cstr(buf);
 }
 
-/* str-concat: mirror stdlib/str.tur:99 -- malloc(la+lb+1), copy both halves,
+/* str-concat: mirror stdlib/str.tur:99 -- allocate la+lb+1, copy both halves,
  * NUL-terminate.  Layout-exact with the compiled cstr ABI (a NUL-terminated
  * char* boxed as a cstr value), so a value crossing between interpreted and
- * native code reads identically. */
+ * native code reads identically.  Allocated from the env value pool, not
+ * malloc: nothing ever frees the result individually (by design), and a
+ * malloc here is a REAL leak when the native runs at macro-expansion time
+ * inside the leak-checked `tur build`/`emit-c` path (defmacro* bodies). */
 static TuriValue native_str_concat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     const char *sa = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
     const char *sb = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "";
     size_t la = strlen(sa), lb = strlen(sb);
-    char *out = (char *)malloc(la + lb + 1);
+    char *out = (char *)turi_val_alloc(env, la + lb + 1);
     if (!out) return turi_nil();
     memcpy(out, sa, la);
     memcpy(out + la, sb, lb);

@@ -34,6 +34,8 @@
  */
 #include "turi/eval.h"
 #include "turi/env.h"
+#include "turi/interpreter_natives.h"
+#include "turi/preload.h"
 
 #include "elab.h"
 #include "elab_internal.h"
@@ -44,20 +46,75 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
     if (!e) return NULL;
     if (e->macro_env) return e->macro_env;
 
-    /* Bracket the constructor's g_interpret_mode side effect (see above). */
+    /* Creation runs several nested evaluations (the stdlib preload below),
+     * each of which resets the diagnostic slate, registers its own source
+     * at file id 0, and re-stamps the global builtin table against the
+     * macro env's symbol table.  Bracket ALL of it here -- creation is
+     * lazy, so it fires mid-compile at the first defmacro*. */
+    bool saved_had = diag_had_error();
+    const SourceFile *saved_files[64];
+    size_t n_saved = diag_files_save(saved_files,
+                                     sizeof(saved_files) / sizeof(saved_files[0]));
     bool saved_interp = g_interpret_mode;
-    TuriEnv *env = turi_env_new();
-    g_interpret_mode = saved_interp;
-    if (!env) return NULL;
 
-    /* Macro expansion must be deterministic and effect-free: deny every
-     * capability (no I/O, FFI, inline-C, async, unsafe, import) and bound
-     * total work with step fuel so a runaway macro-time loop is a
-     * diagnostic, not a hung compile.  Stage 3 grants TURI_CAP_IMPORT
-     * transiently for `:for-macros` module loads; nothing else is ever
-     * granted here. */
-    turi_env_deny(env, TURI_CAP_ALL);
-    turi_env_set_fuel(env, TURI_DEFAULT_SANDBOX_FUEL);
+    TuriEnv *env = turi_env_new();   /* sets g_interpret_mode = true */
+    g_interpret_mode = saved_interp;
+    if (env) {
+        /* Load the stdlib into the macro env with the REPL's exact sequence
+         * (repl_preload_stdlib_and_natives), so defmacro* bodies get the
+         * real language: core macros (cond/when/for/...), the carrier list
+         * helpers, typed collections, typeclasses, and string functions.
+         * This must run BEFORE capabilities are denied -- the preload's
+         * `(load ...)` splices are gated on TURI_CAP_IMPORT -- and the
+         * interpreter natives are re-registered AFTER it so the native
+         * shims override the loaded inline-C stdlib bodies (the documented
+         * preload ordering contract in preload.h / repl.c).
+         *
+         * stdlib root: the compile's own resolved stdlib dir; each nested
+         * eval self-brackets g_interpret_mode (turi_eval_with_sink). */
+        const char *stdlib_root = e->module_stdlib_dir;
+        turi_env_preload_macros(env, stdlib_root);
+        turi_env_preload_native_stubs(env);
+        turi_env_preload_collections(env, stdlib_root);
+        turi_env_preload_typeclasses(env, stdlib_root);
+        /* String helpers are not in the shared collection preload set; load
+         * them too -- name synthesis is the bread-and-butter of procedural
+         * macros, and the typed defns kill the W0040 runtime-dispatch
+         * warning on every defmacro* body that concatenates.  str-build.tur
+         * carries str-concat + the StringBuilder; cstr.tur the byte-level
+         * cstr ops.  (The interpreter-native shims re-registered below
+         * override their inline-C bodies at runtime, per the preload
+         * ordering contract.) */
+        {
+            char loadbuf[8600];
+            const char *root = (stdlib_root && *stdlib_root) ? stdlib_root
+                                                             : "stdlib";
+            snprintf(loadbuf, sizeof(loadbuf),
+                     "(load \"%s/cstr.tur\")(load \"%s/str-build.tur\")",
+                     root, root);
+            turi_eval(env, loadbuf);
+        }
+        turi_env_pin_prelude(env);
+        turi_env_register_interpreter_natives(env);
+
+        /* Macro expansion must be deterministic and effect-free: deny every
+         * capability (no I/O, FFI, inline-C, async, unsafe, import) and
+         * bound total work with step fuel so a runaway macro-time loop is a
+         * diagnostic, not a hung compile.  Stage 3 grants TURI_CAP_IMPORT
+         * transiently for `:for-macros` module loads; nothing else is ever
+         * granted here. */
+        turi_env_deny(env, TURI_CAP_ALL);
+        turi_env_set_fuel(env, TURI_DEFAULT_SANDBOX_FUEL);
+    }
+
+    for (size_t i = 0; i < n_saved; i++)
+        if (saved_files[i]) diag_register_file(saved_files[i]);
+    if (saved_had) diag_force_had_error();
+    /* Re-stamp the builtin table's name_sym pointers to the compile's
+     * symtab (the preload's nested elaborations stamped it against the
+     * macro env's).  A bare session (e.g. the ctest) has no symtab yet;
+     * its next elaborate entry re-stamps anyway. */
+    if (e->st) builtins_init(e->st);
 
     e->macro_env = env;
     return env;

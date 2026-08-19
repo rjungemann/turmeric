@@ -2041,6 +2041,13 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                              * guard, so it is left out of this scalar fast-path. */
                             else if (rl == 5 && memcmp(rn, "float",   5) == 0) ret_kind = TY_FLOAT;
                             else if (rl == 7 && memcmp(rn, "float64", 7) == 0) ret_kind = TY_FLOAT;
+                            /* Stage 2 (macro-system-direction-plan): Syntax is
+                             * a simple scalar-class kind (a copyable Form*
+                             * handle); without this a `: Syntax` self-recursive
+                             * letrec fn -- the canonical defmacro* field-walker
+                             * -- collapses to the int carrier and the self-call
+                             * trips a spurious then=Syntax else=int mismatch. */
+                            else if (rl == 6 && memcmp(rn, "Syntax",  6) == 0) ret_kind = TY_SYNTAX;
                         }
                     }
                     placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
