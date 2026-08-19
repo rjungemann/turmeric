@@ -72,27 +72,40 @@ total accessors if ever, never a general evaluator.)
 - Multi-form `defmacro` bodies: setup forms + final template, wrapped in
   a synthetic CT `do`, always routed through the CT evaluator.
 
-## Stage 1 -- syntax value + macro-time env plumbing (unscheduled)
+## Stage 1 -- syntax value + macro-time env plumbing (LANDED)
 
-- `TURI_SYNTAX` tag in `TuriValue` (`src/turi/value.h`) wrapping `Form*`
-  directly (spans ride along); `TY_SYNTAX` opaque type in
-  `src/compiler/types.h` (pattern: `TYPE_SYM`).
-- ~25 syntax builtins as interpreter natives: accessors
-  (`syntax-first/rest/tag/...`), converters (`syntax->int`,
-  `int->syntax`, ... -- what permanently fixes "no arithmetic at macro
-  time"), span-inheriting constructors, `gensym`, and `syntax-error`
-  (diag at the argument's span).
-- **Stage gate: `g_interpret_mode` + globals reentrancy audit.**
-  Macro-time eval nests inside a compile-mode elaboration turn.
-  Templates exist (the JIT REPL's save/clear/restore in `main.c`; turi's
-  per-env snapshot), but the three interp-flipped elaboration behaviors
-  (`elab_toplevel.c` reader-conds, `elab_call.c` unknown-head demotion,
-  `elab_core.c` aggregate returns), the diag sink, and
-  `g_opt_cps_tramp_resume` all need a deliberate decision.
-- Macro env: lazily created per-compile, torn down with the
-  `ElabSession` (fresh compile-time state each build = determinism),
-  `TURI_CAP_NONE`, fuel-limited alongside the existing depth-256 +
-  stack-headroom guards.
+- `TY_SYNTAX` compile-time type kind (`types.h`, `TYPE_SYNTAX`, surface
+  name `Syntax`; comment-void codegen placeholder -- never a compiled
+  runtime value) and `TURI_SYNTAX` interpreter tag wrapping `Form*`
+  (`src/turi/value.h`), extended through every TuriTag switch (repr,
+  promotion, collmark, ffi tag names) and given structural `=` semantics
+  via the hoisted `form_equal` (forms.c, shared with the CT evaluator).
+- ~30 syntax natives (`wk_register_syntax_natives`,
+  `src/turi/interpreter_natives.c`), registered typed (`TUR_NRT_SYNTAX`
+  -> `TYPE_SYNTAX`) so REPL calls elaborate cleanly: `read-string`,
+  accessors (`syntax-first/rest/nth/tag/len`), tag predicates,
+  converters (`syntax->int/float/str`, `int/float/bool/str/sym->syntax`,
+  `syntax-sym-name`, `syntax->string` -- the crossing that ends "no
+  arithmetic at macro time" in Stage 2), span-inheriting constructors
+  (`syntax-list/vec/cons`), `syntax-gensym` (symtab-checked freshness),
+  `syntax=?`, `syntax-error`.
+- Macro-time env: `elab_macro_env_get`/`_dispose` (`elab.h`,
+  `src/turi/macro_env.c` -- implemented turi-side so the include
+  direction stays turi -> compiler), hung off `Elab.macro_env`, lazily
+  created, `TURI_CAP_NONE` + default sandbox fuel, torn down at all
+  three elaborator teardown sites.
+- **Stage gate passed** (ctest `tur_macro_env_nested`,
+  `tests/turi/macro-env-nested.c`): env creation brackets
+  `turi_env_new`'s unconditional `g_interpret_mode = true`; each nested
+  eval is bracketed by `turi_eval_with_sink` ("Gap 7": mode + diag sink
+  + diag file registry).  Deliberate decision recorded: macro-time code
+  runs with interpreter semantics (`#?(:turi ...)` arms selected) --
+  the macro-time language IS the interpreted language.
+- Deferred from Stage 1: a REPL `expand-1` (needs prompt access to the
+  session's macro registry -- natural alongside Stage 2's `defmacro*`);
+  Stage-2 items: routing macro bodies into this env, quasiquote
+  producing Syntax, and diag-sink policy for diagnostics raised *by*
+  macro-time code mid-expansion.
 
 ## Stage 2 -- `defmacro*` procedural macros, same-module (unscheduled)
 

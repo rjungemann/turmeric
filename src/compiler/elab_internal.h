@@ -166,6 +166,13 @@ typedef struct Elab {
      * user macros the entry file did. May be NULL. */
     struct ReaderMacroRegistry *user_macros;
 
+    /* Stage 1 (macro-system-direction-plan): lazily-created macro-time turi
+     * env (see elab_macro_env_get in elab.h / src/turi/macro_env.c).  NULL
+     * until first use; freed via elab_macro_env_dispose at the same three
+     * sites as the malloc'd registries (both elaborate_program teardown
+     * branches and elab_session_free). */
+    struct TuriEnv *macro_env;
+
     /* Phase 3: Collect file-scope definitions (FN_DEF) from nested contexts */
     Expr       **file_scope_defs;
     uint32_t    n_file_scope_defs;

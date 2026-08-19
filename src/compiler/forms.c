@@ -361,3 +361,51 @@ void form_print(Buf *b, const Form *f) {
             break;
     }
 }
+
+/* Deep structural equality (see forms.h).  Formerly elab_macros.c's static
+ * ct_form_equal; hoisted so the interpreter's TURI_SYNTAX `=` shares the
+ * exact semantics of the compile-time macro evaluator's `=`. */
+bool form_equal(const Form *a, const Form *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->tag != b->tag) return false;
+    switch (a->tag) {
+        case F_NIL: return true;
+        case F_BOOL: return a->as.b == b->as.b;
+        case F_INT: return a->as.i == b->as.i;
+        case F_FLOAT: return a->as.f == b->as.f;
+        case F_STR:
+            return a->as.s.len == b->as.s.len &&
+                   strncmp(a->as.s.p, b->as.s.p, a->as.s.len) == 0;
+        case F_SYM:
+        case F_KEYWORD:
+            return a->as.sym == b->as.sym;
+        case F_QUOTE:
+        case F_QUASIQUOTE:
+        case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING:
+        case F_TYPE_ANN:
+        /* CT0: Contract types compare structurally */
+        case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals compare structurally */
+        case F_READER_COND:
+        /* RR3: Range literal variable annotation compares structurally */
+        case F_RANGE_VAR:
+        case F_LIST:
+        case F_VEC:
+        case F_MAP:
+        case F_SET:
+        case F_MAP_LITERAL:
+        case F_SET_LITERAL:
+        case F_ROW_LITERAL:
+            if (a->as.list.len != b->as.list.len) return false;
+            for (uint32_t i = 0; i < a->as.list.len; i++) {
+                if (!form_equal(a->as.list.items[i], b->as.list.items[i])) return false;
+            }
+            return true;
+        case F_CBLOCK:
+            return a->as.cblock.len == b->as.cblock.len &&
+                   strncmp(a->as.cblock.p, b->as.cblock.p, a->as.cblock.len) == 0;
+    }
+    return false;
+}

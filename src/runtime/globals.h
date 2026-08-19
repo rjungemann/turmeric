@@ -339,6 +339,7 @@ typedef enum TurNativeRetType {
     TUR_NRT_CSTR,
     TUR_NRT_VOID,
     TUR_NRT_PTR,       /* opaque handle -> ptr<void> */
+    TUR_NRT_SYNTAX,    /* syntax object (TURI_SYNTAX) -> the Syntax type */
 } TurNativeRetType;
 
 /* Register (or replace) the return-type signature for native `name`.  `name`

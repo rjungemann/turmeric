@@ -529,6 +529,7 @@ static void repl_print_value(TuriValue v, bool use_color) {
         case TURI_GEN:         col = COL_RESET; break;
         case TURI_HANDLER:     col = COL_RESET; break;
         case TURI_REJECTION:   col = COL_ERR;   break;
+        case TURI_SYNTAX:      col = COL_RESET; break;
     }
     printf("=> %s%s%s\n", col, repr, COL_RESET);
 }

@@ -3543,11 +3543,12 @@ Expr *elab_call(Elab *e, Form *call) {
                     if (tur_native_sig_lookup(nm, &nrt)) {
                         native_registered = true;
                         switch (nrt) {
-                            case TUR_NRT_FLOAT: dispatch_result = TYPE_FLOAT;    break;
-                            case TUR_NRT_BOOL:  dispatch_result = TYPE_BOOL;     break;
-                            case TUR_NRT_CSTR:  dispatch_result = TYPE_CSTR;     break;
-                            case TUR_NRT_VOID:  dispatch_result = TYPE_NIL;      break;
-                            case TUR_NRT_PTR:   dispatch_result = TYPE_PTR_VOID; break;
+                            case TUR_NRT_FLOAT:  dispatch_result = TYPE_FLOAT;    break;
+                            case TUR_NRT_BOOL:   dispatch_result = TYPE_BOOL;     break;
+                            case TUR_NRT_CSTR:   dispatch_result = TYPE_CSTR;     break;
+                            case TUR_NRT_VOID:   dispatch_result = TYPE_NIL;      break;
+                            case TUR_NRT_PTR:    dispatch_result = TYPE_PTR_VOID; break;
+                            case TUR_NRT_SYNTAX: dispatch_result = TYPE_SYNTAX;   break;
                             case TUR_NRT_INT:   /* fallthrough: keep TYPE_INT */
                             default:            dispatch_result = TYPE_INT;      break;
                         }

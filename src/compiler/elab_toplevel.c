@@ -1469,6 +1469,7 @@ void elab_session_free(ElabSession *session) {
         free(e->active_dynvar_bindings);
         free((void *)e->load_expanded_paths);
         free(e->file_scope_defs);
+        elab_macro_env_dispose(e->macro_env);
     }
     free(e);
 }
@@ -1957,6 +1958,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.macros);
         free(e.macro_expansion_stack);
         free((void *)e.load_expanded_paths);
+        elab_macro_env_dispose(e.macro_env);
         return NULL;
     }
 
@@ -2202,6 +2204,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.dynvar_entries);
         free(e.active_dynvar_bindings);
         free((void *)e.load_expanded_paths);
+        elab_macro_env_dispose(e.macro_env);
     }
     if (rc != 0) return NULL;
 

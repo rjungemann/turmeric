@@ -167,4 +167,10 @@ void  form_print(Buf *b, const Form *f);
 /* Return the name of a FormTag as a string */
 const char *form_tag_name(FormTag tag);
 
+/* Deep structural equality over two forms.  Symbols/keywords compare by
+ * interned pointer identity; strings/C-blocks by content; sequence forms
+ * recursively.  Spans are ignored.  Shared by the compile-time macro
+ * evaluator's `=` builtin and the interpreter's TURI_SYNTAX `=`. */
+bool form_equal(const Form *a, const Form *b);
+
 #endif

@@ -8,7 +8,6 @@ static CtEnv *ct_env_new(Elab *e, CtEnv *parent, bool *ok);
 static void ct_env_bind(CtEnv *env, const Symbol *name, CtValue v);
 static bool ct_env_lookup(CtEnv *env, const Symbol *name, CtValue *out);
 static bool compile_time_truthy(Form *f);
-static bool ct_form_equal(const Form *a, const Form *b);
 static Form *ct_value_to_form(CtEnv *env, CtValue v, Span span);
 static Form *ct_eval_quasiquote(CtEnv *env, Form *f);
 static bool ct_symbol_name(const Symbol *sym, const char *name);
@@ -77,50 +76,8 @@ static bool compile_time_truthy(Form *f) {
     return !(f->tag == F_NIL || (f->tag == F_BOOL && !f->as.b));
 }
 
-static bool ct_form_equal(const Form *a, const Form *b) {
-    if (a == b) return true;
-    if (!a || !b) return false;
-    if (a->tag != b->tag) return false;
-    switch (a->tag) {
-        case F_NIL: return true;
-        case F_BOOL: return a->as.b == b->as.b;
-        case F_INT: return a->as.i == b->as.i;
-        case F_FLOAT: return a->as.f == b->as.f;
-        case F_STR:
-            return a->as.s.len == b->as.s.len &&
-                   strncmp(a->as.s.p, b->as.s.p, a->as.s.len) == 0;
-        case F_SYM:
-        case F_KEYWORD:
-            return a->as.sym == b->as.sym;
-        case F_QUOTE:
-        case F_QUASIQUOTE:
-        case F_UNQUOTE:
-        case F_UNQUOTE_SPLICING:
-        case F_TYPE_ANN:
-        /* CT0: Contract types compare structurally */
-        case F_CONTRACT_TYPE:
-        /* INT-1: Reader conditionals compare structurally */
-        case F_READER_COND:
-        /* RR3: Range literal variable annotation compares structurally */
-        case F_RANGE_VAR:
-        case F_LIST:
-        case F_VEC:
-        case F_MAP:
-        case F_SET:
-        case F_MAP_LITERAL:
-        case F_SET_LITERAL:
-        case F_ROW_LITERAL:
-            if (a->as.list.len != b->as.list.len) return false;
-            for (uint32_t i = 0; i < a->as.list.len; i++) {
-                if (!ct_form_equal(a->as.list.items[i], b->as.list.items[i])) return false;
-            }
-            return true;
-        case F_CBLOCK:
-            return a->as.cblock.len == b->as.cblock.len &&
-                   strncmp(a->as.cblock.p, b->as.cblock.p, a->as.cblock.len) == 0;
-    }
-    return false;
-}
+/* Structural form equality now lives in forms.c as form_equal (shared with
+ * the interpreter's TURI_SYNTAX `=`); this file's `=` builtin calls it. */
 
 static Form *ct_value_to_form(CtEnv *env, CtValue v, Span span) {
     if (v.tag == CT_VAL_FORM) return v.as.form;
@@ -572,7 +529,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
     }
     case CT_B_EQ: {
         if (n_args != 2) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time = expects 2 arguments"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
-        return ct_value_form(form_bool(env->elab->arena, span, ct_form_equal(args[0], args[1])));
+        return ct_value_form(form_bool(env->elab->arena, span, form_equal(args[0], args[1])));
     }
     case CT_B_NOT: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time not expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
