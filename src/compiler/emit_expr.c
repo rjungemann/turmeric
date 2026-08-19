@@ -4172,6 +4172,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (pk == TY_CSTR || pk == TY_PTR_VOID)
                         buf_printf(&cb, "%s(%s)(intptr_t)(%s)",
                                    i ? ", " : "", pc, av);
+                    /* F4: an aggregate argument is passed AS IS -- a defstruct
+                     * already emits as the exact by-value C struct the
+                     * signature names, and C has no cast to a struct type
+                     * anyway. */
+                    else if (pk == TY_ADT)
+                        buf_printf(&cb, "%s(%s)", i ? ", " : "", av);
                     else
                         buf_printf(&cb, "%s(%s)(%s)", i ? ", " : "", pc, av);
                     free(av);

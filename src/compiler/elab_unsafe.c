@@ -713,6 +713,83 @@ Expr *elab_c_call(Elab *e, const Form *call) {
     return out;
 }
 
+/* jit-ffi-c2mir-plan F4: a `call-ptr` signature slot may name a by-value
+ * aggregate.  A `defstruct` lowers to a single-variant record ADT whose C
+ * emission is already an exact by-value struct with the declared field types
+ * (`struct tur_adt_Vec2 { double x; double y; }`), so the compiled path
+ * passes one by naming the type -- there is no marshalling step and no
+ * layout guesswork.  The interpreter builds the bytes itself; see
+ * eval_call_ptr.
+ *
+ * Returns the resolved TY_ADT type, or a TY_UNKNOWN type when `name` does
+ * not name a struct at all (caller falls through to its own diagnostic).
+ * `*fatal` is set when the name IS a struct but cannot cross the boundary,
+ * in which case a diagnostic has already been emitted. */
+static Type call_ptr_aggregate_type(Elab *e, const Symbol *name, Span span,
+                                    bool *fatal) {
+    Type unknown = type_from_kind(TY_UNKNOWN);
+    *fatal = false;
+    Type *t = elab_lookup_type_by_name(e, name);
+    if (!t || t->kind != TY_ADT || !t->as.adt_.def) return unknown;
+
+    const AdtDef *def = t->as.adt_.def;
+    /* Only a product type has a by-value C layout.  A multi-constructor sum
+     * carries a tag and (in the general case) a union; that is a real ABI
+     * shape but not one any C API declares, so it is out of scope rather
+     * than mis-described. */
+    if (def->n_ctors != 1 || !def->ctors[0]->is_record) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' is not a by-value aggregate -- only a "
+                  "single-constructor record (a defstruct, or a defdata with "
+                  "one record variant) has a C struct layout",
+                  def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+    /* A `:heap` record's natural ABI is a pointer to a header, not the
+     * aggregate itself; passing it by value would pass the header. */
+    if (def->is_heap) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' is a :heap record -- its ABI is a pointer, "
+                  "not a by-value aggregate; declare the slot :ptr instead",
+                  def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+    if (def->n_type_params != 0) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' is parametric -- a by-value aggregate slot "
+                  "needs a monomorphic layout",
+                  def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+
+    const CtorDef *ct = def->ctors[0];
+    if (ct->n_fields == 0) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' has no fields -- an empty aggregate has no "
+                  "portable C layout", def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        if (tur_jit_ffi_member_code_for_kind(ct->fields[i].kind) == 0) {
+            diag_emit(DIAG_ERROR, span,
+                      "call-ptr: field '%s' of '%s' is %s, which has no "
+                      "by-value C member type -- aggregate fields must be "
+                      "scalars (:int, :float, :float32, :bool, :cstr, :ptr, "
+                      "sized ints)",
+                      ct->fields[i].name ? ct->fields[i].name : "(positional)",
+                      def->name ? def->name : name->name,
+                      typekind_to_string(ct->fields[i].kind));
+            *fatal = true;
+            return unknown;
+        }
+    }
+    return *t;
+}
+
 /* jit-ffi-c2mir-plan F3: `(call-ptr p [T1 T2 -> R] args...)` -- call an
  * arbitrary function pointer with a signature stated at the site.  The
  * pointer typically comes from dlsym, which until this form existed had no
@@ -784,16 +861,27 @@ Expr *elab_call_ptr(Elab *e, const Form *call) {
                 else if (strcmp(nm, "ptr") == 0)  k = TY_PTR_VOID;
             }
         }
+        /* F4: a bare name that is not a scalar keyword may be a by-value
+         * aggregate.  Tried before the '?' diagnostic so a struct name gets
+         * the specific reason it was rejected, not the scalar-list message. */
+        if (k == TY_UNKNOWN && t->tag == F_SYM) {
+            bool fatal = false;
+            Type agg = call_ptr_aggregate_type(e, t->as.sym, t->span, &fatal);
+            if (fatal) return NULL;
+            if (agg.kind == TY_ADT) {
+                if (is_return) ret_type = agg;
+                else           param_types[i] = agg;
+                continue;
+            }
+        }
         char cls = (k == TY_UNKNOWN)
                        ? '?'
                        : tur_jit_ffi_class_for_kind(k, is_return);
         if (cls == '?') {
             diag_emit(DIAG_ERROR, t->span,
-                      "call-ptr: unsupported %s type in signature -- only "
-                      "scalar types (:int, :float, :float32, :bool, :cstr, "
-                      ":ptr, sized ints%s) are representable "
-                      "(struct-by-value is a later phase of the jit-ffi "
-                      "experiment)",
+                      "call-ptr: unsupported %s type in signature -- expected "
+                      "a scalar (:int, :float, :float32, :bool, :cstr, :ptr, "
+                      "sized ints%s) or the name of a by-value record",
                       is_return ? "return" : "parameter",
                       is_return ? ", :void" : "");
             return NULL;
@@ -828,6 +916,22 @@ Expr *elab_call_ptr(Elab *e, const Form *call) {
     for (uint32_t a = 0; a < n_args; a++) {
         args[a] = elab_form(e, call->as.list.items[3 + a]);
         if (!args[a]) return NULL;
+        /* F4: an aggregate slot is matched by IDENTITY, not by class -- two
+         * records with the same field kinds still describe different C
+         * types, and silently accepting one for the other is exactly the
+         * mis-call this form exists to make impossible. */
+        if (param_types[a].kind == TY_ADT) {
+            if (args[a]->type.kind != TY_ADT ||
+                args[a]->type.as.adt_.def != param_types[a].as.adt_.def) {
+                diag_emit(DIAG_ERROR, call->as.list.items[3 + a]->span,
+                          "call-ptr: argument %u is %s, but the signature "
+                          "declares the by-value record %s",
+                          (unsigned)a, type_name(args[a]->type),
+                          param_types[a].as.adt_.def->name);
+                return NULL;
+            }
+            continue;
+        }
         char want = tur_jit_ffi_class_for_kind(param_types[a].kind, 0);
         char got  = tur_jit_ffi_class_for_kind(args[a]->type.kind, 0);
         /* int-class accepts any int-class value; float-class also accepts
