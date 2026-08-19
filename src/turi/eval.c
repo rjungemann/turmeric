@@ -992,6 +992,55 @@ static TuriValue agg_load_member(const void *base, size_t off, char code,
     return turi_int(out);
 }
 
+/* jit-ffi-c2mir-plan F5: `(callback-ptr f [sig])` under the interpreter.
+ * Builds a process-lifetime context pinning the Turmeric function and asks
+ * the provider for a C function pointer whose generated body calls
+ * tur_ffi_cb_dispatch with that context's address baked in.  Gated on
+ * TURI_CAP_FFI like the rest of the FFI surface. */
+static TuriValue eval_callback_ptr(TuriEnv *env, EvalFrame *frame,
+                                   const Expr *e) {
+    const CallPtrSig *ps = e->as.call_.ptr_sig;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_error(
+            "eval: callback-ptr not allowed in sandboxed environment");
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp || !jp->callback_for)
+        return turi_error(
+            "callback-ptr under --interpret requires a JIT-enabled build "
+            "(-DTUR_JIT=ON); the compiled path (tur build / tur run) "
+            "supports it in every build");
+
+    TuriValue fv = eval_expr(env, frame, e->as.call_.fn_expr);
+    if (turi_is_error(fv)) return fv;
+
+    uint32_t n = ps->n_params;
+    char  sig_inl[64];
+    char *sig = sig_inl, *sig_heap = NULL;
+    if ((size_t)n + 3 > sizeof sig_inl) {
+        sig_heap = (char *)malloc((size_t)n + 3);
+        if (!sig_heap) return turi_error("callback-ptr: out of memory");
+        sig = sig_heap;
+    }
+    sig[0] = tur_jit_ffi_class_for_kind(ps->return_type.kind, 1);
+    sig[1] = ':';
+    for (uint32_t k = 0; k < n; k++)
+        sig[2 + k] = tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
+    sig[n + 2] = '\0';
+
+    /* The context is never freed: its ADDRESS is compiled into the callback
+     * body, and a C library holding that pointer has no way to tell us it is
+     * done.  Same policy as turi's closures. */
+    TurFfiCbCtx *ctx = tur_ffi_cb_ctx_new(env, fv, sig[0], sig + 2, n);
+    if (!ctx) { free(sig_heap); return turi_error("callback-ptr: out of memory"); }
+
+    char errbuf[256];
+    void *fn = jp->callback_for(sig, ctx, errbuf, sizeof errbuf);
+    free(sig_heap);
+    if (!fn) return turi_errorf("callback-ptr: %s", errbuf);
+    return turi_int((int64_t)(intptr_t)fn);
+}
+
 /* Evaluate an EX_CALL carrying a ptr_sig: an indirect call through a raw C
  * address with the signature stated at the site.  Routes through the c2mir
  * thunk provider; a non-JIT interpreter build reports a clean diagnostic,
@@ -6617,13 +6666,15 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case EX_CALL: {
-                /* jit-ffi-c2mir-plan F3: a `(call-ptr ...)` node has no turi
+                /* jit-ffi-c2mir-plan F3/F5: a `(call-ptr ...)` node has no turi
                  * callee to resolve -- the target is a raw C address.
                  * Dispatch synchronously through the thunk provider; the
                  * scalar args recurse via eval_expr, which is fine at FFI
                  * arg depth. */
                 if (control->as.call_.ptr_sig) {
-                    cur = eval_call_ptr(env, cf, control);
+                    cur = control->as.call_.ptr_sig->is_callback
+                              ? eval_callback_ptr(env, cf, control)
+                              : eval_call_ptr(env, cf, control);
                     descending = false;
                     break;
                 }
@@ -8946,11 +8997,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Function call --------------------------------------------------- */
     case EX_CALL:
-        /* jit-ffi-c2mir-plan F3: a `(call-ptr ...)` call routes through the
+        /* jit-ffi-c2mir-plan F3/F5: a `(call-ptr ...)` call routes through the
          * c2mir thunk provider, not the work-stack driver -- the callee is a
          * raw C address, so there is no turi closure to apply. */
         if (e->as.call_.ptr_sig)
-            return eval_call_ptr(env, frame, e);
+            return e->as.call_.ptr_sig->is_callback
+                       ? eval_callback_ptr(env, frame, e)
+                       : eval_call_ptr(env, frame, e);
         /* T3.2a: delegated to the explicit-stack driver (DK_CALL_ARG), which
          * resolves the callee and accumulates args on the work-stack, then
          * applies via eval_apply.  Semantics match the former inline loop; the

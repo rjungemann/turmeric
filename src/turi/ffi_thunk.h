@@ -51,6 +51,40 @@ int tur_ffi_register_extern_thunk(TuriEnv *env, const char *name, void *fn,
                                   char ret_class, const char *arg_classes,
                                   uint32_t n);
 
+/* ------------------------------------------------------------------ */
+/* jit-ffi-c2mir-plan F5: callbacks (C calling back into Turmeric)     */
+/* ------------------------------------------------------------------ */
+
+/* The context a generated callback carries.  Its ADDRESS is baked into the
+ * generated C as a literal, so it must outlive every C library that holds
+ * the function pointer -- i.e. the process.  Allocated by
+ * tur_ffi_cb_ctx_new and never freed, matching turi's closure policy. */
+typedef struct TurFfiCbCtx {
+    TuriEnv  *env;
+    TuriValue fn;
+    char      ret_class;              /* 'i' / 'f' / 'F' / 'v' */
+    char     *arg_classes;            /* n entries, owned */
+    uint32_t  n_args;
+} TurFfiCbCtx;
+
+/* Build a process-lifetime callback context.  Returns NULL on OOM. */
+TurFfiCbCtx *tur_ffi_cb_ctx_new(TuriEnv *env, TuriValue fn, char ret_class,
+                                const char *arg_classes, uint32_t n);
+
+/* The fixed entry point every generated callback calls.  Deliberately NOT
+ * static and spelled with a stable name: the generated C declares it
+ * `extern` and resolves it against this process (the `tur` executable links
+ * with ENABLE_EXPORTS), so renaming it breaks every compiled callback.
+ *
+ * Unpacks the position-indexed `iv`/`fv` buffers into TuriValues per the
+ * context's classes, calls the Turmeric function, and writes the result back
+ * through *out_i / *out_f by the return class.  A Turmeric-side error is
+ * reported on stderr and yields a zero result -- there is no error channel
+ * back through a C callback slot, and unwinding through foreign frames is
+ * not something we can do safely. */
+void tur_ffi_cb_dispatch(void *ctx, const long long *iv, const double *fv,
+                         long long *out_i, double *out_f);
+
 /* RP5: register the `reload` native so the user can type `(reload)`
  * at the prompt. Available even when no spice is currently loaded
  * (the call surfaces a clean "no spice loaded" error in that case).

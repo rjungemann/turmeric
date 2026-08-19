@@ -378,7 +378,140 @@ static void *resolve_sym(const char *name) {
     return dlsym(RTLD_DEFAULT, name);
 }
 
-static const TurJitFfiProvider g_provider = { thunk_for, resolve_sym };
+/* ------------------------------------------------------------------ */
+/* F5: callbacks                                                       */
+/* ------------------------------------------------------------------ */
+
+/* A callback is bound to ONE context, so unlike a call thunk it cannot be
+ * shared across signatures alone -- the cache is keyed on (sig, ctx).  The
+ * pairing matters in a loop: without it, re-evaluating a callback-ptr form
+ * would compile a fresh MIR image per iteration and never reclaim any of
+ * them (callbacks are process-lifetime by design). */
+typedef struct CbEntry {
+    char           *sig;
+    void           *ctx;
+    void           *fnptr;
+    struct CbEntry *next;
+} CbEntry;
+
+static CbEntry *g_cb_head = NULL;   /* few enough per program for a list */
+
+/* Render the callback TU for `sig` with `ctx` baked in as an address
+ * literal.  Caller frees. */
+static char *render_callback_source(ParsedSig *ps, void *ctx) {
+    SrcBuf b = { NULL, 0, 0, 0 };
+    int n = ps->n;
+
+    sb_puts(&b,
+        "extern void tur_ffi_cb_dispatch(void *, const long long *,\n"
+        "                                const double *, long long *,\n"
+        "                                double *);\n");
+    sb_puts(&b, class_c_type(ps->ret.cls));
+    sb_puts(&b, " __tur_ffi_cb(");
+    if (n == 0) {
+        sb_puts(&b, "void");
+    } else {
+        for (int i = 0; i < n; i++)
+            sb_printf(&b, "%s%s a%d", i ? ", " : "",
+                      class_c_type(ps->args[i].cls), i);
+    }
+    sb_puts(&b, ") {\n");
+    /* Sized for n or 1: a zero-length array is not C. */
+    sb_printf(&b, "  long long iv[%d]; double fv[%d];\n",
+              n ? n : 1, n ? n : 1);
+    sb_puts(&b, "  long long oi = 0; double of = 0;\n");
+    sb_puts(&b, "  (void)iv; (void)fv;\n");
+    for (int i = 0; i < n; i++) {
+        if (ps->args[i].cls == 'i')
+            sb_printf(&b, "  iv[%d] = (long long)a%d;\n", i, i);
+        else
+            sb_printf(&b, "  fv[%d] = (double)a%d;\n", i, i);
+    }
+    /* The context rides as an unsigned literal -- c2mir sees a constant, so
+     * there is no relocation and no symbol to resolve. */
+    sb_printf(&b,
+              "  tur_ffi_cb_dispatch((void *)(unsigned long long)%lluULL,\n"
+              "                      iv, fv, &oi, &of);\n",
+              (unsigned long long)(uintptr_t)ctx);
+    if (ps->ret.cls == 'i')      sb_puts(&b, "  return (long long)oi;\n");
+    else if (ps->ret.cls == 'f') sb_puts(&b, "  return of;\n");
+    else if (ps->ret.cls == 'F') sb_puts(&b, "  return (float)of;\n");
+    sb_puts(&b, "}\n");
+
+    if (b.bad) { free(b.p); return NULL; }
+    return b.p;
+}
+
+static void *callback_for(const char *sig, void *ctx, char *errbuf,
+                          size_t errcap) {
+    ParsedSig ps;
+    int n = sig_parse(sig, &ps);
+    if (n < 0) {
+        if (errbuf && errcap)
+            snprintf(errbuf, errcap, "malformed callback signature '%s'",
+                     sig ? sig : "(null)");
+        return NULL;
+    }
+    /* F5 is scalars only: an aggregate crossing INTO a Turmeric function
+     * needs an unpacking marshaller F4 did not build (that one packs
+     * outward).  Elaboration rejects it too; this is the backstop. */
+    if (ps.ret.cls == '{') {
+        if (errbuf && errcap)
+            snprintf(errbuf, errcap,
+                     "a callback cannot return a by-value aggregate yet");
+        return NULL;
+    }
+    for (int i = 0; i < n; i++) {
+        if (ps.args[i].cls == '{') {
+            if (errbuf && errcap)
+                snprintf(errbuf, errcap,
+                         "a callback cannot take a by-value aggregate yet "
+                         "(parameter %d)", i);
+            return NULL;
+        }
+    }
+
+    pthread_mutex_lock(&g_cache_lock);
+    for (CbEntry *e = g_cb_head; e; e = e->next) {
+        if (e->ctx == ctx && strcmp(e->sig, sig) == 0) {
+            void *f = e->fnptr;
+            pthread_mutex_unlock(&g_cache_lock);
+            return f;
+        }
+    }
+
+    void *fnptr = NULL;
+    char *src = render_callback_source(&ps, ctx);
+    if (src) {
+        TurJitImage *img = NULL;
+        int rc = tur_jit_compile_image(src, strlen(src), NULL, NULL, 0, &img);
+        if (rc == TUR_JIT_OK && img)
+            fnptr = tur_jit_image_sym(img, "__tur_ffi_cb");
+        free(src);
+    }
+    if (fnptr) {
+        CbEntry *e = (CbEntry *)calloc(1, sizeof(*e));
+        if (e) {
+            e->sig = strdup(sig);
+            if (e->sig) {
+                e->ctx = ctx; e->fnptr = fnptr;
+                e->next = g_cb_head; g_cb_head = e;
+            } else {
+                free(e);
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_cache_lock);
+
+    if (!fnptr && errbuf && errcap)
+        snprintf(errbuf, errcap,
+                 "c2mir could not compile a callback for '%s' "
+                 "(see stderr for the compile diagnostic)", sig);
+    return fnptr;
+}
+
+static const TurJitFfiProvider g_provider = { thunk_for, resolve_sym,
+                                              callback_for };
 
 void tur_jit_ffi_install(void) {
     tur_jit_ffi_set_provider(&g_provider);

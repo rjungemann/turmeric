@@ -80,6 +80,19 @@ typedef struct TurJitFfiProvider {
      * resolution order (process image incl. ENABLE_EXPORTS runtime, then
      * anything dlopened RTLD_GLOBAL, e.g. jit autolink libs) is dlsym's. */
     void *(*resolve)(const char *name);
+    /* F5: return a C function pointer with signature `sig` that calls back
+     * into the interpreter.  `ctx` is an opaque context pointer baked into
+     * the generated code as an address literal and handed to
+     * tur_ffi_cb_dispatch (ffi_thunk.h) on every call, so one compiled
+     * callback serves exactly one (signature, Turmeric function) pair.
+     *
+     * Unlike thunk_for, the result is NOT shareable across contexts, so the
+     * cache is keyed on the context as well as the signature.  Callbacks are
+     * process-lifetime: a C library holding a function pointer has no way to
+     * announce it is finished with one, so there is no safe moment to
+     * reclaim the MIR image.  NULL with a reason in errbuf on failure. */
+    void *(*callback_for)(const char *sig, void *ctx, char *errbuf,
+                          size_t errcap);
 } TurJitFfiProvider;
 
 /* Install / read the process-wide provider.  Installed once at startup by a
