@@ -1061,6 +1061,22 @@ static void check_unreachable_handlers_in_expr(
     switch (e->kind) {
     case EX_HANDLE: {
         HandleExpr *h = e->as.handle_.handle;
+        /* unsafe-block-w0033-on-raw-builtins (docs/archive/): the `(unsafe
+         * ...)` desugar's Unsafe clause is compiler-generated and the block
+         * is MANDATORY for the gated raw builtins, which by design never
+         * perform the Unsafe effect (it is a compile-time marker; see the
+         * is_unsafe_marker comment in expr.h).  So "this clause is
+         * unreachable" was both always true and never actionable --
+         * contradictory advice on a required form.  Skip the clause check;
+         * a USER-written handle for a never-performed effect still warns
+         * (errors/effect-handle-unreachable pins that), and nested user
+         * handles inside the unsafe body are still swept below. */
+        if (h->is_unsafe_marker) {
+            check_unreachable_handlers_in_expr(a, h->body, idx, env);
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                check_unreachable_handlers_in_expr(a, h->cases[i].body, idx, env);
+            return;
+        }
         EffectRowSubst *subst = effect_row_subst_new(a);
         EffectRow *body_row = collect_effects_in_expr(
             a, h->body, effect_row_empty(a), idx, env, subst);

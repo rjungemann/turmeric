@@ -318,12 +318,15 @@ The 2026-08-19 investigation's item-3 gaps are now closed or de-risked:
   (`sized-alive?`, whose inline C also bounds-checks) is the remaining,
   slightly larger half.
 
-- **Papercut filed:** every `unsafe` block the visible shape needs draws
-  a contradictory TUR-W0033 ("handler clause unreachable") because the
-  raw builtins require the block syntactically but never perform the
-  `Unsafe` effect.  See
-  `docs/reported/unsafe-block-w0033-on-raw-builtins.md`; worth fixing
-  before the spice rewrite lands or the ECS build output gets noisy.
+- **Papercut filed, then FIXED same day:** every `unsafe` block the
+  visible shape needs drew a contradictory TUR-W0033 ("handler clause
+  unreachable") because the raw builtins require the block syntactically
+  but never perform the `Unsafe` effect.  Resolved 2026-08-19: the W0033
+  sweep skips the compiler-generated unsafe-desugar handle (keyed on the
+  existing `is_unsafe_marker` flag), so the ECS build output stays quiet
+  when the spice rewrite lands; a user-written unreachable clause still
+  warns.  Report + resolution:
+  `docs/archive/unsafe-block-w0033-on-raw-builtins.md`.
 
 #### R4 execution record, part 2 (2026-08-19): slice 1 of the footprint walk -- omitted-PARAMETER evidence
 

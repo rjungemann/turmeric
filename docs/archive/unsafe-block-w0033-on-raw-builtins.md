@@ -54,3 +54,24 @@ Either end works; the first is more honest:
 
 Found 2026-08-19 while probing the R4 visible-measure shape
 (trusted-refinement-claims-plan.md).
+
+## Resolution (2026-08-19, same day)
+
+Fixed by the second direction, made precise by a flag that already existed:
+`HandleExpr.is_unsafe_marker` is set by `elab_unsafe` on exactly the
+`(unsafe ...)` desugar, so the TUR-W0033 sweep
+(`check_unreachable_handlers_in_expr`, `src/passes/effect_check.c`) now
+skips the clause check on flagged handles -- no body scan for gated
+builtins needed, and no change to the effect-row model (the first
+direction would have had the row machinery interact with the fiber-lift /
+CPS-coloring exemption the marker exists to provide, for no additional
+honesty).
+
+A USER-written `handle` over a never-performed effect still warns --
+`errors/effect-handle-unreachable` pins that -- and nested user handles
+inside an unsafe body are still swept.  What is deliberately given up: a
+gratuitous non-empty `(unsafe ...)` block (no raw ops inside) no longer
+draws any warning; since W0033 previously fired on EVERY unsafe block it
+carried zero discrimination there anyway, and "this unsafe block is
+unnecessary" belongs to the `--lint-unsafe` family (which already covers
+nested and empty blocks) if demand ever shows up.
