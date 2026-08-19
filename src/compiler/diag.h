@@ -482,6 +482,10 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
 
 bool diag_had_error(void);
 
+/* Re-mark the error flag after a nested evaluation's diag_reset cleared it
+ * (macro-time evaluation inside a compile; see diag.c). */
+void diag_force_had_error(void);
+
 /* Monotonic count of errors actually SHOWN to the user (captured/speculative
  * errors excluded).  Compare across a window to learn whether it surfaced an
  * error; never reset, so only differences are meaningful. */

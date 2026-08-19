@@ -1379,6 +1379,16 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
         if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--; \
     } while (0)
 
+    /* Stage 2: a procedural macro's expansion is computed by its closure in
+     * the macro-time env, not by substitution + CT eval.  Arity checking,
+     * variadic packing, invocation, and the cross-symtab import of the
+     * result all live in elab_macro_env_call_proc (src/turi/macro_env.c). */
+    if (macro->kind == MACRO_PROCEDURAL) {
+        Span call_span = n_args > 0 ? args[0]->span : macro->span;
+        Form *result = elab_macro_env_call_proc(e, macro, args, n_args, call_span);
+        EXPAND_RESTORE(); return result;
+    }
+
     /* Check arity */
     if (macro->is_variadic) {
         if (n_args < macro->n_params) {
@@ -1603,6 +1613,155 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     elab_register_macro(e, macro);
 
     /* Return nil - defmacro doesn't produce a value */
+    return e_nil(e, call->span);
+}
+
+/* Stage 2 (macro-system-direction-plan): defmacro* -- procedural macros.
+ *
+ *   (defmacro* name [params...] body...)
+ *
+ * The body is ordinary Turmeric, not a template: it receives each argument
+ * as a Syntax value (the raw call-site form), computes with the full
+ * language plus the syntax natives (syntax-first, syntax->int,
+ * int->syntax, syntax-list, ...), and returns the expansion as a Syntax.
+ * At definition time the body is compiled into the session's macro-time
+ * turi env as
+ *
+ *   (defn <name>__mx [p1 : Syntax ... ] : Syntax body...)
+ *
+ * so parameter/return types are checked when the macro is DEFINED, and the
+ * closure is invoked at each expansion (elab_macro_env_call_proc).  A
+ * variadic `& rest` param is declared as one ordinary Syntax param -- the
+ * call path packs the trailing argument forms into a single list form.
+ */
+Expr *elab_defmacro_star(Elab *e, const Form *call) {
+    if (call->as.list.len < 4) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmacro* requires (defmacro* name [params...] body...)");
+        return NULL;
+    }
+
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defmacro* name must be a symbol");
+        return NULL;
+    }
+    if (!e->in_stdlib_load)
+        tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro*");
+    if (elab_lookup_macro(e, name_f->as.sym)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "defmacro*: '%s' is already defined", name_f->as.sym->name);
+        return NULL;
+    }
+
+    Form *params_f = call->as.list.items[2];
+    if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "defmacro*: expected parameter list or vector");
+        return NULL;
+    }
+
+    /* Params are bare symbols, optionally ending `& rest`.  No `^syntax`
+     * markers: every defmacro* parameter is already raw syntax. */
+    uint32_t n_total = params_f->as.list.len;
+    Form **params = (Form **)arena_alloc(e->arena, n_total * sizeof(Form *));
+    uint32_t n_fixed = 0;
+    bool is_variadic = false;
+    const Symbol *rest_param = NULL;
+    for (uint32_t i = 0; i < n_total; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "defmacro*: parameter must be a bare symbol "
+                      "(every parameter is already Syntax; type annotations "
+                      "and ^syntax markers are not accepted)");
+            return NULL;
+        }
+        if (p->as.sym->len == 7 && memcmp(p->as.sym->name, "^syntax", 7) == 0) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "defmacro*: '^syntax' is meaningless here -- every "
+                      "defmacro* parameter already receives raw syntax");
+            return NULL;
+        }
+        if (p->as.sym == e->sym_borrow) {
+            if (i + 1 >= n_total) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defmacro*: '&' must be followed by a rest parameter name");
+                return NULL;
+            }
+            if (i + 2 < n_total) {
+                diag_emit(DIAG_ERROR, params_f->as.list.items[i + 2]->span,
+                          "defmacro*: only one parameter may follow '&'");
+                return NULL;
+            }
+            Form *rest_f = params_f->as.list.items[i + 1];
+            if (rest_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, rest_f->span,
+                          "defmacro*: rest parameter after '&' must be a symbol");
+                return NULL;
+            }
+            is_variadic = true;
+            rest_param = rest_f->as.sym;
+            break;
+        }
+        params[n_fixed++] = p;
+    }
+
+    uint32_t body_count = call->as.list.len - 3;
+
+    /* Bound closure name: <name>__mx. */
+    size_t fn_len = name_f->as.sym->len + 4;
+    char *fn_name = (char *)arena_alloc(e->arena, fn_len + 1);
+    memcpy(fn_name, name_f->as.sym->name, name_f->as.sym->len);
+    memcpy(fn_name + name_f->as.sym->len, "__mx", 5);
+
+    /* Synthesize (defn <fn_name> [p : Syntax ...] : Syntax body...).  The
+     * spaced `: T` annotation is an F_TYPE_ANN item following the slot it
+     * annotates, both in the param vector and after it (return type). */
+    const Symbol *syntax_sym = symtab_intern(e->st, strslice("Syntax", 6));
+    const Symbol *fn_sym = symtab_intern(e->st, strslice(fn_name, (uint32_t)fn_len));
+    Span sp = call->span;
+    Form *syntax_ann_proto = form_sym(e->arena, sp, syntax_sym);
+
+    uint32_t n_decl = n_fixed + (is_variadic ? 1 : 0);
+    Form **pv = (Form **)arena_alloc(e->arena, (n_decl * 2) * sizeof(Form *));
+    uint32_t pvn = 0;
+    for (uint32_t i = 0; i < n_fixed; i++) {
+        pv[pvn++] = params[i];
+        pv[pvn++] = form_type_ann(e->arena, params[i]->span, syntax_ann_proto);
+    }
+    if (is_variadic) {
+        pv[pvn++] = form_sym(e->arena, sp, rest_param);
+        pv[pvn++] = form_type_ann(e->arena, sp, syntax_ann_proto);
+    }
+
+    uint32_t defn_len = 4 + body_count;
+    Form **items = (Form **)arena_alloc(e->arena, defn_len * sizeof(Form *));
+    items[0] = form_sym(e->arena, sp, e->sym_defn);
+    items[1] = form_sym(e->arena, sp, fn_sym);
+    items[2] = form_vec(e->arena, params_f->span, pv, pvn);
+    items[3] = form_type_ann(e->arena, sp, syntax_ann_proto);
+    for (uint32_t i = 0; i < body_count; i++)
+        items[4 + i] = call->as.list.items[3 + i];
+    Form *defn_form = form_list(e->arena, sp, items, defn_len);
+
+    if (!elab_macro_env_define_proc(e, fn_name, defn_form, name_f->span))
+        return NULL;
+
+    MacroDef *macro = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
+    memset(macro, 0, sizeof(MacroDef));
+    macro->name = name_f->as.sym;
+    macro->params = params;
+    macro->n_params = n_fixed;
+    macro->is_variadic = is_variadic;
+    macro->rest_param = rest_param;
+    macro->body = call->as.list.items[3];  /* first body form, for tooling */
+    macro->span = call->span;
+    macro->defining_module_name = e->current_module_name;
+    macro->kind = MACRO_PROCEDURAL;
+    macro->proc_fn_name = fn_name;
+    elab_register_macro(e, macro);
+
     return e_nil(e, call->span);
 }
 

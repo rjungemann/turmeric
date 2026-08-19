@@ -2628,6 +2628,8 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
+    /* Stage 2 (macro-system-direction-plan): procedural macros. */
+    if (name == e->sym_defmacro_star) return elab_defmacro_star(e, call);
     if (name == e->sym_quote) {
         /* (quote x) -- mirrors F_QUOTE in elab_toplevel.c. Quoting a
          * bare symbol yields a :Sym literal so DSL helpers in defns

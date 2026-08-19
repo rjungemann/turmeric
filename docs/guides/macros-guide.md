@@ -144,6 +144,59 @@ A macro body whose only compile-time work is `=`/`not`/`if` should thread
 it through a form that does trigger (in practice any real body has a
 quasiquote, which always triggers).
 
+## Procedural macros (`defmacro*`)
+
+Where a `defmacro` body is a *template*, a `defmacro*` body is ordinary
+Turmeric, evaluated at expansion time by the in-process interpreter
+(the macro-time env).  Each parameter arrives as a **Syntax** value
+wrapping the raw call-site form; the body computes with the full
+language -- arithmetic, strings, recursion, local functions -- plus the
+syntax vocabulary (`read-string`, `syntax-first/rest/nth/len/tag`,
+`syntax->int` / `int->syntax` and friends, `syntax-list/vec/cons`,
+`syntax-gensym`, `syntax=?`, `syntax-error`), and returns the expansion
+as a Syntax.
+
+```turmeric
+(defmacro* const-sum [a b]                 ; compile-time arithmetic --
+  (int->syntax (+ (syntax->int a)          ; impossible in a template
+                  (syntax->int b))))
+
+(const-sum 40 2)   ; compiles to the literal 42
+
+(defmacro* twice [e]
+  (syntax-list (sym->syntax "+") e e))
+
+(twice (f))        ; expands to (+ (f) (f))
+```
+
+Facts that matter in practice:
+
+- **Definition-time checking.**  The body is compiled as
+  `(fn [Syntax...] Syntax)` when the `defmacro*` is defined, so type
+  errors in the body surface at the definition, not at some later call.
+- **A variadic `& rest` arrives as ONE Syntax** wrapping the argument
+  list; walk it with `syntax-len` / `syntax-nth` and ordinary integer
+  recursion (see `tests/fixtures/macro-procedural-variadic/`).
+- **Sandboxed and bounded.**  Macro-time code runs with every capability
+  denied (no I/O, FFI, inline-C, async, import) and a step-fuel bound, so
+  a runaway macro is a diagnostic, not a hung compile.
+- **`syntax-error msg stx`** raises an expansion-time diagnostic at the
+  offending argument's span with your message.
+- **Kinds mix freely**: a procedural expansion may call template macros
+  and vice versa; `tur expand` traces both identically.
+- **The macro-time env has the interpreter's natives but (today) not the
+  loaded stdlib**; helper functions are `(def helper (fn ...))` forms in
+  the body (self-calls resolve by runtime dispatch, with a TUR-W0040
+  note).  Quasiquote producing Syntax and stdlib preload are planned
+  follow-ups -- see
+  [macro-system-direction-plan.md](../upcoming/macro-system-direction-plan.md).
+- **Unhygienic like `defmacro`** -- mint bindings with `syntax-gensym`.
+
+Prefer a plain `defmacro` template when substitution is all you need; it
+expands without spinning the interpreter.  Reach for `defmacro*` the
+moment you need computation the CT evaluator refuses (counting,
+arithmetic, string synthesis, structural analysis).
+
 ## Multi-form bodies
 
 A `defmacro` body may be several forms: every form before the last is

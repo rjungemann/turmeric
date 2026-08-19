@@ -4210,9 +4210,12 @@ static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *
     memcpy(src, a[0].as_cstr, len + 1);
 
     /* The reader reports through the diagnostic file registry, which the
-     * enclosing eval owns right now -- save it, parse under a temporary
-     * file entry, restore.  (Same shape as the REPL's :type command, plus
-     * the save/restore.) */
+     * enclosing eval (or, when called from a defmacro* body, the enclosing
+     * COMPILE) owns right now -- snapshot the whole registry and the
+     * had-error flag, parse under a temporary file entry, put both back.
+     * diag_files_restore deliberately skips id 0, so re-register the saved
+     * entries directly. */
+    bool saved_had = diag_had_error();
     const SourceFile *saved_files[64];
     size_t n_saved = diag_files_save(saved_files, 64);
     diag_reset();
@@ -4229,7 +4232,9 @@ static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *
                                           e->reader_macros, &nforms);
     bool bad = (!forms || nforms == 0 || diag_had_error());
     diag_reset();
-    diag_files_restore(saved_files, n_saved);
+    for (size_t i = 0; i < n_saved; i++)
+        if (saved_files[i]) diag_register_file(saved_files[i]);
+    if (saved_had) diag_force_had_error();
     if (bad)
         return turi_errorf("read-string: could not parse \"%s\"", src);
     /* First form only (Clojure read-string semantics). */
@@ -4520,7 +4525,10 @@ static void wk_register_syntax_natives(TuriEnv *env) {
     turi_env_register_native_typed(env, "syntax-cons",     native_syntax_cons,     NULL, TUR_NRT_SYNTAX);
     turi_env_register_native_typed(env, "syntax=?",        native_syntax_eq,       NULL, TUR_NRT_BOOL);
     turi_env_register_native_typed(env, "syntax-gensym",   native_syntax_gensym,   NULL, TUR_NRT_SYNTAX);
-    turi_env_register_native_typed(env, "syntax-error",    native_syntax_error,    NULL, TUR_NRT_VOID);
+    /* syntax-error never returns normally (its value is a propagating
+     * error), but it types as Syntax so `(if p good-stx (syntax-error ...))`
+     * unifies in a defmacro* body. */
+    turi_env_register_native_typed(env, "syntax-error",    native_syntax_error,    NULL, TUR_NRT_SYNTAX);
 }
 
 void turi_env_register_interpreter_natives(TuriEnv *env) {

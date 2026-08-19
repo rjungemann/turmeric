@@ -1949,6 +1949,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_gc_cand_hw       = intern_cstr(st, "gc-candidate-high-water");
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
+    e->sym_defmacro_star = intern_cstr(st, "defmacro*");
     e->sym_quote = intern_cstr(st, "quote");
     e->sym_quasiquote = intern_cstr(st, "quasiquote");
     e->sym_unquote = intern_cstr(st, "unquote");

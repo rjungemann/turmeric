@@ -1,6 +1,6 @@
 # Macro System Direction -- procedural macros on turi, not phases
 
-Status: direction adopted; Stage 0 landed; Stages 1+ unscheduled.
+Status: direction adopted; Stages 0-2 landed; Stage 3+ unscheduled.
 
 ## The question
 
@@ -107,24 +107,45 @@ total accessors if ever, never a general evaluator.)
   producing Syntax, and diag-sink policy for diagnostics raised *by*
   macro-time code mid-expansion.
 
-## Stage 2 -- `defmacro*` procedural macros, same-module (unscheduled)
+## Stage 2 -- `defmacro*` procedural macros, same-module (LANDED)
 
-- New special form next to `defmacro` in `elab_call.c`; `MacroDef` gains
-  `kind = TEMPLATE | PROCEDURAL` plus a turi closure.  At definition the
-  body is elaborated as `(Fn [Syntax...] Syntax)` in the macro env
-  (params implicitly `Syntax` -- zero annotation burden, definition-time
-  type errors).
-- Call path: convert args -> invoke closure (fuel + interp-mode
-  bracketed) -> unwrap `Form*` -> feed the UNCHANGED downstream
-  (provenance note, definstance re-span, toplevel hand-off, refine
-  crossing note).  Interpreter error -> diag at the call site plus the
-  existing "in expansion of" note.
-- Routing is explicit, never heuristic: body size / feature sniffing
-  would be the old gate bug at 100x blast radius.
-- Proof-of-migration only: port the derive-show/debug/display family
-  (`stdlib/macros.tur`), diffing `tur emit-c` output against the
-  template versions; the other ~90 template macros stay as they are,
-  permanently first-class.
+- `defmacro*` dispatched next to `defmacro` (`elab_call.c`); `MacroDef`
+  carries `kind = MACRO_TEMPLATE | MACRO_PROCEDURAL` + the macro-env
+  binding name (`<name>__mx`).  At definition (`elab_defmacro_star`,
+  elab_macros.c) the body is synthesized into
+  `(defn <name>__mx [p : Syntax ...] : Syntax body...)`, printed, and
+  evaluated into the macro env (`elab_macro_env_define_proc`) -- so type
+  errors in the body surface at the DEFINITION.  Params implicitly
+  Syntax; `& rest` is declared as one fixed Syntax param.
+- Call path (`elab_macro_env_call_proc`, src/turi/macro_env.c, branched
+  from `elab_expand_macro`): marshal raw arg forms to TURI_SYNTAX
+  (variadic tail packed into one list form), fresh fuel per expansion,
+  interp-mode bracketed `turi_call`, then a mandatory **cross-symtab
+  import walk** -- macro-side forms intern symbols into the macro env's
+  own table, and the elaborator dispatches special forms by pointer
+  identity, so the expansion is deep-copied into the compile
+  arena/symtab, with span-less constructed forms attributed to the call
+  site.  Everything downstream (provenance note, definstance re-span,
+  toplevel hand-off, refine crossing) is the unchanged template path.
+- Reentrancy fixes the smoke tests forced (audit addenda): nested
+  elaboration re-stamps the global builtin table's `name_sym` pointers
+  (`builtins_init` runs at every elaborate entry) -- stamped back to the
+  compile's symtab after each definition eval; the nested eval's
+  `diag_reset` + file-id-0 registration are bracketed (whole-registry
+  save + `diag_force_had_error`, also applied to the `read-string`
+  native); `TY_SYNTAX` was falling into `typekind_default_copy_kind`'s
+  CK_MOVE default, making second uses of a param a use-after-move --
+  now CK_COPY; `syntax-error` types as Syntax so error branches unify.
+- Kinds mix freely in both directions (procedural expansions calling
+  template macros and vice versa); `tur expand` traces both.
+- Fixtures: `macro-procedural`, `macro-procedural-variadic` (a counting
+  macro -- the CT evaluator's designed-out case),
+  `errors/macro-procedural-non-syntax`,
+  `errors/macro-procedural-syntax-error`.
+- Deferred to follow-ups: stdlib preload into the macro env (macro-time
+  string building is currently limited to the syntax natives -- the
+  derive-family proof-of-migration port WAITS on this), quasiquote
+  producing Syntax, and REPL `expand-1`.
 
 ## Stage 3 -- cross-module macro-time deps (unscheduled, post-v1 unless
 a concrete stdlib need appears)

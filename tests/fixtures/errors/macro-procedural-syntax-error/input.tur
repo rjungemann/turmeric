@@ -1,0 +1,7 @@
+;; Stage 2: syntax-error raises an expansion-time diagnostic carrying the
+;; offending argument's span and the macro author's message.
+(defmacro* need-int [x]
+  (if (syntax-int? x)
+    x
+    (syntax-error "need-int expects an int literal" x)))
+(defn main [] : int (println (need-int foo)) 0)

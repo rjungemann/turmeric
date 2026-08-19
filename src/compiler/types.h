@@ -553,6 +553,12 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
          * names a runtime value, so the copy/move discipline is moot; COPY. */
         case TY_TYPEROW:
             return CK_COPY;
+        /* Stage 1/2 (macro-system-direction-plan): a Syntax value is an
+         * arena-resident Form* -- freely copyable, like TY_SYM.  Falling
+         * into the CK_MOVE default made `(syntax-list f x x)` a
+         * use-after-move error in defmacro* bodies. */
+        case TY_SYNTAX:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;

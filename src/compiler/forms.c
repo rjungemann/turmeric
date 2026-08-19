@@ -379,7 +379,14 @@ bool form_equal(const Form *a, const Form *b) {
                    strncmp(a->as.s.p, b->as.s.p, a->as.s.len) == 0;
         case F_SYM:
         case F_KEYWORD:
-            return a->as.sym == b->as.sym;
+            /* Name-based, not pointer-based: forms built in the macro-time
+             * env intern into that env's own symbol table, so cross-symtab
+             * pointer comparison would be always-false.  Within one table
+             * this is exactly pointer identity (interning is unique). */
+            if (a->as.sym == b->as.sym) return true;
+            return a->as.sym && b->as.sym &&
+                   a->as.sym->len == b->as.sym->len &&
+                   memcmp(a->as.sym->name, b->as.sym->name, a->as.sym->len) == 0;
         case F_QUOTE:
         case F_QUASIQUOTE:
         case F_UNQUOTE:

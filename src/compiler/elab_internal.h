@@ -337,6 +337,7 @@ typedef struct Elab {
     const Symbol *sym_gc_cand_hw;       /* gc-candidate-high-water (CG6) */
     /* Phase 6: Macro system */
     const Symbol *sym_defmacro;   /* defmacro */
+    const Symbol *sym_defmacro_star; /* defmacro* (Stage 2 procedural macros) */
     const Symbol *sym_quote;      /* quote */
     const Symbol *sym_quasiquote; /* quasiquote */
     const Symbol *sym_unquote;    /* unquote */
@@ -1080,6 +1081,13 @@ typedef struct GenContext {
 } GenContext;
 
 /* Phase 6: Macro definition */
+/* Stage 2 (macro-system-direction-plan): how a macro's body runs. */
+typedef enum MacroKind {
+    MACRO_TEMPLATE = 0,   /* defmacro: substitute_params + the CT evaluator */
+    MACRO_PROCEDURAL,     /* defmacro*: full-Turmeric body evaluated in the
+                           * macro-time turi env (src/turi/macro_env.c) */
+} MacroKind;
+
 typedef struct MacroDef {
     const Symbol *name;
     Form **params;
@@ -1107,6 +1115,11 @@ typedef struct MacroDef {
      * which only has meaning under the compile-time evaluator -- route the
      * substituted template through it unconditionally. */
     bool force_ct_eval;
+    /* Stage 2: MACRO_TEMPLATE (default, memset-0) or MACRO_PROCEDURAL. */
+    MacroKind kind;
+    /* Stage 2: for MACRO_PROCEDURAL, the name the macro's compiled-to-defn
+     * closure is bound under in the macro-time env ("<name>__mx"). */
+    const char *proc_fn_name;
 } MacroDef;
 
 typedef enum CtValueTag {
@@ -1227,7 +1240,29 @@ void elab_register_macro(Elab *e, MacroDef *macro);
 Form *quasiquote_expand_form(Elab *e, Form *f);
 Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args);
 Expr *elab_defmacro(Elab *e, const Form *call);
+Expr *elab_defmacro_star(Elab *e, const Form *call);
 Expr *elab_gensym(Elab *e, const Form *call);
+
+/* Stage 2 (macro-system-direction-plan): procedural-macro bridge, implemented
+ * in src/turi/macro_env.c (include direction stays turi -> compiler; the
+ * compiler sees only these declarations).
+ *
+ * elab_macro_env_define_proc evaluates the synthesized
+ * `(defn <fn_name> [params : Syntax ...] : Syntax body...)` form in the
+ * session's macro-time env; emits a diagnostic at err_span and returns false
+ * on any definition-time failure.
+ *
+ * elab_macro_env_call_proc invokes a MACRO_PROCEDURAL macro's closure on the
+ * raw call-site argument forms and returns the expansion imported into the
+ * compiler's arena/symtab (forms built macro-side intern symbols into the
+ * macro env's own table, so a deep re-interning copy is mandatory -- symbol
+ * identity drives every special-form dispatch).  NULL after emitting a
+ * diagnostic on arity mismatch, expansion-time error, or a non-syntax
+ * result. */
+bool  elab_macro_env_define_proc(Elab *e, const char *fn_name,
+                                 const Form *defn_form, Span err_span);
+Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
+                               Form **args, uint32_t n_args, Span call_span);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
