@@ -379,6 +379,16 @@ struct Binding {
      * override on it.  False never means "clean", only "no evidence" -- an
      * inline-C body is unwalkable and stays false by design. */
     bool                reads_frame_omits_state;
+    /* R4 slice 2 (trusted-refinement-claims-plan): the read-side mirror of
+     * `writes_checked`.  True only when the deferred rf_resolve_read_frames
+     * pass saw the WHOLE elaborated body and attributed every read of
+     * mutable state to a frame-named parameter -- silence is never enough,
+     * so an inline-C body, an unvouchable call, or an unmodeled form all
+     * leave it false (UNVERIFIED, not broken).  Stamped only when the pass
+     * runs (--enable=checked-reads or --dump-read-frames); nothing consumes
+     * it behaviorally yet -- the dump is the surface, and the first real
+     * consumer is a post-v1 decision recorded in the plan. */
+    bool                reads_checked;
     /* WF1 / #writes: the per-argument WRITE frame -- which parameters' mutable
      * state this function's body may write.  A bitmask (bit i = parameter i is
      * in the frame), the same shape `reads_params_mask` above has carried

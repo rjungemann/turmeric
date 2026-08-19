@@ -126,6 +126,9 @@ bool g_dump_effects = false;
 /* G1: --dump-write-frames flag */
 bool g_dump_write_frames = false;
 
+/* R4 slice 2: --dump-read-frames flag */
+bool g_dump_read_frames = false;
+
 /* CPS2: --dump-cps flag */
 bool g_dump_cps = false;
 

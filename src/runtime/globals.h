@@ -102,6 +102,15 @@ extern bool g_dump_effects;
  * diagnostic, which is not something a fixture can assert on. */
 extern bool g_dump_write_frames;
 
+/* R4 slice 2 (trusted-refinement-claims-plan): --dump-read-frames flag --
+ * print the read-frame verification verdict for every `#reads`-annotated
+ * function (VERIFIED / EXCEEDED / UNVERIFIED).  Same character as
+ * --dump-write-frames: a diagnostic knob, not an experiment -- it reports
+ * what rf_resolve_read_frames decided and changes nothing.  Setting it also
+ * makes that pass run even without --enable=checked-reads, so the verdicts
+ * are inspectable before opting into the refusal tier. */
+extern bool g_dump_read_frames;
+
 /* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
  * colored user-level top-level defn */
 extern bool g_dump_cps;

@@ -7449,6 +7449,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--strict-refine")     == 0) g_strict_refine            = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
         else if (strcmp(tok, "--dump-write-frames") == 0) g_dump_write_frames        = true;
+        else if (strcmp(tok, "--dump-read-frames") == 0)  g_dump_read_frames         = true;
         else if (strcmp(tok, "--dump-cps-coloring") == 0) g_dump_cps_coloring        = true;
         else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
         else if (strcmp(tok, "--dump-mono-specs")   == 0) g_dump_mono_specs          = true;
@@ -8266,6 +8267,7 @@ static int usage(void) {
         "  --strict-refine                  hard-fail refinement obligations the solver cannot prove\n"
         "  --dump-effects                   print inferred effect row for each defn (ER6)\n"
         "  --dump-write-frames              print the checked verdict for each `#writes` frame (G1)\n"
+        "  --dump-read-frames               print the verification verdict for each `#reads` frame (R4)\n"
         "  --dump-cps-coloring              print whole-program may-capture coloring per defn (CPS1)\n"
         "  --dump-cps                       print the ANF/CPS IR for each colored defn (CPS2)\n"
         "  --lint-effects                   advisory warnings for unannotated effectful functions (ER6)\n"
@@ -9235,6 +9237,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-write-frames") == 0) {
             /* G1: print the checked verdict for each declared `#writes` frame */
             g_dump_write_frames = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-read-frames") == 0) {
+            /* R4 slice 2: print the verification verdict for each `#reads` frame */
+            g_dump_read_frames = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

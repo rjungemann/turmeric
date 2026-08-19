@@ -992,7 +992,13 @@ anyway.
   was always the enforcement, and that remains intact for ordinary code). A
   hard guarantee needs module-private construction / a `::`-sealed newtype --
   an independent language feature, tracked in
-  `docs/archive/frozen-region-aliasing-via-coercing-cast.md`. See the
+  `docs/archive/frozen-region-aliasing-via-coercing-cast.md`. Trust is no
+  longer the whole story, though: a demonstrably broken frame (a direct read
+  of a mutable global, or of state rooted in a parameter the frame omits)
+  draws `TUR-W0383` gatelessly and is refused under `--enable=checked-reads`,
+  and `--dump-read-frames` runs a verification walk that can stamp a
+  walkable body's frame VERIFIED. An inline-C body stays exactly as trusted
+  as this entry describes. See the
   [Stateful Refinements guide](stateful-refinements-guide.md).
 
 Every one of these fails toward a runtime check, never toward a wrong answer

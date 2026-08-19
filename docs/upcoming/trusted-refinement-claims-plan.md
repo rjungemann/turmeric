@@ -372,17 +372,62 @@ Notes from doing it:
   fail the run).  The quiet fixture is also the first visible-body
   multi-param `#reads` measure in the tree, closing the loop with R3.
 
-**What remains for R4 proper:** the footprint walk itself (attribute
-every read in a walkable measure body to a named frame parameter, with
-the WG_UNKNOWN discipline for calls it cannot follow -- slice 1 above is
-its evidence-only precursor: same leaves, same roots, no verdict on
-silence), the decision of what a VERIFIED frame buys its
-consumers, the sized-world half of the spice conversion, and a guides
-pass once the walk lands -- `stateful-refinements-guide.md` (the trusted
-tier's own documentation and its three-step trajectory),
-`refinement-types-guide.md`, and the TUR-W0383 `--explain` text all
-describe the reads story as it stands today and need to say what checked
-frames actually verify.  The facade half of the spice-side prototype is
+#### R4 execution record, part 3 (2026-08-19): slice 2 -- the footprint walk proper, VERIFIED as a stamped fact
+
+The tri-state pass the plan kept deferring to now exists.
+`rf_resolve_read_frames` (elab_fns.c, invoked from elab_toplevel.c beside
+its WF2 template) walks each `#reads` function's ELABORATED body -- unlike
+WF2's Form walk, the read leaves need type information -- and stamps
+`Binding.reads_checked` when every read of mutable state attributes to a
+frame-named parameter.  The discipline the plan demanded before silence
+could mean anything: every expression kind is either modeled or answers
+UNVERIFIED -- inline C, `perform`, indirect/poly calls, unvetted builtins,
+and any unmodeled form are "could not see", never quietly clean.  Reuses
+the WfVerdict lattice and the slice-1 root chase.
+
+- **Interprocedural, one level deep by frames:** a call to a walk-PURE
+  callee is clean; a call to a callee with its own VERIFIED `#reads` frame
+  maps each framed callee slot to the ROOT of the argument feeding it
+  (fixed-point rounds, same shape as wf_resolve_write_frames, so
+  definition order does not matter).  This makes the two-function ECS
+  shape verify: `alive2?` reading only through a verified `gen-at` frame
+  is VERIFIED, and -- the payoff shape -- feeding a verified callee's
+  framed slot from an UNFRAMED parameter is EXCEEDED, a finding slice 1's
+  definition-site scan structurally cannot see because it sits behind a
+  call.  The dump is currently that finding's only surface (no W0383;
+  wiring the walk's EXCEEDED into the warning is a candidate next slice).
+- **Surface: `--dump-read-frames`** (diagnostic knob, ungated -- it also
+  makes the pass run without the experiment), one line per frame:
+  VERIFIED / EXCEEDED / UNVERIFIED plus the mask.  Pinned by
+  `read-frames-dump-verdicts`, one function per verdict shape, identical
+  output on the compiled and --interpret paths.
+- **The `(unsafe ...)` desugar needed one more modeled kind:** its
+  handler case body is `(resume k nil)`, so EX_RESUME (operands scanned)
+  joined the walk -- without it every visible-measure body was UNVERIFIED
+  for a resume that reads nothing.
+- **What VERIFIED buys, decided for now:** it is a stamped, dumpable fact
+  and nothing more.  The consumers the guide lists (CSE, safe
+  parallelization, incremental recompute) want a verified frame over the
+  REAL measure layer, and per PR #54 that layer is still half-converted;
+  wiring a behavioral consumer before the sized-world half lands would be
+  optimizing on a vocabulary nothing yet speaks.  Revisit when the spice
+  conversion completes.
+- **Honest limitation, stated:** the root chase does not follow local
+  `let` aliases or calls (a pointer laundered through a local or returned
+  from a helper is UNVERIFIED, not attributed), and the real spice
+  measure `rgworld-alive?` -> `rgw-gen (rgw-ctrl w)` shape verifies only
+  if the helper takes the WORLD (so the root is visible at the call),
+  not a pre-unwrapped int -- a concrete design input for the sized-world
+  conversion: keep frames on world-typed helpers.
+
+**What remains for R4 proper:** wiring the walk's call-shape EXCEEDED
+into the W0383/refusal evidence tier (today it is dump-only), local
+alias tracking in the root chase if real measures need it, the first
+behavioral consumer of `reads_checked` (deferred as above), the
+sized-world half of the spice conversion, and keeping the guides in step
+as those land (the slice-1/slice-2 guide and `--explain` updates are in;
+what remains documents itself alongside each remaining piece).  The
+facade half of the spice-side prototype is
 up as turmeric-spices PR #54 (2026-08-19), verified byte-identical on
 both the new and the old purity walk, so it carries no new `tur` floor.
 The walk and the sized-world conversion stay one design, landed

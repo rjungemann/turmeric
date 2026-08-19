@@ -801,6 +801,7 @@ static const Binding *reads_scan_unframed_param(const Expr *x,
 #undef RSUP
 }
 
+
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
  * by the elaborator because it is the only side that can look a name up in the
  * global scope; refine_collect.c reaches it through a function pointer so it
@@ -2071,6 +2072,289 @@ void wf_resolve_write_frames(Elab *e) {
             printf("\n");
         }
         fflush(stdout);
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * R4 slice 2 (trusted-refinement-claims-plan): the read-frame VERIFICATION
+ * walk -- the footprint walk proper, in its first honest form.
+ *
+ * Slice 1 above is the EVIDENCE half: it may only speak when it saw a read
+ * the frame omits, and its silence means nothing.  This walk is the other
+ * half: it decides whether silence was "saw the whole body and every read of
+ * mutable state attributes to a frame-named parameter" (WF_VERIFIED, stamped
+ * as Binding.reads_checked) or "could not see" (WF_UNVERIFIED, no stamp, no
+ * diagnostic -- the frame simply stays at the trusted tier it is today).
+ * WF_EXCEEDED can also fall out (the same finding slice 1 warns about,
+ * possibly reached through a verified callee's frame); it is NOT re-reported
+ * here -- TUR-W0383 and the checked-reads refusal own that -- it only blocks
+ * the VERIFIED stamp.
+ *
+ * The discipline is the tri-state the plan required before silence could
+ * back anything: every expression kind is either modeled (children walked,
+ * read leaves attributed) or answers WF_UNVERIFIED.  Inline C, `perform`,
+ * indirect and poly calls, and any unmodeled form are UNVERIFIED, never
+ * quietly clean.  Reuses WfVerdict/wf_worse from the WF2 write walk: the
+ * lattice is the same, only the vocabulary (reads, not writes) differs. */
+
+/* Attribute a read's chased root.  VERIFIED = stable or framed state;
+ * EXCEEDED = mutable state the frame omits (an unframed parameter, or a
+ * mutable global); UNVERIFIED = a local or unknown root, whose provenance
+ * this walk does not track. */
+static WfVerdict rf_root_verdict(const Binding *root, Binding **params,
+                                 uint32_t n_params, uint64_t mask) {
+    if (!root) return WF_UNVERIFIED;
+    if (root->is_param) {
+        for (uint32_t i = 0; i < n_params && i < 64; i++) {
+            if (params[i] != root) continue;
+            return (mask & (UINT64_C(1) << i)) ? WF_VERIFIED : WF_EXCEEDED;
+        }
+        return WF_UNVERIFIED;   /* an enclosing fn's param, via a closure */
+    }
+    if (root->is_global)
+        return root->is_mut ? WF_EXCEEDED : WF_VERIFIED;
+    return WF_UNVERIFIED;
+}
+
+/* Builtins that read no program-visible mutable state: pure computations,
+ * output/free/write-only memory ops, and value-reshaping casts.  Everything
+ * else -- RAW_MEMCPY reads its source, the dl* family reaches outside the
+ * program, and any shape this list has not vetted -- answers UNVERIFIED. */
+static bool rf_builtin_reads_nothing(BuiltinShape s) {
+    if (rt_builtin_shape_pure(s)) return true;
+    switch (s) {
+    case BS_PTR_ARITH:                                    /* address math */
+    case BS_PRINTLN_INT:  case BS_PRINTLN_FLOAT: case BS_PRINTLN_BOOL:
+    case BS_PRINTLN_CSTR: case BS_PRINTLN_UINT:  case BS_PRINTLN_FLOAT32:
+    case BS_PREFIX_UNARY_FREE:
+    case BS_PTR_WRITE:    case BS_ARRAY_SET_UNCHECKED:    /* write-only */
+    case BS_RAW_MALLOC:   case BS_RAW_FREE:
+    case BS_RAW_REALLOC:  case BS_RAW_MEMSET:
+    case BS_UNSAFE_CAST:  case BS_REINTERPRET: case BS_TRANSMUTE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static WfVerdict rf_scan(const Expr *x, Binding **params, uint32_t n_params,
+                         uint64_t mask, uint32_t *budget) {
+#define RFS(sub) rf_scan((sub), params, n_params, mask, budget)
+    if (!x) return WF_VERIFIED;
+    if (*budget == 0) return WF_UNVERIFIED;
+    (*budget)--;
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return WF_VERIFIED;
+
+    case EX_VAR: {
+        const Binding *b = x->as.var.binding;
+        if (!b) return WF_UNVERIFIED;
+        /* A mutable GLOBAL read is the slice-1 finding.  A mutable LOCAL is
+         * per-call state -- fresh each invocation, so it cannot differ
+         * between two calls with equal arguments -- and a by-value
+         * parameter read is the stability the whole feature rests on. */
+        return (b->is_mut && b->is_global) ? WF_EXCEEDED : WF_VERIFIED;
+    }
+
+    /* The unwalkables.  Each is the reason a frame stays TRUSTED today. */
+    case EX_INLINE_C:
+    case EX_PERFORM:
+        return WF_UNVERIFIED;
+
+    case EX_GET_FIELD: {
+        const Expr *recv = x->as.get_field_.struct_expr;
+        WfVerdict v = WF_VERIFIED;
+        if (recv) {
+            switch (recv->type.kind) {
+            case TY_REF: case TY_RC: case TY_PTR_VOID:
+            case TY_REF_IMMUT: case TY_REF_MUT:
+                /* An aliasable receiver: the read is of mutable state and
+                 * must attribute. */
+                v = rf_root_verdict(reads_read_root(recv), params, n_params,
+                                    mask);
+                break;
+            default: break;   /* by-value receiver: as stable as its root */
+            }
+        }
+        return wf_worse(v, RFS(recv));
+    }
+
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return WF_UNVERIFIED;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        WfVerdict v;
+        if (sh == BS_PTR_DEREF || sh == BS_ARRAY_GET_UNCHECKED) {
+            /* A raw-memory load: attribute its pointer's root. */
+            v = (x->as.builtin.n >= 1)
+                    ? rf_root_verdict(reads_read_root(x->as.builtin.args[0]),
+                                      params, n_params, mask)
+                    : WF_UNVERIFIED;
+        } else {
+            v = rf_builtin_reads_nothing(sh) ? WF_VERIFIED : WF_UNVERIFIED;
+        }
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            v = wf_worse(v, RFS(x->as.builtin.args[i]));
+        return v;
+    }
+
+    case EX_CALL: {
+        WfVerdict v = WF_VERIFIED;
+        if (x->as.call_.fn_expr || x->as.call_.is_poly_call) {
+            v = WF_UNVERIFIED;    /* dispatch this walk cannot name */
+        } else {
+            Binding *callee = x->as.call_.fn_binding;
+            if (callee && rt_binding_is_pure(callee)) {
+                /* Pure: reads nothing mutable, whatever it is passed. */
+            } else if (callee && callee->reads_params_mask != 0 &&
+                       callee->reads_checked) {
+                /* A VERIFIED callee frame is an upper bound on its mutable
+                 * reads, so map each framed callee parameter to the root of
+                 * the argument feeding it.  A framed slot fed by our framed
+                 * parameter is covered; fed by an unframed one, the callee's
+                 * verified read IS our omitted read (EXCEEDED); fed by
+                 * anything untrackable -- including a partial application
+                 * that leaves a framed slot unbound -- UNVERIFIED. */
+                for (uint32_t j = 0; j < 64; j++) {
+                    if (!(callee->reads_params_mask & (UINT64_C(1) << j)))
+                        continue;
+                    if (j >= x->as.call_.n_args) { v = wf_worse(v, WF_UNVERIFIED); break; }
+                    v = wf_worse(v, rf_root_verdict(
+                            reads_read_root(x->as.call_.args[j]),
+                            params, n_params, mask));
+                }
+            } else {
+                v = WF_UNVERIFIED;
+            }
+        }
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+            v = wf_worse(v, RFS(x->as.call_.args[i]));
+        return v;
+    }
+
+    case EX_IF:
+        return wf_worse(RFS(x->as.if_.cond),
+                        wf_worse(RFS(x->as.if_.then_),
+                                 RFS(x->as.if_.else_or_null)));
+    case EX_DO: {
+        WfVerdict v = WF_VERIFIED;
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            v = wf_worse(v, RFS(x->as.do_.items[i]));
+        return v;
+    }
+    case EX_LET: case EX_LETREC: {
+        WfVerdict v = RFS(x->as.let_.body);
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            v = wf_worse(v, RFS(x->as.let_.bindings[i].init));
+        return v;
+    }
+    case EX_WHILE:
+        return wf_worse(RFS(x->as.while_.cond), RFS(x->as.while_.body));
+    case EX_SET:
+        /* The write is not a read; the value being written is. */
+        return RFS(x->as.set_.value);
+    case EX_SET_DEREF:
+        return wf_worse(RFS(x->as.set_deref_.ref), RFS(x->as.set_deref_.value));
+    case EX_MATCH: {
+        WfVerdict v = RFS(x->as.match_.scrutinee);
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            v = wf_worse(v, RFS(x->as.match_.arms[i].guard));
+            v = wf_worse(v, RFS(x->as.match_.arms[i].body));
+        }
+        return v;
+    }
+    case EX_ASCRIBE: return RFS(x->as.ascribe_.inner);
+    case EX_CAST:    return RFS(x->as.cast_.expr);
+    case EX_RETURN:  return RFS(x->as.return_.value);
+    case EX_HANDLE: {
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return WF_UNVERIFIED;
+        WfVerdict v = RFS(h->body);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            v = wf_worse(v, RFS(h->cases[i].body));
+        return v;
+    }
+    /* `(resume k v)` transfers control; the reads are in its operands.
+     * Modeled because every `(unsafe ...)` desugar carries one as its
+     * handler-case body -- without this the whole visible-measure shape
+     * would be UNVERIFIED for a resume that reads nothing. */
+    case EX_RESUME: {
+        const ResumeExpr *r = x->as.resume_.resume;
+        if (!r) return WF_UNVERIFIED;
+        return wf_worse(RFS(r->k), RFS(r->value));
+    }
+    default:
+        return WF_UNVERIFIED;   /* unmodeled: "could not see", never clean */
+    }
+#undef RFS
+}
+
+void rf_note_reads_site(Elab *e, Binding *fn, Binding **params,
+                        uint32_t n_params) {
+    if (!e || !fn) return;
+    if (e->n_rf_reads_sites == e->cap_rf_reads_sites) {
+        uint32_t ncap = e->cap_rf_reads_sites ? e->cap_rf_reads_sites * 2 : 8;
+        RfReadsSite *nb = (RfReadsSite *)arena_alloc(
+            e->arena, ncap * sizeof(RfReadsSite));
+        if (e->rf_reads_sites)
+            memcpy(nb, e->rf_reads_sites,
+                   e->n_rf_reads_sites * sizeof(RfReadsSite));
+        e->rf_reads_sites     = nb;
+        e->cap_rf_reads_sites = ncap;
+    }
+    RfReadsSite *s = &e->rf_reads_sites[e->n_rf_reads_sites++];
+    s->fn       = fn;
+    s->params   = params;
+    s->n_params = n_params;
+}
+
+void rf_resolve_read_frames(Elab *e) {
+    if (!e || e->n_rf_reads_sites == 0) return;
+    if (!g_opt_checked_reads && !g_dump_read_frames) return;
+    /* Fixed point, same shape and same rationale as wf_resolve_write_frames:
+     * the call case consults a callee's reads_checked, which a later round
+     * may raise.  Verdicts only move toward verified, so this terminates. */
+    uint32_t rounds = e->n_rf_reads_sites + 1;
+    for (uint32_t round = 0; round < rounds; round++) {
+        bool progress = false;
+        for (uint32_t i = 0; i < e->n_rf_reads_sites; i++) {
+            RfReadsSite *s = &e->rf_reads_sites[i];
+            if (!s->fn || s->fn->reads_checked) continue;
+            FnDef *fd = s->fn->source_fn_def;
+            if (!fd || !fd->body) continue;   /* inline-C-only: UNVERIFIED */
+            uint32_t budget = 65536;
+            WfVerdict v = rf_scan(fd->body, s->params, s->n_params,
+                                  s->fn->reads_params_mask, &budget);
+            if (v == WF_VERIFIED) { s->fn->reads_checked = true; progress = true; }
+        }
+        if (!progress) break;
+    }
+    /* --dump-read-frames: one line per frame, in registration order.  No
+     * EXCEEDED diagnostic here -- slice 1's TUR-W0383 / the checked-reads
+     * refusal own the finding -- but the dump does distinguish it from
+     * UNVERIFIED so a fixture can tell "broken" from "could not see". */
+    if (g_dump_read_frames) {
+        for (uint32_t i = 0; i < e->n_rf_reads_sites; i++) {
+            RfReadsSite *s = &e->rf_reads_sites[i];
+            if (!s->fn) continue;
+            const char *verdict = "UNVERIFIED";
+            if (s->fn->reads_checked) {
+                verdict = "VERIFIED";
+            } else {
+                FnDef *fd = s->fn->source_fn_def;
+                if (fd && fd->body) {
+                    uint32_t budget = 65536;
+                    if (rf_scan(fd->body, s->params, s->n_params,
+                                s->fn->reads_params_mask, &budget) == WF_EXCEEDED)
+                        verdict = "EXCEEDED";
+                }
+            }
+            printf("read-frame %s: %s mask=0x%llx\n",
+                   s->fn->name ? s->fn->name->name : "<fn>",
+                   verdict,
+                   (unsigned long long)s->fn->reads_params_mask);
+        }
     }
 }
 
@@ -7572,6 +7856,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
      * refinements, so this must not sit inside the block above. */
     b->reads_params_mask = reads_params_mask_defn;
+    /* R4 slice 2: register the frame for the deferred verification pass.
+     * Clones are skipped for the same reason their W0383 is deduped below:
+     * one declared frame, one verdict, one dump line. */
+    if (reads_params_mask_defn != 0 && !e->bare_fat_spec_active)
+        rf_note_reads_site(e, b, params, n_params);
     /* mutable-globals-plan section 12.3, warning tier (section 13.1): a
      * `#reads` frame is TRUSTED and its one consumer GRANTS congruence, so a
      * frame that omits mutable state the body reads buys proofs it has not
