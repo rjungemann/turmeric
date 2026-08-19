@@ -22,11 +22,12 @@ Quick orientation:
 |---|---|---|
 | Call a C library you can link against | `extern-c` (+ autolink / `:cmake-deps`) | headers + `-l` flag |
 | Call a library chosen/found at runtime | `dlopen` / `dlsym` / `call-ptr` | nothing |
+| Give a C library a callback into Turmeric | `callback-ptr` | nothing |
 | Call C from the REPL / `--interpret` | either; both route through JIT thunks | a `-DTUR_JIT=ON` build |
 | Wrap a C library as a reusable package | a spice with `:cmake-deps` | see [Developing Spices](developing-spices-guide.md) |
 
-`call-ptr` is **experimental** (`--enable=jit-ffi`, TUR-W0060); the other
-forms are stable. Everything on this page that touches raw pointers lives
+`call-ptr` and `callback-ptr` are **experimental** (`--enable=jit-ffi`,
+TUR-W0060); the other forms are stable. Everything on this page that touches raw pointers lives
 inside `(unsafe ...)` blocks and behind the `TURI_CAP_FFI` capability in
 sandboxed interpreter environments.
 
@@ -56,13 +57,11 @@ sandboxed interpreter environments.
   the stated signature. The signature vector is positional parameter
   types, `->`, one return type.
 
-All four require an enclosing `(unsafe ...)` block; `call-ptr`
-additionally requires `--enable=jit-ffi` (or `:experiments [:jit-ffi]` in
+All four require an enclosing `(unsafe ...)` block; `call-ptr` (and
+`callback-ptr`) additionally require `--enable=jit-ffi` (or `:experiments [:jit-ffi]` in
 `build.tur`).
 
 ### Signature vocabulary
-
-`call-ptr` signatures are scalar-only today:
 
 | Type token | C parameter type | Register class |
 |---|---|---|
@@ -72,13 +71,85 @@ additionally requires `--enable=jit-ffi` (or `:experiments [:jit-ffi]` in
 | `:float` | `double` | float |
 | `:float32` | `float` (exact -- not widened) | float |
 | `:void` / `:nil` | return position only | -- |
-
-Struct-by-value parameters and runtime-created callbacks are the plan's
-F4/F5 phases and are not available yet; a signature that needs them is a
-compile-time error, never a silent mis-call.
+| a record type name | that record, by value | see below |
 
 The **pointer expression** may be a `dlsym` result (`ptr<void>`) or a raw
 `:int` address (e.g. one you got from inline C).
+
+### Struct-by-value
+
+A signature slot may name a `defstruct` (or any single-constructor record),
+in parameter or return position:
+
+```turmeric
+(defstruct Point [x : int32 y : int32])
+
+(unsafe
+  (let [d (call-ptr distance-fn [Point Point -> :float] a b)
+        p (call-ptr origin-fn   [-> Point])]
+    ...))
+```
+
+There is no marshalling step in compiled code: a `defstruct` already emits
+as the exact by-value C struct with the declared field types, so the
+signature just names it. Requirements on the record:
+
+- one constructor, record-style (a multi-variant sum has a tag, which no C
+  API declares);
+- not `:heap` (its ABI is a pointer -- declare the slot `:ptr`);
+- monomorphic (a parametric record has no single layout);
+- every field a scalar from the table above.
+
+Arguments are matched by **type identity**, not by shape: two records with
+the same field types are still different C types, and passing one where the
+other is declared is an error.
+
+> **aarch64 limitation, interpreter only.** Under `--interpret`, an
+> aggregate whose fields are all the same floating-point type (an AAPCS64
+> *HFA* -- `{float, float}`, `{double, double, double}`, and so on) is
+> **refused with a diagnostic** on arm64. MIR has no HFA class and would
+> pass it in the general-purpose registers where a natively compiled callee
+> reads the SIMD ones, which produces silently wrong numbers rather than a
+> crash. Compiled code is unaffected and correct on every target, because
+> the C compiler implements the ABI. Details, measurements, and fix
+> directions:
+> [mir-aarch64-fp-aggregate-abi](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mir-aarch64-fp-aggregate-abi.md).
+
+### Callbacks: `callback-ptr`
+
+`(callback-ptr f [T1 T2 -> R])` goes the other way -- it hands C a function
+pointer that runs Turmeric. The signature vector reads exactly like
+`call-ptr`'s, and describes the callback's own parameters and return:
+
+```turmeric
+;; qsort reads only the SIGN of the result, and ptr-deref yields a unique
+;; value usable once -- so subtract rather than compare twice.
+(defn intcmp [a : ptr b : ptr] : int
+  (unsafe (- (ptr-deref a) (ptr-deref b))))
+
+(unsafe
+  (let [q   (dlsym libc "qsort")
+        cmp (callback-ptr intcmp [:ptr :ptr -> :int])]
+    (call-ptr q [:ptr :int :int :ptr -> :void] buf 5 8 cmp)))
+```
+
+The callback must be a **top-level function**, named directly or written
+inline with no captures. A C callback slot is a bare function pointer with
+no room for a captured environment, so a closure cannot become one; a
+capturing lambda, or a local holding a function value, is a compile-time
+error.
+
+Callbacks are **process-lifetime**. A C library holding a function pointer
+has no way to announce that it is finished with it, so there is no safe
+moment to reclaim one and no `callback-free!`.
+
+A Turmeric error raised inside a callback cannot propagate: there is no
+error channel through a C callback slot, and unwinding through the foreign
+frames in between is not safe. The error is printed to stderr and the
+callback returns a zero result, so handle failure inside the callback.
+
+Aggregates are supported outbound (`call-ptr`) but not yet inbound -- a
+callback cannot take or return a record by value.
 
 ### How it executes
 
@@ -89,10 +160,12 @@ The **pointer expression** may be a `dlsym` result (`ptr<void>`) or a raw
 - **Interpreted (`--interpret`, REPL):** the signature is rendered to a
   ~10-line C thunk, compiled in-process by c2mir (the C front end of the
   MIR JIT the tree already vendors), cached per unique signature, and
-  called with the marshalled arguments. This requires a **JIT-enabled
-  build** (`-DTUR_JIT=ON`); an engine-less interpreter reports
-  `call-ptr under --interpret requires a JIT-enabled build` -- a clean
-  error, never a nil.
+  called with the marshalled arguments. `callback-ptr` works the same way
+  in reverse: c2mir synthesizes a function with the stated C signature that
+  calls back into the interpreter. Both require a **JIT-enabled build**
+  (`-DTUR_JIT=ON`); an engine-less interpreter reports
+  `... under --interpret requires a JIT-enabled build` -- a clean error,
+  never a nil.
 
 Thunk compilation costs milliseconds per *unique signature*, once per
 process -- noise against tree-walking dispatch. A c2mir compile failure

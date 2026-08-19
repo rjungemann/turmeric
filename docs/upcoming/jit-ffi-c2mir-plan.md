@@ -1,7 +1,7 @@
 # JIT-scoped dynamic FFI via c2mir (no new dependency)
 
-> **Status:** F1-F3 implemented (2026-08-17); F4 (struct-by-value) and F5
-> (callbacks) deliberately trailing, per section 3.  Proposed 2026-08-17.
+> **Status:** F1-F5 implemented (F1-F3 2026-08-17; F4 + F5 2026-08-18), each
+> with a stated boundary -- see "F4/F5 as built" below.  Proposed 2026-08-17.
 > **Track:** post-v1. Requires `-DTUR_JIT=ON` builds; non-JIT builds keep
 > today's behavior unchanged.
 > **Type:** interpreter/JIT (`src/turi/`, `src/jit_engine.c`) + one small
@@ -42,6 +42,55 @@
 >   experiment gate); the JIT-only cases probe the binary and PASS-skip on
 >   an engine-less build (`TUR=./build-jit/tur bash tests/run-flags.sh`
 >   exercises them).
+
+> **Implementation notes (F4-F5, 2026-08-18):**
+>
+> - **The struct registry section 4 warned about does not exist, by design.**
+>   Section 2.1 sketched naming a layout "by hash ... resolved against a small
+>   registry", and section 4 flagged that registry as the piece most likely to
+>   grow.  Encoding the layout INLINE in the sig instead (`{ff}`, exact-width
+>   member codes, nesting allowed) makes a sig string a complete
+>   self-describing layout: the thunk cache stays keyed on it alone, and
+>   nothing has to be kept in sync between the elaborator and turi.
+> - **The compiled path needed almost nothing.**  A `defstruct` already emits
+>   as the exact by-value C struct with the declared field types, so a
+>   signature slot naming a record just works; only the argument cast had to
+>   go (C has no cast to a struct type).  The interpreter builds bytes itself,
+>   from the same layout engine that renders the thunk's declaration.
+> - **MIR mis-passes floating-point aggregates on aarch64**, which is the
+>   real boundary on F4.  c2mir's aarch64 ABI file hands back one undifferentiated
+>   `MIR_T_BLK` for every aggregate where the x86-64 sibling runs the full SysV
+>   eightbyte classification, and both MIR backends then route every block
+>   through `x0..x7`.  AAPCS64 puts an HFA in `v0..v7`.  A c2mir thunk calling
+>   a natively compiled callee therefore writes the members where the callee
+>   does not look -- and the answer is whatever was left in the SIMD
+>   registers, so some call sites are accidentally right.  The interpreter
+>   REFUSES an HFA on aarch64 rather than miscall it; compiled code is
+>   unaffected.  Matrix + root cause at file:line:
+>   [docs/reported/mir-aarch64-fp-aggregate-abi.md](../reported/mir-aarch64-fp-aggregate-abi.md).
+> - **F5 reuses F3's node** -- a `CallPtrSig` with `is_callback`, the closure
+>   sitting where the target address sat -- so F3's "no walker had to learn a
+>   new kind" property still holds, and both forms share one `[T1 T2 -> R]`
+>   parser.
+> - **A callback must lower to a plain C function** (top-level defn, or an
+>   inline lambda with no captures).  A C callback slot has no room for a
+>   captured environment, and the `:fn` runtime representation is not uniform
+>   enough to recover one from -- one of its three shapes already SIGSEGVs on
+>   the ordinary argument path
+>   ([docs/reported/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md](../reported/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md)).
+>   Enforced in elaboration so `tur run` and `--interpret` agree.
+> - **No `callback-free!`** (section 2.3 floated it as optional).  It would be
+>   a no-op on the compiled path and a use-after-free primitive on the other;
+>   a C library holding a function pointer cannot tell us it is finished, so
+>   there is no safe moment to reclaim one.  Callbacks are process-lifetime,
+>   matching turi's closure policy, and the provider caches on (sig, ctx) so a
+>   `callback-ptr` in a loop reuses its image.
+> - Tests: `tests/fixtures/jit-ffi-call-ptr-struct`,
+>   `tests/fixtures/jit-ffi-callback-ptr` (qsort(3) with a Turmeric
+>   comparator, the acceptance case named in section 3), and five new
+>   `jit-ffi-*` cases in `tests/run-flags.sh` covering the interpreter's
+>   struct marshaller, the aarch64 HFA refusal, the interpreter callback, the
+>   closure rejection, and the non-JIT diagnostic.
 
 ## 0. Summary
 
@@ -292,14 +341,46 @@ cleanup once JIT builds are the default REPL configuration.
 - **F3 -- `call-ptr`.** Elaboration + AOT codegen + turi routing +
   experiment row. Fixture: dlopen a test .so, dlsym, call-ptr, both
   paths.
-- **F4 -- struct-by-value.** Extend signatures with `"{...}"`,
-  struct marshaller, retire `'?'` errors for registered layouts.
-  Expect MIR-fork ABI patches here; budget for it.
-- **F5 -- callbacks.** `tur_jit_ffi_callback` + `callback-free!`.
-  Fixture: qsort(3) with a Turmeric comparator under `--interpret`.
+- **F4 -- struct-by-value.** DONE 2026-08-18. Extend signatures with
+  `"{...}"`, struct marshaller, retire `'?'` errors for registered
+  layouts. Expect MIR-fork ABI patches here; budget for it.
+- **F5 -- callbacks.** DONE 2026-08-18. `tur_jit_ffi_callback` +
+  `callback-free!`. Fixture: qsort(3) with a Turmeric comparator under
+  `--interpret`.
 
 F1/F2 are independently shippable and carry most of the value; F4/F5
 can trail indefinitely.
+
+### Open after F5
+
+Not blockers on anything, in rough priority order:
+
+- **The aarch64 HFA gap in MIR** (the F4 boundary). Fixing it is vendored
+  backend work in `rjungemann/mir`: an HFA classifier in
+  `c2mir/aarch64/caarch64-ABI-code.c`, plus a SIMD-register path for that
+  blk class in both `mir-gen-aarch64.c` (call lowering) and `mir-aarch64.c`
+  (the hand-encoded interface thunks, where `gen_ld_pat` currently only
+  encodes GP loads). Landing it means pushing to the fork and bumping the
+  pin in `cmake/mir.cmake` -- mind the CACHE-VARIABLE trap at lines 67-76.
+  Until then the interpreter refuses the case.
+- **x86-64 verification.** c2mir implements full SysV eightbyte
+  classification there, so struct-by-value through a thunk is *believed*
+  correct on x86-64 -- but it has never been measured, because no x86-64
+  host was available when F4 landed. The refusal above is `#if
+  defined(__aarch64__)`, so x86-64 takes the unverified path today.
+- **Scalar width fidelity.** The scalar vocabulary collapses every integer
+  width onto `'i'` (`long long` in the thunk), so an `:int32` parameter is
+  passed as a 64-bit value. Benign on both supported ABIs -- same register,
+  callee reads the low half -- but now inconsistent with F4's aggregate
+  members, which are exact-width because layout demanded it. Widening the
+  scalar codes to match would make the whole vocabulary exact. Pre-existing
+  since F1, not introduced by F4.
+- **Aggregates inbound to a callback.** F4's marshaller packs outward only;
+  a callback taking or returning a record by value needs the unpacking
+  direction. Rejected explicitly today, in elaboration and in the provider.
+- **extern-c with aggregate parameters.** `register_extern_c_binding` still
+  classifies an aggregate as `'?'` and falls back to the nil stub. The
+  layout machinery F4 added would carry it; nothing else is missing.
 
 ## 4. Risks / open questions
 
@@ -311,10 +392,13 @@ can trail indefinitely.
   runtime, but extern-c against a lib the process never linked needs
   `jit_load_autolink` or an explicit dlopen first. Document the
   resolution order.
-- **Signature registry for structs** needs a single source of truth
+- ~~**Signature registry for structs** needs a single source of truth
   shared between elaborator and turi; the monomorph layout tables are
   the likely donor. Scope carefully in F4 -- this is the phase most
-  likely to grow.
+  likely to grow.~~ **Dissolved in F4:** the layout is encoded inline in
+  the sig string rather than referenced by hash, so a sig is
+  self-describing and there is no registry to share. See the F4-F5
+  implementation notes at the top.
 - **Sanitizers:** `tur_mir` is deliberately built unsanitized
   (`cmake/mir.cmake:118-126`); calls crossing into thunked code are
   invisible to ASan. Same status quo as the JIT today; note it in the
