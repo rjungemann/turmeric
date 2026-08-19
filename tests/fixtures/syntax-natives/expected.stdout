@@ -1,0 +1,10 @@
+(+ 40 2)
+list
+3
++
+2
+42
+(println 7)
+(do x y)
+true
+false

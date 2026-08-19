@@ -156,6 +156,19 @@ extern bool g_symbols_enabled;
 /* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
 extern bool g_interpret_mode;
 
+/* `tur expand`: print each macro expansion (outside stdlib load) to stdout
+ * as it happens during elaboration.  Set by cmd_expand in main.c; read at
+ * the expansion site in elab_call.c. */
+extern bool g_dump_expansion;
+
+/* Stage 3 (macro-system-direction-plan): --macro-caps=io grants the
+ * macro-time env TURI_CAP_IO for the rare legitimately-effectful macro
+ * (embed-file style).  Default deny; io is the only grantable capability
+ * -- FFI/Unsafe/inline-C/async at macro time are never offered.  Set by
+ * the global flag parser in main.c; read at macro-env creation in
+ * src/turi/macro_env.c. */
+extern bool g_macro_caps_io;
+
 /* interp-stdlib-class-method-shadows-user-defn: true while an interpreter
  * entry point (--interpret / REPL / WASM) is preloading stdlib modules via
  * `(load ...)` turns.  Those turns run with stdlib_prefix == 0, so
@@ -334,6 +347,7 @@ typedef enum TurNativeRetType {
     TUR_NRT_CSTR,
     TUR_NRT_VOID,
     TUR_NRT_PTR,       /* opaque handle -> ptr<void> */
+    TUR_NRT_SYNTAX,    /* syntax object (TURI_SYNTAX) -> the Syntax type */
 } TurNativeRetType;
 
 /* Register (or replace) the return-type signature for native `name`.  `name`

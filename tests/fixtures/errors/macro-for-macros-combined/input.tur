@@ -1,0 +1,3 @@
+(defmodule prog
+  (import mhelp :for-macros :refer [mx-add])
+  (defn main [] : int 0))

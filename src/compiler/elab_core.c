@@ -75,6 +75,9 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "any") == 0) return TY_ANY;
     /* SYM0: interned runtime symbol type (-Xsymbols) */
     if (strcmp(name, "Sym") == 0) return TY_SYM;
+    /* Stage 1 (macro-system-direction-plan): compile-time syntax object.
+     * Interpreter/macro-time only; a compiled runtime value never has it. */
+    if (strcmp(name, "Syntax") == 0) return TY_SYNTAX;
     return TY_UNKNOWN;
 }
 
@@ -1946,6 +1949,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_gc_cand_hw       = intern_cstr(st, "gc-candidate-high-water");
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
+    e->sym_defmacro_star = intern_cstr(st, "defmacro*");
     e->sym_quote = intern_cstr(st, "quote");
     e->sym_quasiquote = intern_cstr(st, "quasiquote");
     e->sym_unquote = intern_cstr(st, "unquote");
@@ -2101,6 +2105,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_is_q    = intern_cstr(st, "is?");       /* TY3: (is? x T) type test */
     e->kw_as = intern_cstr(st, "as");   /* same interned symbol, used as :as keyword */
     e->kw_refer = intern_cstr(st, "refer");
+    e->kw_for_macros = intern_cstr(st, "for-macros"); /* Stage 3 macro-time imports */
     e->has_defmodule = false;
     e->current_module_name = NULL;
     e->current_module = NULL;

@@ -1,0 +1,5 @@
+(defmodule prog
+  (defmacro* noisy [x]
+    (println "expanding noisy!")
+    x)
+  (defn main [] : int (println (noisy 7)) 0))

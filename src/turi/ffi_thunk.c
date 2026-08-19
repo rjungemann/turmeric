@@ -68,6 +68,7 @@ static const char *tag_name(TuriTag t) {
         case TURI_INT:    return "int";
         case TURI_FLOAT:  return "float";
         case TURI_CSTR:   return "cstr";
+        case TURI_SYNTAX: return "syntax";
         default:          return "value";
     }
 }

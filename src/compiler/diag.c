@@ -47,6 +47,12 @@ void diag_register_file(const SourceFile *file) {
 
 bool diag_had_error(void) { return had_error_; }
 
+/* Re-mark the error flag after a nested evaluation's diag_reset cleared it.
+ * Used by macro-time evaluation (src/turi/macro_env.c, read-string): the
+ * nested eval resets the diagnostic slate for its own parse/elaborate, which
+ * would otherwise let a compile that already reported errors exit 0. */
+void diag_force_had_error(void) { had_error_ = true; }
+
 uint64_t diag_error_serial(void) { return error_serial_; }
 
 /* Speculative-elaboration capture frames (see diag.h). */

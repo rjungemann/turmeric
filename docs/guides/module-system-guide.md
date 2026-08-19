@@ -123,6 +123,14 @@ defmodule app
 | `(import math)`                     | Names available as fully-qualified: `math/sqrt`.         |
 | `(import math :as m)`               | Alias: `m/sqrt`.                                          |
 | `(import math :refer [sqrt abs])`   | Pull selected names directly into scope: `sqrt`, `abs`. |
+| `(import math :for-macros)`         | Macro-time only: `math`'s functions become callable from `defmacro*` bodies at expansion time; nothing is imported at runtime. |
+
+`:for-macros` cannot combine with `:as`/`:refer` -- a module needed in both
+phases is imported twice, one form per phase, so which code runs at compile
+time stays explicit in the source.  Inside the macro-time env the module's
+functions bind under their bare names.  A macro *defined* in another module
+needs no `:for-macros`; export it and `:refer` it like any macro.  See
+[macros-guide.md](macros-guide.md#macro-time-imports-for-macros).
 
 Self-qualification works inside a module too:
 `(defmodule geom/vector ... (geom/vector/magnitude p))` resolves

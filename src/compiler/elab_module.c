@@ -573,6 +573,7 @@ static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
     out->n_refer = 0;
     out->refer_effect_syms = NULL;
     out->n_refer_effects   = 0;
+    out->for_macros = false;
     out->span = f->span;
 
     uint32_t i = 2;
@@ -643,13 +644,55 @@ static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
             out->refer_effect_syms = esyms;
             out->n_refer_effects   = n_effs;
             i++;
+        } else if (kw->tag == F_KEYWORD && kw->as.sym == e->kw_for_macros) {
+            /* Stage 3 (macro-system-direction-plan): macro-time-only import.
+             * Takes no argument. */
+            out->for_macros = true;
+            i++;
         } else {
             diag_emit(DIAG_ERROR, kw->span,
-                      "unexpected token in import; expected :as or :refer");
+                      "unexpected token in import; expected :as, :refer, or :for-macros");
             return false;
         }
     }
+    if (out->for_macros && (out->alias || out->n_refer > 0 || out->n_refer_effects > 0)) {
+        diag_emit(DIAG_ERROR, out->span,
+                  ":for-macros is a macro-time-only import and cannot combine "
+                  "with :as or :refer; a module needed in both phases is "
+                  "imported twice -- (import %s) and (import %s :for-macros)",
+                  out->module_name->name, out->module_name->name);
+        return false;
+    }
     return true;
+}
+
+/* Stage 3: resolve a module name to its file path, mirroring exactly the
+ * search order elab_load_module walks below (importing file's directory ->
+ * stdlib dir -> each -I include dir), but probing for existence only.
+ * Keep the two in lockstep: a module resolvable by one must be resolvable
+ * by the other. */
+static bool module_path_exists(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
+bool elab_module_resolve_path(Elab *e, const Symbol *name,
+                              char *out, size_t cap) {
+    const char *base = e->module_base_dir ? e->module_base_dir : ".";
+    int n = snprintf(out, cap, "%s/%s.tur", base, name->name);
+    if (n > 0 && (size_t)n < cap && module_path_exists(out)) return true;
+    if (e->module_stdlib_dir) {
+        n = snprintf(out, cap, "%s/%s.tur", e->module_stdlib_dir, name->name);
+        if (n > 0 && (size_t)n < cap && module_path_exists(out)) return true;
+    }
+    for (int ii = 0; ii < e->n_module_include_dirs; ii++) {
+        n = snprintf(out, cap, "%s/%s.tur",
+                     e->module_include_dirs[ii], name->name);
+        if (n > 0 && (size_t)n < cap && module_path_exists(out)) return true;
+    }
+    return false;
 }
 
 Expr *elab_defmodule(Elab *e, const Form *call) {
@@ -838,6 +881,28 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     /* M2: Process imports — load each referenced module and inject :refer symbols. */
     for (uint32_t j = 0; j < mod->n_imports; j++) {
         const ImportSpec *imp = &mod->imports[j];
+        if (imp->for_macros) {
+            /* Stage 3: macro-time-only import -- evaluate the module into
+             * the macro env; no runtime load, no scope injection. */
+            char mpath[4096];
+            if (!elab_module_resolve_path(e, imp->module_name,
+                                          mpath, sizeof(mpath))) {
+                diag_emit(DIAG_ERROR, imp->span,
+                          ":for-macros module '%s' not found (searched the "
+                          "importing file's directory, the stdlib, and the "
+                          "-I include dirs)",
+                          imp->module_name->name);
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            if (!elab_macro_env_import(e, imp->module_name, mpath, imp->span)) {
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            continue;
+        }
         ElabModule *loaded = elab_load_module(e, imp->module_name, imp->span);
         if (!loaded) {
             e->current_module_name = NULL;

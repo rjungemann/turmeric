@@ -103,6 +103,11 @@ set(TURI_EVAL_SOURCES
     # block relocated from main.c so `tur repl` and the WASM REPL register the
     # same interpreter natives as --interpret (web-repl-repl-inline-c-native-gap).
     turi/interpreter_natives.c
+    # macro_env.c -- the per-compile macro-time interpreter env
+    # (macro-system-direction-plan Stage 1): elab_macro_env_get/_dispose,
+    # declared in compiler/elab.h, implemented turi-side to keep the include
+    # direction turi -> compiler.
+    turi/macro_env.c
     # dap.c -- Debug Adapter Protocol server (debugger Phase 3), a thin shell
     # over the Phase 2 interpreter debugger's control API in eval.c.
     turi/dap.c
@@ -698,6 +703,26 @@ target_link_options(tur_lang_switch_prelude PRIVATE -pthread
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_lang_switch_prelude PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# macro-system-direction-plan Stage 1: the macro-time interpreter env.
+# Nested turi evaluation inside a (simulated) compile must never leave
+# g_interpret_mode flipped; capabilities are denied and fuel is bounded.
+# ---------------------------------------------------------------------------
+add_executable(tur_macro_env_nested ${CMAKE_SOURCE_DIR}/tests/turi/macro-env-nested.c)
+target_include_directories(tur_macro_env_nested PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_macro_env_nested PRIVATE libturi)
+target_compile_options(tur_macro_env_nested PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_macro_env_nested PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_macro_env_nested PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 

@@ -2628,6 +2628,8 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
+    /* Stage 2 (macro-system-direction-plan): procedural macros. */
+    if (name == e->sym_defmacro_star) return elab_defmacro_star(e, call);
     if (name == e->sym_quote) {
         /* (quote x) -- mirrors F_QUOTE in elab_toplevel.c. Quoting a
          * bare symbol yields a :Sym literal so DSL helpers in defns
@@ -2747,6 +2749,27 @@ Expr *elab_call(Elab *e, Form *call) {
                           name->name);
             e->macro_expand_depth--;
             return NULL;
+        }
+
+        /* `tur expand`: trace each expansion as it happens.  Nested
+         * expansions print too (inner-first is elaboration order), each
+         * labeled with the macro name and the call site's line:col.
+         * Expansions inside the stdlib preload are noise, skip them. */
+        if (g_dump_expansion && !e->in_stdlib_load) {
+            Buf mb;
+            buf_init(&mb);
+            form_print(&mb, expanded);
+            /* Basename only: a full path would embed the build environment
+             * into output meant for golden-file comparison.  A recursive
+             * macro's inner calls carry the macro-definition file's spans,
+             * so the file name is what disambiguates them from user code. */
+            const char *dump_path = diag_file_path(call->span.file_id);
+            const char *dump_base = dump_path ? strrchr(dump_path, '/') : NULL;
+            dump_base = dump_base ? dump_base + 1 : (dump_path ? dump_path : "?");
+            printf(";; %s @ %s:%u:%u\n%.*s\n", name->name, dump_base,
+                   call->span.line, call->span.col_start,
+                   (int)mb.len, mb.data);
+            buf_free(&mb);
         }
 
         /* Re-attribute a macro-emitted top-level `definstance` to the macro
@@ -3522,11 +3545,12 @@ Expr *elab_call(Elab *e, Form *call) {
                     if (tur_native_sig_lookup(nm, &nrt)) {
                         native_registered = true;
                         switch (nrt) {
-                            case TUR_NRT_FLOAT: dispatch_result = TYPE_FLOAT;    break;
-                            case TUR_NRT_BOOL:  dispatch_result = TYPE_BOOL;     break;
-                            case TUR_NRT_CSTR:  dispatch_result = TYPE_CSTR;     break;
-                            case TUR_NRT_VOID:  dispatch_result = TYPE_NIL;      break;
-                            case TUR_NRT_PTR:   dispatch_result = TYPE_PTR_VOID; break;
+                            case TUR_NRT_FLOAT:  dispatch_result = TYPE_FLOAT;    break;
+                            case TUR_NRT_BOOL:   dispatch_result = TYPE_BOOL;     break;
+                            case TUR_NRT_CSTR:   dispatch_result = TYPE_CSTR;     break;
+                            case TUR_NRT_VOID:   dispatch_result = TYPE_NIL;      break;
+                            case TUR_NRT_PTR:    dispatch_result = TYPE_PTR_VOID; break;
+                            case TUR_NRT_SYNTAX: dispatch_result = TYPE_SYNTAX;   break;
                             case TUR_NRT_INT:   /* fallthrough: keep TYPE_INT */
                             default:            dispatch_result = TYPE_INT;      break;
                         }

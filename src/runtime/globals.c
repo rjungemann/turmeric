@@ -175,6 +175,12 @@ bool g_symbols_enabled = true;
 
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
+
+/* `tur expand`: dump macro expansions during elaboration. */
+bool g_dump_expansion = false;
+
+/* Stage 3: --macro-caps=io -- grant the macro-time env I/O. */
+bool g_macro_caps_io = false;
 bool g_turi_stdlib_preload = false;
 
 /* F4 (cross-plan-followups): --Werror=deprecated promotes deprecation

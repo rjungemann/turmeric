@@ -8265,8 +8265,25 @@ Expr *elab_fn(Elab *e, const Form *call) {
                  * int64 carrier and the value's struct type was lost at the
                  * call site -- a following (.field ...) could not resolve. */
                 bool resolved_nominal = false;
-                /* defalias table (mirror elab_defn's TA1/TA2 ladder) */
+                /* Phase N6 mirror (see elab_defn): sized primitives and the
+                 * other simple named kinds typekind_from_symbol knows
+                 * (int32, uint8, ..., Sym, Syntax) as a fn LITERAL's return
+                 * keyword.  Without this they fell through to the tyvar
+                 * path and the lambda returned the int64 carrier -- e.g. a
+                 * `(fn [i : int] : Syntax ...)` inside a defmacro* body
+                 * typed its calls int and tripped spurious if-branch
+                 * mismatches (then=Syntax else=int). */
                 {
+                    TypeKind sized_k = typekind_from_symbol(kw->name);
+                    if (sized_k != TY_UNKNOWN && sized_k != TY_INT &&
+                            sized_k != TY_FLOAT && sized_k != TY_BOOL &&
+                            sized_k != TY_CSTR && sized_k != TY_NIL) {
+                        return_kind      = sized_k;
+                        resolved_nominal = true;
+                    }
+                }
+                /* defalias table (mirror elab_defn's TA1/TA2 ladder) */
+                if (!resolved_nominal) {
                     const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
                     for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                         if (e->type_alias_names[ai] == ksym) {

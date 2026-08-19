@@ -1,0 +1,29 @@
+;; Stage 4 / R3: syntax-struct-fields -- a derive macro that needs NO field
+;; list: the field names come from the compile's own registry, as a bounded,
+;; total projection (a flat Syntax list of symbols; no Type value crosses).
+(load "stdlib/str-build.tur")
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int] (show [x] : cstr (int->str x)))
+(defstruct P3 :copy [x : int y : int z : int])
+
+(defmacro* derive-show3 [TypeName]
+  (letrec [fields   (syntax-struct-fields TypeName)
+           accessor (fn [f : Syntax] : Syntax
+                      (syntax-list (sym->syntax (str-concat "." (syntax-sym-name f)))
+                                   (sym->syntax "__p")))
+           build    (fn [i : int] : Syntax
+                      (if (< i (syntax-len fields))
+                        `(str-concat ~(str->syntax (str-concat (if (= i 0) " { " ", ")
+                                                     (str-concat (syntax-sym-name (syntax-nth fields i)) " = ")))
+                                     (str-concat (.show ~(accessor (syntax-nth fields i)))
+                                                 ~(build (+ i 1))))
+                        (str->syntax " }")))]
+    `(definstance Show [~TypeName]
+       (show [__p] : cstr
+         (str-concat ~(str->syntax (syntax-sym-name TypeName)) ~(build 0))))))
+
+(derive-show3 P3)
+
+(defn main [] : int
+  (println (show (P3 1 2 3)))
+  0)

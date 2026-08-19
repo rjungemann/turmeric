@@ -3142,6 +3142,12 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
                 }
                 return turi_bool(false);
             }
+            if (args[0].tag == TURI_SYNTAX) {
+                /* Structural equality, same semantics as the compile-time
+                 * macro evaluator's `=` (forms.c form_equal). */
+                if (args[1].tag != TURI_SYNTAX) return turi_bool(false);
+                return turi_bool(form_equal(args[0].as_syntax, args[1].as_syntax));
+            }
             /* Fallback: compare as integer representation */
             return turi_bool(args[0].as_int == args[1].as_int);
         }
@@ -10838,6 +10844,11 @@ static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen) {
          * the only scratch object; copying it is always safe. */
         return true;
     }
+    case TURI_SYNTAX:
+        /* The wrapped Form* lives in an arena (env sym_arena / eval arena /
+         * elaborator arena), never in scratch; the value itself is trivially
+         * relocatable. */
+        return true;
     }
     return false;  /* unknown tag: refuse to rewind */
 }
@@ -11035,6 +11046,9 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
         *nhv = *hv;
         return turi_handler_val(nhv);
     }
+    case TURI_SYNTAX:
+        /* Arena-resident Form* (never scratch): nothing to relocate. */
+        return v;
     default:
         /* Scalars and the shapes promo_check proved are non-scratch: unchanged. */
         return v;
@@ -11167,8 +11181,8 @@ static void collmark_value(TuriEnv *env, TuriValue v, PromoMap *seen,
         return;
     }
     default:
-        /* NIL/BOOL/FLOAT/CSTR/ERROR/STRUCT_TYPE/HANDLER/REJECTION carry no
-         * collection handles. */
+        /* NIL/BOOL/FLOAT/CSTR/ERROR/STRUCT_TYPE/HANDLER/REJECTION/SYNTAX
+         * carry no collection handles. */
         return;
     }
 }
@@ -11923,6 +11937,16 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
     case TURI_REJECTION:
         snprintf(buf, cap, "#<rejection: %s>", v.as_error ? v.as_error : "");
         break;
+    case TURI_SYNTAX: {
+        /* Show the wrapped form's text: `#<syntax (+ 1 2)>`. */
+        if (!v.as_syntax) { snprintf(buf, cap, "#<syntax>"); break; }
+        Buf fb;
+        buf_init(&fb);
+        form_print(&fb, v.as_syntax);
+        snprintf(buf, cap, "#<syntax %.*s>", (int)fb.len, fb.data);
+        buf_free(&fb);
+        break;
+    }
     }
 }
 

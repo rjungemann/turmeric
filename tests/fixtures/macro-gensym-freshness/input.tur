@@ -1,0 +1,14 @@
+;; gensym freshness is checked against the symbol table, not just a counter:
+;; the user-written `tmp_0` below is interned when the file is read, so
+;; (gensym "tmp") must skip it and mint tmp_1 (or later).  If gensym handed
+;; out tmp_0, the expansion's let would capture the user's binding and the
+;; program would print 2000 instead of 1005.
+(defmacro capture-probe [e]
+  (let [t (gensym "tmp")]
+    `(let [~t 1000]
+       (+ ~t ~e))))
+
+(defn main [] : int
+  (let [tmp_0 5]
+    (println (capture-probe tmp_0)))
+  0)

@@ -518,7 +518,8 @@ bool type_extract_adt_app(const Type *t, AdtDef **out_def,
     X(TY_TIMEOUT,           "/*session-protocol*/ void", "timeout",          false) \
     X(TY_SESSION_PAIR,      "void *",                   "session_pair",      false) \
     X(TY_SESSION_RECV_PAIR, "void *",                   "session_recv_pair", false) \
-    X(TY_SESSION_OFFER,     "int64_t",                  "session_offer",     false)
+    X(TY_SESSION_OFFER,     "int64_t",                  "session_offer",     false) \
+    X(TY_SYNTAX,            "/*syntax*/ void",          "syntax",            false)
 
 bool type_has_concrete_codegen_layout(const Type *t) {
     if (!t) return false;
@@ -2163,6 +2164,9 @@ const char *type_name(Type t) {
             buf_free(&tmp);
             return r;
         }
+        /* Stage 1 (macro-system-direction-plan): compile-time syntax object. */
+        case TY_SYNTAX:
+            return "Syntax";
         /* Variadic HKT rows: short name "#row{T1 T2 ...}". */
         case TY_TYPEROW: {
             Buf tmp;
@@ -2652,6 +2656,10 @@ static void type_name_buf(Buf *b, Type t) {
             buf_putc(b, ')');
             break;
         }
+        /* Stage 1 (macro-system-direction-plan): compile-time syntax object. */
+        case TY_SYNTAX:
+            buf_puts(b, "Syntax");
+            break;
         /* Variadic HKT rows: print as the surface form `#row{T1 T2 ...}`. */
         case TY_TYPEROW: {
             buf_puts(b, "#row{");
@@ -3659,6 +3667,9 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
             return true;
         /* GF1: Generator -- heap pointer, leaf; no recursive members */
         case TY_GENERATOR:
+            return true;
+        /* Stage 1: syntax objects are leaves; no recursive members. */
+        case TY_SYNTAX:
             return true;
         /* Variadic HKT rows -- the row is a constructor over its elements;
          * guard recursion like a union and recurse into each element. */

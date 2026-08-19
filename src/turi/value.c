@@ -1,6 +1,8 @@
 #include "value.h"
 #include "env.h"     /* TuriEnv layout + value_scratch/value_perm pools */
 #include "arena.h"
+#include "buf.h"     /* TURI_SYNTAX repr */
+#include "forms.h"   /* form_print for TURI_SYNTAX */
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -142,5 +144,15 @@ void turi_print_value(FILE *out, TuriValue v) {
     case TURI_REJECTION:
         fprintf(out, "#<rejection: %s>", v.as_error ? v.as_error : "");
         break;
+    case TURI_SYNTAX: {
+        /* Show the wrapped form's text: `#<syntax (+ 1 2)>`. */
+        if (!v.as_syntax) { fprintf(out, "#<syntax>"); break; }
+        Buf b;
+        buf_init(&b);
+        form_print(&b, v.as_syntax);
+        fprintf(out, "#<syntax %.*s>", (int)b.len, b.data);
+        buf_free(&b);
+        break;
+    }
     }
 }

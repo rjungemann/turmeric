@@ -1,0 +1,17 @@
+(defmacro* twice [e] `(+ ~e ~e))
+
+(defmacro* wrap-when [c body] `(when ~c ~body))
+
+(defmacro* sum-first-last [& xs]
+  `(+ ~(syntax-first xs) ~(syntax-nth xs (- (syntax-len xs) 1))))
+
+(defmacro* call-all [f & xs] `(~f ~@xs 100))
+
+(defn add3 [a : int b : int c : int] : int (+ a (+ b c)))
+
+(defn main [] : int
+  (println (twice 21))
+  (wrap-when true (println 1))
+  (println (sum-first-last 5 9 30))
+  (println (call-all add3 1 2))
+  0)

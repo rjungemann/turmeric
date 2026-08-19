@@ -8,11 +8,10 @@ static CtEnv *ct_env_new(Elab *e, CtEnv *parent, bool *ok);
 static void ct_env_bind(CtEnv *env, const Symbol *name, CtValue v);
 static bool ct_env_lookup(CtEnv *env, const Symbol *name, CtValue *out);
 static bool compile_time_truthy(Form *f);
-static bool ct_form_equal(const Form *a, const Form *b);
 static Form *ct_value_to_form(CtEnv *env, CtValue v, Span span);
 static Form *ct_eval_quasiquote(CtEnv *env, Form *f);
 static bool ct_symbol_name(const Symbol *sym, const char *name);
-static bool form_contains_ct_builtins(Form *f);
+static bool template_needs_ct_eval(Form *f);
 static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint32_t n_args, Span span);
 static CtValue ct_eval_call(CtEnv *env, Form *f);
 static CtValue ct_eval_form(CtEnv *env, Form *f);
@@ -77,50 +76,8 @@ static bool compile_time_truthy(Form *f) {
     return !(f->tag == F_NIL || (f->tag == F_BOOL && !f->as.b));
 }
 
-static bool ct_form_equal(const Form *a, const Form *b) {
-    if (a == b) return true;
-    if (!a || !b) return false;
-    if (a->tag != b->tag) return false;
-    switch (a->tag) {
-        case F_NIL: return true;
-        case F_BOOL: return a->as.b == b->as.b;
-        case F_INT: return a->as.i == b->as.i;
-        case F_FLOAT: return a->as.f == b->as.f;
-        case F_STR:
-            return a->as.s.len == b->as.s.len &&
-                   strncmp(a->as.s.p, b->as.s.p, a->as.s.len) == 0;
-        case F_SYM:
-        case F_KEYWORD:
-            return a->as.sym == b->as.sym;
-        case F_QUOTE:
-        case F_QUASIQUOTE:
-        case F_UNQUOTE:
-        case F_UNQUOTE_SPLICING:
-        case F_TYPE_ANN:
-        /* CT0: Contract types compare structurally */
-        case F_CONTRACT_TYPE:
-        /* INT-1: Reader conditionals compare structurally */
-        case F_READER_COND:
-        /* RR3: Range literal variable annotation compares structurally */
-        case F_RANGE_VAR:
-        case F_LIST:
-        case F_VEC:
-        case F_MAP:
-        case F_SET:
-        case F_MAP_LITERAL:
-        case F_SET_LITERAL:
-        case F_ROW_LITERAL:
-            if (a->as.list.len != b->as.list.len) return false;
-            for (uint32_t i = 0; i < a->as.list.len; i++) {
-                if (!ct_form_equal(a->as.list.items[i], b->as.list.items[i])) return false;
-            }
-            return true;
-        case F_CBLOCK:
-            return a->as.cblock.len == b->as.cblock.len &&
-                   strncmp(a->as.cblock.p, b->as.cblock.p, a->as.cblock.len) == 0;
-    }
-    return false;
-}
+/* Structural form equality now lives in forms.c as form_equal (shared with
+ * the interpreter's TURI_SYNTAX `=`); this file's `=` builtin calls it. */
 
 static Form *ct_value_to_form(CtEnv *env, CtValue v, Span span) {
     if (v.tag == CT_VAL_FORM) return v.as.form;
@@ -273,33 +230,124 @@ static bool ct_symbol_name(const Symbol *sym, const char *name) {
     return sym->len == n && strncmp(sym->name, name, n) == 0;
 }
 
-static bool form_contains_ct_builtins(Form *f) {
+/* Single source of truth for the compile-time builtin name set.
+ *
+ * X(ID, "name", gates): one row per builtin.  `ct_eval_builtin` dispatches
+ * off this table (via ct_builtin_kind), and `template_needs_ct_eval` reads
+ * the same rows (via ct_builtin_gates), so a builtin can no longer be added
+ * to the evaluator and forgotten in the gate -- the historical failure mode
+ * where a macro body using the new builtin silently never evaluated.
+ *
+ * `gates` marks names whose appearance as a call head in a substituted
+ * template routes the template through the compile-time evaluator.  Two
+ * deliberate exceptions carry gates=false:
+ *   - `=` and `not` are recognized builtins but predate the gate, and they
+ *     appear in existing templates that are pure runtime code (e.g. the
+ *     stdlib `doc` macro); gating them would CT-hijack those templates,
+ *     comparing Forms structurally where the author meant runtime values.
+ * `map` is the inverse case: it gates, but is dispatched as a special form
+ * in ct_eval_call (the fn argument must stay a CT_VAL_FN), so its switch
+ * case below falls through to "not a builtin". */
+#define CT_BUILTIN_TABLE(X) \
+    X(FIRST,          "first",          true)  \
+    X(REST,           "rest",           true)  \
+    X(SECOND,         "second",         true)  \
+    X(NIL_P,          "nil?",           true)  \
+    X(EMPTY_P,        "empty?",         true)  \
+    X(LIST_P,         "list?",          true)  \
+    X(VEC_P,          "vec?",           true)  \
+    X(SYMBOL_NAME,    "symbol-name",    true)  \
+    X(TYPE_ANN_P,     "type-ann?",      true)  \
+    X(TYPE_ANN_INNER, "type-ann-inner", true)  \
+    X(DOT_SYM,        "dot-sym",        true)  \
+    X(STR_TO_SYM,     "str->sym",       true)  \
+    X(STR_APPEND,     "str-append",     true)  \
+    X(CONS,           "cons",           true)  \
+    X(LIST,           "list",           true)  \
+    X(VEC,            "vec",            true)  \
+    X(MAP,            "map",            true)  \
+    X(EQ,             "=",              false) \
+    X(NOT,            "not",            false)
+
+typedef enum {
+    CT_B_NONE = 0,
+#define X(id, name, gates) CT_B_##id,
+    CT_BUILTIN_TABLE(X)
+#undef X
+} CtBuiltinKind;
+
+static const struct { const char *name; bool gates; } CT_BUILTINS[] = {
+#define X(id, name, gates) { name, gates },
+    CT_BUILTIN_TABLE(X)
+#undef X
+};
+
+/* Unified gensym: one name-manufacturing path for the three call sites
+ * (template substitution, quasiquote expansion outside macro bodies, and
+ * expression-position (gensym ...)).
+ *
+ * Freshness is checked against the symbol table, not just assumed from the
+ * counter: every symbol the reader has seen -- the whole current file, the
+ * stdlib, and every module loaded so far -- is already interned, so skipping
+ * interned candidates means a hand-written `tmp_0` can no longer be captured
+ * by (gensym "tmp").  The winning name is interned on return, so later
+ * gensyms skip it too. */
+static const Symbol *gensym_fresh(Elab *e, const char *prefix) {
+    char name_buf[128];
+    for (;;) {
+        snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, e->next_gensym_id++);
+        StrSlice s = strslice(name_buf, (uint32_t)strlen(name_buf));
+        if (!symtab_contains(e->st, s)) return symtab_intern(e->st, s);
+    }
+}
+
+/* Shared prefix parse for (gensym), (gensym sym), (gensym "str") and
+ * (gensym 'sym).  Returns the prefix string, or NULL when the argument is
+ * not an acceptable prefix form -- callers decide whether that is an error
+ * (expression position) or a silent default (template substitution). */
+static const char *gensym_prefix_from_call(const Form *call) {
+    if (call->as.list.len < 2) return "g";
+    const Form *prefix_f = call->as.list.items[1];
+    if (prefix_f->tag == F_SYM) return prefix_f->as.sym->name;
+    if (prefix_f->tag == F_STR) return prefix_f->as.s.p;
+    if (prefix_f->tag == F_QUOTE && prefix_f->as.list.len == 1 &&
+        prefix_f->as.list.items[0]->tag == F_SYM) {
+        return prefix_f->as.list.items[0]->as.sym->name;
+    }
+    return NULL;
+}
+
+static CtBuiltinKind ct_builtin_kind(const Symbol *sym) {
+    for (size_t i = 0; i < sizeof(CT_BUILTINS) / sizeof(CT_BUILTINS[0]); i++) {
+        if (ct_symbol_name(sym, CT_BUILTINS[i].name))
+            return (CtBuiltinKind)(i + 1);
+    }
+    return CT_B_NONE;
+}
+
+static bool ct_builtin_gates(const Symbol *sym) {
+    CtBuiltinKind k = ct_builtin_kind(sym);
+    return k != CT_B_NONE && CT_BUILTINS[k - 1].gates;
+}
+
+/* Decide whether a substituted macro template must run through the
+ * compile-time evaluator (elab_eval_macro_form) before elaboration.
+ * True when the template still carries quasiquote machinery, or calls a
+ * gate-listed CT builtin (see CT_BUILTIN_TABLE above).  Surviving orphan
+ * F_UNQUOTE nodes recurse into their inner form only: both this evaluator
+ * and the elaborator's quasiquote path merely unwrap an unquote outside
+ * quasiquote, so gating on the wrapper alone would not change its meaning
+ * but WOULD expose bare do/let/if heads elsewhere in the template to CT
+ * special-form hijacking. */
+static bool template_needs_ct_eval(Form *f) {
     switch (f->tag) {
         case F_LIST:
-            if (f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM) {
-                const Symbol *head = f->as.list.items[0]->as.sym;
-                if (ct_symbol_name(head, "first") ||
-                    ct_symbol_name(head, "rest") ||
-                    ct_symbol_name(head, "second") ||
-                    ct_symbol_name(head, "nil?") ||
-                    ct_symbol_name(head, "empty?") ||
-                    ct_symbol_name(head, "list?") ||
-                    ct_symbol_name(head, "vec?") ||
-                    ct_symbol_name(head, "type-ann?") ||
-                    ct_symbol_name(head, "type-ann-inner") ||
-                    ct_symbol_name(head, "symbol-name") ||
-                    ct_symbol_name(head, "dot-sym") ||
-                    ct_symbol_name(head, "str->sym") ||
-                    ct_symbol_name(head, "str-append") ||
-                    ct_symbol_name(head, "cons") ||
-                    ct_symbol_name(head, "list") ||
-                    ct_symbol_name(head, "vec") ||
-                    ct_symbol_name(head, "map")) {
-                    return true;
-                }
+            if (f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
+                ct_builtin_gates(f->as.list.items[0]->as.sym)) {
+                return true;
             }
             for (uint32_t i = 0; i < f->as.list.len; i++) {
-                if (form_contains_ct_builtins(f->as.list.items[i])) return true;
+                if (template_needs_ct_eval(f->as.list.items[i])) return true;
             }
             return false;
         case F_VEC:
@@ -309,7 +357,7 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_SET_LITERAL:
         case F_ROW_LITERAL:
             for (uint32_t i = 0; i < f->as.list.len; i++) {
-                if (form_contains_ct_builtins(f->as.list.items[i])) return true;
+                if (template_needs_ct_eval(f->as.list.items[i])) return true;
             }
             return false;
         case F_TYPE_ANN:
@@ -321,12 +369,12 @@ static bool form_contains_ct_builtins(Form *f) {
              * into the payload so a CT-evaluable form in type position triggers
              * the post-substitute ct_eval_quasiquote pass. */
             for (uint32_t i = 0; i < f->as.list.len; i++) {
-                if (form_contains_ct_builtins(f->as.list.items[i])) return true;
+                if (template_needs_ct_eval(f->as.list.items[i])) return true;
             }
             return false;
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
-            return form_contains_ct_builtins(f->as.list.items[0]);
+            return template_needs_ct_eval(f->as.list.items[0]);
         case F_QUASIQUOTE:
             /* substitute_params now preserves the quasiquote wrapper to
              * shield runtime do/let/if heads from CT special-form
@@ -353,7 +401,8 @@ static bool form_contains_ct_builtins(Form *f) {
 }
 
 static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint32_t n_args, Span span) {
-    if (ct_symbol_name(name, "first")) {
+    switch (ct_builtin_kind(name)) {
+    case CT_B_FIRST: {
         if (n_args != 1) {
             *env->ok = false;
             diag_emit(DIAG_ERROR, span, "compile-time first expects 1 argument");
@@ -362,7 +411,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         if ((args[0]->tag != F_LIST && args[0]->tag != F_VEC) || args[0]->as.list.len == 0) return ct_value_form(form_nil(env->elab->arena, span));
         return ct_value_form(args[0]->as.list.items[0]);
     }
-    if (ct_symbol_name(name, "rest")) {
+    case CT_B_REST: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time rest expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
         if ((args[0]->tag != F_LIST && args[0]->tag != F_VEC) || args[0]->as.list.len <= 1) return ct_value_form(form_list(env->elab->arena, span, NULL, 0));
         uint32_t len = args[0]->as.list.len - 1;
@@ -370,40 +419,40 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         for (uint32_t i = 0; i < len; i++) items[i] = args[0]->as.list.items[i + 1];
         return ct_value_form(form_list(env->elab->arena, span, items, len));
     }
-    if (ct_symbol_name(name, "second")) {
+    case CT_B_SECOND: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time second expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
         if ((args[0]->tag != F_LIST && args[0]->tag != F_VEC) || args[0]->as.list.len < 2) return ct_value_form(form_nil(env->elab->arena, span));
         return ct_value_form(args[0]->as.list.items[1]);
     }
-    if (ct_symbol_name(name, "nil?")) {
+    case CT_B_NIL_P: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time nil? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_NIL));
     }
-    if (ct_symbol_name(name, "empty?")) {
+    case CT_B_EMPTY_P: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time empty? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         bool empty = args[0]->tag == F_NIL ||
                      ((args[0]->tag == F_LIST || args[0]->tag == F_VEC || args[0]->tag == F_MAP || args[0]->tag == F_SET) && args[0]->as.list.len == 0);
         return ct_value_form(form_bool(env->elab->arena, span, empty));
     }
-    if (ct_symbol_name(name, "list?")) {
+    case CT_B_LIST_P: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time list? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_LIST));
     }
-    if (ct_symbol_name(name, "vec?")) {
+    case CT_B_VEC_P: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time vec? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_VEC));
     }
-    if (ct_symbol_name(name, "symbol-name")) {
+    case CT_B_SYMBOL_NAME: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
         if (args[0]->tag != F_SYM) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects a symbol"); return ct_value_form(form_nil(env->elab->arena, span)); }
         const Symbol *sym = args[0]->as.sym;
         return ct_value_form(form_str(env->elab->arena, span, sym->name, sym->len));
     }
-    if (ct_symbol_name(name, "type-ann?")) {
+    case CT_B_TYPE_ANN_P: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time type-ann? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_TYPE_ANN));
     }
-    if (ct_symbol_name(name, "type-ann-inner")) {
+    case CT_B_TYPE_ANN_INNER: {
         /* Unwrap an F_TYPE_ANN node so a macro can read the type form a
          * structural `name : type` annotation carries. The reader folds
          * `: type` into form_type_ann(inner) (src/compiler/forms.c:142),
@@ -414,7 +463,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         if (args[0]->tag != F_TYPE_ANN) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time type-ann-inner expects an annotation form"); return ct_value_form(form_nil(env->elab->arena, span)); }
         return ct_value_form(args[0]->as.list.items[0]);
     }
-    if (ct_symbol_name(name, "dot-sym")) {
+    case CT_B_DOT_SYM: {
         /* (dot-sym field-sym) => the symbol ".field-sym" for use in method calls */
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time dot-sym expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
         if (args[0]->tag != F_SYM) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time dot-sym expects a symbol"); return ct_value_form(form_nil(env->elab->arena, span)); }
@@ -427,14 +476,14 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         const Symbol *new_sym = symtab_intern(env->elab->st, strslice(buf, new_len));
         return ct_value_form(form_sym(env->elab->arena, span, new_sym));
     }
-    if (ct_symbol_name(name, "str->sym")) {
+    case CT_B_STR_TO_SYM: {
         /* (str->sym s) => intern s as a symbol */
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time str->sym expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
         if (args[0]->tag != F_STR) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time str->sym expects a string"); return ct_value_form(form_nil(env->elab->arena, span)); }
         const Symbol *new_sym = symtab_intern(env->elab->st, strslice(args[0]->as.s.p, args[0]->as.s.len));
         return ct_value_form(form_sym(env->elab->arena, span, new_sym));
     }
-    if (ct_symbol_name(name, "str-append")) {
+    case CT_B_STR_APPEND: {
         /* (str-append s1 s2 ...) => compile-time string concatenation */
         size_t total = 0;
         for (uint32_t i = 0; i < n_args; i++) {
@@ -450,7 +499,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         buf[total] = '\0';
         return ct_value_form(form_str(env->elab->arena, span, buf, (uint32_t)total));
     }
-    if (ct_symbol_name(name, "cons")) {
+    case CT_B_CONS: {
         if (n_args != 2) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time cons expects 2 arguments"); return ct_value_form(form_nil(env->elab->arena, span)); }
         Form *tail = args[1];
         uint32_t tail_len = 0;
@@ -468,23 +517,27 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         }
         return ct_value_form(form_list(env->elab->arena, span, items, tail_len + 1));
     }
-    if (ct_symbol_name(name, "list")) {
+    case CT_B_LIST: {
         Form **items = (n_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_args * sizeof(Form *));
         for (uint32_t i = 0; i < n_args; i++) items[i] = args[i];
         return ct_value_form(form_list(env->elab->arena, span, items, n_args));
     }
-    if (ct_symbol_name(name, "vec")) {
+    case CT_B_VEC: {
         Form **items = (n_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_args * sizeof(Form *));
         for (uint32_t i = 0; i < n_args; i++) items[i] = args[i];
         return ct_value_form(form_vec(env->elab->arena, span, items, n_args));
     }
-    if (ct_symbol_name(name, "=")) {
+    case CT_B_EQ: {
         if (n_args != 2) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time = expects 2 arguments"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
-        return ct_value_form(form_bool(env->elab->arena, span, ct_form_equal(args[0], args[1])));
+        return ct_value_form(form_bool(env->elab->arena, span, form_equal(args[0], args[1])));
     }
-    if (ct_symbol_name(name, "not")) {
+    case CT_B_NOT: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time not expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         return ct_value_form(form_bool(env->elab->arena, span, !compile_time_truthy(args[0])));
+    }
+    case CT_B_MAP:  /* CT special form, dispatched in ct_eval_call */
+    case CT_B_NONE:
+        break;
     }
     return ct_value_form(NULL);
 }
@@ -742,7 +795,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
      * data forms). This lets a template GENERATE the sequence it splices, e.g.
      * `(do ~@(map (fn [x] `(println ~x)) items))`.
      * docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md */
-    if (ct_symbol_name(head->as.sym, "map") && f->as.list.len == 3) {
+    if (ct_builtin_kind(head->as.sym) == CT_B_MAP && f->as.list.len == 3) {
         CtValue fn_v = ct_eval_form(env, f->as.list.items[1]);
         if (!*env->ok) return fn_v;
         /* Only treat this as the compile-time map when the first argument is a
@@ -999,19 +1052,9 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
                 const Symbol *name = f->as.list.items[0]->as.sym;
                 if (name == e->sym_gensym) {
                     /* Generate a fresh symbol for gensym inside quasiquote */
-                    const char *prefix = "g";
-                    if (f->as.list.len >= 2) {
-                        Form *prefix_f = f->as.list.items[1];
-                        if (prefix_f->tag == F_SYM) {
-                            prefix = prefix_f->as.sym->name;
-                        } else if (prefix_f->tag == F_STR) {
-                            prefix = prefix_f->as.s.p;
-                        }
-                    }
-                    char name_buf[64];
-                    snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, e->next_gensym_id++);
-                    const Symbol *fresh_sym = symtab_intern(e->st, strslice(name_buf, (uint32_t)strlen(name_buf)));
-                    return form_sym(e->arena, f->span, fresh_sym);
+                    const char *prefix = gensym_prefix_from_call(f);
+                    return form_sym(e->arena, f->span,
+                                    gensym_fresh(e, prefix ? prefix : "g"));
                 }
             }
             /* Lists inside quasiquote: process each element */
@@ -1091,7 +1134,7 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
  * the argument list), which then reach the elaborator as an unbound symbol.
  * docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md */
 static bool splice_inner_needs_ct_eval(Elab *e, Form *f) {
-    if (form_contains_ct_builtins(f)) return true;
+    if (template_needs_ct_eval(f)) return true;
     if (f->tag == F_LIST && f->as.list.len > 0 &&
         f->as.list.items[0]->tag == F_SYM &&
         elab_lookup_macro(e, f->as.list.items[0]->as.sym) != NULL) {
@@ -1184,20 +1227,9 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                 const Symbol *name = f->as.list.items[0]->as.sym;
                 if (name == e->sym_gensym) {
                     /* This is a gensym call - generate a fresh symbol */
-                    const char *prefix = "g";
-                    if (f->as.list.len >= 2) {
-                        Form *prefix_f = f->as.list.items[1];
-                        if (prefix_f->tag == F_SYM) {
-                            prefix = prefix_f->as.sym->name;
-                        } else if (prefix_f->tag == F_STR) {
-                            prefix = prefix_f->as.s.p;
-                        }
-                        /* For other cases, use default prefix */
-                    }
-                    char name_buf[64];
-                    snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, e->next_gensym_id++);
-                    const Symbol *fresh_sym = symtab_intern(e->st, strslice(name_buf, (uint32_t)strlen(name_buf)));
-                    return form_sym(e->arena, f->span, fresh_sym);
+                    const char *prefix = gensym_prefix_from_call(f);
+                    return form_sym(e->arena, f->span,
+                                    gensym_fresh(e, prefix ? prefix : "g"));
                 }
             }
             /* Not a gensym call - continue with normal processing */
@@ -1347,6 +1379,16 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
         if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--; \
     } while (0)
 
+    /* Stage 2: a procedural macro's expansion is computed by its closure in
+     * the macro-time env, not by substitution + CT eval.  Arity checking,
+     * variadic packing, invocation, and the cross-symtab import of the
+     * result all live in elab_macro_env_call_proc (src/turi/macro_env.c). */
+    if (macro->kind == MACRO_PROCEDURAL) {
+        Span call_span = n_args > 0 ? args[0]->span : macro->span;
+        Form *result = elab_macro_env_call_proc(e, macro, args, n_args, call_span);
+        EXPAND_RESTORE(); return result;
+    }
+
     /* Check arity */
     if (macro->is_variadic) {
         if (n_args < macro->n_params) {
@@ -1370,7 +1412,8 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
         aug_args[macro->n_params] = form_list(e->arena, rest_span, rest_items, n_rest);
         Form *templ = substitute_params(e, macro->body, macro, aug_args);
         if (!templ) { EXPAND_RESTORE(); return NULL; }
-        Form *result = (form_contains_ct_builtins(templ) || macro->is_syntax_param || macro->rest_is_syntax)
+        Form *result = (template_needs_ct_eval(templ) || macro->is_syntax_param ||
+                        macro->rest_is_syntax || macro->force_ct_eval)
             ? elab_eval_macro_form(e, templ, macro, aug_args) : templ;
         EXPAND_RESTORE(); return result;
     }
@@ -1384,7 +1427,8 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
     /* Substitute parameters in the macro body */
     Form *templ = substitute_params(e, macro->body, macro, args);
     if (!templ) { EXPAND_RESTORE(); return NULL; }
-    Form *result = (form_contains_ct_builtins(templ) || macro->is_syntax_param)
+    Form *result = (template_needs_ct_eval(templ) || macro->is_syntax_param ||
+                    macro->force_ct_eval)
         ? elab_eval_macro_form(e, templ, macro, args) : templ;
     EXPAND_RESTORE(); return result;
 
@@ -1526,13 +1570,24 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* For now, we only support a single body expression
-     * (multi-expression macro bodies would need to be wrapped in do) */
-    Form *body = call->as.list.items[3];
-    if (body_count > 1) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "defmacro: multi-expression bodies not yet supported; wrap in do");
-        return NULL;
+    /* Multi-form bodies: earlier forms are compile-time setup (evaluated in
+     * order by the CT evaluator's `do`, with (def x v) forms spliced into
+     * let bindings), and the LAST form's value is the template.  Wrap them
+     * in a synthetic (do ...) and remember to force the template through
+     * the CT evaluator -- a (do setup... template) has no meaning as a
+     * literal runtime template. */
+    Form *body;
+    bool multi_form_body = body_count > 1;
+    if (multi_form_body) {
+        Form **body_items = (Form **)arena_alloc(e->arena,
+                                                 (body_count + 1) * sizeof(Form *));
+        body_items[0] = form_sym(e->arena, call->span, e->sym_do);
+        for (uint32_t i = 0; i < body_count; i++) {
+            body_items[i + 1] = call->as.list.items[3 + i];
+        }
+        body = form_list(e->arena, call->span, body_items, body_count + 1);
+    } else {
+        body = call->as.list.items[3];
     }
 
     /* Create the macro definition.  arena_alloc returns uninitialised
@@ -1550,6 +1605,7 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     macro->is_syntax_param = any_syntax ? is_syntax_param : NULL;
     macro->rest_is_syntax = rest_is_syntax;
     macro->body = body;
+    macro->force_ct_eval = multi_form_body;
     macro->span = call->span;
     macro->defining_module_name = e->current_module_name; /* Phase M4 */
 
@@ -1560,47 +1616,370 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
+/* ---------------------------------------------------------------------------
+ * Stage 2 follow-up: quasiquote producing Syntax inside defmacro* bodies.
+ *
+ * A quasiquote in a defmacro* body is sugar for the syntax constructors:
+ *
+ *   `(+ ~e ~e)        lowers to  (syntax-list (sym->syntax "+") e e)
+ *   `(f ~@xs 9)       lowers to  (syntax-append (syntax-list (sym->syntax "f"))
+ *                                               xs
+ *                                               (syntax-list (int->syntax 9)))
+ *
+ * `~expr` splices a Syntax-valued expression verbatim; `~@expr` splices the
+ * elements of a list-shaped Syntax.  The lowering is purely syntactic and
+ * happens BEFORE the body is handed to the macro-time env, so the env's
+ * elaborator sees only ordinary calls -- no evaluator-mode special cases.
+ * ------------------------------------------------------------------------- */
+
+static Form *sxqq_callv(Elab *e, Span sp, const char *fn,
+                        Form **args, uint32_t n_args) {
+    Form **items = (Form **)arena_alloc(e->arena, (n_args + 1) * sizeof(Form *));
+    items[0] = form_sym(e->arena, sp,
+                        symtab_intern(e->st, strslice(fn, (uint32_t)strlen(fn))));
+    for (uint32_t i = 0; i < n_args; i++) items[i + 1] = args[i];
+    return form_list(e->arena, sp, items, n_args + 1);
+}
+
+static Form *sxqq_call1(Elab *e, Span sp, const char *fn, Form *arg) {
+    return sxqq_callv(e, sp, fn, &arg, 1);
+}
+
+static Form *sxqq_call_strlit(Elab *e, Span sp, const char *fn,
+                              const char *s, uint32_t len) {
+    Form *lit = form_str(e->arena, sp, s, len);
+    return sxqq_call1(e, sp, fn, lit);
+}
+
+static Form *sxqq_lower(Elab *e, Form *f, bool *ok);
+
+/* Lower the items of a list/vec template body.  With no `~@` present the
+ * result is one (syntax-list ...) / (syntax-vec ...) call; a splice turns
+ * the list case into (syntax-append seg...) where runs of plain items group
+ * into (syntax-list ...) segments and each `~@e` contributes `e` verbatim. */
+static Form *sxqq_lower_seq(Elab *e, Form *f, bool is_vec, bool *ok) {
+    uint32_t n = f->as.list.len;
+    bool has_splice = false;
+    for (uint32_t i = 0; i < n; i++)
+        if (f->as.list.items[i]->tag == F_UNQUOTE_SPLICING) { has_splice = true; break; }
+
+    if (!has_splice) {
+        Form **items = (n == 0) ? NULL
+            : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+        for (uint32_t i = 0; i < n; i++) {
+            items[i] = sxqq_lower(e, f->as.list.items[i], ok);
+            if (!*ok) return f;
+        }
+        return sxqq_callv(e, f->span, is_vec ? "syntax-vec" : "syntax-list",
+                          items, n);
+    }
+    if (is_vec) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "defmacro* quasiquote: '~@' splicing into a vector template "
+                  "is not supported; build it with syntax-vec explicitly");
+        *ok = false;
+        return f;
+    }
+    /* Segment the items around the splices. */
+    Form **parts = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    Form **seg   = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    uint32_t n_parts = 0, seg_len = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *item = f->as.list.items[i];
+        if (item->tag == F_UNQUOTE_SPLICING) {
+            if (seg_len > 0) {
+                parts[n_parts++] = sxqq_callv(e, f->span, "syntax-list", seg, seg_len);
+                seg = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                seg_len = 0;
+            }
+            parts[n_parts++] = item->as.list.items[0];  /* the spliced expr, verbatim */
+        } else {
+            seg[seg_len++] = sxqq_lower(e, item, ok);
+            if (!*ok) return f;
+        }
+    }
+    if (seg_len > 0)
+        parts[n_parts++] = sxqq_callv(e, f->span, "syntax-list", seg, seg_len);
+    return sxqq_callv(e, f->span, "syntax-append", parts, n_parts);
+}
+
+static Form *sxqq_lower(Elab *e, Form *f, bool *ok) {
+    switch (f->tag) {
+        case F_SYM:
+            return sxqq_call_strlit(e, f->span, "sym->syntax",
+                                    f->as.sym->name, f->as.sym->len);
+        case F_KEYWORD:
+            return sxqq_call_strlit(e, f->span, "kw->syntax",
+                                    f->as.sym->name, f->as.sym->len);
+        case F_STR:
+            return sxqq_call_strlit(e, f->span, "str->syntax",
+                                    f->as.s.p, f->as.s.len);
+        case F_INT:
+            return sxqq_call1(e, f->span, "int->syntax",
+                              form_int(e->arena, f->span, f->as.i));
+        case F_FLOAT:
+            return sxqq_call1(e, f->span, "float->syntax",
+                              form_float(e->arena, f->span, f->as.f));
+        case F_BOOL:
+            return sxqq_call1(e, f->span, "bool->syntax",
+                              form_bool(e->arena, f->span, f->as.b));
+        case F_NIL:
+            return sxqq_callv(e, f->span, "nil->syntax", NULL, 0);
+        case F_UNQUOTE:
+            /* `~expr` -- the expression itself, evaluated by the macro body
+             * (must be Syntax-typed; checked at definition time). */
+            return f->as.list.items[0];
+        case F_UNQUOTE_SPLICING:
+            diag_emit(DIAG_ERROR, f->span,
+                      "defmacro* quasiquote: '~@' is only meaningful inside a "
+                      "list template");
+            *ok = false;
+            return f;
+        case F_LIST:
+            return sxqq_lower_seq(e, f, false, ok);
+        case F_VEC:
+            return sxqq_lower_seq(e, f, true, ok);
+        case F_TYPE_ANN:
+            return sxqq_call1(e, f->span, "syntax-type-ann",
+                              sxqq_lower(e, f->as.list.items[0], ok));
+        case F_QUOTE:
+            return sxqq_call1(e, f->span, "syntax-quote",
+                              sxqq_lower(e, f->as.list.items[0], ok));
+        case F_QUASIQUOTE:
+            diag_emit(DIAG_ERROR, f->span,
+                      "defmacro* quasiquote: nested quasiquote is not "
+                      "supported; build the inner template with the syntax "
+                      "constructors");
+            *ok = false;
+            return f;
+        default:
+            diag_emit(DIAG_ERROR, f->span,
+                      "defmacro* quasiquote: a %s template is not supported "
+                      "here; build it with the syntax constructors (or use a "
+                      "template defmacro)",
+                      form_tag_name(f->tag));
+            *ok = false;
+            return f;
+    }
+}
+
+/* Walk a defmacro* body form, lowering every quasiquote.  Quoted data is
+ * left untouched; everything list-shaped recurses. */
+static Form *sxqq_walk(Elab *e, Form *f, bool *ok) {
+    switch (f->tag) {
+        case F_QUASIQUOTE:
+            return sxqq_lower(e, f->as.list.items[0], ok);
+        case F_QUOTE:
+            return f;
+        case F_LIST:
+        case F_VEC:
+        case F_MAP:
+        case F_SET:
+        case F_MAP_LITERAL:
+        case F_SET_LITERAL:
+        case F_ROW_LITERAL:
+        case F_TYPE_ANN:
+        case F_CONTRACT_TYPE:
+        case F_READER_COND:
+        case F_RANGE_VAR:
+        case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING: {
+            uint32_t n = f->as.list.len;
+            Form **items = (n == 0) ? NULL
+                : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+            bool changed = false;
+            for (uint32_t i = 0; i < n; i++) {
+                items[i] = sxqq_walk(e, f->as.list.items[i], ok);
+                if (!*ok) return f;
+                if (items[i] != f->as.list.items[i]) changed = true;
+            }
+            if (!changed) return f;
+            Form *out = form_new(e->arena, f->tag, f->span);
+            out->lit_suffix = f->lit_suffix;
+            out->fx_prov    = f->fx_prov;
+            out->as.list.items = items;
+            out->as.list.len   = n;
+            return out;
+        }
+        default:
+            return f;
+    }
+}
+
+/* Stage 2 (macro-system-direction-plan): defmacro* -- procedural macros.
+ *
+ *   (defmacro* name [params...] body...)
+ *
+ * The body is ordinary Turmeric, not a template: it receives each argument
+ * as a Syntax value (the raw call-site form), computes with the full
+ * language plus the syntax natives (syntax-first, syntax->int,
+ * int->syntax, syntax-list, ...), and returns the expansion as a Syntax.
+ * At definition time the body is compiled into the session's macro-time
+ * turi env as
+ *
+ *   (defn <name>__mx [p1 : Syntax ... ] : Syntax body...)
+ *
+ * so parameter/return types are checked when the macro is DEFINED, and the
+ * closure is invoked at each expansion (elab_macro_env_call_proc).  A
+ * variadic `& rest` param is declared as one ordinary Syntax param -- the
+ * call path packs the trailing argument forms into a single list form.
+ */
+Expr *elab_defmacro_star(Elab *e, const Form *call) {
+    if (call->as.list.len < 4) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmacro* requires (defmacro* name [params...] body...)");
+        return NULL;
+    }
+
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defmacro* name must be a symbol");
+        return NULL;
+    }
+    if (!e->in_stdlib_load)
+        tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro*");
+    if (elab_lookup_macro(e, name_f->as.sym)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "defmacro*: '%s' is already defined", name_f->as.sym->name);
+        return NULL;
+    }
+
+    Form *params_f = call->as.list.items[2];
+    if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "defmacro*: expected parameter list or vector");
+        return NULL;
+    }
+
+    /* Params are bare symbols, optionally ending `& rest`.  No `^syntax`
+     * markers: every defmacro* parameter is already raw syntax. */
+    uint32_t n_total = params_f->as.list.len;
+    Form **params = (Form **)arena_alloc(e->arena, n_total * sizeof(Form *));
+    uint32_t n_fixed = 0;
+    bool is_variadic = false;
+    const Symbol *rest_param = NULL;
+    for (uint32_t i = 0; i < n_total; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "defmacro*: parameter must be a bare symbol "
+                      "(every parameter is already Syntax; type annotations "
+                      "and ^syntax markers are not accepted)");
+            return NULL;
+        }
+        if (p->as.sym->len == 7 && memcmp(p->as.sym->name, "^syntax", 7) == 0) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "defmacro*: '^syntax' is meaningless here -- every "
+                      "defmacro* parameter already receives raw syntax");
+            return NULL;
+        }
+        if (p->as.sym == e->sym_borrow) {
+            if (i + 1 >= n_total) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defmacro*: '&' must be followed by a rest parameter name");
+                return NULL;
+            }
+            if (i + 2 < n_total) {
+                diag_emit(DIAG_ERROR, params_f->as.list.items[i + 2]->span,
+                          "defmacro*: only one parameter may follow '&'");
+                return NULL;
+            }
+            Form *rest_f = params_f->as.list.items[i + 1];
+            if (rest_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, rest_f->span,
+                          "defmacro*: rest parameter after '&' must be a symbol");
+                return NULL;
+            }
+            is_variadic = true;
+            rest_param = rest_f->as.sym;
+            break;
+        }
+        params[n_fixed++] = p;
+    }
+
+    uint32_t body_count = call->as.list.len - 3;
+
+    /* Bound closure name: <name>__mx. */
+    size_t fn_len = name_f->as.sym->len + 4;
+    char *fn_name = (char *)arena_alloc(e->arena, fn_len + 1);
+    memcpy(fn_name, name_f->as.sym->name, name_f->as.sym->len);
+    memcpy(fn_name + name_f->as.sym->len, "__mx", 5);
+
+    /* Synthesize (defn <fn_name> [p : Syntax ...] : Syntax body...).  The
+     * spaced `: T` annotation is an F_TYPE_ANN item following the slot it
+     * annotates, both in the param vector and after it (return type). */
+    const Symbol *syntax_sym = symtab_intern(e->st, strslice("Syntax", 6));
+    const Symbol *fn_sym = symtab_intern(e->st, strslice(fn_name, (uint32_t)fn_len));
+    Span sp = call->span;
+    Form *syntax_ann_proto = form_sym(e->arena, sp, syntax_sym);
+
+    uint32_t n_decl = n_fixed + (is_variadic ? 1 : 0);
+    Form **pv = (Form **)arena_alloc(e->arena, (n_decl * 2) * sizeof(Form *));
+    uint32_t pvn = 0;
+    for (uint32_t i = 0; i < n_fixed; i++) {
+        pv[pvn++] = params[i];
+        pv[pvn++] = form_type_ann(e->arena, params[i]->span, syntax_ann_proto);
+    }
+    if (is_variadic) {
+        pv[pvn++] = form_sym(e->arena, sp, rest_param);
+        pv[pvn++] = form_type_ann(e->arena, sp, syntax_ann_proto);
+    }
+
+    uint32_t defn_len = 4 + body_count;
+    Form **items = (Form **)arena_alloc(e->arena, defn_len * sizeof(Form *));
+    items[0] = form_sym(e->arena, sp, e->sym_defn);
+    items[1] = form_sym(e->arena, sp, fn_sym);
+    items[2] = form_vec(e->arena, params_f->span, pv, pvn);
+    items[3] = form_type_ann(e->arena, sp, syntax_ann_proto);
+    /* Quasiquote sugar: lower every `template` in the body into syntax
+     * constructor calls before the body reaches the macro-time env. */
+    bool qq_ok = true;
+    for (uint32_t i = 0; i < body_count; i++) {
+        items[4 + i] = sxqq_walk(e, call->as.list.items[3 + i], &qq_ok);
+        if (!qq_ok) return NULL;
+    }
+    Form *defn_form = form_list(e->arena, sp, items, defn_len);
+
+    if (!elab_macro_env_define_proc(e, fn_name, defn_form, name_f->span))
+        return NULL;
+
+    MacroDef *macro = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
+    memset(macro, 0, sizeof(MacroDef));
+    macro->name = name_f->as.sym;
+    macro->params = params;
+    macro->n_params = n_fixed;
+    macro->is_variadic = is_variadic;
+    macro->rest_param = rest_param;
+    macro->body = call->as.list.items[3];  /* first body form, for tooling */
+    macro->span = call->span;
+    macro->defining_module_name = e->current_module_name;
+    macro->kind = MACRO_PROCEDURAL;
+    macro->proc_fn_name = fn_name;
+    elab_register_macro(e, macro);
+
+    return e_nil(e, call->span);
+}
+
 /* Phase 6: gensym — (gensym) or (gensym prefix-sym) generates a fresh symbol Form */
 Expr *elab_gensym(Elab *e, const Form *call) {
     /* Syntax: (gensym) or (gensym prefix) */
-    const char *prefix = "g"; /* default prefix */
-    
-    if (call->as.list.len >= 2) {
-        Form *prefix_f = call->as.list.items[1];
-        if (prefix_f->tag == F_SYM) {
-            prefix = prefix_f->as.sym->name;
-        } else if (prefix_f->tag == F_STR) {
-            prefix = prefix_f->as.s.p;
-        } else if (prefix_f->tag == F_QUOTE && prefix_f->as.list.len == 1) {
-            /* (gensym 'prefix) - get the symbol from the quote */
-            Form *quoted = prefix_f->as.list.items[0];
-            if (quoted->tag == F_SYM) {
-                prefix = quoted->as.sym->name;
-            } else {
-                diag_emit(DIAG_ERROR, prefix_f->span,
-                          "gensym: quoted prefix must be a symbol");
-                return NULL;
-            }
-        } else {
-            diag_emit(DIAG_ERROR, prefix_f->span,
-                      "gensym: expected symbol, string, or quoted symbol prefix, got %s",
-                      prefix_f->tag == F_INT ? "integer" : "other");
-            return NULL;
-        }
+    const char *prefix = gensym_prefix_from_call(call);
+    if (!prefix) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "gensym: expected symbol, string, or quoted symbol prefix, got %s",
+                  call->as.list.items[1]->tag == F_INT ? "integer" : "other");
+        return NULL;
     }
-    
-    /* Generate a fresh symbol name */
-    char name_buf[64];
-    snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, e->next_gensym_id++);
-    const Symbol *fresh_sym = symtab_intern(e->st, strslice(name_buf, (uint32_t)strlen(name_buf)));
-    
-    /* For phase 6: gensym generates a fresh symbol but doesn't register it. */
-    /* The symbol can be used in macro output, but the user must bind it. */
-    /* Return a symbol expression - in practice, this will error until gensym */
-    /* is used in a proper context (like inside quasiquote in a macro body). */
-    Binding *b = binding_new(e, fresh_sym, TYPE_INT, false, false, call->span);
-    Expr *out = expr_new(e->arena, EX_VAR, TYPE_INT, call->span);
-    out->as.var.binding = b;
-    
-    return out;
+
+    /* A (gensym ...) call that reaches ordinary elaboration sits in runtime
+     * code: template substitution and quasiquote expansion intercept every
+     * gensym inside macro machinery before elab_form ever sees it.  A fresh
+     * symbol has no runtime value, so reject it plainly instead of the old
+     * behavior of minting an unbound TYPE_INT variable that failed later in
+     * codegen with an undeclared-identifier C error. */
+    diag_emit(DIAG_ERROR, call->span,
+              "(gensym) has no runtime value: it mints a fresh symbol for use "
+              "inside a macro template or quasiquote, where it is expanded at "
+              "compile time");
+    return NULL;
 }

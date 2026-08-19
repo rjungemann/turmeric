@@ -1,0 +1,4 @@
+(defmacro* fields-of [T] (syntax-struct-fields T))
+(defn main [] : int
+  (println (syntax->string (fields-of Nope)))
+  0)

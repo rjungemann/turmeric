@@ -1,6 +1,7 @@
 #ifndef TUR_SYMBOLS_H
 #define TUR_SYMBOLS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -39,6 +40,10 @@ typedef struct SymbolTable {
 void          symtab_init(SymbolTable *st, Arena *arena);
 void          symtab_free(SymbolTable *st);
 const Symbol *symtab_intern(SymbolTable *st, StrSlice name);
+/* True when `name` is already interned, without interning it.  Used by
+ * gensym to guarantee a generated name is fresh with respect to every
+ * symbol the reader has seen so far. */
+bool          symtab_contains(const SymbolTable *st, StrSlice name);
 
 /* Phase 8: Levenshtein distance for "did you mean" suggestions */
 int sym_levenshtein_distance(const Symbol *a, const Symbol *b);

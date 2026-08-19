@@ -15,6 +15,9 @@
 
 #include "turi/eval.h"
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
+#include "diag.h"    /* SYNTAX natives: diag file-registry save/restore for read-string */
+#include "forms.h"   /* SYNTAX natives: Form constructors/accessors */
+#include "reader.h"  /* SYNTAX natives: read_all_with_registry for read-string */
 
 #include <ctype.h>
 #include <errno.h>
@@ -485,16 +488,19 @@ static TuriValue native_int_to_str(TuriEnv *env, TuriValue *a, uint32_t n, void 
     return turi_cstr(buf);
 }
 
-/* str-concat: mirror stdlib/str.tur:99 -- malloc(la+lb+1), copy both halves,
+/* str-concat: mirror stdlib/str.tur:99 -- allocate la+lb+1, copy both halves,
  * NUL-terminate.  Layout-exact with the compiled cstr ABI (a NUL-terminated
  * char* boxed as a cstr value), so a value crossing between interpreted and
- * native code reads identically. */
+ * native code reads identically.  Allocated from the env value pool, not
+ * malloc: nothing ever frees the result individually (by design), and a
+ * malloc here is a REAL leak when the native runs at macro-expansion time
+ * inside the leak-checked `tur build`/`emit-c` path (defmacro* bodies). */
 static TuriValue native_str_concat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     const char *sa = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
     const char *sb = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "";
     size_t la = strlen(sa), lb = strlen(sb);
-    char *out = (char *)malloc(la + lb + 1);
+    char *out = (char *)turi_val_alloc(env, la + lb + 1);
     if (!out) return turi_nil();
     memcpy(out, sa, la);
     memcpy(out + la, sb, lb);
@@ -4164,6 +4170,438 @@ TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
  * so the WASM REPL (src/web/wasm_glue.c) and `tur repl` (src/turi/repl.c) call
  * the same block and cannot drift.  Call AFTER turi_env_preload_*.
  * ---------------------------------------------------------------------- */
+/* ============================================================================
+ * SYNTAX natives -- first-class syntax objects (TURI_SYNTAX wrapping a
+ * compiler Form*).  Stage 1 of docs/upcoming/macro-system-direction-plan.md:
+ * the value plumbing that macro-time evaluation (Stage 2's defmacro*) will
+ * run on, landed first as REPL/interpreter surface so it is exercisable on
+ * its own.  Forms constructed here are allocated from env->sym_arena
+ * (env-lifetime; never scratch) and symbols intern into env->st.
+ * ==========================================================================*/
+
+static const char *sx_tag_name(TuriTag t) {
+    switch (t) {
+        case TURI_NIL:    return "nil";
+        case TURI_BOOL:   return "bool";
+        case TURI_INT:    return "int";
+        case TURI_FLOAT:  return "float";
+        case TURI_CSTR:   return "cstr";
+        case TURI_SYNTAX: return "syntax";
+        default:          return "value";
+    }
+}
+
+/* Arg guard: the wrapped Form* when args[i] is a syntax object, else NULL. */
+static Form *sx_arg(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n || a[i].tag != TURI_SYNTAX) return NULL;
+    return a[i].as_syntax;
+}
+
+static bool sx_is_seq(const Form *f) {
+    return f && (f->tag == F_LIST || f->tag == F_VEC);
+}
+
+static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("read-string: expected a string, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    /* Copy the source into the env-lifetime arena so any Form slices that
+     * borrow from it stay valid after the caller's string dies. */
+    size_t len = strlen(a[0].as_cstr);
+    char *src = (char *)arena_alloc(&e->sym_arena, len + 1);
+    memcpy(src, a[0].as_cstr, len + 1);
+
+    /* The reader reports through the diagnostic file registry, which the
+     * enclosing eval (or, when called from a defmacro* body, the enclosing
+     * COMPILE) owns right now -- snapshot the whole registry and the
+     * had-error flag, parse under a temporary file entry, put both back.
+     * diag_files_restore deliberately skips id 0, so re-register the saved
+     * entries directly. */
+    bool saved_had = diag_had_error();
+    const SourceFile *saved_files[64];
+    size_t n_saved = diag_files_save(saved_files, 64);
+    diag_reset();
+    SourceFile sfile = {0};
+    sfile.path        = "<read-string>";
+    sfile.src         = src;
+    sfile.len         = len;
+    sfile.file_id     = 0;
+    sfile.reader_type = e->reader_type;
+    diag_register_file(&sfile);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&e->sym_arena, &e->st, &sfile,
+                                          e->reader_macros, &nforms);
+    bool bad = (!forms || nforms == 0 || diag_had_error());
+    diag_reset();
+    for (size_t i = 0; i < n_saved; i++)
+        if (saved_files[i]) diag_register_file(saved_files[i]);
+    if (saved_had) diag_force_had_error();
+    if (bad)
+        return turi_errorf("read-string: could not parse \"%s\"", src);
+    /* First form only (Clojure read-string semantics). */
+    return turi_syntax_val(forms[0]);
+}
+
+static TuriValue native_syntax_tag(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-tag: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_cstr(form_tag_name(f->tag));
+}
+
+static TuriValue native_syntax_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-len: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_int(sx_is_seq(f) ? (int64_t)f->as.list.len : 0);
+}
+
+static TuriValue native_syntax_first(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-first: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (!sx_is_seq(f) || f->as.list.len == 0) return turi_nil();
+    return turi_syntax_val(f->as.list.items[0]);
+}
+
+static TuriValue native_syntax_rest(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-rest: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (!sx_is_seq(f) || f->as.list.len <= 1)
+        return turi_syntax_val(form_list(&e->sym_arena, f ? f->span : SPAN_UNKNOWN, NULL, 0));
+    uint32_t len = f->as.list.len - 1;
+    Form **items = (Form **)arena_alloc(&e->sym_arena, len * sizeof(Form *));
+    for (uint32_t i = 0; i < len; i++) items[i] = f->as.list.items[i + 1];
+    return turi_syntax_val(form_list(&e->sym_arena, f->span, items, len));
+}
+
+static TuriValue native_syntax_nth(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f || n < 2 || a[1].tag != TURI_INT)
+        return turi_errorf("syntax-nth: expected (syntax-nth stx idx)");
+    int64_t idx = a[1].as_int;
+    if (!sx_is_seq(f) || idx < 0 || (uint64_t)idx >= f->as.list.len) return turi_nil();
+    return turi_syntax_val(f->as.list.items[idx]);
+}
+
+/* Tag predicates. ud carries the FormTag to test (int-encoded). */
+static TuriValue native_syntax_tag_p(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_bool(false);
+    return turi_bool(f->tag == (FormTag)(intptr_t)ud);
+}
+
+static TuriValue native_syntax_to_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->int: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag == F_INT)  return turi_int(f->as.i);
+    if (f->tag == F_BOOL) return turi_int(f->as.b ? 1 : 0);
+    return turi_errorf("syntax->int: form is %s, not an int literal",
+                       form_tag_name(f->tag));
+}
+
+static TuriValue native_syntax_to_float(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->float: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag == F_FLOAT) return turi_float(f->as.f);
+    if (f->tag == F_INT)   return turi_float((double)f->as.i);
+    return turi_errorf("syntax->float: form is %s, not a float literal",
+                       form_tag_name(f->tag));
+}
+
+static TuriValue native_syntax_to_str(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->str: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag != F_STR)
+        return turi_errorf("syntax->str: form is %s, not a string literal",
+                           form_tag_name(f->tag));
+    /* F_STR slices are not NUL-terminated; copy into the value pool. */
+    char *s = (char *)turi_val_alloc(e, f->as.s.len + 1);
+    memcpy(s, f->as.s.p, f->as.s.len);
+    s[f->as.s.len] = '\0';
+    return turi_cstr(s);
+}
+
+static TuriValue native_syntax_sym_name(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-sym-name: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag != F_SYM && f->tag != F_KEYWORD)
+        return turi_errorf("syntax-sym-name: form is %s, not a symbol/keyword",
+                           form_tag_name(f->tag));
+    return turi_cstr(f->as.sym->name);
+}
+
+static TuriValue native_syntax_to_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->string: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    Buf b;
+    buf_init(&b);
+    form_print(&b, f);
+    char *s = (char *)turi_val_alloc(e, b.len + 1);
+    memcpy(s, b.data, b.len);
+    s[b.len] = '\0';
+    buf_free(&b);
+    return turi_cstr(s);
+}
+
+static TuriValue native_int_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_INT)
+        return turi_errorf("int->syntax: expected an int, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_int(&e->sym_arena, SPAN_UNKNOWN, a[0].as_int));
+}
+
+static TuriValue native_float_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_FLOAT)
+        return turi_errorf("float->syntax: expected a float, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_float(&e->sym_arena, SPAN_UNKNOWN, a[0].as_float));
+}
+
+static TuriValue native_bool_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_BOOL)
+        return turi_errorf("bool->syntax: expected a bool, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_bool(&e->sym_arena, SPAN_UNKNOWN, a[0].as_bool));
+}
+
+static TuriValue native_str_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("str->syntax: expected a string, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    size_t len = strlen(a[0].as_cstr);
+    char *copy = (char *)arena_alloc(&e->sym_arena, len + 1);
+    memcpy(copy, a[0].as_cstr, len + 1);
+    return turi_syntax_val(form_str(&e->sym_arena, SPAN_UNKNOWN, copy, (uint32_t)len));
+}
+
+static TuriValue native_sym_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1)
+        return turi_errorf("sym->syntax: expected a name (string or :Sym)");
+    /* Dual arg shape like str->sym: a real cstr, or a :Sym int carrier. */
+    const Symbol *sym = NULL;
+    if (a[0].tag == TURI_CSTR && a[0].as_cstr) {
+        StrSlice sl = { a[0].as_cstr, (uint32_t)strlen(a[0].as_cstr) };
+        sym = symtab_intern(&e->st, sl);
+    } else if (a[0].tag == TURI_INT && a[0].as_int) {
+        sym = (const Symbol *)(intptr_t)a[0].as_int;
+    }
+    if (!sym)
+        return turi_errorf("sym->syntax: expected a name (string or :Sym), got %s",
+                           sx_tag_name(a[0].tag));
+    return turi_syntax_val(form_sym(&e->sym_arena, SPAN_UNKNOWN, sym));
+}
+
+/* Shared body for syntax-list / syntax-vec.  ud: 0 = list, 1 = vec.
+ * Every element must itself be a syntax object; the result inherits the
+ * first element's span so diagnostics against constructed forms still point
+ * somewhere real. */
+static TuriValue native_syntax_seq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    bool vec = ud != NULL;
+    Form **items = (n == 0) ? NULL
+                            : (Form **)arena_alloc(&e->sym_arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) {
+        if (a[i].tag != TURI_SYNTAX)
+            return turi_errorf("%s: arg %u is %s, not a syntax object",
+                               vec ? "syntax-vec" : "syntax-list",
+                               i, sx_tag_name(a[i].tag));
+        items[i] = a[i].as_syntax;
+    }
+    Span span = (n > 0 && items[0]) ? items[0]->span : SPAN_UNKNOWN;
+    return turi_syntax_val(vec ? form_vec(&e->sym_arena, span, items, n)
+                               : form_list(&e->sym_arena, span, items, n));
+}
+
+static TuriValue native_syntax_cons(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *hd = sx_arg(a, n, 0);
+    Form *tl = sx_arg(a, n, 1);
+    if (!hd || !tl)
+        return turi_errorf("syntax-cons: expected (syntax-cons stx stx-list)");
+    /* Mirror the CT evaluator's cons: list tail prepends; nil tail makes a
+     * one-element list; any other tail makes a two-element list. */
+    uint32_t tail_len = 0;
+    if (tl->tag == F_LIST) tail_len = tl->as.list.len;
+    else if (tl->tag != F_NIL) tail_len = 1;
+    Form **items = (Form **)arena_alloc(&e->sym_arena, (tail_len + 1) * sizeof(Form *));
+    items[0] = hd;
+    if (tl->tag == F_LIST) {
+        for (uint32_t i = 0; i < tail_len; i++) items[i + 1] = tl->as.list.items[i];
+    } else if (tl->tag != F_NIL) {
+        items[1] = tl;
+    }
+    return turi_syntax_val(form_list(&e->sym_arena, hd->span, items, tail_len + 1));
+}
+
+static TuriValue native_kw_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("kw->syntax: expected a name string (without the colon), got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    StrSlice sl = { a[0].as_cstr, (uint32_t)strlen(a[0].as_cstr) };
+    const Symbol *sym = symtab_intern(&e->st, sl);
+    return turi_syntax_val(form_keyword(&e->sym_arena, SPAN_UNKNOWN, sym));
+}
+
+static TuriValue native_nil_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)a; (void)n; (void)ud;
+    return turi_syntax_val(form_nil(&e->sym_arena, SPAN_UNKNOWN));
+}
+
+static TuriValue native_syntax_type_ann(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *inner = sx_arg(a, n, 0);
+    if (!inner)
+        return turi_errorf("syntax-type-ann: expected a syntax object, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_type_ann(&e->sym_arena, inner->span, inner));
+}
+
+static TuriValue native_syntax_quote(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *inner = sx_arg(a, n, 0);
+    if (!inner)
+        return turi_errorf("syntax-quote: expected a syntax object, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_quote(&e->sym_arena, inner->span, inner));
+}
+
+/* syntax-append: concatenate list-shaped syntax objects into one list form.
+ * The lowering target for `~@` splices inside a defmacro* quasiquote:
+ * `(a ~@xs b)` lowers to
+ * (syntax-append (syntax-list <a>) xs (syntax-list <b>)). */
+static TuriValue native_syntax_append(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *p = sx_arg(a, n, i);
+        if (!p || (p->tag != F_LIST && p->tag != F_NIL))
+            return turi_errorf("syntax-append: part %u is %s, not a list-shaped "
+                               "syntax object (a ~@ splice needs a list)",
+                               i, (a[i].tag == TURI_SYNTAX && a[i].as_syntax)
+                                      ? form_tag_name(a[i].as_syntax->tag)
+                                      : sx_tag_name(a[i].tag));
+        if (p->tag == F_LIST) total += p->as.list.len;
+    }
+    Form **items = (total == 0) ? NULL
+        : (Form **)arena_alloc(&e->sym_arena, total * sizeof(Form *));
+    uint32_t out = 0;
+    Span span = SPAN_UNKNOWN;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *p = a[i].as_syntax;
+        if (p->tag != F_LIST) continue;
+        if (span.line == 0 && p->span.line > 0) span = p->span;
+        for (uint32_t j = 0; j < p->as.list.len; j++) items[out++] = p->as.list.items[j];
+    }
+    return turi_syntax_val(form_list(&e->sym_arena, span, items, total));
+}
+
+static TuriValue native_syntax_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    /* Deep structural equality, same semantics as the CT evaluator's `=`
+     * (forms.c form_equal).  Named syntax=? because the `=` operator's
+     * overload set is scalar-only -- precedent: sym=?. */
+    Form *fa = sx_arg(a, n, 0);
+    Form *fb = sx_arg(a, n, 1);
+    if (!fa || !fb)
+        return turi_errorf("syntax=?: expected two syntax objects");
+    return turi_bool(form_equal(fa, fb));
+}
+
+static TuriValue native_syntax_gensym(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *prefix = "g";
+    if (n >= 1 && a[0].tag == TURI_CSTR && a[0].as_cstr) prefix = a[0].as_cstr;
+    /* Same freshness contract as the elaborator's gensym_fresh: skip any
+     * candidate already interned in this env's symbol table. */
+    static uint32_t counter = 0;
+    char name_buf[128];
+    for (;;) {
+        snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, counter++);
+        StrSlice sl = { name_buf, (uint32_t)strlen(name_buf) };
+        if (!symtab_contains(&e->st, sl)) {
+            const Symbol *sym = symtab_intern(&e->st, sl);
+            return turi_syntax_val(form_sym(&e->sym_arena, SPAN_UNKNOWN, sym));
+        }
+    }
+}
+
+static TuriValue native_syntax_error(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *msg = (n >= 1 && a[0].tag == TURI_CSTR && a[0].as_cstr)
+                          ? a[0].as_cstr : "syntax error";
+    Form *f = sx_arg(a, n, 1);
+    if (f && f->span.line > 0)
+        return turi_errorf("syntax-error at %u:%u: %s",
+                           f->span.line, f->span.col_start, msg);
+    return turi_errorf("syntax-error: %s", msg);
+}
+
+static void wk_register_syntax_natives(TuriEnv *env) {
+    turi_env_register_native_typed(env, "read-string",     native_read_string,     NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-tag",      native_syntax_tag,      NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "syntax-len",      native_syntax_len,      NULL, TUR_NRT_INT);
+    turi_env_register_native_typed(env, "syntax-first",    native_syntax_first,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-rest",     native_syntax_rest,     NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-nth",      native_syntax_nth,      NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-list?",    native_syntax_tag_p,    (void *)(intptr_t)F_LIST,    TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-vec?",     native_syntax_tag_p,    (void *)(intptr_t)F_VEC,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-sym?",     native_syntax_tag_p,    (void *)(intptr_t)F_SYM,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-keyword?", native_syntax_tag_p,    (void *)(intptr_t)F_KEYWORD, TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-int?",     native_syntax_tag_p,    (void *)(intptr_t)F_INT,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-float?",   native_syntax_tag_p,    (void *)(intptr_t)F_FLOAT,   TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-str?",     native_syntax_tag_p,    (void *)(intptr_t)F_STR,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-nil?",     native_syntax_tag_p,    (void *)(intptr_t)F_NIL,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax->int",     native_syntax_to_int,   NULL, TUR_NRT_INT);
+    turi_env_register_native_typed(env, "syntax->float",   native_syntax_to_float, NULL, TUR_NRT_FLOAT);
+    turi_env_register_native_typed(env, "syntax->str",     native_syntax_to_str,   NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "syntax-sym-name", native_syntax_sym_name, NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "syntax->string",  native_syntax_to_string, NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "int->syntax",     native_int_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "float->syntax",   native_float_to_syntax, NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "bool->syntax",    native_bool_to_syntax,  NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "str->syntax",     native_str_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "sym->syntax",     native_sym_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-list",     native_syntax_seq,      NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-vec",      native_syntax_seq,      (void *)1, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-cons",     native_syntax_cons,     NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax=?",        native_syntax_eq,       NULL, TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "kw->syntax",      native_kw_to_syntax,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "nil->syntax",     native_nil_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-type-ann", native_syntax_type_ann, NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-quote",    native_syntax_quote,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-append",   native_syntax_append,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-gensym",   native_syntax_gensym,   NULL, TUR_NRT_SYNTAX);
+    /* syntax-error never returns normally (its value is a propagating
+     * error), but it types as Syntax so `(if p good-stx (syntax-error ...))`
+     * unifies in a defmacro* body. */
+    turi_env_register_native_typed(env, "syntax-error",    native_syntax_error,    NULL, TUR_NRT_SYNTAX);
+}
+
 void turi_env_register_interpreter_natives(TuriEnv *env) {
     if (!env) return;
     /* Register native overrides for stdlib inline-C functions. */
@@ -4215,4 +4653,7 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
     /* SCHEMA (turi): runtime schema validator over the JSON nodes, overriding
      * schema.tur's inline-C constructors/decoder/accessors (Layer 2). */
     wk_register_schema_natives(env);
+    /* SYNTAX (turi): first-class syntax objects (TURI_SYNTAX) -- Stage 1 of
+     * docs/upcoming/macro-system-direction-plan.md. */
+    wk_register_syntax_natives(env);
 }
