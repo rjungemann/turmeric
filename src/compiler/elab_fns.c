@@ -671,6 +671,21 @@ static const Binding *reads_read_root(const Expr *x) {
         case EX_CAST:      x = x->as.cast_.expr; break;
         case EX_REINTERPRET: x = x->as.reinterpret_.expr; break;
         case EX_GET_FIELD: x = x->as.get_field_.struct_expr; break;
+        /* An `(unsafe ...)` marker handle's value IS its body's value (the
+         * built-in Unsafe effect never performs, so the handler clause never
+         * runs), and a `do`'s value is its last item -- both value-shaping,
+         * so a load nested inside its own unsafe block still chases through.
+         * A USER handle is not followed: its cases can replace the value. */
+        case EX_HANDLE: {
+            const HandleExpr *h = x->as.handle_.handle;
+            if (!h || !h->is_unsafe_marker) return NULL;
+            x = h->body;
+            break;
+        }
+        case EX_DO:
+            if (x->as.do_.n == 0) return NULL;
+            x = x->as.do_.items[x->as.do_.n - 1];
+            break;
         case EX_BUILTIN:
             if (x->as.builtin.spec &&
                 (x->as.builtin.spec->shape == BS_PTR_ARITH ||

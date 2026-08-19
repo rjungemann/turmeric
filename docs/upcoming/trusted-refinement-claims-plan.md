@@ -423,18 +423,55 @@ the WfVerdict lattice and the slice-1 root chase.
   not a pre-unwrapped int -- a concrete design input for the sized-world
   conversion: keep frames on world-typed helpers.
 
+#### R4 execution record, part 4 (2026-08-19): the sized-world conversion -- the REAL measure chain is VERIFIED
+
+The "one design" coupling paid out exactly as predicted: converting the
+real stack surfaced two attribution gaps, both closed compiler-side in
+the same day's work.
+
+- **Chase-through-loads and EX_REINTERPRET.**  The `__ecs_state` control
+  block is two loads deep (`gens = state[6]; gens[slot]`), so
+  `reads_read_root` now follows a raw load through its pointer operand --
+  a pointer loaded out of state reachable from `s` points at state
+  reachable from `s` (attribution is REACHABILITY-based; deep-alias
+  escape is the same documented trust boundary the tier already stands
+  on).  And the int->ptr `::` builds an EX_REINTERPRET the walks had
+  never modeled -- now exactly-as-pure-as / rooted-at its operand in the
+  purity walk, the chase, both evidence scans, and rf_scan.  The chase
+  also crosses an `(unsafe ...)` MARKER handle and a `do`'s last item
+  (both value-shaping; a user handle is not followed -- its cases can
+  replace the value).  `read-frames-dump-verdicts` pins the two-level
+  shape.
+- **Spice side (turmeric-spices, sized-world.tur):** `worldstate->int`
+  is a `::` unwrap; the new `sized-gen-of [s slot] #reads s` replaces
+  `__sized-state-gen-of-raw` with three attributable typed-pointer loads
+  (cap bounds check, gens-null check, gens[slot]); `sized-live` /
+  `sized-cap` are visible one-load reads; `sized-alive?` and
+  `sized-slot-generation` route through `sized-gen-of` and carry
+  `#reads s`; the gen-of/live/cap raw helpers are deleted.  Spawn /
+  despawn / copy / free stay inline C -- writes were never this plan's
+  subject.  Style rule that fell out: keep the pointer expressions
+  INLINE (the chase does not follow local aliases), and do not nest a
+  second `(unsafe ...)` around an inner load (handled by the chase now,
+  but the flat form is cleaner).
+- **The payoff, observed on the shipping test:** under
+  `--dump-read-frames`, `refined-stack-alive` reports every frame in the
+  chain VERIFIED -- `sized-gen-of`, `sized-live`, `sized-cap`,
+  `sized-slot-generation`, `sized-alive?`, and the macro-generated
+  `GameWorld-alive?` (three frames deep through the fixed-point call
+  mapping).  The flagship ECS aliveness measure is no longer trusted; it
+  is checked.  The 87-run sweep is byte-identical to the pre-conversion
+  baseline -- zero behavioral cost, and this time zero warning deltas
+  (the W0033 papercut was fixed first).
+
 **What remains for R4 proper:** wiring the walk's call-shape EXCEEDED
 into the W0383/refusal evidence tier (today it is dump-only), local
 alias tracking in the root chase if real measures need it, the first
-behavioral consumer of `reads_checked` (deferred as above), the
-sized-world half of the spice conversion, and keeping the guides in step
-as those land (the slice-1/slice-2 guide and `--explain` updates are in;
-what remains documents itself alongside each remaining piece).  The
-facade half of the spice-side prototype is
-up as turmeric-spices PR #54 (2026-08-19), verified byte-identical on
-both the new and the old purity walk, so it carries no new `tur` floor.
-The walk and the sized-world conversion stay one design, landed
-together, per the trigger note in `ecs-refinement-typed-apis-plan.md`.
+behavioral consumer of `reads_checked` -- now genuinely unblocked, since
+the real measure layer speaks the vocabulary -- and keeping the guides
+in step as those land.  The facade half of the spice conversion merged
+as turmeric-spices PR #54; the sized-world half is the PR that carries
+this record's spice-side changes.
 
 ## 3. Explicitly not doing
 
