@@ -325,16 +325,68 @@ The 2026-08-19 investigation's item-3 gaps are now closed or de-risked:
   `docs/reported/unsafe-block-w0033-on-raw-builtins.md`; worth fixing
   before the spice rewrite lands or the ECS build output gets noisy.
 
+#### R4 execution record, part 2 (2026-08-19): slice 1 of the footprint walk -- omitted-PARAMETER evidence
+
+The evidence tier now covers the second way a frame breaks.  R1/R2 saw one
+kind of positive evidence (a direct mutable-global read); slice 1 adds the
+other: **a demonstrable read of mutable state rooted in a parameter the
+frame omits**.  `reads_scan_unframed_param` (elab_fns.c, beside the global
+scan it mirrors) walks the body for the two read shapes the trusted tier
+exists for -- a raw-memory load (`ptr-deref` / `array-get-unchecked`) and a
+field read through a reference-typed receiver -- and chases each read's
+pointer root through the value-shaping forms only (VAR, `::`, cast, field
+hops, ptr arithmetic).  A root that is a parameter Binding (pointer
+identity against the params array, so shadowing cannot mis-attribute)
+whose mask bit is clear is the finding.  A root behind a CALL yields no
+evidence: interprocedural attribution stays the footprint walk proper's
+job, where "could not see" must first become a distinct verdict.
+
+Notes from doing it:
+
+- **Both evidence scans now descend `(unsafe ...)`** (EX_HANDLE, body and
+  case bodies).  The raw-load builtins *require* the block, so a walk that
+  stopped at it was blind to exactly the reads this tier is about -- this
+  also quietly strengthens R1/R2 (a mutable-global read inside an unsafe
+  block now warns too).
+- **A `^borrow` struct parameter's field read is NOT evidence, and that is
+  correct, not a gap.**  Probed before assuming: such a read discharges a
+  refined crossing with no frame at all, because the receiver is
+  struct-typed (the purity walk's reference decline list matches reference
+  VALUES, not borrow-annotated params) and mutation between guard and use
+  is the hypothesis-invalidation machinery's job.  Param state the solver
+  already tracks is outside the trust tier; warning on it would be a false
+  positive.
+- The evidence flag was renamed (`Binding.reads_omits_mut_global` ->
+  `reads_frame_omits_state`) since it now carries either kind; the R2
+  refusal consumes it unchanged, so `--enable=checked-reads` refuses the
+  omitted-parameter case with the same fix-the-frame W0372 wording.
+  TUR-W0383 gets a second message variant naming the omitted parameter and
+  the exact fix (`#reads [w g]`); the --explain text and
+  stateful-refinements-guide.md cover both kinds.
+- **Fixture triple**, mirroring the R2 set: `refine-reads-frame-omits-param`
+  (warn + still proves, gate off), `errors/r4-checked-reads-refuses-param-read`
+  (gate on -> refused, TUR-W0372 "grant was refused"), and
+  `refine-reads-multi-param-visible-quiet` (frame widened to `#reads [w g]`
+  per the warning's advice: silent and proving even under the gate --
+  structurally pinned, since residual evidence would refuse the grant and
+  fail the run).  The quiet fixture is also the first visible-body
+  multi-param `#reads` measure in the tree, closing the loop with R3.
+
 **What remains for R4 proper:** the footprint walk itself (attribute
 every read in a walkable measure body to a named frame parameter, with
-the WG_UNKNOWN discipline for calls it cannot follow -- skeleton:
-`reads_scan_mut_global`), the decision of what a VERIFIED frame buys its
-consumers, and the sized-world half of the spice conversion.  The facade
-half of the spice-side prototype is up as turmeric-spices PR #54
-(2026-08-19), verified byte-identical on both the new and the old purity
-walk, so it carries no new `tur` floor.  The walk and the sized-world
-conversion stay one design, landed together, per the trigger note in
-`ecs-refinement-typed-apis-plan.md`.
+the WG_UNKNOWN discipline for calls it cannot follow -- slice 1 above is
+its evidence-only precursor: same leaves, same roots, no verdict on
+silence), the decision of what a VERIFIED frame buys its
+consumers, the sized-world half of the spice conversion, and a guides
+pass once the walk lands -- `stateful-refinements-guide.md` (the trusted
+tier's own documentation and its three-step trajectory),
+`refinement-types-guide.md`, and the TUR-W0383 `--explain` text all
+describe the reads story as it stands today and need to say what checked
+frames actually verify.  The facade half of the spice-side prototype is
+up as turmeric-spices PR #54 (2026-08-19), verified byte-identical on
+both the new and the old purity walk, so it carries no new `tur` floor.
+The walk and the sized-world conversion stay one design, landed
+together, per the trigger note in `ecs-refinement-typed-apis-plan.md`.
 
 ## 3. Explicitly not doing
 

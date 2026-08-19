@@ -496,7 +496,7 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
      * read", never "could not see" -- an unwalkable (inline-C) body carries
      * no evidence and keeps the trusted grant even under the gate. */
     if (!pure && info.reads_params_mask != 0 &&
-        !(g_opt_checked_reads && info.reads_omits_mut_global) &&
+        !(g_opt_checked_reads && info.reads_frame_omits_state) &&
         enc_reads_args_frozen(E, f, info.reads_params_mask))
         pure = true;
 

@@ -623,9 +623,182 @@ static const Binding *reads_scan_mut_global(const Expr *x, uint32_t *budget) {
     case EX_ASCRIBE: return reads_scan_mut_global(x->as.ascribe_.inner, budget);
     case EX_CAST:    return reads_scan_mut_global(x->as.cast_.expr, budget);
     case EX_RETURN:  return reads_scan_mut_global(x->as.return_.value, budget);
+    /* R4 slice 1: `(unsafe ...)` desugars to a handle whose body is where
+     * every raw-memory read lives (the gated builtins REQUIRE the block),
+     * so not descending it would blind both evidence scans to exactly the
+     * reads the trusted tier exists for.  Handler case bodies are read
+     * positions too. */
+    case EX_HANDLE: {
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return NULL;
+        const Binding *r = reads_scan_mut_global(h->body, budget);
+        for (uint8_t i = 0; !r && i < h->n_cases; i++)
+            r = reads_scan_mut_global(h->cases[i].body, budget);
+        return r;
+    }
     default:
         return NULL;   /* unmodeled kind: no evidence, no warning */
     }
+}
+
+/* R4 slice 1 (trusted-refinement-claims-plan): chase a read's ROOT through
+ * the value-shaping forms only -- VAR, `::`-ascription, cast, field hops,
+ * and ptr-add/ptr-sub arithmetic (provenance follows the pointer operand).
+ * Anything else (a CALL above all) returns NULL: no root, no evidence.
+ * Interprocedural attribution belongs to the footprint walk proper, where
+ * "could not see" must become a distinct verdict before it can back
+ * anything stronger than silence. */
+static const Binding *reads_read_root(const Expr *x) {
+    while (x) {
+        switch (x->kind) {
+        case EX_VAR:       return x->as.var.binding;
+        case EX_ASCRIBE:   x = x->as.ascribe_.inner; break;
+        case EX_CAST:      x = x->as.cast_.expr; break;
+        case EX_GET_FIELD: x = x->as.get_field_.struct_expr; break;
+        case EX_BUILTIN:
+            if (x->as.builtin.spec &&
+                x->as.builtin.spec->shape == BS_PTR_ARITH &&
+                x->as.builtin.n >= 1) {
+                x = x->as.builtin.args[0];
+                break;
+            }
+            return NULL;
+        default:           return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* Is this root a parameter of the frame's function that the mask OMITS?
+ * Binding-pointer identity against the params array, so a let that shadows
+ * a parameter's name can never mis-attribute. */
+static const Binding *reads_root_unframed_param(const Binding *root,
+                                                Binding **params,
+                                                uint32_t n_params,
+                                                uint64_t mask) {
+    if (!root || !root->is_param) return NULL;
+    for (uint32_t i = 0; i < n_params && i < 64; i++) {
+        if (params[i] != root) continue;
+        return (mask & (UINT64_C(1) << i)) ? NULL : root;
+    }
+    return NULL;
+}
+
+/* R4 slice 1: does this elaborated body DEMONSTRABLY read mutable state
+ * rooted in a PARAMETER the `#reads` frame omits?  Same posture as
+ * reads_scan_mut_global above: positive evidence only, direct reads only,
+ * unmodeled kinds are not descended, and an inline-C body yields no
+ * evidence.  The frame's contract is "the named parameters are the only
+ * mutable state this answer depends on", and a mutable global is not the
+ * only way to break it -- reading ANOTHER parameter's aliasable state does
+ * too, and the per-parameter mask makes exactly that omission checkable.
+ *
+ * A "read of mutable state" here is one of:
+ *   - a field read through a REFERENCE-typed receiver (the same decline
+ *     list the purity walk uses at EX_GET_FIELD: a borrowed / rc / raw-ptr
+ *     receiver is aliasable, so two calls the grant treats as one value
+ *     can observe different fields), or
+ *   - a raw-memory load (ptr-deref / array-get-unchecked).
+ * By-value receivers stay silent on purpose: a copied aggregate cannot
+ * change between two calls with equal arguments, which is the same
+ * aliasing argument the purity walk's EX_GET_FIELD case documents. */
+static const Binding *reads_scan_unframed_param(const Expr *x,
+                                                Binding **params,
+                                                uint32_t n_params,
+                                                uint64_t mask,
+                                                uint32_t *budget) {
+#define RSUP(sub) reads_scan_unframed_param((sub), params, n_params, mask, budget)
+    if (!x || *budget == 0) return NULL;
+    (*budget)--;
+    switch (x->kind) {
+    case EX_GET_FIELD: {
+        const Expr *recv = x->as.get_field_.struct_expr;
+        if (recv) {
+            switch (recv->type.kind) {
+            case TY_REF: case TY_RC: case TY_PTR_VOID:
+            case TY_REF_IMMUT: case TY_REF_MUT: {
+                const Binding *r = reads_root_unframed_param(
+                    reads_read_root(recv), params, n_params, mask);
+                if (r) return r;
+                break;
+            }
+            default: break;
+            }
+        }
+        return RSUP(recv);
+    }
+    case EX_BUILTIN: {
+        if (x->as.builtin.spec &&
+            (x->as.builtin.spec->shape == BS_PTR_DEREF ||
+             x->as.builtin.spec->shape == BS_ARRAY_GET_UNCHECKED) &&
+            x->as.builtin.n >= 1) {
+            const Binding *r = reads_root_unframed_param(
+                reads_read_root(x->as.builtin.args[0]), params, n_params, mask);
+            if (r) return r;
+        }
+        for (uint32_t i = 0; i < x->as.builtin.n; i++) {
+            const Binding *r = RSUP(x->as.builtin.args[i]);
+            if (r) return r;
+        }
+        return NULL;
+    }
+    case EX_LET: case EX_LETREC: {
+        for (uint32_t i = 0; i < x->as.let_.n; i++) {
+            const Binding *r = RSUP(x->as.let_.bindings[i].init);
+            if (r) return r;
+        }
+        return RSUP(x->as.let_.body);
+    }
+    case EX_IF: {
+        const Binding *r = RSUP(x->as.if_.cond);
+        if (!r) r = RSUP(x->as.if_.then_);
+        if (!r) r = RSUP(x->as.if_.else_or_null);
+        return r;
+    }
+    case EX_DO: {
+        for (uint32_t i = 0; i < x->as.do_.n; i++) {
+            const Binding *r = RSUP(x->as.do_.items[i]);
+            if (r) return r;
+        }
+        return NULL;
+    }
+    case EX_WHILE: {
+        const Binding *r = RSUP(x->as.while_.cond);
+        return r ? r : RSUP(x->as.while_.body);
+    }
+    case EX_SET:
+        /* A write target is a different defect (same rule as the global
+         * scan); the VALUE being written is still read. */
+        return RSUP(x->as.set_.value);
+    case EX_MATCH: {
+        const Binding *r = RSUP(x->as.match_.scrutinee);
+        for (uint32_t i = 0; !r && i < x->as.match_.n_arms; i++) {
+            r = RSUP(x->as.match_.arms[i].guard);
+            if (!r) r = RSUP(x->as.match_.arms[i].body);
+        }
+        return r;
+    }
+    case EX_CALL: {
+        const Binding *r = RSUP(x->as.call_.fn_expr);
+        for (uint32_t i = 0; !r && i < x->as.call_.n_args; i++)
+            r = RSUP(x->as.call_.args[i]);
+        return r;
+    }
+    case EX_ASCRIBE: return RSUP(x->as.ascribe_.inner);
+    case EX_CAST:    return RSUP(x->as.cast_.expr);
+    case EX_RETURN:  return RSUP(x->as.return_.value);
+    case EX_HANDLE: {   /* see reads_scan_mut_global's EX_HANDLE rationale */
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return NULL;
+        const Binding *r = RSUP(h->body);
+        for (uint8_t i = 0; !r && i < h->n_cases; i++)
+            r = RSUP(h->cases[i].body);
+        return r;
+    }
+    default:
+        return NULL;   /* unmodeled kind: no evidence, no warning */
+    }
+#undef RSUP
 }
 
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
@@ -755,7 +928,7 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * broken-promise evidence rides along so `--enable=checked-reads` can
      * refuse the grant. */
     out->reads_params_mask      = b->reads_params_mask;
-    out->reads_omits_mut_global = b->reads_omits_mut_global;
+    out->reads_frame_omits_state = b->reads_frame_omits_state;
 
     /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
      * CHECKED.  A consumer that acts on the frame (WF3, WF4) must gate on
@@ -921,7 +1094,7 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f) {
 }
 
 /* R2 (`--enable=checked-reads`): same walk, narrowed to a `#reads` measure
- * carrying broken-frame evidence (reads_omits_mut_global) -- i.e. one whose
+ * carrying broken-frame evidence (reads_frame_omits_state) -- i.e. one whose
  * congruence grant the encoder will refuse under the gate.  Feeds only the
  * W0372 wording at the crossing, so the "guard it inside a `frozen` region"
  * advice is not given for a crossing where the region is present and the
@@ -934,7 +1107,7 @@ static bool rt_pred_reads_measure_refused(Elab *e, const Form *f) {
         RefineFnInfo info;
         memset(&info, 0, sizeof(info));
         if (rt_resolve_fn(e, head->as.sym->name, &info) &&
-            info.reads_params_mask != 0 && info.reads_omits_mut_global)
+            info.reads_params_mask != 0 && info.reads_frame_omits_state)
             return true;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
@@ -7412,12 +7585,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (reads_params_mask_defn != 0 && body) {
         uint32_t scan_budget = 4096;
         const Binding *gb = reads_scan_mut_global(body, &scan_budget);
-        if (gb && gb->name) {
+        /* R4 slice 1: the same broken promise, reached through a PARAMETER
+         * the frame omits rather than a global.  Scanned only when the
+         * global scan found nothing so one defn reports one finding. */
+        const Binding *pb_omitted = NULL;
+        if (!(gb && gb->name)) {
+            uint32_t scan_budget2 = 4096;
+            pb_omitted = reads_scan_unframed_param(body, params, n_params,
+                                                   reads_params_mask_defn,
+                                                   &scan_budget2);
+        }
+        if ((gb && gb->name) || (pb_omitted && pb_omitted->name)) {
             /* R2 (trusted-refinement-claims-plan): the evidence is stamped on
              * EVERY elaboration of the defn -- clones included -- because the
              * encoder's refusal must see it whichever binding a call resolves
              * to.  Only the WARNING is deduped by the bare_fat guard below. */
-            b->reads_omits_mut_global = true;
+            b->reads_frame_omits_state = true;
             /* The refusal is the experiment's behaviour, so its lifecycle
              * warning fires where the refusal becomes live: evidence found
              * AND the gate on.  A gate enabled over a clean program stays
@@ -7440,17 +7623,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (wrote < 0 || (size_t)wrote >= sizeof(frame_txt) - fo) break;
                     fo += (size_t)wrote;
                 }
-                diag_emit_with_code(DIAG_WARNING,
-                                    reads_annot_defn ? reads_annot_defn->span
-                                                     : name_f->span,
-                                    TUR_W0383_READS_FRAME_OMITS_MUTABLE,
-                                    "`#reads %s` omits mutable state the body reads: "
-                                    "the mutable global '%s' can change between two "
-                                    "calls this frame lets the solver treat as one "
-                                    "value; thread the state through a parameter the "
-                                    "frame can name, or make the global immutable",
-                                    frame_txt[0] ? frame_txt : "?",
-                                    gb->name->name);
+                if (gb && gb->name) {
+                    diag_emit_with_code(DIAG_WARNING,
+                                        reads_annot_defn ? reads_annot_defn->span
+                                                         : name_f->span,
+                                        TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                        "`#reads %s` omits mutable state the body reads: "
+                                        "the mutable global '%s' can change between two "
+                                        "calls this frame lets the solver treat as one "
+                                        "value; thread the state through a parameter the "
+                                        "frame can name, or make the global immutable",
+                                        frame_txt[0] ? frame_txt : "?",
+                                        gb->name->name);
+                } else {
+                    diag_emit_with_code(DIAG_WARNING,
+                                        reads_annot_defn ? reads_annot_defn->span
+                                                         : name_f->span,
+                                        TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                        "`#reads %s` omits mutable state the body reads: "
+                                        "the body reads state reached through parameter "
+                                        "'%s', which the frame does not name, and that "
+                                        "state can change between two calls this frame "
+                                        "lets the solver treat as one value; name it in "
+                                        "the frame (`#reads [%s %s]`)",
+                                        frame_txt[0] ? frame_txt : "?",
+                                        pb_omitted->name->name,
+                                        frame_txt[0] ? frame_txt : "?",
+                                        pb_omitted->name->name);
+                }
             }
         }
     }

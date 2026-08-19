@@ -370,14 +370,15 @@ struct Binding {
      * Stamped on the same forward-declared Binding as the refine_* fields, so
      * it is visible to call sites elaborated before the defn. */
     uint64_t            reads_params_mask;
-    /* R2 (trusted-refinement-claims-plan): positive evidence that this
-     * function's `#reads` frame is broken -- the elaborated body directly
-     * reads a mutable global the frame cannot name.  Stamped where the frame
+    /* R2 + R4 slice 1 (trusted-refinement-claims-plan): positive evidence
+     * that this function's `#reads` frame is broken -- the elaborated body
+     * directly reads a mutable global the frame cannot name, or mutable
+     * state rooted in a PARAMETER the frame omits.  Stamped where the frame
      * is stamped; TUR-W0383 reports it gatelessly, and under
      * `--enable=checked-reads` the refinement encoder refuses the congruence
      * override on it.  False never means "clean", only "no evidence" -- an
      * inline-C body is unwalkable and stays false by design. */
-    bool                reads_omits_mut_global;
+    bool                reads_frame_omits_state;
     /* WF1 / #writes: the per-argument WRITE frame -- which parameters' mutable
      * state this function's body may write.  A bitmask (bit i = parameter i is
      * in the frame), the same shape `reads_params_mask` above has carried

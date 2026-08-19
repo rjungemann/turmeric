@@ -1,0 +1,47 @@
+;; R4 slice 1, the fixed-frame quadrant: the refine-reads-frame-omits-param
+;; program with the frame WIDENED to `#reads [w g]` -- exactly what the
+;; W0383 message tells the author to write. Both named parameters are
+;; frozen at the site, so the conjunctive grant applies; the evidence walk
+;; finds every raw load rooted in a FRAMED parameter and stays silent; and
+;; the program proves and prints 100 even with `--enable=checked-reads` on.
+;;
+;; This pins two properties at once, STRUCTURALLY rather than by stderr
+;; diffing (the harness can only assert substrings present, not absent):
+;; with the gate on, any residual evidence would REFUSE the grant and the
+;; --strict-refine crossing would hard-error, so this fixture printing 100
+;; is itself the proof that naming the parameter cleared the finding. And
+;; it pins that the R2/R4 refusal keys on evidence, never on the mere
+;; presence of the gate over a clean program.
+(defstruct Wld [gens : ptr<void>])
+(defstruct Grd [gens : ptr<void>])
+
+(defn wld-new [] : Wld
+  (unsafe (let [p (raw-malloc 32)]
+            (array-set-unchecked p 0 0)   ;; init slot 0 -- turi runs this too
+            (Wld p))))
+(defn grd-new [] : Grd
+  (unsafe (let [p (raw-malloc 32)]
+            (array-set-unchecked p 0 0)
+            (Grd p))))
+
+(defn linked? [^borrow w : Wld ^borrow g : Grd e : int] #reads [w g] : bool
+  (= (unsafe (+ (array-get-unchecked (.gens w) e)
+                (array-get-unchecked (.gens g) e)))
+     0))
+
+(defn get-it [^borrow w : Wld ^borrow g : Grd
+              e : #refine{ x : int | (linked? w g x) }] : int
+  (+ e 100))
+
+(defn run [] : int
+  (let [^mut w (wld-new)
+        ^mut g (grd-new)]
+    (let [__f1 (& w)
+          __f2 (& g)]
+      (if (linked? w g 0)
+        (get-it w g 0)
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)
