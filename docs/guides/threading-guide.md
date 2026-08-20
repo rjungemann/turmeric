@@ -266,7 +266,7 @@ mutex, condvar, and value/error slot.
 (def f p)
 
 ;; Producer thread fulfills the promise
-(thread (fn [] (promise-fulfill p 42)))
+(async (fn [] (promise-fulfill p 42)))
 
 ;; Consumer blocks on the future
 (def result (future-get f))
@@ -280,7 +280,7 @@ def p promise-new()
 def f p
 
 ;; Producer thread fulfills the promise
-thread((fn [] promise-fulfill(p 42)))
+async(fn([] promise-fulfill(p 42)))
 
 ;; Consumer blocks on the future
 def result future-get(f)
@@ -406,7 +406,7 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
 (def ch (chan-new 8))
 
 ;; Producer thread
-(thread
+(async
   (fn []
     (chan-send ch 1)
     (chan-send ch 2)
@@ -422,7 +422,7 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
 def ch chan-new(8)
 
 ;; Producer thread
-thread
+async
   fn []
     chan-send(ch 1)
     chan-send(ch 2)
@@ -578,7 +578,7 @@ unnamed form is unavailable on macOS).
 ;; Limit concurrency to 3 parallel workers
 (def sem (sem-new 3))
 
-(thread
+(async
   (fn []
     (sem-acquire sem)
     (do-work)
@@ -591,7 +591,7 @@ def s sem-new(1)
 ;; Limit concurrency to 3 parallel workers
 def sem sem-new(3)
 
-thread
+async
   fn []
     sem-acquire(sem)
     do-work()
@@ -953,32 +953,13 @@ Most library types implement these traits automatically based on their fields.
 
 Turmeric's borrow checker enforces:
 
-```turmeric
-;; ERROR: cannot move borrowed reference to thread
-(let [x 42]
-  (thread
-    (fn []
-      (println x))))  ; x is borrowed; can't move across boundary
-
-;; OK: clone or use Arc
-(let [x (arc 42)]
-  (thread
-    (fn []
-      (println (arc-deref x)))))
-```
-```sweet-exp
-;; ERROR: cannot move borrowed reference to thread
-let [x 42]
-  thread
-    fn []
-      println(x)  ; x is borrowed; can't move across boundary
-
-;; OK: clone or use Arc
-let [x arc(42)]
-  thread
-    fn []
-      println(arc-deref(x))
-```
+A closure crossing a thread boundary (via `thread-spawn`, `async`, or a
+task-group spawn) is Send-checked: capturing a non-`Send` value -- a `ref<T>`,
+a continuation, a borrow -- is rejected with `TUR-E0010` (not Send) or
+`TUR-E0011` (not Sync) instead of racing at runtime. Copyable scalars capture
+freely; shared structures cross via an Arc or a channel. See
+`tests/fixtures/errors/thread-send-ref` and
+`tests/fixtures/errors/thread-send-cont` for the rejected shapes.
 
 ## Common Patterns
 
@@ -988,7 +969,7 @@ let [x arc(42)]
 (def ch (chan-new 16))
 
 ;; Producer
-(thread
+(async
   (fn []
     (for-each items
       (fn [item] (chan-send ch item)))
@@ -1007,7 +988,7 @@ let [x arc(42)]
 def ch chan-new(16)
 
 ;; Producer
-thread
+async
   fn []
     for-each items
       fn [item] chan-send(ch item)

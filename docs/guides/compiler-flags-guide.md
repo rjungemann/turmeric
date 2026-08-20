@@ -6,11 +6,11 @@ description: Diagnostic and debug flags accepted by `tur`; list of removed `-X` 
 
 # Turmeric Compiler Flags
 
-As of **v0.24.0**, every `-X` feature flag is an accept-and-warn no-op:
-the language features they used to gate are unconditionally on. Passing
-`-X<name>` for any of the 16 names listed below still parses successfully
-(downstream `build.tur` files keep compiling unchanged) but emits
-`TUR-W0050` and otherwise does nothing.
+Every `-X` feature flag is an accept-and-warn no-op: the language features
+they used to gate are unconditionally on. Passing `-X<name>` for any of the
+16 names listed below still parses successfully (downstream `build.tur`
+files keep compiling unchanged) but emits `TUR-W0050` and otherwise does
+nothing.
 
 The diagnostic and debug flags below (`--strict-effects`, `--keep-contracts`,
 `--no-contracts`, `--dump-*`, `--emit-abi-trace`, `--warn-unused-result`,
