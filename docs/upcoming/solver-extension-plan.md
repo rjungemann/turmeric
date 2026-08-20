@@ -1,7 +1,7 @@
 ---
 title: Solver Extension Plan (SX)
 category: Planning
-description: Extending the refinement solver into an incremental, backtracking decision procedure -- and the two things an outside reviewer asked for first -- a trail with per-cell opt-out, and a capture/restore cost curve in the benchmark harness.
+description: Extending the refinement solver into an incremental, backtracking decision procedure -- a trail with per-cell opt-out, a capture/restore cost curve in the benchmark harness, an offline lazy-SMT stepping stone, and an untrusted-search/trusted-checker seam.
 ---
 
 # Solver Extension (SX)
@@ -13,19 +13,23 @@ sound. Read section 5 for what to do first if only one phase gets built.
 ## 0. Provenance
 
 This plan is the write-up of an outside design review of the refinement
-solver. Two excerpts from that review are the load-bearing part and are quoted
-verbatim in section 1; the rest of this document is (a) what the codebase
-actually does today, checked against the source, (b) the literature each of the
-reviewer's two points points at, and (c) a phased plan that answers both.
+solver. Two excerpts from that review are quoted verbatim in section 1; the
+originating conversation
+(`https://claude.ai/share/bb3cf410-6151-44f4-a2f3-fed54a946731`) sits behind a
+Cloudflare interstitial and could not be fetched from the build container, but
+a structured summary of the full discussion was supplied afterwards and is
+folded in throughout. Beyond the two headline questions, that summary covers:
+why the cube design is what it is and when it stops being tolerable; the real
+cost of moving to DPLL(T)/CDCL(T) (the theory seam and the testing burden, not
+the SAT core); whether continuations help the theory seam (mostly no, with
+specific exceptions); the consequences of `tur` having a live compile-time
+runtime; multi-shot versus backtrackable; and a recommended layer split. Each
+of those has a home below: sections 2, 3.5-3.7, 4, and the phase structure of
+section 5.
 
-> **Transcript note.** The originating conversation
-> (`https://claude.ai/share/bb3cf410-6151-44f4-a2f3-fed54a946731`) is behind a
-> Cloudflare interstitial and could not be fetched from the build container --
-> `curl` and the fetch tool both get the SPA shell, not the messages. The two
-> excerpts below were supplied directly and are treated as the review of
-> record. If other parts of that transcript should shape this plan, paste them
-> and this document gets a revision, not a rewrite: sections 3 and 4 are
-> organized around the two questions, and more questions become more sections.
+The rest of this document is (a) what the codebase actually does today,
+checked against the source, (b) the literature each point leans on, and (c) a
+phased plan.
 
 ## 1. The two review questions
 
@@ -83,8 +87,8 @@ the design of record is
 | Stage | File | What it decides | Incremental? |
 |---|---|---|---|
 | S0 | `refine_solver_s0.c` | trivial / syntactic | n/a (stateless) |
-| S1 | `refine_solver_euf.c` | congruence closure (EUF) | **no** -- `euf_new` per cube |
-| S2 | `refine_solver_arith.c` | linear arithmetic, Fourier-Motzkin over exact rationals | **no** -- `la_new` per cube |
+| S1 | `refine_solver_euf.c` | congruence closure (EUF), naive O(n^2) fixpoint | **no** -- `euf_new` per cube |
+| S2 | `refine_solver_arith.c` | linear arithmetic, Fourier-Motzkin over exact int64 rationals | **no** -- `la_new` per cube |
 | S3 | `refine_solver_no.c` | Nelson-Oppen combination of S1+S2 | **no** -- both rebuilt per cube |
 | (S4) | -- | never built; boolean structure is handled by small-DNF cube expansion | -- |
 
@@ -107,6 +111,31 @@ The invariants that constrain every line of this plan:
   `tests/refine-fuzz-src.py`. Both of those are the acceptance instruments for
   every phase below.
 
+### 2.1 Why the cube design is what it is, and when it stops being tolerable
+
+The review walked through this and it is worth pinning down, because it is the
+premise behind SX6:
+
+- Theory procedures decide *conjunctions*. Congruence closure takes a set of
+  (dis)equalities; Fourier-Motzkin takes a set of linear inequalities. Neither
+  handles disjunction. The DNF cube expansion exists to strip boolean structure
+  so each cube can be handed to S1/S2/S3 whole.
+- DNF is worst-case exponential, which is why no production solver does it this
+  way: real solvers run DPLL(T)/CDCL(T), where a SAT engine lazily enumerates
+  boolean assignments (each one *is* a cube) with clause learning and theory
+  propagation. Turmeric's caps make the naive expansion tolerable, and the
+  runtime fallback makes the cap-hit answer sound.
+- The disequality wrinkle compounds it: `a != b` over a total order is
+  `a < b OR b < a`, so a *negated equality* creates a disjunction in NNF --
+  even the most natural postcondition shape, `(= r <expr>)`, needs cube
+  expansion. The same integer non-convexity is what S3 declines to case-split
+  on.
+- The diagnosis for when small-DNF actually fails: **when the propositional
+  structure of VCs grows** -- path-sensitive obligations over `match`/`if`, or
+  loop unrolling. If RT1 does not generate such VCs yet, a SAT engine buys very
+  little. That is a measurable question, and SX0(b) exists to answer it before
+  anyone writes one.
+
 The existing seams the extension slots behind (`refine_solver.h:70-105`):
 
 ```c
@@ -122,8 +151,11 @@ bool      la_unsat(LaState *);
 bool      la_entails_eq(LaState *, VCTerm *, VCTerm *);
 ```
 
-These are already the right shape. What they are missing is exactly two
-operations -- a mark and an undo -- plus, for SX6, an explanation.
+These are already the right shape. What they are missing is exactly three
+operations -- a mark, an undo, and (for SX6b) an *explanation*: the ability to
+return the inconsistent subset of asserted literals that caused a conflict, so
+the caller can learn a clause from it. The first two are the trail; the third
+is the proof machinery of 3.7.
 
 ## 3. Answer to Q1 -- the trail
 
@@ -160,7 +192,8 @@ implied by the original formula, so it is valid at every level, not just the
 one that produced it), VSIDS activity scores and their decay, phase saving, and
 the restart/luby state. Those are the reviewer's "learned clauses, activity
 scores" -- and their whole value comes from surviving the backtrack that
-produced them.
+produced them. The canonical backtrack is *decrementing a trail index*, and
+CDCL does it millions of times per second -- a number that matters in 3.6.
 
 **ASP solvers** spell the same idea "global" -- nogoods/lemmas recorded at
 level 0 are permanent.
@@ -294,13 +327,38 @@ SX3 and SX4:
 Five of the eleven rows are opt-outs. That ratio is the reason a trail without
 an escape hatch would not have been usable here.
 
-### 3.5 The part that needs care -- trail meets multi-shot continuations
+### 3.5 Trail meets continuations -- and why multi-shot is the wrong strength
 
 Turmeric already ships `shift`/`reset`, `shift0`/`reset0`, `call/cc`,
 `call/cc*` (multi-shot) and `escape`
 ([delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md)).
-A trail is a *stack* discipline; a multi-shot continuation is not. The
-interaction has one sharp edge and one design decision:
+A trail is a *stack* discipline; a multi-shot continuation is not.
+
+First, the framing point from the review, which the rest of this section
+serves: **backtracking in a solver is asymmetric, and a continuation is
+symmetric.** A continuation restores *everything*; a CDCL backjump discards the
+trail above the backjump level but **keeps the learned clause** -- the only
+thing preventing re-exploration -- and simplex keeps its basis. Threading the
+kept state around the restore leaves the continuation carrying nothing. So "use
+continuations as the theory-seam backtracking mechanism" dissolves into "use
+backtrackable *state*" -- this section's trail -- with control expressed
+however is convenient. If "backtrackable continuation" is read as "capture a
+resumption point and re-enter", that is one-shot capture by another name and
+the same asymmetry objection stands.
+
+Second: **multi-shot is specifically the wrong strength for solver-internal
+search.** Reusability is what makes capture expensive -- the copying and the
+immutability discipline exist so a second entry does not see the first entry's
+mutations. CDCL-style search is *entirely* mutation over a shared trail, watch
+lists, and activity scores, and each node of its search tree is entered exactly
+once. A multi-shot default pays for reusability, on the most frequent operation,
+for an algorithm that never uses it. The runtime already distinguishes the
+paths (`call/cc` one-shot vs `call/cc*` multi-shot); the one-shot path is the
+relevant one for search, and SX0's `R` axis measures the one-shot/multi-shot
+gap instead of assuming it.
+
+With that placed, the interaction between the trail and the existing operators
+has one sharp edge and one design decision:
 
 - **Unwinding is fine.** `escape`, an abortive `shift0`, a panic: the runtime
   unwinds past a `bt-scope`, which runs the undo. Same as any scope-exit
@@ -315,36 +373,105 @@ interaction has one sharp edge and one design decision:
   benchmark in section 4 and should not be built before that curve exists.
 
 Recommendation: ship (a); measure; only consider (b) if the curve says it is
-affordable and something real wants it. Note that this is precisely why the
-reviewer's benchmark request comes first in the phase order.
+affordable and something real wants it.
 
 - **Serialization.** `serial.c` / the serializable-continuation path must
   either serialize the live trail segment alongside the continuation or refuse
   to serialize inside a `bt-scope`. Refusing is the SX1 answer; the diagnostic
   should say which scope.
 
-### 3.6 Honest scoping -- who actually benefits
+**One candidate *genuine* multi-shot use: RT6 hint generation.** Today each
+candidate hypothesis re-runs the whole chain from scratch (`run_chain`,
+`refine_discharge.c:139`), which is why the RT7 memo exists. The multi-shot
+shape fits exactly: capture a continuation after the hypotheses are asserted
+but before the theory work, then re-enter it once per candidate -- same prefix,
+many futures. Whether it beats the memo depends on how much work precedes the
+branch point, which is measurable and should be measured (SX0 gives the
+capture cost; `TUR_REFINE_STATS` gives the probe count) before anyone builds
+it. Filed as open question 3 in section 8, not as a phase.
 
-Two consumers, and they are not the same:
+### 3.6 Honest scoping -- who benefits, and the layer split
+
+Three consumers, and they are not the same. An earlier draft of the review
+dismissed compiler-side use on the grounds that the solver is compile-time C
+with no runtime available -- that objection **dissolved on inspection**:
+full-Turmeric macros run pre-type-resolution, so there *is* a live Turmeric
+runtime inside `tur` at compile time. What survives is a cost argument, and it
+produces a split rather than a verdict:
+
+| Layer | Frequency | Where it lives | Trail / continuations? |
+|---|---|---|---|
+| BCP / unit propagation, watch lists, simplex pivoting, union-find find/union | millions of ops/sec | C | **no** -- the canonical backtrack here is "decrement a trail index"; anything heavier is overhead on the hottest loop. WASM stack-switching is also awkward, and the zero-dependency playground runs this code |
+| branch-and-bound, splitting-on-demand, strategy selection, RT6 candidate enumeration | thousands of ops/sec | Turmeric (compile-time runtime), eventually | **yes** -- nondeterminism expressed directly with `bt-scope` and one-shot capture |
+
+The seam between the layers is the point: **the Turmeric side proposes, the C
+side validates** (see 3.7). The interpreter being ~100-1000x off native for
+tight mutation loops is a *category gap* for the top row -- not a deferred
+optimization -- and is perfectly adequate for the bottom row.
+
+So, the three consumers:
 
 1. **User-level search in Turmeric** -- the direct beneficiary.
    `stdlib/logic.tur` currently threads a persistent association-list `Subst`
    with a fresh-variable counter riding in its base; `stdlib/backtrack.tur` is
-   a list monad over eagerly built alternative lists. Both are the "thread state
-   around it" design the reviewer named. With a trail, miniKanren's
+   a list monad over eagerly built alternative lists. Both are the "thread
+   state around it" design the reviewer named. With a trail, miniKanren's
    substitution becomes a destructive union-find with undo -- the actual WAM
    design -- and the backtracking monad can become a `bt-scope`-bracketed
-   depth-first search that does not materialize alternatives.
-2. **The compiler's own solver** -- an *indirect* beneficiary, and this should
-   not be oversold. `tur`'s solver is C and stays C; a Turmeric runtime
-   primitive does not simplify it. What SX3/SX4 take from SX1 is the *design*
-   and a small shared C utility (`src/compiler/trail_c.h`), so the two
-   implementations agree on stamps, opt-out, and undo ordering, and so a later
-   self-hosting step is a port rather than a redesign.
+   depth-first search that does not materialize alternatives. Elsewhere in the
+   compiler's own problem domain, the elaborator's searches (unification with
+   backtracking, typeclass instance resolution, RT4 template inference) have
+   the same shape and are eventual candidates.
+2. **The solver's hot layer** -- the top row of the table. It is C and stays
+   C. What SX3/SX4 take from SX1 is the *design* and a small shared C utility
+   (`src/compiler/trail_c.h`), so the two implementations agree on stamps,
+   opt-out, and undo ordering.
+3. **The solver's search layer** -- the bottom row, the genuinely new
+   possibility the compile-time runtime opens. Branch-and-bound for the
+   integer tail (SX7) can be *prototyped in Turmeric* against
+   `tests/corpus/smtlib/` and ported to C only if the stats move. This is
+   cheap to try and cheap to discard, which is the right risk profile for the
+   most speculative part of the plan.
 
-Calling this out matters because the review's phrase "having it as a runtime
-primitive would be real leverage" is true for (1) and only aspirationally true
-for (2).
+### 3.7 TCB discipline -- untrusted search, trusted checking
+
+A `RT_VALID` verdict elides a runtime check, so everything that can produce
+one is trusted compute. Today that is a few kLOC of in-house C. A
+Turmeric-hosted search stage (3.6, consumer 3) would add the macro expander,
+the compile-time runtime, and its dependencies to that trusted base --
+potentially including Turmeric code that itself carries refinements decided by
+the very solver being bootstrapped. That is not a reason to forbid it; it is a
+reason to adopt the architecture every serious proof-producing solver adopts:
+
+> **Search is untrusted; checking is trusted.** No verdict proposed by a
+> search layer -- Turmeric-hosted or C -- is accepted unless its certificate
+> passes an independent checker. An unverified certificate is `RT_UNKNOWN`.
+
+The certificates are small and known:
+
+- **Simplex:** Farkas coefficients from the infeasible row -- a linear
+  combination of asserted bounds summing to a contradiction; checking is a dot
+  product in exact rationals.
+- **EUF:** the path through the proof forest (Nieuwenhuis-Oliveras
+  proof-producing congruence closure); checking is replaying a list of merges.
+- **Propositional:** the resolution chain behind a learned clause; DRAT is the
+  standard format for exactly this.
+
+The checker is a few hundred lines of C that never has to be smart, and it
+collapses the TCB back to something auditable regardless of how clever the
+search above it becomes. It also converts the soundness invariant from a
+review discipline into a mechanical property -- which section 5 leans on hard,
+because the classic CDCL(T) bug class (a subtly wrong explanation clause that
+prunes the search into a silent, input-dependent wrong answer) is exactly the
+kind of thing a 125-case corpus does not catch. Prior art: veriT and the
+Alethe proof format; DRAT-trim for the propositional half.
+
+Bootstrap ordering note, so nobody trips on it later: macros run
+pre-type-resolution and discharge runs during elaboration, so a solver stage
+written in Turmeric must be fully expanded and executable before the first
+obligation of the unit being compiled exists. Practically: the stage ships
+pre-compiled with `tur` (like the stdlib), it is not compiled by the unit that
+uses it.
 
 ## 4. Answer to Q2 -- the capture/restore curve
 
@@ -391,7 +518,9 @@ The DK chain is documented as "Capture is O(depth-of-slice) and unbounded -- no
 16-frame ceiling" (`tur_rt_split.c:1137`). That is a slope, and the multi-shot
 path pays it on *every resume*. Whether the constant is small enough that the
 slope does not matter until 100 frames or 10 000 frames is exactly the
-unmeasured number, and it is the number that decides 3.5(b).
+unmeasured number, and it is the number that decides 3.5(b) -- and, per 3.5,
+whether a one-shot fast path needs to exist before any search layer uses
+capture at all.
 
 ### 4.3 The benchmark, specified
 
@@ -426,7 +555,10 @@ than just a shape:
 emitting CSV plus a markdown table appended to
 `benchmarks/benchmark-results.md`. Run compiled and `--interpret`, and under
 the JIT where available -- but note that the interpreter/JIT ratio is
-explicitly *not* the headline number; the per-path slope is.
+explicitly *not* the headline number; the per-path slope is. The
+interpreter's row matters for one decision only: confirming (or refuting) the
+3.6 claim that the tree-walker is adequate for a thousands-per-second search
+layer.
 
 **Method discipline**, because this repo has been bitten by it: never run the
 sweep concurrently with a build or another suite. `tests/run.sh` stamps the
@@ -436,19 +568,30 @@ refuse to publish a row if `./build/tur` changed mid-run.
 ## 5. The plan
 
 Phases are ordered so that each one is independently landable and independently
-valuable. SX0 is the only one with a hard ordering claim attached (the reviewer
-asked for the harness "while you're building it", and 3.5(b) cannot be decided
-without it).
+valuable. SX0 must be first: both of its instruments produce the decision data
+the later phases are gated on, and the reviewer asked for one of them "while
+you're building it".
 
-### SX0 -- the capture/restore curve in the harness
+### SX0 -- measure first
 
-- **Do:** section 4.3, with `T = 0`. No language or runtime change.
-- **Files:** `benchmarks/bench-capture-restore.tur`,
+Two instruments, no language or runtime change:
+
+- **(a) The capture/restore curve** -- section 4.3, with `T = 0`.
+  Files: `benchmarks/bench-capture-restore.tur`,
   `benchmarks/run-capture-curve.sh`, `benchmarks/benchmark-results.md`.
-- **Accept:** the three paths of 4.2 each produce a fitted slope and intercept
+  Accept: the three paths of 4.2 each produce a fitted slope and intercept
   over `F` and `E`; the table is checked in; a rerun on an idle box reproduces
   within noise.
-- **Size:** small. **Gate:** none (benchmarks are not a compiler feature).
+- **(b) Cap-hit telemetry** -- extend `TUR_REFINE_STATS=1` to report *which*
+  cap bit and how often (cubes, cube literals, LA vars, LA constraints, EUF
+  terms, NO shared/rounds), then sweep the corpus, the fuzzer seeds, and the
+  largest in-tree refinement users. This answers 2.1's question -- do
+  path-sensitive VCs with real propositional structure exist yet? -- and gates
+  SX4 and SX6: if `REFINE_MAX_LA_CONSTR` never bites, SX4 waits; if the cube
+  caps never bite, SX6 waits.
+
+**Size:** small. **Gate:** none (benchmarks and stats are not compiler
+features).
 
 ### SX1 -- the trail primitive
 
@@ -489,7 +632,10 @@ without it).
 - **Do:** extend the `euf_*` seam with `euf_mark` / `euf_undo_to`, backed by
   `src/compiler/trail_c.h` (the C sibling of SX1, same stamp discipline).
   Replace the per-cube `euf_new` in `refine_s1_decide` and `no_cube_unsat` with
-  assert/mark/undo over one state.
+  assert/mark/undo over one state. Pick the union-find representation with the
+  Nieuwenhuis-Oliveras proof forest in mind -- not built here, but the merge
+  history it needs must be recoverable, so SX6b's `euf_explain` is an addition
+  rather than a second rewrite.
 - **Accept:** identical verdicts on all 125 corpus benchmarks and all
   `refine-*` fixtures -- this phase changes *cost*, not answers, and a verdict
   diff is a bug. `TUR_REFINE_STATS=1` shows the same proven/refuted/unknown
@@ -501,21 +647,29 @@ without it).
 ### SX4 -- incremental simplex (S2b)
 
 - **Do:** the Dutertre--de Moura solver behind the existing `la_*` seam, with a
-  bound stack and *no* basis restoration (3.4). Add `la_mark` / `la_backtrack`.
+  bound stack and *no* basis restoration (3.4). Add `la_mark` / `la_backtrack`,
+  and produce **Farkas coefficients** on infeasibility from day one -- they are
+  the explanation SX6b needs and the certificate 3.7's checker verifies, and
+  retrofitting them is harder than emitting them.
   Note the naming collision: `la_push` is already taken by the static
   constraint-adder at `refine_solver_arith.c:249` -- do not overload it.
+- **Numerics:** the existing exact int64 rational layer is partly reusable, but
+  pivoting grows coefficients. Decision to make up front: bignum rationals, or
+  keep int64 with the current overflow checks and a disciplined
+  overflow -> `RT_UNKNOWN` degrade. The second is in keeping with everything
+  else in this solver and is the recommendation; revisit only if telemetry
+  shows real obligations degrading.
 - **Accept:** every obligation S2 proves today is still proven (superset
   property; a regression here is a real regression), the `REFINE_MAX_LA_CONSTR`
-  cap stops biting on the corpus's wide benchmarks, and the strict-inequality
-  handling matches the paper's delta-rational treatment. Exact rationals with
-  overflow checks throughout, as today.
+  cap stops biting on the corpus's wide benchmarks, strict inequalities via the
+  paper's delta-rational treatment, and every unsat verdict carries a
+  Farkas certificate that an independent check accepts.
 - **Size:** the design of record already estimates 2--4 weeks for this, and that
   estimate looks right. This is the single largest phase.
-- **Note:** the archived plan says FM was chosen over simplex deliberately, and
-  that simplex slots in "if the cap ever bites". Before building SX4, *check
-  whether it bites*: run the corpus and the fuzzer with cap-hit telemetry. If
-  nothing real hits `REFINE_MAX_LA_CONSTR`, SX4 is a performance project with no
-  user-visible payoff and should wait behind SX6.
+- **Gate on starting at all:** SX0(b). The archived plan chose FM over simplex
+  deliberately, with simplex reserved for "if the cap ever bites". If the
+  telemetry says it does not bite, SX4 is a performance project with no
+  user-visible payoff and waits behind SX6a.
 
 ### SX5 -- incremental Nelson-Oppen (S3i)
 
@@ -524,25 +678,55 @@ without it).
 - **Accept:** as SX3 -- identical verdicts, lower cost. `NO_MAX_SHARED` and
   `NO_MAX_ROUNDS` can then be raised on evidence rather than caution.
 
-### SX6 -- a small CDCL(T) core (S4)
+### SX6 -- boolean structure beyond small DNF (S4)
 
 The line the design of record explicitly does not cross ("no DPLL(T) engine").
-This phase proposes crossing it *narrowly*, and the framing matters:
+The review reframed the cost usefully: the SAT core is the cheap part
+(Tseitin CNF from the already-existing NNF is days; a MiniSat-grade CDCL core
+is ~1.5-2 kLOC of C with paper and source as an effective spec); the
+*incremental, backtrackable, explaining theory seam* is the real cost, and the
+*testing burden* -- a subtly wrong explanation clause prunes the search into a
+silent, input-dependent false verdict -- dominates even that. Ballpark from
+the review: 2-4 person-months to make CDCL(T) work, 6+ to trust it with
+eliding checks. So this phase is two steps with a stepping stone, and the
+stepping stone may be where it permanently stops:
 
-- **Do:** replace the DNF cube expansion **only where it overflows** with a
-  small CDCL loop over theory atoms: decide, propagate, on conflict ask the
-  theory for an explanation (`euf_explain` / `la_explain` returning a conflict
-  literal set), learn the clause, backjump via the trail. Learned clauses and
-  activity scores are `GCell`-equivalent -- never undone (3.4).
-- **Why narrowly:** today a cube-cap overflow is `RT_UNKNOWN`, i.e. a kept
-  runtime check. That is *already correct*. So S4 is a pure recall improvement
-  with a hard floor: if the CDCL core answers `UNKNOWN` for everything, nothing
-  regresses. That makes it the safest possible way to build a SAT engine.
-- **Accept:** the corpus benchmarks currently answered `UNKNOWN` for cap
-  reasons shrink; no verdict flips from `VALID`/`INVALID` to anything else; the
-  source-level fuzzer stays clean across at least six seeds.
-- **Gate:** `EXPERIMENTS[]` row `solver-cdcl` while in flux. Graduating means
-  deleting the row and making it unconditional, per the project rule.
+**SX6a -- lazy cubes, then offline lazy SMT.**
+
+- Step zero, available today with no new machinery: *stream* cubes off an
+  explicit stack instead of materializing up to 64, so a time budget replaces
+  the `overflow` flag. No semantic change; retires the cube-count cap as a
+  cliff.
+- Then offline lazy SMT: Tseitin-encode the (already-NNF) refutation formula,
+  run a plain CDCL SAT core as a **black box**, hand each full boolean model --
+  which *is* a cube -- to the existing **non-incremental** S1-S3, and on
+  theory conflict add a blocking clause and re-solve. This removes the
+  exponential DNF blowup with **none** of the explanation machinery, no
+  incremental theories, and no changes to the stages at all. It is the honest
+  stepping stone: every piece of it survives into SX6b if SX6b ever happens.
+- **Accept:** verdicts never flip against the DNF path where both decide;
+  corpus/telemetry `UNKNOWN`s attributable to cube caps shrink; the
+  source-level fuzzer stays clean across at least six seeds; the whole thing
+  remains dependency-free (the SAT core is in-tree C).
+- **Gate:** `EXPERIMENTS[]` row `solver-lazy-smt` while in flux; graduation
+  deletes the row per the project rule. Gate on *starting*: SX0(b) shows the
+  cube caps biting on real obligations.
+
+**SX6b -- CDCL(T) proper.** Only if SX6a's blocking-clause loop measurably
+thrashes (many iterations rediscovering the same theory conflict) on real
+obligations.
+
+- **Needs:** the theories incremental (SX3/SX4/SX5), backtrackable (the
+  trail), and explaining -- `euf_explain` via the SX3 proof-forest hooks,
+  `la_explain` via SX4's Farkas certificates. Learned clauses and activity
+  scores are the never-undone rows of 3.4. Splitting-on-demand for S3's
+  non-convex integer case becomes "emit the split as a lemma clause", which is
+  the modern move precisely because the learning then works across the split.
+- **Precondition, not afterthought:** the 3.7 certificate checker, wired so a
+  bad explanation is *rejected at solve time* (degrading to `RT_UNKNOWN`)
+  rather than trusted. This is what makes the dominant bug class survivable.
+- **Accept:** obligations `UNKNOWN` for propositional reasons shrink to none
+  on the corpus; no verdict flips; fuzzer clean; every conflict clause checks.
 - **Do not:** attempt a competitive SAT solver. The stopping condition is "no
   real obligation is `UNKNOWN` for propositional reasons", not benchmark
   parity with a real SMT solver.
@@ -552,8 +736,13 @@ This phase proposes crossing it *narrowly*, and the framing matters:
 - **Do:** branch-and-bound over the SX4 simplex, depth-limited, `UNKNOWN` past
   the limit. Optionally Gomory cuts. Closes the integer non-convexity hole that
   makes S3 incomplete on disequality case-splits today.
-- **Gate:** depth cap is a constant, not a flag. Deferrable indefinitely; it is
-  the last phase for a reason.
+- **How:** per 3.6(3), *prototype the search in Turmeric first* -- it is the
+  bottom-row, thousands-per-second layer -- and run it against
+  `tests/corpus/smtlib/` with verdicts checked through the 3.7 seam. Port to C
+  only if the stats move. This is deliberately the first consumer of the
+  untrusted-search/trusted-checker architecture, on the smallest search
+  problem in the plan.
+- **Gate:** depth cap is a constant, not a flag. Deferrable indefinitely.
 
 ### SX8 -- docs and graduation
 
@@ -566,54 +755,82 @@ This phase proposes crossing it *narrowly*, and the framing matters:
   [logic-programming-guide.md](../guides/logic-programming-guide.md).
 - Graduate `backtrackable-state` (delete the row, behavior unconditional) once
   3.5's re-entry question is settled and SX2 has a benchmark answer. Graduate
-  `solver-cdcl` on the corpus criterion in SX6. Move this plan to
+  `solver-lazy-smt` on the SX6a corpus criterion. Move this plan to
   `docs/archive/` when the last phase lands, per the archiving rule.
 
-### Recommended order if only some of it gets built
+### Recommended order
 
-**SX0, then SX1, then SX2.** Those three answer both review questions with
-evidence and leave a primitive the language did not have. SX3 is a cheap
-follow-on. SX4 waits on cap-hit telemetry. SX6 is the one with real recall
-payoff for users and is worth pulling forward past SX4 if the telemetry says
-the LA cap is not biting. SX7 last, or never.
+This mirrors the review's own next-steps list:
+
+1. **SX0**, both instruments -- the telemetry and the curve are the decision
+   data for everything below, and cost days.
+2. **SX1, then SX2** -- answers the opt-out question with a shipped design
+   instead of a promise, and immediately tests whether the primitive pays for
+   itself on the stdlib search paths.
+3. **If SX0(b) says the cube caps bite: SX6a** -- offline lazy SMT needs no
+   incremental theories, so it can leapfrog SX3-SX5 entirely.
+4. **SX3-SX5** when SX6b or measured compile-time cost justifies them; SX4
+   only if its own cap bites.
+5. **SX7 prototype in Turmeric early** (it needs only SX4's seam or even
+   today's S2 for a first cut against the corpus), C port last or never.
+   **SX6b** last of all, and only if SX6a thrashes.
 
 ## 6. Explicitly not doing
 
 - **Not** linking an external SMT solver, in any build. The Z3 oracle was
   retired for reasons that still hold, and the corpus plus the source-level
-  fuzzer replaced it with something that runs everywhere, including WASM.
-- **Not** building a competitive SAT solver (see SX6's stopping condition).
+  fuzzer replaced it with something that runs everywhere, including WASM. The
+  SX6a SAT core, if built, is in-tree C.
+- **Not** building a competitive SAT solver (see SX6b's stopping condition).
 - **Not** making captured continuations capture *state*. A continuation
   captures control; the trail is a separate mechanism with a separate scope
   discipline. Conflating them is how this design gets slow in a way that cannot
   be undone later.
+- **Not** putting the hot layer in Turmeric. BCP, watch lists, pivoting, and
+  union-find operations run millions of times a second; per 3.6 they are C on
+  every target, WASM included.
 - **Not** removing the caps. Every cap stays; incrementality changes what a cap
   costs, not whether it exists. An `UNKNOWN` is always available and always
   sound.
 - **Not** trailing by default in the compiler's arena-allocated VC structures.
   Terms are immortal within a query by construction; that is a feature.
+- **Not** trusting any Turmeric-hosted search stage to decide. Per 3.7 it may
+  only propose; the C checker decides, and an unverified certificate is
+  `RT_UNKNOWN`.
 
 ## 7. Risks
 
 | Risk | Mitigation |
 |---|---|
 | Incremental EUF/simplex changes a verdict | Corpus + fixtures are verdict-identical by acceptance criterion; keep the rebuild path behind an env test seam for differential replay |
+| A subtly wrong explanation clause prunes the search into a silent, input-dependent false verdict (the classic CDCL(T) bug class) | The 3.7 certificate checker validates every conflict at solve time -- a bad explanation degrades to `RT_UNKNOWN` instead of being trusted; differential replay against the DNF and lazy-SMT paths; the corpus is necessary but known-insufficient here and is not the safety argument |
+| TCB growth from a Turmeric-hosted search stage | Untrusted-search/trusted-checker split (3.7); a Tur stage proposes, never decides |
 | Trail undo mis-handles rc ownership -> leak or double-free | ASan/LSan is on for the compiled fixture path; add a fixture with an rc payload written and undone in a loop |
 | Multi-shot resume across a stale mark corrupts state | Generational marks, checked at `bt-undo-to!` (3.2(4)); the alternative is a silent wrong answer |
-| SX4 is weeks of work with no user-visible payoff | Gate SX4 behind cap-hit telemetry from the corpus before starting |
+| SX4 / SX6 are weeks-to-months of work with no user-visible payoff | Both are gated on SX0(b) cap-hit telemetry before starting; SX6a's blocking-clause loop must measurably thrash before SX6b starts |
+| Simplex coefficient growth overflows int64 rationals | Disciplined overflow -> `RT_UNKNOWN` (today's policy, kept); bignums only if telemetry shows real degrades |
 | Fixture snapshot churn | Regenerate in the same PR as the codegen change, per the project rule; SX1 is the only phase that touches codegen at all |
 | The benchmark measures the wrong thing under load | Serialize the sweep, stamp the binary, refuse to publish rows if it changed mid-run |
 
 ## 8. Open questions to take back to the reviewer
 
-1. Multi-shot re-entry (3.5): checked error, or state-snapshotting `call/cc*`?
-   The SX0 curve informs it but does not settle the semantics question.
+1. Multi-shot re-entry across a trail scope (3.5): checked error, or
+   state-snapshotting `call/cc*`? The review's own framing (multi-shot is the
+   wrong strength for search; one-shot is the relevant path) argues for the
+   checked error plus a one-shot fast path; the SX0 curve settles the cost
+   half, the semantics half is a decision.
 2. Is a *write-once* cell flavor (`LVar`) worth its own type, or should
    everything be a value cell with the stamp doing the optimization? The WAM
    says yes; a smaller API says no.
-3. For SX6: is theory propagation (not just conflict explanation) worth it at
-   this scale, or is explain-and-learn enough given obligations of a few dozen
-   atoms?
+3. RT6 hint generation as the one genuine multi-shot consumer: capture after
+   hypotheses are asserted, re-enter once per candidate. Does it beat the RT7
+   memo? Depends on the work ahead of the branch point -- measure (SX0 curve
+   x `TUR_REFINE_STATS` probe counts) before building.
+4. For SX6b: is theory propagation worth it at this scale, or is
+   explain-and-learn enough given obligations of a few dozen atoms? Related:
+   the review notes the modern treatment of non-convex splits is to emit them
+   as SAT lemmas so learning works across them -- adopted in SX6b's design,
+   worth confirming it holds at this problem size.
 
 ## 9. References
 
@@ -629,8 +846,15 @@ the LA cap is not biting. SX7 last, or never.
 
 - Warren Abstract Machine trailing and conditional trailing; see the ECLiPSe and BinProlog architecture papers for the CLP value-trail extension and its redundant-trailing problem: <https://ar5iv.labs.arxiv.org/html/1012.4240>, <https://arxiv.org/pdf/1102.1178>, <http://eclipseclp.org/reports/ECRC-95-11.pdf>.
 - B. Dutertre and L. de Moura, "A Fast Linear-Arithmetic Solver for DPLL(T)", CAV 2006 -- the bound stack, and the decision not to restore the basis: <https://yices.csl.sri.com/papers/cav06.pdf>.
-- MiniSat's trail / `trail_lim` / backjumping, and what survives a backjump: <https://github.com/niklasso/minisat/blob/master/minisat/core/Solver.cc>, <https://www.cs.cmu.edu/~mheule/publications/JSAT7_11_vanderTak.pdf>.
+- MiniSat's trail / `trail_lim` / backjumping, and what survives a backjump: N. Een and N. Sorensson, "An Extensible SAT-solver", SAT 2003; <https://github.com/niklasso/minisat/blob/master/minisat/core/Solver.cc>, <https://www.cs.cmu.edu/~mheule/publications/JSAT7_11_vanderTak.pdf>.
 - G. Nelson and D. Oppen, "Simplification by Cooperating Decision Procedures", ACM TOPLAS 1(2), 1979.
+- J. Harrison, *Handbook of Practical Logic and Automated Reasoning*, CUP 2009, ch. 2-5 -- NNF/DNF, congruence closure, Nelson-Oppen, with source.
+
+**External -- proofs and certificates (3.7, SX6b)**
+
+- R. Nieuwenhuis and A. Oliveras, "Proof-Producing Congruence Closure", RTA 2005 -- the proof forest behind `euf_explain`.
+- G. Tseitin, "On the Complexity of Derivation in Propositional Calculus", 1968 -- the CNF encoding SX6a uses.
+- The veriT solver and the Alethe proof format; N. Wetzler, M. Heule, W. Hunt, "DRAT-trim: Efficient Checking and Trimming Using Expressive Clausal Proofs", SAT 2014 -- prior art for untrusted-search/trusted-checker.
 
 **External -- capture/restore cost**
 
