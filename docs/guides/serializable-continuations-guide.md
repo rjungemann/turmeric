@@ -10,7 +10,7 @@ Save and resume computations across process boundaries using serializable contin
 
 ## Overview
 
-Turmeric's **serializable continuations** enable suspended computations to be marshalled to bytes, persisted to disk or sent over a network, then resumed in a fresh process. This builds on Phase 18's delimited continuations (`shift`/`reset`) which reify the call stack as a heap-allocated closure chain.
+Turmeric's **serializable continuations** enable suspended computations to be marshalled to bytes, persisted to disk or sent over a network, then resumed in a fresh process. This builds on the delimited continuations (`shift`/`reset`), which reify the call stack as a heap-allocated closure chain.
 
 Use cases include:
 - **Persistent workflows** -- Pause and resume multi-step business processes
@@ -59,45 +59,27 @@ Not all values can be serialized. Types must opt-in via the `Serializable` typec
 
 ```turmeric
 (defclass Serializable [a]
-  (serialize   [x : a] : bytes)
-  (deserialize [b : bytes] : (Result a cstr)))
+  (serialize   [x] : ptr<void>)
+  (deserialize [b : ptr<void>] : a))
 ```
 ```sweet-exp
 defclass Serializable [a]
-  serialize   [x : a] : bytes
-  deserialize [b : bytes] : (Result a cstr)
+  serialize   [x] : ptr<void>
+  deserialize [b : ptr<void>] : a
 ```
 
-Primitive types have automatic instances:
+`serialize` returns a length-prefixed `bytes` buffer (carried as
+`:ptr<void>`). `stdlib/serial.tur` ships instances for the primitives and
+two containers:
 
-```turmeric
-(definstance Serializable int64)
-(definstance Serializable float64)
-(definstance Serializable bool)
-(definstance Serializable cstr)
-(definstance Serializable bytes)
-```
-```sweet-exp
-definstance Serializable int64
-definstance Serializable float64
-definstance Serializable bool
-definstance Serializable cstr
-definstance Serializable bytes
-```
-
-Container types derive their instances from element types:
-
-```turmeric
-(definstance (Serializable (Vec a)) [Serializable a])
-(definstance (Serializable (Pair a b)) [Serializable a, Serializable b])
-(definstance (Serializable (Option a)) [Serializable a])
-(definstance (Serializable (Result a b)) [Serializable a, Serializable b])
-```
-```sweet-exp
-definstance (Serializable (Vec a)) [Serializable a]
-definstance (Serializable (Pair a b)) [Serializable a, Serializable b]
-definstance (Serializable (Option a)) [Serializable a]
-definstance (Serializable (Result a b)) [Serializable a, Serializable b]
+```turmeric no-check
+(definstance Serializable [int] ...)
+(definstance Serializable [bool] ...)
+(definstance Serializable [float] ...)
+(definstance Serializable [cstr] ...)
+(definstance Serializable [ptr<void>] ...)
+(definstance Serializable [Pair] ...)
+(definstance Serializable [Option] ...)
 ```
 
 Types that **do not** implement `Serializable` (file handles, raw pointers, `Mutex<T>`) cannot be captured in a serializable continuation. The elaborator enforces this at the `serial-reset` boundary.
@@ -501,21 +483,26 @@ serial-reset
 
 ### `stdlib/serial.tur`
 
-```turmeric
-;; File I/O helpers
-(defn cont-to-file [k : serial-continuation<T>, path : cstr] : (Result unit cstr)
-  (write-file path (serial-cont->bytes k)))
+File I/O helpers over the serialised `bytes` buffers produced by
+`save-cont!`:
 
-(defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
-  (bytes->serial-cont (read-file path)))
+```turmeric no-check
+;; Write a serialised continuation bytes value to a file; returns 1 on
+;; success, 0 on failure.
+(cont-to-file b "/tmp/checkpoint.bin")
+
+;; Read one back; returns the bytes :ptr<void>, or NULL on any I/O or
+;; allocation failure.
+(cont-from-file "/tmp/checkpoint.bin")
 ```
 ```sweet-exp
-;; File I/O helpers
-defn cont-to-file [k : serial-continuation<T>, path : cstr] : (Result unit cstr)
-  write-file(path serial-cont->bytes(k))
+;; Write a serialised continuation bytes value to a file; returns 1 on
+;; success, 0 on failure.
+cont-to-file(b "/tmp/checkpoint.bin")
 
-defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
-  bytes->serial-cont(read-file(path))
+;; Read one back; returns the bytes :ptr<void>, or NULL on any I/O or
+;; allocation failure.
+cont-from-file("/tmp/checkpoint.bin")
 ```
 
 ### `stdlib/workflow.tur`

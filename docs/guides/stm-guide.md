@@ -19,74 +19,73 @@ For a conceptual walkthrough and worked examples, see the [STM Tutorial](stm-tut
 | Concept | Description |
 |---|---|
 | `TVar` | A mutable cell readable/writable only inside a transaction |
-| `atomically` | Runs a transaction; retries automatically on conflict |
-| `retry` | Voluntarily abort and block until a watched `TVar` changes |
+| `stm` | Groups TVar operations into one transaction block |
+| `atomically` | Runs an `stm` block; retries automatically on conflict |
+| `retry` / `check` | Voluntarily abort and block until a watched `TVar` changes |
 | `or-else` | Try one branch; if it retries, try the other |
 
 ## TVar Lifecycle
 
-```turmeric
-(import "stdlib/stm.tur")
+The STM forms (`tvar/*`, `stm`, `atomically`, `retry`, `check`, `or-else`)
+are built into the compiler -- no load or import is required.
 
+```turmeric
 ;; Create a TVar with an initial value
 (def counter (tvar/new 0))
 
 ;; Free when no longer needed (only when no transactions reference it)
-;; (tvar/free counter)  ; called via inline C if needed
+;; via inline C over tur_tvar_free if needed
 ```
 
 ```sweet-exp
-import("stdlib/stm.tur")
-
 ;; Create a TVar with an initial value
 def counter tvar/new(0)
 
 ;; Free when no longer needed (only when no transactions reference it)
-;; tvar/free(counter)  ; called via inline C if needed
+;; via inline C over tur_tvar_free if needed
 ```
 
 `tvar/new` accepts any value; TVars are untyped at the Turmeric level.
 
 ## Reading and Writing
 
-All TVar access must happen inside `atomically`:
+All TVar access must happen inside an `(stm ...)` block run by `atomically`.
+Using `tvar/read`/`tvar/write` outside an `stm` block is a compile error
+(`TUR-E0009`), and `atomically` requires an `stm` block as its argument:
 
 ```turmeric
 ;; Read
 (def val
-  (atomically
-    (fn []
-      (tvar/read counter))))
+  (atomically (stm (tvar/read counter))))
 
 ;; Write
-(atomically
-  (fn []
-    (tvar/write counter 42)))
+(atomically (stm (tvar/write counter 42)))
 
 ;; Read-modify-write (common pattern)
 (atomically
-  (fn []
-    (def v (tvar/read counter))
-    (tvar/write counter (+ v 1))))
+  (stm (let [v (tvar/read counter)]
+         (tvar/write counter (+ v 1)))))
+
+;; Or use tvar/modify with a function
+(atomically (stm (tvar/modify counter add1)))   ; add1 = your fn of one arg
 ```
 
 ```sweet-exp
 ;; Read
 def val
-  atomically
-    fn []
-      tvar/read(counter)
+  atomically $ stm $ tvar/read counter
 
 ;; Write
-atomically
-  fn []
-    tvar/write(counter 42)
+atomically $ stm $ tvar/write counter 42
 
 ;; Read-modify-write (common pattern)
 atomically
-  fn []
-    def v tvar/read(counter)
-    tvar/write(counter {v + 1})
+  stm
+    let [v tvar/read(counter)]
+      tvar/write(counter {v + 1})
+
+;; Or use tvar/modify with a function
+atomically $ stm $ tvar/modify counter add1   ; add1 = your fn of one arg
 ```
 
 ### Swap and CAS
@@ -94,79 +93,65 @@ atomically
 ```turmeric
 ;; Swap: write new value and return old value (within one transaction)
 (def old-val
-  (atomically
-    (fn []
-      (tvar/swap counter 99))))
+  (atomically (stm (tvar/swap counter 99))))
 
 ;; Compare-and-swap: write new only if current value equals expected
 ;; Returns true if the swap succeeded
 (def swapped
-  (atomically
-    (fn []
-      (tvar/cas counter 99 100))))
+  (atomically (stm (tvar/cas counter 99 100))))
 ```
 
 ```sweet-exp
 ;; Swap: write new value and return old value (within one transaction)
 def old-val
-  atomically
-    fn []
-      tvar/swap(counter 99)
+  atomically $ stm $ tvar/swap counter 99
 
 ;; Compare-and-swap: write new only if current value equals expected
 ;; Returns true if the swap succeeded
 def swapped
-  atomically
-    fn []
-      tvar/cas(counter 99 100)
+  atomically $ stm $ tvar/cas counter 99 100
 ```
 
-## Retry
+## Retry and check
 
-`retry` aborts the current transaction and blocks until one of the `TVar`s read during this transaction changes, then re-runs from the beginning:
+`retry` aborts the current transaction and blocks until one of the `TVar`s read during this transaction changes, then re-runs from the beginning. `(check cond)` is the conditional form: it retries when `cond` is false and continues when it is true.
 
 ```turmeric
 ;; Block until counter reaches at least 10
 (atomically
-  (fn []
-    (def v (tvar/read counter))
-    (when (< v 10)
-      (retry))
-    v))
+  (stm (check (>= (tvar/read counter) 10))
+       (tvar/read counter)))
 ```
 
 ```sweet-exp
 ;; Block until counter reaches at least 10
 atomically
-  fn []
-    def v tvar/read(counter)
-    when {v < 10}
-      retry()
-    v
+  stm
+    check {tvar/read(counter) >= 10}
+    tvar/read(counter)
 ```
 
 `retry` never returns. The runtime records the read set, sleeps the thread, and wakes it when any read TVar is modified by another transaction.
 
 ## or-else
 
-`or-else` tries the first transaction; if it calls `retry`, the second is tried instead:
+`or-else` tries the first `stm` block; if it retries (a `retry` or a failed `check`), the second is tried instead:
 
 ```turmeric
 ;; Drain queue-a if possible, otherwise queue-b
 (atomically
-  (fn []
-    (or-else
-      (fn [] (dequeue queue-a))
-      (fn [] (dequeue queue-b)))))
+  (stm (or-else
+         (stm (dequeue queue-a))
+         (stm (dequeue queue-b)))))
 ```
 
 ```sweet-exp
 ;; Drain queue-a if possible, otherwise queue-b
 atomically
-  fn []
+  stm
     or-else
-      fn [] dequeue(queue-a)
-      fn [] dequeue(queue-b)
+      stm $ dequeue queue-a
+      stm $ dequeue queue-b
 ```
 
 Both branches see the same transactional snapshot. If both retry, the outer transaction also retries.
@@ -176,7 +161,7 @@ Both branches see the same transactional snapshot. If both retry, the outer tran
 Each call to `atomically` runs a retry loop:
 
 1. **Begin** -- allocate a transaction context; record thread-local pointer.
-2. **Execute** -- run the closure; all `tvar/read` and `tvar/write` calls are journaled (read set / write set).
+2. **Execute** -- run the `stm` block body; all `tvar/read` and `tvar/write` calls are journaled (read set / write set).
 3. **Validate** -- check that every read TVar still has the version seen during step 2.
 4. **Commit** -- apply the write set atomically; bump versions; notify waiters. Fire commit defers.
 5. **Abort** -- if validation fails or `retry` was called, discard the write set, fire abort defers, then go to step 1.
@@ -224,89 +209,79 @@ Up to 32 defers per transaction; exceeding this panics.
 ### TMVar (single-slot mailbox)
 
 ```turmeric
-;; An empty slot is represented as nil
+;; An empty slot is represented as null (sketch)
 (defn tmvar/new [] : ptr  (tvar/new (ptr/null)))
-(defn tmvar/empty? [mv]  (nil? (tvar/read mv)))
 
 (defn tmvar/take [mv]
   (atomically
-    (fn []
-      (def v (tvar/read mv))
-      (when (nil? v) (retry))
-      (tvar/write mv (ptr/null))
-      v)))
+    (stm (let [v (tvar/read mv)]
+           (check (not (nil? v)))
+           (tvar/write mv (ptr/null))
+           v))))
 
 (defn tmvar/put [mv val]
   (atomically
-    (fn []
-      (when (not (nil? (tvar/read mv))) (retry))
-      (tvar/write mv val))))
+    (stm (check (nil? (tvar/read mv)))
+         (tvar/write mv val))))
 ```
 
 ```sweet-exp
-;; An empty slot is represented as nil
+;; An empty slot is represented as null (sketch)
 defn tmvar/new [] :ptr
   tvar/new(ptr/null())
-defn tmvar/empty? [mv]
-  nil?(tvar/read(mv))
 
 defn tmvar/take [mv]
   atomically
-    fn []
-      def v tvar/read(mv)
-      when nil?(v)
-        retry()
-      tvar/write(mv ptr/null())
-      v
+    stm
+      let [v tvar/read(mv)]
+        check not(nil?(v))
+        tvar/write(mv ptr/null())
+        v
 
 defn tmvar/put [mv val]
   atomically
-    fn []
-      when not(nil?(tvar/read(mv)))
-        retry()
+    stm
+      check nil?(tvar/read(mv))
       tvar/write(mv val)
 ```
 
 ### TChan (unbounded FIFO)
 
 ```turmeric
-;; Backed by a TVar holding a list
+;; Backed by a TVar holding a list (sketch)
 (defn tchan/new [] : ptr  (tvar/new '()))
 
 (defn tchan/write [ch val]
   (atomically
-    (fn []
-      (def q (tvar/read ch))
-      (tvar/write ch (append q (list val))))))
+    (stm (let [q (tvar/read ch)]
+           (tvar/write ch (append q (list val)))))))
 
 (defn tchan/read [ch]
   (atomically
-    (fn []
-      (def q (tvar/read ch))
-      (when (nil? q) (retry))
-      (tvar/write ch (cdr q))
-      (car q))))
+    (stm (let [q (tvar/read ch)]
+           (check (not (nil? q)))
+           (tvar/write ch (cdr q))
+           (car q)))))
 ```
 
 ```sweet-exp
-;; Backed by a TVar holding a list
+;; Backed by a TVar holding a list (sketch)
 defn tchan/new [] :ptr
   tvar/new('())
 
 defn tchan/write [ch val]
   atomically
-    fn []
-      def q tvar/read(ch)
-      tvar/write(ch append(q list(val)))
+    stm
+      let [q tvar/read(ch)]
+        tvar/write(ch append(q list(val)))
 
 defn tchan/read [ch]
   atomically
-    fn []
-      def q tvar/read(ch)
-      when nil?(q)
-        retry()
-      tvar/write(ch cdr(q))
-      car(q)
+    stm
+      let [q tvar/read(ch)]
+        check not(nil?(q))
+        tvar/write(ch cdr(q))
+        car(q)
 ```
 
 ## Composability
@@ -316,15 +291,14 @@ Because `retry` and `or-else` work purely through the transaction's read set, an
 ```turmeric
 ;; Both operations run in a single atomic transaction
 (atomically
-  (fn []
-    (transfer account-a account-b 30)
-    (log-transfer account-a account-b 30)))
+  (stm (transfer account-a account-b 30)
+       (log-transfer account-a account-b 30)))
 ```
 
 ```sweet-exp
 ;; Both operations run in a single atomic transaction
 atomically
-  fn []
+  stm
     transfer(account-a account-b 30)
     log-transfer(account-a account-b 30)
 ```
@@ -338,27 +312,25 @@ Transactions may run more than once (on retry). **Avoid observable side effects*
 ```turmeric
 ;; BAD -- println may run multiple times
 (atomically
-  (fn []
-    (tvar/write counter 42)
-    (println "done")))
+  (stm (tvar/write counter 42)
+       (println "done")))
 
 ;; GOOD -- println fires once after commit
 (atomically
-  (fn []
-    (tvar/write counter 42)
-    (register-commit-defer nil log-fn)))
+  (stm (tvar/write counter 42)
+       (register-commit-defer nil log-fn)))
 ```
 
 ```sweet-exp
 ;; BAD -- println may run multiple times
 atomically
-  fn []
+  stm
     tvar/write(counter 42)
     println("done")
 
 ;; GOOD -- println fires once after commit
 atomically
-  fn []
+  stm
     tvar/write(counter 42)
     register-commit-defer(nil log-fn)
 ```
@@ -396,13 +368,16 @@ that a `retry`/`check`-false with no way to make progress blocks forever under
 | Function | Description |
 |---|---|
 | `tvar/new val` | Create a TVar with initial value |
-| `tvar/read tv` | Read TVar (must be inside `atomically`) |
-| `tvar/write tv val` | Write TVar (must be inside `atomically`) |
+| `tvar/read tv` | Read TVar (must be inside an `stm` block) |
+| `tvar/write tv val` | Write TVar (must be inside an `stm` block) |
+| `tvar/modify tv fn` | Apply `fn` to the current value and store the result |
 | `tvar/swap tv new` | Write and return old value |
 | `tvar/cas tv old new` | Conditional write; returns bool |
-| `atomically fn` | Run `fn` as an atomic transaction |
+| `stm body...` | Group TVar operations into one transaction block |
+| `atomically (stm ...)` | Run the block as an atomic transaction |
+| `check cond` | Retry (abort + block) until `cond` holds on a re-run |
 | `retry` | Abort and block until a read TVar changes |
-| `or-else fn-a fn-b` | Try `fn-a`; if it retries, try `fn-b` |
+| `or-else (stm a) (stm b)` | Try `a`; if it retries, try `b` |
 
 ## See Also
 

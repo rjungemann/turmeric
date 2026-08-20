@@ -1,10 +1,10 @@
 ---
-title: tur/logic — Logic Programming Guide
+title: tur/logic -- Logic Programming Guide
 category: Advanced Control Flow
 description: How to use and extend tur/logic for miniKanren-style relational programming in Turmeric
 ---
 
-# `tur/logic` — Logic Programming Guide
+# `tur/logic` -- Logic Programming Guide
 
 `tur/logic` provides miniKanren-style logic programming: unification, logic
 variables, goals, and a backtracking search engine.  The module lives in
@@ -137,7 +137,7 @@ let [x (term-var 0)
   ...
 ```
 
-Prefer `(fresh ...)` (below) over hand-numbered ids — it keeps variable
+Prefer `(fresh ...)` (below) over hand-numbered ids -- it keeps variable
 scope explicit and threads the counter for you.
 
 ### Substitutions
@@ -152,7 +152,7 @@ empty one and `reify-walk` lets you look up results.
 
 ### Goals
 
-A *goal* is an opaque `(Goal A)` handle over a function `Subst -> Stream` —
+A *goal* is an opaque `(Goal A)` handle over a function `Subst -> Stream` --
 it accepts a substitution and returns zero or more extended substitutions
 (the solution `Stream`).  `(apply-goal g state)` runs one directly.  `Goal`
 also carries Functor / Applicative / Monad / Alternative instances, so goals
@@ -233,7 +233,7 @@ let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
 ; => 0 (no solutions)
 ```
 
-### Disjunction — multiple answers
+### Disjunction -- multiple answers
 
 ```turmeric
 (let [x   (term-var 0)
@@ -544,50 +544,50 @@ building tools on top of the same monad without the full logic layer,
 
 ### The miniKanren language and theory
 
-- **"The Reasoned Schemer" (2nd ed.)** — Daniel P. Friedman, William E. Byrd,
+- **"The Reasoned Schemer" (2nd ed.)** -- Daniel P. Friedman, William E. Byrd,
   Oleg Kiselyov, Jason Hemann (MIT Press, 2018).  The canonical introduction;
   every concept in `tur/logic` maps directly to a chapter.
 
-- **"miniKanren, Live and Untagged"** — William Byrd et al., 2012 Workshop
+- **"miniKanren, Live and Untagged"** -- William Byrd et al., 2012 Workshop
   on Scheme and Functional Programming.
   <https://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf>
 
-- **µKanren** (micro-Kanren) — Jason Hemann & Daniel Friedman, 2013.
-  The minimal core (≈ 40 lines of Scheme) that `tur/logic` is modeled after.
+- **muKanren** (micro-Kanren) -- Jason Hemann & Daniel Friedman, 2013.
+  The minimal core (~40 lines of Scheme) that `tur/logic` is modeled after.
   <http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf>
 
-- **miniKanren.org** — canonical reference implementation, papers, and talks.
+- **miniKanren.org** -- canonical reference implementation, papers, and talks.
   <http://minikanren.org>
 
 ### Unification
 
-- **"An Efficient Unification Algorithm"** — Martelli & Montanari (1982),
+- **"An Efficient Unification Algorithm"** -- Martelli & Montanari (1982),
   *ACM Transactions on Programming Languages and Systems*.
   Describes the linear-time algorithm; `tur/logic` uses the simpler quadratic
   alist walk, suitable for small substitutions.
 
-- **"Unification: A Multidisciplinary Survey"** — Kevin Knight (1989).
+- **"Unification: A Multidisciplinary Survey"** -- Kevin Knight (1989).
   <https://dl.acm.org/doi/10.1145/62029.62030>
 
 ### Logic programming broadly
 
-- **"The Art of Prolog"** — Sterling & Shapiro (MIT Press, 1994).
+- **"The Art of Prolog"** -- Sterling & Shapiro (MIT Press, 1994).
   Classical treatment of resolution, unification, and search strategies.
 
-- **core.logic** (Clojure) — a production miniKanren embedding closest in
+- **core.logic** (Clojure) -- a production miniKanren embedding closest in
   spirit to `tur/logic`.  Good source of idioms and constraint extensions.
   <https://github.com/clojure/core.logic>
 
-- **Kanren** (original, Scheme) — Byrd & Friedman.
+- **Kanren** (original, Scheme) -- Byrd & Friedman.
   <https://github.com/webyrd/miniKanren>
 
 ### Related guides in this documentation
 
-- [backtracking-guide.md](backtracking-guide.md) — The `tur/backtrack` monad
+- [backtracking-guide.md](backtracking-guide.md) -- The `tur/backtrack` monad
   that `tur/logic` is built on.
 - [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md)
-  — A runnable worked example building a family-graph query.
-- [datalog-01-concepts.md](datalog-01-concepts.md) — Datalog, a cousin of
+  -- A runnable worked example building a family-graph query.
+- [datalog-01-concepts.md](datalog-01-concepts.md) -- Datalog, a cousin of
   miniKanren suited to database-style queries.
-- [effects-system-guide.md](effects-system-guide.md) — Algebraic effects,
+- [effects-system-guide.md](effects-system-guide.md) -- Algebraic effects,
   an alternative to the monad-based search strategy used here.

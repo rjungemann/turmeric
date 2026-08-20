@@ -74,7 +74,7 @@ available.
 ### `TuriEnv *turi_env_new_sandboxed(void)`
 
 Creates a sandboxed environment.  I/O builtins (`println`, `read-async`,
-`write-async`, …) and inline-C expressions are disabled.  Suitable for
+`write-async`, ...) and inline-C expressions are disabled.  Suitable for
 evaluating untrusted code.
 
 ### `void turi_env_free(TuriEnv *env)`

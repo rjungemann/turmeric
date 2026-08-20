@@ -4,9 +4,9 @@ category: CLI Tools
 description: Test framework API and contract
 ---
 
-# Test Runner Contract (Deferred Follow-up)
+# Test Runner Contract
 
-This document defines the expected behavior for stdlib test running follow-up work.
+This document defines the expected behavior for stdlib test running.
 
 ## Scope
 
@@ -181,4 +181,4 @@ it is testing. Declare it.
 ## Follow-up Work Hooks
 
 - Integrate this contract with `stdlib/test.tur` implementation work.
-- Integrate with future `tur test` CLI command behavior and fixture validations.
+- Integrate with `tur test` CLI command behavior and fixture validations.

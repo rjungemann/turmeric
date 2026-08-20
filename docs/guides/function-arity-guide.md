@@ -6,10 +6,13 @@ description: When to use positional parameters, defstruct options, and variadic 
 
 # Function Arity Style Guide
 
-Turmeric functions have a hard parameter limit of **16** (`MAX_FN_ARITY`). Functions
-with more than ~5 positional parameters are a code smell; 16 is an emergency
-escape hatch, not a target. This guide covers when to reach for each arity style
-and the rules each one carries.
+There is **no hard cap** on positional parameters -- a function may declare an
+arbitrary number, matching the emitted C (which has no limit of its own).
+Functions with more than ~5 positional parameters are still a code smell, and
+declaring more than **16** emits the `TUR-W0041` lint nudge back to this
+guide. The high ceiling is an escape hatch for generated code, macro
+expansions, and wide interop shims, not a target. This guide covers when to
+reach for each arity style and the rules each one carries.
 
 ---
 
@@ -125,11 +128,11 @@ launch(route!() route!())     ; OK
 launch(route!() make-mw())    ; ERROR
 ```
 
-Because of this, the old workaround "declare the rest as `:int` and cast the
-opaque handles back inside the body" is **no longer needed** -- write the real
-type. A bare `:int` rest now also rejects opaque/struct/ADT values; pass the
-declared type instead. For a mix of distinct handle types, prefer two explicit
-`:list<T>` parameters over a single untyped rest.
+Because of this, do not declare the rest as `:int` and cast the opaque
+handles back inside the body -- write the real type. A bare `:int` rest
+rejects opaque/struct/ADT values; pass the declared type instead. For a mix
+of distinct handle types, prefer two explicit `:list<T>` parameters over a
+single untyped rest.
 
 ---
 
@@ -163,7 +166,7 @@ The rest parameter is a `int64_t` holding a pointer to a linked list of
 Inline-C helpers that walk it look like:
 
 ```turmeric
-(defn cons-list-sum [lst : int] #{Unsafe} : int
+(defn cons-list-sum [lst : int] #fx{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
@@ -176,7 +179,7 @@ Inline-C helpers that walk it look like:
 Or use a pure tail-recursive helper:
 
 ```turmeric
-(defn list-sum-acc [lst : int  acc : int] #{Unsafe} : int
+(defn list-sum-acc [lst : int  acc : int] #fx{Unsafe} : int
   (if (= lst 0)
     acc
     (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))

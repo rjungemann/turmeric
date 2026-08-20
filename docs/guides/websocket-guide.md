@@ -55,23 +55,23 @@ Both spices follow the standard `:spices` declaration in `build.tur`.
 ### Client only
 
 ```turmeric
-:spices #{
-  "ws-client" #{:url    "https://github.com/rjungemann/turmeric-spices"
-                :ref    "ws-client-v0.1.0"
-                :subdir "spices/ws-client"}
+:spices #map{
+  "ws-client" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                   :ref    "ws-client-v0.1.0"
+                   :subdir "spices/ws-client"}
 }
 ```
 
 ### Server (depends on `httpd`)
 
 ```turmeric
-:spices #{
-  "httpd"     #{:url    "https://github.com/rjungemann/turmeric-spices"
-                :ref    "httpd-v0.1.0"
-                :subdir "spices/httpd"}
-  "ws-server" #{:url    "https://github.com/rjungemann/turmeric-spices"
-                :ref    "ws-server-v0.1.0"
-                :subdir "spices/ws-server"}
+:spices #map{
+  "httpd"     #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                   :ref    "httpd-v0.1.0"
+                   :subdir "spices/httpd"}
+  "ws-server" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                   :ref    "ws-server-v0.1.0"
+                   :subdir "spices/ws-server"}
 }
 ```
 
@@ -305,7 +305,7 @@ Adapted from `ws-server/tests/fixtures/echo/server.tur`:
     return strcmp((const char *)a, (const char *)b) == 0;
     ```)
 
-  (defn block-forever [] #{Unsafe} : void
+  (defn block-forever [] #fx{Unsafe} : void
     ```c
     #include <unistd.h>
     for (;;) sleep(3600);

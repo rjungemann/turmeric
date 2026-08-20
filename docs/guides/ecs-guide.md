@@ -664,7 +664,7 @@ Every component storage in a sized world shares the same `n`:
 
 Lowers to a loop indexed `0..n` where the bound is the first
 storage's type-level capacity, not a runtime min. Inside the loop body
-the elaborator already knows `i ∈ [0, n)` structurally, so the
+the elaborator already knows `i in [0, n)` structurally, so the
 generated accessor codegen elides bounds checks. A mixed-capacity
 invocation fails at elaboration:
 

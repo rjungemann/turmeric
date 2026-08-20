@@ -278,7 +278,7 @@ defn freq-count [words] :hamt
     ref/get(m)
 ```
 
-HAMT operations are O(log₃₂ n) in practice -- fast for lookups but slower
+HAMT operations are O(log32 n) in practice -- fast for lookups but slower
 than a mutable hash table for write-heavy workloads. If you need the latter,
 reach for an inline-C wrapper around `uthash` or a fixed-size open-addressing
 table.
@@ -354,7 +354,7 @@ handing that `String` to a container is free. See
 
 ### Text search
 
-For simple substring search, `str/index-of` wraps `strstr` and is O(n·m) in
+For simple substring search, `str/index-of` wraps `strstr` and is O(n*m) in
 the worst case. For repeated pattern matching over a corpus, compile the
 pattern once and reuse the handle -- the search itself is then O(n):
 
@@ -842,7 +842,7 @@ python3 scripts/analyze_results.py
 ```
 
 The output normalises all timings to C = 1.0. A Turmeric ratio of 1.4 means
-Turmeric took 1.4× as long as C on that benchmark.
+Turmeric took 1.4x as long as C on that benchmark.
 
 ### Environment checklist
 

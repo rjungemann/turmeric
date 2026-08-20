@@ -154,10 +154,10 @@ Flip the operator to canonical `var op form`, then apply the table above.
 
 | Seen | Canonical | Flip rule |
 |------|-----------|-----------|
-| `hi > n`  | `n < hi`  | `>` → `<` |
-| `hi >= n` | `n <= hi` | `>=` → `<=` |
-| `lo < n`  | `n > lo`  | `<` → `>` |
-| `lo <= n` | `n >= lo` | `<=` → `>=` |
+| `hi > n`  | `n < hi`  | `>` -> `<` |
+| `hi >= n` | `n <= hi` | `>=` -> `<=` |
+| `lo < n`  | `n > lo`  | `<` -> `>` |
+| `lo <= n` | `n >= lo` | `<=` -> `>=` |
 
 ### Two-sided left-to-right (form op-fwd var op-fwd form)
 
@@ -350,7 +350,7 @@ defn float-range-contains? [r :int v :float] :bool ...
 The reader selects float constructors when any bound token is a `F_FLOAT`
 literal.  If one bound is `F_INT` and the other is `F_FLOAT`, the int is
 promoted (the constructor call is emitted with the integer as a float literal,
-e.g. `0` → `0.0`).
+e.g. `0` -> `0.0`).
 
 If a bound is a non-literal expression, the reader cannot infer the numeric
 type.  In that case it defaults to the integer constructor family and emits a

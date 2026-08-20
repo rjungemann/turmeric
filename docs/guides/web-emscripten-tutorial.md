@@ -258,11 +258,14 @@ Replace the inline `<script>` block from Project A with:
     Module._turi_wasm_init();
 
     var src = await fetch('program.tur').then(function(r) { return r.text(); });
-    var ptr = Module.allocateUTF8(src);
+    var len = Module.lengthBytesUTF8(src) + 1;
+    var ptr = Module._malloc(len);
+    Module.stringToUTF8(src, ptr, len);
     var res = Module._turi_wasm_eval(ptr);
 
     document.getElementById('output').textContent = Module.UTF8ToString(res);
     Module._free(ptr);
+    if (res) Module._free(res);
   });
 </script>
 ```
@@ -288,7 +291,9 @@ error handling use `turi_wasm_eval_ex`:
 var resultPtrAddr = Module._malloc(4);
 var errorPtrAddr  = Module._malloc(4);
 
-var inputPtr = Module.allocateUTF8(src);
+var inputLen = Module.lengthBytesUTF8(src) + 1;
+var inputPtr = Module._malloc(inputLen);
+Module.stringToUTF8(src, inputPtr, inputLen);
 var status   = Module._turi_wasm_eval_ex(inputPtr, resultPtrAddr, errorPtrAddr);
 
 // Read the pointer values out of WASM memory.
@@ -297,10 +302,10 @@ var errorPtr  = Module.getValue(errorPtrAddr,  'i32');
 
 if (status === 0) {
   console.log('result:', Module.UTF8ToString(resultPtr));
-  Module._turi_wasm_free_string(resultPtr);
+  Module._free(resultPtr);
 } else {
   console.error('error:', Module.UTF8ToString(errorPtr));
-  Module._turi_wasm_free_string(errorPtr);
+  Module._free(errorPtr);
 }
 
 Module._free(inputPtr);
@@ -308,9 +313,10 @@ Module._free(resultPtrAddr);
 Module._free(errorPtrAddr);
 ```
 
-Note: both `*out_result` and `*out_error` must be freed with
-`_turi_wasm_free_string` (not `_free`) because they are allocated by the glue
-layer with its own allocator.
+Note: both `*out_result` and `*out_error` are malloc'd strings the caller
+owns; free each non-NULL one with `_free`. (The C-side helper
+`turi_wasm_free_string` is a plain `free()` and is not in the exported
+function list, so `_free` is the way to release them from JS.)
 
 ---
 
@@ -372,10 +378,13 @@ export async function init() {
 
 export async function evalCode(src) {
   var mod = await init();
-  var ptr = mod.allocateUTF8(src);
+  var len = mod.lengthBytesUTF8(src) + 1;
+  var ptr = mod._malloc(len);
+  mod.stringToUTF8(src, ptr, len);
   var rp  = mod._turi_wasm_eval(ptr);
   var out = mod.UTF8ToString(rp);
   mod._free(ptr);
+  if (rp) mod._free(rp);
   return out;
 }
 
@@ -463,7 +472,9 @@ function or macro. It backs the doc panel in the web REPL.
 ```js
 async function docLookup(name) {
   var mod = await init();           // reuse the singleton from Project C: A Vite-Based Web App
-  var ptr = mod.allocateUTF8(name);
+  var len = mod.lengthBytesUTF8(name) + 1;
+  var ptr = mod._malloc(len);
+  mod.stringToUTF8(name, ptr, len);
   var rp  = mod._turi_doc_lookup(ptr);
   var doc = rp ? mod.UTF8ToString(rp) : '(no documentation)';
   mod._free(ptr);
@@ -492,7 +503,7 @@ and rebuild the WASM module to see the changes.
 | `_turi_wasm_init is not a function` | Missing `-sEXPORTED_FUNCTIONS` flag | Re-run `just wasm` with the correct CMake configuration |
 | `TypeError: WebAssembly.instantiate` fails | Server sends `.wasm` as `text/plain` | Configure MIME type `application/wasm` on your server |
 | Page hangs on first call | pthread pool not yet started | Call `_turi_wasm_init` inside the `.then()` callback, not at top level |
-| `allocateUTF8 is not a function` | Missing `EXPORTED_RUNTIME_METHODS` | Ensure `stringToUTF8,UTF8ToString,lengthBytesUTF8` are in the link flags |
+| `stringToUTF8 is not a function` | Missing `EXPORTED_RUNTIME_METHODS` | Ensure `stringToUTF8,UTF8ToString,lengthBytesUTF8` are in the link flags (`allocateUTF8` is NOT exported -- use `_malloc` + `stringToUTF8`) |
 | `.wasm` file not found (404) | Emscripten looks for `.wasm` next to `.js` | Copy both files to the same directory; do not rename them |
 
 ---

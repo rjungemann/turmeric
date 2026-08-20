@@ -115,7 +115,7 @@ examples/guestbook/
   data/
     entries.bin        -- serialized guestbook entries (auto-created at runtime)
     conts/             -- one file per continuation blob (auto-created at runtime)
-```text
+```
 
 The `data/` directory is created at runtime by the server on first start. You do not need to create it manually.
 
@@ -133,11 +133,13 @@ The guestbook `CMakeLists.txt` links only against the Turmeric runtime and the C
 
 ### Justfile Recipe
 
-After following this tutorial, the root `Justfile` gains:
+The root `Justfile` provides:
 
 ```just
-run-guestbook: configure-examples
+guestbook: configure-examples
     cmake --build build --target guestbook
+
+run-guestbook: guestbook
     ./build/examples/guestbook/guestbook
 ```
 
@@ -953,7 +955,7 @@ Browser                 Server
   |                       |  serial-resume k2 "message=Hello"
   |                       |  flow resumes: message = "Hello"
   |                       |  (more steps follow in Step 8)
-```text
+```
 
 Each `serial-resume` re-enters the flow at exactly the point after `send-form-and-wait` returned, with all local variables (`name`, etc.) intact in the deserialized continuation.
 

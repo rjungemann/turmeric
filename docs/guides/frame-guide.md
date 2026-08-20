@@ -26,11 +26,17 @@ tur add https://github.com/rjungemann/turmeric-spices \
 tur fetch
 ```
 
-Then in your `build.tur`:
+`tur add` writes the dependency into your `build.tur`:
 
-```turmeric
-{:name "myapp"
- :spices ["frame"]}
+```turmeric no-check
+(defpackage myapp
+  :name "myapp"
+  :version "0.1.0"
+  :spices #map{
+    "frame" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                 :ref    "frame-v0.1.0"
+                 :subdir "spices/frame"}
+  })
 ```
 
 ## Importing
@@ -182,7 +188,7 @@ let [df read-csv("data/sales.csv" default-csv-opts())]
     [err(e) println("error:" e)]
 ```
 
-The type inference order is int64 → float64 → date32 → timestamp → bool → utf8.
+The type inference order is int64 -> float64 -> date32 -> timestamp -> bool -> utf8.
 Use `read-csv-typed` to supply an explicit schema and skip inference:
 
 ```turmeric
@@ -569,7 +575,7 @@ let [df   read-csv("quarterly.csv" default-csv-opts())
 All non-identity columns must share the same type. `melt` returns `0` if they
 do not.
 
-> **Note:** `pivot` (long → wide) and `transpose` are not included in v0.1.0.
+> **Note:** `pivot` (long -> wide) and `transpose` are not included in v0.1.0.
 > For those operations, export to Arrow and use the receiving runtime's native
 > pivot/transpose.
 
@@ -653,14 +659,14 @@ let [col  frame-column(df "score")
 
 | Type tag function | Arrow format | Turmeric element accessor |
 |---|---|---|
-| `(type-int32)` | `"i"` | `(column-int32-at col i)` → `:int` |
-| `(type-int64)` | `"l"` | `(column-int64-at col i)` → `:int` |
-| `(type-float32)` | `"f"` | `(column-float32-at col i)` → `:float` |
-| `(type-float64)` | `"g"` | `(column-float64-at col i)` → `:float` |
-| `(type-bool)` | `"b"` | `(column-bool-at col i)` → `:int` (0 or 1) |
-| `(type-utf8)` | `"u"` | `(column-utf8-at col i)` → `:cstr` |
-| `(type-date32)` | `"tdD"` | `(column-int32-at col i)` → days since epoch |
-| `(type-timestamp)` | `"tsu:"` | `(column-int64-at col i)` → µs since epoch |
+| `(type-int32)` | `"i"` | `(column-int32-at col i)` -> `:int` |
+| `(type-int64)` | `"l"` | `(column-int64-at col i)` -> `:int` |
+| `(type-float32)` | `"f"` | `(column-float32-at col i)` -> `:float` |
+| `(type-float64)` | `"g"` | `(column-float64-at col i)` -> `:float` |
+| `(type-bool)` | `"b"` | `(column-bool-at col i)` -> `:int` (0 or 1) |
+| `(type-utf8)` | `"u"` | `(column-utf8-at col i)` -> `:cstr` |
+| `(type-date32)` | `"tdD"` | `(column-int32-at col i)` -> days since epoch |
+| `(type-timestamp)` | `"tsu:"` | `(column-int64-at col i)` -> us since epoch |
 | `(type-null)` | `"n"` | all rows null |
 
 Typed fast-path accessors (`column-int64-at`, etc.) are undefined if called on

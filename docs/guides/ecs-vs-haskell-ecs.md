@@ -33,7 +33,7 @@ load-bearing prereqs see
 | **Read-set enforcement** | Trust the programmer | Trust the programmer | Same -- read caps in scope iff comp is in `:reads` |
 | **Storage choice** (dense vs sparse vs tag) | Type-family `Storage c` -- resolved at compile time, but the user can lie via orphan instances | Associated type, same caveat | Per-component; macro registers, accessor type bakes it in. No orphan-instance surface |
 | **Typeclass coherence** | Open instances; orphans are a maintenance hazard | Open instances | Coherent -- one `Component T` instance per `T`, enforced by the elaborator |
-| **Polymorphic-system bound** ("any world with `Pos` and `Vel`") | `Has w Pos, Has w Vel => …` constraint, solved by GHC | Same | `(HasPos W) (HasVel W) => …` Turmeric class constraint -- shipped via `defcomponent-class` / `definstance` |
+| **Polymorphic-system bound** ("any world with `Pos` and `Vel`") | `Has w Pos, Has w Vel => ...` constraint, solved by GHC | Same | `(HasPos W) (HasVel W) => ...` Turmeric class constraint -- shipped via `defcomponent-class` / `definstance` |
 | **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness by importing the `ecs/refined-world` facade: a read whose entity is not proven alive is a compile error |
 | **Query arity** | Tuples up to 8-ish via type-class hackery; degrades past that | `Query` arrow combinators -- no cap, but composition cost is real | Truly variadic via row-kinded `for-each`; row type is the kind-`[*]` of components |
 | **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check on the unsized world; compile-time (statically rectangular, `TUR-E0260` on mismatch) with the opt-in sized worlds (`sized-defworld` / `sized-for-each`) |
@@ -130,9 +130,9 @@ aztecs makes the read/write explicit via arrow notation. That's an
 improvement over `cmap`: you can read the system's declared effects
 off the arrow body. But the *enforcement* is the same as apecs --
 nothing makes `integrate` actually use only `Pos` and `Vel`. A line
-that says `ECS.write @Color -< …` would type-check fine.
+that says `ECS.write @Color -< ...` would type-check fine.
 
-The query value here is `proc … do`, which composes via arrow
+The query value here is `proc ... do`, which composes via arrow
 combinators. Past three or four reads/writes this gets hard to read,
 which is the cost aztecs pays for its compile-time row shape.
 
@@ -361,7 +361,7 @@ runtime check remains only on the unsized path.
 ### The world handle is `:int` at the system body's signature
 
 `(defsystem foo [Pos Vel] [Pos] body)` lowers to `(defn foo-impl [w :
-int] : nil …)`. The body receives `w` as an int and recovers the
+int] : nil ...)`. The body receives `w` as an int and recovers the
 typed world with `(:: w World)`. This was the cheapest way to ship a
 working scheduler without rewriting the system trampoline contract.
 The downstream effect is that the world *type* is recovered inside
@@ -379,7 +379,7 @@ isn't load-bearing for the v1 wins above.
 | **Ad-hoc polymorphism over component sets.** `cmap` lets a system body decide *at the lambda* which tuple of components it touches. tur-ecs makes you declare `:reads` / `:writes` up front. | Declaration ceremony per system. Pays off the moment your codebase has more than one system writing the same component. |
 | **Orphan-instance flexibility.** A downstream consumer cannot swap `Storage Pos = Map` for `Storage Pos = Cache (Map Pos)` from outside the component-declaration site. | Largely a non-cost in practice; orphan instances are a maintenance hazard apecs codebases regret. |
 | **Open-world typeclass extension.** A new library can register itself as a `Component` for an existing type without source access to the original module. | We force the registration into the world declaration. For a library author this means the world author has to opt in -- which is what you'd want anyway for cap-gated writes. |
-| **GHC's constraint inference.** `(Has w Pos, Has w Vel) => …` is solved silently; the user often doesn't see it. tur-ecs makes typeclass-bounded systems explicit via `(HasPos W) (HasVel W)`. | Slightly more verbose at the declaration site. Identical runtime cost (one dictionary lookup per polymorphic call). |
+| **GHC's constraint inference.** `(Has w Pos, Has w Vel) => ...` is solved silently; the user often doesn't see it. tur-ecs makes typeclass-bounded systems explicit via `(HasPos W) (HasVel W)`. | Slightly more verbose at the declaration site. Identical runtime cost (one dictionary lookup per polymorphic call). |
 
 The recurring theme: tur-ecs trades flexibility-at-the-import-site for
 locality-of-reasoning-at-the-declaration-site. In a small project this

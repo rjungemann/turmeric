@@ -389,12 +389,12 @@ The compiled library and its symbol manifest live under
 
 ```
 my-spice/
-├── build.tur
-├── src/
-│   └── lib.tur
-└── .tur-repl-cache/        <- auto-generated, gitignored
-    ├── lib-0.so            <- shared library (one per process generation)
-    └── exports.manifest    <- module/defn -> mangled C symbol :: signature
+|-- build.tur
+|-- src/
+|   `-- lib.tur
+`-- .tur-repl-cache/        <- auto-generated, gitignored
+    |-- lib-0.so            <- shared library (one per process generation)
+    `-- exports.manifest    <- module/defn -> mangled C symbol :: signature
 ```
 
 The first time the cache directory is created, `.tur-repl-cache/` is
@@ -522,11 +522,11 @@ Arguments are marshaled per the defn's signature recorded in
 The marshaler accepts compatible Turmeric values:
 
 ```
-turmeric> (sh/add42 100)         ; :int -> :int            ✓
+turmeric> (sh/add42 100)         ; :int -> :int            OK
 => 142
-turmeric> (sh/scale 2.5 4.0)     ; :float :float -> :float ✓
+turmeric> (sh/scale 2.5 4.0)     ; :float :float -> :float OK
 => 10
-turmeric> (sh/add42 1.5)         ; :float into :int slot   ✗ rejected
+turmeric> (sh/add42 1.5)         ; :float into :int slot   REJECTED
 error: ffi: 'sh/add42' arg 0: expected :int-class, got float
 ```
 
@@ -606,7 +606,7 @@ ordinary environment variable it is inherited by every child process and
 outlives the install that set it, so a stale value can point a freshly built
 `tur` at a stdlib that has since moved or been deleted.
 
-It is now validated before use: if `$TUR_STDLIB_DIR/macros.tur` is not
+It is validated before use: if `$TUR_STDLIB_DIR/macros.tur` is not
 readable, `tur` prints one line naming the variable, unsets it, and falls back
 to the stdlib beside the binary.
 
@@ -615,11 +615,9 @@ $ TUR_STDLIB_DIR=/gone tur repl
 tur: ignoring TUR_STDLIB_DIR=/gone (no readable macros.tur there); falling back to the stdlib beside the binary
 ```
 
-Previously the value was taken verbatim, and the first sign of trouble was a
-wall of `load: cannot open .../macros.tur` errors with nothing pointing at the
-variable that caused them.  A directory that *does* contain a stdlib is still
-honoured silently -- an explicit override remains an override, so pinning a
-host's bundled stdlib works exactly as before.
+A directory that *does* contain a stdlib is honoured silently -- an explicit
+override remains an override, so pinning a host's bundled stdlib works as
+expected.
 
 ---
 
