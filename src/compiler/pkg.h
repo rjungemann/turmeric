@@ -443,6 +443,7 @@ int cmd_pkg_init(int argc, char **argv);      /* tur init */
 int cmd_pkg_add(int argc, char **argv);       /* tur add  */
 int cmd_pkg_add_cmake(int argc, char **argv); /* tur add-cmake */
 int cmd_pkg_fetch(int argc, char **argv);     /* tur fetch */
+int cmd_pkg_audit(int argc, char **argv);     /* tur audit */
 int cmd_pkg_emit_cmake(int argc, char **argv); /* tur emit-cmake */
 int cmd_pkg_install(int argc, char **argv);   /* tur install */
 int cmd_pkg_uninstall(int argc, char **argv); /* tur uninstall */

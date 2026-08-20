@@ -8112,7 +8112,7 @@ static void list_external_subcommands(void) {
         "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "expand", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
-        "init", "add", "add-cmake", "fetch",
+        "init", "add", "add-cmake", "fetch", "audit",
         "install", "uninstall", "list", "upgrade",
         NULL,
     };
@@ -8204,7 +8204,7 @@ static const char *const CANONICAL_COMMANDS[] = {
     "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
     "eval", "doc", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test",
-    "new", "init", "add", "add-cmake", "fetch",
+    "new", "init", "add", "add-cmake", "fetch", "audit",
     "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
     NULL,
 };
@@ -8271,6 +8271,7 @@ static int usage(void) {
         "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n"
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
         "  tur fetch [--update|--dry-run|--refetch]  download/update spices (--refetch bypasses system pkgs)\n"
+        "  tur audit                         list every origin the build fetches code from\n"
         "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
         "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
         "  tur install <path> --path         install a local spice binary globally\n"
@@ -10317,6 +10318,8 @@ int main(int argc, char **argv) {
         return cmd_pkg_add_cmake(argc, argv);
     if (strcmp(cmd, "fetch") == 0)
         return cmd_pkg_fetch(argc, argv);
+    if (strcmp(cmd, "audit") == 0)
+        return cmd_pkg_audit(argc, argv);
     if (strcmp(cmd, "emit-cmake") == 0)
         return cmd_pkg_emit_cmake(argc, argv);
     /* GS-M2: global spice install commands */

@@ -372,8 +372,21 @@ Turmeric library so CMake projects can consume it), see the
 - Use git tags (not branch names) for `:ref` to avoid moving targets.
 - Any `:cmake-deps` entry is a trust decision equivalent to executing build
   scripts from that repository. Audit before adding.
-- `tur audit` (planned) will list all cmake-dep repositories and their
-  maintainer GPG keys.
+- `tur audit` lists every origin the build fetches code from -- Turmeric
+  spices and cmake-deps alike -- with each one's ref and, where `tur.lock`
+  has pinned it, the resolved commit and SHA-256. Origins with no lock entry
+  are called out, so "what am I trusting, and is it pinned?" is one command
+  rather than a manual reconciliation of `build.tur` against `tur.lock`.
+
+  ```sh
+  tur audit
+  ```
+
+  It **lists; it does not verify.** There is no signature or maintainer-key
+  checking -- an earlier version of this bullet promised GPG keys, and no key
+  infrastructure exists to check them against. A `:path` dep is reported but
+  not flagged as unpinned: it resolves from local source and has nothing to
+  pin, and flagging it would train you to ignore the warning that matters.
 
 ---
 

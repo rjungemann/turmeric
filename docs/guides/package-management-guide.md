@@ -648,6 +648,7 @@ tur add <path> --path      # add a local path dependency
 tur add-cmake <url>        # add a C/CMake dependency
 tur fetch                  # download all spices from tur.lock
 tur fetch --update         # update to latest allowed versions
+tur audit                  # list every origin the build fetches code from
 
 # Build and run
 tur build <dir>            # compile a project directory

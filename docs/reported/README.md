@@ -67,7 +67,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [schan-recv-pair-signature-migration](schan-recv-pair-signature-migration.md) | low | schan-recv still uses the caller-cell workaround; its miscompile blocker is fixed |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
-| [tur-audit-not-implemented](tur-audit-not-implemented.md) | low | security docs promise `tur audit`; only audit-spans exists |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
 
 ## Value representation (the consolidation campaign)

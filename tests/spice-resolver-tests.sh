@@ -802,6 +802,80 @@ fi
 rm -f "$LS6_B_ERR"
 rm -rf "$LS6_B"
 
+# AUDIT1/2: `tur audit` lists every origin the build fetches code from.
+# The security section of consuming-spices-guide.md promised this command; it
+# did not exist (only `audit-spans`, an unrelated debugger mode).
+AUD=$(mktemp -d)
+mkdir -p "$AUD/proj" "$AUD/utils"
+cat >"$AUD/utils/build.tur" <<'EOF'
+(defpackage utils :name "utils")
+EOF
+cat >"$AUD/proj/build.tur" <<'EOF'
+(defpackage demo
+  :name "demo"
+  :spices #{
+    "geom"  #{:url "https://example.invalid/tur-geom" :ref "v0.2.1"}
+    "utils" #{:path "../utils"}
+  }
+  :cmake-deps #{
+    "raylib" #{:url "https://example.invalid/raylib" :ref "5.0"}
+  })
+EOF
+
+# AUDIT1: with no tur.lock, every :url origin is reported UNPINNED. A :path dep
+# is not -- it resolves from local source and has nothing to pin, so flagging it
+# would train the reader to ignore the warning.
+AUD_OUT=$(mktemp)
+( cd "$AUD/proj" && "$LS6_ABS_TUR" audit ) >"$AUD_OUT" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'example.invalid/tur-geom' "$AUD_OUT" \
+   && grep -qF 'example.invalid/raylib' "$AUD_OUT" \
+   && grep -qF 'local path' "$AUD_OUT" \
+   && [ "$(grep -c 'NOT IN tur.lock' "$AUD_OUT")" -eq 2 ] \
+   && grep -qF 'verifies nothing' "$AUD_OUT"; then
+    echo "PASS AUDIT1: audit lists origins and flags the unpinned ones"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL AUDIT1: audit output"
+    echo "  exit: $rc"; sed 's/^/    /' "$AUD_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("AUDIT1: audit lists origins")
+fi
+rm -f "$AUD_OUT"
+
+# AUDIT2: with a tur.lock present, each pinned origin reports its commit and
+# hash and is no longer flagged. Written in pkg_lock_write's own format.
+cat >"$AUD/proj/tur.lock" <<'EOF'
+(deflockfile
+  :format-version 1
+  :spices #{
+    "geom" #{:url "https://example.invalid/tur-geom" :ref "v0.2.1" :resolved "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4" :sha256 "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb"}
+  }
+  :cmake-deps #{
+    "raylib" #{:url "https://example.invalid/raylib" :ref "5.0" :resolved "0123456789abcdef0123456789abcdef01234567" :sha256 "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}
+  }
+)
+EOF
+AUD_OUT=$(mktemp)
+( cd "$AUD/proj" && "$LS6_ABS_TUR" audit ) >"$AUD_OUT" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'commit a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4' "$AUD_OUT" \
+   && grep -qF 'commit 0123456789abcdef0123456789abcdef01234567' "$AUD_OUT" \
+   && grep -qF 'sha256 deadbeef' "$AUD_OUT" \
+   && ! grep -qF 'NOT IN tur.lock' "$AUD_OUT"; then
+    echo "PASS AUDIT2: audit reports the pin from tur.lock"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL AUDIT2: audit with a lock file"
+    echo "  exit: $rc"; sed 's/^/    /' "$AUD_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("AUDIT2: audit reports the pin")
+fi
+rm -f "$AUD_OUT"
+rm -rf "$AUD"
+
 # MSG1: `tur add` on an already-declared dep must not point at a `tur update`
 # subcommand -- there is no "update" row in CANONICAL_COMMANDS (`tur upgrade`
 # is the installed-tool pipeline, a different thing), so the old text sent
