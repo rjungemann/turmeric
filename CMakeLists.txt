@@ -358,6 +358,14 @@ add_test(
   COMMAND bash tests/run-engine-select.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `:entry "<path>"` in build.tur -- the first rung of `tur run`'s project-mode
+# entry-point ladder (:entry > src/main.tur > the single .tur under src/),
+# plus the dangling-:entry hard error.
+add_test(
+  NAME tur_manifest_entry
+  COMMAND bash tests/run-manifest-entry.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Off-tree (load "stdlib/<file>") resolution: a freestanding script run from
 # outside the repo resolves the stdlib via the exe-relative root, not just
 # cwd-relative. See docs/archive/history/one-off-script-print-and-annotation-ergonomics.md

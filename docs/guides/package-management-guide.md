@@ -471,6 +471,31 @@ binary's exit code.
 | Single `*.tur` file in `src/` | that file |
 | None of the above | error with suggestion |
 
+`:entry` is a path relative to the manifest directory (an absolute path is
+honored as written):
+
+```turmeric no-check
+(defpackage app
+  :name    "app"
+  :version "0.1.0"
+  :entry   "src/cli.tur")
+```
+
+The rungs are tried in order, so `:entry` wins even when `src/main.tur` also
+exists. It is authoritative rather than a hint: a `:entry` that does not name
+an existing file is a hard error, never a quiet fall-through to `src/main.tur`
+-- running a different program than the manifest asked for is the failure mode
+worth being loud about.
+
+```
+tur run: :entry "src/nope.tur" in build.tur does not name a file
+  Looked for /home/alice/app/src/nope.tur
+```
+
+`:entry` applies to project-mode `tur run` (a bare `tur run` inside the
+project). `tur run <file>` names its entry directly, and `tur build <dir>`
+compiles every module under `src/` rather than picking one.
+
 ### Compile without running
 
 ```sh

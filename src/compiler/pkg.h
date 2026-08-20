@@ -144,6 +144,12 @@ typedef struct PkgManifest {
     /* build-output-directory-plan: relative path (from the manifest dir) for
      * generated artifacts. NULL = use the default (`<manifest-dir>/build`). */
     char        *build_dir;
+    /* `:entry "src/foo.tur"` -- the project's entry-point module for
+     * `tur run` in project mode, relative to the manifest dir (an absolute
+     * path is honored as written). NULL when the key is absent, in which
+     * case resolution falls back to src/main.tur and then to the single
+     * .tur file under src/. */
+    char        *entry;
     /* engine-selection-plan E1: default execution engine for `tur run` --
      * "cc" | "jit" | "interp", or NULL when the key is absent.  Validated at
      * parse (TUR-E0311); resolved by main.c's resolve_engine ladder
