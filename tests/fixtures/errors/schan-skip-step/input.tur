@@ -8,8 +8,7 @@
 
 (defmodule app
   (import schan :refer [SChan SSend SRecv SClose
-                        schan-new schan-send schan-recv schan-close
-                        schan-cell-new schan-cell-get schan-cell-free])
+                        schan-new schan-send schan-recv schan-close])
   (defn main [] : int
     (let [c0 (:: (schan-new 2) (SChan (SSend int (SRecv int SClose))))
           c1 (schan-send c0 7)]

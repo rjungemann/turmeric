@@ -3,9 +3,9 @@
 ;;; `SChan<p>` is a thin generic wrapper over a synchronous blocking channel
 ;;; that carries a protocol phantom `p`.  Each operation advances the phantom:
 ;;;
-;;;   schan-send  : SChan<SSend T R> -> T          -> SChan<R>
-;;;   schan-recv  : SChan<SRecv T R> -> cell        -> SChan<R>   (value -> cell)
-;;;   schan-close : SChan<SClose>                   -> nil
+;;;   schan-send  : SChan<SSend T R> -> T  -> SChan<R>
+;;;   schan-recv  : SChan<SRecv T R>       -> (Pair T SChan<R>)
+;;;   schan-close : SChan<SClose>          -> nil
 ;;;
 ;;; The phantom is threaded through the result type, so a caller cannot skip a
 ;;; step or reorder send/recv: doing so is a compile-time type error (TUR-E0001
@@ -36,10 +36,7 @@
     schan-new
     schan-send
     schan-recv
-    schan-close
-    schan-cell-new
-    schan-cell-get
-    schan-cell-free)
+    schan-close)
   ;; ---- Protocol phantom tags -----------------------------------------------
   ;; Pure type-level markers; never constructed as values.  The carrier is :int
   ;; only so the opaque has a base type -- the value is irrelevant.
@@ -120,33 +117,37 @@
   ;;; schan-recv -- receive a T from a channel whose protocol begins with SRecv T R.
   ;;;
   ;;; Parameters:
-  ;;;   c    -- channel at protocol SRecv<T R> (consumed)
-  ;;;   cell -- a cell (from schan-cell-new) that receives the value
+  ;;;   c -- channel at protocol SRecv<T R> (consumed)
   ;;;
   ;;; Returns:
-  ;;;   The channel advanced to protocol R.  The received value is written into
-  ;;;   `cell`; read it with schan-cell-get and ascribe to T.
+  ;;;   A `(Pair T (SChan R))`: the received value and the channel advanced to
+  ;;;   protocol R, together. Read them with `pair-fst` / `pair-snd`.
   ;;;
-  ;;;   NOTE: the plan's ideal signature is `Pair<T SChan<R>>` -- value and
-  ;;;   continuation returned together as a typed pair.  That is currently
-  ;;;   blocked by a monomorphizer limitation: a generic function cannot return a
-  ;;;   parametric aggregate (Pair, or any struct) whose element type is a phantom
-  ;;;   type parameter carried only inside an opaque argument -- the type
-  ;;;   variable is not recoverable from the opaque, so the aggregate result
-  ;;;   never specializes and the generic carrier fallback miscompiles (see
-  ;;;   docs/archive/history/generic-struct-opaque-element-miscompile.md).  Returning the
-  ;;;   continuation as a bare opaque (SChan R) keeps it *fully typed* -- the
-  ;;;   protocol-ordering guarantee is intact on every step -- and the value rides
-  ;;;   out through the cell.
+  ;;;   This used to take a caller-allocated cell as an out-parameter and
+  ;;;   return only the channel, because a generic function could not return a
+  ;;;   parametric aggregate whose element type is a phantom carried inside an
+  ;;;   opaque argument -- the type variable was not recoverable, so the result
+  ;;;   never specialized and the generic carrier fallback miscompiled. That
+  ;;;   defect was fixed 2026-06-05
+  ;;;   (docs/archive/history/generic-struct-opaque-element-miscompile.md,
+  ;;;   pinned by tests/fixtures/generic-relay-aggregate-result), so the pair
+  ;;;   signature the plan always wanted is now what ships. `schan-cell-new` /
+  ;;;   `-get` / `-free` existed only to serve the workaround and are gone.
   ;;;
   ;;; Example:
-  ;;;   (let [cell (schan-cell-new)
-  ;;;         c2   (schan-recv c cell)         ; c : SChan<SRecv int R> => c2 : SChan<R>
-  ;;;         v    (schan-cell-get cell)]      ; : int
+  ;;;   (let [p  (schan-recv c)               ; c : SChan<SRecv int R>
+  ;;;         v  (pair-fst p)                 ; : int
+  ;;;         c2 (pair-snd p)]                ; : SChan<R>
   ;;;     ...)
   ;;;
-  ;;; Since: S1
-  (defn schan-recv [T R] [c : (SChan (SRecv T R)) cell : ptr<void>] : (SChan R)
+  ;;; Since: S1 (pair signature: 2026-08-20)
+  ;;; schan-recv-value -- internal: block for the next value, leave the channel.
+  ;;;
+  ;;; Split out from `schan-recv` so the Pair is built in ordinary Turmeric.
+  ;;; Constructing it inside the inline-C body would mean hand-rolling the
+  ;;; struct layout; keeping inline-C down to the raw blocking read hands
+  ;;; ownership of the aggregate back to the compiler.
+  (defn schan-recv-value [T R] [^borrow c : (SChan (SRecv T R))] : T
     ```c
     typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -161,9 +162,18 @@
     ch->count--;
     pthread_cond_signal(&ch->not_full);
     pthread_mutex_unlock(&ch->lock);
-    *(int64_t *)cell = v;
-    return (int64_t)(intptr_t)ch;
+    return v;
     ```)
+  ;;; schan-advance-recv -- internal: retag the channel from SRecv T R to R.
+  ;;;
+  ;;; The same pointer; only the phantom protocol index moves, exactly as
+  ;;; `schan-send` does at the end of its own body.
+  (defn schan-advance-recv [T R] [c : (SChan (SRecv T R))] : (SChan R)
+    ```c
+    return (int64_t)(intptr_t)c;
+    ```)
+  (defn schan-recv [T R] [c : (SChan (SRecv T R))] : (Pair T (SChan R))
+    (pair (schan-recv-value c) (schan-advance-recv c)))
   ;;; schan-close -- close a channel whose protocol has reached SClose.
   ;;;
   ;;; Parameters:
@@ -188,49 +198,4 @@
     pthread_cond_destroy(&ch->not_empty);
     free(ch->buf);
     free(ch);
-    ```)
-  ;; ---- Value cell (out-parameter for schan-recv) ---------------------------
-  ;;; schan-cell-new -- allocate a one-slot cell for receiving a value.
-  ;;;
-  ;;; Returns:
-  ;;;   A fresh cell handle to pass to schan-recv; read it with schan-cell-get
-  ;;;   and release it with schan-cell-free.
-  ;;;
-  ;;; Example:
-  ;;;   (let [cell (schan-cell-new)] ...)
-  ;;;
-  ;;; Since: S1
-  (defn schan-cell-new [] : ptr<void>
-    ```c
-    int64_t *c = (int64_t *)malloc(sizeof(int64_t));
-    if (!c) { fprintf(stderr, "schan-cell-new: oom\n"); abort(); }
-    *c = 0; return (void *)c;
-    ```)
-  ;;; schan-cell-get -- read the value most recently stored into a cell by recv.
-  ;;;
-  ;;; Parameters:
-  ;;;   cell -- a cell handle from schan-cell-new
-  ;;;
-  ;;; Returns:
-  ;;;   The int64-carried value; ascribe it to the protocol payload type, e.g.
-  ;;;   (:: (schan-cell-get cell) :Bool).
-  ;;;
-  ;;; Example:
-  ;;;   (schan-cell-get cell)  ; => last received value
-  ;;;
-  ;;; Since: S1
-  (defn schan-cell-get [cell : ptr<void>] : int
-    ```c return *(int64_t *)cell; ```)
-  ;;; schan-cell-free -- release a cell allocated by schan-cell-new.
-  ;;;
-  ;;; Parameters:
-  ;;;   cell -- a cell handle from schan-cell-new
-  ;;;
-  ;;; Returns:
-  ;;;   nil.
-  ;;;
-  ;;; Example:
-  ;;;   (schan-cell-free cell)
-  ;;;
-  ;;; Since: S1
-  (defn schan-cell-free [cell : ptr<void>] : nil ```c free(cell); ```))
+    ```))

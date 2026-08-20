@@ -3533,39 +3533,32 @@ static TuriValue native_chan_free(TuriEnv *env, TuriValue *a, uint32_t n, void *
 }
 
 /* schan.tur synchronous session channels: same ring buffer (SChanBlock matches
- * WkChan's leading fields), plus a one-int64 cell.  send/recv return the channel
- * carrier (the protocol continuation rides the same pointer); recv writes the
- * popped value into *cell. */
+ * WkChan's leading fields).  The protocol continuation rides the same pointer,
+ * so send and the advance step both return the channel carrier unchanged.
+ *
+ * Only the two INLINE-C leaves are overridden here. `schan-recv` itself is
+ * ordinary Turmeric -- `(pair (schan-recv-value c) (schan-advance-recv c))` --
+ * so the tree-walker evaluates it and builds the Pair with the same struct
+ * machinery the compiled path uses. Overriding `schan-recv` instead would mean
+ * hand-building a Pair value here, i.e. a second copy of that layout, which is
+ * exactly what the cell out-parameter existed to avoid. */
 static TuriValue native_schan_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2 || !a[0].as_int) return turi_int(0);
     wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int);
     return a[0];  /* SChan R continuation */
 }
-static TuriValue native_schan_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n < 2 || !a[0].as_int) return turi_int(0);
-    int64_t v = 0;
-    wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
-    if (a[1].as_int) *(int64_t *)(intptr_t)a[1].as_int = v;  /* write into cell */
-    return a[0];  /* SChan R continuation */
-}
-static TuriValue native_schan_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)a; (void)n; (void)ud;
-    int64_t *c = (int64_t *)malloc(sizeof(int64_t));
-    if (!c) return turi_nil();
-    *c = 0;
-    return wk_int_ptr(c);
-}
-static TuriValue native_schan_cell_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+static TuriValue native_schan_recv_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || !a[0].as_int) return turi_int(0);
-    return turi_int(*(int64_t *)(intptr_t)a[0].as_int);
+    int64_t v = 0;
+    wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    return turi_int(v);
 }
-static TuriValue native_schan_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+static TuriValue native_schan_advance_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
-    return turi_nil();
+    if (n < 1) return turi_int(0);
+    return a[0];  /* same pointer; only the phantom moves */
 }
 
 static void wk_register_chan_natives(TuriEnv *env) {
@@ -3581,11 +3574,9 @@ static void wk_register_chan_natives(TuriEnv *env) {
     /* schan.tur synchronous session channels (SChanBlock == WkChan prefix). */
     turi_env_register_native(env, "schan-new",           native_chan_new,        NULL);
     turi_env_register_native(env, "schan-send",          native_schan_send,      NULL);
-    turi_env_register_native(env, "schan-recv",          native_schan_recv,      NULL);
+    turi_env_register_native(env, "schan-recv-value",    native_schan_recv_value,   NULL);
+    turi_env_register_native(env, "schan-advance-recv",  native_schan_advance_recv, NULL);
     turi_env_register_native(env, "schan-close",         native_chan_free,       NULL);
-    turi_env_register_native(env, "schan-cell-new",      native_schan_cell_new,  NULL);
-    turi_env_register_native(env, "schan-cell-get",      native_schan_cell_get,  NULL);
-    turi_env_register_native(env, "schan-cell-free",     native_schan_cell_free, NULL);
 }
 
 /* -------------------------------------------------------------------------

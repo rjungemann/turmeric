@@ -426,8 +426,7 @@ provides a thin generic wrapper, `SChan<p>`, that carries a protocol *phantom*
 
 ```turmeric
 (import schan :refer [SChan SSend SRecv SClose
-                      schan-new schan-send schan-recv schan-close
-                      schan-cell-new schan-cell-get schan-cell-free])
+                      schan-new schan-send schan-recv schan-close])
 ```
 
 The phantom is built from three type-level tags (the session-type names `Send` /
@@ -444,21 +443,20 @@ Each operation consumes the channel at one protocol state and returns it at the
 next, so the phantom is threaded through the result type:
 
 ```turmeric
-schan-send  : SChan<SSend T R> -> T    -> SChan<R>
-schan-recv  : SChan<SRecv T R> -> cell -> SChan<R>   ;; value written to cell
-schan-close : SChan<SClose>            -> nil
+schan-send  : SChan<SSend T R> -> T  -> SChan<R>
+schan-recv  : SChan<SRecv T R>       -> Pair<T SChan<R>>
+schan-close : SChan<SClose>          -> nil
 ```
 
 A round trip of `SSend int (SRecv int SClose)`:
 
 ```turmeric
-(let [cell (schan-cell-new)
-      c0   (:: (schan-new 2) (SChan (SSend int (SRecv int SClose))))
-      c1   (schan-send c0 7)        ;; c1 : SChan<SRecv int SClose>
-      c2   (schan-recv c1 cell)     ;; c2 : SChan<SClose>
-      v    (schan-cell-get cell)]   ;; v  : int  (= 7)
-  (schan-close c2)
-  (schan-cell-free cell))
+(let [c0 (:: (schan-new 2) (SChan (SSend int (SRecv int SClose))))
+      c1 (schan-send c0 7)      ;; c1 : SChan<SRecv int SClose>
+      p  (schan-recv c1)        ;; p  : Pair<int SChan<SClose>>
+      v  (pair-fst p)           ;; v  : int  (= 7)
+      c2 (pair-snd p)]          ;; c2 : SChan<SClose>
+  (schan-close c2))
 ```
 
 Because the phantom advances with every step, **skipping or reordering a step is
@@ -481,15 +479,14 @@ reading from the wrapped channel), and `tests/fixtures/errors/schan-skip-step`
 [`tur/chan`](https://github.com/rjungemann/turmeric/blob/main/stdlib/chan.tur) channels, which keep their untyped surface
 for callers that do not want the protocol discipline.
 
-> **Note on `schan-recv`.** The natural signature is
-> `SChan<SRecv T R> -> Pair<T SChan<R>>`. The wrapper instead returns the
-> *typed* continuation directly and delivers the received value through a
-> caller-provided cell -- which keeps the continuation protocol fully checked.
-> The monomorphizer bug that originally forced this shape (parametric
-> aggregates whose element is an opaque/phantom type) has been fixed (see
-> `docs/archive/history/generic-struct-opaque-element-miscompile.md`), so the
-> Pair-returning signature is now possible; the stdlib API simply has not been
-> migrated yet.
+> **`schan-recv` used to take a cell.** Until 2026-08-20 it returned only the
+> continuation and wrote the received value through a caller-allocated
+> out-parameter (`schan-cell-new` / `-get` / `-free`, all now removed). That was
+> a workaround for a monomorphizer defect -- a generic function could not return
+> a parametric aggregate whose element type is a phantom carried inside an
+> opaque argument. The defect was fixed 2026-06-05
+> (`docs/archive/history/generic-struct-opaque-element-miscompile.md`), so the
+> `Pair<T SChan<R>>` signature the design always wanted is what ships now.
 
 ---
 

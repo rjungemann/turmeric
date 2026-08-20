@@ -64,7 +64,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
 | [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | medium | mw-recover blocked by closure/fat-handle codegen defects: lifted thunk references an unthreaded name, plus a drop-glue use-after-free -- 4 repros inside |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
-| [schan-recv-pair-signature-migration](schan-recv-pair-signature-migration.md) | low | schan-recv still uses the caller-cell workaround; its miscompile blocker is fixed |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
