@@ -20,11 +20,11 @@ Turmeric offers two primary error handling strategies:
 Contract macros (`assert!`, `require!`, `ensure!`, `invariant!`) provide structured
 precondition and postcondition checking built on top of `panic`.
 
-> **Removed in 0.25.0:** `throw` / `try` / `catch` have been deleted end-to-end.
-> Use `Result` for recoverable failures and `panic` / `catch-unwind` for
-> unrecoverable ones. Fiber rejection (from `await`, `with-timeout`,
-> `task-cancel`) now surfaces as `TURI_REJECTION` and is observed with
-> `(error? r)` / `(error-message r)` rather than `try`/`catch`.
+> **No exceptions:** Turmeric has no `throw` / `try` / `catch`. Use `Result`
+> for recoverable failures and `panic` / `catch-unwind` for unrecoverable
+> ones. Fiber rejection (from `await`, `with-timeout`, `task-cancel`)
+> surfaces as `TURI_REJECTION` and is observed with `(error? r)` /
+> `(error-message r)`.
 
 ---
 
@@ -661,14 +661,16 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 
 ## Panic inside async tasks
 
-> **Today (synchronous async).** `(async fn)` inlines the function call; the
-> body runs synchronously with no fiber scheduler and no task boundary. A panic
-> inside an async body simply propagates through the caller's stack exactly as a
-> normal panic would -- there is nothing async-specific about it, and
-> `catch-unwind` at the call site catches it like any other panic.
+> **Today.** `(async ...)` runs its body on the caller's stack until the
+> body's first suspension point, and there is no per-task panic boundary. A
+> panic inside an async body propagates through the caller's stack exactly as
+> a normal panic would -- there is nothing async-specific about it, and
+> `catch-unwind` at the call site catches it like any other panic. (Fibers
+> spawned into a *task group* are the exception: a panic there is caught at
+> the fiber boundary and auto-cancels the group.)
 
-> **v2 (fiber-based async).** When the fiber scheduler lands, panics gain a task
-> boundary:
+> **Planned (task-boundary panics).** A future revision gives every async
+> task a panic boundary:
 >
 > 1. A panic inside an async task is caught at the task boundary; the task's
 >    future resolves to a rejected state carrying the panic payload. Use
@@ -679,9 +681,6 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 >    code after all defer thunks have fired.
 > 4. On the WASM target, panics lower to the WebAssembly `unreachable`
 >    instruction.
-
-> See [docs/archive/history/cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md)
-> for the fiber-based async runtime these v2 semantics depend on.
 
 ---
 
@@ -706,13 +705,6 @@ A panic interacts with the effect/continuation machinery as follows:
 
 ---
 
-## Deferred
-
-All previously-deferred features have shipped; see the table of contents above
-for the current error-handling surface.
-
----
-
 ## See Also
 
 - [error-handling-rationale.md](https://github.com/rjungemann/turmeric/blob/main/docs/design/error-handling-rationale.md) --
@@ -721,5 +713,5 @@ for the current error-handling surface.
   semantics referenced above
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- `--no-contracts`,
   `--warn-unused-result`, and `--lint-panic`
-- [cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the fiber-based
-  async runtime behind the v2 async-panic semantics
+- [cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the CPS
+  substrate the async runtime is built on

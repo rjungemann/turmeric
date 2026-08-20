@@ -388,15 +388,13 @@ actually want to write works as written:
   (if (alive? w e) (use-it w e) 0))      ; the guard IS the proof
 ```
 
-Before this, every measure was declared integer-sorted. A `bool`-returning one
-was then rejected as "does not denote a proposition" and silently fell to
-unknown, which pushed people to the `(= (alive-i w x) 1)` spelling -- the exact
-`:int` stand-in `CLAUDE.md` forbids. A `float`-returning one was worse than
-incomplete: it was *mis*-sorted, and integer tightening (`e < 4` implies
-`e <= 3`, valid only over the integers) turned an unprovable goal into a proved
-one and elided a check that should have fired. `refine-bool-measure`,
-`refine-float-measure`, and `errors/refine-float-measure-not-tightened` pin all
-three.
+The sorting matters for soundness as well as expressiveness: a `bool` measure
+mis-sorted as an integer would push people to the `(= (alive-i w x) 1)`
+spelling -- the exact `:int` stand-in `CLAUDE.md` forbids -- and a `float`
+measure mis-sorted as an integer would let integer tightening (`e < 4` implies
+`e <= 3`, valid only over the integers) prove an unprovable goal and elide a
+check that should fire. `refine-bool-measure`, `refine-float-measure`, and
+`errors/refine-float-measure-not-tightened` pin all three behaviors.
 
 An **abstract** measure -- a name that resolves to no function at all -- has no
 return type to read, so its *position* decides: a proposition where the grammar
@@ -725,7 +723,7 @@ note: the predicate (not= x 0) is false for the value given here
 | `TUR-E0371` | the predicate genuinely does not hold: a function's own claim is falsifiable, or an argument is definitely wrong at its call site |
 | `TUR-W0372` | nothing decided it; the runtime check is kept |
 | `TUR-W0373` | a nonlinear subterm was abstracted; arithmetic reasoning is incomplete for it |
-| `TUR-W0060` | the `refined` experiment is in use (prototype lifecycle notice) |
+| `TUR-W0063` / `TUR-W0064` | a lingering `--enable=refined` / `#lang turmeric refined`; accepted, no effect |
 
 `TUR-E0371` and `TUR-W0372` both leave the program safe -- the runtime check
 survives in each case. Under `--strict-refine` both become hard errors.
@@ -933,10 +931,7 @@ anyway.
   `let` contributes `x = v`, a `match` arm contributes a literal pattern's
   equation and its guard. The caller's **whole** body is searched, so a call in
   any body form keeps its guards -- not only one in the form the function
-  returns. That distinction was a real gap: `caller_body` used to be the last
-  body form, which is the return obligation's subject and not the body, so a
-  zero-parameter caller like `main` had the walk searching its trailing `0` for
-  the call and every guard was lost.
+  returns.
 
   Four things are deliberately left out, and all four cost a diagnostic rather
   than soundness -- the callee's own entry check always remains:
@@ -976,8 +971,8 @@ anyway.
   There is no cross-build cache.
 - **[by design] Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --
-  a struct field read or a loop is still enough (`match` was, and no longer
-  is). Its calls are then not congruent and measure-style reasoning over it
+  a struct field read through a computed receiver or a loop is enough.
+  Its calls are then not congruent and measure-style reasoning over it
   does not go through. This costs completeness, never soundness. Widening the
   whitelist further is the natural next increment; the effect row cannot
   substitute for it, because an empty row is not a purity claim.

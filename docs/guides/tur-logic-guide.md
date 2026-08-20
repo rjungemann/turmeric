@@ -8,7 +8,9 @@ description: How to use and extend tur/logic for miniKanren-style relational pro
 
 `tur/logic` provides miniKanren-style logic programming: unification, logic
 variables, goals, and a backtracking search engine.  The module lives in
-`stdlib/logic.tur` and has no dependencies outside the standard C allocator.
+`stdlib/logic.tur` and is pure Turmeric (no inline-C): terms, substitutions,
+and the solution stream are `defdata` sum types, so the engine runs identically
+under the compiled path and the tree-walking interpreter.
 
 ---
 
@@ -41,17 +43,17 @@ The key primitives are:
 
 ```turmeric
 (import tur/logic :refer [term-int term-var term-nil term-pair
-                           lvar-next subs-empty
+                           subs-empty
                            lequal succeed fail conjoined disjoined fresh
                            run-logic first-state reify-walk
-                           term-int-val term-tag logic-walk])
+                           term-int-val logic-walk bt-length])
 
 ;; Q: is 5 equal to 5?
 (let [results (run-logic 1 (lequal (term-int 5) (term-int 5)))]
   (println (bt-length results)))   ; => 1
 
 ;; Q: what value does x have if x == 7?
-(let [x      (term-var (lvar-next))
+(let [x      (term-var 0)
       goal   (lequal x (term-int 7))
       result (run-logic 1 goal)
       walked (reify-walk x result)]
@@ -59,16 +61,16 @@ The key primitives are:
 ```
 ```sweet-exp
 import tur/logic :refer [term-int term-var term-nil term-pair
-                           lvar-next subs-empty
+                           subs-empty
                            lequal succeed fail conjoined disjoined fresh
                            run-logic first-state reify-walk
-                           term-int-val term-tag logic-walk]
+                           term-int-val logic-walk bt-length]
 ;; Q: is 5 equal to 5?
 let [results (run-logic 1 (lequal (term-int 5) (term-int 5)))]
   println(bt-length(results))
 ; => 1
 ;; Q: what value does x have if x == 7?
-let [x      (term-var (lvar-next))
+let [x      (term-var 0)
       goal   (lequal x (term-int 7))
       result (run-logic 1 goal)
       walked (reify-walk x result)]
@@ -82,17 +84,24 @@ let [x      (term-var (lvar-next))
 
 ### Terms
 
-A *term* is a tagged heap struct with three 64-bit fields: `tag`, `data1`,
-`data2`.
+A *term* is a `defdata` sum type (`Term`) with four constructors:
 
-| Tag | Kind | Constructor | Accessor(s) |
-|-----|------|-------------|-------------|
-| 0 | integer constant | `(term-int n)` | `(term-int-val t)` |
-| 1 | logic variable | `(term-var id)` | `(term-var-id t)` |
-| 2 | pair | `(term-pair a b)` | `(term-pair-fst t)`, `(term-pair-snd t)` |
-| 3 | nil | `(term-nil)` | — |
+| Kind | Constructor (helper / raw) | Accessor(s) |
+|------|----------------------------|-------------|
+| integer constant | `(term-int n)` / `(TInt n)` | `(term-int-val t)` |
+| logic variable | `(term-var id)` / `(TVar id)` | `(term-var-id t)` |
+| pair | `(term-pair a b)` / `(TPair a b)` | `(term-pair-fst t)`, `(term-pair-snd t)` |
+| nil | `(term-nil)` / `(TNil)` | -- |
 
-The tag of any term can be inspected with `(term-tag t)`.
+Inspect a term's shape with `match`:
+
+```turmeric
+(match t
+  (TInt n)    ...
+  (TVar id)   ...
+  (TPair a b) ...
+  (TNil)      ...)
+```
 
 Pairs nest to form lists in the usual cons-cell style:
 
@@ -111,37 +120,43 @@ let [lst (term-pair (term-int 1)
 
 ### Logic variables
 
-Every variable is identified by a unique integer id, obtained from the
-global counter `(lvar-next)`:
+Every variable is identified by an integer id.  Inside a goal, `(fresh ...)`
+allocates the next unused id from the search state itself (the substitution's
+base node carries the fresh-variable counter), so scoped variables never
+collide.  For a top-level query variable, construct one by hand with ids
+numbered from 0:
 
 ```turmeric
-(let [x (term-var (lvar-next))
-      y (term-var (lvar-next))]
+(let [x (term-var 0)
+      y (term-var 1)]
   ...)
 ```
 ```sweet-exp
-let [x (term-var (lvar-next))
-      y (term-var (lvar-next))]
+let [x (term-var 0)
+      y (term-var 1)]
   ...
 ```
 
-Prefer `(fresh ...)` (below) over manual `lvar-next` calls — it keeps
-variable scope explicit.
+Prefer `(fresh ...)` (below) over hand-numbered ids — it keeps variable
+scope explicit and threads the counter for you.
 
 ### Substitutions
 
-A *substitution* maps variable ids to terms.  It is represented as an alist
-(a linked list of `{ var_id, term_ptr, next }` structs) whose empty value is
-`(subs-empty)` (i.e., 0).
+A *substitution* maps variable ids to terms.  It is a persistent `defdata`
+association list (`Subst`): `(SBind var-id term rest)` binding nodes over a
+base `(SNil next)` that carries the next unused fresh-variable id.  The empty
+substitution is `(subs-empty)`.
 
 You rarely manipulate substitutions directly; `run-logic` starts from the
 empty one and `reify-walk` lets you look up results.
 
 ### Goals
 
-A *goal* is a fat closure of type `UState → list UState` — it accepts a
-substitution and returns zero or more extended substitutions (the solution
-stream).
+A *goal* is an opaque `(Goal A)` handle over a function `Subst -> Stream` —
+it accepts a substitution and returns zero or more extended substitutions
+(the solution `Stream`).  `(apply-goal g state)` runs one directly.  `Goal`
+also carries Functor / Applicative / Monad / Alternative instances, so goals
+compose with `do-m` (conjunction) and `alt-or` (disjunction) as well.
 
 The built-in goal constructors:
 
@@ -185,21 +200,21 @@ fresh(fn([x] body-goal))
 run-logic(n goal)
 ```
 
-Returns a solution list of at most `n` substitutions.  Use helper functions
-to extract results:
+Returns a solution `Stream` of at most `n` substitutions.  Use helper
+functions to extract results:
 
 ```turmeric
-(first-state results)             ; first substitution, or 0
+(first-state results)             ; first substitution, or (subs-empty)
 (reify-walk term results)         ; walk a term through the first substitution
-(bt-length results)               ; number of solutions (from tur/logic, re-exported)
+(bt-length results)               ; number of solutions
 ```
 ```sweet-exp
 first-state(results)
-; first substitution, or 0
+; first substitution, or (subs-empty)
 reify-walk(term results)
 ; walk a term through the first substitution
 bt-length(results)
-; number of solutions (from tur/logic, re-exported)
+; number of solutions
 ```
 
 ---
@@ -221,7 +236,7 @@ let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
 ### Disjunction — multiple answers
 
 ```turmeric
-(let [x   (term-var (lvar-next))
+(let [x   (term-var 0)
       g   (disjoined (lequal x (term-int 1))
                      (disjoined (lequal x (term-int 2))
                                 (lequal x (term-int 3))))
@@ -229,7 +244,7 @@ let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
   (println (bt-length res)))       ; => 3
 ```
 ```sweet-exp
-let [x   (term-var (lvar-next))
+let [x   (term-var 0)
       g   (disjoined (lequal x (term-int 1))
                      (disjoined (lequal x (term-int 2))
                                 (lequal x (term-int 3))))
@@ -248,7 +263,8 @@ let [x   (term-var (lvar-next))
               (conjoined
                 (lequal x (term-int 42))
                 (succeed)))))]
-  (println (term-int-val (reify-walk x res))))  ; => 42
+  ;; the fresh variable received id 0 (the counter starts at 0)
+  (println (term-int-val (reify-walk (term-var 0) res))))  ; => 42
 ```
 ```sweet-exp
 let [res (run-logic 1
@@ -256,15 +272,16 @@ let [res (run-logic 1
               (conjoined
                 (lequal x (term-int 42))
                 (succeed)))))]
-  println(term-int-val(reify-walk(x res)))
+  ;; the fresh variable received id 0 (the counter starts at 0)
+  println(term-int-val(reify-walk(term-var(0) res)))
 ; => 42
 ```
 
 ### Pair unification
 
 ```turmeric
-(let [x   (term-var (lvar-next))
-      y   (term-var (lvar-next))
+(let [x   (term-var 0)
+      y   (term-var 1)
       lhs (term-pair x (term-int 2))
       rhs (term-pair (term-int 1) y)
       res (run-logic 1 (lequal lhs rhs))]
@@ -273,8 +290,8 @@ let [res (run-logic 1
   (println (term-int-val (reify-walk y res)))) ; => 2
 ```
 ```sweet-exp
-let [x   (term-var (lvar-next))
-      y   (term-var (lvar-next))
+let [x   (term-var 0)
+      y   (term-var 1)
       lhs (term-pair x (term-int 2))
       rhs (term-pair (term-int 1) y)
       res (run-logic 1 (lequal lhs rhs))]
@@ -290,18 +307,18 @@ let [x   (term-var (lvar-next))
 Build a chain of goals with `conjoined`:
 
 ```turmeric
-;; helper: (conjoin-all gs) folds a list of goals with conjoined
-(defn conjoin-all [gs] : ptr<void>
+;; helper: (conjoin-all gs) folds a cons list of goals with conjoined
+(defn conjoin-all [gs : int] : (Goal int)
   (if (= (tail gs) 0)
-    (head gs)
-    (conjoined (head gs) (conjoin-all (tail gs)))))
+    (:: (head gs) (Goal int))
+    (conjoined (:: (head gs) (Goal int)) (conjoin-all (tail gs)))))
 ```
 ```sweet-exp
-;; helper: (conjoin-all gs) folds a list of goals with conjoined
-defn conjoin-all [gs] :ptr<void>
+;; helper: (conjoin-all gs) folds a cons list of goals with conjoined
+defn conjoin-all [gs : int] : (Goal int)
   if =(tail(gs) 0)
-    head(gs)
-    conjoined(head(gs) conjoin-all(tail(gs)))
+    (:: (head gs) (Goal int))
+    conjoined((:: (head gs) (Goal int)) conjoin-all(tail(gs)))
 ```
 
 ### Family-tree relations

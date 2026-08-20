@@ -708,12 +708,12 @@ let [f fopen("data.bin" "rb")]
 
 **Maximum defers per frame:** `TUR_FRAME_MAX_DEFERS` = 32. Exceeding this at
 runtime returns `-1` from `tur_frame_push_defer` (the generated code silently
-ignores the error in v1). Keep the number of defers per lexical scope under 32.
+ignores the error). Keep the number of defers per lexical scope under 32.
 
-**`defer` and exceptions:** Turmeric uses `setjmp`/`longjmp` for exceptions
-(`src/exn.h`). The exception machinery calls `tur_frame_fire_chain` before
-jumping to the nearest handler, so defers do fire on exception unwind. However,
-if a `defer` itself throws an exception the behavior is undefined in v1.
+**`defer` and panics:** defer thunks registered before a `panic` fire in
+reverse order during unwinding. A defer that itself panics during a panic
+trips the double-panic guard, which prints `double panic: aborting` and calls
+`abort()` immediately.
 
 **`defer` and `return`:** Defers fire before `return` via `tur_frame_fire_chain`.
 This means you can safely return from the middle of a scope that has registered
@@ -721,42 +721,37 @@ defers.
 
 ---
 
-## Exception Handling
+## Panics and Error Signaling
 
-Exceptions are non-resumable and use `setjmp`/`longjmp`:
+Turmeric has no throw/catch exception system. Recoverable failures are modeled
+with `Result` / `Option`; unrecoverable ones go through `panic`:
 
 ```turmeric
-(try
-  (throw 42)
-  (catch [e :int]
-    (println e))
-  (finally
-    (println "always")))
+(panic "something went wrong")   ;; prints to stderr, fires defers, aborts
 ```
 
 ```sweet-exp
-try
-  throw(42)
-  catch [e :int]
-    println(e)
-  finally
-    println("always")
+panic("something went wrong")   ;; prints to stderr, fires defers, aborts
 ```
 
-Generated C for the `try` block calls `setjmp`. The `throw` form calls
-`tur_throw`, which fires defers then `longjmp`s to the nearest handler. If
-there is no handler, `tur_throw` prints the exception and calls `exit(1)`.
+A panic can be intercepted at a controlled boundary with `catch-unwind`, which
+runs a nullary thunk and returns an ordinary `Result` -- `(ok value)` on normal
+return, `(err Panic)` if the thunk panicked. The unwind is implemented with
+`setjmp`/`longjmp` under the hood. See
+[error-handling-guide.md](error-handling-guide.md) for the full story
+(`catch-panic-of`, `stdlib/panic.tur`, `--lint-panic`).
 
 **From C:** If your inline C block or `extern-c` function needs to signal an
-error, the safest approach in v1 is to return a sentinel value (e.g. `NULL` or
-`-1`) and check it in Turmeric with `if`/`when`. Calling `tur_throw` directly
-from C code that was called from inside a `try` block would work mechanically
-(it is just a C function), but the exception type system would not know the
-payload type at compile time. Use sentinel returns instead.
+error, return a real `(Result T E)` or `(Option T)` built with the preamble
+helpers (`tur_err_int`, `tur_ok_ptr`, ... -- see above) and check it in
+Turmeric. `tur_panic(msg)` is callable from C too, but it unwinds only to a
+`catch-unwind` boundary and aborts the process otherwise -- reserve it for
+genuinely unrecoverable states.
 
-**Exception payloads** are typed by `TypeKind`. In v1, payloads are always
-scalar values (int, bool, cstr) or `void *`. You cannot throw an `rc<T>` as an
-exception payload yet.
+**FFI boundaries and panics:** a panic must not unwind through C stack frames.
+When Turmeric code is invoked as a callback from C, wrap the callback body in
+`catch-unwind` so a panic is converted to a value before it reaches the C
+caller.
 
 ---
 
@@ -782,13 +777,13 @@ that crosses the boundary**, and keep `rc<T>`/`ref<T>` on the Turmeric side.
 
 ## Inline C and the Type Checker
 
-The elaborator (`src/elab.c`) does not parse inline C. It treats an inline
-block as a black box and trusts the annotated return type. This means:
+The elaborator (`src/compiler/elab_*.c`) does not parse inline C. It treats an
+inline block as a black box and trusts the annotated return type. This means:
 
 - **Type mismatches in inline C are silent.** A block annotated `:int` that
   actually returns a `double *` will compile and then corrupt memory at runtime.
 - **Undefined behavior is not caught by the borrow checker.** The borrow
-  checker (`src/borrow_check.c`) stops at the boundary of an inline block.
+  checker stops at the boundary of an inline block.
 - **No `#include` is injected.** If your inline C calls `memcpy`, you need to
   either add an `extern-c memcpy` declaration or put `#include <string.h>` at
   the top of the inline block. The latter is valid C99 (an `#include` can
@@ -816,14 +811,13 @@ If your C side is a plain `extern-c` callback (a hand-written `int64_t (*)(int64
 function pointer), declare it normally and pass it in -- the `^fat` parameter
 auto-shims a bare fn-pointer into a one-cell fat box on the way in. Do not
 spell the handle as `void *` in inline-C; the codegen agrees on `int64_t`,
-and the unsafe-block capture scan (#264) inspects ascriptions, so a wrong
+and the unsafe-block capture scan inspects ascriptions, so a wrong
 carrier type can hide a real capture from the checker. See
 [fat-closure-annotation-guide.md](fat-closure-annotation-guide.md) for the
 deeper rationale and `^fat` on return types.
 
-First-class `:fn` values shipped (#272); the prior hedges in this guide
-about "closures cannot cross the boundary" are obsolete -- the rule is that
-they cross as `int64_t` and must be annotated at the boundary.
+`:fn` values are first-class: closures cross the boundary as `int64_t` and
+must be annotated at the boundary.
 
 ### Calling a typed `fn` parameter from inline C -- `tur_poly_fn_t`
 
@@ -865,25 +859,29 @@ generate the ABI.
 ### Building the compiler
 
 ```sh
-make           # debug build -- -Og, ASan+UBSan, -DTUR_DEBUG=1
-make release   # -O2, -DNDEBUG
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build -j --config Debug
 ```
 
-The compiler binary is `build/tur`.
+The compiler binary is `build/tur`. A Release build uses
+`-DCMAKE_BUILD_TYPE=Release` into a separate build dir.
 
 ### Compiler flags for generated code
 
-The compiler invokes `$(CC)` (defaulting to `cc`) with:
+The compiler invokes `$CC` (defaulting to `cc`) with:
 
 ```sh
--Wall -Wextra -Werror -Wno-unused-parameter -std=c99 -pedantic
+-O2 -std=c99 -Wall -fno-strict-aliasing
 ```
 
-Plus, in debug mode: `-Og -g -fsanitize=address,undefined -DTUR_DEBUG=1`  
-In release mode: `-O2 -DNDEBUG`
+(`-g -Og` instead of `-O2` under `--debug`.) The `TUR_CC_FLAGS` environment
+variable **replaces** the default flag set entirely -- include the defaults if
+you only mean to add to them.
 
-**Pitfall:** `-Werror` is on. Any warning in your inline C block or in a header
-it includes will be a build error. Common sources of warnings in inline C:
+**Pitfall:** modern clang/gcc treat an implicit function declaration as a hard
+error in C99 mode, and the build pipeline deliberately does not pass
+`-Wno-error=implicit-function-declaration`. Common sources of trouble in
+inline C:
 
 - Implicit function declarations (missing `#include`).
 - Signed/unsigned comparisons when mixing `int64_t` with `size_t`.
@@ -893,20 +891,23 @@ Cast liberally and include headers explicitly.
 
 ### Linking external libraries
 
-`extern-c` imports must be resolvable at link time. Pass extra linker flags via
-the `LDFLAGS` environment variable:
+`extern-c` imports must be resolvable at link time. In a project with a
+`build.tur` manifest, declare libraries under `:build-opts`:
 
-```sh
-LDFLAGS="-lraylib -framework OpenGL" make release
+```
+:build-opts {:link-libs ["m" "raylib"]}   ;; -> -lm -lraylib on the link line
 ```
 
-For system libraries (`-lm`, `-lpthread`, etc.) add them to `LDFLAGS` in your
-build script or `Makefile` wrapper.
+A spice can also vendor C sources and include dirs with `:c-sources` /
+`:c-includes` (see
+[developing-spices-guide.md](developing-spices-guide.md)). For a one-off
+single-file build, put `-L`/`-l` flags in `TUR_CC_FLAGS` (remembering it
+replaces the default flags).
 
 ### Multi-file builds
 
 ```sh
-./build/tur build src/main.tur   # compiles main.tur and any (require ...) deps
+./build/tur build src/main.tur   # compiles main.tur and any (import ...) deps
 ```
 
 Each required module emits its own `.c` + `.h` pair. A generated `_main.c`
@@ -923,10 +924,10 @@ shared `.tur` file.
 |---------|-------------|-----|
 | Calling `free()` on an `rc<T>` pointer | Heap corruption | Never cross this boundary; use `:ptr` instead |
 | Annotating inline C with wrong return type | Silent type confusion or memory corruption | Run with `emit-c` and inspect the generated code |
-| Missing `#include` in inline C | Implicit function declaration warning -> `-Werror` build failure | Add `#include` at top of inline block |
+| Missing `#include` in inline C | Implicit function declaration -> hard build error | Add `#include` at top of inline block (or via `__tur_include__`) |
 | Creating a C<->rc cycle | Memory leak (cycle collector can't see C pointers) | Keep cycles entirely on one side |
 | More than 32 defers in a single scope | Silent drop of excess defers | Split scope or refactor |
-| `defer` throwing an exception | Undefined behavior in v1 | Keep defer bodies simple and non-throwing |
+| `defer` panicking during a panic | Double-panic guard aborts | Keep defer bodies simple and non-panicking |
 | Inline C that calls `longjmp` unexpectedly | Skips Turmeric defer/rc cleanup | Only use `longjmp` if you know the full unwind path |
 | Storing a `ref<T>` across an `extern-c` call | Borrow checker does not track C call boundaries | Use copy or `rc<T>` for data that outlives a single call |
 | Varadic `extern-c` with wrong arg types | UB at runtime | Check generated C with `emit-c`; cast explicitly in callers |
@@ -957,8 +958,8 @@ void  vec2_free(Vec2 *v);
 (extern-c vec2_alloc [^float ^float] :ptr)
 (extern-c vec2_free  [^ptr]          :void)
 
-;; vec2_add and vec2_len operate on struct values, which we pass through
-;; inline C since struct-by-value is not in the type system yet
+;; vec2_add and vec2_len operate on C struct values, which we pass through
+;; inline C since C-struct-by-value parameters are not expressible in extern-c
 (defn vec2-add [a b]
   ```c
   #include "libmath.h"
@@ -988,8 +989,8 @@ void  vec2_free(Vec2 *v);
 extern-c vec2_alloc [^float ^float] :ptr
 extern-c vec2_free  [^ptr]          :void
 
-;; vec2_add and vec2_len operate on struct values, which we pass through
-;; inline C since struct-by-value is not in the type system yet
+;; vec2_add and vec2_len operate on C struct values, which we pass through
+;; inline C since C-struct-by-value parameters are not expressible in extern-c
 defn vec2-add [a b]
   ```c
   #include "libmath.h"
@@ -1017,22 +1018,25 @@ defn demo []
 Build with:
 
 ```sh
-LDFLAGS="-L. -lmath" ./build/tur build math_wrap.tur
+TUR_CC_FLAGS="-O2 -std=c99 -Wall -fno-strict-aliasing -L. -lmath" \
+  ./build/tur build math_wrap.tur
 ```
+
+(or, in a manifest-rooted project, declare `:build-opts {:link-libs ["math"]}`
+in `build.tur` and run `tur build .`).
 
 ---
 
 ## Future Directions
 
-These are not yet available in v1 but are planned:
+These are not yet available but are plausible extensions:
 
 - **`extern-struct`** -- import a C struct layout into the Turmeric type system,
   eliminating the need for opaque `:ptr` wrappers.
-- **`rc<T>` with custom drop** -- the `RcDropFn` field in `RcControlBlock` is
-  already wired; future phases will let user code register a custom destructor
-  so an `rc<T>` can own a C-allocated resource directly.
-- **Algebraic effects across the boundary** -- Phase 18+ effects (`perform`/
-  `handle`) are implemented using delimited continuations (`tur_cont`). Crossing
-  the C boundary inside a `handle` block is not yet safe.
-- **Embedding API** -- a `libtur.a` with `tur_eval()` and a value API is
-  described in the v2 roadmap but does not exist in v1.
+- **`rc<T>` with custom drop registration from user code** -- the `RcDropFn`
+  field in `RcControlBlock` is wired and used internally; a user-facing way to
+  register a custom destructor would let an `rc<T>` own a C-allocated resource
+  directly.
+- **Algebraic effects across the boundary** -- effects (`perform`/`handle`) are
+  implemented using delimited continuations. Crossing the C boundary inside a
+  `handle` block is not safe.

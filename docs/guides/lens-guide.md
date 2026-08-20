@@ -163,6 +163,5 @@ A few shapes still ride the boxed carrier bridge as a correctness backstop:
   consumer monomorphization: box-free clones for a lens param resolving to
   several simple lenses
 - [van-laarhoven-composed-byvalue-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/van-laarhoven-composed-byvalue-plan.md) --
-  the remaining fix that brings composed lenses onto the by-value path
+  by-value propagation for composed lenses (CB1-CB5)
 - [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses use
-```
