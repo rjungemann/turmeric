@@ -325,7 +325,7 @@ defn conjoin-all [gs : int] : (Goal int)
 
 ```turmeric
 ;; Encode people as integers; 0=Alice, 1=Bob, 2=Carol, 3=Dave
-(defn parento [parent child] : ptr<void>
+(defn parento [parent : Term child : Term] : (Goal int)
   (disjoined (conjoined (lequal parent (term-int 0))
                         (lequal child  (term-int 1)))
              (disjoined (conjoined (lequal parent (term-int 0))
@@ -334,26 +334,26 @@ defn conjoin-all [gs : int] : (Goal int)
                                    (lequal child  (term-int 3))))))
 
 ;; grandparento via fresh intermediate variable
-(defn grandparento [grand child] : ptr<void>
+(defn grandparento [grand : Term child : Term] : (Goal int)
   (fresh (fn [mid]
     (conjoined (parento grand mid)
                (parento mid child)))))
 
 ;; Query: who are the grandchildren of Alice (id=0)?
-(let [child (term-var (lvar-next))
+(let [child (term-var 0)
       res   (run-logic 10 (grandparento (term-int 0) child))]
   ;; walks each solution
   ...)
 ```
 ```sweet-exp
 ;; Encode people as integers; 0=Alice, 1=Bob, 2=Carol, 3=Dave
-defn parento [parent child] :ptr<void>
+defn parento [parent : Term child : Term] : (Goal int)
   disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(1))) disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(2))) conjoined(lequal(parent term-int(1)) lequal(child term-int(3)))))
 ;; grandparento via fresh intermediate variable
-defn grandparento [grand child] :ptr<void>
+defn grandparento [grand : Term child : Term] : (Goal int)
   fresh(fn([mid] conjoined(parento(grand mid) parento(mid child))))
 ;; Query: who are the grandchildren of Alice (id=0)?
-let [child (term-var (lvar-next))
+let [child (term-var 0)
       res   (run-logic 10 (grandparento (term-int 0) child))]
   ;; walks each solution
   ...
@@ -371,31 +371,28 @@ inspect terms:
 
 ```turmeric
 ;; goal: t must walk to an integer in the range [lo, hi]
-(defn range-goal [t lo hi] : ptr<void>
-  (fn [state]
-    (let [walked (logic-walk t state)
-          tag    (term-tag walked)]
-      (if (= tag 0)                             ; INT term
-        (let [v (term-int-val walked)]
-          (if (and (>= v lo) (<= v hi))
-            (mreturn state)
-            (mzero)))
-        (mzero)))))                             ; not ground -- fail
+(defn range-goal [t : Term lo : int hi : int] : (Goal int)
+  (:: (fn [state : Subst]
+        (match (logic-walk t state)
+          (TInt v) (if (and (>= v lo) (<= v hi))
+                     (mreturn state)
+                     (mzero))
+          _        (mzero)))                    ; not ground -- fail
+    :Goal))
 ```
 ```sweet-exp
 ;; goal: t must walk to an integer in the range [lo, hi]
-defn range-goal [t lo hi] :ptr<void>
-  fn [state]
-    let [walked (logic-walk t state)
-          tag    (term-tag walked)]
-      if =(tag 0)
-        ; INT term
-        let [v (term-int-val walked)]
-          if and(>=(v lo) <=(v hi))
-            mreturn(state)
-            mzero()
+defn range-goal [t : Term lo : int hi : int] : (Goal int)
+  ::
+    fn [state : Subst]
+      match logic-walk(t state)
+        TInt(v)
+        if and(>=(v lo) <=(v hi))
+          mreturn(state)
+          mzero()
+        _
         mzero()
-; not ground -- fail
+    :Goal
 ```
 
 ### Reification helpers
