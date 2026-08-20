@@ -36,9 +36,9 @@ sh tvm/install.sh        # installs into ~/.tvm and wires up your shell rc
 Then, in a new shell:
 
 ```sh
-tvm install 0.23.1       # download + SHA-256 verify + cache a prebuilt release
-tvm use 0.23.1           # activate it for this shell
-tvm alias default 0.23.1 # make it the default for new shells
+tvm install 0.36.0       # download + SHA-256 verify + cache a prebuilt release
+tvm use 0.36.0           # activate it for this shell
+tvm alias default 0.36.0 # make it the default for new shells
 tvm ls-remote            # list versions available to download
 tvm run 0.17.0 --version # one-shot invoke without switching (great for bisects)
 ```
@@ -68,7 +68,7 @@ Pick the tarball for your platform, verify, and extract:
 
 ```sh
 # Apple Silicon macOS example. Adjust the URL for your platform/version.
-TAG=v0.13.0
+TAG=v0.36.0
 ARCH=macos-arm64
 curl -fLO "https://github.com/rjungemann/turmeric/releases/download/${TAG}/turmeric-${TAG}-${ARCH}.tar.gz"
 curl -fLO "https://github.com/rjungemann/turmeric/releases/download/${TAG}/sha256sums.txt"
@@ -141,10 +141,10 @@ After extracting, the tarball lays out like:
 |-- tur                       # the CLI
 |-- libturi.a                 # static library for C embedding
 |-- include/turi/             # public headers (eval.h, env.h, value.h, fiber.h)
-`-- stdlib/                   # the standard library (86 .tur files)
+`-- stdlib/                   # the standard library (~137 .tur files)
 ```
 
-`tur` finds `stdlib/` via a probe defined in `src/main.c:188`
+`tur` finds `stdlib/` via a probe defined in `src/main.c`
 (`resolve_stdlib_root`), in this order:
 
 1. The `TUR_STDLIB_DIR` environment variable, if set.
@@ -176,9 +176,11 @@ If you move `tur` somewhere without an adjacent `stdlib/`, set
 
 These go through the C-codegen path and link against runtime sources
 referenced by autolink markers in stdlib (e.g. `stdlib/hamt.tur` contains
-`/* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */`). The path
-is interpreted relative to the current working directory, so a `tur run`
-from outside a Turmeric source checkout fails with:
+`/* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */`). The compiler
+anchors those relative paths at the located turmeric root (the parent of
+the resolved `stdlib/`), but the release tarball ships no `src/runtime/`
+next to its `stdlib/`, so a `tur run` from a downloaded release fails
+with:
 
 ```
 clang: error: no such file or directory: 'src/runtime/hamt.c'
@@ -247,13 +249,12 @@ The release pipeline lives at `.github/workflows/release.yml` and is
 triggered automatically on `git push` of any tag matching `v*`.
 
 The `/cut-minor-release` and `/cut-major-release` skills drive the full
-flow with preconditions and confirmations. One of those preconditions is
-the **experiment-expiry gate**: before bumping `VERSION`, the skill runs
-`tur experiments --json` and refuses to proceed if any registry entry's
-`expires_at` is at or before the version being cut. The release author must
-first **graduate** the expiring experiment (delete its row in
-`src/runtime/experiments.c`; the feature becomes always-on) or **shelve** it,
-in a separate reviewed PR. An empty registry passes the gate trivially. See
+flow with preconditions and confirmations. Experiment expiry is
+**advisory and never blocks a release**: the skills surface any registry
+entry whose `expires_at` is at or before the version being cut and then
+proceed; the author follows up by graduating the experiment (delete its
+row in `src/runtime/experiments.c`; the feature becomes always-on),
+shelving it, or bumping `expires_at` with a one-line rationale. See
 [experimental-flags-guide.md](experimental-flags-guide.md#expiry-policy).
 
 ### Steps
@@ -265,9 +266,9 @@ in a separate reviewed PR. An empty registry passes the gate trivially. See
 2. Commit the bump.
 3. Tag the bump commit:
    ```sh
-   git tag v0.13.0    # match the new VERSION
+   git tag v0.36.0    # match the new VERSION
    git push origin main
-   git push origin v0.13.0
+   git push origin v0.36.0
    ```
 4. The workflow runs (~1-2 minutes per matrix leg, ~3 minutes total),
    builds three binaries, and publishes a GitHub Release.
@@ -339,6 +340,6 @@ failed attempt's history is preserved.
 
 - `Formula/turmeric.rb` -- the Homebrew formula.
 - `.github/workflows/release.yml` -- the release pipeline.
-- `src/main.c:188` (`resolve_stdlib_root`) -- the stdlib-discovery logic
+- `src/main.c` (`resolve_stdlib_root`) -- the stdlib-discovery logic
   that makes both the tarball and Homebrew layouts work without code
   changes.

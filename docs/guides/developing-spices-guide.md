@@ -986,9 +986,9 @@ contents never leak into VCS even if the dir itself gets tracked. (See
 `:engine "cc" | "jit" | "interp"` selects the default EXECUTION engine for
 `tur run`, on the same ladder: `--engine` flag > `TUR_ENGINE` env >
 manifest > `"cc"`.  An unknown value is a hard error (TUR-E0311); a `"jit"`
-selection needs a `-DTUR_JIT=ON` build plus the `jit` experiment
-(`:experiments [jit]` in the same manifest now opens that gate -- no CLI
-flag needed).  The engines differ in semantics, not just speed
+selection needs a `-DTUR_JIT=ON` build (the former `jit` experiment gate has
+graduated -- only the build-time gate remains).  The engines differ in
+semantics, not just speed
 (`#?(:tur ... :turi ...)`, inline-C carve-outs), so when the choice is
 load-bearing, pair it with a `:tur-version` floor: older binaries silently
 ignore unknown manifest keys and would run under cc.

@@ -6,10 +6,9 @@ description: Model protocols as types, whether the protocol has two participants
 
 # Session Types Guide
 
-> This guide supersedes the archived
+> This guide is the user-facing reference for `stdlib/schan.tur` and the
+> broader session-types story; the design record is the archived
 > [`stdlib-session-typed-channels-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-session-typed-channels-plan.md).
-> All phases (S1--S3) shipped; the user-facing reference for `stdlib/schan.tur`
-> and the broader session-types story is here.
 
 Turmeric supports session types -- a type discipline that statically verifies
 communication protocols between concurrent processes. The feature is enabled
@@ -407,19 +406,12 @@ elaborated.
 
 | Code | Meaning |
 |------|---------|
-| `TUR-E0210` | Session operation on a non-session type |
-| `TUR-E0211` | Session channel dropped (linearity violation) |
-| `TUR-E0212` | Session operation does not match current protocol state |
-| `TUR-E0213` | Protocol mismatch between session endpoints |
-| `TUR-E0214` | Channel used after close |
-| `TUR-E0215` | Channel used more than once (linearity violation) |
-| `TUR-E0216` | Receive-timeout used on a non-timeout protocol |
-| `TUR-E0217` | Offer used on a non-branch protocol |
-| `TUR-E0218` | Choose used on a non-choice protocol |
-| `TUR-E0219` | Type mismatch in session message payload |
+| `TUR-E0210` | Session endpoints are not dual |
+| `TUR-E0211` | Linear session channel dropped without being closed |
+| `TUR-E0212` | Session operation does not match the current protocol state (wrong op, use-after-close, reuse of a consumed endpoint, payload type mismatch) |
 | `TUR-E0220` | Global protocol is not projectable (mergeability failure) |
 | `TUR-E0221` | Role not declared in the protocol |
-| `TUR-E0222` | Role implementation type mismatch |
+| `TUR-E0222` | Role implementation does not match the projected local type |
 | `TUR-E0223` | Global protocol not well-formed (undeclared role used) |
 
 ---
@@ -490,13 +482,14 @@ reading from the wrapped channel), and `tests/fixtures/errors/schan-skip-step`
 for callers that do not want the protocol discipline.
 
 > **Note on `schan-recv`.** The natural signature is
-> `SChan<SRecv T R> -> Pair<T SChan<R>>`. That is currently blocked by a
-> monomorphizer limitation around parametric aggregates whose element is an
-> opaque/phantom type (see
-> `docs/archive/history/generic-struct-opaque-element-miscompile.md`). Until it is
-> fixed, `schan-recv` returns the *typed* continuation directly and delivers the
-> received value through a caller-provided cell -- which keeps the continuation
-> protocol fully checked.
+> `SChan<SRecv T R> -> Pair<T SChan<R>>`. The wrapper instead returns the
+> *typed* continuation directly and delivers the received value through a
+> caller-provided cell -- which keeps the continuation protocol fully checked.
+> The monomorphizer bug that originally forced this shape (parametric
+> aggregates whose element is an opaque/phantom type) has been fixed (see
+> `docs/archive/history/generic-struct-opaque-element-miscompile.md`), so the
+> Pair-returning signature is now possible; the stdlib API simply has not been
+> migrated yet.
 
 ---
 

@@ -6,11 +6,10 @@ description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual ty
 
 # Union and Intersection Types Guide
 
-> **Status:** IT0--IT4 are complete. As of TY2, `any` boxing codegen, the
-> checked `cast`, and `type-of` ship for every payload kind
-> (int/bool/float/nil/cstr/ptr, ADTs, and heap-boxed structs). The remaining
-> deferred item is general `struct { int tag; union { ... } }` tagged-union
-> C emission. See [Deferred](#deferred) below.
+> **Status:** `any` boxing codegen, the checked `cast`, and `type-of` ship for
+> every payload kind (int/bool/float/nil/cstr/ptr, ADTs, and heap-boxed
+> structs). The one deferred item is general `struct { int tag; union { ... } }`
+> tagged-union C emission. See [Deferred](#deferred) below.
 
 Union types (`A | B`) and intersection types (`A & B`) extend the Turmeric type system with
 structural type combinations. Together they enable gradual typing, flexible APIs, and
@@ -22,8 +21,9 @@ Both features, along with the `any` type, are enabled by default; no flag is req
 
 ## Union Types
 
-A union type `(A | B)` represents a value that is **either** `A` or **`B`**. The compiler
-emits a tagged-union C struct at runtime.
+A union type `(A | B)` represents a value that is **either** `A` or **`B`**. At runtime
+a union-typed value is carried as a `tur_tagged_t` (`{ int64_t tag; int64_t val; }`) --
+a tag word plus one 64-bit payload slot.
 
 ### Syntax
 
@@ -79,7 +79,7 @@ defn describe [x : (int | cstr)] : cstr
     str("string: " s)
 ```
 
-Omitting any member is a compile-time error (`TUR_E0301`).
+Omitting any member is a compile-time error (`TUR-E0301`).
 
 ### Subtyping
 
@@ -189,7 +189,7 @@ resolves the instance at the intersection type site.
 
 ### Unsatisfiable Intersections
 
-Intersections of known-disjoint concrete types are rejected statically (`TUR_E0350`):
+Intersections of known-disjoint concrete types are rejected statically (`TUR-E0350`):
 
 ```turmeric
 ;; Compile error: int and cstr are disjoint
@@ -208,8 +208,8 @@ at compile time are permitted and fail during instance resolution.
 
 ## The `any` Type
 
-`any` is the **top type**: every type is a subtype of `any`. It is available when either
-union or intersection flag is active.
+`any` is the **top type**: every type is a subtype of `any`. Like unions and
+intersections, it is enabled by default.
 
 ```turmeric
 (defn debug-print [x : any] : unit
@@ -327,10 +327,10 @@ type. An ADT value widens to `any` (boxing codegen), reports its kind via
 
 | Code | Message |
 |---|---|
-| `TUR_E0300` | Union type mismatch: expected `{expected}`, got `{actual}` |
-| `TUR_E0301` | Non-exhaustive pattern match on union type `{type}` -- missing arm for `{variant}` |
-| `TUR_E0350` | Intersection type unsatisfiable: no value can be both `{A}` and `{B}` |
-| `TUR_E0351` | Value of type `{actual}` does not satisfy intersection member `{missing}` |
+| `TUR-E0300` | Union type mismatch: expected `{expected}`, got `{actual}` |
+| `TUR-E0301` | Non-exhaustive pattern match on union type `{type}` -- missing arm for `{variant}` |
+| `TUR-E0350` | Intersection type unsatisfiable: no value can be both `{A}` and `{B}` |
+| `TUR-E0351` | Value of type `{actual}` does not satisfy intersection member `{missing}` |
 
 ---
 
@@ -338,10 +338,11 @@ type. An ADT value widens to `any` (boxing codegen), reports its kind via
 
 ### Tagged Union Overhead
 
-TypeScript's union types are zero-cost (erased). Turmeric emits
-`struct { int tag; union { A a; B b; } data; }`. Every union-typed value pays
-one extra `int` for the tag plus alignment padding to the largest member. This
-matters for arrays, struct fields, and cache pressure.
+TypeScript's union types are zero-cost (erased). Turmeric carries every
+union-typed value as a `tur_tagged_t` (`{ int64_t tag; int64_t val; }`): one
+extra 64-bit tag word per value, with the payload riding a single 64-bit slot
+(by-value structs are heap-boxed into it). This matters for arrays, struct
+fields, and cache pressure.
 
 Widening (passing `42` where `(int | cstr)` is expected) requires constructing
 the tagged union at the call site -- it is not a free annotation.
@@ -408,22 +409,13 @@ returning `(int | ParseError)` cannot be transparently composed with one returni
 
 Variance for type constructors containing union or intersection types is not yet
 specified. Passing `(vec (int | cstr))` where `(vec int)` is expected may produce
-unexpected behaviour and will be addressed before these features are enabled by
-default.
+unexpected behaviour.
 
 ---
 
-## Shipped in TY2
-
-| Item | Notes |
-|---|---|
-| `any` boxing codegen | All payload kinds box: immediates ride the carrier, floats by bit pattern, cstr/ptr/ADT by pointer, by-value structs heap-boxed. Boxing happens at every widening site (call arg, `: any` return, `if` branch). |
-| `(cast x : T)` | Checked downcast from `any`; verifies the box tag and panics on mismatch. `T` may be a primitive, struct, or ADT name. |
-| `(type-of x)` | Returns the payload's type name (`"int"`, ..., `"struct"`, `"adt"`) at kind granularity. |
-
 ## Deferred
 
-The following IT4 items are not yet implemented:
+The following items are not yet implemented:
 
 | Item | Notes |
 |---|---|

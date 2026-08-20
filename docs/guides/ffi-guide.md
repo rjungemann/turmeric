@@ -328,7 +328,7 @@ through the same thunk engine.
   0)
 ```
 
-In an engine-less build the historical behavior stands: a small table of
+In an engine-less build, a small table of
 known names (`exit`, `free`, `strlen`, `getenv`, `printf`, `puts`) works,
 and everything else silently evaluates to nil. The known table also
 *overrides* the thunk path in JIT builds, deliberately -- `free` must stay

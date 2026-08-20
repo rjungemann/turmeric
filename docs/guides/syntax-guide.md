@@ -368,9 +368,7 @@ one pulled in by `(load "...")`: a loaded file's dialect is read from its own
 first line and its own extension, independently of whatever dialect the loading
 file is written in. When both are present the extension picks the base dialect
 and the directive is a redundant hint; layers on the `#lang` line apply either
-way. (Before 2026-07-29 a loaded file's dialect came from its extension alone,
-so `(load ...)` on a plain-`.tur` file whose first line was
-`#lang turmeric/sweet` failed to parse.)
+way.
 
 ### The three tools
 
@@ -557,9 +555,9 @@ defn main [] : int
   string/len(#s"hello")
 ```
 
-There is no semantic layer today. `refined` was one until it graduated in
-v0.33.0; static discharge of `#refine{...}` predicates is now unconditional, so
-there is nothing left for the token to turn on. A file that still carries
+There is no semantic layer today. Static discharge of `#refine{...}`
+predicates is unconditional (the former `refined` layer graduated), so there
+is nothing for the token to turn on. A file that still carries
 `#lang turmeric refined` keeps compiling -- the token is accepted and ignored
 with a one-time `TUR-W0064` -- but it can be dropped. See
 [refinement-types-guide.md](refinement-types-guide.md).
@@ -668,7 +666,7 @@ A short list of pitfalls newcomers hit:
 7. **Naming a definition after a special form.** `(defn return ...)`,
    `(defn match ...)`, `(defmacro open ...)` are accepted, but a bare call site
    dispatches to the form, never to your definition. See
-   [Reserved names](#reserved-names) below -- the compiler now flags this as
+   [Reserved names](#reserved-names) below -- the compiler flags this as
    `TUR-W0042` at the definition.
 
 ### Reserved names

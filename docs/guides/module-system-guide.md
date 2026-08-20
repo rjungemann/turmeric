@@ -300,12 +300,19 @@ The argument must be a string literal.
 
 ## Auto-Loaded Stdlib Modules
 
-Two stdlib files are auto-loaded into every program:
+A set of stdlib files is auto-loaded into every program (the full list is
+`autoload_files_` in `src/compiler/stdlib_autoload.c`). It includes, among
+others:
 
 - `stdlib/macros.tur` -- `(defmodule tur/macros ...)`: `cond`, `when`,
   `unless`, `must!`, `must-msg!`, `ignore!`, `do-m`, `for`.
 - `stdlib/safe.tur`   -- `(defmodule tur/safe ...)`: `array-get`, `array-set`,
   `array-slice`, `with-c-string`, `from-c-string`, `box`, `unbox`.
+- `stdlib/contract.tur`, the core typeclass files (`typeclass-eq.tur`,
+  `typeclass-functor.tur`, `typeclass-monad.tur`, ...), the typed
+  collections (`map.tur`, `vec.tur`, `set.tur`, `list.tur`, ...),
+  `option.tur` / `result.tur` / `pair.tur` / `tuple.tur`, `json.tur`,
+  `schema.tur`, `sym.tur`, and `unique.tur`.
 
 After loading, the elaborator **promotes** every export from any module under
 the `tur/` namespace back to "stdlib pre-module" status (its

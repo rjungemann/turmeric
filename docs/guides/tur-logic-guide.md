@@ -401,43 +401,25 @@ defn range-goal [t : Term lo : int hi : int] : (Goal int)
 tree, walk recursively:
 
 ```turmeric
-(defn reify-term [t subs] : cstr
-  (let [walked (logic-walk t subs)
-        tag    (term-tag walked)]
-    (cond
-      (= tag 0) (int->cstr (term-int-val walked))
-      (= tag 1) "_"
-      (= tag 2) (str-concat "(" (str-concat (reify-term (term-pair-fst walked) subs)
-                                            (str-concat " . " (str-concat (reify-term (term-pair-snd walked) subs) ")"))))
-      (= tag 3) "nil"
-      :else     "?")))
+(defn reify-term [t : Term subs : Subst] : cstr
+  (match (logic-walk t subs)
+    (TInt n)    (int->cstr n)
+    (TVar id)   "_"
+    (TPair a b) (str-concat "(" (str-concat (reify-term a subs)
+                                            (str-concat " . " (str-concat (reify-term b subs) ")"))))
+    (TNil)      "nil"))
 ```
 ```sweet-exp
-defn reify-term [t subs] :cstr
-  let [walked (logic-walk t subs)
-        tag    (term-tag walked)]
-    cond
-      =
-        tag
-        0
-      int->cstr
-        term-int-val(walked)
-      =
-        tag
-        1
-      "_"
-      =
-        tag
-        2
-      str-concat
-        "("
-        str-concat(reify-term(term-pair-fst(walked) subs) str-concat(" . " str-concat(reify-term(term-pair-snd(walked) subs) ")")))
-      =
-        tag
-        3
-      "nil"
-      :else
-      "?"
+defn reify-term [t : Term subs : Subst] : cstr
+  match logic-walk(t subs)
+    TInt(n)
+    int->cstr(n)
+    TVar(id)
+    "_"
+    TPair(a b)
+    str-concat("(" str-concat(reify-term(a subs) str-concat(" . " str-concat(reify-term(b subs) ")"))))
+    TNil()
+    "nil"
 ```
 
 Each `str-concat` / `int->cstr` here returns a fresh "caller frees" `cstr`, and
@@ -481,22 +463,21 @@ search replace `mplus` with an interleaving version:
 
 ```turmeric
 ;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
-(defn mplus-i [xs ys] : int
-  ;; swap xs and ys for every cons cell so solutions alternate
-  (if (= xs 0) ys
-    (let [head-val (bt-head xs)
-          rest     (bt-tail xs)]
-      (bt-cons head-val (mplus-i ys rest)))))
+(defn mplus-i [xs : Stream ys : Stream] : Stream
+  ;; swap xs and ys at every step so solutions alternate
+  (match xs
+    (StNil)         ys
+    (StCons v rest) (StCons v (mplus-i ys rest))))
 ```
 ```sweet-exp
 ;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
-defn mplus-i [xs ys] :int
-  ;; swap xs and ys for every cons cell so solutions alternate
-  if =(xs 0)
+defn mplus-i [xs : Stream ys : Stream] : Stream
+  ;; swap xs and ys at every step so solutions alternate
+  match xs
+    StNil()
     ys
-    let [head-val (bt-head xs)
-          rest     (bt-tail xs)]
-      bt-cons(head-val mplus-i(ys rest))
+    StCons(v rest)
+    StCons(v mplus-i(ys rest))
 ```
 
 Then define `disjoined-i` analogously and use it in place of `disjoined`
@@ -539,10 +520,10 @@ defn tabled [name goal-fn args subs] :int
 
 ## Integration with `tur/backtrack`
 
-`tur/logic` inlines the backtracking monad (`mzero`, `mreturn`, `mplus`,
-`mbind`) directly for performance.  If you are building tools on top of the
-same monad without the full logic layer, `stdlib/backtrack.tur` exports these
-primitives separately.
+`tur/logic` defines its own copies of the backtracking monad primitives
+(`mzero`, `mreturn`, `mplus`, `mbind`) over its typed `Stream`.  If you are
+building tools on top of the same monad without the full logic layer,
+`stdlib/backtrack.tur` exports these primitives separately.
 
 ---
 

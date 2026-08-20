@@ -148,7 +148,7 @@ vim.api.nvim_create_autocmd("FileType", {
 
 ### Vim (vim-lsp)
 
-Install [vim-lsp](https://github.com/prabirsheth/vim-lsp), then add:
+Install [vim-lsp](https://github.com/prabirshrestha/vim-lsp), then add:
 
 ```vim
 if executable('tur')

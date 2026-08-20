@@ -176,8 +176,10 @@ configuration is needed once Treesitter supports Turmeric.
   than embedded C syntax. Embedded language highlighting is possible with
   `:syn include` but requires `vim-syntax/syntax/turmeric.vim` to be
   restructured as a cluster.
-- No LSP (hover docs, go-to-definition, diagnostics) -- planned for a future
-  language server (`turl`).
+- The plugin itself is syntax-only. For hover docs, go-to-definition, and
+  diagnostics, wire up the compiler's built-in language server (`tur lsp`)
+  through your LSP client of choice (e.g. Neovim's `vim.lsp.start` or
+  `nvim-lspconfig` with a custom server entry running `tur lsp`).
 - Operator highlighting is limited to `::` and `|>`. Arithmetic and comparison
   operators (`+`, `-`, `<`, `>`, `=`, etc.) are left uncolored, which matches
   typical Lisp syntax conventions.

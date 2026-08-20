@@ -7,8 +7,9 @@ description: def ^mut, what the compiler checks about a global write, and the co
 # Mutable Globals Guide
 
 > Everything on this page is unconditional -- naming a global in a write frame,
-> the read-only-outside-the-module rule, `^atomic`, and `^thread-local`
-> graduated from `--enable=global-state` in 0.35.0. The design of record is
+> the read-only-outside-the-module rule, `^atomic`, and `^thread-local` need
+> no `--enable` flag (a lingering `--enable=global-state` is a no-op). The
+> design of record is
 > [`docs/upcoming/mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/mutable-globals-plan.md).
 
 ## The form

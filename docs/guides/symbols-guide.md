@@ -6,15 +6,13 @@ description: First-class runtime symbols (:Sym type) with compile-time interning
 
 # Runtime Symbols: `:Sym`
 
-> **Status:** shipping. All phases (SYM0--SYM6) are implemented: the `:Sym`
-> type, per-TU codegen, cross-TU interning, map-literal + typeclass
-> integration, the stdlib surface, and the opt-in dynamic `str->sym` intern
-> table.
+> Covers the `:Sym` type, per-TU codegen, cross-TU interning, map-literal +
+> typeclass integration, the stdlib surface, and the opt-in dynamic
+> `str->sym` intern table.
 
-Turmeric's `:foo` keyword syntax has always parsed cleanly and interned its
-name at read time, but in *expression position* a keyword had no value and no
-type. `:foo` is now a first-class expression of type `:Sym` whose runtime
-value is a unique, deduplicated pointer into `.rodata`.
+Turmeric's `:foo` keyword syntax parses cleanly and interns its name at read
+time. In *expression position*, `:foo` is a first-class expression of type
+`:Sym` whose runtime value is a unique, deduplicated pointer into `.rodata`.
 
 ```turmeric
 (println (sym->str :hello))   ; => hello
@@ -58,16 +56,16 @@ just within a single file. Single-file `emit-c` output keeps the records
 
 ## Expression position vs. syntactic position
 
-Adding a runtime value for `:foo` does **not** change any of its existing
-syntactic uses. These are consumed by earlier elaborator passes:
+The runtime value for `:foo` does **not** change any of its syntactic uses.
+These are consumed by earlier elaborator passes:
 
 - Type annotations: `:int`, `:cstr`, `:Sym`
 - Import directives: `:refer [...]`, `:as foo`
 - Struct field selectors: `(:name p)`
 - `:else` in `cond`/`case`
 
-The behavioral addition is in **expression position**, where `:foo` was
-previously a hard error and now evaluates to a `:Sym` value.
+The `:Sym` value appears only in **expression position**, where `:foo`
+evaluates to the interned symbol.
 
 ## The `:Sym` type
 
