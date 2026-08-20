@@ -10,7 +10,7 @@ Ergonomic asynchronous programming in Turmeric using fibers and delimited contin
 
 ## Overview
 
-Turmeric's `async`/`await` syntax enables direct-style asynchronous programming for I/O-bound and concurrent tasks. The implementation builds on Phase 18's delimited continuations and integrates with Turmeric's effect system.
+Turmeric's `async`/`await` syntax enables direct-style asynchronous programming for I/O-bound and concurrent tasks. The implementation builds on delimited continuations and integrates with Turmeric's effect system.
 
 ## Quick Start
 
@@ -68,7 +68,7 @@ A **fiber** is a user-space thread (lightweight thread) that:
 
 ### Scheduling
 
-The scheduler is single-threaded: all fibers run on one OS thread, avoiding data races. A multi-threaded scheduler (fibers on a thread pool) is a future direction.
+The default scheduler is single-threaded: all fibers run on one OS thread, avoiding data races. A multi-threaded work-stealing scheduler (fibers distributed across a pool of OS threads) is available separately via `stdlib/scheduler_mt.tur`.
 
 ## Design Decisions
 
@@ -164,28 +164,23 @@ async
 
 ### Error Handling
 
-Effects-based try/catch works within async blocks (see [Effects System Guide](effects-system-guide.md)):
+Effect handlers work within async blocks. `try-with` is sugar for `handle`:
+the body comes first, followed by `(EffectName [params] k)` clause heads and
+their handler bodies (see [Effects System Guide](effects-system-guide.md)):
 
 ```turmeric
 (async
   (try-with
-    (fn []
-      (await (fetch-file "missing.txt")))
-    (fn [e k]
-      (match e
-        (FileNotFound _) -> (continue k "default")))))
+    (await (fetch-file "missing.txt"))
+    (FileError [path] k) (resume k "default")))
 ```
 
 ```sweet-exp
 async
   try-with
-    fn []
-      await(fetch-file("missing.txt"))
-    fn [e k]
-      match e
-        (FileNotFound _)
-        ->
-        continue(k "default")
+    await(fetch-file("missing.txt"))
+    (FileError [path] k)
+    resume(k "default")
 ```
 
 ## Send Requirements for Async Bodies
@@ -238,7 +233,7 @@ Consume or drop non-Send values before the `await`:
 This check applies **only to inline closures** passed directly to `(async
 (fn [] ...))`. Pre-defined functions referenced as `(async my-fn)` are not
 re-elaborated and are not checked here; their bodies were compiled without
-async context. A future CPS-based implementation will close this gap.
+async context.
 
 ## I/O Bindings
 

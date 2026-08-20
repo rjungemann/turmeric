@@ -293,7 +293,7 @@ in isolation without imports:
 ```turmeric
 ;; src/mylib/io.tur -- ANTI-PATTERN
 ;; Stub copy of make-widget from core.tur; real body is return NULL.
-(defn make-widget [v :int] #{Unsafe} :Widget
+(defn make-widget [v :int] #fx{Unsafe} :Widget
   ```c
   return NULL;
   ```)
@@ -313,12 +313,8 @@ This pattern fails in three ways:
   `tur check`/`tur emit-c` on a single file passes while the combined build
   fails.
 
-The `scscm` spice used this pattern across all five of its source files.
-It was eliminated in the 2026-05 import refactor by converting each file to
-`defmodule` + `import`. See
-[scscm-spice-import-refactor-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/scscm-spice-import-refactor-plan.md)
-for the full migration. If you encounter the stub pattern in other spices,
-the fix is the same: add a `(defmodule ...)` + `(export ...)` header and
+If you encounter the stub pattern in an existing spice, the fix is
+mechanical: add a `(defmodule ...)` + `(export ...)` header to each file and
 replace each stub block with `(import <module> :refer [...])`.
 
 ---
@@ -851,11 +847,11 @@ instead of an untyped `:int`:
   ...)
 ```
 
-The old workaround of declaring the rest as `:int` and casting handles back
-inside the body is no longer needed. For an interface that mixes distinct
-handle types (e.g. middlewares and routes), use two explicit `:list<T>`
-parameters rather than one untyped rest -- a single `& rest` is one
-homogeneous element type by design.
+Do not declare the rest as `:int` and cast handles back inside the body --
+write the real type (a bare `:int` rest rejects opaque/struct/ADT values).
+For an interface that mixes distinct handle types (e.g. middlewares and
+routes), use two explicit `:list<T>` parameters rather than one untyped
+rest -- a single `& rest` is one homogeneous element type by design.
 
 ---
 
@@ -1083,9 +1079,10 @@ For the complete step-by-step see
 
 ## Emscripten / WASM Support
 
-Once `tur build --target wasm` lands, all cmake-deps spices will get WASM
-builds automatically when the underlying C library supports Emscripten.
-To make your spice Emscripten-compatible:
+`tur build --target wasm` compiles via `emcc` (Emscripten must be
+installed), and `:cmake-deps` are configured through `emcmake`, so a
+cmake-deps spice gets a WASM build automatically when the underlying C
+library supports Emscripten. To make your spice Emscripten-compatible:
 
 - Prefer C libraries with documented Emscripten support (yyjson, mbedTLS,
   PCRE2, and the SQLite amalgamation all qualify).
@@ -1152,7 +1149,7 @@ abstractions in your spice:
 
 ```turmeric
 ;; Wrong (TUR-D0001):
-(defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))
+(defn map-fn [^fat g :(fn [:int] :int) n :int] :int (g n))
 
 ;; Right:
 (defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))
@@ -1160,8 +1157,8 @@ abstractions in your spice:
 
 The structural `name : type` colon (the one separating a parameter name from
 its type) is unaffected -- the rule only forbids colons **inside** a `(fn ...)`
-type. If you are migrating an older spice forward, run the codemod from
-`#270` (`bf3445e5`) over your tree, or fix the hits by hand.
+type. If you are migrating an older spice forward, run
+`tools/rewrite_fn_type_colons.py` over your tree, or fix the hits by hand.
 
 ### Name mangling and inline-C
 

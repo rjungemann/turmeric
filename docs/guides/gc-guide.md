@@ -69,12 +69,12 @@ Bacon-Rajan trial-deletion collector:
 
 1. When a strong decrement lands on a still-live block that could be part
    of a cycle, the block is added to a **suspect buffer** and colored
-   PURPLE (`gc.c` — `gc_on_strong_decrement`, `rc.c:184`).
-2. A collection cycle runs `mark_phase` (`gc.c:242-293`) over the suspects:
+   PURPLE (`gc_possible_root`, called from `rc_strong_decrement` in `rc.c`).
+2. A collection cycle runs `gc_mark_phase` (`gc.c`) over the suspects:
    colors reset to WHITE, blocks reachable from real roots (any block with
    `strong_count > 0` that is not a suspect) go BLACK, and reachability is
    propagated by each block's `walk_fn`.
-3. `trial_deletion_phase` (`gc.c:296-343`) frees anything still WHITE — by
+3. `gc_trial_deletion_phase` (`gc.c`) frees anything still WHITE -- by
    definition, unreachable cyclic garbage.
 
 The important part for users: **the collector only sees what the walker
@@ -86,11 +86,11 @@ walker — cycles that route through them will not be reclaimed.
 
 ### What triggers a collection
 
-- `GC_DISABLED` (default in v1, `gc.c:33`) — the whole `trial_deletion_phase`
-  early-returns (`gc.c:347`). RC still runs; cycles just accumulate.
-- `GC_MANUAL` — collection runs only when user code calls `(gc!)`.
-- `GC_THRESHOLD` — collection runs when the suspect buffer reaches 128
-  entries (forced at 4096).
+- `GC_DISABLED` (default in v1, `gc.c`) -- collection early-returns.
+  RC still runs; cycles just accumulate.
+- `GC_MANUAL` -- collection runs only when user code calls `(gc!)`.
+- `GC_THRESHOLD` -- collection runs when the suspect buffer reaches
+  `GC_SUSPECT_THRESHOLD` (128) entries.
 - `GC_AUTO` (CG5) -- collection runs at **allocation checkpoints**, with no
   `(gc!)` call anywhere in the program. Two triggers: the candidate buffer
   reaching `GC_SUSPECT_THRESHOLD`, or `GC_AUTO_ALLOC_INTERVAL` allocations
@@ -142,21 +142,20 @@ happens only when you ask for it with `(gc!)`. Call `gc_set_mode(GC_THRESHOLD)`
 for the suspect-count trigger; an explicit mode set before `(gc-enable!)`
 survives it.
 
-> **What a collection actually reclaims (updated 2026-07-25).** `(gc!)` now
-> reclaims **live strong `rc<T>` cycles** as well as weak-zombie blocks. The
-> collector runs real Bacon-Rajan trial deletion: a strong decrement that leaves
-> the count > 0 buffers a candidate root, and collection subtracts the internal
-> (in-cycle) edges on a scratch counter to find blocks referenced only from
-> within the candidate subgraph. Measured: 192 bytes per two-node cycle -> 0.
+> **What a collection actually reclaims.** `(gc!)` reclaims **live strong
+> `rc<T>` cycles** as well as weak-zombie blocks. The collector runs real
+> Bacon-Rajan trial deletion: a strong decrement that leaves the count > 0
+> buffers a candidate root, and collection subtracts the internal (in-cycle)
+> edges on a scratch counter to find blocks referenced only from within the
+> candidate subgraph. Measured: 192 bytes per two-node cycle -> 0.
 >
-> One caveat remains: the collector only sees what the walker sees, so a cycle
-> routed through an `RCK_OPAQUE` handle is still not reclaimed. Collection is
+> One caveat: the collector only sees what the walker sees, so a cycle
+> routed through an `RCK_OPAQUE` handle is not reclaimed. Collection is
 > driven by user code -- `(gc!)`, or the suspect threshold under
 > `(gc-enable!)` -- **unless** `(gc-auto!)` is in play, which collects at
-> allocation checkpoints on its own (CG5). Breaking cycles
-> with `weak<T>`, as in Rust, remains valid and is still the only option with the
-> collector disabled (the default). See
-> `docs/archive/gc-cycle-collection-plan.md` and
+> allocation checkpoints on its own (CG5). Breaking cycles with `weak<T>`,
+> as in Rust, is valid and is the only option with the collector disabled
+> (the default). See `docs/archive/gc-cycle-collection-plan.md` and
 > `docs/archive/gc-cycle-collection-followup-plan.md`.
 
 ---
@@ -193,23 +192,16 @@ freed when the count hits zero) but the cycle collector cannot see through
 them. Wrap C handles in `defopaque` and give them a proper drop, not a
 walker, when they have no `rc<T>` children.
 
-This blind spot used to be narrower than it sounds, for a reason nobody would
-want: a `vec` or `map` could not hold an `rc<T>` at all (`emit: invalid
-EX_REINTERPRET rc -> int`), so "cycle through a collection" was closed by
-rejection rather than by tracing.
+**A `Vec[rc<T>]` compiles and is refcount-correct** -- the Vec takes a strong
+reference per slot and releases it on free/overwrite/removal -- but a cycle
+routed through a Vec's element buffer is RC-balanced and **not** reclaimed,
+because the Vec's buffer is an ordinary `malloc` block with no walker.
 
-**As of 2026-07-25 a `Vec[rc<T>]` compiles and is refcount-correct** -- the Vec
-takes a strong reference per slot and releases it on free/overwrite/removal --
-so the blind spot is now open for real on the vec side: a cycle routed through a
-Vec's element buffer is RC-balanced but **not** reclaimed, because the Vec's
-buffer is an ordinary `malloc` block with no walker.
-
-**As of 2026-07-26 a `Map[K rc<V>]` compiles too**, on the same terms: the map
-takes a strong reference on insert (`tests/fixtures/map-holds-rc-values`) and a
-read hands the caller its own. So the vec-side caveat now applies to maps as
-well -- HAMT nodes are plain `malloc` blocks with no walker, so a cycle routed
-through a map entry is RC-balanced and unreclaimed. `weak<T>` is still rejected
-everywhere (there is no count to take).
+**A `Map[K rc<V>]` behaves the same way**: the map takes a strong reference on
+insert (`tests/fixtures/map-holds-rc-values`) and a read hands the caller its
+own, but HAMT nodes are plain `malloc` blocks with no walker, so a cycle routed
+through a map entry is RC-balanced and unreclaimed. `weak<T>` is rejected as a
+collection element everywhere (there is no count to take).
 
 `tests/fixtures/gc-blind-spot-cycle-through-vec` measures exactly this. It
 builds the same two-reference cycle twice, differing only in the back-edge:
@@ -272,8 +264,8 @@ spot.
 
 ## Ownership across the stdlib
 
-Where does that leave the standard library? A 2026-07-24 audit of all ~138
-stdlib modules found that **stdlib builds no `rc<T>` cycles and uses `weak<T>`
+Where does that leave the standard library? An audit of all ~138 stdlib
+modules found that **stdlib builds no `rc<T>` cycles and uses `weak<T>`
 nowhere -- because it barely reaches for shared ownership at all.** `rc<T>`
 appears only in `stdlib/rc.tur` (the module that *defines* it) and the generated
 `stdlib/docstrings.tur`; no other module constructs, stores, or imports one. The
@@ -299,17 +291,18 @@ the first place (Clojure/Haskell-style persistence plus linear types), so there
 are no cycles to break and `weak<T>` is unused.
 
 The one forward-looking caveat: a stored `rc<T>` field is what *would* enable a
-cycle, and the collector cannot reclaim a live strong cycle today
-(see the Known gaps below). To keep the property from regressing silently, the
+cycle, and reclaiming one requires the collector to be enabled and the cycle to
+be walker-visible (see the Known gaps below). To keep the property from
+regressing silently, the
 `tur_stdlib_no_rc_cycles` ctest guard (`tests/check-stdlib-no-rc-cycles.sh`)
 fails if a stdlib type annotation introduces `rc<...>` without an explicit
 `rc-cycle-ok` review marker.
 
-The escape hatch for the day shared ownership *is* wanted now exists in the
+The escape hatch for the day shared ownership *is* wanted lives in the
 library: [`stdlib/weak.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur) provides `rc/downgrade`,
 `weak/upgrade`, `weak/unwrap`, `weak/alive?`, and `weak/drop` -- Rust's
-`Rc::downgrade` / `Weak::upgrade` pairing, wrapping intrinsics that already
-existed. It is opt-in (`(load "stdlib/weak.tur")`) and stdlib itself still uses
+`Rc::downgrade` / `Weak::upgrade` pairing, wrapping the runtime's weak-ref
+intrinsics. It is opt-in (`(load "stdlib/weak.tur")`) and stdlib itself uses
 none of it. For when to reach for which ownership strategy in the first place,
 see [ownership-guide.md](ownership-guide.md).
 
@@ -353,15 +346,15 @@ The tree-walking interpreter (`turi_eval`, `src/turi/eval.c`) makes
 deliberately different choices, and this trips people up.
 
 **Closures are never freed *individually*.** Frames, bindings, and closures
-are region-allocated from the env's value pool (`turi_val_alloc`,
-`value.c:16-18`; `eval_frame_new`/`eval_frame_free`, `eval.c:424-451`), and the
+are region-allocated from the env's value pool (`turi_val_alloc` in
+`value.c`; `eval_frame_new`/`eval_frame_free` in `eval.c`), and the
 per-object free is a deliberate no-op because a closure can capture a frame that
 outlives its defining scope and the interpreter does not track which. The whole
-pool is then reclaimed wholesale at `turi_env_free` (`env.c:334-336`) -- this is
+pool is then reclaimed wholesale at `turi_env_free` (`env.c`) -- this is
 region memory reclaimed at teardown, **not** memory abandoned to the OS. The
 practical split: a short-lived process (fork-per-fixture, one-shot `tur build`)
 reclaims everything at exit; a **long-lived env** is bounded by two mechanisms
-that are now on for the REPL. Incremental parse + elaboration is the default
+that are on for the REPL. Incremental parse + elaboration is the default
 for every env (`TUR_NO_INCREMENTAL_ELAB=1` opts out), so `eval_arenas` and
 re-parse cost are linear instead of quadratic; the REPL additionally enables
 scratch promotion, which deep-copies each eval boundary's escaping values into
@@ -418,33 +411,34 @@ it.
 
 If you want to touch this code:
 
-1. `src/runtime/rc.h` — control-block layout, kind tags (`RCK_*`,
+1. `src/runtime/rc.h` -- control-block layout, kind tags (`RCK_*`,
    `RCEXP_*`). Start here; everything else assumes this vocabulary.
-2. `src/runtime/rc.c` — increment / decrement, the deferred free queue
-   hookup, `gc_on_strong_decrement` at line 184.
-3. `src/runtime/gc.h` and `src/runtime/gc.c` — modes, suspect buffer,
-   `mark_phase` (242-293), `trial_deletion_phase` (296-343).
-4. `src/compiler/emit_expr.c` — where `rc_cb_alloc_*` calls are emitted
-   (lines 5594-5656); this is how types acquire walkers.
-5. `src/turi/eval.c` — the interpreter's opposing policy (region allocation +
-   no-op per-object free, lines 424-451) and why it is deliberate.
+2. `src/runtime/rc.c` -- increment / decrement, the deferred free queue
+   hookup, the `gc_on_strong_decrement` / `gc_possible_root` calls.
+3. `src/runtime/gc.h` and `src/runtime/gc.c` -- modes, suspect buffer,
+   `gc_mark_phase`, `gc_trial_deletion_phase`.
+4. `src/compiler/emit_expr.c` -- where `rc_cb_alloc_*` calls are emitted;
+   this is how types acquire walkers.
+5. `src/turi/eval.c` -- the interpreter's opposing policy (region allocation +
+   no-op per-object free, `eval_frame_new`/`eval_frame_free`) and why it is
+   deliberate.
 
 For historical context:
 
 - `docs/archive/history/existential-gc-plan.md` — original EXG1 RC-for-existentials plan.
-- `docs/archive/existential-gc-followup-plan.md` — EXG4/5/6 (cross-scope
-  ownership, cycle visibility, `:linear`), shipped 2026-05.
+- `docs/archive/existential-gc-followup-plan.md` -- EXG4/5/6 (cross-scope
+  ownership, cycle visibility, `:linear`).
 - `docs/archive/history/end-to-end-monomorphization-plan.md` — the longer-term
   ABI direction; the current hybrid carrier/by-value boxing is the seam RC
   and GC sit on.
 
 ---
 
-## Which copy of the collector runs (updated 2026-07-25)
+## Which copy of the collector runs
 
-The collector was written twice: `src/runtime/{rc,gc,rc_free_queue}.c`, and a
-hand-written replica emitted into every compiled program. Divergence between
-them produced five bugs, so the replica is being retired. As of DEDUP-4b:
+The collector exists in two copies: `src/runtime/{rc,gc,rc_free_queue}.c`
+(linked as `libturt_runtime.a`), and a replica emitted into standalone C
+output. Which one a program runs depends on the build path:
 
 | build path | collector |
 |---|---|
@@ -512,13 +506,12 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
 
 ## Known gaps
 
-- Cycle collection is off by default. When enabled it now reclaims live strong
-  `rc<T>` cycles as well as weak-zombies (CG0--CG2, 2026-07-25; measured 192
-  bytes per cycle -> 0, archived at
-  `docs/archive/history/gc-strong-cycles-not-collected.md`). Remaining gaps: a cycle
-  routed through an `RCK_OPAQUE` block is invisible to the walker, and there is
-  no automatic trigger -- user code drives collection via `(gc!)` or the
-  suspect threshold.
+- Cycle collection is off by default. When enabled it reclaims live strong
+  `rc<T>` cycles as well as weak-zombies (see
+  `docs/archive/history/gc-strong-cycles-not-collected.md`). Remaining gap: a
+  cycle routed through an `RCK_OPAQUE` block is invisible to the walker.
+  Automatic collection exists only as the opt-in `(gc-auto!)` mode; otherwise
+  user code drives collection via `(gc!)` or the suspect threshold.
 - A cycle routed through a `Vec[rc<T>]` element buffer or a `Map[K rc<V>]` entry
   is refcount-correct but not reclaimed: both are plain `malloc` blocks with no
   walker, and neither can simply be given one (each is shared by raw pointer, so
@@ -527,12 +520,11 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
   self-walking container -- is designed in
   `docs/archive/history/collections-cannot-hold-rc-values.md` item 3, and
   `stdlib/rcchain.tur` is a working instance of it.
-- Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
-  no live weak pointers at collection time — see the comment there.
 - The walker relies on per-block metadata registered at allocation. Runtime
   type reflection is not available; a block with no `walk_fn` is opaque to
   the collector no matter what it actually points to.
-- Interpreter memory is reclaimed at env teardown, but a long-lived env
-  (REPL/kernel) is not bounded incrementally -- the value pool and per-eval
-  arenas grow until teardown. The plan to bound it is
+- Interpreter memory is reclaimed at env teardown; a long-lived env is
+  bounded incrementally only via incremental elaboration and scratch
+  promotion (on for the REPL -- see "The interpreter is different" above).
+  Embedders using the bare create/eval/free pattern grow until teardown. See
   `docs/archive/turi-interp-incremental-reclamation-plan.md`.

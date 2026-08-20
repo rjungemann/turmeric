@@ -73,8 +73,7 @@ The `Num` class is closed over its instance type:
 ```
 
 Every method returns `a`, not `:int`. That is what lets `(add r1 r2)` on two
-Rationals be a Rational at the call site rather than an integer -- the
-`:int`-returning shape it used to have made `Rational` un-instantiable.
+Rationals be a Rational at the call site rather than an integer.
 
 ## `Rational`
 
@@ -193,12 +192,11 @@ Both modules are written in ordinary Turmeric with **no inline C**. That is not
 an aesthetic choice: the tree-walking interpreter cannot execute inline C and
 carries hand-written native overrides to compensate, so a numeric tower written
 in Turmeric needs *zero* new natives and is byte-identical under `tur`, `turi`,
-and `tur jit` by construction.  JIT parity was measured, not assumed (N3,
-2026-08-17): every rational/complex fixture -- the error negatives included --
-passes under the MIR engine with zero cc-fallbacks, and `tests/run.sh` carries
-a standing check (`tests/check-no-c-complex.sh`) that `_Complex`,
-`<complex.h>`, and the `__mul*c3`/`__div*c3` compiler-runtime family never
-appear in emitter source or generated C.
+and `tur jit` by construction.  Every rational/complex fixture -- the error
+negatives included -- passes under the MIR engine with zero cc-fallbacks, and
+`tests/run.sh` carries a standing check (`tests/check-no-c-complex.sh`) that
+`_Complex`, `<complex.h>`, and the `__mul*c3`/`__div*c3` compiler-runtime
+family never appear in emitter source or generated C.
 
 The one dependency on inline C is the scalar libm layer in
 [`stdlib/math.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/math.tur) -- `sqrt`, `fabs`, `exp`, `sin`,

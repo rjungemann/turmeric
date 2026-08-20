@@ -208,7 +208,7 @@ already emit. A union type `(A | B | C)` is a tagged union in C with one tag
 per member. Subtyping (`A` is a subtype of `(A | B)`) is checked at use sites
 and does not require runtime casts.
 
-The `any` top type (available under either flag) is the natural home for code
+The `any` top type is the natural home for code
 that genuinely wants dynamic dispatch -- dynamic configuration, debug printers,
 and cross-FFI value shuttling -- without infecting typed code with `void*`.
 
@@ -230,7 +230,7 @@ as type-level compile-time integers.
 > polymorphic helpers. Sizes only known at run time fall back to runtime
 > assertions. See the archived
 > [sized-types-completion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-completion-plan.md)
-> (SZ6–SZ9) and
+> (SZ6--SZ9) and
 > [sized-types-cross-param-unification-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-cross-param-unification-plan.md).
 
 ```turmeric
@@ -518,23 +518,23 @@ graph:
 
 ```
 Algebraic effects (Phase 19)
-  └── Effect Types / Row Polymorphism (-Xeffect-types)
-        └── Linear Continuations, Multi-Shot Continuations
+  +-- Effect Types / Row Polymorphism
+        +-- Linear Continuations, Multi-Shot Continuations
 
-Linear Types (-Xlinear)
-  ├── Substructural Types (-Xsubstructural)
-  │     └── Uniqueness Types (-Xunique-types)
-  └── Session Types (-Xsessions)
+Linear Types
+  +-- Substructural Types
+  |     +-- Uniqueness Types
+  +-- Session Types
 
-GADTs (-Xgadt)
-  └── Sized Types (via GADT infrastructure)
+GADTs
+  +-- Sized Types (via GADT infrastructure)
 
-Union/Intersection Types (-Xunion-types, -Xintersection-types)
+Union/Intersection Types
 
-Contract Types (-Xcontracts)
+Contract Types
 
-HKT (default-on) -- forall, Rank-2
-  └── Existential Types (default-on) -- exists, pack/open
+HKT -- forall, Rank-2
+  +-- Existential Types -- exists, pack/open
 ```
 
 Each feature in the graph uses the one above it. Dependent types would not slot

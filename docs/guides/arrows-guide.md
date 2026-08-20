@@ -34,9 +34,8 @@ canonical method names (`arr`, `>>>`, `<<<`, `first`, `second`, `left`,
 Both surfaces live in the **same module** and share the names `arr` / `>>>`. A
 bare call dispatches to the matching instance when the receiver's type selects
 one, and falls back to the bare combinator otherwise -- so a single `(load
-"stdlib/arrow.tur")` gives you both. (This unification became possible once a
-free `defn` and a typeclass method of the same name were allowed to coexist;
-see
+"stdlib/arrow.tur")` gives you both. (A free `defn` and a typeclass method of
+the same name share the value namespace; see
 [`docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).)
 
 For the function arrow, `arr` lifts a function (the identity up to eta), and
@@ -111,8 +110,8 @@ let [add1       arr(fn([x] +(x 1)))
 `arrow-first` and `arrow-second` are the plain-function helpers exported from
 `stdlib/arrow.tur`. The bare layer exports only forward composition (`>>>`);
 write `(>>> f g)` with the arguments in the order you want them applied. If you
-need reverse composition (`<<<`), reach for the typeclass layer below -- the A3
-operator-mangling fix gives `>>>` and `<<<` distinct C identifiers
+need reverse composition (`<<<`), reach for the typeclass layer below --
+operator mangling gives `>>>` and `<<<` distinct C identifiers
 (`_gt_gt_gt` / `_lt_lt_lt`), so they coexist there as method names.
 
 ## Additional Combinators
@@ -303,19 +302,14 @@ flowing through the instance dictionary.
 
 ## Signals and Signal Functions
 
-> **Where the Signal/SF library lives:** the worked example is the
+> **Where the Signal/SF library lives:** the worked implementation is the
 > `tur-signal` spice in `../turmeric-spices/spices/signal/` (see
 > `docs/archive/history/tur-signal-rebuild-plan.md` for the rebuild plan and
-> current acceptance state). The code samples below use the
-> `stdlib/signal/core.tur` paths from the original placement; treat
-> them as the conceptual surface -- the same names are exported by
+> acceptance state). The code samples below are written against
+> `stdlib/signal/...` paths; there is no `stdlib/signal/` in this repo, so
+> treat them as the conceptual surface -- the same names are exported by
 > `signal/core`, `signal/osc`, `signal/filter`, `signal/shaper`,
-> `signal/envelope`, and `signal/compose` in the spice. End-to-end
-> exercise of the SF-application surface is currently gated on the
-> reports under `docs/reported/` named `defmodule-loses-fat-fn-type-
-> annotation` and `vec-typed-fat-closure-readback-fixture-regressed-
-> codegen`; the bare combinators (`arr`, `>>>`, `arrow-first`,
-> `arrow-second`) work today.
+> `signal/envelope`, and `signal/compose` in the spice.
 
 `stdlib/signal/core.tur` introduces the Signal abstraction:
 
@@ -585,57 +579,25 @@ let [dummy  constant(())
 
 ---
 
-## Extended Arrow Typeclasses
-
-An earlier scaleback
-([`docs/archive/history/stdlib-arrow-scaleback-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-arrow-scaleback-plan.md))
-removed `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`, and `ArrowApply`
-because no instances backed them (closure-returning instance methods tripped a
-codegen bug, and several stubs needed `Either`/`Left`/`Right` sum types). Both
-gaps have since closed, so the hierarchy was **reintroduced**
-([`docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md))
-and is now live in `stdlib/arrow.tur` -- see the **Typeclass dispatch** section
-above for the full table and per-class examples. `Category` and the honest
-`Kleisli` `ArrowZero` were added on top
-([`docs/archive/history/category-arrowzero-implementation-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/category-arrowzero-implementation-plan.md)).
-`ArrowZero`/`ArrowPlus` remain uninstantiated at `(->)` by design (no zero for a
-total function); `Kleisli` is where `zero-arrow` honestly lives.
-
----
-
 ## Examples
 
-The `examples/signal-processing/` directory contains a three-step tutorial
-that you can run directly:
-
-```sh
-tur run examples/signal-processing/01_basics.tur    # Arrow fundamentals
-tur run examples/signal-processing/02_signals.tur   # Signals and SFs
-tur run examples/signal-processing/03_dsp.tur       # DSP primitives
-```
-
-**`01_basics.tur`** -- covers `arr`, `>>>`, arrow laws, and
-`arrow-first`/`arrow-second` using plain integer functions.
-
-**`02_signals.tur`** -- introduces the `Signal` and `SF` types, `constant`,
-`time-signal`, `pair-signals`, and stateful SFs via `state-sf`.
-
-**`03_dsp.tur`** -- demonstrates oscillators (`sine`, `square`, `sawtooth`,
-`triangle`), processors (`gain`, `offset`, `invert`, `abs-sf`), mixing
-(`add`, `mix`, `multiply`), filters (`low-pass`, `high-pass`), and a
-complete multi-stage processing chain.
+Runnable signal-processing examples ship with the `tur-signal` spice under
+`../turmeric-spices/spices/signal/examples/` -- short, per-module programs
+covering signal construction, oscillators, filters and shapers, envelopes,
+and a simple voice. Clone the `turmeric-spices` repository next to this one
+to run them.
 
 ## Quick Reference
 
 ```
-stdlib/arrow.tur          -- arr, >>>, compose-float, arrow-first, arrow-second,
+stdlib/arrow.tur          -- arr, >>>, arrow-first, arrow-second,
                              par-comp, arrow-split, arrow-const, arrow-dup
 stdlib/kleisli.tur        -- Kleisli, kleisli, k-apply
-stdlib/signal/core.tur    -- constant, time-signal, sample, map-signal,
-                             pair-signals, left-signal, right-signal
-stdlib/signal/dsp.tur     -- sine, square, sawtooth, triangle,
-                             low-pass, high-pass,
-                             gain, mix, add, offset, clip, invert
+signal/core (spice)       -- constant, time-signal, sample, map-signal,
+                             pair-signals
+signal/osc (spice)        -- sine, square, sawtooth, triangle
+signal/filter (spice)     -- low-pass, high-pass
+signal/shaper (spice)     -- gain, mix, add, offset, clip, invert
 ```
 
 ## See Also
