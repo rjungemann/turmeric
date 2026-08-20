@@ -93,17 +93,54 @@ initializer, etc.).
 **Arc** (atomic reference counting) is the thread-safe counterpart to
 `rc<T>`: where `rc<T>` uses plain counts (single-threaded), the Arc control
 block uses atomic counts so multiple OS threads can safely clone and drop a
-shared value. The runtime lives in `src/runtime/arc.{c,h}`; there is no
-auto-loaded stdlib wrapper yet, so today Arc is reached through inline C
-over the control block (see `tests/fixtures/arc-basic` and
-`tests/fixtures/arc-clone` for the canonical shapes: an `arc-new` /
-`arc-clone` / `arc-drop` trio over an atomic `{strong, weak, value}` block).
+shared value. The runtime lives in `src/runtime/arc.{c,h}`; the language
+surface is `stdlib/arc.tur`, which is not auto-loaded:
+
+```turmeric no-check
+(defmodule app
+  (import arc :refer [arc-new arc-clone arc-get arc-strong-count arc-drop])
+  (defn main [] : int
+    (let [a (arc-new 42)
+          b (arc-clone a)]
+      (println (arc-get b))            ; 42
+      (println (arc-strong-count a))   ; 2
+      (arc-drop b)
+      (arc-drop a))
+    0))
+```
+
+`Arc` and `ArcWeak` are distinct opaque handles, so passing one where the
+other belongs is a type error rather than a runtime abort.
 
 ### Properties
 
 - **Atomic:** Reference count increments/decrements are atomic (thread-safe).
 - **Clone/drop:** cloning increments the strong count; dropping decrements it atomically and frees at zero.
 - **Shared but not mutable:** an Arc gives shared read-only access. Guard mutable shared state with a mutex or use an atomic cell.
+- **No cycle collector.** This is the one place Arc is *weaker* than `rc<T>`,
+  which has a Bacon-Rajan collector. A cycle of strong Arcs leaks; break it
+  by hand with `arc-downgrade` / `arc-upgrade`.
+
+### Weak references
+
+`arc-downgrade` yields an `ArcWeak` that does not keep the value alive.
+`arc-upgrade` returns `(Option Arc)` -- not a nullable handle, because "the
+value may already be gone" is the entire point of a weak reference, so the
+caller has to say what happens in that case:
+
+```turmeric no-check
+(let [a (arc-new 42)
+      w (arc-downgrade a)]
+  (arc-drop a)                     ; last strong reference gone
+  (let [u (arc-upgrade w)]
+    (println (if (some? u) 1 -1))) ; -1
+  (arc-weak-drop w))
+```
+
+`arc-weak-count` reports the weak handles a caller actually holds: the
+runtime keeps a +1 sentinel while any strong reference lives, so the control
+block is not freed under a live weak handle, and that sentinel is subtracted
+out.
 
 ### When to Use Arc
 

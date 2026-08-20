@@ -1,0 +1,9 @@
+stdlib/arc.tur is inline-C over the src/runtime/arc.c control block, and the
+tree-walking interpreter does not run inline-C (the TI7 carve-out).
+
+This fixture used to be auto-skipped by run-turi.sh's fixture_has_inline_c,
+which greps THIS file for a ```c fence -- it had one, because it hand-rolled
+its own control block. Moving the implementation into the shared module is
+what the fix was, and it also moved the inline-C out of the grep's reach:
+the detector follows `(load "...")` but not `(import arc ...)`. So the skip
+that used to happen by accident now has to be declared.

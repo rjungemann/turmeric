@@ -1,0 +1,45 @@
+;; arc-weak-upgrade -- the weak half of stdlib/arc.tur.
+;;
+;; A weak handle does not keep the value alive, which is how an Arc cycle gets
+;; broken -- unlike rc<T>, Arc has NO cycle collector. So the interesting
+;; assertion is the one after the last strong drop: upgrading must report
+;; failure rather than hand back a dangling handle.
+;;
+;; arc-upgrade returns (Option Arc), not a nullable handle: "the value may
+;; already be gone" is the entire point of a weak reference, so the caller is
+;; made to say what happens in that case. Both arms are exercised below.
+;;
+;; The sentinel: the runtime keeps a +1 weak count while any strong reference
+;; lives, so the block is not freed under a live weak handle. arc-weak-count
+;; subtracts it, so the counts below are the ones a caller actually holds.
+
+(defmodule app
+  (import arc :refer [arc-new arc-get arc-strong-count arc-weak-count
+                      arc-drop arc-downgrade arc-upgrade arc-weak-drop])
+
+  (defn main [] : int
+    (let [a (arc-new 42)
+          w (arc-downgrade a)]
+      (println (arc-weak-count a))           ; 1  -- sentinel excluded
+      (println (arc-strong-count a))         ; 1
+
+      ;; upgrade while the value is alive -> some, and it is a REAL strong ref
+      (let [u (arc-upgrade w)]
+        (if (some? u)
+          (let [b (unwrap u)]
+            (println (arc-get b))            ; 42
+            (println (arc-strong-count b))   ; 2  -- upgrade took a reference
+            (arc-drop b))
+          (println -1)))
+      (println (arc-strong-count a))         ; 1  -- back down after the drop
+
+      ;; drop the last strong reference; the weak handle survives it
+      (arc-drop a)
+
+      ;; upgrade after the value is gone -> none, not a dangling handle
+      (let [u2 (arc-upgrade w)]
+        (println (if (some? u2) 1 -1)))      ; -1
+
+      ;; releasing the last weak handle frees the control block
+      (arc-weak-drop w))
+    0))

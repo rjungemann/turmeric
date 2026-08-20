@@ -1,72 +1,36 @@
-;; Phase T19: arc-basic — atomic reference counting (Arc<T>) using inline C.
+;; arc-basic -- Arc<T>, atomic reference counting, through stdlib/arc.tur.
 ;;
-;; Arc is represented as a :ptr<void> pointing to an ArcBlock:
+;; This fixture used to hand-roll its OWN control block in inline C:
 ;;   struct { uint64_t strong; uint64_t weak; int64_t value; }
-;; strong and weak are accessed via __atomic_* builtins.
-;; weak has a sentinel +1 while strong > 0 to keep the block alive.
+;; which had already drifted from the real ArcControlBlock in
+;; src/runtime/arc.h (that one carries `value` as a pointer plus a drop_fn and
+;; a type kind). The runtime existed the whole time; what was missing was a
+;; language surface over it, so the only user in the tree reimplemented it and
+;; the two definitions diverged unnoticed -- the same shape as the HttpdConn
+;; redeclaration defect. See docs/archive/stdlib-arc-surface-missing.md.
+;;
+;; The assertions below are unchanged from that version; only the
+;; implementation moved to the shared module, so this now exercises the real
+;; runtime rather than a copy of it.
 
-(defn arc-new [val : int] : ptr<void>
-  ```c
-  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
-  ArcBlock *b = (ArcBlock *)malloc(sizeof(ArcBlock));
-  if (!b) { fprintf(stderr, "arc-new: out of memory\n"); abort(); }
-  __atomic_store_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
-  __atomic_store_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
-  b->value = (int64_t)val;
-  return (void *)b;
-  ```)
+(defmodule app
+  (import arc :refer [arc-new arc-clone arc-get arc-strong-count arc-drop])
 
-(defn arc-get [p : ptr<void>] : int
-  ```c
-  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
-  ArcBlock *b = (ArcBlock *)p;
-  return (int64_t)b->value;
-  ```)
-
-(defn arc-clone [p : ptr<void>] : ptr<void>
-  ```c
-  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
-  ArcBlock *b = (ArcBlock *)p;
-  __atomic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
-  return (void *)b;
-  ```)
-
-(defn arc-strong-count [p : ptr<void>] : int
-  ```c
-  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
-  ArcBlock *b = (ArcBlock *)p;
-  return (int64_t)__atomic_load_n(&b->strong, __ATOMIC_SEQ_CST);
-  ```)
-
-(defn arc-drop [p : ptr<void>] : nil
-  ```c
-  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
-  ArcBlock *b = (ArcBlock *)p;
-  uint64_t prev_strong = __atomic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
-  if (prev_strong == 1) {
-      /* Last strong ref dropped: drop value, then drop sentinel weak ref */
-      uint64_t prev_weak = __atomic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL);
-      if (prev_weak == 1) {
-          free(b);
-      }
-  }
-  ```)
-
-(defn main [] : int
-  ;; create
-  (let [a (arc-new 42)]
-    (println (arc-get a))
-    (println (arc-strong-count a))
-
-    ;; clone — same underlying block, strong count increases
-    (let [b (arc-clone a)]
+  (defn main [] : int
+    ;; create
+    (let [a (arc-new 42)]
+      (println (arc-get a))
       (println (arc-strong-count a))
-      (println (arc-get b))
 
-      ;; drop clone — strong count back to 1
-      (arc-drop b)
-      (println (arc-strong-count a)))
+      ;; clone -- same underlying block, strong count increases
+      (let [b (arc-clone a)]
+        (println (arc-strong-count a))
+        (println (arc-get b))
 
-    ;; drop original
-    (arc-drop a))
-  0)
+        ;; drop clone -- strong count back to 1
+        (arc-drop b)
+        (println (arc-strong-count a)))
+
+      ;; drop original
+      (arc-drop a))
+    0))
