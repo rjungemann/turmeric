@@ -1,0 +1,24 @@
+;; The Send-across-await check (TUR-E0022) must not be evadable by hoisting.
+;;
+;; The sibling fixture `await-live-not-send` writes the offending body as an
+;; inline `(async (fn [] ...))`. This one is the SAME body, lifted into a named
+;; defn and handed to `(async f)`. Semantically identical: `x` is an rc<int>,
+;; not Send, live in scope across an await, and the fiber may resume on a
+;; different OS thread and race the refcount.
+;;
+;; It used to compile clean. The check was gated on an in_async_body flag set
+;; only while the elaborator walked inside an `(async ...)` form, and a
+;; pre-defined function is elaborated at its own definition site instead -- so
+;; moving the body one line up silenced a soundness diagnostic. See
+;; docs/archive/async-send-check-skips-predefined-fns.md.
+(load "stdlib/rc.tur")
+
+(defn zero [] : int 0)
+
+(defn f [] : int
+  (let [x (rc/of 42)]      ;; rc<int> -- not Send
+    (await (async zero))   ;; x is in scope across this await -- ERROR
+    (rc/deref x)))
+
+(defn main [] : nil
+  (await (async f)))

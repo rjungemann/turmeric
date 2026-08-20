@@ -230,10 +230,30 @@ Consume or drop non-Send values before the `await`:
 
 ### Scope
 
-This check applies **only to inline closures** passed directly to `(async
-(fn [] ...))`. Pre-defined functions referenced as `(async my-fn)` are not
-re-elaborated and are not checked here; their bodies were compiled without
-async context.
+The check runs at **every** `await`, wherever it appears. Writing the body
+inline as `(async (fn [] ...))` and lifting it into a named `defn` handed to
+`(async my-fn)` are diagnosed the same way -- the two are semantically
+identical, so hoisting is not an escape hatch:
+
+```turmeric no-check
+;; Both of these are TUR-E0022.
+(defn main [] : nil
+  (await (async (fn [] : int
+    (let [x (rc/of 42)]
+      (await (async zero))    ;; x live across an await
+      (rc/deref x))))))
+
+(defn f [] : int
+  (let [x (rc/of 42)]
+    (await (async zero))      ;; ... and so is this
+    (rc/deref x)))
+(defn main [] : nil (await (async f)))
+```
+
+This is conservative in the direction of safety: *every* binding in scope at
+an `await` must be Send, whether or not it is genuinely read afterwards. To
+carry a non-Send value across an await, end its scope before the await point
+(a nested `let`) or convert it to a Send representation.
 
 ## I/O Bindings
 
