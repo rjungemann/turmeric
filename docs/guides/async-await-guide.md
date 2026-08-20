@@ -117,7 +117,7 @@ reset
 | Feature | Threads | Async/Await |
 |---------|-------------------|----------------------|
 | **Model** | OS-level 1:1 threads | User-space fibers |
-| **Overhead** | ~10-100μs per thread | ~1μs per fiber |
+| **Overhead** | ~10-100us per thread | ~1us per fiber |
 | **Scalability** | 100s-1000s max | 100k+ feasible |
 | **Stack** | Real OS stack | CPS-based (heap) |
 | **Use case** | CPU-bound parallelism | I/O-bound concurrency |

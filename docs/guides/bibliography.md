@@ -104,7 +104,7 @@ Referenced by: `docs/archive/effect-types-row-polymorphism-plan.md`.
 ---
 
 **Liberating Effects with Rows and Handlers**
-Daniel Hillerström and Sam Lindley.
+Daniel Hillerstrom and Sam Lindley.
 *Liberating Effects with Rows and Handlers.*
 TyDe 2016.
 <https://doi.org/10.1145/3007263.3007271>

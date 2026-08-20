@@ -186,12 +186,11 @@ etc.) dedupe by value:
 ; each element expression evaluated exactly once
 ```
 
-> **Note on the `Hash[A]` typeclass.** The original design sketched injecting
-> a `(hash x)` typeclass call per element. The `Hash[A]` method does not
-> monomorphize in the current compiled codegen, so `set-of` uses identity
-> hashing instead (matching all existing `Set[A]` usage). Keyword *values*
-> are not runtime values in Turmeric, so `#set{:a :b}` does not type-check;
-> use scalar elements.
+> **Note on hashing.** Scalar elements are their own hash (the identity-hash
+> convention above). Keyword elements are first-class `:Sym` values, so
+> `#set{:a :b}` builds a `Set[Sym]` content-keyed on the interned symbol;
+> membership tests take the symbol's hash explicitly, e.g.
+> `(set-member? s (hash :a) :a)`. See [the symbols guide](symbols-guide.md).
 
 ## Empty literals
 
@@ -343,10 +342,10 @@ a literal-syntax change.
 
 ## Relationship to the JSON reader macro
 
-The data literals supersede the [JSON reader-macro
-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/json-reader-macro-plan.md) for the common "literal shape, computed
-values" case: `#map{...}` already accepts arbitrary value expressions, which a
-JSON-only reader cannot. A `#json(...)` reader would remain useful only for
+The `#json(...)` reader macro ([json-guide.md](json-guide.md)) embeds a
+verbatim JSON blob, validated at compile time. The data literals cover the
+"literal shape, computed values" case that a JSON-only reader cannot:
+`#map{...}` accepts arbitrary value expressions. Use `#json(...)` for
 pasting a literal JSON blob verbatim; for everything else, write the map
 literal directly.
 
