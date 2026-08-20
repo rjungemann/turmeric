@@ -134,18 +134,19 @@ Where the compiler can prove a lens call site **statically and uniquely**
 resolves to a *simple* lens (one with a single `fmap` dispatch at its body tail),
 it redirects the call to a monomorphized by-value body with **no heap box** on
 either the `(f S)` or `(f A)` result. A consumer lens param that resolves to
-several distinct simple lenses gets one box-free clone per lens. Two shapes still
-ride the boxed carrier bridge as a correctness fallback:
+several distinct simple lenses gets one box-free clone per lens. Composed
+lenses (a body that tails into *another lens*, e.g.
+`line-a-x = line-a . point-x`) also thread `(f a)` by value end to end --
+no carrier box at any composition crossing (see
+[van-laarhoven-composed-byvalue-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/van-laarhoven-composed-byvalue-plan.md)).
+A few shapes still ride the boxed carrier bridge as a correctness backstop:
 
 - **Runtime-selected lenses** -- a lens chosen at run time (not a named-function
-  argument) has no static resolution, so there is nothing to redirect.
-- **Composed lenses** -- a lens whose body tails into *another lens* rather than
-  a direct `fmap` dispatch (e.g. `line-a-x = line-a . point-x`). The nested lens
-  is carrier-lowered while the outer functor is by value, and the two ABIs do not
-  yet meet, so such a lens (and any consumer ever passed one) falls back to the
-  boxed path. The fix that lets composed lenses join the by-value path is tracked
-  in
-  [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/van-laarhoven-composed-byvalue-plan.md).
+  argument) has no static resolution, so there is nothing to redirect. The
+  same applies to a runtime-selected *nested* lens inside a composition.
+- **Unloweable compositions** -- a composed body whose tail is not a lens
+  application or `fmap` dispatch, one missing its adapter, or nesting past
+  the lowering depth cap.
 
 ## Related
 

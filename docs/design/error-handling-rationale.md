@@ -1,6 +1,15 @@
 # Error Handling Rationale: Exceptions vs. Panic
 
-This document explains Turmeric's choice of **exception-based error handling** and compares it with panic-based approaches.
+> **Status: Superseded.** This document records the original (pre-v0.25.0)
+> rationale for exception-based error handling. The `throw` / `try` / `catch`
+> forms it describes were **deleted end-to-end in v0.25.0** (see CHANGELOG).
+> Current Turmeric uses `Result` / `Option` for recoverable errors and
+> `panic` / `catch-unwind` for unrecoverable ones -- see
+> [docs/guides/error-handling-guide.md](../guides/error-handling-guide.md)
+> for what is implemented today. The panic/`defer` half of this document
+> still reflects current behavior; the exception half is history.
+
+This document explains Turmeric's original choice of **exception-based error handling** and compares it with panic-based approaches.
 
 ## Executive Summary
 
@@ -89,7 +98,7 @@ Expected failures (I/O, validation, network) use **exceptions**:
 **Why?**
 - These are expected; programs should recover.
 - Callers need to decide: retry, use default, report to user, etc.
-- Composability: `read-file` → `parse-json` → `validate` can chain recovery.
+- Composability: `read-file` -> `parse-json` -> `validate` can chain recovery.
 - Debugging: exception traces show exactly where the error occurred.
 
 ### Programming Errors: Panic
@@ -216,6 +225,6 @@ This allows custom exception handling logic without language support; useful for
 
 ## See Also
 
-- [Effects System Guide](../guides/effects-system-guide.md) -- Exception handling with effects (v3)
-- [Threading Guide](../guides/threading-guide.md) -- Exception handling in threads
-- [turmeric-plan.md](../turmeric-plan.md) §17 -- Exception system architecture
+- [Error Handling Guide](../guides/error-handling-guide.md) -- the current `Result` / `Option` / `panic` / `catch-unwind` model
+- [Effects System Guide](../guides/effects-system-guide.md) -- effect handlers (`try-with`)
+- [Threading Guide](../guides/threading-guide.md) -- error handling in threads

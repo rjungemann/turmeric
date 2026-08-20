@@ -20,7 +20,7 @@ interpreting benchmarks.
 Always benchmark release builds:
 
 ```sh
-just release          # builds build-rel/tur
+just release          # cmake --build build -j --config Release
 ```
 
 The debug build (`just build`) inserts contract checks and disables
@@ -473,9 +473,10 @@ defn with-indent [body] :any
 
 ### Allocation patterns
 
-Turmeric uses a precise, tracing garbage collector. Short-lived objects are
-cheap to allocate but incur GC work proportional to their number. For
-allocation-heavy workloads:
+Turmeric uses reference counting with an opt-in cycle collector (see
+[gc-guide.md](gc-guide.md)). Short-lived objects are cheap to allocate but
+incur retain/release work proportional to their number. For allocation-heavy
+workloads:
 
 - Prefer stack-allocated scalars (concrete `int`, `float`, `bool`) -- they
   never hit the GC.
@@ -732,10 +733,8 @@ time; `bash benchmarks/run-triangle.sh` regenerates this from
 | mandel (float inner loop) | 639ms | 142ms | 187ms | 5ms | 192ms |
 
 All three legs are re-measured together on each run, so the columns are
-comparable to each other. They are NOT comparable to an older snapshot taken
-on a different machine -- an earlier edition of this table had the interpreter
-at 223ms for `fib` where this one has 137ms, and essentially none of that is a
-Turmeric change.
+comparable to each other. They are NOT comparable to a snapshot taken on a
+different machine.
 
 How to read it:
 
@@ -745,10 +744,9 @@ How to read it:
   interpreter's zero-compile leg makes it competitive end to end even
   while its loop throughput is 9x behind (loop-sum).
 - **`tur jit` beats the cc round trip end to end**, by ~25-30% on these
-  programs. It did not always: with eager code generation it merely matched
-  cc, and switching to serialized LAZY generation -- only the functions a run
-  actually calls get compiled -- is what moved it ahead (23-36% off the JIT
-  leg alone). Its other advantage is structural, being IN PROCESS: no
+  programs. Code generation is serialized and LAZY -- only the functions a
+  run actually calls get compiled (worth 23-36% off the JIT leg alone
+  versus eager generation). Its other advantage is structural, being IN PROCESS: no
   subprocess, no disk artifacts, and the spice REPL reload path is ~3.2x
   faster than the `tur build --shared` round trip it replaces (see the
   repl guide). `TUR_JIT_GEN=eager` restores whole-program generation, which

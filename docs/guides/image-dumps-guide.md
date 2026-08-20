@@ -236,7 +236,7 @@ cross the boundary.
 
 - `docs/guides/serializable-continuations-guide.md` -- the Phase 21 substrate.
 - `docs/archive/history/application-image-dumps-plan.md` -- the full plan (AI0--AI8),
-  including the phases not yet implemented (AI3 globals, AI5 reload hooks,
-  AI6.1 `tur run --image`, perf benchmarks).
+  including the phases not yet implemented (AI3 globals, AI6.1
+  `tur run --image`, perf benchmarks).
 - `src/runtime/image.h` -- the canonical header layout; `tests/image_unit.c`
   pins it.

@@ -20,9 +20,9 @@ so are the rows where Haskell's ad-hoc polymorphism still buys you
 something we don't have.
 
 For the introductory tutorial see
-[`ecs-guide.md`](ecs-guide.md). For the long-form plan and the
-load-bearing prereqs that closed in 2026-06-11 see
-[`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
+[`ecs-guide.md`](ecs-guide.md). For the long-form plan and its
+load-bearing prereqs see
+[`../archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
 
 ## The bottom line
 
@@ -36,8 +36,8 @@ load-bearing prereqs that closed in 2026-06-11 see
 | **Polymorphic-system bound** ("any world with `Pos` and `Vel`") | `Has w Pos, Has w Vel => …` constraint, solved by GHC | Same | `(HasPos W) (HasVel W) => …` Turmeric class constraint -- shipped via `defcomponent-class` / `definstance` |
 | **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness by importing the `ecs/refined-world` facade: a read whose entity is not proven alive is a compile error |
 | **Query arity** | Tuples up to 8-ish via type-class hackery; degrades past that | `Query` arrow combinators -- no cap, but composition cost is real | Truly variadic via row-kinded `for-each`; row type is the kind-`[*]` of components |
-| **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check (lifts when the spice wires `SizedVec<n, T>` -- SZ6+ shipped, spice wiring still TODO) |
-| **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md)); single-world is v1 |
+| **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check on the unsized world; compile-time (statically rectangular, `TUR-E0260` on mismatch) with the opt-in sized worlds (`sized-defworld` / `sized-for-each`) |
+| **Cross-world systems** | Out of scope | Out of scope | Shipped -- `ecs/xsystem` / `defmirror` / `XStage` (see [`ecs-guide.md`](ecs-guide.md#cross-world-systems)) |
 
 The single largest delta is **write-set enforcement**. Both Haskell
 libraries trust the programmer not to write to a component they didn't
@@ -193,8 +193,8 @@ The line you cannot write here:
 `Color` is not in `:writes`, so the `defsystem` macro never binds
 `Color-write-cap` in body scope, so the `set-Color!` call cannot
 resolve its required cap argument. The body refuses to elaborate.
-This is the compile-time enforcement neither apecs nor aztecs deliver
--- it's what the spec'd Phase I cap-gating shipped.
+This is the compile-time enforcement neither apecs nor aztecs
+deliver.
 
 The corresponding *positive* case is just as direct:
 
@@ -315,12 +315,12 @@ apecs and aztecs do the same thing the same way -- neither ships
 compile-time alive-set proofs, and tur-ecs's *default* path doesn't
 either.
 
-Two honesty notes the earlier version of this section got wrong. The
-reads are **not** `option`-returning: `defcomponent-accessors` emits a
-`get-<Comp>` that returns the component directly. And on the unsized
-world the comparison is not performed anywhere on the read path -- a
-stale handle reads stale bits. Sized worlds have `sized-alive?`;
-unsized worlds leave the check to you.
+Two honesty notes. The reads are **not** `option`-returning:
+`defcomponent-accessors` emits a `get-<Comp>` that returns the
+component directly. And on the unsized world the comparison is not
+performed anywhere on the read path -- a stale handle reads stale
+bits. Sized worlds have `sized-alive?`; unsized worlds leave the
+check to you.
 
 A compile-time version now **ships as an opt-in module** -- you opt in
 by importing it, not by setting a flag. Refinement types are checked
@@ -349,15 +349,14 @@ the prover can't.
 
 ### Dense-storage length matching
 
-`for-each [Pos Vel]` zips two dense storages. The spice currently
-checks at runtime that both storages have the same length and rejects
-otherwise. The prereq for lifting this to compile time -- `SizedVec<n,
-T>` with a load-bearing size index -- shipped in 2026-06-10 (SZ6-SZ8;
-see
-[`docs/archive/history/sized-types-phantom-index.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-phantom-index.md)).
-The spice has not yet wired its dense storages through `SizedVec`.
-When it does, dense-vs-dense zip becomes statically rectangular; the
-runtime check disappears for that case.
+On the unsized world, `for-each [Pos Vel]` zips two dense storages
+with a runtime check that both storages cover the loop range (the
+`__fe-min-cap` probe). The opt-in sized worlds move this to compile
+time: `sized-for-each` over a `(GameWorld (Static n))` is statically
+rectangular, and a mixed-capacity invocation is a `TUR-E0260`
+elaboration error (see [`ecs-storage-guide.md`](ecs-storage-guide.md)
+and the sized-world section of [`ecs-guide.md`](ecs-guide.md)). The
+runtime check remains only on the unsized path.
 
 ### The world handle is `:int` at the system body's signature
 
@@ -429,14 +428,15 @@ scheduler ever runs.
 ## Where to look next
 
 - [`ecs-guide.md`](ecs-guide.md) -- the introductory tutorial.
-- [`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md)
+- [`../archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md)
   -- the long-form plan, status, and what's still queued for v2.
 - [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md)
   -- the Phase I implementation log for the cap-gating surface that
   delivered the headline compile-time-write-set claim.
-- [`../upcoming/v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md)
-  -- post-v1 follow-up extending the cap surface to multi-world
-  render-extract / client-prediction patterns.
+- [`../archive/history/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md)
+  -- the shipped extension of the cap surface to multi-world
+  render-extract / client-prediction patterns (`ecs/xsystem`,
+  `defmirror`, `XStage`).
 - [`substructural-types-guide.md`](substructural-types-guide.md) --
   the `^linear` / `^borrow` machinery the cap surface is built on.
 
@@ -446,7 +446,7 @@ If you take only one thing from this guide, take this:
 
 - **Component membership and write-set enforcement** are the rows
   where tur-ecs is unambiguously better than apecs and aztecs in v1.
-  The cap-gating ships as of 2026-06-11; this is not a future claim.
+  The cap-gating has shipped; this is not a future claim.
 - **Aliveness** is the row where the *defaults* are the same and
   runtime-checked everywhere (Haskell's `liquid-haskell` is the analog;
   nobody ships it as default). tur-ecs now has an opt-in compile-time

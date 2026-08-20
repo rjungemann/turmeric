@@ -6,8 +6,11 @@ description: Plan for #r{...} reader-level range shorthand (RR0-RR4) -- desugars
 
 # Range Reader Shorthand -- Plan (RR0--RR4)
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-22
+> **Status:** SHIPPED. All phases (RR0-RR4, including the RR3 shadowing
+> warning) are implemented -- see `read_range_literal` in
+> `src/compiler/reader.c`, `stdlib/float-range.tur`, and the
+> `tests/fixtures/range-reader-*` fixtures. This document is kept as the
+> design reference for the grammar and desugaring tables.
 > **Type:** Reader / Syntax Feature
 
 ---

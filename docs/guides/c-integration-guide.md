@@ -4,12 +4,12 @@ category: Interoperability
 description: Foreign function interface (FFI) and C interop
 ---
 
-# Turmeric ↔ C Integration Guide
+# Turmeric <-> C Integration Guide
 
 Turmeric compiles to C99. This means C integration is not a plugin API -- it is
-the compilation target itself. There is no runtime library to link against and
-no interpreter to embed. Instead, you write Turmeric code that reaches into C
-(and vice-versa) by making the generated C source do what you need.
+the compilation target itself. You write Turmeric code that reaches into C
+(and vice-versa) by making the generated C source do what you need; `tur build`
+links the small Turmeric runtime for you automatically.
 
 This guide covers the *static* story -- the library is known at build time
 and the generated C calls it by name. For loading libraries at **runtime**
@@ -32,15 +32,17 @@ This guide covers the two directions:
 Running `./build/tur build path/to/file.tur` internally does:
 
 ```text
-Source → Reader → Elaborator → Effect-lower → CPS transform
-       → Borrow-checker → Emit C99 → cc → executable
+Source -> Reader -> Elaborator -> Effect-lower -> CPS transform
+        -> Borrow-checker -> Emit C99 -> cc -> executable
 ```
 
-The emitter (`src/emit.c`) writes a self-contained `.c` file. For multi-file
-builds it also emits a `_main.c` that `#include`s the generated modules.
-No Turmeric runtime shared library is produced; the only runtime artifact is
-`src/runtime.{c,h}` (the defer/continuation frame structs), which gets compiled
-in via `build/runtime.o`.
+The emitter (`src/compiler/emit_*.c`) writes a self-contained `.c` file. For
+multi-file builds it also emits a `_main.c` that pulls in the generated module
+headers and defines `main()`. The runtime (defer frames, rc, panics, ...) is
+carried by the compiler and linked automatically -- from the prebuilt
+`libturt_runtime.a` / `libturi.a` archive under `--runtime=lib`, or compiled
+alongside the generated code (set `TUR_RUNTIME_LIB` to point at the archive
+explicitly).
 
 To inspect the emitted C without building, use:
 
@@ -147,14 +149,14 @@ extern-c time  [^ptr]    :ptr
 | Turmeric type | Generated C type | Notes |
 |---------------|-----------------|-------|
 | `:int`        | `int64_t`       | Alias for `int64` |
-| `:int8`       | `int8_t`        | −128 … 127 |
-| `:int16`      | `int16_t`       | −32 768 … 32 767 |
-| `:int32`      | `int32_t`       | −2 147 483 648 … 2 147 483 647 |
+| `:int8`       | `int8_t`        | -128 .. 127 |
+| `:int16`      | `int16_t`       | -32 768 .. 32 767 |
+| `:int32`      | `int32_t`       | -2 147 483 648 .. 2 147 483 647 |
 | `:int64`      | `int64_t`       | Alias for `int` |
-| `:uint8`      | `uint8_t`       | 0 … 255 |
-| `:uint16`     | `uint16_t`      | 0 … 65 535 |
-| `:uint32`     | `uint32_t`      | 0 … 4 294 967 295 |
-| `:uint64`     | `uint64_t`      | 0 … 18 446 744 073 709 551 615 |
+| `:uint8`      | `uint8_t`       | 0 .. 255 |
+| `:uint16`     | `uint16_t`      | 0 .. 65 535 |
+| `:uint32`     | `uint32_t`      | 0 .. 4 294 967 295 |
+| `:uint64`     | `uint64_t`      | 0 .. 18 446 744 073 709 551 615 |
 | `:float`      | `double`        | Alias for `float64` |
 | `:float32`    | `float`         | IEEE 754 single-precision |
 | `:float64`    | `double`        | IEEE 754 double-precision |
@@ -486,8 +488,16 @@ builders) for end-to-end examples.
 
 ## Calling Turmeric from C
 
-Turmeric does not yet produce a linkable `.a` or `.so`. However, there are two
-practical ways to use compiled Turmeric code inside a larger C project:
+There are several ways to use compiled Turmeric code inside a larger C project:
+
+- **`tur build --shared <dir>`** builds the project as a shared library.
+- **`tur emit-cmake`** publishes a Turmeric library for consumption by C and
+  C++ projects via CMake or CPM -- see
+  [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md).
+- **`libturi.a`** provides a C embedding API for evaluating Turmeric
+  expressions and calling Turmeric functions from a C host -- see
+  [eval-api.md](eval-api.md).
+- Or include the emitted `.c` directly, as below.
 
 ### Include the emitted `.c` directly
 
@@ -499,9 +509,9 @@ Then add `generated/mylib.c` (and `src/runtime.c`) to your C build. Declare
 the Turmeric-emitted top-level `defn` functions with `extern` in a hand-written
 header, and call them from your C code.
 
-Name mangling is **reversible and injective** (#275): a top-level
+Name mangling is **reversible and injective**: a top-level
 `(defn my-function ...)` becomes `my_function` in C, but sigils encode through
-escape digraphs -- `-` → `_hy`, `/` → `_sl`, `_` → `_un`, with `?`, `!`, `=`
+escape digraphs -- `-` -> `_hy`, `/` -> `_sl`, `_` -> `_un`, with `?`, `!`, `=`
 and friends covered analogously -- so any Turmeric global name round-trips
 cleanly to C and back. Closures and anonymous functions get mangled names
 like `tur__closure_N`. See [name-mangling-guide.md](name-mangling-guide.md)
@@ -551,13 +561,16 @@ Use `./build/tur build` as a build step that produces an executable, then have
 your C application invoke it as a subprocess. This is the zero-coupling option:
 the Turmeric binary handles I/O independently.
 
-### Linking `runtime.c`
+### Linking the runtime
 
-Whichever approach you use, if the generated code uses `defer` you must compile
-and link `src/runtime.c`. Its public surface is small:
+`tur build` links the runtime automatically. If you embed the emitted `.c` in
+your own build instead, link the runtime archive (`libturt_runtime.a` or
+`libturi.a` from the compiler's build tree; `TUR_RUNTIME_LIB` points `tur` at
+it too). The defer-frame surface, declared in `src/runtime/runtime.h`, is
+small:
 
 ```c
-/* src/runtime.h */
+/* src/runtime/runtime.h (abridged) */
 
 typedef void (*defer_fn_t)(void *env);
 
@@ -566,10 +579,11 @@ typedef void (*defer_fn_t)(void *env);
 typedef struct tur_frame {
     defer_fn_t defers[TUR_FRAME_MAX_DEFERS];
     void *envs[TUR_FRAME_MAX_DEFERS];
+    DeferMode modes[TUR_FRAME_MAX_DEFERS];  /* NORMAL / SUSPENDED / REPLAY */
     int n;
     struct tur_frame *parent;
-    bool may_capture;          /* unused in v1 */
-    struct EffectRow *effect_row; /* unused in v1 */
+    bool may_capture;
+    struct EffectRow *effect_row;
 } tur_frame;
 
 void tur_frame_init(tur_frame *f, tur_frame *parent);
@@ -587,7 +601,7 @@ essential when crossing the C boundary.
 
 ### Arena (compile-time only)
 
-The compiler itself uses a bump-allocator arena (`src/arena.h`). This is
+The compiler itself uses a bump-allocator arena (`src/runtime/arena.h`). This is
 **compiler-internal only** -- generated programs do not use it.
 
 ### Reference counting -- `rc<T>`
@@ -597,15 +611,17 @@ pointer to an `RcControlBlock` followed immediately by the value. The control
 block holds a strong count and a weak count.
 
 ```c
-/* src/rc.h */
+/* src/runtime/rc.h (abridged) */
 struct RcControlBlock {
     uint64_t strong_count;
     uint64_t weak_count;
     void    *value;
-    RcDropFn drop_fn;      /* NULL → use free() */
-    TypeKind value_type_kind;
-    GcColor  color;        /* Bacon-Rajan cycle collector */
+    RcDropFn drop_fn;         /* NULL -> use free() */
+    RcWalkFn walk_fn;         /* enumerates rc children for the cycle collector */
+    uint8_t  value_type_kind; /* fixed-width TypeKind byte */
+    uint8_t  color;           /* Bacon-Rajan cycle collector (GcColor) */
     bool     may_contain_cycles;
+    /* ... cycle-collector bookkeeping (gc_index, gc_buffered, ...) */
 };
 ```
 
@@ -907,8 +923,8 @@ shared `.tur` file.
 |---------|-------------|-----|
 | Calling `free()` on an `rc<T>` pointer | Heap corruption | Never cross this boundary; use `:ptr` instead |
 | Annotating inline C with wrong return type | Silent type confusion or memory corruption | Run with `emit-c` and inspect the generated code |
-| Missing `#include` in inline C | Implicit function declaration warning → `-Werror` build failure | Add `#include` at top of inline block |
-| Creating a C↔rc cycle | Memory leak (cycle collector can't see C pointers) | Keep cycles entirely on one side |
+| Missing `#include` in inline C | Implicit function declaration warning -> `-Werror` build failure | Add `#include` at top of inline block |
+| Creating a C<->rc cycle | Memory leak (cycle collector can't see C pointers) | Keep cycles entirely on one side |
 | More than 32 defers in a single scope | Silent drop of excess defers | Split scope or refactor |
 | `defer` throwing an exception | Undefined behavior in v1 | Keep defer bodies simple and non-throwing |
 | Inline C that calls `longjmp` unexpectedly | Skips Turmeric defer/rc cleanup | Only use `longjmp` if you know the full unwind path |

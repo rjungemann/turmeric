@@ -156,11 +156,6 @@ per-case continuation discipline) are specified in
   default affine `k` are enforced inside a handler value identically to inline
   `handle`, and composition never blends two handlers' disciplines.
 
-> *History:* `compose-handlers` was briefly gated (`TUR-E0704`) while handler
-> values had no runtime representation. That gate has been removed; handler
-> values are now first-class. See
-> [first-class-handlers-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/first-class-handlers-plan.md).
-
 ## Common Use Cases
 
 ### Direct-Style Async
@@ -272,28 +267,28 @@ An effect row appears between the parameter list and the return type:
 
 ```turmeric
 ;; Annotated: may perform the Write effect
-(defn log-msg [msg : cstr] #{Write} : nil
+(defn log-msg [msg : cstr] #fx{Write} : nil
   (perform (Write msg)))
 
 ;; Pure: performs no effects
-(defn add [a : int b : int] #{} : int
+(defn add [a : int b : int] #fx{} : int
   (+ a b))
 
 ;; Row-polymorphic: propagates the row of the function argument
-(defn run-twice [f :(fn [] #{e} int)] #{e} : int
+(defn run-twice [f :(fn [] #fx{e} int)] #fx{e} : int
   (+ (f) (f)))
 ```
 ```sweet-exp
 ;; Annotated: may perform the Write effect
-defn log-msg [msg :cstr] #{Write} :nil
+defn log-msg [msg :cstr] #fx{Write} :nil
   perform(Write(msg))
 
 ;; Pure: performs no effects
-defn add [a :int b :int] #{} :int
+defn add [a :int b :int] #fx{} :int
   {a + b}
 
 ;; Row-polymorphic: propagates the row of the function argument
-defn run-twice [f :(fn [] #{e} int)] #{e} :int
+defn run-twice [f :(fn [] #fx{e} int)] #fx{e} :int
   {f() + f()}
 ```
 
@@ -383,11 +378,11 @@ enforce that it has the capabilities of everything it calls.
 (import tur/fs :refer [fs/read-text])
 
 ;; OK: declares the FS capability it relies on.
-(defn load-config [path : cstr] #{FS} : cstr
+(defn load-config [path : cstr] #fx{FS} : cstr
   (fs/read-text path))
 
 ;; ERROR (TUR-E0009): claims purity but reaches the file system.
-(defn load-config-bad [path : cstr] #{} : cstr
+(defn load-config-bad [path : cstr] #fx{} : cstr
   (fs/read-text path))
 
 ;; OK: un-annotated, so the row is not checked at all.
@@ -411,8 +406,8 @@ Effects interact with Turmeric's `defer` mechanism:
 
 ## The Prompt Model and Unbounded Capture (CPS substrate)
 
-Delimited control in Turmeric is moving onto a single **multi-prompt** substrate
-(the Dybvig--Peyton-Jones--Sabry model), built by
+Delimited control in Turmeric is built on a single **multi-prompt** substrate
+(the Dybvig--Peyton-Jones--Sabry model); see
 [`cps-transform-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md). The operators you
 already use map onto prompts and sub-continuations:
 
@@ -428,8 +423,8 @@ Two properties of the substrate matter in practice:
 
 - **Unbounded capture.** A continuation is a heap-reified closure chain, not a
   fixed-size native-stack snapshot. Capturing it is O(1) and works at any call
-  depth -- the old 16-frame ceiling (`tur_cont_alloc` returning `NULL` past
-  `TUR_CONT_MAX_CAPTURED_FRAMES`) does not apply on this path. This is what lets
+  depth -- the fiber fast path's 16-frame ceiling (`tur_cont_alloc` returning
+  `NULL` past `TUR_CONT_MAX_CAPTURED_FRAMES`) does not apply on this path. This is what lets
   `call/cc` reach all the way back to the top of the program.
 
 - **Implicit root prompt.** There is a prompt around program entry, so a bare
@@ -446,9 +441,8 @@ cost. See the plan for the full model.
 
 `call/cc` and `escape` capture an **undelimited** continuation against the
 implicit program-wide prompt. They are enabled by default -- no flag and no
-enclosing `reset` is required. (The old `-Xcallcc` gate, with its `TUR-E0700` /
-`TUR-E0701` "unsound stub" diagnostics, is retired; `-Xcallcc` is now a
-deprecated no-op.)
+enclosing `reset` is required. (The legacy `-Xcallcc` flag is still accepted
+as a deprecated no-op.)
 
 ```turmeric
 ;; k aborts the pending (+ 100 ...) and returns 41 at the call/cc site; the

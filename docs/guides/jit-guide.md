@@ -25,16 +25,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON   # build time (fetche
 tur jit hello.tur                                           # no run-time flag
 ```
 
-There used to be a second, run-time gate: the `jit` row in `EXPERIMENTS[]`,
-requiring `--enable=jit`. **It graduated in 0.34.0** and the row is gone; a
-command line or `build.tur` that still names it gets a `TUR-W0063` no-op rather
-than an error. What remains is the build-time gate, because the engine vendors
-MIR at configure time and a default build carries neither the fetch nor the
-dependency. On a binary built without it, `tur jit` says so and exits 2.
+There is no run-time gate: the `jit` experiment name is graduated, so a
+command line or `build.tur` that still says `--enable=jit` gets a `TUR-W0063`
+no-op rather than an error. The build-time gate exists because the engine
+vendors MIR at configure time and a default build carries neither the fetch
+nor the dependency. On a binary built without it, `tur jit` says so and
+exits 2.
 
-Graduating the flag did **not** change which engine you get by default. `cc` is
-still the default; the JIT runs when you invoke `tur jit` directly, or when
-engine selection asks for it (`--engine jit`, `TUR_ENGINE=jit`, or
+`cc` is the default engine; the JIT runs when you invoke `tur jit` directly,
+or when engine selection asks for it (`--engine jit`, `TUR_ENGINE=jit`, or
 `:engine "jit"` in `build.tur`).
 
 ---
@@ -192,8 +191,7 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
 
 ### What happens when you run `tur jit hello.tur`
 
-1. **Gate.** `cmd_jit` checks `TUR_HAVE_JIT` -- the only gate left since the
-   `jit` experiment graduated in 0.34.0.
+1. **Gate.** `cmd_jit` checks `TUR_HAVE_JIT` -- the only gate.
 2. **Front half, identical to `tur build`.** `compile_to_c` (reader,
    elaborate, kind/effect/CPS/borrow, emit C into memory) with
    `g_emit_for_link = true`, then `hoist_tur_include_directives`, then

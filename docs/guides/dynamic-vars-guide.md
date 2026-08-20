@@ -217,12 +217,6 @@ Load the file to get both the vars and `spawn-conveying`:
 load("stdlib/dynvar.tur")
 ```
 
-> **Known limitation:** Root-value initialization for vars declared in
-> loaded files (`load`) is not emitted when the loading program defines
-> an explicit `(defn main ...)`. Until this is fixed, use script mode
-> (no explicit `defn main`) when relying on non-zero root values from
-> loaded files, or declare the vars locally in the main file.
-
 ## Effects vs. Dynamic Vars
 
 Both algebraic effects and dynamic vars solve the "implicit context" problem.

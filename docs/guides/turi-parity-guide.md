@@ -35,7 +35,8 @@ interactive prompt see [repl.md](repl.md) and [repl-tutorial.md](repl-tutorial.m
 Because both paths share the elaborator, "feature X works under turi" almost
 always reduces to "the runtime ops behind X are evaluable" -- i.e. they are pure
 Turmeric, have an `EX_*` case arm in `eval.c`, or are backed by a native override
-(`wk_register_*_natives` in `src/main.c`) rather than raw inline-C.
+(the `wk_register_*_natives` registrations, compiled into `tur_core`) rather
+than raw inline-C.
 
 ---
 
@@ -58,13 +59,13 @@ concurrency).
 | Uniqueness (`^unique`) | OK | OK | shared elaborator |
 | `rc` / `weak` / `box` | OK | OK | `EX_RC_*`, `EX_WEAK`, `EX_BOX` case arms in `eval.c` |
 | GC (`gc!`, enable/disable) | OK | OK | interpreter calls the linked `src/runtime/gc.c` directly |
-| Structs / ADTs | OK | OK | `make-struct` layout, field access, constructor dispatch. Includes by-value parameter passing: a struct argument is copied on bind, so a callee's `(set! (.f p) v)` is invisible to the caller in both backends. It WAS visible under `--interpret` until 2026-08-02; `rc<T>` and `:heap` structs stay shared in both, by design |
+| Structs / ADTs | OK | OK | `make-struct` layout, field access, constructor dispatch. Includes by-value parameter passing: a struct argument is copied on bind, so a callee's `(set! (.f p) v)` is invisible to the caller in both backends; `rc<T>` and `:heap` structs stay shared in both, by design |
 | GADTs | OK | OK | shared elaborator; runtime is ordinary ADT eval |
-| HKT (Functor/Monad/...) | OK | OK | stdlib instances preloaded; one library (logic.tur miniKanren) is carved |
+| HKT (Functor/Monad/...) | OK | OK | stdlib instances preloaded (logic.tur's miniKanren engine is pure Turmeric and interprets) |
 | Refinement types | OK | OK | checked by the shared elaborator |
 | Effects + handlers (one-shot) | OK | OK | `perform`/`handle`/`with-handler`, `EX_WITH_HANDLER`, `EX_SELECT` |
-| Continuations -- multishot / escaping / nested | OK | OK | heap-owned `TuriWsCont` on the driver work-stack (landed 2026-06-14) |
-| Continuation captured *through* a native HOF callback | OK | **partial** | errors cleanly; lifted by SR -- see [Continuations](#continuations-captured-continuation-re-entry-through-native-hofs) below |
+| Continuations -- multishot / escaping / nested | OK | OK | heap-owned `TuriWsCont` on the driver work-stack |
+| Continuation captured *through* a native HOF callback | OK | OK | native callbacks are reified onto the driver work-stack -- see [Continuations](#continuations-captured-continuation-re-entry-through-native-hofs) below |
 | `call/cc` / `escape` (one-shot upward) | OK | OK | `eval_callcc_escape`, setjmp/longjmp landing pad |
 | `shift`/`reset`/`shift0` (abortive) | OK | OK | TI3.1 |
 | serial / cloneable `shift` (context-capturing) | OK | OK | `EX_SERIAL_RESET` / `EX_CLONEABLE_RESET` reify the context (TI3.2) |
@@ -91,34 +92,29 @@ concurrency).
 ## Continuations -- captured-continuation re-entry through native HOFs
 
 Multishot resume, escaping continuations, and resume through nested handlers
-**all work under `--interpret` today**. They landed 2026-06-14
+**all work under `--interpret`**
 ([turi-interpreter-delimited-control-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-interpreter-delimited-control-plan.md)):
 capturable handles run on the driver work-stack as a heap-owned `TuriWsCont`
 continuation (the turi analog of `tur`'s heap `DK` chain), captured between the
 `perform` and the matching `DK_PROMPT`. Because the continuation is heap-owned
 and clonable, it survives the `handle` frame (escaping `k`), can be re-entered
 more than once (multishot, by cloning the captured slice per resume), and
-re-installs the enclosing handlers on resume (nested). The ucontext-fiber path
-is kept only as a fallback for black-boxed performs (`while`/`try`/`async`/
-native-HOF bodies). The five formerly-carved fixtures
-(`fh-multishot-value`, `multishot-copy-capture`, `multishot-handler`,
-`effect-capture-k`, `effect-handler-capture-nested`) are un-carved and pass.
+re-installs the enclosing handlers on resume (nested).
 
-The **one residual** continuation gap: capturing a continuation *through a
-native / inline-C higher-order-function callback* (a native HOF that re-applies
-a closure via `turi_call` on a live C frame). That case errors **cleanly** (no
-crash, no silent miscompile) -- the tree-walker cannot capture across a native
-C frame. Lifting it is the subject of
-[turi-cek-stackless-reentry-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)
-(SR, concluded + archived), which reifies the native callback onto the driver
-work-stack as an explicit resume continuation. Root-cause history:
-[the delimited-control gaps report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/turi-interpreter-delimited-control-gaps.md)
-(RESOLVED).
+Capturing a continuation *through a native / inline-C higher-order-function
+callback* also works: a native HOF that re-applies a closure no longer does so
+on a live C frame -- the callback is reified onto the driver work-stack as an
+explicit resume continuation
+([turi-cek-stackless-reentry-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)),
+so interpreter recursion through driven positions is heap-bounded and
+delimited control composes with native HOFs the same way it does compiled.
+The C-scoped boundary forms (`catch-unwind`, `atomically`, `async`) still
+C-recurse -- a stack-depth concern shared with the compiled backend, guarded
+by a precise depth check, not a parity gap.
 
 One-shot effects/handlers, `call/cc`/`escape`, abortive and context-capturing
-`shift`/`reset`, serializable/cloneable continuations, and multishot/escaping/
-nested resume all work today -- only capturing *through a native HOF frame*
-remains.
+`shift`/`reset`, serializable/cloneable continuations, multishot/escaping/
+nested resume, and capture through native HOF frames all work today.
 
 ---
 
@@ -134,16 +130,15 @@ cannot drift silently.
   signature the tree-walker cannot execute. The escape hatch is the native
   override: stdlib inline-C functions register a C implementation
   (`wk_register_*_natives`, `try_exec_simple_inline_c`) that turi calls instead.
-  *User* inline-C, and library inline-C with no native shim (currently re.tur's
-  regex VM, logic.tur's miniKanren engine, range-bound.tur's `snprintf "%s"`,
-  and a handful of others) fall through to a clean, actionable error pointing at
-  `tur build` / `tur run`. It never silently miscompiles. Fixtures with a ```c
+  *User* inline-C, and library inline-C with no native shim, fall through to a
+  clean, actionable error pointing at `tur build` / `tur run`. It never
+  silently miscompiles. Fixtures with a ```c
   body auto-skip under `run-turi.sh` -- no per-fixture marker needed.
 - **WASM async.** No WASM target exists in the interpreter; `n/a`, not a gap.
 - **`EX_CPS_CONT_APP`.** A CPS-pipeline node the elaborator never emits (the
   interpreter stops at elaboration), so there is nothing to evaluate -- carved
   as unreachable, not unimplemented. This is the **only** carved `EX_*` kind
-  (`tools/check_turi_parity.py` reports 116/117 handled, 1 carved, 0 gaps).
+  (`tools/check_turi_parity.py` reports 1 carved out, 0 gaps).
 - **Module preload gap.** `json.tur` and `schema.tur` sit outside the static
   `prelude[]` array the parity ratchet tracks, but the JR0/RD reader-macro
   auto-load blocks (right after `prelude[]` in `cmd_eval_h`) preload them
