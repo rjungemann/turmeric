@@ -149,517 +149,257 @@ post-1.0 CPS pass.  See
 
 ### Prime sieve
 
-The Sieve of Eratosthenes benefits from a `vec` (growable array backed by a C
-`malloc`ed block) rather than a linked list:
+The Sieve of Eratosthenes benefits from a `vec` (a growable array over a
+`malloc`ed block) rather than a linked list.
+
+> Corrected on 2026-08-20: this example previously used `vec/make`,
+> `vec/get`, `vec/set!` and `(import "stdlib/vec.tur")`, none of which exist.
+> The version below was run: it prints `25`, the number of primes below 100.
 
 ```turmeric
-(import "stdlib/vec.tur")
+(load "stdlib/vec.tur")
 
-(defn sieve [limit] :vec
-  (let [flags (vec/make limit true)]
-    (vec/set! flags 0 false)
-    (vec/set! flags 1 false)
-    (let [loop (fn [i] :void
-                 (when (<= (* i i) limit)
-                   (when (vec/get flags i)
-                     (let [inner (fn [j] :void
-                                   (when (<= j limit)
-                                     (vec/set! flags j false)
-                                     (inner (+ j i))))]
-                       (inner (* i i))))
-                   (loop (+ i 1))))]
-      (loop 2))
-    flags))
+(defn sieve-count [limit : int] : int
+  (let [flags   (:: (vec-new) (Vec int))
+        ^mut k  0
+        ^mut i  2
+        ^mut n  0]
+    (while (<= k limit) (vec-push! flags 1) (set! k (+ k 1)))
+    (vec-set! flags 0 0)
+    (vec-set! flags 1 0)
+    (while (<= (* i i) limit)
+      (when (= (vec-get flags i) 1)
+        (let [^mut j (* i i)]
+          (while (<= j limit)
+            (vec-set! flags j 0)
+            (set! j (+ j i)))))
+      (set! i (+ i 1)))
+    (set! k 2)
+    (while (<= k limit)
+      (when (= (vec-get flags k) 1) (set! n (+ n 1)))
+      (set! k (+ k 1)))
+    n))
 ```
 
 ```sweet-exp
-import "stdlib/vec.tur"
+load("stdlib/vec.tur")
 
-defn sieve [limit] :vec
-  let [flags vec/make(limit true)]
-    vec/set!(flags 0 false)
-    vec/set!(flags 1 false)
-    let [loop (fn [i] :void
-                (when (<= *(i i) limit)
-                  (when vec/get(flags i)
-                    (let [inner (fn [j] :void
-                                  (when <=(j limit)
-                                    vec/set!(flags j false)
-                                    inner({j + i})))]
-                      inner(*(i i))))
-                  loop({i + 1})))]
-      loop(2)
-    flags
+defn sieve-count [limit : int] : int
+  let [flags   (:: (vec-new) (Vec int))
+       ^mut k  0
+       ^mut i  2
+       ^mut n  0]
+    while <=(k limit)
+      vec-push!(flags 1)
+      set!(k {k + 1})
+    vec-set!(flags 0 0)
+    vec-set!(flags 1 0)
+    while <=(*(i i) limit)
+      when =(vec-get(flags i) 1)
+        let [^mut j (* i i)]
+          while <=(j limit)
+            vec-set!(flags j 0)
+            set!(j {j + i})
+      set!(i {i + 1})
+    set!(k 2)
+    while <=(k limit)
+      when =(vec-get(flags k) 1)
+        set!(n {n + 1})
+      set!(k {k + 1})
+    n
 ```
+
+Note there is no numeric-range `for`: `for` is the monadic comprehension, so a
+counted loop is a `while` over a `^mut` binding. A binding that `set!` writes
+to must be declared `^mut` at its binding site.
 
 ### Monte Carlo pi estimation
 
-Use `rand` (from `stdlib/rand.tur`) rather than importing `<stdlib.h>` via
-inline-C so the compiler can see through calls and optimise the loop:
+Use the stdlib RNG rather than reaching into `<stdlib.h>` from inline-C, so the
+compiler can see through the calls.
+
+> Corrected on 2026-08-20: this example previously loaded `stdlib/rand.tur`
+> and called `rand/float`. The module is **`stdlib/random.tur`** and the
+> function is `rand-float`, which returns an **int in [0, 9999]** -- divide by
+> 10000.0 for a float in [0, 1). `int->float` lives in `stdlib/math.tur` and is
+> not auto-loaded. The version below was run and lands in range.
 
 ```turmeric
-(import "stdlib/rand.tur")
+(load "stdlib/math.tur")
+(load "stdlib/random.tur")
 
-(defn estimate-pi [samples] :float
-  (let [loop (fn [i inside] :float
-               (if (= i 0)
-                 (* 4.0 (/ (int->float inside) (int->float samples)))
-                 (let [x (rand/float)
-                       y (rand/float)]
-                   (loop (- i 1)
-                         (if (<= (+ (* x x) (* y y)) 1.0)
-                           (+ inside 1)
-                           inside)))))]
-    (loop samples 0)))
+(defn estimate-pi [samples : int] : float
+  (let [^mut i      samples
+        ^mut inside 0]
+    (while (> i 0)
+      (let [x (/ (int->float (rand-float)) 10000.0)
+            y (/ (int->float (rand-float)) 10000.0)]
+        (when (<= (+ (* x x) (* y y)) 1.0) (set! inside (+ inside 1))))
+      (set! i (- i 1)))
+    (* 4.0 (/ (int->float inside) (int->float samples)))))
 ```
 
 ```sweet-exp
-import "stdlib/rand.tur"
+load("stdlib/math.tur")
+load("stdlib/random.tur")
 
-defn estimate-pi [samples] :float
-  let [loop (fn [i inside] :float
-              (if (= i 0)
-                (* 4.0 (/ (int->float inside) (int->float samples)))
-                (let [x (rand/float)
-                      y (rand/float)]
-                  (loop (- i 1)
-                        (if (<= (+ (* x x) (* y y)) 1.0)
-                          (+ inside 1)
-                          inside)))))]
-    loop(samples 0)
+defn estimate-pi [samples : int] : float
+  let [^mut i      samples
+       ^mut inside 0]
+    while >(i 0)
+      let [x {int->float(rand-float()) / 10000.0}
+           y {int->float(rand-float()) / 10000.0}]
+        when <=({*(x x) + *(y y)} 1.0)
+          set!(inside {inside + 1})
+      set!(i {i - 1})
+    {4.0 * {int->float(inside) / int->float(samples)}}
 ```
 
----
+Note `rand-float` is seeded from `time(NULL)` on first use, so successive runs
+differ -- do not pin an exact value in a test.
 
 ## Data structures
 
+> The API names in this section were corrected on 2026-08-20. It previously
+> documented `vec/make`, `vec/sort!`, `vec/fill!`, `hamt/insert` and
+> `hamt/get-or`, none of which exist.
+
 ### Lists vs vecs
 
-Use `list` / `cons` for functional transformations where sharing is important.
-Use `vec` for index-heavy access and mutation-in-place:
+Use `list` / `cons` for functional transformations where sharing matters; use
+`vec` for index-heavy access and mutation in place.
 
 | Operation | `list` | `vec` |
 |-----------|--------|-------|
-| Prepend | O(1) | O(n) amortised |
+| Prepend | O(1) | O(n) |
 | Random read | O(n) | O(1) |
 | Append (single) | O(n) | O(1) amortised |
-| Memory per element | 2 words (pointer + tag) | 1 word |
+
+The real `vec` surface is `vec-new`, `vec-push!`, `vec-get`, `vec-set!`,
+`vec-len` (`stdlib/vec.tur`), plus the `[...]` literal, which lowers to
+`vec-of` in expression position. See
+[data-literals-guide.md](data-literals-guide.md).
 
 ### Hash maps
 
-`stdlib/hamt.tur` (the persistent hash-array-mapped trie) is the standard map.
-For hot paths that need mutable semantics, combine `hamt` with `ref`:
+`stdlib/hamt.tur` (a persistent hash-array-mapped trie) is the standard map,
+wrapped by `stdlib/map.tur`. The operations are `hamt/set` and `hamt/get` --
+persistent, so each `set` returns a new map sharing structure with the old.
+`#map{...}` literals construct one directly.
 
-```turmeric
-(import "stdlib/hamt.tur")
-(import "stdlib/ref.tur")
-
-(defn freq-count [words] :hamt
-  (let [m (ref (hamt/empty))]
-    (list/for-each words
-                   (fn [w] :void
-                     (ref/update! m
-                                  (fn [h] :hamt
-                                    (hamt/insert h w (+ 1 (hamt/get-or h w 0)))))))
-    (ref/get m)))
-```
-
-```sweet-exp
-import "stdlib/hamt.tur"
-import "stdlib/ref.tur"
-
-defn freq-count [words] :hamt
-  let [m ref(hamt/empty())]
-    list/for-each(words
-                  (fn [w] :void
-                    ref/update!(m
-                                (fn [h] :hamt
-                                  hamt/insert(h w {1 + hamt/get-or(h w 0)})))))
-    ref/get(m)
-```
-
-HAMT operations are O(log32 n) in practice -- fast for lookups but slower
-than a mutable hash table for write-heavy workloads. If you need the latter,
-reach for an inline-C wrapper around `uthash` or a fixed-size open-addressing
-table.
+For a key that must outlive its source buffer, use `String` rather than a
+computed `cstr`: `MapKey` for `String` copies and owns the key bytes, where a
+`cstr` key can dangle. See [strings-guide.md](strings-guide.md).
 
 ### Sorting
 
-`stdlib/vec.tur` exposes `vec/sort!` (in-place quicksort) and `list/sort`
-(merge sort returning a new list):
-
-```turmeric
-(import "stdlib/vec.tur")
-
-; in-place, cache-friendly
-(let [v (vec/of 5 3 8 1 9 2)]
-  (vec/sort! v <)
-  v)
-```
-
-```sweet-exp
-import "stdlib/vec.tur"
-
-; in-place, cache-friendly
-let [v vec/of(5 3 8 1 9 2)]
-  vec/sort!(v <)
-  v
-```
-
----
+No `vec/sort!` ships today. Sort by moving through a `list` or writing the
+comparison loop directly over the `vec`; if you add a sort to `stdlib/vec.tur`,
+this section should name it.
 
 ## String and text processing
 
-### Avoid repeated concatenation
+> Corrected on 2026-08-20. This section previously documented `str/concat`,
+> `str/builder`, `str/view`, `str/format` and `stdlib/regex.tur`. None of them
+> exist.
 
-`str/concat` allocates a new buffer each call. For building large strings from
-many pieces, use `str/builder`:
+Turmeric has three string-shaped types and the choice between them is the
+performance decision that matters. `cstr` is a borrowed `const char *` with no
+length; `str` (`stdlib/str.tur`) is a borrowed pointer+length view, so
+substring-without-copy over a buffer you already own; `String`
+(`stdlib/string.tur`) owns refcounted immutable bytes, so `Clone` is an O(1)
+retain and structural sharing in a persistent map is free.
 
-```turmeric
-(import "stdlib/str.tur")
+Repeated concatenation is the usual hot spot: each concat allocates and copies,
+so building a string in a loop is quadratic. Prefer accumulating pieces and
+joining once, and prefer a `str` view over copying a substring out.
 
-(defn join [sep parts] :str
-  (let [b (str/builder)]
-    (list/for-each-indexed parts
-                           (fn [i s] :void
-                             (when (> i 0)
-                               (str/builder/append! b sep))
-                             (str/builder/append! b s)))
-    (str/builder/finish b)))
-```
+There is no regex engine in the tree. `stdlib/cstr.tur` provides the byte
+primitives (`cstr-len`, `cstr-nth`, `cstr-sub`, `cstr-eq?`) that scanning code
+is written against.
 
-```sweet-exp
-import "stdlib/str.tur"
-
-defn join [sep parts] :str
-  let [b str/builder()]
-    list/for-each-indexed(parts
-                          (fn [i s] :void
-                            (when (> i 0)
-                              (str/builder/append! b sep))
-                            (str/builder/append! b s)))
-    str/builder/finish(b)
-```
-
-`str/builder/finish` produced fresh bytes, but the `:str` return above is a
-*borrowed view* -- fine while the builder's buffer is alive, but not a value the
-result can safely outlive. When the joined string must be **returned, stored, or
-used as a Map/Set key**, reach for the owned `String` builder instead:
-`stdlib/string.tur`'s `StringBuilder` (`builder/new`, `builder/push-cstr!` /
-`builder/push-string!`, `builder/finish`) accumulates bytes in the same linear
-time and `builder/finish` freezes them into an **owned, immutable `String`** with
-no lifetime tie to the builder. `Clone[String]` is an O(1) refcount bump, so
-handing that `String` to a container is free. See
-[strings-guide.md](strings-guide.md) for the `cstr` vs `str` vs `String` tiering.
-
-### Text search
-
-For simple substring search, `str/index-of` wraps `strstr` and is O(n*m) in
-the worst case. For repeated pattern matching over a corpus, compile the
-pattern once and reuse the handle -- the search itself is then O(n):
-
-```turmeric
-(import "stdlib/regex.tur")
-
-(defn count-matches [pattern text] :int
-  (let [re (regex/compile pattern)]
-    (regex/count re text)))
-```
-
-```sweet-exp
-import "stdlib/regex.tur"
-
-defn count-matches [pattern text] :int
-  let [re regex/compile(pattern)]
-    regex/count(re text)
-```
-
-### Prefer `str/view` over copying
-
-`str/view` is a non-owning slice into an existing string. Use it when you only
-need to inspect a substring -- without allocating or copying:
-
-```turmeric
-(let [s "hello world"]
-  (str/view s 6 11))   ; => "world", zero-copy
-```
-
-```sweet-exp
-let [s "hello world"]
-  str/view(s 6 11)   ; => "world", zero-copy
-```
-
----
+See [strings-guide.md](strings-guide.md) for the full comparison.
 
 ## Concurrency and parallelism
 
-### Thread creation
+> Corrected on 2026-08-20. This section previously documented
+> `stdlib/concurrency.tur` and `stdlib/dynamic-vars.tur`; neither exists. The
+> dynamic-variable module is `stdlib/dynvar.tur`.
 
-Threads are spawned with `spawn` (from `stdlib/concurrency.tur`):
+Threads and channels live in `stdlib/concurrent.tur` (mutexes, rwlocks,
+condvars, and the `mutex-guard-*` pair behind the `with-lock` /
+`with-read-lock` / `with-write-lock` macros). `stdlib/schan.tur` provides
+session-typed channels, where the protocol is a phantom threaded through each
+operation, so a send that must precede a receive is checked at compile time.
+`stdlib/stm.tur` and `stdlib/stm-sync.tur` cover transactional variables and
+TMVar/TChan.
 
-```turmeric
-(import "stdlib/concurrency.tur")
+Thread-local and dynamically-scoped state is `stdlib/dynvar.tur`
+(`defdynamic` / `let-dyn`).
 
-(defn parallel-map [f xs] :list
-  (let [handles (list/map xs (fn [x] :handle (spawn (fn [] :any (f x)))))]
-    (list/map handles (fn [h] :any (await h)))))
-```
+The costs worth knowing: a thread is an OS thread, so creation is not free and
+a work-queue over a fixed pool beats spawning per item; an uncontended
+`with-lock` is cheap while a contended one parks; and STM retries the whole
+transaction on conflict, so keeping transactions short matters more than
+keeping them few.
 
-```sweet-exp
-import "stdlib/concurrency.tur"
-
-defn parallel-map [f xs] :list
-  let [handles list/map(xs (fn [x] :handle spawn((fn [] :any f(x)))))]
-    list/map(handles (fn [h] :any await(h)))
-```
-
-Each `spawn` creates a POSIX thread. Thread creation overhead is several
-microseconds; avoid spawning threads inside tight loops.
-
-### Channels (producer-consumer)
-
-Use `chan` for lock-free message passing between threads:
-
-```turmeric
-(import "stdlib/chan.tur")
-
-(defn pipeline [producer-fn consumer-fn n] :void
-  (let [c (chan/make 64)]
-    (spawn (fn [] :void (producer-fn c)))
-    (spawn (fn [] :void (consumer-fn c)))
-    (chan/close c)))
-```
-
-```sweet-exp
-import "stdlib/chan.tur"
-
-defn pipeline [producer-fn consumer-fn n] :void
-  let [c chan/make(64)]
-    spawn((fn [] :void producer-fn(c)))
-    spawn((fn [] :void consumer-fn(c)))
-    chan/close(c)
-```
-
-Channel sends block when the buffer is full; size the buffer to amortise
-context-switch cost for your throughput target.
-
-### Dynamic vars and thread-local state
-
-`defvar` / `with-var` (from `stdlib/dynamic-vars.tur`) provide thread-local
-dynamic bindings. Reads have no locking overhead -- they index directly into a
-thread-local slot:
-
-```turmeric
-(import "stdlib/dynamic-vars.tur")
-
-(defvar *indent* 0)
-
-(defn with-indent [body] :any
-  (with-var [*indent* (+ *indent* 2)] (body)))
-```
-
-```sweet-exp
-import "stdlib/dynamic-vars.tur"
-
-defvar *indent* 0
-
-defn with-indent [body] :any
-  with-var [*indent* {*indent* + 2}] body()
-```
-
----
+See [threading-guide.md](threading-guide.md) and [stm-guide.md](stm-guide.md).
 
 ## Memory and allocation
 
-### Allocation patterns
+> Corrected on 2026-08-20. The GC-pressure benchmark scripts this section
+> referenced (`scripts/run_all.sh`, `analyze_results.py`) do not exist; see
+> [Benchmarking methodology](#benchmarking-methodology) for the real harness.
 
-Turmeric uses reference counting with an opt-in cycle collector (see
-[gc-guide.md](gc-guide.md)). Short-lived objects are cheap to allocate but
-incur retain/release work proportional to their number. For allocation-heavy
-workloads:
+Turmeric is refcounted, not tracing, so the cost model is retain/release
+traffic and drop glue rather than collection pauses. Practical consequences:
 
-- Prefer stack-allocated scalars (concrete `int`, `float`, `bool`) -- they
-  never hit the GC.
-- Reuse `vec` buffers with `vec/clear!` instead of allocating a fresh vec each
-  iteration.
-- Use `ref` sparingly; each `ref` is a heap cell.
+- `Clone` on a `String` or an `Arc` is a refcount bump, not a copy -- sharing
+  is cheap and does not need avoiding.
+- A cycle is never reclaimed by refcounting alone. `tests/` carries a
+  `tur_stdlib_no_rc_cycles` check for exactly this in the stdlib.
+- `(gc-auto!)` exists and is strictly opt-in; it is not becoming the default.
+- A by-value struct parameter is copied on bind, so a wide struct passed
+  through a hot loop is worth passing by pointer or borrowing.
 
-### GC pressure benchmarks
-
-The simplest way to measure GC impact is to compare a version that allocates
-aggressively against one that reuses buffers:
-
-```turmeric
-; high churn -- allocates a new list each iteration
-(defn churn [n] :void
-  (let [loop (fn [i] :void
-               (when (> i 0)
-                 (let [_ (list/range 0 1000)]
-                   (loop (- i 1)))))]
-    (loop n)))
-
-; low churn -- reuses a vec
-(defn no-churn [n] :void
-  (let [v (vec/make 1000 0)]
-    (let [loop (fn [i] :void
-                 (when (> i 0)
-                   (vec/fill! v 0)
-                   (loop (- i 1))))]
-      (loop n))))
-```
-
-```sweet-exp
-; high churn -- allocates a new list each iteration
-defn churn [n] :void
-  let [loop (fn [i] :void
-              (when (> i 0)
-                (let [_ (list/range 0 1000)]
-                  (loop (- i 1)))))]
-    loop(n)
-
-; low churn -- reuses a vec
-defn no-churn [n] :void
-  let [v vec/make(1000 0)]
-    let [loop (fn [i] :void
-                (when (> i 0)
-                  (vec/fill! v 0)
-                  (loop (- i 1))))]
-      loop(n)
-```
-
----
+See [memory-management-guide.md](memory-management-guide.md).
 
 ## Recursion and stack usage
 
-### Tail recursion
+> Corrected on 2026-08-20. This section previously pointed at
+> `stdlib/trampoline.tur`, which does not exist.
 
-The compiler performs tail-call optimisation (TCO) on self-tail calls. A
-function whose recursive call is in tail position compiles to a C `goto` loop
-and uses O(1) stack:
+Self-tail-calls are optimised into a loop -- see
+[Self-tail-call optimization](#self-tail-call-optimization) above, which is
+measured and accurate. A tail-recursive accumulator therefore runs in constant
+stack and is the idiomatic way to write a loop over a list.
 
-```turmeric
-; tail-recursive -- safe for any n
-(defn factorial [n acc] :int
-  (if (= n 0)
-    acc
-    (factorial (- n 1) (* n acc))))
+Mutual recursion is **not** turned into a loop: `even?` calling `odd?` calling
+`even?` grows the stack, so deep mutual recursion needs restructuring into a
+single self-recursive function with an explicit state parameter, or into an
+explicit worklist. There is no trampoline module to reach for.
 
-(factorial 1000000 1)
-```
-
-```sweet-exp
-; tail-recursive -- safe for any n
-defn factorial [n acc] :int
-  if ={n 0}
-    acc
-    factorial({n - 1} {n * acc})
-
-factorial(1000000 1)
-```
-
-Non-tail recursion is not optimised and will overflow the stack for deep
-inputs. When you cannot restructure to tail position, use an explicit stack
-(a `list` or `vec` as a workaround).
-
-### Mutual recursion
-
-Mutually recursive functions are currently not tail-call optimised across the
-function boundary. Rewrite mutual recursion as a single function with a
-discriminant, or use a trampoline:
-
-```turmeric
-(import "stdlib/trampoline.tur")
-
-(defn even? [n] :thunk
-  (if (= n 0)
-    (done true)
-    (bounce (fn [] :thunk (odd? (- n 1))))))
-
-(defn odd? [n] :thunk
-  (if (= n 0)
-    (done false)
-    (bounce (fn [] :thunk (even? (- n 1))))))
-
-(trampoline/run (even? 100000))   ; => true, O(1) stack
-```
-
-```sweet-exp
-import "stdlib/trampoline.tur"
-
-defn even? [n] :thunk
-  if ={n 0}
-    done(true)
-    bounce((fn [] :thunk odd?({n - 1})))
-
-defn odd? [n] :thunk
-  if ={n 0}
-    done(false)
-    bounce((fn [] :thunk even?({n - 1})))
-
-trampoline/run(even?(100000))   ; => true, O(1) stack
-```
-
----
+Generators (`gen` / `yield`) and the CPS-lowered paths have their own cost
+model; the tree-walking interpreter retains roughly 4 KiB per trampolined step,
+which is a memory multiplier under `--interpret` and nothing at all compiled.
 
 ## I/O operations
 
-### Sequential file I/O
+> Corrected on 2026-08-20. This section previously documented `io/open` and
+> `io/read-all`, neither of which exists.
 
-`stdlib/io.tur` wraps `fread`/`fwrite`. For sequential reads of large files,
-use a buffer size that matches your OS page size (typically 4096 or 65536
-bytes):
+`stdlib/io.tur` provides `read-file` (whole file into a malloc'd,
+NUL-terminated buffer; NULL on error; **caller frees**) and `write-file`, plus
+the lower-level file handle operations. `stdlib/fs.tur` covers path and
+directory work.
 
-```turmeric
-(import "stdlib/io.tur")
+The performance points that hold: one `read-file` beats a per-line read loop
+for a file that fits in memory; writes should be batched rather than issued
+per record; and the returned buffer is owned by the caller, so a read in a loop
+that never frees is a leak, not merely garbage.
 
-(defn read-file [path] :str
-  (let [f (io/open path "rb")]
-    (let [s (io/read-all f)]
-      (io/close f)
-      s)))
-```
-
-```sweet-exp
-import "stdlib/io.tur"
-
-defn read-file [path] :str
-  let [f io/open(path "rb")]
-    let [s io/read-all(f)]
-      io/close(f)
-      s
-```
-
-`io/read-all` reads in 65536-byte chunks internally; do not loop over
-`io/read-byte` for large files -- the per-call overhead dominates.
-
-### Buffered writes
-
-Writes are buffered by the C `FILE*` layer. Flush explicitly only when
-durability is required:
-
-```turmeric
-(defn write-lines [path lines] :void
-  (let [f (io/open path "wb")]
-    (list/for-each lines (fn [line] :void
-      (io/write f line)
-      (io/write f "\n")))
-    (io/close f)))   ; flush happens here
-```
-
-```sweet-exp
-defn write-lines [path lines] :void
-  let [f io/open(path "wb")]
-    list/for-each(lines
-                  (fn [line] :void
-                    io/write(f line)
-                    io/write(f "\n")))
-    io/close(f)   ; flush happens here
-```
-
-Calling `io/flush` inside the loop adds a syscall per line; omit it unless you
-need crash-safety.
-
----
+Asynchronous file and socket I/O is a separate surface -- see
+[async-await-guide.md](async-await-guide.md).
 
 ## Real-world algorithms
 
@@ -770,92 +510,67 @@ corpus runs under all three harnesses (`tests/run.sh`, `tests/run-turi.sh`,
 
 ## Benchmarking methodology
 
-### Harness structure
+> Corrected on 2026-08-20. This section previously described a
+> `scripts/run_all.sh` / `analyze_results.py` / `check_environment.sh` harness
+> and a benchmark template built on `time/now-ns`, `args/parse-int`,
+> `args/get` and `str/format`. None of those scripts or functions exist.
+> `scripts/` contains only `wait-for-release.sh`.
 
-Each benchmark file should follow this template so that the automated runner
-(`scripts/run_all.sh`) can collect results consistently:
+### The real harness
 
-```turmeric
-(import "stdlib/time.tur")
-(import "stdlib/args.tur")
-
-(defn benchmark [n] :void
-  ; ... work under test ...
-  )
-
-(defn main [] :void
-  (let [n (args/parse-int (args/get 1) 1000)
-        t0 (time/now-ns)]
-    (benchmark n)
-    (let [elapsed (- (time/now-ns) t0)]
-      (println (str/format "elapsed_ns={}" elapsed)))))
-```
-
-```sweet-exp
-import "stdlib/time.tur"
-import "stdlib/args.tur"
-
-defn benchmark [n] :void
-  ; ... work under test ...
-
-defn main [] :void
-  let [n  args/parse-int(args/get(1) 1000)
-       t0 time/now-ns()]
-    benchmark(n)
-    let [elapsed {time/now-ns() - t0}]
-      println(str/format("elapsed_ns={}" elapsed))
-```
-
-Pass problem size via `*args*` (never hardcode), so the runner can sweep
-sizes without rebuilding.
-
-### Iteration count and warm-up
-
-- Run each benchmark at least **5 times**; discard the first run (cold caches,
-  JIT warm-up for JVM-backed languages in comparisons).
-- Report the **trimmed mean** (drop the highest and lowest reading) for a
-  robust central estimate.
-- Report **coefficient of variation** (CV = stddev / mean). A CV above 10%
-  signals an unstable measurement -- check for background load or OS
-  scheduling noise.
-
-### Sizing inputs
-
-Choose three input sizes:
-
-| Label | Guideline | Rationale |
-|-------|-----------|-----------|
-| small | < 1 ms wall time | Exercises startup path |
-| medium | 100 ms -- 1 s | Exercises algorithm body |
-| large | 5 -- 30 s | Exercises memory and cache behaviour |
-
-Avoid inputs so large that a single run takes minutes; reproducibility suffers.
-
-### Reading results
-
-`scripts/analyze_results.py` computes speedup ratios relative to a C baseline
-and writes `results/processed/summary.json`. Use it rather than eyeballing raw
-numbers:
+Benchmarks live in `benchmarks/` and are run by
+`benchmarks/run-benchmarks.sh` -- all of them, or one by name:
 
 ```sh
-python3 scripts/analyze_results.py
+./benchmarks/run-benchmarks.sh            # every benchmark
+./benchmarks/run-benchmarks.sh bench-logic-query
 ```
 
-The output normalises all timings to C = 1.0. A Turmeric ratio of 1.4 means
-Turmeric took 1.4x as long as C on that benchmark.
+The layout it expects:
 
-### Environment checklist
+| File | Role |
+|---|---|
+| `benchmarks/<name>.tur` | the benchmark source |
+| `benchmarks/<name>-baseline.c` | optional monomorphic C baseline to compare against |
+| `benchmarks/<name>.time` | optional upper bound in milliseconds |
 
-Before publishing numbers, run:
+Results are written to `benchmarks/benchmark-results.md`.
+
+### A benchmark does not time itself
+
+This is the part the old template got backwards. The **runner** measures wall
+time around the built executable (`measure_time` in `run-benchmarks.sh`); the
+benchmark itself just does the work. So a benchmark needs no clock, no
+argument parsing, and no `elapsed_ns=` output -- it is an ordinary program with
+a `main`, and `benchmarks/bench-logic-query.tur` and friends are the models to
+copy.
+
+If a benchmark does need to size its work from the command line, read `*args*`
+or use `args/parse` from `stdlib/args.tur`. Reading `g_tur_args` directly, or
+via a hand-rolled `parse-first-arg`, is forbidden -- see CLAUDE.md.
+
+### Build flags
+
+The runner compiles with `-O2` by default and honours `TUR_CC_FLAGS` and `CC`:
 
 ```sh
-bash scripts/check_environment.sh
+CC=clang TUR_CC_FLAGS="-O3 -march=native" ./benchmarks/run-benchmarks.sh
 ```
 
-This prints exact compiler and runtime versions and hardware details. Always
-include this output alongside benchmark results so readers can reproduce.
+### Reading a result honestly
 
----
+- Compare against the `-baseline.c` where one exists; an absolute number on an
+  unspecified machine is not a result.
+- A `.time` bound is a regression tripwire, not a target -- it is an upper
+  bound chosen for the slowest machine expected to run it.
+- Run one benchmark at a time. A concurrent build or test suite competing for
+  cores makes the number meaningless, and this repo has been bitten by exactly
+  that in its test suite (see
+  [test-suite-portability-guide.md](test-suite-portability-guide.md)).
+- The three-engine comparison has its own runner,
+  `benchmarks/run-triangle.sh`; see
+  [Execution engines](#execution-engines-interpreter-vs-tur-jit-vs-cc--o2)
+  above.
 
 ## Performance checklist
 
@@ -865,7 +580,8 @@ Use this list before calling a hot path done:
 - [ ] Numeric types annotated concretely (`int`, `float`, not inferred `any`)
 - [ ] Hot loops use `vec` instead of list where random access or mutation is
       needed
-- [ ] No repeated `str/concat` inside loops -- use `str/builder`
+- [ ] No repeated string concatenation inside loops -- accumulate the
+      pieces and join once; prefer a `str` view over copying a substring
 - [ ] Recursive functions in tail position (verified by running with a large
       input without stack overflow)
 - [ ] Profiled with `time` and at least 5 iterations; CV < 10%
