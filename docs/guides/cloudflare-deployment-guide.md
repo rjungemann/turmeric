@@ -54,33 +54,37 @@ requests to it.
 ;; Listens on $PORT (default 8080), accepts connections concurrently using the
 ;; cooperative fiber scheduler, and returns a fixed HTTP 200 response.
 
-(import "stdlib/async_socket.tur")
-(import "stdlib/scheduler.tur")
-(import "stdlib/fiber.tur")
-(import "stdlib/args.tur")
-(import "stdlib/env.tur")
+(load "stdlib/async_socket.tur")
+(load "stdlib/scheduler.tur")
+(load "stdlib/fiber.tur")
+(load "stdlib/env.tur")
+
+(defn cstr-length [s : cstr] : int
+  ```c
+  return (int64_t)strlen(s);
+  ```)
 
 (defn http-ok [body : cstr len : int] : cstr
   (str-concat "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: "
               (str-concat (int->str len)
                           (str-concat "\r\n\r\n" body))))
 
-(defn handle-client [fd : int] : nil
+(defn handle-client [fd : Fd] : nil
   (async-socket-recv fd 4096)
   (let [body "Hello from Turmeric!\n"
         resp (http-ok body 21)]
     (async-socket-send fd resp (cstr-length resp)))
   (async-socket-close fd))
 
-(defn accept-loop [listen-fd : int sched : ptr<void>] : nil
+(defn accept-loop [listen-fd : Fd sched : ptr<void>] : nil
   (let [client-fd (async-socket-accept listen-fd)
         f         (fiber-new (fn [] : nil (handle-client client-fd)) 0)]
     (scheduler-spawn sched f))
   (accept-loop listen-fd sched))
 
 (defn main [] : int
-  (let [port-str (getenv "PORT")
-        port     (if port-str (cstr->parse-int port-str) 8080)
+  (let [port-str (env/get-raw "PORT")
+        port     (if (= port-str 0) 8080 (cstr->parse-int (:: port-str :cstr)))
         sched    (scheduler-new)
         fd       (async-socket-listen port 128)
         accepter (fiber-new (fn [] : nil (accept-loop fd sched)) 0)]
@@ -94,27 +98,30 @@ requests to it.
 ;;
 ;; Listens on $PORT (default 8080), accepts connections concurrently using the
 ;; cooperative fiber scheduler, and returns a fixed HTTP 200 response.
-import "stdlib/async_socket.tur"
-import "stdlib/scheduler.tur"
-import "stdlib/fiber.tur"
-import "stdlib/args.tur"
-import "stdlib/env.tur"
+load("stdlib/async_socket.tur")
+load("stdlib/scheduler.tur")
+load("stdlib/fiber.tur")
+load("stdlib/env.tur")
+defn cstr-length [s :cstr] :int
+  ```c
+  return (int64_t)strlen(s);
+  ```
 defn http-ok [body :cstr len :int] :cstr
   str-concat("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: " str-concat(int->str(len) str-concat("\r\n\r\n" body)))
-defn handle-client [fd :int] :nil
+defn handle-client [fd :Fd] :nil
   async-socket-recv(fd 4096)
   let [body "Hello from Turmeric!\n"
        resp (http-ok body 21)]
     async-socket-send(fd resp cstr-length(resp))
   async-socket-close(fd)
-defn accept-loop [listen-fd :int sched :ptr<void>] :nil
+defn accept-loop [listen-fd :Fd sched :ptr<void>] :nil
   let [client-fd (async-socket-accept listen-fd)
        f         (fiber-new (fn [] :nil (handle-client client-fd)) 0)]
     scheduler-spawn(sched f)
   accept-loop(listen-fd sched)
 defn main [] :int
-  let [port-str (getenv "PORT")
-       port     (if port-str (cstr->parse-int port-str) 8080)
+  let [port-str (env/get-raw "PORT")
+       port     (if (= port-str 0) 8080 (cstr->parse-int (:: port-str :cstr)))
        sched    (scheduler-new)
        fd       (async-socket-listen port 128)
        accepter (fiber-new (fn [] :nil (accept-loop fd sched)) 0)]
@@ -162,7 +169,7 @@ COPY . .
 RUN just release
 
 # Compile the service to a standalone binary
-RUN build-release/tur emit-c --output-dir /tmp/svc service.tur \
+RUN build/tur emit-c --output-dir /tmp/svc service.tur \
     && cd /tmp/svc \
     && gcc -O2 -o service service.c -lpthread
 
@@ -187,7 +194,7 @@ alongside the source:
 FROM ubuntu:22.04
 
 # ... install build deps, just build ...
-COPY --from=builder /turmeric/build-release/tur /usr/local/bin/tur
+COPY --from=builder /turmeric/build/tur /usr/local/bin/tur
 COPY service.tur /app/service.tur
 
 EXPOSE 8080
@@ -293,15 +300,14 @@ build-wasm/wasm/turmeric.wasm
 ### Step 2 -- adapt the Emscripten output for Workers
 
 Emscripten's default output targets browser environments. Cloudflare Workers run in
-a V8 isolate with no `window`, `document`, or `XMLHttpRequest`. You need to rebuild
-with environment flags:
+a V8 isolate with no `window`, `document`, or `XMLHttpRequest`. The stock
+`just wasm` build already passes `-sMODULARIZE=1` and
+`-sEXPORT_NAME=TurmericModule`; what it does not set is the target environment:
 
 ```sh
-# In CMakeLists.txt or a custom build script, add to the emcc link command:
+# In src/CMakeLists.txt (the tur_wasm target) or a custom build script,
+# add to the emcc link command:
 #   -sENVIRONMENT=worker
-#   -sMODULARIZE=1
-#   -sEXPORT_NAME=TurmericModule
-#   --no-entry
 ```
 
 Or patch the existing output to remove browser-specific checks. The exact changes
