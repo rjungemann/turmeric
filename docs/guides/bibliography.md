@@ -19,8 +19,7 @@ POPL 1982.
 <https://dl.acm.org/doi/10.1145/359576.359587>
 
 Referenced by: `docs/archive/history/higher-kinded-types-plan.md` (kind
-inference algorithm); `docs/guides/compiler-flags-guide.md` (rank-1
-polymorphism description).
+inference algorithm).
 
 ---
 

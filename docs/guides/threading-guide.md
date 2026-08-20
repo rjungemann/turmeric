@@ -1007,56 +1007,33 @@ chan-free(ch)
 ### Thread-Safe Counter
 
 ```turmeric
-(def counter (mutex 0))
+(def counter (atomic-new 0))
 
 (for-each (range 10)
   (fn [i]
-    (thread
+    (async
       (fn []
-        (with-lock counter
-          (fn [n]
-            (+ n 1)))))))
+        (atomic-add! counter 1)))))
 
-(println (with-lock counter (fn [n] n)))  ; => 10
+;; ... after joining the workers ...
+(println (atomic-load counter))  ; => 10
 ```
 ```sweet-exp
-def counter mutex(0)
+def counter atomic-new(0)
 
 for-each range(10)
   fn [i]
-    thread
+    async
       fn []
-        with-lock counter
-          fn [n]
-            {n + 1}
+        atomic-add!(counter 1)
 
-println(with-lock(counter (fn [n] n)))  ; => 10
+;; ... after joining the workers ...
+println(atomic-load(counter))  ; => 10
 ```
 
-### Barrier
-
-```turmeric
-(def barrier (barrier-new 3))
-
-(for-each (range 3)
-  (fn [i]
-    (thread
-      (fn []
-        (println (str "Thread " i " starting"))
-        (barrier-wait barrier)
-        (println (str "Thread " i " done"))))))
-```
-```sweet-exp
-def barrier barrier-new(3)
-
-for-each range(3)
-  fn [i]
-    thread
-      fn []
-        println(str("Thread " i " starting"))
-        barrier-wait(barrier)
-        println(str("Thread " i " done"))
-```
+For a barrier (N threads rendezvous), build one from a TVar plus `check` --
+see the barrier sketch in the [STM Tutorial](stm-tutorial.md#barrier) -- or
+from a mutex + condvar + counter.
 
 ### Structured Concurrency with TaskGroup
 
