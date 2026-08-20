@@ -35,8 +35,27 @@ reconfigure:
 # ---------------------------------------------------------------------------
 
 test: build doctest
-    # NOTE: Run with a 5-minute timeout for now, due to some minor hang issues
-    timeout 300 ctest --output-on-failure --progress --test-dir build
+    # -j is required, not decoration: without it the ~106 registered targets
+    # run sequentially and end-to-end wall time becomes their SUM rather than
+    # the slowest one. It is safe because the fan-out harnesses (tur_tests,
+    # turi_fixture_tests, tur_jit_fixture_tests) are marked RUN_SERIAL, so
+    # ctest never co-schedules two of them. Dropping it is a soft regression
+    # that shows up in no individual test's timing -- see section 5 of
+    # docs/guides/test-suite-portability-guide.md.
+    #
+    # The job count must be EXPLICIT. `ctest -j` with no number is documented
+    # as `-j <jobs>` through CMake 3.28 (a bare value-less --parallel only
+    # arrived in 3.29), and on 3.28 a bare -j is accepted in silence and does
+    # nothing: measured on a 4-core box, five targets took 11.2s serial, 11.5s
+    # with bare -j, and 5.8s with an explicit count. A bare -j therefore looks
+    # like the fix while changing nothing. `getconf _NPROCESSORS_ONLN` is the
+    # portable count (nproc is GNU-only; macOS has neither).
+    #
+    # 720s, not 300s: tests/run.sh alone is ~265s on a 4-core box and is
+    # RUN_SERIAL, so a 5-minute cap killed the suite on any machine slower
+    # than the one it was tuned on. 12 minutes is the repo-wide suite timeout
+    # (see CLAUDE.md).
+    timeout 720 ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build
 
 # Run stdlib doctests (generate + run).
 doctest: build
@@ -103,7 +122,7 @@ test-turi: build
     bash tests/run-turi.sh
 
 test-tsan: tsan
-    TUR_TSAN=1 ctest --output-on-failure --test-dir build
+    TUR_TSAN=1 ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --test-dir build
 
 # Run production smoke tests against live turmeric-lang.com + try.turmeric-lang.com.
 # Requires: npm install run from the web/ directory (just web-deps).

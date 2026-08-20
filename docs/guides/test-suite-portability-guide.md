@@ -157,8 +157,24 @@ looks like:
 
 ```justfile
 test: build doctest
-    timeout 300 ctest -j --output-on-failure --progress --test-dir build
+    timeout 720 ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build
 ```
+
+**The job count must be explicit.** A bare `ctest -j` looks like it asks for
+"parallel, pick a number" -- it does not. Through CMake 3.28 the option is
+documented as `-j <jobs>`; a value-less `--parallel` only arrived in 3.29.
+On 3.28 a bare `-j` is accepted **in silence and does nothing**: measured on a
+4-core box, five targets took 11.2s serial, 11.5s with bare `-j`, and 5.8s
+with an explicit count. So a bare `-j` is the worst of both worlds -- it reads
+in review as the parallel recipe while behaving exactly like the serial one,
+which is how this section's own snippet came to document a no-op. Use
+`getconf _NPROCESSORS_ONLN`: `nproc` is GNU coreutils only, and macOS has
+neither it nor a value-less `-j` on the CMake it ships.
+
+The cap is 12 minutes, not 5: `tests/run.sh` alone is ~265s on a 4-core box
+and is `RUN_SERIAL`, so a 300s cap kills the whole suite on any machine
+slower than the one it was tuned on -- and the kill looks like a hang, not a
+timeout. 12 minutes is the repo-wide suite timeout; see CLAUDE.md.
 
 Under parallel `ctest`, end-to-end wall time is bounded by the slowest
 single target (usually `tests/run.sh` cold), not the sum. Removing the
