@@ -1,4 +1,5 @@
 /* elab_types.c -- type-expression forms: defkind/defrec/deftype/type-app, ascribe/pack/open. */
+#include <stdint.h>
 #include "elab_internal.h"
 #include "experiments.h"  /* Slice 1 (constrained-hkt-forall): forall-kinds gate */
 
@@ -3121,6 +3122,79 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
          dst_kind == TY_FLOAT64)) {
         inner->type = *ascribed;
         return inner;
+    }
+    /* ascribe-int-to-float-reinterprets: an INTEGER literal ascribed to a
+     * float kind is the number, not its bit pattern.  `(:: 3 :float)` printed
+     * 1.4822e-323 -- the double whose bits are 0x...03 -- because :int and
+     * :float are both 8 bytes and the same-size rule below turned the
+     * ascription into an EX_REINTERPRET.  The bug was width-dependent in a way
+     * that made it obviously unintended: `(:: 3 :float32)` printed 3, since 8
+     * != 4 misses that rule, so one operator disagreed with itself across
+     * float widths.
+     *
+     * Scoped to literals on purpose.  `::` from an int-typed EXPRESSION to a
+     * float really is a bit-reinterpret in the carrier round-trip that typed
+     * slots, variadic rest collection, and the cons/HAMT carriers depend on --
+     * a value whose static type is :int while it holds float bits (see
+     * tests/fixtures/typed-slots/ascribe-reinterpret and
+     * variadic-float-cons-collect).  Nothing in the static types separates
+     * that from a genuine int being converted, so a blanket change would break
+     * it: forcing conversion for every int->float ascription was measured at
+     * 4 fixture failures, all of them that carrier path.  A literal is the one
+     * shape with no such ambiguity -- the author wrote a constant, and there
+     * is no carried value whose bits could be meant.  This mirrors the
+     * float-literal arm directly above, which retypes for the same reason.
+     *
+     * The residual expression-level ambiguity is recorded in
+     * docs/reported/ascribe-int-to-float-expression-ambiguity.md. */
+    if ((dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+         dst_kind == TY_FLOAT64) &&
+        (src_kind == TY_INT || src_kind == TY_INT64 ||
+         src_kind == TY_INT32 || src_kind == TY_INT16 || src_kind == TY_INT8 ||
+         src_kind == TY_UINT32 || src_kind == TY_UINT16 || src_kind == TY_UINT8)) {
+        /* Peel integer-typed ascription wrappers to reach the literal, so a
+         * stepped `(:: (:: 3 i32) f32)` reads the same as a direct one.
+         *
+         * Each hop must hold the value EXACTLY.  Today that guard never fires:
+         * an integer-to-integer `::` is erased at codegen and does not narrow
+         * (`(:: 300 :int8)` prints 300, not 44), so peeling could not observe
+         * a truncated value even if it ignored the question.  It is here so
+         * that this arm does not silently become wrong the day narrowing is
+         * implemented -- at which point `(:: (:: 300 :int8) :float)` means
+         * 44.0, and folding it to 300.0 would trade one wrong answer for
+         * another.  Declining falls through to the existing path rather than
+         * inventing a third behavior. */
+        const Expr *lit_src = inner;
+        bool exact = true;
+        while (lit_src && lit_src->kind == EX_ASCRIBE) {
+            TypeKind k = lit_src->type.kind;
+            if (k != TY_INT && k != TY_INT64 && k != TY_INT32 &&
+                k != TY_INT16 && k != TY_INT8 && k != TY_UINT32 &&
+                k != TY_UINT16 && k != TY_UINT8) { exact = false; break; }
+            lit_src = lit_src->as.ascribe_.inner;
+        }
+        if (exact && lit_src && lit_src->kind == EX_INT_LIT) {
+            int64_t v = lit_src->as.i;
+            /* Re-walk the chain outward-in, checking the value survives each
+             * declared width unchanged. */
+            for (const Expr *w = inner; exact && w && w->kind == EX_ASCRIBE;
+                 w = w->as.ascribe_.inner) {
+                switch (w->type.kind) {
+                    case TY_INT8:   exact = (v >= INT8_MIN  && v <= INT8_MAX);  break;
+                    case TY_INT16:  exact = (v >= INT16_MIN && v <= INT16_MAX); break;
+                    case TY_INT32:  exact = (v >= INT32_MIN && v <= INT32_MAX); break;
+                    case TY_UINT8:  exact = (v >= 0 && v <= UINT8_MAX);  break;
+                    case TY_UINT16: exact = (v >= 0 && v <= UINT16_MAX); break;
+                    case TY_UINT32: exact = (v >= 0 && v <= UINT32_MAX); break;
+                    default: break;   /* int / int64 -- no narrowing */
+                }
+            }
+            if (exact) {
+                Expr *lit = expr_new(e->arena, EX_FLOAT_LIT, *ascribed, call->span);
+                lit->as.f = (double)v;
+                return lit;
+            }
+        }
     }
     if (src_kind != dst_kind) {
         int src_size = type_size_bytes(src_kind);
