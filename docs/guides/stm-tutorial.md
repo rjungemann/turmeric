@@ -390,6 +390,14 @@ defn release-write [] :nil
 
 ### Barrier
 
+> If you just want a barrier, `stdlib/barrier.tur` ships one -- `barrier-new`
+> / `barrier-wait` / `barrier-free` over mutex + condvar, reusable across
+> rounds, with `barrier-wait` returning `true` for the one thread that tripped
+> it. See the [Threading Guide](threading-guide.md#barrier). The sketch below
+> is for when the rendezvous has to compose with other transactional state, and
+> is deliberately minimal: it counts arrivals but never resets, so it is a
+> one-shot latch rather than the reusable barrier the stdlib one is.
+
 ```turmeric
 ;; Synchronize N threads: count arrivals, then block until all arrive
 (defn barrier-new [n]

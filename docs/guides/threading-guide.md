@@ -1082,9 +1082,44 @@ for-each range(10)
 println(atomic-load(counter))  ; => 10
 ```
 
-For a barrier (N threads rendezvous), build one from a TVar plus `check` --
-see the barrier sketch in the [STM Tutorial](stm-tutorial.md#barrier) -- or
-from a mutex + condvar + counter.
+### Barrier
+
+`stdlib/barrier.tur` is a counting barrier: `barrier-wait` blocks until the
+Nth caller arrives, then releases all N together and resets for the next
+round. That reuse is the point -- a barrier is for **phased** work, where
+every worker must finish phase 1 before any starts phase 2, which is what
+separates it from a one-shot latch.
+
+```turmeric no-check
+(load "stdlib/barrier.tur")
+
+(let [b (barrier-new 3)]
+  ;; ... each of three threads calls (barrier-wait b) between phases ...
+  (barrier-free b))
+```
+
+`barrier-wait` returns `true` for exactly **one** of the N threads released
+per round -- the arrival that tripped it, mirroring
+`PTHREAD_BARRIER_SERIAL_THREAD`. That lets a single thread do the
+between-phases work (swap buffers, print a summary) without a second lock:
+
+```turmeric no-check
+(if (barrier-wait b) (println "phase complete") 0)
+```
+
+It is built from mutex + condvar rather than `pthread_barrier_t`, which is an
+optional POSIX feature macOS does not ship -- the same reason
+`stdlib/sync.tur` hand-rolls its semaphore instead of using `sem_t`.
+Internally it is sense-reversing: each round bumps a generation counter and a
+waiter sleeps until *its* generation ends, so a thread that loops back around
+cannot be released by its own next round.
+
+Free the barrier only after every waiter has been released; destroying it
+while threads are parked on it destroys the condvar out from under them.
+
+The STM alternative -- a TVar plus `check` -- is sketched in the
+[STM Tutorial](stm-tutorial.md#barrier), and is the right choice when the
+rendezvous needs to compose with other transactional state.
 
 ### Structured Concurrency with TaskGroup
 
