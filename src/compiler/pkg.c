@@ -4481,9 +4481,14 @@ int cmd_pkg_add(int argc, char **argv) {
     /* Check for duplicate */
     for (int i = 0; i < m.n_spices; i++) {
         if (strcmp(m.spices[i].name, name_buf) == 0) {
+            /* There is no `tur update` subcommand -- CANONICAL_COMMANDS has
+             * no "update" row (`tur upgrade` is the installed-tool pipeline,
+             * a different thing). Point at the flow that actually exists:
+             * edit the manifest, then re-resolve. */
             fprintf(stderr,
                 "'%s' is already a dependency. "
-                "Use `tur update %s` to change the ref.\n",
+                "To change its ref, edit the `:spices` entry for '%s' in "
+                "build.tur, then run `tur fetch --update`.\n",
                 name_buf, name_buf);
             pkg_manifest_free(&m);
             return 1;
@@ -4660,7 +4665,10 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
     printf("Added cmake dep '%s' -> %s", name_buf, url);
     if (ref) printf(" @ %s", ref);
     printf("\n");
-    printf("Run `tur fetch` to generate cmake/SpiceDeps.cmake.\n");
+    /* The generated file is cmake/CMakeLists.txt; `SpiceDeps` is the name of
+     * the cmake project declared inside it, which is what this message used
+     * to report as the filename. */
+    printf("Run `tur fetch` to generate cmake/CMakeLists.txt.\n");
 
     pkg_manifest_free(&m);
     return 0;

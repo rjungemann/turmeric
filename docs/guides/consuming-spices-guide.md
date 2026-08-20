@@ -358,7 +358,7 @@ defn main [] :int
 No `-I` or `-L` flags are needed; `tur build` injects them from the manifest.
 
 CMake deps are also tracked in `tur.lock` with SHA-256 hashes for integrity
-verification. For the generated `SpiceDeps.cmake` format, the manifest
+verification. For the generated `cmake/CMakeLists.txt` format, the manifest
 schema, security considerations, and the outbound direction (publishing a
 Turmeric library so CMake projects can consume it), see the
 [CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
@@ -391,7 +391,7 @@ range.
 | Condition | Message |
 |---|---|
 | No `build.tur` in the directory tree | `No build.tur found. Run tur new <name> to create a project.` |
-| Spice already in the manifest | `'geom' is already a dependency. Use tur update geom to change the ref.` |
+| Spice already in the manifest | `'geom' is already a dependency. To change its ref, edit the :spices entry for 'geom' in build.tur, then run tur fetch --update.` |
 | Network failure | `Failed to reach https://github.com/...: <reason>` |
 | Ref not found | `Ref 'v99.0.0' not found in https://github.com/alice/tur-geom` |
 | SHA mismatch on re-fetch | `Integrity check failed for 'geom'. Run tur fetch --force to re-download.` |

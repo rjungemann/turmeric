@@ -204,11 +204,13 @@ for C/CMake dependency details.
 (def primes #s(2 3 5 7 11 13))
 ```
 
-**Structural equality:**
+**Structural equality** -- via the `Eq` typeclass, on any container whose
+element type is itself `Eq`:
 
 ```lisp
-(println (=struct= [1 2 3] [1 2 3]))   ; => true
-(println (=struct= {:a 1} {:a 2}))     ; => false
+(println (.eq? [1 2 3] [1 2 3]))            ; => true
+(println (.eq? #map{:a 1} #map{:a 2}))      ; => false
+(println (.eq? #set{1 2} #set{1 2}))        ; => true
 ```
 
 **Defer:**
@@ -496,7 +498,7 @@ for C/CMake dependency details.
 | Serializable continuations | ✅ |
 | Backtracking / cloneable continuations | ✅ |
 | `extern-c`, inline-C blocks, FFI | ✅ |
-| Structural equality (`=struct=`) | ✅ |
+| Structural equality (`Eq` typeclass / `.eq?`) | ✅ |
 | Runtime contracts (`require!` / `ensure!` / `assert!` / `invariant!`) | ✅ |
 | Standard library: `option`, `result`, `vec`, `str`, `slice`, `io`, `log`, `test`, `math`, `bits`, `args` | ✅ |
 | Persistent collections (HAMT) | ✅ |

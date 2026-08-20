@@ -372,7 +372,7 @@ defpackage my-app
 | Condition | Message |
 |---|---|
 | Not in a project directory | `No build.tur found. Run tur new <name> to create a project.` |
-| Spice already present | `'geom' is already a dependency. Use tur update geom to change the ref.` |
+| Spice already present | `'geom' is already a dependency. To change its ref, edit the :spices entry for 'geom' in build.tur, then run tur fetch --update.` |
 | Clone or ref failure | `spice: git failed for 'geom' ref 'v99.0.0' in 'spices'` |
 | SHA mismatch on re-fetch | `spice: SHA mismatch detected -- run tur fetch --update to re-fetch` |
 

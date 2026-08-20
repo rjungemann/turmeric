@@ -764,10 +764,13 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         /* Async */
         {"async",    "(async body) -- create an async computation"},
         {"await",    "(await future) -- wait for an async computation to complete"},
-        /* Error handling */
-        {"try",      "(try body (catch err handler)) -- catch runtime errors"},
-        {"catch",    "catch -- error handler clause in (try ...)"},
-        {"throw",    "(throw msg) -- raise a runtime error"},
+        /* Error handling.  try/catch/throw were deleted end-to-end in v0.25.0
+         * (CHANGELOG.md:1974); the model is Result-returning functions plus
+         * panic for the unrecoverable case.  Do not re-add them here. */
+        {"panic",    "(panic msg) -- abort with an unrecoverable error"},
+        {"panic-with","(panic-with value) -- panic carrying a typed payload"},
+        {"catch-unwind","(catch-unwind thunk) -- run thunk, returning a Result whose err slot carries the Panic"},
+        {"catch-panic-of","(catch-panic-of Type thunk) -- like catch-unwind, but re-raises panics whose payload is not Type"},
         /* Dynamic vars */
         {"defdynamic","(defdynamic *name* :Type init) -- define a dynamic (thread-local) variable"},
         {"let-dyn",  "(let-dyn [*name* val] body) -- bind dynamic variable within scope"},

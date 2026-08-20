@@ -991,6 +991,26 @@ else
     pass "lang-layer-same-set-no-reset"
 fi
 
+# repl-doc-no-exceptions: the :doc builtin table must not resurrect
+# try/catch/throw.  Exceptions were deleted end-to-end in v0.25.0
+# (CHANGELOG.md:1974) but their :doc rows survived for eleven releases, so the
+# prompt kept describing a form that no longer elaborates.  Assert both halves:
+# the dead names are gone, and the Result-based surface that replaced them is
+# documented in their place.
+out=$(printf ':doc try\n:doc catch\n:doc throw\n:doc panic\n:doc catch-unwind\n:quit\n' \
+      | "$TUR" repl 2>&1); rc=$?
+if echo "$out" | grep -qi "catch runtime errors\|raise a runtime error\|error handler clause"; then
+    fail "repl-doc-no-exceptions" "the removed try/catch/throw docs are still in the :doc table"
+elif [ "$(echo "$out" | grep -c "no documentation for")" -lt 3 ]; then
+    fail "repl-doc-no-exceptions" "expected try/catch/throw to report no documentation"
+elif ! echo "$out" | grep -q "abort with an unrecoverable error"; then
+    fail "repl-doc-no-exceptions" ":doc panic did not describe the panic form"
+elif ! echo "$out" | grep -q "catch-unwind thunk"; then
+    fail "repl-doc-no-exceptions" ":doc catch-unwind did not describe the Result-returning form"
+else
+    pass "repl-doc-no-exceptions"
+fi
+
 # ---------------------------------------------------------------------------
 # jit-ffi-c2mir-plan: dynamic FFI (call thunks, extern-c, call-ptr)
 # ---------------------------------------------------------------------------

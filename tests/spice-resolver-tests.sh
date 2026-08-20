@@ -802,6 +802,71 @@ fi
 rm -f "$LS6_B_ERR"
 rm -rf "$LS6_B"
 
+# MSG1: `tur add` on an already-declared dep must not point at a `tur update`
+# subcommand -- there is no "update" row in CANONICAL_COMMANDS (`tur upgrade`
+# is the installed-tool pipeline, a different thing), so the old text sent
+# users to a command that does not exist.  Assert both that the dead name is
+# gone and that the replacement names the flow that works.
+MSG1=$(mktemp -d)
+mkdir -p "$MSG1/proj" "$MSG1/geom"
+cat >"$MSG1/geom/build.tur" <<'EOF'
+(defpackage geom :name "geom")
+EOF
+cat >"$MSG1/proj/build.tur" <<'EOF'
+(defpackage proj
+  :name "proj"
+  :spices #{
+    "geom" #{:path "../geom"}
+  })
+EOF
+MSG1_ERR=$(mktemp)
+( cd "$MSG1/proj" && "$LS6_ABS_TUR" add ../geom --path ) >/dev/null 2>"$MSG1_ERR"
+rc=$?
+if [ "$rc" -ne 0 ] \
+   && ! grep -qF 'tur update' "$MSG1_ERR" \
+   && grep -qF 'already a dependency' "$MSG1_ERR" \
+   && grep -qF 'tur fetch --update' "$MSG1_ERR"; then
+    echo "PASS MSG1: duplicate-dep message points at a real command"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL MSG1: duplicate-dep message"
+    echo "  exit: $rc (want non-zero)"
+    echo "  stderr:"; sed 's/^/    /' "$MSG1_ERR"
+    grep -qF 'tur update' "$MSG1_ERR" && echo "  still names the nonexistent \`tur update\`"
+    FAIL=$((FAIL + 1))
+    FAILED+=("MSG1: duplicate-dep message names a real command")
+fi
+rm -f "$MSG1_ERR"
+rm -rf "$MSG1"
+
+# MSG2: `tur add-cmake` must name the file `tur fetch` actually writes.
+# It writes cmake/CMakeLists.txt; SpiceDeps is the name of the cmake PROJECT
+# declared inside that file, which is what the old message reported as the
+# filename.
+MSG2=$(mktemp -d)
+mkdir -p "$MSG2/proj"
+cat >"$MSG2/proj/build.tur" <<'EOF'
+(defpackage proj :name "proj")
+EOF
+MSG2_OUT=$(mktemp)
+( cd "$MSG2/proj" && "$LS6_ABS_TUR" add-cmake https://example.invalid/cjson --ref v1.7.16 ) \
+    >"$MSG2_OUT" 2>/dev/null
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'cmake/CMakeLists.txt' "$MSG2_OUT" \
+   && ! grep -qF 'SpiceDeps.cmake' "$MSG2_OUT"; then
+    echo "PASS MSG2: add-cmake names the file fetch actually generates"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL MSG2: add-cmake generated-file message"
+    echo "  exit: $rc"
+    echo "  stdout:"; sed 's/^/    /' "$MSG2_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("MSG2: add-cmake names the generated file correctly")
+fi
+rm -f "$MSG2_OUT"
+rm -rf "$MSG2"
+
 # LS6 case C: `tur fetch --dry-run` classifies each dep and writes no
 # lock file.  The bogus URL would error out on a real fetch; --dry-run
 # proves it was never contacted.

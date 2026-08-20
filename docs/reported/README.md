@@ -69,10 +69,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [stm-tmvar-tchan-stdlib](stm-tmvar-tchan-stdlib.md) | low | no TMVar/TChan; STM docs hand-sketch them from tvar/* + check |
 | [barrier-primitive-missing](barrier-primitive-missing.md) | low | no barrier-new/barrier-wait anywhere |
 | [schan-recv-pair-signature-migration](schan-recv-pair-signature-migration.md) | low | schan-recv still uses the caller-cell workaround; its miscompile blocker is fixed |
-| [tur-update-subcommand-missing](tur-update-subcommand-missing.md) | low | `tur add` tells users to run nonexistent `tur update`; also the SpiceDeps.cmake message misnomer |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
-| [readme-structural-equality-op-missing](readme-structural-equality-op-missing.md) | low | README advertises `=struct=`, which has never existed |
-| [repl-doc-table-lists-removed-try-catch-throw](repl-doc-table-lists-removed-try-catch-throw.md) | low | REPL `:doc` still documents try/catch/throw, deleted in v0.25.0 |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tur-audit-not-implemented](tur-audit-not-implemented.md) | low | security docs promise `tur audit`; only audit-spans exists |
 | [justfile-test-recipe-lost-ctest-j](justfile-test-recipe-lost-ctest-j.md) | low | Justfile test recipe dropped ctest -j, the documented soft regression |
