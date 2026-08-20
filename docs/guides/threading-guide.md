@@ -485,50 +485,42 @@ async-chan-free(ch)
 
 ### Multi-Channel Select
 
-`select` waits on multiple channel operations and executes the first one ready.
+`select` waits on multiple channel operations and runs the body of the first
+clause that is ready. Each clause is `((chan :recv v) body)` -- binding the
+received value to `v` -- or `((chan :send val) body)`, plus an optional
+`(:default body)` arm; `select` returns the selected clause body's value:
 
 ```turmeric
 (def ch-a (chan-new 4))
 (def ch-b (chan-new 4))
 
 ;; Poll with a default arm (never blocks)
-(let [[idx val] (select
-                  (ch-a :recv)
-                  (ch-b :recv)
-                  (:default :nothing))]
-  (cond
-    (= idx 0) (println (str "from ch-a: " val))
-    (= idx 1) (println (str "from ch-b: " val))
-    :else     (println "nothing ready")))
+(select ((ch-a :recv v) (println (str "from ch-a: " v)))
+        ((ch-b :recv v) (println (str "from ch-b: " v)))
+        (:default       (println "nothing ready")))
 
 ;; Send-or-drop
-(select
-  (ch-a :send 99)
-  (:default (println "ch-a full, dropping")))
+(select ((ch-a :send 99) 99)
+        (:default (println "ch-a full, dropping")))
 ```
 ```sweet-exp
 def ch-a chan-new(4)
 def ch-b chan-new(4)
 
 ;; Poll with a default arm (never blocks)
-let [[idx val] select((ch-a :recv) (ch-b :recv) (:default :nothing))]
-  cond
-    {idx = 0}
-    println(str("from ch-a: " val))
-    {idx = 1}
-    println(str("from ch-b: " val))
-    :else
-    println("nothing ready")
+select
+  ((ch-a :recv v) println(str("from ch-a: " v)))
+  ((ch-b :recv v) println(str("from ch-b: " v)))
+  (:default       println("nothing ready"))
 
 ;; Send-or-drop
 select
-  (ch-a :send 99)
+  ((ch-a :send 99) 99)
   (:default println("ch-a full, dropping"))
 ```
 
-Returns `(index value)` where `index` is the 0-based clause position (or `-1`
-for `:default`) and `value` is the received value, `true` for `:send`, or the
-`:default` expression result.
+Clause bodies must be type-compatible; the value of the selected body is the
+value of the whole `select`.
 
 When multiple clauses are simultaneously ready, `select` picks one uniformly at
 random using an xorshift32 PRNG so that no single channel is systematically

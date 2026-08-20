@@ -134,7 +134,7 @@ or an `rc<Struct>` -- so the reference route is not available by accident.
 | `:bool`           | Boolean |
 | `:float`          | 64-bit float |
 | `:float32`        | 32-bit float |
-| `:uint8`, `:int16`, `:int32`, … | Sized numeric types |
+| `:uint8`, `:int16`, `:int32`, ... | Sized numeric types |
 | `:cstr`           | C string pointer (`const char *`) |
 | `:ptr<void>`      | Raw pointer |
 | `:rc<T>`          | Reference-counted pointer to `T` |

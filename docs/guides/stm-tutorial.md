@@ -317,16 +317,18 @@ the better tool.)
                  (tvar/write queue (conj q i)))))
         (sleep 100)))))
 
+(defn pop-item []
+  (atomically
+    (stm (let [q (tvar/read queue)]
+           (check (not (empty? q)))
+           (tvar/write queue (cdr q))
+           (car q)))))
+
 (async
   (fn []
     ;; Consumer: process one item per transaction
     (while true
-      (let [item (atomically
-                   (stm (let [q (tvar/read queue)]
-                          (check (not (empty? q)))
-                          (tvar/write queue (cdr q))
-                          (car q))))]
-        (println item)))))
+      (println (pop-item)))))
 ```
 ```sweet-exp
 ;; Shared queue in a TVar
@@ -343,16 +345,19 @@ async
               tvar/write(queue conj(q i))
         sleep(100)
 
+defn pop-item []
+  atomically
+    stm
+      let [q tvar/read(queue)]
+        check not(empty?(q))
+        tvar/write(queue cdr(q))
+        car(q)
+
 async
   fn []
     ;; Consumer: process one item per transaction
     while true
-      let [item atomically(stm(
-                  let [q tvar/read(queue)]
-                    check not(empty?(q))
-                    tvar/write(queue cdr(q))
-                    car(q)))]
-        println(item)
+      println(pop-item())
 ```
 
 ### Gate (write token)

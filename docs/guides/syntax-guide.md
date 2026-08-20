@@ -686,7 +686,7 @@ Reserved in call-head position:
 | Group | Names |
 |---|---|
 | Binding / control | `def` `define` `let` `let*` `letrec` `if` `do` `unsafe` `set!` `while` `case` `defer` `return` `match` `quote` `gensym` `?` `->` `->>` |
-| Definition forms | `defn` `fn` `λ` `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
+| Definition forms | `defn` `fn` (and its Greek-letter lambda alias) `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
 | Generators | `gen` `yield` `gen-next` `gen-done?` |
 | References / rc / weak | `ref` `deref` `drop!` `ref?` `weak` `weak?` `upgrade` `lref/new` `rc/of` `rc/clone` `rc/drop` `rc->ptr` `rc/strong-count` `rc/from-ref` `ref/from-rc` |
 | Continuations | `reset` `shift` `shift0` `call/cc` `call/cc*` `escape` `cloneable-reset` `cloneable-shift` `serial-reset` `serial-shift` `cont?` |

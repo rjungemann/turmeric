@@ -16,33 +16,33 @@ the type system, or understand how source text becomes a native binary.
 
 ```
 source.tur
-    │
-    ▼
+    |
+    v
  Reader          (src/compiler/reader.c)
-    │  Form[]
-    ▼
+    |  Form[]
+    v
  Elaborator      (src/compiler/elab_*.c)
-    │  Expr (typed IR)
-    ▼
+    |  Expr (typed IR)
+    v
  Kind check      (src/passes/kind_check.c)
-    │
-    ▼
+    |
+    v
  Effect lower    (src/passes/effect_lower.c)
-    │  perform/handle → shift/reset
-    ▼
+    |  perform/handle -> shift/reset
+    v
  Effect row infer (src/passes/effect_check.c)
-    │
-    ▼
+    |
+    v
  CPS transform   (src/passes/cps.c)
-    │  shift/reset → trampolined IR
-    ▼
+    |  shift/reset -> trampolined IR
+    v
  Borrow check    (src/passes/borrow_check.c)
-    │
-    ▼
+    |
+    v
  Emitter         (src/compiler/emit_*.c)
-    │  C99 source
-    ▼
- C compiler (cc) → native binary
+    |  C99 source
+    v
+ C compiler (cc) -> native binary
 ```
 
 All passes share a single `PassContext` (defined in `src/runtime/pass.h`) that
@@ -56,13 +56,13 @@ static array in `src/main.c` and executed by `run_core_passes()`.
 
 ```
 src/
-├── main.c              compiler driver (CLI, pass scheduling, cc invocation)
-├── compiler/           frontend: reader, elaborator, emitter, formatter
-├── passes/             analysis and transformation passes
-├── runtime/            arena, RC, GC, HAMT, STM, serializable continuations
-├── async/              fibers, scheduler, async I/O
-├── turi/               tree-walking interpreter (REPL, eval API)
-└── web/                WASM glue for the browser playground
++-- main.c              compiler driver (CLI, pass scheduling, cc invocation)
++-- compiler/           frontend: reader, elaborator, emitter, formatter
++-- passes/             analysis and transformation passes
++-- runtime/            arena, RC, GC, HAMT, STM, serializable continuations
++-- async/              fibers, scheduler, async I/O
++-- turi/               tree-walking interpreter (REPL, eval API)
++-- web/                WASM glue for the browser playground
 ```
 
 ---
@@ -71,7 +71,7 @@ src/
 
 The compiler driver. Responsibilities:
 
-- Parse global CLI flags (`--no-color`, `-Xlinear`, `--dump-kinds`, etc.) and
+- Parse global CLI flags (`--no-color`, `--dump-kinds`, `--enable=<name>`, etc.) and
   store them in `globals.c` variables before any subcommand runs.
 - Dispatch subcommands: `build`, `run`, `emit-c`, `emit-h`, `check`, `format`,
   `repl`, `test`, and the Spice package manager commands (`new`, `add`, `fetch`,
@@ -94,12 +94,13 @@ The compiler driver. Responsibilities:
 
 ### reader.c / reader.h
 
-Converts raw text into a flat array of `Form*` values. Supports three reader
+Converts raw text into a flat array of `Form*` values. Supports four reader
 modes selected by file extension or a `#lang` directive:
 
 - `READER_TURMERIC` -- standard S-expression syntax (default for `.tur`)
-- `READER_SWEET` -- neoteric/indentation-sensitive syntax (`.sweet`)
-- `READER_SCHEME` -- Scheme-compatible S-expressions (not yet implemented)
+- `READER_CURLY_INFIX` -- Turmeric + curly-infix (SRFI-105)
+- `READER_NEOTERIC` -- Turmeric + neoteric notation
+- `READER_SWEET` -- full sweet-expression syntax (`.tur.sweet`)
 
 Key entry point: `read_all(arena, st, file, &nforms)` returns a `Form**`.
 
@@ -109,18 +110,23 @@ Defines the `Form` union -- the raw parsed representation before type-checking:
 
 | Kind | Description |
 |------|-------------|
-| `FORM_NIL` | `()` / nil literal |
-| `FORM_BOOL` | boolean literal |
-| `FORM_INT` | integer literal |
-| `FORM_FLOAT` | float literal |
-| `FORM_STR` | string literal |
-| `FORM_SYM` | symbol (interned) |
-| `FORM_KEYWORD` | `:keyword` |
-| `FORM_LIST` | `(a b c ...)` |
-| `FORM_VEC` | `[a b c ...]` |
-| `FORM_MAP` | `{k v ...}` |
-| `FORM_SET` | `#fx{a b ...}` |
-| `FORM_CODE` | inline C block (``` ``` ```) |
+| `F_NIL` | `()` / nil literal |
+| `F_BOOL` | boolean literal |
+| `F_INT` | integer literal |
+| `F_FLOAT` | float literal |
+| `F_STR` | string literal |
+| `F_SYM` | symbol (interned) |
+| `F_KEYWORD` | `:keyword` |
+| `F_LIST` | `(a b c ...)` |
+| `F_VEC` | `[a b c ...]` |
+| `F_MAP` | `#{k v ...}` (effect rows) |
+| `F_SET` | `#s(a b ...)` set literal |
+| `F_CBLOCK` | inline C block (``` ``` ```) |
+
+Further tags cover quote/quasiquote (`F_QUOTE`, `F_QUASIQUOTE`, ...), type
+annotations (`F_TYPE_ANN`, `F_CONTRACT_TYPE`), reader conditionals
+(`F_READER_COND`), and the data/row literals (`F_MAP_LITERAL`,
+`F_SET_LITERAL`, `F_ROW_LITERAL`).
 
 Each `Form` also carries a `Span` (file, line, col, byte offset) used for
 diagnostics.
@@ -135,7 +141,7 @@ instead of `strcmp`.
 
 The typed intermediate representation (IR). Every `Expr` carries:
 
-- `ExprKind kind` -- one of 215+ `EX_*` constants
+- `ExprKind kind` -- one of ~115 `EX_*` constants
 - `Type *ty` -- the elaborated type of this expression
 - `Span span` -- source location
 - A union of kind-specific payload fields
@@ -163,7 +169,7 @@ state (`is_moved`), and substructural annotations (linear, affine, relevant).
 
 ### types.c / types.h
 
-The type system. `Type` has a `TypeKind` (131+ `TY_*` constants) plus
+The type system. `Type` has a `TypeKind` (~60 `TY_*` constants) plus
 kind-specific fields.
 
 Primitive types: `TY_UNIT`, `TY_BOOL`, `TY_INT`, `TY_I8` .. `TY_U64`,
@@ -384,7 +390,7 @@ deep recursion during large tree teardowns.
 
 Persistent Hash Array Mapped Trie -- the data structure backing `hamt<K,V>` and
 `map<K,V>` in Turmeric. Structural sharing makes `insert`, `remove`, and
-`lookup` O(log₃₂ n) with no mutation of existing nodes.
+`lookup` O(log32 n) with no mutation of existing nodes.
 
 ### interp.c / interp.h
 
@@ -440,17 +446,17 @@ Architecture-specific context switch assembly. Saves and restores
 callee-saved registers and the stack pointer. One file is compiled per target
 architecture.
 
-### scheduler.c / scheduler_common.c
+### scheduler.c / scheduler.h
 
-Multi-threaded work-stealing scheduler (Phase T23). Each OS thread has a
-local deque; idle threads steal from the tail of a random peer's deque.
-`scheduler_common.c` holds code shared between single- and multi-threaded
-variants.
+The fiber scheduler, including the multi-threaded work-stealing variant
+(each OS thread has a local deque; idle threads steal from the tail of a
+peer's deque).
 
 ### io.c / io_kqueue.c / io_epoll.c
 
 Async I/O abstraction. `io.c` defines the platform-neutral API; `io_kqueue.c`
-is the macOS/BSD backend and `io_epoll.c` is the Linux backend. Integrates with
+is the macOS/BSD backend, `io_epoll.c` the Linux backend, and `io_iocp.c` the
+Windows backend. Integrates with
 the scheduler so that I/O-blocked fibers are automatically rescheduled when the
 underlying fd is ready.
 
@@ -515,9 +521,10 @@ Fiber integration for the interpreter. Bridges `turi/eval.c` with
 
 ## src/web/
 
-WASM glue code. `wasm_glue.c` exports `turi_eval_string()` and
-`turi_doc_lookup()` to JavaScript. The latter is called by the doc panel in
-the web REPL (`web/`) when the user hovers over a name.
+WASM glue code. `wasm_glue.c` exports `turi_wasm_eval()`, `turi_doc_lookup()`,
+and the other `turi_wasm_*` entry points to JavaScript. `turi_doc_lookup` is
+called by the doc panel in the web REPL (`web/`) when the user hovers over a
+name.
 
 ---
 
@@ -525,25 +532,25 @@ the web REPL (`web/`) when the user hovers over a name.
 
 ```
 Text
-  └─ reader.c ──────────────────────────────► Form[]
-                                               │
-  └─ (stdlib forms prepended in main.c)        │
-                                               ▼
-                              elab_*.c ──────► Expr* (typed IR)
-                                               │
-                              kind_check ───── │ (validates HKT kinds)
-                                               │
-                              effect_lower ──► │ (perform/handle → shift/reset)
-                                               │
-                              effect_check ─── │ (infer effect rows)
-                                               │
-                              cps.c ─────────► │ (shift/reset → trampolines)
-                                               │
-                              borrow_check ─── │ (ownership validation)
-                                               │
-                              emit_*.c ──────► Buf (C99 source text)
-                                               │
-                              cc ────────────► native binary
+  +- reader.c -----------------------------> Form[]
+                                               |
+  +- (stdlib forms prepended in main.c)        |
+                                               v
+                              elab_*.c ------> Expr* (typed IR)
+                                               |
+                              kind_check ----- | (validates HKT kinds)
+                                               |
+                              effect_lower --> | (perform/handle -> shift/reset)
+                                               |
+                              effect_check --- | (infer effect rows)
+                                               |
+                              cps.c --------> | (shift/reset -> trampolines)
+                                               |
+                              borrow_check --- | (ownership validation)
+                                               |
+                              emit_*.c ------> Buf (C99 source text)
+                                               |
+                              cc -----------> native binary
 ```
 
 All allocations within a compilation unit live in a single `Arena` that is
@@ -584,4 +591,4 @@ propagate kind info from source nodes to replacement nodes.
 - `docs/guides/hkt-guide.md` -- higher-kinded types
 - `docs/guides/substructural-types-guide.md` -- linear, affine, relevant types
 - `docs/guides/module-system-guide.md` -- separate compilation
-- `docs/design/design-notes.md` -- architectural decisions and rationale
+- `docs/design/` -- architectural decision and rationale notes
