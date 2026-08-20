@@ -1,7 +1,7 @@
 ---
 title: Solver Extension Plan (SX)
 category: Planning
-description: Extending the refinement solver into an incremental, backtracking decision procedure -- a trail with per-cell opt-out, a capture/restore cost curve in the benchmark harness, an offline lazy-SMT stepping stone, and an untrusted-search/trusted-checker seam.
+description: Extending the refinement solver into an incremental, backtracking decision procedure -- a trail with per-cell opt-out, a capture/restore cost curve in the benchmark harness, an offline lazy-SMT stepping stone, an untrusted-search/trusted-checker seam, and a query surface for interrogating the solver from outside the compiler.
 ---
 
 # Solver Extension (SX)
@@ -30,6 +30,13 @@ section 5.
 The rest of this document is (a) what the codebase actually does today,
 checked against the source, (b) the literature each point leans on, and (c) a
 phased plan.
+
+One item is *not* from the review: the external interrogation surface (SX8)
+was requested in follow-up -- expose the solver so tools, tests, and users
+outside the compile pipeline can put queries to it directly. It slots in
+cleanly because every later phase makes the same surface strictly more
+informative (marks make `push`/`pop` real, certificates make `get-proof`
+real), so it is specified here rather than as a separate plan.
 
 ## 1. The two review questions
 
@@ -744,7 +751,80 @@ obligations.
   problem in the plan.
 - **Gate:** depth cap is a constant, not a flag. Deferrable indefinitely.
 
-### SX8 -- docs and graduation
+### SX8 -- external interrogation surface
+
+Expose the solver to callers *outside* the compile pipeline. The review kept
+asking "measure it", "replay it", "check it against an external solver by
+hand" -- every one of those is easier when the solver answers queries
+directly, and the pieces already exist in-tree: `refine_smtlib.c` serializes a
+VC *out* to SMT-LIB2, and `tests/unit/refine_corpus.c` already contains a
+complete SMT-LIB2 reader *in* (s-expr parser, term builder onto `RefineVC`,
+`:status` handling) that today only the ctest harness can invoke. SX8 is
+mostly relocation and plumbing, in three tiers that ride the other phases:
+
+**SX8a -- `tur smt` (batch CLI) and the JSON obligation dump.** Independent of
+everything else; can land right after SX0.
+
+- `tur smt <file.smt2>`: lift the corpus harness's reader out of `tests/unit/`
+  into `src/compiler/refine_smtlib.c` (making that file the reader *and*
+  writer, which also lets the corpus harness shrink to a driver), run the
+  standard chain, print `sat` / `unsat` / `unknown` plus which stage decided,
+  the model when the bounded search found one, and -- once SX4/SX6b exist --
+  the certificate. Exit codes mirror the answer so shell harnesses can branch.
+  This closes the loop the internals guide already gestures at: today you can
+  dump a VC *to* "whatever solver you like"; after SX8a an external harness
+  can differentially test any solver against `tur` in both directions without
+  `tur` ever linking one.
+- `tur emit-c --dump-refine=json <file.tur>` (or a `tur refine-report`
+  spelling, settle in-phase): one JSON record per obligation -- location,
+  predicate source, hypotheses, the VC as SMT-LIB2 text, verdict, deciding
+  stage, counterexample, `help:` hints, memo hit, and which caps (if any) were
+  hit. This is deliberately the same stream SX0(b)'s telemetry wants: one
+  emitter, two consumers (a human/tool reading a build, and the cap-hit
+  sweep). Editors and CI read it; the LSP can surface "show me the VC / why
+  UNKNOWN" as a hover or code action from the same records later, without a
+  new protocol.
+- **Gating:** none. Per the experimental-features rule, diagnostic and dump
+  surfaces (`--dump-*`) are explicitly outside the `EXPERIMENTS[]` regime.
+  Mark the JSON schema explicitly unstable (a `"schema": 0` field) until SX9.
+- **Accept:** the corpus replay can be expressed as `tur smt` invocations and
+  agrees with the ctest harness on all 125 labels; the JSON dump round-trips
+  through `python3 -m json.tool`; both are exercised by fixtures.
+
+**SX8b -- incremental queries.** After SX3/SX4 land marks, the textual surface
+grows the SMT-LIB2 incremental commands, because the trail is exactly what
+makes them implementable: `(push)` / `(pop)` map onto `euf_mark` +
+`la_mark` / undo, `(get-model)` onto the bounded search, and -- after the 3.7
+machinery -- `(get-unsat-core)` onto the conflict explanation and
+`(get-proof)` onto the certificate. This tier is the *external witness* that
+the trail works: a `push`/`assert`/`check-sat`/`pop` script exercises
+mark/undo through a public door, and SX3/SX4's acceptance suites should
+include such scripts once the tier exists. `tur smt --interactive` (read
+commands from stdin) makes `tur` usable as a backend for anything that speaks
+the protocol subset.
+
+**SX8c -- in-language and playground access.**
+
+- A compile-time API for the 3.6 search layer: expose the discharge seam to
+  Turmeric compile-time code as `(solver/check hyps goal)` returning
+  valid/invalid/unknown plus model. This is not extra work on top of SX7 --
+  it *is* the seam SX7's Turmeric-side prototype needs, named and documented.
+  Read-only by construction: per 3.7 nothing reachable from this API can
+  elide a check; interrogation proposes, the C chain decides.
+- A WASM export (`turi_smt_check` in `src/web/wasm_glue.c`, next to
+  `turi_doc_lookup`) so the playground can answer queries -- the "static
+  checking at zero download cost" story already ships the solver to the
+  browser; this makes it visible there.
+
+**Scope honesty, so the surface never overpromises:** `tur smt` accepts the
+corpus subset of SMT-LIB2 over `QF_UFLIA`/`QF_UFLRA`, answers `unknown`
+freely, and parity with a production SMT solver is a non-goal (SX6b's
+stopping condition applies here too). The reader must keep the corpus
+harness's discipline of erroring on anything it would otherwise silently
+drop: a partially parsed assertion set weakens `unsat` claims, which is the
+one dishonest failure mode a query surface can have.
+
+### SX9 -- docs and graduation
 
 - Update
   [refinement-solver-internals-guide.md](../guides/refinement-solver-internals-guide.md)
@@ -752,7 +832,9 @@ obligations.
   story), write a `docs/guides/backtrackable-state-guide.md` for the SX1
   surface, and cross-link from
   [backtracking-guide.md](../guides/backtracking-guide.md) and
-  [logic-programming-guide.md](../guides/logic-programming-guide.md).
+  [logic-programming-guide.md](../guides/logic-programming-guide.md). Document
+  the `tur smt` subcommand and the JSON obligation schema (stamping it
+  `"schema": 1`) in a `docs/guides/solver-query-guide.md`.
 - Graduate `backtrackable-state` (delete the row, behavior unconditional) once
   3.5's re-entry question is settled and SX2 has a benchmark answer. Graduate
   `solver-lazy-smt` on the SX6a corpus criterion. Move this plan to
@@ -760,20 +842,26 @@ obligations.
 
 ### Recommended order
 
-This mirrors the review's own next-steps list:
+This mirrors the review's own next-steps list, with the interrogation
+surface slotted where it is cheapest:
 
 1. **SX0**, both instruments -- the telemetry and the curve are the decision
    data for everything below, and cost days.
-2. **SX1, then SX2** -- answers the opt-out question with a shipped design
+2. **SX8a alongside or immediately after SX0** -- it shares SX0(b)'s
+   emitter, costs little (the SMT-LIB reader already exists in
+   `tests/unit/refine_corpus.c`), and every phase after it gets a public
+   query door for its acceptance tests plus two-way differential testing
+   against external solvers.
+3. **SX1, then SX2** -- answers the opt-out question with a shipped design
    instead of a promise, and immediately tests whether the primitive pays for
    itself on the stdlib search paths.
-3. **If SX0(b) says the cube caps bite: SX6a** -- offline lazy SMT needs no
+4. **If SX0(b) says the cube caps bite: SX6a** -- offline lazy SMT needs no
    incremental theories, so it can leapfrog SX3-SX5 entirely.
-4. **SX3-SX5** when SX6b or measured compile-time cost justifies them; SX4
-   only if its own cap bites.
-5. **SX7 prototype in Turmeric early** (it needs only SX4's seam or even
-   today's S2 for a first cut against the corpus), C port last or never.
-   **SX6b** last of all, and only if SX6a thrashes.
+5. **SX3-SX5** when SX6b or measured compile-time cost justifies them; SX4
+   only if its own cap bites. SX8b rides whichever of SX3/SX4 lands first.
+6. **SX7 prototype in Turmeric early**, via the SX8c seam (it needs only
+   SX4's seam or even today's S2 for a first cut against the corpus), C port
+   last or never. **SX6b** last of all, and only if SX6a thrashes.
 
 ## 6. Explicitly not doing
 
@@ -794,6 +882,9 @@ This mirrors the review's own next-steps list:
   sound.
 - **Not** trailing by default in the compiler's arena-allocated VC structures.
   Terms are immortal within a query by construction; that is a feature.
+- **Not** shipping a general-purpose SMT solver CLI. `tur smt` is an
+  interrogation window onto the solver `tur` already contains -- the corpus
+  subset of SMT-LIB2, `unknown` as a first-class answer, no parity ambitions.
 - **Not** trusting any Turmeric-hosted search stage to decide. Per 3.7 it may
   only propose; the C checker decides, and an unverified certificate is
   `RT_UNKNOWN`.
@@ -811,6 +902,7 @@ This mirrors the review's own next-steps list:
 | Simplex coefficient growth overflows int64 rationals | Disciplined overflow -> `RT_UNKNOWN` (today's policy, kept); bignums only if telemetry shows real degrades |
 | Fixture snapshot churn | Regenerate in the same PR as the codegen change, per the project rule; SX1 is the only phase that touches codegen at all |
 | The benchmark measures the wrong thing under load | Serialize the sweep, stamp the binary, refuse to publish rows if it changed mid-run |
+| The query surface (JSON schema, SMT-LIB subset) hardens into a compatibility contract before the solver settles | Schema versioned and explicitly unstable through SX8a-b; stabilized (`"schema": 1`) only at SX9, alongside the guide |
 
 ## 8. Open questions to take back to the reviewer
 
