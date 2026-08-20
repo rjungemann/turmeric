@@ -474,6 +474,19 @@ TESTABLE_RE = re.compile(
     r'^(-?[0-9]+\.[0-9]+|-?[0-9]+|true|false|"[^"]*"|nil)$'
 )
 
+# An explicit opt-out for an example whose output is correct as documentation
+# but not reproducible in the doctest harness -- e.g. one that depends on
+# stdout being a tty. Spelled as a trailing `; doctest: <reason>` on the
+# `; =>` line:
+#
+#   ;;;   (term/bold "hello")  ; => "\x1b[1mhello\x1b[0m"  ; doctest: requires a tty
+#
+# Without this the case is still dropped -- TESTABLE_RE is anchored, so any
+# trailing text stops it matching -- but silently and by accident. Declaring
+# it keeps the reason in the docstring, where the reader of the rendered docs
+# also benefits from knowing the output is environment-dependent.
+DOCTEST_ANNOT_RE = re.compile(r';\s*doctest:\s*(.+?)\s*$')
+
 
 class DocTestCase:
     """A single testable docstring example."""
@@ -505,6 +518,7 @@ def extract_doctest_cases(module_name, defn_name, doc):
     lines = [l.strip() for l in doc['example'].splitlines() if l.strip()]
     cases = []
     pending_setup = []
+    skipped = extract_doctest_cases.last_skipped = []
 
     for line in lines:
         if '; =>' not in line:
@@ -513,6 +527,12 @@ def extract_doctest_cases(module_name, defn_name, doc):
         expr_part, expected_raw = line.split('; =>', 1)
         expr_part = expr_part.strip()
         expected_raw = expected_raw.strip()
+        annot = DOCTEST_ANNOT_RE.search(expected_raw)
+        if annot:
+            # Declared un-runnable here; not a failure and not a silent drop.
+            skipped.append((defn_name, annot.group(1)))
+            pending_setup = []
+            continue
         if TESTABLE_RE.match(expected_raw):
             # Quoted string: strip outer quotes since println prints the raw
             # cstr value without surrounding quotes.

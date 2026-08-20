@@ -163,7 +163,10 @@
 ;;;   A Seq that is immediately exhausted.
 ;;;
 ;;; Example:
-;;;   (let [s (empty-seq)] (seq-gen-done (seq-iter s)))  ; => true
+;;;   ;; seq-gen-done reports "ran to completion", so a freshly-created
+;;;   ;; iterator is not done yet -- drive it once first. (An unstarted
+;;;   ;; generator is never done; that holds for a non-empty Seq too.)
+;;;   (let [g (seq-iter (empty-seq))] (let [_ (seq-gen-next g)] (seq-gen-done g)))  ; => true
 ;;;
 ;;; Since: LZ0
 
