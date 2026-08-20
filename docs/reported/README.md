@@ -46,7 +46,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [quickstart-tutorial-fictional-option-api](quickstart-tutorial-fictional-option-api.md) | high | the shipped quickstart tutorial stack (repl-tutorial, quickstart.md, tutorials/quickstart.yaml) teaches `option-some`/counted-`for`/`Point-x` -- none exist |
 | [async-panic-task-boundary](async-panic-task-boundary.md) | medium | panic in a plain `(async ...)` body unwinds the caller instead of rejecting the future |
 | [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
 | [args-api-int-erased-handles](args-api-int-erased-handles.md) | medium | stdlib/args.tur types spec/result handles and the option default as bare `:int` (no-lazy-int violation) |

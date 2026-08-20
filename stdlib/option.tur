@@ -57,6 +57,29 @@
 ;;; Since: Phase TC1
 
 (defn some? [A] [o : (Option A)] : bool (.is-some o))
+;;; none? -- check whether an Option[A] is empty.
+;;;
+;;; The complement of `some?`. It existed in the compiler's pure-builtin list
+;;; (src/compiler/emit_fns.c) with no implementation behind it, which made it
+;;; worse than simply absent: the compiled path rejected it as an unknown
+;;; function, while the interpreter treated the name as known and answered
+;;; `false` for EVERY argument, with no warning -- so
+;;; `(none? (none))` was `false` at the REPL. See
+;;; docs/archive/quickstart-tutorial-fictional-option-api.md.
+;;;
+;;; Parameters:
+;;;   o -- Option[A]
+;;;
+;;; Returns:
+;;;   true if o is none, false if o is some.
+;;;
+;;; Example:
+;;;   (none? (none))    ; => true
+;;;   (none? (some 1))  ; => false
+;;;
+;;; Since: 2026-08-20
+
+(defn none? [A] [o : (Option A)] : bool (not (.is-some o)))
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:

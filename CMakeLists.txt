@@ -367,6 +367,15 @@ add_test(
   COMMAND bash tests/run-engine-select.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Tutorial content must actually run: tutorials/*.yaml is data, so no compiler
+# ever reads it, which is how quickstart.yaml came to teach an Option/for/struct
+# API that never existed. Replays each tutorial's own steps through one REPL
+# session.
+add_test(
+  NAME tur_tutorial_steps
+  COMMAND bash tests/run-tutorial-quickstart.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # `:entry "<path>"` in build.tur -- the first rung of `tur run`'s project-mode
 # entry-point ladder (:entry > src/main.tur > the single .tur under src/),
 # plus the dangling-:entry hard error.

@@ -42,16 +42,20 @@ steps:
   - id: match_value
     title: Pattern-matching a Value
     instruction: |
-      Use match to print a LongVal or StrVal. Define print-value:
+      Use match to print a Value. Every constructor needs an arm -- match is
+      checked for exhaustiveness, so leaving EntityVal out is a compile error,
+      not a silent fall-through. Define print-value:
         (defn print-value [v :int] :nil
           (match v
-            (LongVal n) (println n)
-            (StrVal s)  (println s)))
-    expected: "(defn print-value [v :int] :nil (match v (LongVal n) (println n) (StrVal s) (println s)))"
+            (LongVal n)   (println n)
+            (StrVal s)    (println s)
+            (EntityVal e) (println e)))
+    expected: "(defn print-value [v :int] :nil (match v (LongVal n) (println n) (StrVal s) (println s) (EntityVal e) (println e)))"
     hints:
       - "match dispatches on the constructor of a Value."
       - "Each arm binds the payload to a name: (LongVal n) binds n."
-    success_message: "Correct! Pattern matching is the standard way to inspect a tagged union."
+      - "Value has three constructors; an arm for each, or match rejects it."
+    success_message: "Correct! Pattern matching is the standard way to inspect a tagged union, and match makes you cover every case."
     match_strategy: normalized
 
   - id: datum_layout
