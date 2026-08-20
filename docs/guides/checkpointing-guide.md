@@ -348,63 +348,43 @@ defn analyze-large-dataset [data]
 
 Continuation frames carry schema version. Mismatches produce an error:
 
-```turmeric
-(def k (deserialize bytes))  ; May fail if:
-                             ; - Function no longer exists
-                             ; - Argument types changed
-                             ; - Captured types are incompatible
+```turmeric no-check
+(def r (bytes->serial-cont bytes))  ; (err "...") if:
+                                    ; - Function no longer exists
+                                    ; - Argument types changed
+                                    ; - Captured types are incompatible
 ```
 
 ```sweet-exp
-def k deserialize(bytes)  ; May fail if:
-                          ; - Function no longer exists
-                          ; - Argument types changed
-                          ; - Captured types are incompatible
+def r bytes->serial-cont(bytes)  ; (err "...") if:
+                                 ; - Function no longer exists
+                                 ; - Argument types changed
+                                 ; - Captured types are incompatible
 ```
 
-Error handling:
+`bytes->serial-cont` returns an ordinary `Result`, so error handling is a
+`Result` check, not an exception handler:
 
-```turmeric
-(try-with
-  (fn []
-    (deserialize (read-file "checkpoint.bin")))
-  (fn [e k]
-    (match e
-      (schema-mismatch _ old-version) ->
-        (throw (error (str "Cannot resume: checkpoint uses version " old-version
-                           " but current code is version " (current-version)))))))
+```turmeric no-check
+(let [r (bytes->serial-cont (cont-from-file "checkpoint.bin"))]
+  (if (err? r)
+    (panic (str-concat "Cannot resume: " (err-val r)))
+    (serial-resume (ok-val r) 0)))
 ```
 
 ```sweet-exp
-try-with
-  fn []
-    deserialize(read-file("checkpoint.bin"))
-  fn [e k]
-    match e
-      (schema-mismatch _ old-version)
-      ->
-      throw(error(str("Cannot resume: checkpoint uses version " old-version " but current code is version " current-version())))
+let [r bytes->serial-cont(cont-from-file("checkpoint.bin"))]
+  if err?(r)
+    panic(str-concat("Cannot resume: " err-val(r)))
+    serial-resume(ok-val(r) 0)
 ```
 
 ### Partial Reconstruction
 
-If deserialization of a captured value fails, the whole continuation fails. To tolerate missing state:
-
-```turmeric
-;; Wrap potentially failing values in Option
-(def opt-value
-  (try
-    (deserialize captured-value)
-    (catch [e] (None))))
-```
-
-```sweet-exp
-;; Wrap potentially failing values in Option
-def opt-value
-  try
-    deserialize(captured-value)
-    catch([e] None())
-```
+If deserialization of a captured value fails, the whole continuation fails --
+`bytes->serial-cont` returns `(err msg)` rather than a half-reconstructed
+continuation. To tolerate missing state, keep the fragile value out of the
+captured frame (reference it by an identifier and re-load it after resume).
 
 ## Performance Considerations
 
@@ -424,44 +404,43 @@ def opt-value
 ## API Summary
 
 ```turmeric no-check
-;; Serialize a continuation
-(serialize cont : (cloneable-shift [k] k)) : bytes
+;; Delimit a serializable region / capture the continuation
+(serial-reset body)
+(serial-shift k body)             ; k : serial-continuation<T>
 
-;; Deserialize a continuation
-(deserialize bytes : bytes) : (cloneable-shift [k] k)
+;; Serialize / deserialize
+(serial-cont->bytes k)            ; -> bytes
+(bytes->serial-cont b)            ; -> (Result (serial-continuation<T>) cstr)
 
 ;; Resume a continuation with a value
-(resume k : (cloneable-shift [k] k) v : a) : a
+(serial-resume k v)               ; -> T
 
-;; Checkpoint macro (example)
+;; File helpers (stdlib/serial.tur)
+(cont-to-file b path)             ; write serialized bytes; 1 on success
+(cont-from-file path)             ; read serialized bytes back
+
+;; Checkpoint macro (example, defined above)
 (checkpoint name value)
-
-;; Resource marshalling
-(marshal resource : a) : resource-token
-(unmarshal token : resource-token) : a
 ```
 
 ```sweet-exp
-;; Serialize a continuation
-serialize cont : (cloneable-shift [k] k)
-: bytes
+;; Delimit a serializable region / capture the continuation
+serial-reset body
+serial-shift k body              ; k : serial-continuation<T>
 
-;; Deserialize a continuation
-deserialize bytes : bytes
-: (cloneable-shift [k] k)
+;; Serialize / deserialize
+serial-cont->bytes(k)            ; -> bytes
+bytes->serial-cont(b)            ; -> (Result (serial-continuation<T>) cstr)
 
 ;; Resume a continuation with a value
-resume k : (cloneable-shift [k] k) v : a
-: a
+serial-resume(k v)               ; -> T
 
-;; Checkpoint macro (example)
-checkpoint name value
+;; File helpers (stdlib/serial.tur)
+cont-to-file(b path)             ; write serialized bytes; 1 on success
+cont-from-file(path)             ; read serialized bytes back
 
-;; Resource marshalling
-marshal resource : a
-: resource-token
-unmarshal token : resource-token
-: a
+;; Checkpoint macro (example, defined above)
+checkpoint(name value)
 ```
 
 ## See Also

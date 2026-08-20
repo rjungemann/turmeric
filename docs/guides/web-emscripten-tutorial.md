@@ -57,15 +57,17 @@ Key files in the Turmeric repository:
 |---|---|
 | `src/web/wasm_glue.h` | Exported C API (`turi_wasm_init`, `turi_wasm_eval`, etc.) |
 | `src/web/wasm_glue.c` | Implementation of the glue layer |
-| `src/CMakeLists.txt` lines 282-365 | How the `tur_wasm` CMake target is defined |
-| `web/main.js` | Reference JS integration using the WASM module |
+| `src/CMakeLists.txt` (`add_custom_target(tur_wasm ...)`, ~line 1499) | How the `tur_wasm` CMake target is defined |
+| `web/public/eval-worker.js` | Reference JS integration using the WASM module |
 
 The `emcc` link command in `CMakeLists.txt` exports these functions:
 
 ```
 _turi_wasm_init  _turi_wasm_reset  _turi_wasm_shutdown  _turi_wasm_eval
-_turi_wasm_eval_ex  _turi_wasm_version  _turi_wasm_format  _turi_doc_lookup
-_malloc  _free
+_turi_wasm_eval_ex  _turi_wasm_version  _turi_wasm_format
+_turi_wasm_lsp_request  _turi_wasm_lsp_flush  _turi_wasm_lsp_reset
+_turi_wasm_set_lang  _turi_wasm_get_lang  _turi_wasm_lang_registry
+_turi_doc_lookup  _turi_type_of  _turi_explain  _malloc  _free
 ```
 
 And these runtime methods:

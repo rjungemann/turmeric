@@ -6,9 +6,9 @@
 > lingering `--enable=refined` is accepted as a no-op, `TUR-W0063`.) The design
 > of record is
 > [`docs/archive/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md).
-> A `#reads`-refined accessor now proves its guarded crossings *and* codegens
-> (see [Codegen and enforcement](#codegen-and-enforcement) -- this required
-> suppressing an impure entry contract). Read the
+> A `#reads`-refined accessor proves its guarded crossings *and* codegens
+> (see [Codegen and enforcement](#codegen-and-enforcement) -- the impure
+> entry contract is suppressed). Read the
 > [Refinement Types guide](refinement-types-guide.md) first; this one assumes it.
 
 ## The gap this fills
@@ -401,12 +401,9 @@ Declared-but-never-written is fine -- a frame is an *upper bound* on what the
 body may write, the same reading `#writes [a]` already has for a parameter the
 body happens not to touch. A frame may mix the two: `#writes [a hits]`.
 
-Two rejections have their own reasons rather than a generic one: naming an
-**immutable** global is a claim that cannot be true (`TUR-E0381`), and naming a
-global **without the experiment** is the pre-G2 "not a parameter" error --
-the gate covers the grammar, not just the checking, because accepting the name
-and ignoring it would be exactly the silently-dropped frame member `TUR-E0381`
-exists to prevent.
+Naming an **immutable** global gets its own rejection rather than a generic
+"not a parameter" one: it is a claim that cannot be true (`TUR-E0381`), and
+saying so beats a message about parameters.
 
 `#reads` is deliberately **not** part of this. It is the annotation that
 *grants* congruence, so letting it name a global would let a promise about
