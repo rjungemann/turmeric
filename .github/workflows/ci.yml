@@ -116,11 +116,16 @@ jobs:
         # accepted silently and does nothing (see the Justfile `test` recipe).
         # getconf _NPROCESSORS_ONLN is portable across the Linux and macOS
         # runners; nproc is GNU-only.
-        # Safe because every fan-out harness in the set (turi_fixture_tests,
-        # tur_jit_fixture_tests, the repl-spice targets) is marked RUN_SERIAL in
-        # CMakeLists.txt, so ctest never co-schedules two harnesses that each
-        # already fan out across nproc. The step above is a single RUN_SERIAL
-        # target, so -j would do nothing there.
+        # Safe for the harnesses that fan out across nproc internally
+        # (turi_fixture_tests, tur_jit_fixture_tests) because those ARE marked
+        # RUN_SERIAL in CMakeLists.txt, so ctest never co-schedules two of them.
+        # Note the repl-spice targets are NOT uniformly RUN_SERIAL -- only
+        # reload/watch/jit are; call/load/linklibs run in parallel. They drive a
+        # single REPL rather than fanning out, so that is fine, but it does mean
+        # they no longer run one-at-a-time: each needs its own leak-detection
+        # opt-out for the interpreter's process-lifetime bindings, which they
+        # now carry. The step above is a single RUN_SERIAL target, so -j would
+        # do nothing there.
         run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$'
 
       # Save after everything (incl. the fixture suite, which also feeds ccache

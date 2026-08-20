@@ -153,10 +153,9 @@
 ;;;
 ;;; Since: 2026-08-20
 (defmacro with-read-lock [rw & body]
-  (do (rwlock-rdlock rw)
-      (let [__wrl-result (do ~@body)]
-        (rwlock-unlock rw)
-        __wrl-result)))
+  (do
+    (rwlock-rdlock rw)
+    (let [__wrl-result (do ~@body)] (rwlock-unlock rw) __wrl-result)))
 ;;; with-write-lock -- run body holding the rwlock for writing.
 ;;;
 ;;; Parameters:
@@ -175,7 +174,6 @@
 ;;;
 ;;; Since: 2026-08-20
 (defmacro with-write-lock [rw & body]
-  (do (rwlock-wrlock rw)
-      (let [__wwl-result (do ~@body)]
-        (rwlock-unlock rw)
-        __wwl-result)))
+  (do
+    (rwlock-wrlock rw)
+    (let [__wwl-result (do ~@body)] (rwlock-unlock rw) __wwl-result)))

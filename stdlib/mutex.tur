@@ -141,7 +141,6 @@
 ;;;
 ;;; Since: 2026-08-20
 (defmacro with-lock [m & body]
-  (do (mutex-lock m)
-      (let [__wl-result (do ~@body)]
-        (mutex-unlock m)
-        __wl-result)))
+  (do
+    (mutex-lock m)
+    (let [__wl-result (do ~@body)] (mutex-unlock m) __wl-result)))

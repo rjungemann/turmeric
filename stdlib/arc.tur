@@ -27,10 +27,16 @@
 ;;;
 ;;; Since: 2026-08-20
 (defmodule arc
-  (export arc-new arc-clone arc-get arc-strong-count arc-weak-count
-          arc-drop arc-downgrade arc-upgrade arc-weak-drop
-          arc/autolink-hint)
-
+  (export arc-new
+    arc-clone
+    arc-get
+    arc-strong-count
+    arc-weak-count
+    arc-drop
+    arc-downgrade
+    arc-upgrade
+    arc-weak-drop
+    arc/autolink-hint)
   ;;; arc/autolink-hint -- link libturi and hoist the ArcControlBlock decls.
   ;;;
   ;;; The control-block layout and the arc_* prototypes are declared ONCE here,
@@ -60,13 +66,11 @@
     /* __tur_include__: bool arc_weak_upgrade(ArcControlBlock *cb); */
     return 0;
     ```)
-
   ;; Handle newtypes.  Not `:int` and not a bare `:ptr<void>`: an Arc and an
   ;; ArcWeak are different kinds of thing, and mixing them up is exactly the
   ;; error the type checker should catch rather than a runtime abort.
   (defopaque Arc :ptr<void>)
   (defopaque ArcWeak :ptr<void>)
-
   ;;; arc-new -- allocate an Arc holding an int payload, strong count 1.
   ;;;
   ;;; Parameters:
@@ -86,7 +90,6 @@
     *(int64_t *)cb->value = (int64_t)v;
     return (int64_t)(intptr_t)cb;
     ```)
-
   ;;; arc-clone -- add a strong reference.
   ;;;
   ;;; Parameters:
@@ -104,7 +107,6 @@
     ```c
     return (int64_t)(intptr_t)arc_strong_increment((ArcControlBlock *)(intptr_t)a);
     ```)
-
   ;;; arc-get -- read the shared value.
   ;;;
   ;;; Borrows its handle, so reading does not consume the caller's Arc.
@@ -125,7 +127,6 @@
     if (!cb || !cb->value) return 0;
     return *(int64_t *)cb->value;
     ```)
-
   ;;; arc-strong-count -- how many Arc handles share this value.
   ;;;
   ;;; Parameters:
@@ -144,7 +145,6 @@
     if (!cb) return 0;
     return (int64_t)__atomic_load_n(&cb->strong_count, __ATOMIC_SEQ_CST);
     ```)
-
   ;;; arc-weak-count -- how many ArcWeak handles point at this value.
   ;;;
   ;;; The runtime keeps a +1 sentinel in the weak count while any strong
@@ -173,7 +173,6 @@
     if (s > 0 && w > 0) w--;
     return (int64_t)w;
     ```)
-
   ;;; arc-drop -- release one strong reference.
   ;;;
   ;;; When the last strong reference goes, the value is dropped; the control
@@ -198,7 +197,6 @@
         if (arc_weak_decrement(cb)) free(cb);
     }
     ```)
-
   ;;; arc-downgrade -- make a non-owning ArcWeak from an Arc.
   ;;;
   ;;; A weak handle does not keep the value alive, which is how an Arc cycle
@@ -219,7 +217,6 @@
     ```c
     return (int64_t)(intptr_t)arc_weak_increment((ArcControlBlock *)(intptr_t)a);
     ```)
-
   ;;; arc-upgrade -- try to get a strong Arc back from a weak handle.
   ;;;
   ;;; This is `option<Arc>` rather than a null Arc on purpose: "the value may
@@ -246,7 +243,6 @@
     ArcControlBlock *cb = (ArcControlBlock *)(intptr_t)w;
     return cb ? arc_weak_upgrade(cb) : false;
     ```)
-
   ;;; arc-weak->arc -- internal: view a weak handle as the strong one it
   ;;; became. Only valid immediately after arc-try-upgrade returned true --
   ;;; the two handles are the same control block, and the upgrade is what
@@ -255,7 +251,6 @@
     ```c
     return (int64_t)w;
     ```)
-
   ;; The Option is built in ordinary Turmeric, not with tur_some_ptr in the
   ;; inline-C body.  A `some` constructed inside inline C allocates a box the
   ;; elaborator never sees and therefore never releases -- LeakSanitizer caught
@@ -264,10 +259,7 @@
   ;; Turmeric hands ownership back to the compiler; this is the same split
   ;; stdlib/env.tur uses for `env/get` over `env/get-raw`.
   (defn arc-upgrade [^borrow w : ArcWeak] : (Option Arc)
-    (if (arc-try-upgrade w)
-      (some (arc-weak->arc w))
-      (none)))
-
+    (if (arc-try-upgrade w) (some (arc-weak->arc w)) (none)))
   ;;; arc-weak-drop -- release one weak reference.
   ;;;
   ;;; Frees the control block when this was the last reference of either kind.

@@ -29,14 +29,7 @@
 ;;; Since: S1
 ;; stdlib/schan.tur -- session-typed channel wrappers.
 (defmodule schan
-  (export SChan
-    SSend
-    SRecv
-    SClose
-    schan-new
-    schan-send
-    schan-recv
-    schan-close)
+  (export SChan SSend SRecv SClose schan-new schan-send schan-recv schan-close)
   ;; ---- Protocol phantom tags -----------------------------------------------
   ;; Pure type-level markers; never constructed as values.  The carrier is :int
   ;; only so the opaque has a base type -- the value is irrelevant.

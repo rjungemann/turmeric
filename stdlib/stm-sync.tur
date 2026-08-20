@@ -108,8 +108,7 @@
 ;;;
 ;;; Since: 2026-08-20
 (defmacro tmvar-put-stm [mv v]
-  (do (check (= (:: (tvar/read mv) :int) 0))
-      (tvar/write mv v)))
+  (do (check (= (:: (tvar/read mv) :int) 0)) (tvar/write mv v)))
 ;;; tmvar-put -- block until the TMVar is empty, then fill it.
 ;;;
 ;;; Parameters:
@@ -133,9 +132,7 @@
 ;;;
 ;;; Since: 2026-08-20
 (defmacro tmvar-read-stm [mv]
-  (let [__tv (tvar/read mv)]
-    (check (not (= (:: __tv :int) 0)))
-    __tv))
+  (let [__tv (tvar/read mv)] (check (not (= (:: __tv :int) 0))) __tv))
 ;;; tmvar-read -- block until full, return the value without emptying.
 ;;;
 ;;; Parameters:
@@ -318,5 +315,4 @@
 ;;;   (println (tchan-empty? (tchan-new)))  ; => true
 ;;;
 ;;; Since: 2026-08-20
-(defmacro tchan-empty? [ch]
-  (atomically (stm (= (:: (tvar/read ch) :int) 0))))
+(defmacro tchan-empty? [ch] (atomically (stm (= (:: (tvar/read ch) :int) 0))))
