@@ -1,0 +1,8 @@
+(defmodule chain/mid
+  (import chain/low :refer [low-add low-const twice])
+  (export mid-own)
+  ;; Re-export a defn AND a macro low defines. No wrapper is emitted for
+  ;; either: a consumer of chain/mid resolves to low's own binding, so the
+  ;; emitted C holds exactly one chain_low__low_hyadd and no chain_mid__ copy.
+  (export-from chain/low low-add twice)
+  (defn mid-own [] : int 7))

@@ -205,6 +205,62 @@ Imported macros expand correctly in the consumer module -- recursive macro
 calls inside an exported macro can still reach private helpers of the
 defining module (the elaborator tracks the "expansion module" for this).
 
+The same macro reaching a file by two import paths is **not** a conflict.
+Given a diamond where you import both `a` and `b`, and `b` also refers a
+macro from `a`, that macro arrives twice -- it is one definition, so the
+second arrival is ignored rather than reported. Two *different* modules
+exporting the same macro name is still an error.
+
+### `(export-from ...)` -- re-export without a wrapper
+
+A module can re-export names another module already exports, so a facade
+module can present a curated surface without a forwarding `defn` per name:
+
+```turmeric
+(defmodule geom
+  (import geom/vector :refer [v-add v-scale])
+  (import geom/matrix :refer [m-mul])
+  (export geom-version)
+  (export-from geom/vector v-add v-scale)
+  (export-from geom/matrix m-mul)
+  (defn geom-version [] : int 2))
+```
+
+```sweet-exp
+defmodule geom
+  import geom/vector :refer [v-add v-scale]
+  import geom/matrix :refer [m-mul]
+  export geom-version
+  export-from geom/vector v-add v-scale
+  export-from geom/matrix m-mul
+  defn geom-version [] : int
+    2
+```
+
+A consumer now writes `(import geom :refer [v-add m-mul])` and never names
+the inner modules.
+
+Rules:
+
+- **The source module must be imported.** `export-from` re-exports from a
+  module you already `import`; it does not load one. A second load path with
+  its own resolution rules is how two modules end up disagreeing about which
+  file a name came from.
+- **The name must be *exported* by the source, not merely defined there.**
+  Re-exporting a module-private name would smuggle it into the public surface
+  through a third party. The two cases get different diagnostics -- "defined
+  by 'X' but not exported from it" is one edit, "not exported by module 'X'"
+  is a typo.
+- **Chains work.** If `mid` re-exports from `low` and `hi` re-exports from
+  `mid`, a consumer of `hi` sees the name. The check is "does the source
+  module export it", not "did the source module define it".
+- **Defns and macros both.** A re-exported macro forwards the original
+  definition, so it expands exactly as it would when imported directly.
+- **No wrapper is emitted.** The consumer resolves to the *defining* module's
+  binding and calls its mangled symbol, so a re-export costs nothing at
+  runtime however many hops it travels. Pinned by
+  `tests/check-export-from-no-wrapper.sh`.
+
 ---
 
 ## Module-Level Defer
@@ -487,9 +543,6 @@ Build with `./build/tur build src/app.tur -o app`.
 - **No wildcard `:refer :all`**: explicit symbol lists only.
 - **Module-private types in public signatures**: not yet a hard error; the
   type system will eventually enforce it.
-- **No re-export shorthand**: re-exporting a name from a transitively imported
-  module currently requires defining a thin wrapper. A future `(export-from
-  other-module foo bar)` form is planned.
 - **Hot reload / dynamic loading**: not supported in v1.
 
 The deferred items above are the full list; there is no separate design-history

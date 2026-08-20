@@ -1,0 +1,8 @@
+;; (export-from mod) with no names is a no-op that looks like it does
+;; something -- rejected at parse rather than accepted and ignored.
+(defmodule mid
+  (import m/low :refer [low-add])
+  (export mid-own)
+  (export-from m/low)
+  (defn mid-own [] : int 7)
+  (defn main [] : int 0))

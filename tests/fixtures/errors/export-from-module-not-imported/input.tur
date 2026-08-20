@@ -1,0 +1,8 @@
+;; export-from re-exports from a module you already import; it deliberately
+;; does NOT load one.  A second load path with its own resolution rules is how
+;; two modules end up disagreeing about which file a name came from.
+(defmodule mid
+  (export mid-own)
+  (export-from m/low low-add)
+  (defn mid-own [] : int 7)
+  (defn main [] : int 0))

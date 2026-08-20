@@ -294,6 +294,15 @@ add_test(
   COMMAND bash tests/check-httpd-conn-single-def.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# (export-from ...) costs nothing at runtime: re-exporting a name must resolve
+# to the defining module's mangled symbol, not emit a forwarding wrapper per
+# hop. The behaviour fixture (module-export-from) passes either way, so the
+# invariant needs its own codegen guard.
+add_test(
+  NAME tur_export_from_no_wrapper
+  COMMAND bash tests/check-export-from-no-wrapper.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # SF let-bind regression: a let-bound two-level closure (signal-function) whose
 # inner closure captures and calls the outer ^fat param must keep its declared
 # outer arg type (tur check guard; see

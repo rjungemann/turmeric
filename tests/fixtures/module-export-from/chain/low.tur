@@ -1,0 +1,8 @@
+(defmodule chain/low
+  (export low-add low-const twice)
+  (defn low-add [a : int b : int] : int (+ a b))
+  (defn low-const [] : int 41)
+  ;; module-private: never re-exportable, asserted by
+  ;; errors/export-from-not-exported next door.
+  (defn low-private [] : int 99)
+  (defmacro twice [x] `(* 2 ~x)))

@@ -572,6 +572,9 @@ typedef struct Elab {
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
+    /* (export-from <mod> name ...) -- re-export names another module already
+     * exports, without a forwarding wrapper. */
+    const Symbol *sym_export_from;
     const Symbol *sym_effect;     /* effect — used to parse (effect Name) in export/refer lists */
     const Symbol *sym_import;     /* import */
     const Symbol *sym_load;       /* load */

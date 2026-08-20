@@ -1,0 +1,3 @@
+(defmodule dia/low
+  (export twice)
+  (defmacro twice [x] `(* 2 ~x)))

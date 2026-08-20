@@ -63,7 +63,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
 | [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | low | mw-recover (panic -> 500) unwritten; its catch-unwind blocker is fixed |
-| [module-reexport-shorthand-missing](module-reexport-shorthand-missing.md) | low | no `(export-from ...)`; forwarding a name needs a wrapper defn |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [stdlib-arc-surface-missing](stdlib-arc-surface-missing.md) | low | Arc runtime exists, no stdlib surface -- fixtures hand-roll it in inline C |
 | [value-carrying-lock-wrappers](value-carrying-lock-wrappers.md) | low | no `with-lock` / value-carrying Mutex<T>; only raw mutex-*/rwlock-* handles |

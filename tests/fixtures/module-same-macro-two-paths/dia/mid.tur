@@ -1,0 +1,4 @@
+(defmodule dia/mid
+  (import dia/low :refer [twice])
+  (export mid-six)
+  (defn mid-six [] : int (twice 3)))

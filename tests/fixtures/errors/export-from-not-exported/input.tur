@@ -1,0 +1,11 @@
+;; Re-exporting a name the source module DEFINES but keeps private would
+;; smuggle a module-private name into the public surface through a third
+;; party -- exactly what the export list exists to prevent.  The diagnostic
+;; must distinguish this from a typo: "defined but not exported" is one edit,
+;; "no such name" is a hunt.
+(defmodule mid
+  (import m/low :refer [low-add])
+  (export mid-own)
+  (export-from m/low low-private)
+  (defn mid-own [] : int 7)
+  (defn main [] : int 0))

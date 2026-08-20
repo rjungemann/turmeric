@@ -1,0 +1,8 @@
+(defmodule chain/hi
+  (import chain/mid :refer [mid-own low-add twice])
+  (export hi-own)
+  ;; Second hop: hi re-exports from mid a name that LOW defined. The check is
+  ;; "does chain/mid export it", not "did chain/mid define it" -- requiring the
+  ;; latter breaks every chain at its second link.
+  (export-from chain/mid low-add twice)
+  (defn hi-own [] : int 8))
