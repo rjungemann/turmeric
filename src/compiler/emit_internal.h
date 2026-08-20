@@ -898,6 +898,12 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
  * signature and reads the real entry point out of the closure env's `__fn`
  * slot (offset 0) at run time.  Returns the shim name, or NULL when the return
  * already rides the int64 carrier or a param is not int-register-class. */
+/* Adapter for a `:fn` value carried as a BARE C function pointer (a let-bound
+ * non-capturing lambda) rather than a closure box.  Stashes the pointer in the
+ * tur_poly_fn_t env slot and casts it back to its env-less signature.  See the
+ * definition in emit_module.c. */
+char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
+                                  Type *param_types, uint8_t n_params);
 char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
                                       Type *param_types, uint8_t n_params);
 /* E2 (fat-closure fn-value threading): ensure a `<wrapper>__cps` twin exists for
