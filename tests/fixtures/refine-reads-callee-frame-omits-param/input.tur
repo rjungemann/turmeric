@@ -1,0 +1,39 @@
+;; R4 slice 3: the CALL-SHAPE broken frame at the warning tier. `cross?`
+;; declares `#reads w` but reads g's state THROUGH `gen-at`'s own verified
+;; `#reads` frame -- a finding the defn-site evidence scans structurally
+;; cannot see (the read sits behind a call), and which the verification
+;; pass's evidence sweep feeds to the same gateless TUR-W0383 tier.
+;;
+;; Same trust-boundary posture as every other W0383 fixture: the warning is
+;; gateless and changes nothing proved -- the trusted grant still discharges
+;; the crossing and the program prints 100. The refusal half is
+;; errors/r4-checked-reads-refuses-callee-frame-read.
+(defstruct Wld [gens : ptr<void>])
+
+(defn wld-new [] : Wld
+  (unsafe (let [p (raw-malloc 32)]
+            (array-set-unchecked p 0 0)
+            (Wld p))))
+
+(defn gen-at [^borrow w : Wld i : int] #reads w : int
+  (unsafe (array-get-unchecked (.gens w) i)))
+
+(defn cross? [^borrow w : Wld ^borrow g : Wld i : int] #reads w : bool
+  (= (gen-at g i) 0))
+
+(defn get-it [^borrow w : Wld ^borrow g : Wld
+              e : #refine{ x : int | (cross? w g x) }] : int
+  (+ e 100))
+
+(defn run [] : int
+  (let [^mut w (wld-new)
+        ^mut g (wld-new)]
+    (let [__f1 (& w)
+          __f2 (& g)]
+      (if (cross? w g 0)
+        (get-it w g 0)
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

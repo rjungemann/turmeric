@@ -3,7 +3,7 @@
 ;; discharges the guarded read is about `w` and the literal entity. Before
 ;; frame-aware invalidation the whole-body boolean decline dropped it anyway,
 ;; which is why `for-each-alive!` shipped taking only PURE bodies -- this is
-;; the demand signal in docs/upcoming/checked-write-frames-plan.md.
+;; the demand signal in docs/archive/checked-write-frames-plan.md.
 ;;
 ;; The rescue is narrow by construction: the target is a plain symbol, the
 ;; hypothesis does not mention it, and the body never borrows it. Assign a

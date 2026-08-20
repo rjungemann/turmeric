@@ -1,0 +1,60 @@
+;; R4 slice 2: the read-frame verification pass (rf_resolve_read_frames) and
+;; its --dump-read-frames surface, one function per verdict shape:
+;;
+;;   gen-at    VERIFIED    a direct raw load rooted at the framed parameter
+;;   alive2?   VERIFIED    reads only THROUGH a verified callee's frame; the
+;;                         argument feeding the callee's framed slot roots at
+;;                         our framed parameter (the fixed-point round)
+;;   cross?    EXCEEDED    the verified callee's framed slot is fed by an
+;;                         UNFRAMED parameter -- the callee's verified read is
+;;                         this frame's omitted read. Slice 1's direct
+;;                         evidence scan cannot see this one (it is behind a
+;;                         call); since slice 3 the verification pass's
+;;                         evidence sweep feeds it to the same gateless
+;;                         TUR-W0383 tier (expected.stderr pins the call-shape
+;;                         wording), and under --enable=checked-reads the same
+;;                         evidence refuses the congruence grant
+;;                         (errors/r4-checked-reads-refuses-callee-frame-read).
+;;   opaque?   UNVERIFIED  an inline-C body -- unwalkable, stays trusted;
+;;                         "could not see" is a distinct verdict from clean.
+;;
+;; VERIFIED is a stamped, dumpable fact (Binding.reads_checked); nothing
+;; consumes it behaviorally yet -- that decision is recorded in
+;; docs/upcoming/trusted-refinement-claims-plan.md.
+(defstruct Wld [gens : ptr<void>])
+
+(defn wld-new [] : Wld
+  (unsafe (let [p (raw-malloc 32)]
+            (array-set-unchecked p 0 0)
+            (Wld p))))
+
+(defn gen-at [^borrow w : Wld i : int] #reads w : int
+  (unsafe (array-get-unchecked (.gens w) i)))
+
+;; two-level: the pointer loaded OUT of w's block points at state reachable
+;; from w, so a load through it still roots at w (the ECS control-block
+;; shape: gens = state[6]; gens[slot]). The chase also crosses the
+;; EX_REINTERPRET the int->ptr `::` builds.
+(defn gen2-at [^borrow w : Wld i : int] #reads w : int
+  (unsafe (array-get-unchecked
+            (:: (array-get-unchecked (.gens w) 0) :ptr<void>)
+            i)))
+
+(defn alive2? [^borrow w : Wld i : int] #reads w : bool
+  (= (gen-at w i) 0))
+
+(defn cross? [^borrow w : Wld ^borrow g : Wld i : int] #reads w : bool
+  (= (gen-at g i) 0))
+
+(defn opaque? [^borrow w : Wld i : int] #reads w : bool
+  ```c
+  (void)w; (void)i; return 1;
+  ```)
+
+;; main deliberately prints nothing: the dump lines are this fixture's whole
+;; stdout, so their assertion cannot depend on compile-vs-run flush order
+;; (which differs between the compiled and --interpret paths).
+(defn main [] : int
+  (let [^mut w (wld-new)]
+    (let [__f (& w)]
+      (if (alive2? w 0) 0 -1))))

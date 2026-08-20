@@ -880,6 +880,16 @@ typedef struct Elab {
     struct WriteFrameSite *wf_frame_sites;
     uint32_t               n_wf_frame_sites;
     uint32_t               cap_wf_frame_sites;
+    /* R4 slice 2 (trusted-refinement-claims-plan): every `#reads`-annotated
+     * function, recorded during elaboration for the deferred read-frame
+     * verification pass (rf_resolve_read_frames).  Same deferral rationale
+     * as WriteFrameSite: a callee's own frame verdict may not exist yet at
+     * this defn's elaboration.  Registration is unconditional and one
+     * pointer-triple cheap; the PASS runs only under --enable=checked-reads
+     * or --dump-read-frames. */
+    struct RfReadsSite    *rf_reads_sites;
+    uint32_t               n_rf_reads_sites;
+    uint32_t               cap_rf_reads_sites;
     /* Open-addressed (callee, call_form) -> index+1 set, so deduplicating a
      * re-elaborated call site stays O(1) instead of rescanning every crossing
      * recorded so far -- which would make an opted-in build quadratic in its
@@ -1031,6 +1041,37 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
 /* Verify every recorded frame against its body, stamping `writes_checked` on
  * the ones that hold and emitting TUR-E0382 on the ones that do not. */
 void wf_resolve_write_frames(Elab *e);
+
+/* R4 slice 2 (trusted-refinement-claims-plan): one `#reads`-annotated
+ * function, recorded during elaboration and verified AFTER it
+ * (rf_resolve_read_frames).  Unlike WriteFrameSite this walk runs over the
+ * ELABORATED body (Binding.source_fn_def->body) because its read leaves need
+ * type information (receiver type kinds, builtin shapes); the params array is
+ * arena-lived, same as WriteFrameSite's. */
+typedef struct RfReadsSite {
+    Binding  *fn;         /* the `#reads`-annotated function */
+    Binding **params;     /* its parameters, for root -> frame-bit mapping */
+    uint32_t  n_params;
+    Span      span;       /* the `#reads` annotation (or name), for W0383 */
+    /* A monomorphization clone: verified and evidence-stamped like its
+     * original (the encoder's refusal must see the evidence whichever
+     * binding a call resolves to, same rule as the defn-site stamp), but
+     * silent -- no dump line, no repeated warning. */
+    bool      is_clone;
+} RfReadsSite;
+
+/* Record a `#reads`-annotated function for the deferred verification pass. */
+void rf_note_reads_site(Elab *e, Binding *fn, Binding **params,
+                        uint32_t n_params, Span span, bool is_clone);
+
+/* Verify every recorded `#reads` frame against its elaborated body, stamping
+ * `reads_checked` on the ones where every read of mutable state attributes to
+ * a frame-named parameter.  No diagnostic: EXCEEDED evidence is the slice-1
+ * scan's job (TUR-W0383 / the checked-reads refusal); this pass only decides
+ * whether SILENCE was "saw everything, all clean" (VERIFIED) or "could not
+ * see" (UNVERIFIED).  Runs only under --enable=checked-reads or
+ * --dump-read-frames. */
+void rf_resolve_read_frames(Elab *e);
 
 /* G4a: may this kind be loaded/stored atomically in one machine operation? */
 bool type_is_atomic_scalar(TypeKind k);

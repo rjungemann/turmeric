@@ -1004,7 +1004,7 @@ static Form *read_reads_annot(Reader *r) {
  * could not tell where the frame ends.  The vector form is unambiguous, and it
  * gives `#writes []` -- "this body writes nothing" -- a spelling, which is the
  * frame WF2 most wants to check and which a single-symbol-only syntax could
- * not express.  See docs/upcoming/checked-write-frames-plan.md (WF1). */
+ * not express.  See docs/archive/checked-write-frames-plan.md (WF1). */
 static Form *read_writes_annot(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col  = r->col;

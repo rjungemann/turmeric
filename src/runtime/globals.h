@@ -102,6 +102,15 @@ extern bool g_dump_effects;
  * diagnostic, which is not something a fixture can assert on. */
 extern bool g_dump_write_frames;
 
+/* R4 slice 2 (trusted-refinement-claims-plan): --dump-read-frames flag --
+ * print the read-frame verification verdict for every `#reads`-annotated
+ * function (VERIFIED / EXCEEDED / UNVERIFIED).  Same character as
+ * --dump-write-frames: a diagnostic knob, not an experiment -- it reports
+ * what rf_resolve_read_frames decided and changes nothing.  Setting it also
+ * makes that pass run even without --enable=checked-reads, so the verdicts
+ * are inspectable before opting into the refusal tier. */
+extern bool g_dump_read_frames;
+
 /* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
  * colored user-level top-level defn */
 extern bool g_dump_cps;
@@ -280,7 +289,7 @@ extern bool g_opt_owning_cloneable_capture;
  * ascribe_check_sealed gate are gone.  See
  * docs/archive/sealed-opaque-plan.md. */
 
-/* write-frames (WF1/WF2, docs/upcoming/checked-write-frames-plan.md): gates the
+/* write-frames (WF1/WF2, docs/archive/checked-write-frames-plan.md): gates the
  * `#writes` write-frame annotation -- its CHECKING (WF2's TUR-E0382) and every
  * consumer that acts on a checked frame (WF3's callee-frame widening, WF4's
  * entry-check elision).  The annotation itself always PARSES so that adding one

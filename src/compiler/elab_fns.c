@@ -423,6 +423,22 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
     case EX_RETURN:
         return rt_classify_expr(c, x->as.return_.value);
 
+    /* R4 groundwork (trusted-refinement-claims-plan): `::` and `(as T ...)`
+     * are value computations -- an ascription is erased at codegen and a
+     * numeric cast reads nothing but its operand -- so each is exactly as
+     * pure as the expression under it.  Before this case they fell to the
+     * UNKNOWN default, which made any measure that touches a defopaque
+     * newtype via `::` unclassifiable and forced the RE0 pattern of
+     * inline-C identity-cast unwrappers (themselves IMPURE by EX_INLINE_C).
+     * Widening UNKNOWN -> operand's answer only ever removes diagnostics
+     * and grows congruence, same as the EX_MATCH widening above. */
+    case EX_ASCRIBE:
+        return rt_classify_expr(c, x->as.ascribe_.inner);
+    case EX_CAST:
+        return rt_classify_expr(c, x->as.cast_.expr);
+    case EX_REINTERPRET:   /* the compiler-built bitwise half of `::` */
+        return rt_classify_expr(c, x->as.reinterpret_.expr);
+
     /* A `match` computes a value from its scrutinee and one arm; nothing about
      * dispatching on a constructor is observable.  Pattern BINDINGS are not
      * walked -- they are introduced by the pattern, not evaluated -- so an arm
@@ -608,11 +624,217 @@ static const Binding *reads_scan_mut_global(const Expr *x, uint32_t *budget) {
     }
     case EX_ASCRIBE: return reads_scan_mut_global(x->as.ascribe_.inner, budget);
     case EX_CAST:    return reads_scan_mut_global(x->as.cast_.expr, budget);
+    case EX_REINTERPRET:
+        return reads_scan_mut_global(x->as.reinterpret_.expr, budget);
     case EX_RETURN:  return reads_scan_mut_global(x->as.return_.value, budget);
+    /* R4 slice 1: `(unsafe ...)` desugars to a handle whose body is where
+     * every raw-memory read lives (the gated builtins REQUIRE the block),
+     * so not descending it would blind both evidence scans to exactly the
+     * reads the trusted tier exists for.  Handler case bodies are read
+     * positions too. */
+    case EX_HANDLE: {
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return NULL;
+        const Binding *r = reads_scan_mut_global(h->body, budget);
+        for (uint8_t i = 0; !r && i < h->n_cases; i++)
+            r = reads_scan_mut_global(h->cases[i].body, budget);
+        return r;
+    }
     default:
         return NULL;   /* unmodeled kind: no evidence, no warning */
     }
 }
+
+/* R4 slice 1 (trusted-refinement-claims-plan): chase a read's ROOT through
+ * the value-shaping forms only -- VAR, `::`-ascription, cast, field hops,
+ * and ptr-add/ptr-sub arithmetic (provenance follows the pointer operand).
+ * Anything else (a CALL above all) returns NULL: no root, no evidence.
+ * Interprocedural attribution belongs to the footprint walk proper, where
+ * "could not see" must become a distinct verdict before it can back
+ * anything stronger than silence.
+ *
+ * The chase also follows a raw LOAD (ptr-deref / array-get-unchecked)
+ * through its pointer operand: a pointer loaded OUT of state reachable
+ * from `s` points at state reachable from `s`, so a load through it still
+ * roots at `s`.  This is what attributes the real ECS control-block shape
+ * -- `gens = state[6]; gens[slot]` -- rather than only single-level
+ * blocks.  Attribution is REACHABILITY-based on purpose: a block that
+ * stores a pointer into state shared with some other root is the owning
+ * module's aliasing discipline, the same documented trust boundary the
+ * whole `frozen`+`#reads` tier already stands on (see
+ * stateful-refinements-guide.md's trust-boundary section). */
+static const Binding *reads_read_root(const Expr *x) {
+    while (x) {
+        switch (x->kind) {
+        case EX_VAR:       return x->as.var.binding;
+        case EX_ASCRIBE:   x = x->as.ascribe_.inner; break;
+        case EX_CAST:      x = x->as.cast_.expr; break;
+        case EX_REINTERPRET: x = x->as.reinterpret_.expr; break;
+        case EX_GET_FIELD: x = x->as.get_field_.struct_expr; break;
+        /* An `(unsafe ...)` marker handle's value IS its body's value (the
+         * built-in Unsafe effect never performs, so the handler clause never
+         * runs), and a `do`'s value is its last item -- both value-shaping,
+         * so a load nested inside its own unsafe block still chases through.
+         * A USER handle is not followed: its cases can replace the value. */
+        case EX_HANDLE: {
+            const HandleExpr *h = x->as.handle_.handle;
+            if (!h || !h->is_unsafe_marker) return NULL;
+            x = h->body;
+            break;
+        }
+        case EX_DO:
+            if (x->as.do_.n == 0) return NULL;
+            x = x->as.do_.items[x->as.do_.n - 1];
+            break;
+        case EX_BUILTIN:
+            if (x->as.builtin.spec &&
+                (x->as.builtin.spec->shape == BS_PTR_ARITH ||
+                 x->as.builtin.spec->shape == BS_PTR_DEREF ||
+                 x->as.builtin.spec->shape == BS_ARRAY_GET_UNCHECKED) &&
+                x->as.builtin.n >= 1) {
+                x = x->as.builtin.args[0];
+                break;
+            }
+            return NULL;
+        default:           return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* Is this root a parameter of the frame's function that the mask OMITS?
+ * Binding-pointer identity against the params array, so a let that shadows
+ * a parameter's name can never mis-attribute. */
+static const Binding *reads_root_unframed_param(const Binding *root,
+                                                Binding **params,
+                                                uint32_t n_params,
+                                                uint64_t mask) {
+    if (!root || !root->is_param) return NULL;
+    for (uint32_t i = 0; i < n_params && i < 64; i++) {
+        if (params[i] != root) continue;
+        return (mask & (UINT64_C(1) << i)) ? NULL : root;
+    }
+    return NULL;
+}
+
+/* R4 slice 1: does this elaborated body DEMONSTRABLY read mutable state
+ * rooted in a PARAMETER the `#reads` frame omits?  Same posture as
+ * reads_scan_mut_global above: positive evidence only, direct reads only,
+ * unmodeled kinds are not descended, and an inline-C body yields no
+ * evidence.  The frame's contract is "the named parameters are the only
+ * mutable state this answer depends on", and a mutable global is not the
+ * only way to break it -- reading ANOTHER parameter's aliasable state does
+ * too, and the per-parameter mask makes exactly that omission checkable.
+ *
+ * A "read of mutable state" here is one of:
+ *   - a field read through a REFERENCE-typed receiver (the same decline
+ *     list the purity walk uses at EX_GET_FIELD: a borrowed / rc / raw-ptr
+ *     receiver is aliasable, so two calls the grant treats as one value
+ *     can observe different fields), or
+ *   - a raw-memory load (ptr-deref / array-get-unchecked).
+ * By-value receivers stay silent on purpose: a copied aggregate cannot
+ * change between two calls with equal arguments, which is the same
+ * aliasing argument the purity walk's EX_GET_FIELD case documents. */
+static const Binding *reads_scan_unframed_param(const Expr *x,
+                                                Binding **params,
+                                                uint32_t n_params,
+                                                uint64_t mask,
+                                                uint32_t *budget) {
+#define RSUP(sub) reads_scan_unframed_param((sub), params, n_params, mask, budget)
+    if (!x || *budget == 0) return NULL;
+    (*budget)--;
+    switch (x->kind) {
+    case EX_GET_FIELD: {
+        const Expr *recv = x->as.get_field_.struct_expr;
+        if (recv) {
+            switch (recv->type.kind) {
+            case TY_REF: case TY_RC: case TY_PTR_VOID:
+            case TY_REF_IMMUT: case TY_REF_MUT: {
+                const Binding *r = reads_root_unframed_param(
+                    reads_read_root(recv), params, n_params, mask);
+                if (r) return r;
+                break;
+            }
+            default: break;
+            }
+        }
+        return RSUP(recv);
+    }
+    case EX_BUILTIN: {
+        if (x->as.builtin.spec &&
+            (x->as.builtin.spec->shape == BS_PTR_DEREF ||
+             x->as.builtin.spec->shape == BS_ARRAY_GET_UNCHECKED) &&
+            x->as.builtin.n >= 1) {
+            const Binding *r = reads_root_unframed_param(
+                reads_read_root(x->as.builtin.args[0]), params, n_params, mask);
+            if (r) return r;
+        }
+        for (uint32_t i = 0; i < x->as.builtin.n; i++) {
+            const Binding *r = RSUP(x->as.builtin.args[i]);
+            if (r) return r;
+        }
+        return NULL;
+    }
+    case EX_LET: case EX_LETREC: {
+        for (uint32_t i = 0; i < x->as.let_.n; i++) {
+            const Binding *r = RSUP(x->as.let_.bindings[i].init);
+            if (r) return r;
+        }
+        return RSUP(x->as.let_.body);
+    }
+    case EX_IF: {
+        const Binding *r = RSUP(x->as.if_.cond);
+        if (!r) r = RSUP(x->as.if_.then_);
+        if (!r) r = RSUP(x->as.if_.else_or_null);
+        return r;
+    }
+    case EX_DO: {
+        for (uint32_t i = 0; i < x->as.do_.n; i++) {
+            const Binding *r = RSUP(x->as.do_.items[i]);
+            if (r) return r;
+        }
+        return NULL;
+    }
+    case EX_WHILE: {
+        const Binding *r = RSUP(x->as.while_.cond);
+        return r ? r : RSUP(x->as.while_.body);
+    }
+    case EX_SET:
+        /* A write target is a different defect (same rule as the global
+         * scan); the VALUE being written is still read. */
+        return RSUP(x->as.set_.value);
+    case EX_MATCH: {
+        const Binding *r = RSUP(x->as.match_.scrutinee);
+        for (uint32_t i = 0; !r && i < x->as.match_.n_arms; i++) {
+            r = RSUP(x->as.match_.arms[i].guard);
+            if (!r) r = RSUP(x->as.match_.arms[i].body);
+        }
+        return r;
+    }
+    case EX_CALL: {
+        const Binding *r = RSUP(x->as.call_.fn_expr);
+        for (uint32_t i = 0; !r && i < x->as.call_.n_args; i++)
+            r = RSUP(x->as.call_.args[i]);
+        return r;
+    }
+    case EX_ASCRIBE: return RSUP(x->as.ascribe_.inner);
+    case EX_CAST:    return RSUP(x->as.cast_.expr);
+    case EX_REINTERPRET: return RSUP(x->as.reinterpret_.expr);
+    case EX_RETURN:  return RSUP(x->as.return_.value);
+    case EX_HANDLE: {   /* see reads_scan_mut_global's EX_HANDLE rationale */
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return NULL;
+        const Binding *r = RSUP(h->body);
+        for (uint8_t i = 0; !r && i < h->n_cases; i++)
+            r = RSUP(h->cases[i].body);
+        return r;
+    }
+    default:
+        return NULL;   /* unmodeled kind: no evidence, no warning */
+    }
+#undef RSUP
+}
+
 
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
  * by the elaborator because it is the only side that can look a name up in the
@@ -741,7 +963,7 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * broken-promise evidence rides along so `--enable=checked-reads` can
      * refuse the grant. */
     out->reads_params_mask      = b->reads_params_mask;
-    out->reads_omits_mut_global = b->reads_omits_mut_global;
+    out->reads_frame_omits_state = b->reads_frame_omits_state;
 
     /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
      * CHECKED.  A consumer that acts on the frame (WF3, WF4) must gate on
@@ -907,7 +1129,7 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f) {
 }
 
 /* R2 (`--enable=checked-reads`): same walk, narrowed to a `#reads` measure
- * carrying broken-frame evidence (reads_omits_mut_global) -- i.e. one whose
+ * carrying broken-frame evidence (reads_frame_omits_state) -- i.e. one whose
  * congruence grant the encoder will refuse under the gate.  Feeds only the
  * W0372 wording at the crossing, so the "guard it inside a `frozen` region"
  * advice is not given for a crossing where the region is present and the
@@ -920,7 +1142,7 @@ static bool rt_pred_reads_measure_refused(Elab *e, const Form *f) {
         RefineFnInfo info;
         memset(&info, 0, sizeof(info));
         if (rt_resolve_fn(e, head->as.sym->name, &info) &&
-            info.reads_params_mask != 0 && info.reads_omits_mut_global)
+            info.reads_params_mask != 0 && info.reads_frame_omits_state)
             return true;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
@@ -1029,7 +1251,7 @@ static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
  * `while`), so the helpers below let a hypothesis survive an assignment that
  * provably cannot touch what it mentions.
  *
- * The slice is deliberately narrow (docs/upcoming/checked-write-frames-plan.md,
+ * The slice is deliberately narrow (docs/archive/checked-write-frames-plan.md,
  * WF3).  A hypothesis survives only when EVERY assignment in the body targets a
  * PLAIN SYMBOL that the hypothesis does not mention and that the body never
  * borrows.  Anything else -- a place expression (`(set! (.n w) 9)`), an
@@ -1884,6 +2106,361 @@ void wf_resolve_write_frames(Elab *e) {
             printf("\n");
         }
         fflush(stdout);
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * R4 slice 2 (trusted-refinement-claims-plan): the read-frame VERIFICATION
+ * walk -- the footprint walk proper, in its first honest form.
+ *
+ * Slice 1 above is the EVIDENCE half: it may only speak when it saw a read
+ * the frame omits, and its silence means nothing.  This walk is the other
+ * half: it decides whether silence was "saw the whole body and every read of
+ * mutable state attributes to a frame-named parameter" (WF_VERIFIED, stamped
+ * as Binding.reads_checked) or "could not see" (WF_UNVERIFIED, no stamp, no
+ * diagnostic -- the frame simply stays at the trusted tier it is today).
+ * WF_EXCEEDED can also fall out (the same finding slice 1 warns about,
+ * possibly reached through a verified callee's frame); it is NOT re-reported
+ * here -- TUR-W0383 and the checked-reads refusal own that -- it only blocks
+ * the VERIFIED stamp.
+ *
+ * The discipline is the tri-state the plan required before silence could
+ * back anything: every expression kind is either modeled (children walked,
+ * read leaves attributed) or answers WF_UNVERIFIED.  Inline C, `perform`,
+ * indirect and poly calls, and any unmodeled form are UNVERIFIED, never
+ * quietly clean.  Reuses WfVerdict/wf_worse from the WF2 write walk: the
+ * lattice is the same, only the vocabulary (reads, not writes) differs. */
+
+/* Attribute a read's chased root.  VERIFIED = stable or framed state;
+ * EXCEEDED = mutable state the frame omits (an unframed parameter, or a
+ * mutable global); UNVERIFIED = a local or unknown root, whose provenance
+ * this walk does not track. */
+static WfVerdict rf_root_verdict(const Binding *root, Binding **params,
+                                 uint32_t n_params, uint64_t mask) {
+    if (!root) return WF_UNVERIFIED;
+    if (root->is_param) {
+        for (uint32_t i = 0; i < n_params && i < 64; i++) {
+            if (params[i] != root) continue;
+            return (mask & (UINT64_C(1) << i)) ? WF_VERIFIED : WF_EXCEEDED;
+        }
+        return WF_UNVERIFIED;   /* an enclosing fn's param, via a closure */
+    }
+    if (root->is_global)
+        return root->is_mut ? WF_EXCEEDED : WF_VERIFIED;
+    return WF_UNVERIFIED;
+}
+
+/* rf_root_verdict plus witness capture: the FIRST root that answers
+ * EXCEEDED is recorded so the evidence sweep can name the omitted
+ * parameter (or global) in TUR-W0383. */
+static WfVerdict rf_attr(const Binding *root, Binding **params,
+                         uint32_t n_params, uint64_t mask,
+                         const Binding **witness) {
+    WfVerdict v = rf_root_verdict(root, params, n_params, mask);
+    if (v == WF_EXCEEDED && witness && !*witness) *witness = root;
+    return v;
+}
+
+/* Builtins that read no program-visible mutable state: pure computations,
+ * output/free/write-only memory ops, and value-reshaping casts.  Everything
+ * else -- RAW_MEMCPY reads its source, the dl* family reaches outside the
+ * program, and any shape this list has not vetted -- answers UNVERIFIED. */
+static bool rf_builtin_reads_nothing(BuiltinShape s) {
+    if (rt_builtin_shape_pure(s)) return true;
+    switch (s) {
+    case BS_PTR_ARITH:                                    /* address math */
+    case BS_PRINTLN_INT:  case BS_PRINTLN_FLOAT: case BS_PRINTLN_BOOL:
+    case BS_PRINTLN_CSTR: case BS_PRINTLN_UINT:  case BS_PRINTLN_FLOAT32:
+    case BS_PREFIX_UNARY_FREE:
+    case BS_PTR_WRITE:    case BS_ARRAY_SET_UNCHECKED:    /* write-only */
+    case BS_RAW_MALLOC:   case BS_RAW_FREE:
+    case BS_RAW_REALLOC:  case BS_RAW_MEMSET:
+    case BS_UNSAFE_CAST:  case BS_REINTERPRET: case BS_TRANSMUTE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static WfVerdict rf_scan(const Expr *x, Binding **params, uint32_t n_params,
+                         uint64_t mask, uint32_t *budget,
+                         const Binding **witness) {
+#define RFS(sub) rf_scan((sub), params, n_params, mask, budget, witness)
+    if (!x) return WF_VERIFIED;
+    if (*budget == 0) return WF_UNVERIFIED;
+    (*budget)--;
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return WF_VERIFIED;
+
+    case EX_VAR: {
+        const Binding *b = x->as.var.binding;
+        if (!b) return WF_UNVERIFIED;
+        /* A mutable GLOBAL read is the slice-1 finding.  A mutable LOCAL is
+         * per-call state -- fresh each invocation, so it cannot differ
+         * between two calls with equal arguments -- and a by-value
+         * parameter read is the stability the whole feature rests on. */
+        if (b->is_mut && b->is_global) {
+            if (witness && !*witness) *witness = b;
+            return WF_EXCEEDED;
+        }
+        return WF_VERIFIED;
+    }
+
+    /* The unwalkables.  Each is the reason a frame stays TRUSTED today. */
+    case EX_INLINE_C:
+    case EX_PERFORM:
+        return WF_UNVERIFIED;
+
+    case EX_GET_FIELD: {
+        const Expr *recv = x->as.get_field_.struct_expr;
+        WfVerdict v = WF_VERIFIED;
+        if (recv) {
+            switch (recv->type.kind) {
+            case TY_REF: case TY_RC: case TY_PTR_VOID:
+            case TY_REF_IMMUT: case TY_REF_MUT:
+                /* An aliasable receiver: the read is of mutable state and
+                 * must attribute. */
+                v = rf_attr(reads_read_root(recv), params, n_params,
+                            mask, witness);
+                break;
+            default: break;   /* by-value receiver: as stable as its root */
+            }
+        }
+        return wf_worse(v, RFS(recv));
+    }
+
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return WF_UNVERIFIED;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        WfVerdict v;
+        if (sh == BS_PTR_DEREF || sh == BS_ARRAY_GET_UNCHECKED) {
+            /* A raw-memory load: attribute its pointer's root. */
+            v = (x->as.builtin.n >= 1)
+                    ? rf_attr(reads_read_root(x->as.builtin.args[0]),
+                              params, n_params, mask, witness)
+                    : WF_UNVERIFIED;
+        } else {
+            v = rf_builtin_reads_nothing(sh) ? WF_VERIFIED : WF_UNVERIFIED;
+        }
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            v = wf_worse(v, RFS(x->as.builtin.args[i]));
+        return v;
+    }
+
+    case EX_CALL: {
+        WfVerdict v = WF_VERIFIED;
+        if (x->as.call_.fn_expr || x->as.call_.is_poly_call) {
+            v = WF_UNVERIFIED;    /* dispatch this walk cannot name */
+        } else {
+            Binding *callee = x->as.call_.fn_binding;
+            if (callee && rt_binding_is_pure(callee)) {
+                /* Pure: reads nothing mutable, whatever it is passed. */
+            } else if (callee && callee->reads_params_mask != 0 &&
+                       callee->reads_checked) {
+                /* A VERIFIED callee frame is an upper bound on its mutable
+                 * reads, so map each framed callee parameter to the root of
+                 * the argument feeding it.  A framed slot fed by our framed
+                 * parameter is covered; fed by an unframed one, the callee's
+                 * verified read IS our omitted read (EXCEEDED); fed by
+                 * anything untrackable -- including a partial application
+                 * that leaves a framed slot unbound -- UNVERIFIED. */
+                for (uint32_t j = 0; j < 64; j++) {
+                    if (!(callee->reads_params_mask & (UINT64_C(1) << j)))
+                        continue;
+                    if (j >= x->as.call_.n_args) { v = wf_worse(v, WF_UNVERIFIED); break; }
+                    v = wf_worse(v, rf_attr(
+                            reads_read_root(x->as.call_.args[j]),
+                            params, n_params, mask, witness));
+                }
+            } else {
+                v = WF_UNVERIFIED;
+            }
+        }
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+            v = wf_worse(v, RFS(x->as.call_.args[i]));
+        return v;
+    }
+
+    case EX_IF:
+        return wf_worse(RFS(x->as.if_.cond),
+                        wf_worse(RFS(x->as.if_.then_),
+                                 RFS(x->as.if_.else_or_null)));
+    case EX_DO: {
+        WfVerdict v = WF_VERIFIED;
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            v = wf_worse(v, RFS(x->as.do_.items[i]));
+        return v;
+    }
+    case EX_LET: case EX_LETREC: {
+        WfVerdict v = RFS(x->as.let_.body);
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            v = wf_worse(v, RFS(x->as.let_.bindings[i].init));
+        return v;
+    }
+    case EX_WHILE:
+        return wf_worse(RFS(x->as.while_.cond), RFS(x->as.while_.body));
+    case EX_SET:
+        /* The write is not a read; the value being written is. */
+        return RFS(x->as.set_.value);
+    case EX_SET_DEREF:
+        return wf_worse(RFS(x->as.set_deref_.ref), RFS(x->as.set_deref_.value));
+    case EX_MATCH: {
+        WfVerdict v = RFS(x->as.match_.scrutinee);
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            v = wf_worse(v, RFS(x->as.match_.arms[i].guard));
+            v = wf_worse(v, RFS(x->as.match_.arms[i].body));
+        }
+        return v;
+    }
+    case EX_ASCRIBE: return RFS(x->as.ascribe_.inner);
+    case EX_CAST:    return RFS(x->as.cast_.expr);
+    case EX_REINTERPRET: return RFS(x->as.reinterpret_.expr);
+    case EX_RETURN:  return RFS(x->as.return_.value);
+    case EX_HANDLE: {
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return WF_UNVERIFIED;
+        WfVerdict v = RFS(h->body);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            v = wf_worse(v, RFS(h->cases[i].body));
+        return v;
+    }
+    /* `(resume k v)` transfers control; the reads are in its operands.
+     * Modeled because every `(unsafe ...)` desugar carries one as its
+     * handler-case body -- without this the whole visible-measure shape
+     * would be UNVERIFIED for a resume that reads nothing. */
+    case EX_RESUME: {
+        const ResumeExpr *r = x->as.resume_.resume;
+        if (!r) return WF_UNVERIFIED;
+        return wf_worse(RFS(r->k), RFS(r->value));
+    }
+    default:
+        return WF_UNVERIFIED;   /* unmodeled: "could not see", never clean */
+    }
+#undef RFS
+}
+
+void rf_note_reads_site(Elab *e, Binding *fn, Binding **params,
+                        uint32_t n_params, Span span, bool is_clone) {
+    if (!e || !fn) return;
+    if (e->n_rf_reads_sites == e->cap_rf_reads_sites) {
+        uint32_t ncap = e->cap_rf_reads_sites ? e->cap_rf_reads_sites * 2 : 8;
+        RfReadsSite *nb = (RfReadsSite *)arena_alloc(
+            e->arena, ncap * sizeof(RfReadsSite));
+        if (e->rf_reads_sites)
+            memcpy(nb, e->rf_reads_sites,
+                   e->n_rf_reads_sites * sizeof(RfReadsSite));
+        e->rf_reads_sites     = nb;
+        e->cap_rf_reads_sites = ncap;
+    }
+    RfReadsSite *s = &e->rf_reads_sites[e->n_rf_reads_sites++];
+    s->fn       = fn;
+    s->params   = params;
+    s->n_params = n_params;
+    s->span     = span;
+    s->is_clone = is_clone;
+}
+
+void rf_resolve_read_frames(Elab *e) {
+    if (!e || e->n_rf_reads_sites == 0) return;
+    /* The pass is GATELESS (R4 slice 3): its EXCEEDED verdict is positive
+     * evidence of a broken frame -- the call-shape finding the defn-site
+     * scans structurally cannot see -- and evidence belongs to the same
+     * gateless W0383 tier those scans feed.  Only the dump stays behind
+     * its flag; the verified stamp costs nothing to compute and nothing
+     * consumes it behaviorally yet.
+     *
+     * Fixed point, same shape and same rationale as wf_resolve_write_frames:
+     * the call case consults a callee's reads_checked, which a later round
+     * may raise.  Verdicts only move toward verified, so this terminates. */
+    uint32_t rounds = e->n_rf_reads_sites + 1;
+    for (uint32_t round = 0; round < rounds; round++) {
+        bool progress = false;
+        for (uint32_t i = 0; i < e->n_rf_reads_sites; i++) {
+            RfReadsSite *s = &e->rf_reads_sites[i];
+            if (!s->fn || s->fn->reads_checked) continue;
+            FnDef *fd = s->fn->source_fn_def;
+            if (!fd || !fd->body) continue;   /* inline-C-only: UNVERIFIED */
+            uint32_t budget = 65536;
+            WfVerdict v = rf_scan(fd->body, s->params, s->n_params,
+                                  s->fn->reads_params_mask, &budget, NULL);
+            if (v == WF_VERIFIED) { s->fn->reads_checked = true; progress = true; }
+        }
+        if (!progress) break;
+    }
+    /* R4 slice 3: the evidence sweep.  A frame the fixed point left
+     * unverified whose recomputed verdict is EXCEEDED is a demonstrably
+     * broken promise, reached through a verified callee's frame -- stamp it
+     * exactly as the defn-site scans stamp their findings (every binding,
+     * clones included, so the encoder's refusal sees it whichever one a
+     * call resolves to), and warn once per declared frame.  A frame the
+     * defn-site scans already stamped is skipped: one finding, one warning,
+     * whichever tier saw it first. */
+    for (uint32_t i = 0; i < e->n_rf_reads_sites; i++) {
+        RfReadsSite *s = &e->rf_reads_sites[i];
+        if (!s->fn || s->fn->reads_checked || s->fn->reads_frame_omits_state)
+            continue;
+        FnDef *fd = s->fn->source_fn_def;
+        if (!fd || !fd->body) continue;
+        uint32_t budget = 65536;
+        const Binding *witness = NULL;
+        if (rf_scan(fd->body, s->params, s->n_params,
+                    s->fn->reads_params_mask, &budget, &witness) != WF_EXCEEDED)
+            continue;
+        s->fn->reads_frame_omits_state = true;
+        if (g_opt_checked_reads)
+            experiment_warn_if_used("checked-reads");
+        if (!s->is_clone) {
+            char frame_txt[256];
+            size_t fo = 0;
+            frame_txt[0] = '\0';
+            for (uint32_t pi = 0; pi < s->n_params && pi < 64; pi++) {
+                if (!(s->fn->reads_params_mask & (UINT64_C(1) << pi))) continue;
+                const char *pn = (s->params[pi] && s->params[pi]->name)
+                                     ? s->params[pi]->name->name : "?";
+                int wrote = snprintf(frame_txt + fo, sizeof(frame_txt) - fo,
+                                     "%s%s", fo ? " " : "", pn);
+                if (wrote < 0 || (size_t)wrote >= sizeof(frame_txt) - fo) break;
+                fo += (size_t)wrote;
+            }
+            diag_emit_with_code(DIAG_WARNING, s->span,
+                                TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                "`#reads %s` omits mutable state the body reads: "
+                                "a call in the body reaches state rooted in "
+                                "'%s', which the frame does not name, through a "
+                                "callee's own verified `#reads` frame; name it "
+                                "in this frame too",
+                                frame_txt[0] ? frame_txt : "?",
+                                (witness && witness->name)
+                                    ? witness->name->name : "?");
+        }
+    }
+    /* --dump-read-frames: one line per DECLARED frame (clones are silent),
+     * in registration order.  EXCEEDED is distinguished from UNVERIFIED so
+     * a fixture can tell "broken" from "could not see". */
+    if (g_dump_read_frames) {
+        for (uint32_t i = 0; i < e->n_rf_reads_sites; i++) {
+            RfReadsSite *s = &e->rf_reads_sites[i];
+            if (!s->fn || s->is_clone) continue;
+            const char *verdict = "UNVERIFIED";
+            if (s->fn->reads_checked) {
+                verdict = "VERIFIED";
+            } else {
+                FnDef *fd = s->fn->source_fn_def;
+                if (fd && fd->body) {
+                    uint32_t budget = 65536;
+                    if (rf_scan(fd->body, s->params, s->n_params,
+                                s->fn->reads_params_mask, &budget,
+                                NULL) == WF_EXCEEDED)
+                        verdict = "EXCEEDED";
+                }
+            }
+            printf("read-frame %s: %s mask=0x%llx\n",
+                   s->fn->name ? s->fn->name->name : "<fn>",
+                   verdict,
+                   (unsigned long long)s->fn->reads_params_mask);
+        }
     }
 }
 
@@ -7385,6 +7962,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
      * refinements, so this must not sit inside the block above. */
     b->reads_params_mask = reads_params_mask_defn;
+    /* R4 slice 2/3: register the frame for the deferred verification pass.
+     * Clones register too -- the pass stamps call-shape EXCEEDED evidence,
+     * and the encoder's refusal must see it whichever binding a call
+     * resolves to (the same rule as the defn-site stamp below) -- but they
+     * are marked so the pass keeps one dump line and one warning per
+     * declared frame. */
+    if (reads_params_mask_defn != 0)
+        rf_note_reads_site(e, b, params, n_params,
+                           reads_annot_defn ? reads_annot_defn->span
+                                            : name_f->span,
+                           e->bare_fat_spec_active);
     /* mutable-globals-plan section 12.3, warning tier (section 13.1): a
      * `#reads` frame is TRUSTED and its one consumer GRANTS congruence, so a
      * frame that omits mutable state the body reads buys proofs it has not
@@ -7398,12 +7986,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (reads_params_mask_defn != 0 && body) {
         uint32_t scan_budget = 4096;
         const Binding *gb = reads_scan_mut_global(body, &scan_budget);
-        if (gb && gb->name) {
+        /* R4 slice 1: the same broken promise, reached through a PARAMETER
+         * the frame omits rather than a global.  Scanned only when the
+         * global scan found nothing so one defn reports one finding. */
+        const Binding *pb_omitted = NULL;
+        if (!(gb && gb->name)) {
+            uint32_t scan_budget2 = 4096;
+            pb_omitted = reads_scan_unframed_param(body, params, n_params,
+                                                   reads_params_mask_defn,
+                                                   &scan_budget2);
+        }
+        if ((gb && gb->name) || (pb_omitted && pb_omitted->name)) {
             /* R2 (trusted-refinement-claims-plan): the evidence is stamped on
              * EVERY elaboration of the defn -- clones included -- because the
              * encoder's refusal must see it whichever binding a call resolves
              * to.  Only the WARNING is deduped by the bare_fat guard below. */
-            b->reads_omits_mut_global = true;
+            b->reads_frame_omits_state = true;
             /* The refusal is the experiment's behaviour, so its lifecycle
              * warning fires where the refusal becomes live: evidence found
              * AND the gate on.  A gate enabled over a clean program stays
@@ -7426,17 +8024,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (wrote < 0 || (size_t)wrote >= sizeof(frame_txt) - fo) break;
                     fo += (size_t)wrote;
                 }
-                diag_emit_with_code(DIAG_WARNING,
-                                    reads_annot_defn ? reads_annot_defn->span
-                                                     : name_f->span,
-                                    TUR_W0383_READS_FRAME_OMITS_MUTABLE,
-                                    "`#reads %s` omits mutable state the body reads: "
-                                    "the mutable global '%s' can change between two "
-                                    "calls this frame lets the solver treat as one "
-                                    "value; thread the state through a parameter the "
-                                    "frame can name, or make the global immutable",
-                                    frame_txt[0] ? frame_txt : "?",
-                                    gb->name->name);
+                if (gb && gb->name) {
+                    diag_emit_with_code(DIAG_WARNING,
+                                        reads_annot_defn ? reads_annot_defn->span
+                                                         : name_f->span,
+                                        TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                        "`#reads %s` omits mutable state the body reads: "
+                                        "the mutable global '%s' can change between two "
+                                        "calls this frame lets the solver treat as one "
+                                        "value; thread the state through a parameter the "
+                                        "frame can name, or make the global immutable",
+                                        frame_txt[0] ? frame_txt : "?",
+                                        gb->name->name);
+                } else {
+                    diag_emit_with_code(DIAG_WARNING,
+                                        reads_annot_defn ? reads_annot_defn->span
+                                                         : name_f->span,
+                                        TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                        "`#reads %s` omits mutable state the body reads: "
+                                        "the body reads state reached through parameter "
+                                        "'%s', which the frame does not name, and that "
+                                        "state can change between two calls this frame "
+                                        "lets the solver treat as one value; name it in "
+                                        "the frame (`#reads [%s %s]`)",
+                                        frame_txt[0] ? frame_txt : "?",
+                                        pb_omitted->name->name,
+                                        frame_txt[0] ? frame_txt : "?",
+                                        pb_omitted->name->name);
+                }
             }
         }
     }

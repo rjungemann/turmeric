@@ -1,0 +1,29 @@
+;; R4 groundwork (trusted-refinement-claims-plan): `::` and `(as T ...)` are
+;; value computations, so rt_classify_expr models them as exactly-as-pure-as
+;; their operand. A measure whose only "impurity" was newtype traffic through
+;; `::` is therefore PURE, usable as a congruent predicate atom, and the
+;; if-guard discharges the refined crossing with no #reads frame and no
+;; frozen region.
+;;
+;; Before the widening this measure classified UNKNOWN (EX_ASCRIBE fell to
+;; the walk's default), the guard could not discharge, and this file was a
+;; TUR-W0372 under --strict-refine. That was the C1 purity caveat of
+;; ecs-refinement-typed-apis-plan.md: RE0-style handle unwrappers had to be
+;; inline C (IMPURE) or nothing. With `::` modeled, an unwrapper is written
+;; as an ordinary pure defn.
+(defopaque H :int)
+
+(defn h-val [h : H] : int
+  (:: h :int))
+
+(defn positive? [h : H] : bool
+  (> (h-val h) 0))
+
+(defn get-it [h : #refine{ x : H | (positive? x) }] : int
+  (h-val h))
+
+(defn main [] : int
+  (let [h (:: 7 H)]
+    (if (positive? h)
+      (do (println (get-it h)) 0)
+      0)))

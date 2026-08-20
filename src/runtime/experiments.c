@@ -213,7 +213,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     { "write-frames",
       "`#writes w` / `#writes [a b]` -- a checked per-argument write frame; "
       "backs frame-aware hypothesis invalidation and entry-check elision",
-      "docs/upcoming/checked-write-frames-plan.md",
+      "docs/archive/checked-write-frames-plan.md",
       "0.34.0",                  /* introduced */
       "0.38.0",                  /* expires_at -- review at that cut: graduate,
                                   *   shelve, or bump */

@@ -370,18 +370,29 @@ struct Binding {
      * Stamped on the same forward-declared Binding as the refine_* fields, so
      * it is visible to call sites elaborated before the defn. */
     uint64_t            reads_params_mask;
-    /* R2 (trusted-refinement-claims-plan): positive evidence that this
-     * function's `#reads` frame is broken -- the elaborated body directly
-     * reads a mutable global the frame cannot name.  Stamped where the frame
+    /* R2 + R4 slice 1 (trusted-refinement-claims-plan): positive evidence
+     * that this function's `#reads` frame is broken -- the elaborated body
+     * directly reads a mutable global the frame cannot name, or mutable
+     * state rooted in a PARAMETER the frame omits.  Stamped where the frame
      * is stamped; TUR-W0383 reports it gatelessly, and under
      * `--enable=checked-reads` the refinement encoder refuses the congruence
      * override on it.  False never means "clean", only "no evidence" -- an
      * inline-C body is unwalkable and stays false by design. */
-    bool                reads_omits_mut_global;
+    bool                reads_frame_omits_state;
+    /* R4 slice 2 (trusted-refinement-claims-plan): the read-side mirror of
+     * `writes_checked`.  True only when the deferred rf_resolve_read_frames
+     * pass saw the WHOLE elaborated body and attributed every read of
+     * mutable state to a frame-named parameter -- silence is never enough,
+     * so an inline-C body, an unvouchable call, or an unmodeled form all
+     * leave it false (UNVERIFIED, not broken).  Stamped only when the pass
+     * runs (--enable=checked-reads or --dump-read-frames); nothing consumes
+     * it behaviorally yet -- the dump is the surface, and the first real
+     * consumer is a post-v1 decision recorded in the plan. */
+    bool                reads_checked;
     /* WF1 / #writes: the per-argument WRITE frame -- which parameters' mutable
      * state this function's body may write.  A bitmask (bit i = parameter i is
-     * in the frame) rather than `#reads`'s single 1-based index, because a
-     * function may legitimately write more than one of its arguments.
+     * in the frame), the same shape `reads_params_mask` above has carried
+     * since 2026-08-18 (it was a single 1-based index before that).
      *
      * `writes_declared` is what carries the meaning, and the two states are NOT
      * interchangeable:
@@ -397,7 +408,7 @@ struct Binding {
      *
      * Capped at 32 parameters by the mask width; a `#writes` naming a parameter
      * beyond that is rejected (TUR-E0378) rather than silently dropped.
-     * See docs/upcoming/checked-write-frames-plan.md (WF1/WF2). */
+     * See docs/archive/checked-write-frames-plan.md (WF1/WF2). */
 #define WF_MAX_FRAME_PARAMS 32u   /* mask width; see writes_param_mask below */
 /* G2: globals in a write frame are a list, not a mask -- there is no natural
  * index for them -- so the cap is a list length rather than a word width.

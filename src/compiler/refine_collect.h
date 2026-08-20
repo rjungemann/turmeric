@@ -93,12 +93,13 @@ typedef struct RefineFnInfo {
      * callee's own entry check is never elided; see
      * docs/guides/stateful-refinements-guide.md. */
     uint64_t     reads_params_mask;
-    /* R2 (trusted-refinement-claims-plan): positive evidence the `#reads`
-     * frame above is broken (the body directly reads a mutable global).
-     * Mirrors Binding.reads_omits_mut_global.  Consulted only under
+    /* R2 + R4 slice 1 (trusted-refinement-claims-plan): positive evidence
+     * the `#reads` frame above is broken (the body directly reads a mutable
+     * global, or mutable state rooted in a parameter the frame omits).
+     * Mirrors Binding.reads_frame_omits_state.  Consulted only under
      * `--enable=checked-reads`, where it refuses the congruence grant; false
      * means "no evidence", never "verified clean". */
-    bool         reads_omits_mut_global;
+    bool         reads_frame_omits_state;
     /* WF1/WF2 / #writes: this callee's declared write frame, mirroring the
      * Binding fields of the same names.  `writes_declared` distinguishes "the
      * frame is empty" from "there is no frame" -- see expr.h.  WF3 uses these
