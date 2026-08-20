@@ -250,9 +250,15 @@ If the first branch retries, the second branch is tried. Both branches see the s
 
 ## Transactional Synchronization Primitives
 
-There are no built-in TMVar/TChan types -- both are small patterns you build
-from a `TVar` plus `check`. The [STM Guide](stm-guide.md#building-higher-level-primitives)
-carries complete sketches; the shapes are:
+TMVar and TChan are not compiler built-ins -- both are small patterns over a
+`TVar` plus `check` -- but you do not have to write them: `stdlib/stm-sync.tur`
+ships both, with a `-stm` variant of every operation so several can compose
+into one transaction. See the
+[STM Guide](stm-guide.md#building-higher-level-primitives) for the API.
+
+The sketches below are worth reading anyway, because they show the mechanism:
+`check` is what turns an ordinary read into a blocking wait, by making the
+whole transaction retry until the condition holds. The shapes are:
 
 ### TMVar: Single-Slot Mailbox
 

@@ -1,0 +1,322 @@
+;;; tur/stm-sync -- TMVar and TChan, built on tvar + check.
+;;;
+;;; Both STM docs used to hand-sketch these from `tvar/*` and `check`. This is
+;;; that sketch, made real and testable. See
+;;; docs/archive/stm-tmvar-tchan-stdlib.md.
+;;;
+;;; Load it explicitly: `(load "stdlib/stm-sync.tur")`.
+;;;
+;;; ## Why these are macros, not functions
+;;;
+;;; `atomically` requires a **syntactic** `stm` block -- `(atomically (f x))`
+;;; where `f` returns a transaction is a hard error ("atomically requires an
+;;; stm block as argument"). So an STM action cannot be a value returned from a
+;;; function; it has to be spliced into the transaction lexically, which is
+;;; what a macro does.
+;;;
+;;; That constraint shapes the whole API. Each operation comes in two forms:
+;;;
+;;;   `tmvar-take-stm`  -- the BODY only. Use inside your own `(stm ...)`,
+;;;                        composing several operations into ONE transaction
+;;;                        that retries as a unit.
+;;;   `tmvar-take`      -- the same body wrapped in its own
+;;;                        `(atomically (stm ...))`. Use for a standalone
+;;;                        operation.
+;;;
+;;; Reach for the `-stm` form whenever two operations must succeed together;
+;;; two separate `tmvar-take` calls are two transactions, and another thread
+;;; can interleave between them.
+;;;
+;;; ## The empty marker
+;;;
+;;; A TVar holds a `ptr`, and an empty slot is the null pointer -- the same
+;;; representation the guides sketched. In a pointer-valued world "no value" IS
+;;; null, so this is not an `:int` sentinel standing in for a real type. The
+;;; consequence is real though and worth stating plainly: **a TMVar cannot
+;;; hold 0 / null as a legitimate value**, because it is indistinguishable from
+;;; empty. Store a boxed value if you need the full range.
+;;;
+;;; Since: 2026-08-20
+;; Constructors are macros too, not `defn`s.  A `defn` would have to spell the
+;; `TVar` return type, and the TVar TYPE NAME lives in stdlib/stm.tur while only
+;; the tvar/* FUNCTIONS are auto-loaded -- so it would need an explicit
+;; (load "stdlib/stm.tur"). Macros need no annotation, so this module stays
+;; load-free. (That load also surfaced two cc warnings in stm.tur --
+;; `tvar/new` returning a bare `void *` as int64_t and `tvar/write` returning a
+;; value from a `: nil` function -- both fixed alongside this module.)
+;; ---- TMVar: a single-slot mailbox that is either full or empty ----
+;;; tmvar-new -- create a TMVar holding a value (full).
+;;;
+;;; Parameters:
+;;;   v -- the initial value; must not be 0 (see "The empty marker" above)
+;;;
+;;; Returns:
+;;;   A TVar handle serving as a full TMVar.
+;;;
+;;; Example:
+;;;   (let [mv (tmvar-new 42)] ...)
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-new [v] (tvar/new v))
+;;; tmvar-new-empty -- create an empty TMVar.
+;;;
+;;; Returns:
+;;;   A TVar handle serving as an empty TMVar.
+;;;
+;;; Example:
+;;;   (let [mv (tmvar-new-empty)] ...)
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-new-empty [] (tvar/new 0))
+;;; tmvar-take-stm -- transaction BODY: block until full, then empty and return.
+;;;
+;;; Splice into your own `(stm ...)` to compose with other operations in one
+;;; transaction. The `check` makes the whole transaction retry while the slot
+;;; is empty, so a waiter parks rather than spins.
+;;;
+;;; Example:
+;;;   (atomically (stm (tmvar-take-stm mv)))
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-take-stm [mv]
+  (let [__tv (tvar/read mv)]
+    (check (not (= (:: __tv :int) 0)))
+    (tvar/write mv 0)
+    __tv))
+;;; tmvar-take -- block until the TMVar is full, then empty it and return it.
+;;;
+;;; Standalone form: runs in its own transaction. When two operations must
+;;; succeed together, use tmvar-take-stm inside one `(stm ...)` instead --
+;;; two tmvar-take calls are two transactions and another thread can interleave.
+;;;
+;;; Parameters:
+;;;   mv -- the TMVar
+;;;
+;;; Returns:
+;;;   The value that was in the slot, as a ptr.
+;;;
+;;; Example:
+;;;   (let [mv (tmvar-new 42)]
+;;;     (println (:: (tmvar-take mv) :int)))  ; => 42
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-take [mv] (atomically (stm (tmvar-take-stm mv))))
+;;; tmvar-put-stm -- transaction BODY: block until empty, then fill.
+;;;
+;;; Example:
+;;;   (atomically (stm (tmvar-put-stm mv 7)))
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-put-stm [mv v]
+  (do (check (= (:: (tvar/read mv) :int) 0))
+      (tvar/write mv v)))
+;;; tmvar-put -- block until the TMVar is empty, then fill it.
+;;;
+;;; Parameters:
+;;;   mv -- the TMVar
+;;;   v  -- the value to store; must not be 0
+;;;
+;;; Example:
+;;;   (let [mv (tmvar-new-empty)]
+;;;     (tmvar-put mv 7)
+;;;     (println (:: (tmvar-take mv) :int)))  ; => 7
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-put [mv v] (atomically (stm (tmvar-put-stm mv v))))
+;;; tmvar-read-stm -- transaction BODY: block until full, return WITHOUT emptying.
+;;;
+;;; The difference from tmvar-take-stm is the whole point: a reader that peeks
+;;; leaves the value for the next taker.
+;;;
+;;; Example:
+;;;   (atomically (stm (tmvar-read-stm mv)))
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-read-stm [mv]
+  (let [__tv (tvar/read mv)]
+    (check (not (= (:: __tv :int) 0)))
+    __tv))
+;;; tmvar-read -- block until full, return the value without emptying.
+;;;
+;;; Parameters:
+;;;   mv -- the TMVar
+;;;
+;;; Returns:
+;;;   The value in the slot, as a ptr. The slot stays full.
+;;;
+;;; Example:
+;;;   (let [mv (tmvar-new 42)]
+;;;     (println (:: (tmvar-read mv) :int))   ; => 42
+;;;     (println (:: (tmvar-take mv) :int)))  ; => 42 -- still there
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-read [mv] (atomically (stm (tmvar-read-stm mv))))
+;;; tmvar-full? -- is the TMVar currently full? Does not block.
+;;;
+;;; Parameters:
+;;;   mv -- the TMVar
+;;;
+;;; Returns:
+;;;   true when the slot holds a value.
+;;;
+;;; Example:
+;;;   (println (tmvar-full? (tmvar-new-empty)))  ; => false
+;;;
+;;; Since: 2026-08-20
+(defmacro tmvar-full? [mv]
+  (atomically (stm (not (= (:: (tvar/read mv) :int) 0)))))
+;; ---- TChan: an unbounded FIFO channel ----
+;;
+;; A TChan is a TVar holding a cons list in arrival order. Blocking comes from
+;; `check` exactly as it does for TMVar; the queue itself is just a data
+;; structure, which is also how Haskell's TChan is built (a TVar over a linked
+;; structure).
+;;
+;; Complexity, stated rather than glossed: writes are O(n) because they append
+;; at the tail, reads are O(1). That is the wrong way round for a
+;; write-heavy channel. The standard fix is a banker's queue -- a (front, back)
+;; pair, pushing on `back` and reversing into `front` when it empties, giving
+;; amortized O(1) both ways. It is not here because the reverse-on-empty step
+;; has to run INSIDE the transaction body, and expressing that in a macro that
+;; also has to `check` and return a value is a lot of machinery for a v1
+;; primitive. Revisit if a caller hits the write cost.
+;;
+;; Unlike TMVar, a TChan can carry 0 as a value: the empty state is the empty
+;; LIST, which is distinguishable from a list whose head happens to be 0.
+;;; tchan-cons-append -- internal: append `v` to the end of cons list `lst`.
+;;;
+;;; Returns a fresh list; the input is left alone, so a retried transaction
+;;; that re-runs this cannot corrupt the queue it read.
+(defn tchan-cons-append [lst : int v : int] : int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  /* Copy the spine so a retry re-runs cleanly against the original. */
+  __tur_cons_cell *src = (__tur_cons_cell *)(intptr_t)lst;
+  __tur_cons_cell *out_head = NULL, *out_tail = NULL;
+  while (src) {
+      __tur_cons_cell *n = (__tur_cons_cell *)malloc(sizeof(__tur_cons_cell));
+      if (!n) { fprintf(stderr, "tchan-append: oom\n"); abort(); }
+      n->head = src->head; n->tail = 0;
+      if (out_tail) out_tail->tail = (int64_t)(intptr_t)n; else out_head = n;
+      out_tail = n;
+      src = (__tur_cons_cell *)(intptr_t)src->tail;
+  }
+  __tur_cons_cell *last = (__tur_cons_cell *)malloc(sizeof(__tur_cons_cell));
+  if (!last) { fprintf(stderr, "tchan-append: oom\n"); abort(); }
+  last->head = (int64_t)v; last->tail = 0;
+  if (out_tail) out_tail->tail = (int64_t)(intptr_t)last; else out_head = last;
+  return (int64_t)(intptr_t)out_head;
+  ```)
+;;; tchan-cons-head -- internal: first element, or -1 for an empty list.
+(defn tchan-cons-head [lst : int] : int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *c = (__tur_cons_cell *)(intptr_t)lst;
+  return c ? c->head : -1;
+  ```)
+;;; tchan-cons-tail -- internal: the list without its first element.
+(defn tchan-cons-tail [lst : int] : int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *c = (__tur_cons_cell *)(intptr_t)lst;
+  return c ? c->tail : 0;
+  ```)
+;;; tchan-cons-len -- internal: number of elements.
+(defn tchan-cons-len [lst : int] : int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t n = 0;
+  __tur_cons_cell *c = (__tur_cons_cell *)(intptr_t)lst;
+  while (c) { n++; c = (__tur_cons_cell *)(intptr_t)c->tail; }
+  return n;
+  ```)
+;;; tchan-new -- create an empty TChan.
+;;;
+;;; Returns:
+;;;   A TVar handle serving as an empty channel.
+;;;
+;;; Example:
+;;;   (let [ch (tchan-new)] ...)
+;;;
+;;; Since: 2026-08-20
+(defmacro tchan-new [] (tvar/new 0))
+;;; tchan-write-stm -- transaction BODY: append a value. Never blocks.
+;;;
+;;; Example:
+;;;   (atomically (stm (tchan-write-stm ch 1)))
+;;;
+;;; Since: 2026-08-20
+(defmacro tchan-write-stm [ch v]
+  (tvar/write ch (tchan-cons-append (:: (tvar/read ch) :int) v)))
+;;; tchan-write -- append a value to the channel. Never blocks (unbounded).
+;;;
+;;; Parameters:
+;;;   ch -- the TChan
+;;;   v  -- the value to append
+;;;
+;;; Example:
+;;;   (let [ch (tchan-new)] (tchan-write ch 1))
+;;;
+;;; Since: 2026-08-20
+(defmacro tchan-write [ch v] (atomically (stm (tchan-write-stm ch v))))
+;;; tchan-read-stm -- transaction BODY: block until non-empty, then pop.
+;;;
+;;; The `check` retries the whole transaction while the channel is empty, so a
+;;; reader parks instead of spinning. Splice into your own `(stm ...)` to pop
+;;; and do something else atomically.
+;;;
+;;; Example:
+;;;   (atomically (stm (tchan-read-stm ch)))
+;;;
+;;; Since: 2026-08-20
+(defmacro tchan-read-stm [ch]
+  (let [__q (:: (tvar/read ch) :int)]
+    (check (not (= __q 0)))
+    (tvar/write ch (tchan-cons-tail __q))
+    (tchan-cons-head __q)))
+;;; tchan-read -- block until the channel is non-empty, then pop the oldest.
+;;;
+;;; FIFO: the value returned is the one written earliest.
+;;;
+;;; Parameters:
+;;;   ch -- the TChan
+;;;
+;;; Returns:
+;;;   The oldest value in the channel.
+;;;
+;;; Example:
+;;;   (let [ch (tchan-new)]
+;;;     (tchan-write ch 1)
+;;;     (tchan-write ch 2)
+;;;     (println (tchan-read ch)))   ; => 1
+;;;
+;;; Since: 2026-08-20
+(defmacro tchan-read [ch] (atomically (stm (tchan-read-stm ch))))
+;;; tchan-len -- how many values are queued. Does not block.
+;;;
+;;; Parameters:
+;;;   ch -- the TChan
+;;;
+;;; Returns:
+;;;   The number of queued values.
+;;;
+;;; Example:
+;;;   (println (tchan-len (tchan-new)))  ; => 0
+;;;
+;;; Since: 2026-08-20
+(defmacro tchan-len [ch]
+  (atomically (stm (tchan-cons-len (:: (tvar/read ch) :int)))))
+;;; tchan-empty? -- is the channel empty? Does not block.
+;;;
+;;; Parameters:
+;;;   ch -- the TChan
+;;;
+;;; Returns:
+;;;   true when nothing is queued.
+;;;
+;;; Example:
+;;;   (println (tchan-empty? (tchan-new)))  ; => true
+;;;
+;;; Since: 2026-08-20
+(defmacro tchan-empty? [ch]
+  (atomically (stm (= (:: (tvar/read ch) :int) 0))))
