@@ -503,11 +503,10 @@ static int parse_recipe_header(const char *line, JRecipe *r) {
     return 1;
 }
 
-/* Check if a line is a body line (tab-indented or 4-space-indented). */
+/* Check if a line is a body line (tab-indented or 2+ space-indented). */
 static int is_body_line(const char *line) {
     if (line[0] == '\t') return 1;
-    if (line[0] == ' ' && line[1] == ' ' && line[2] == ' ' && line[3] == ' ')
-        return 1;
+    if (line[0] == ' ' && line[1] == ' ') return 1;
     return 0;
 }
 
