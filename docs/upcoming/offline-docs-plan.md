@@ -15,8 +15,16 @@ The short answer this plan builds out: **they do collapse into one.** Generate
 a chrome-free "docs pack" (nav index + per-page HTML fragments) from the same
 generators that already build the site docs, ship it as static assets of the
 Try PWA, render it in an in-app docs pane, and let the existing service worker
-precache it. The website, the in-app viewer, and offline mode then all read
-the same artifact, and nothing is written twice.
+precache it **unconditionally**. The website, the in-app viewer, and offline
+mode then all read the same artifact, and nothing is written twice.
+
+**Settled up front: the pack is always precached.** There is no "download
+docs for offline" toggle and no opt-in. Installing Try Turmeric means having
+the docs, in the same way it already means having the compiler -- offline
+completeness is the feature, and a toggle would be one more state to explain,
+test, and get wrong. The size budget in 2.1 exists to *protect* that decision:
+if the pack ever outgrows the budget, the fix is a smaller pack, not a
+switch.
 
 ## 1. What exists today (checked against the tree)
 
@@ -81,13 +89,25 @@ web/public/docs-pack/
   [...]}]}`. The `words` field carries a lowercase search string per page so
   client search needs no extra index. Stamp the `VERSION` in it; the viewer
   shows it, which makes "are my offline docs stale?" answerable at a glance.
-- **Size budget.** 2.3 MB of guide markdown plus the API pages renders to
-  roughly 5-8 MB of fragments, ~1-2 MB over the wire with the compression the
-  worker already gets. Against an already-precached `turmeric.wasm` this is
-  small, but make it a *checked* number: the pack emitter fails the build if
-  the pack exceeds a budget (start at 16 MB raw), so an accidental image or a
-  generated-page explosion is a build error, not a silent PWA bloat. Images
-  referenced by guides get copied into the pack and counted.
+- **Size budget -- the mechanism that keeps precache-always honest.** 2.3 MB
+  of guide markdown plus the API pages renders to roughly 5-8 MB of
+  fragments, ~1-2 MB over the wire with the compression the worker already
+  gets. Against an already-precached `turmeric.wasm` that is small enough
+  that unconditional precaching is not a judgement call. Because the whole
+  design leans on that, it is a *checked* number: the pack emitter fails the
+  build if the raw pack exceeds a budget (start at 16 MB), so an accidental
+  image or a generated-page explosion is a build error at `just docs` time,
+  not silent PWA bloat discovered by a user on a phone. Images referenced by
+  guides get copied into the pack and counted.
+
+  **If the budget trips, the response is to shrink the pack, never to make
+  precaching conditional.** In descending order of preference: compress or
+  drop oversized images; exclude a doc *category* from the pack (the pack is
+  Try's docs, and it does not have to carry every generated page the website
+  carries); split rarely-read reference pages into a second, lazily-fetched
+  tier that the pane loads on demand and the SW caches on first use. Each of
+  those keeps "installed means complete" true for what the pack claims to
+  contain, which a toggle does not.
 - Cross-links between guides (`[x](y.md)` -> `y.html`) are rewritten to
   pack-relative slugs at generation time, so the viewer resolves them without
   guessing. External links open in a new tab.
@@ -186,15 +206,34 @@ Explicitly rejected alternatives, with reasons, so they do not resurface:
     behavior) to a tiny offline page saying "you're offline -- these docs are
     available in Try" linking `/try/#doc=...` for the matching page when the
     path maps into the pack.
-- **Decide in-phase:** precache-always vs. an opt-in "download docs for
-  offline" toggle. Given the measured pack size next to the wasm,
-  precache-always is the recommendation (one less state to explain); the
-  toggle only if the OD1 budget check reveals a surprise.
-- **Accept:** Playwright offline spec: load `/try/` once online, flip the
-  context offline (`context.setOffline(true)`), reload, open the docs pane,
-  navigate guides and API pages, search -- all green with zero network. Bump
-  `VERSION`, redeploy, confirm the old pack is evicted (the existing
-  `activate` logic, now covering the pack cache).
+- **No toggle.** The pack is precached on install alongside the wasm,
+  unconditionally, on every platform. Concretely this means: no setting, no
+  prompt, no first-run "would you like docs offline?", and no code path in
+  which the docs pane is present but its content is not. If the OD1 budget
+  check ever fights this, OD1's shrink ladder applies -- the pack gets
+  smaller, the guarantee does not get weaker.
+- **Make the guarantee visible, since it is now unconditional.** The install
+  is already failure-tolerant per URL (a fetch that 404s is skipped rather
+  than bricking the worker), which means a partially precached pack is
+  possible on a flaky first load. Record what landed: the SW writes a small
+  `pack-status` entry (expected count from `index.json`, actual cached
+  count, version) that the docs pane reads, so the pane can say "docs ready
+  for offline" or "N of M pages cached -- reconnect to finish" instead of
+  discovering a hole mid-flight. Re-attempt the missing entries on the next
+  load rather than waiting for a version bump.
+- **Accept:** Playwright offline spec, written to assert the *unconditional*
+  guarantee rather than a happy path -- load `/try/` once online **without
+  ever opening the docs pane**, flip the context offline
+  (`context.setOffline(true)`), reload, then open the pane for the first
+  time and navigate guides, API pages, cross-links and search: all green
+  with zero network requests. (Visiting docs before going offline would pass
+  even with today's network-first behavior, which is exactly the bug this
+  phase fixes; the spec must not do it.) Plus: `pack-status` reports
+  complete after a clean install; a spec that fails a subset of fragment
+  fetches on install sees the pane report partial state and sees the
+  missing entries recovered on the next online load. Bump `VERSION`,
+  redeploy, confirm the old pack is evicted (the existing `activate` logic,
+  now covering the pack cache).
 
 ### OD4 -- offline outside the browser (the other half of problem 1)
 
@@ -246,19 +285,21 @@ OD5 folds into whichever of OD1/OD3 touches the neighboring lines first.
 | Risk | Mitigation |
 |---|---|
 | Site pages and pack drift apart | One renderer emits both (fragment rendered once, wrapped twice); drift is structurally impossible rather than policed |
-| Pack bloats the PWA | Size budget enforced at generation; images counted; measured number decides precache-always vs opt-in |
+| Pack bloats the PWA | Size budget enforced at generation (build error, not a runtime surprise); images counted; over-budget is answered by OD1's shrink ladder -- precaching stays unconditional |
+| First load is flaky, so the "always offline" promise is quietly untrue | SW records a `pack-status` (expected/actual/version); the pane surfaces incomplete state and the missing entries are re-fetched on the next load |
 | Stale offline docs after release | Existing `CACHE_VERSION`-from-`VERSION` rotation already evicts; `index.json` carries the version and the pane displays it |
-| SW install slowed by many fragment fetches | Fragments precache after the shell (install is already per-URL and failure-tolerant); worst case a fragment arrives on first use via cache-first |
+| SW install slowed by many fragment fetches | Fragments precache after the shell, so the REPL is usable before the pack finishes; install is already per-URL and failure-tolerant, and `pack-status` makes an incomplete pack visible rather than silent |
 | Deep-link hash scheme collides with URL code sharing | `#doc=` composes with the existing compressed-hash format; a Playwright spec pins both coexisting |
 | `genguides.py` markdown dependency missing on a build machine | Loud preflight check with install instructions, in the style of the existing `web-dev:` guards |
 | Symlink narrowing (OD5) breaks site URLs | Keep the public URL space fixed; only the filesystem mapping changes; prod smoke tests (`playwright.config.prod.js`) cover the doc routes |
 
 ## 5. Open questions
 
-1. Precache the pack always, or behind a "download for offline" toggle?
-   (Recommendation: always; revisit only if the OD1 budget number surprises.)
-2. Should spices docs be in the pack when `../turmeric-spices` is absent at
+1. Should spices docs be in the pack when `../turmeric-spices` is absent at
    build time -- i.e., is the deploy machine guaranteed to have the sibling
    checkout? (Today's `doc-names.json` merge has the same dependency, so
-   whatever it does, the pack should match.)
-3. Does the tour (`web/tour/`) want the same pane, or is Try enough for v1?
+   whatever it does, the pack should match.) Note this interacts with
+   precache-always: if spice pages can be missing from a given build, the
+   pane must not offer nav entries for them, or "installed means complete"
+   becomes false through the side door.
+2. Does the tour (`web/tour/`) want the same pane, or is Try enough for v1?
