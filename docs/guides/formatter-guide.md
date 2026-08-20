@@ -26,6 +26,9 @@ tur format myfile.tur > myfile.tur.tmp && mv myfile.tur.tmp myfile.tur
 
 # Check whether a file is already formatted (exits 1 if not)
 tur format --check myfile.tur
+
+# Show a unified diff of what formatting would change
+tur format --diff myfile.tur
 ```
 
 The `--check` flag is useful in CI:
@@ -80,9 +83,11 @@ These forms have well-known argument roles and use custom layouts:
 ### Vectors, maps, sets
 
 - `[...]` -- inline if total width fits; otherwise one element per line.
-- `#fx{...}` maps -- inline if total width fits; otherwise one key-value pair
+- `#map{...}` maps -- inline if total width fits; otherwise one key-value pair
   per line.
-- `#s(...)` sets -- inline if total width fits; otherwise one element per line.
+- `#set{...}` sets -- inline if total width fits; otherwise one element per
+  line. (The `#s(...)` set form round-trips as-is.)
+- `#fx{...}` effect rows are preserved in their explicit spelling.
 
 ### Comments
 
@@ -148,6 +153,8 @@ defn factorial [n :int] :int
 
 ## See also
 
-- `src/fmt.h` -- Public C API (`fmt_print`, `FmtOptions`)
-- `src/fmt.c` -- Formatter implementation
-- [vscode-guide.md](vscode-guide.md) -- VS Code extension (format-on-save coming in Phase 3)
+- `src/compiler/fmt.h` -- Public C API (`fmt_print`, `FmtOptions`)
+- `src/compiler/fmt.c` -- Formatter implementation
+- [vscode-guide.md](vscode-guide.md) -- VS Code extension (registers a document
+  formatter that pipes the buffer through `tur format`; supports
+  `editor.formatOnSave`)

@@ -145,8 +145,10 @@ cp build-wasm/wasm/turmeric.wasm hello-wasm/
       var input  = '(+ 1 2)';
 
       // Strings must be copied into WASM linear memory before passing to C.
-      // allocateUTF8 mallocs a buffer and writes the NUL-terminated string.
-      var ptr    = Module.allocateUTF8(input);
+      // Malloc a buffer and write the NUL-terminated UTF-8 string into it.
+      var len    = Module.lengthBytesUTF8(input) + 1;
+      var ptr    = Module._malloc(len);
+      Module.stringToUTF8(input, ptr, len);
 
       // _turi_wasm_eval returns a malloc'd char* with the result.
       var resPtr = Module._turi_wasm_eval(ptr);
@@ -156,9 +158,10 @@ cp build-wasm/wasm/turmeric.wasm hello-wasm/
 
       document.getElementById('output').textContent = result;
 
-      // Always free the input buffer. The result pointer is owned by the
-      // runtime and must NOT be freed by the caller.
+      // Free the input buffer, and the result buffer too -- the eval result
+      // is a malloc'd copy the caller owns.
       Module._free(ptr);
+      if (resPtr) Module._free(resPtr);
     });
   </script>
 </body>
@@ -167,8 +170,9 @@ cp build-wasm/wasm/turmeric.wasm hello-wasm/
 
 Why these helpers are needed:
 
-- **`allocateUTF8(str)`** -- allocates WASM memory and writes the JS string as
-  UTF-8, returning a pointer. You must `_free` this pointer when done.
+- **`lengthBytesUTF8(str)` + `_malloc` + `stringToUTF8(str, ptr, len)`** --
+  allocate WASM memory and write the JS string into it as NUL-terminated
+  UTF-8. You must `_free` the pointer when done.
 - **`UTF8ToString(ptr)`** -- reads a NUL-terminated C string from WASM memory
   back into a JS string.
 - **`Module._turi_wasm_eval`** -- note the leading underscore; Emscripten

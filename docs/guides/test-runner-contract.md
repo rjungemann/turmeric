@@ -12,7 +12,7 @@ This document defines the expected behavior for stdlib test running follow-up wo
 
 Applies to:
 - stdlib test helpers in `stdlib/test.tur`
-- CLI test entry behavior (future `tur test` command path)
+- CLI test entry behavior (the `tur test` command path)
 - fixture and output conventions for pass/fail reporting
 
 ## Discovery Model
@@ -105,13 +105,13 @@ A fixture directory may contain an empty `requires.tsan` marker file.
 Enable TSan for a full test run:
 
 ```sh
-TUR_TSAN=1 make test
-# or using the dedicated target:
-make test-tsan
+TUR_TSAN=1 bash tests/run.sh
+# or using the dedicated recipe (Justfile, via `tur run` or `just`):
+tur run test-tsan
 ```
 
-The `make test-tsan` target rebuilds `tur` itself with `-fsanitize=thread` and
-then sets `TUR_TSAN=1` for the test runner.
+The `test-tsan` recipe builds the TSan CMake configuration (`tur` itself
+compiled with `-fsanitize=thread`) and then runs ctest with `TUR_TSAN=1`.
 
 ## Failures That Are Not Product Bugs
 

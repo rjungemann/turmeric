@@ -114,8 +114,22 @@ Meta-commands:
   :doc  <sym>         print documentation for a symbol or builtin
   :reload <file>      evaluate a .tur file into the current session
   :load-string "<src>"  evaluate source directly (\n for newlines)
+  :run <file>         reset session, load file, auto-invoke (main)
+  :reset              clear session and start fresh
   :pwd                print the working directory
   :cd [dir]           change the working directory (bare :cd goes home)
+  :explain [code]     explain the most recent error, or a TUR-E#### code
+
+Tutorial commands:
+  :tutorial              list available tutorials
+  :tutorial <name>       start a tutorial
+  :tutorial <name> <n>   start a tutorial at step n
+  :next                  go to next step
+  :prev                  go to previous step
+  :hint                  show hint for current step
+  :skip                  skip current step
+  :quit-tutorial         exit tutorial mode
+  :tutorial-progress     show progress in current tutorial
 ```
 
 ### `:quit` / `:q`
@@ -427,9 +441,8 @@ built without `-DTUR_JIT=ON`, asking for the `jit` engine is a hard error
 rather than a silent fallback, because the two engines differ in semantics and
 guessing which one you got is worse than being told.
 
-> Before 0.34.0 this was spelled `tur --enable=jit repl`, behind the `jit`
-> experiment. That experiment graduated; the flag is now a warning-only no-op
-> and engine selection is the supported spelling.
+> `tur --enable=jit repl` (the retired experiment spelling) is accepted as a
+> warning-only no-op; engine selection is the supported spelling.
 
 ### (reload) -- pick up edits without restarting
 
