@@ -1,0 +1,5 @@
+stdlib/mutex.tur and stdlib/rwlock.tur are inline-C over pthreads, and the
+tree-walking interpreter does not run inline-C (the TI7 carve-out). This
+fixture reaches them via (load "..."), which run-turi.sh's fixture_has_inline_c
+does follow -- so the marker is belt-and-braces rather than load-bearing today,
+and stays correct if the loads become imports.

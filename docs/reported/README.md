@@ -64,7 +64,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
 | [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | low | mw-recover (panic -> 500) unwritten; its catch-unwind blocker is fixed |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
-| [value-carrying-lock-wrappers](value-carrying-lock-wrappers.md) | low | no `with-lock` / value-carrying Mutex<T>; only raw mutex-*/rwlock-* handles |
 | [stm-tmvar-tchan-stdlib](stm-tmvar-tchan-stdlib.md) | low | no TMVar/TChan; STM docs hand-sketch them from tvar/* + check |
 | [barrier-primitive-missing](barrier-primitive-missing.md) | low | no barrier-new/barrier-wait anywhere |
 | [schan-recv-pair-signature-migration](schan-recv-pair-signature-migration.md) | low | schan-recv still uses the caller-cell workaround; its miscompile blocker is fixed |

@@ -154,6 +154,28 @@ out.
 linear opaque handle; lock and unlock borrow it, and `mutex-free` is the one
 legal consumption:
 
+The scoped form is `with-lock`, which makes the body's value the form's value
+and puts the release where it cannot be forgotten:
+
+```turmeric no-check
+(let [m (mutex-new)]
+  (println (with-lock m (+ 1 41)))   ; => 42
+  (mutex-free m))
+```
+
+`stdlib/rwlock.tur` has the matching `with-read-lock` / `with-write-lock`.
+
+Two things to know about all three. The lock expression is evaluated **twice**
+-- once to acquire, once to release -- so pass a variable, never a call. That
+is forced rather than sloppy: `Mutex` is `:linear`, so a `let` binding *moves*
+the handle and the checker then rejects the enclosing scope for dropping it
+unconsumed (TUR-E0100), which rules out binding it once inside the macro. And
+the release is not panic-safe: if the body panics the lock stays held, so put
+the unlock on an unwind path with `catch-unwind` where that matters.
+
+The raw pair is still there when you need the acquire and release in different
+scopes:
+
 ```turmeric
 (def lock (mutex-new))
 (def ^mut counter 0)
