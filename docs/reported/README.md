@@ -56,6 +56,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [performance-guide-fictional-stdlib-api](performance-guide-fictional-stdlib-api.md) | medium | performance-guide's middle sections document nonexistent stdlib modules/functions |
 | [logic-guide-documents-unimplemented-backtracking-api](logic-guide-documents-unimplemented-backtracking-api.md) | medium | logic-programming-guide's API summary (`choice-point`/`run`/`do-backtrack`) does not exist |
 | [match-nested-constructor-patterns](match-nested-constructor-patterns.md) | medium | match arms cannot nest constructor patterns; everything flattens with inner match |
+| [datalog-examples-do-not-compile](datalog-examples-do-not-compile.md) | medium | 4 of 5 examples/datalog/*.tur fail `tur check`; the tutorial series quotes them |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [type-of-cast-kind-granularity](type-of-cast-kind-granularity.md) | low-medium | `cast` between two different struct types via `any` succeeds -- tag is TypeKind, not type id |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
@@ -72,7 +73,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
 | [readme-structural-equality-op-missing](readme-structural-equality-op-missing.md) | low | README advertises `=struct=`, which has never existed |
 | [repl-doc-table-lists-removed-try-catch-throw](repl-doc-table-lists-removed-try-catch-throw.md) | low | REPL `:doc` still documents try/catch/throw, deleted in v0.25.0 |
-| [stdlib-cstr-content-equality](stdlib-cstr-content-equality.md) | low | no cstr-eq?; `=` compares pointers, callers hand-roll strcmp |
 | [typed-empty-map-literal-suffix](typed-empty-map-literal-suffix.md) | low | `[]:T` and `#set{}:T` exist; `#map{}` has no typed-empty suffix |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tur-audit-not-implemented](tur-audit-not-implemented.md) | low | security docs promise `tur audit`; only audit-spans exists |

@@ -240,11 +240,11 @@ flags, options, and nested subcommands:
         1)
       (let [sub (args/subcommand result)]
         (cond
-          (cstr-same? sub "build")
+          (cstr-eq? sub "build")
             (let [r (args/sub-result result)]
               (println "building, release:" (args/has? r "release"))
               0)
-          (cstr-same? sub "test")
+          (cstr-eq? sub "test")
             (let [r (args/sub-result result)]
               (println "testing, filter:" (args/get-str r "filter"))
               0)
@@ -252,12 +252,6 @@ flags, options, and nested subcommands:
             (do
               (args/print-help spec)
               1))))))
-
-;; content comparison for cstr (=: on cstr compares pointers, not bytes)
-(defn cstr-same? [a : cstr b : cstr] : bool
-  ```c
-  return strcmp(a, b) == 0;
-  ```)
 ```
 ```sweet-exp
 defn main [] :int
@@ -278,12 +272,12 @@ defn main [] :int
         1
       let [sub (args/subcommand result)]
         cond
-          cstr-same?(sub "build")
+          cstr-eq?(sub "build")
           let
             [r (args/sub-result result)]
             println("building, release:" args/has?(r "release"))
             0
-          cstr-same?(sub "test")
+          cstr-eq?(sub "test")
           let
             [r (args/sub-result result)]
             println("testing, filter:" args/get-str(r "filter"))
@@ -292,13 +286,14 @@ defn main [] :int
           do
             args/print-help(spec)
             1
-
-;; content comparison for cstr (=: on cstr compares pointers, not bytes)
-defn cstr-same? [a :cstr b :cstr] :bool
-  ```c
-  return strcmp(a, b) == 0;
-  ```
 ```
+
+`cstr-eq?` is byte-wise content equality on `cstr`, from
+`(import cstr :refer [cstr-eq?])`. It is not optional sugar: `=` has **no**
+`cstr` overload at all, so `(= sub "build")` is a `TUR-E0006` operator-lookup
+error rather than a comparison. `(eq? sub "build")` is the same comparison
+reached through the auto-loaded `Eq[cstr]` instance, if you would rather not
+import `cstr`.
 
 ```sh
 tur run myapp.tur -- build --release
