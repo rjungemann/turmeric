@@ -62,7 +62,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [type-of-cast-kind-granularity](type-of-cast-kind-granularity.md) | low-medium | `cast` between two different struct types via `any` succeeds -- tag is TypeKind, not type id |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
-| [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | low | mw-recover (panic -> 500) unwritten; its catch-unwind blocker is fixed |
+| [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | medium | mw-recover is blocked by 3 closure/fat-handle codegen defects (ICE, use-after-free, undeclared var) -- repros inside |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [schan-recv-pair-signature-migration](schan-recv-pair-signature-migration.md) | low | schan-recv still uses the caller-cell workaround; its miscompile blocker is fixed |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
