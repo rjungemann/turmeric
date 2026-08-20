@@ -552,9 +552,9 @@ defn main [] :int
   0
 ```
 
-Use `(type-of x)` to retrieve the type name as a `cstr`. Use `(cast x T)`
-to unsafely unbox an `any` value as type `T` (no runtime tag check -- use
-only when you know the type):
+Use `(type-of x)` to retrieve the type name as a `cstr`, and `(is? x T)` as
+a boolean predicate on the runtime tag. `(cast x T)` unboxes an `any` value
+as type `T`; the runtime tag is **checked**, and a mismatch panics:
 
 ```turmeric
 (defn print-as-int [x : any] : int
@@ -602,22 +602,22 @@ defn print-as-int [x : any] :int
 - **Polymorphic recursion is not fully inferred.** If a GADT function is
   polymorphically recursive, add an explicit type annotation on the `defn`.
 
-- **`cast` is unchecked.** `(cast x T)` does not verify the runtime tag
-  matches `T`. Use `(type-of x)` first if you need a safe downcast.
+- **`cast` panics on mismatch.** `(cast x T)` checks the runtime tag and
+  aborts when it does not match `T`. Use `(is? x T)` first if you need a
+  non-aborting downcast.
 
-**Implemented (previously deferred):**
+**Supported:**
 
 - **The `(~ a b)` constraint syntax** binds a type variable to a concrete type
-  in a `defn` parameter list: `(defn f [(~ a int) x :a] :int ...)`. Supported
-  since Phase G3.
+  in a `defn` parameter list: `(defn f [(~ a int) x :a] :int ...)`.
 
 - **`equal-cong`** is implemented in `stdlib/equal.tur`. The congruence lemma
   `(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b)) ...)` uses
-  kind-`* -> *` type variables (HKT Phase G4).
+  kind-`* -> *` type variables.
 
 - **Implicit union widening** is supported. A value of type `A` can be passed
   where `(A | B)` is expected; the compiler inserts tag injection
-  automatically (Phase IT4).
+  automatically.
 
 ---
 

@@ -19,8 +19,7 @@ POPL 1982.
 <https://dl.acm.org/doi/10.1145/359576.359587>
 
 Referenced by: `docs/archive/history/higher-kinded-types-plan.md` (kind
-inference algorithm); `docs/guides/compiler-flags-guide.md` (rank-1
-polymorphism description).
+inference algorithm).
 
 ---
 
@@ -105,7 +104,7 @@ Referenced by: `docs/archive/effect-types-row-polymorphism-plan.md`.
 ---
 
 **Liberating Effects with Rows and Handlers**
-Daniel Hillerström and Sam Lindley.
+Daniel Hillerstrom and Sam Lindley.
 *Liberating Effects with Rows and Handlers.*
 TyDe 2016.
 <https://doi.org/10.1145/3007263.3007271>

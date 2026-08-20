@@ -11,7 +11,9 @@
 This document specifies the IR and C emission strategy for `gen`/`yield` forms
 before any compiler changes are made. It serves as the contract between the
 elaboration pass (GF1: `elab_forms.c`) and the emission pass (GF1:
-`emit_stmt.c`, `emit_module.c`).
+`emit_stmt.c`, `emit_module.c`). Generators have since shipped; the
+user-facing documentation is
+[docs/guides/generators-guide.md](../guides/generators-guide.md).
 
 The core idea: a `gen` body compiles to a C struct (the generator state machine)
 plus a `_next` function that dispatches on an integer state tag. `yield` becomes
@@ -484,11 +486,11 @@ which is invalid C.
 
 **v1 rule:** The elaborator rejects `(yield ...)` that appears (directly or
 transitively) inside a `match` arm. `match` may appear in a generator body as
-long as no arm contains a yield. The error message is:
+long as no arm contains a yield. The shipped diagnostic (TUR-E0702, emitted
+from `src/compiler/elab_forms.c`) is:
 
 ```
-error: yield inside match arm is not supported in v1 generators
-  hint: move the yield outside the match expression
+error: 'yield' is not supported inside a 'match' arm (1.0 limitation); this requires the post-1.0 CPS pass.
 ```
 
 ### 7.2 No recursive generators
@@ -498,10 +500,10 @@ a heap-allocated call stack per recursion level, or a CPS transform. Neither
 fits the zero-cost state-machine model.
 
 **v1 rule:** The elaborator detects self-calls inside `gen` bodies and rejects
-them with:
+a yield in such a body with the shipped diagnostic (TUR-E0703):
 
 ```
-error: recursive call inside gen body is not supported in v1 generators
+error: 'yield' is not supported inside a recursive generator (1.0 limitation); this requires the post-1.0 CPS pass.
 ```
 
 ### 7.3 No `yield` inside inline-C blocks

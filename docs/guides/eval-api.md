@@ -74,7 +74,7 @@ available.
 ### `TuriEnv *turi_env_new_sandboxed(void)`
 
 Creates a sandboxed environment.  I/O builtins (`println`, `read-async`,
-`write-async`, …) and inline-C expressions are disabled.  Suitable for
+`write-async`, ...) and inline-C expressions are disabled.  Suitable for
 evaluating untrusted code.
 
 ### `void turi_env_free(TuriEnv *env)`
@@ -154,11 +154,16 @@ typedef struct TuriValue {
 | `TURI_FLOAT`  | 64-bit float (double) |
 | `TURI_CSTR`   | NUL-terminated C string |
 | `TURI_CLOSURE`| First-class function |
-| `TURI_ERROR`  | Runtime / parse error (not catchable by `try/catch`) |
+| `TURI_ERROR`  | Runtime / parse error (`as_error` holds the message) |
 | `TURI_EFFECT_CONT` | Live algebraic-effect continuation |
 | `TURI_STRUCT` | Struct instance |
-| `TURI_THROW`  | In-flight exception (catchable by `try/catch`) |
+| `TURI_THROW`  | Vestigial -- no evaluation path produces it (the `throw`/`try`/`catch` surface was removed from the language) |
 | `TURI_FUTURE` | Async future handle |
+| `TURI_REF`    | Mutable borrow reference |
+| `TURI_STRUCT_TYPE` | Struct type descriptor (`as_cstr` holds the name) |
+| `TURI_GEN`    | Generator instance |
+| `TURI_HANDLER`| First-class handler value |
+| `TURI_REJECTION` | Async-task rejection (`as_error` holds the message). Distinct from `TURI_ERROR` so a rejected future value observed via `(error? r)` / `(error-message r)` does not short-circuit evaluation |
 | `TURI_SYNTAX` | Syntax object (wraps a compiler `Form*`) -- produced by `read-string` and the `syntax-*` natives; the value vocabulary of `defmacro*` macro bodies (see [macros-guide.md](macros-guide.md)) |
 
 ### Constructors
@@ -219,8 +224,7 @@ typedef TuriValue (*TuriNativeFn)(TuriEnv *env, TuriValue *args,
 - `ud` -- the `void *ud` passed to `turi_env_register_native`.
 - Return `turi_nil()` for void functions; return an appropriate `TuriValue`
   for functions that produce results.
-- To raise a catchable exception call `turi_native_throw` then return
-  `turi_nil()`.
+- Signal failure by returning `turi_error("message")` / `turi_errorf(...)`.
 
 ```c
 static TuriValue native_add(TuriEnv *env, TuriValue *args,
@@ -233,20 +237,6 @@ static TuriValue native_add(TuriEnv *env, TuriValue *args,
 turi_env_register_native(env, "my-add", native_add, NULL);
 TuriValue r = turi_eval(env, "(my-add 10 32)");
 /* r.as_int == 42 */
-```
-
-### `void turi_native_throw(TuriEnv *env, const char *msg)`
-
-Raises a catchable Turmeric exception from inside a `TuriNativeFn`.  Sets
-`env->throwing` and `env->throw_value`; the native must return `turi_nil()`
-immediately afterwards.
-
-```c
-static TuriValue native_fail(TuriEnv *env, TuriValue *args,
-                              uint32_t n, void *ud) {
-    turi_native_throw(env, "something went wrong");
-    return turi_nil();
-}
 ```
 
 ---
@@ -431,8 +421,8 @@ Returns a `TURI_FUTURE` value.
 
 ### `void turi_task_cancel(TuriEnv *env, TuriFuture *f)`
 
-Cancels the fiber owning `f`.  The future is rejected; any `(await f)` will
-throw a cancellation exception.
+Cancels the fiber owning `f`.  The future is rejected; any `(await f)` yields
+a `TURI_REJECTION` value, observed with `(error? r)` / `(error-message r)`.
 
 ### `TuriValue turi_future_poll_val(TuriFuture *f)`
 
@@ -463,9 +453,8 @@ if (turi_is_error(v)) {
 ```
 
 Note: `TURI_ERROR` is a value-level error (parse failure, unbound variable).
-`TURI_THROW` is a Turmeric exception thrown by `(throw ...)` or
-`turi_native_throw`.  Uncaught throws surface as `TURI_THROW` values returned
-from `turi_eval`; check with `turi_is_throw(v)`.
+Async-task rejection surfaces as a distinct `TURI_REJECTION` value; check with
+`turi_is_rejection(v)` and read the message with `turi_error_message(v)`.
 
 ---
 

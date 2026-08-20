@@ -45,7 +45,7 @@ defn main [] :int
 ```turmeric
 ;; Walk all arguments
 (defn print-args [args : int] : void
-  (when (some? args)
+  (when (not (= args 0))
     (println (head args))
     (print-args (tail args))))
 
@@ -54,7 +54,7 @@ defn main [] :int
 ```sweet-exp
 ;; Walk all arguments
 defn print-args [args :int] :void
-  when some?(args)
+  when not(=(args 0))
     println(head(args))
     print-args(tail(args))
 print-args(*args*)
@@ -102,48 +102,65 @@ load("stdlib/args.tur")
 
 ### Building a Spec
 
-Build a spec with the `args/spec-*` functions, then call `args/parse`:
+Build a spec with the `args/spec-*` functions, then call `args/parse`.
+Two conventions to know:
+
+- Registration names **include** the dashes (`"--verbose"`); result accessors
+  (`args/has?`, `args/get-*`) take the name **without** dashes (`"verbose"`).
+- An option's default is passed as a `cstr` smuggled through the `:int`
+  `dflt` slot -- define a tiny reinterpret helper (as below) -- or `0` to
+  make the option required.
 
 ```turmeric
+(defn cstr->int [s : cstr] : int
+  ```c
+  return (int64_t)(intptr_t)s;
+  ```)
+
 (defn main [] : int
   (let [spec (-> (args/spec-new)
                  (args/spec-prog "mytool")
                  (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" 0)          ; required
-                 (args/spec-option "--count"  "int"    (cstr "1")) ; default 1
-                 (args/spec-option "--output" "string" (cstr "out.txt")))
+                 (args/spec-option "--input"  "string" 0)                 ; required
+                 (args/spec-option "--count"  "int"    (cstr->int "1"))   ; default 1
+                 (args/spec-option "--output" "string" (cstr->int "out.txt")))
         result (args/parse spec *args*)]
     (if (args/error? result)
       (do
         (println "error:" (args/error-msg result))
         1)
       (do
-        (when (args/has? result "--verbose")
+        (when (args/has? result "verbose")
           (println "verbose mode on"))
-        (println "input: " (args/get-str result "--input"))
-        (println "count: " (args/get-int result "--count"))
-        (println "output:" (args/get-str result "--output"))
+        (println "input: " (args/get-str result "input"))
+        (println "count: " (args/get-int result "count"))
+        (println "output:" (args/get-str result "output"))
         0))))
 ```
 ```sweet-exp
+defn cstr->int [s :cstr] :int
+  ```c
+  return (int64_t)(intptr_t)s;
+  ```
+
 defn main [] :int
   let [spec (-> (args/spec-new)
                  (args/spec-prog "mytool")
                  (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" 0)          ; required
-                 (args/spec-option "--count"  "int"    (cstr "1")) ; default 1
-                 (args/spec-option "--output" "string" (cstr "out.txt")))
+                 (args/spec-option "--input"  "string" 0)                 ; required
+                 (args/spec-option "--count"  "int"    (cstr->int "1"))   ; default 1
+                 (args/spec-option "--output" "string" (cstr->int "out.txt")))
         result (args/parse spec *args*)]
     if args/error?(result)
       do
         println("error:" args/error-msg(result))
         1
       do
-        when args/has?(result "--verbose")
+        when args/has?(result "verbose")
           println("verbose mode on")
-        println("input: " args/get-str(result "--input"))
-        println("count: " args/get-int(result "--count"))
-        println("output:" args/get-str(result "--output"))
+        println("input: " args/get-str(result "input"))
+        println("count: " args/get-int(result "count"))
+        println("output:" args/get-str(result "output"))
         0
 ```
 
@@ -169,13 +186,13 @@ Flags are boolean switches -- present means true, absent means false:
 (args/spec-flag spec "--dry-run")
 
 ;; At runtime:
-(args/has? result "--verbose")  ; => true/false
+(args/has? result "verbose")  ; => true/false
 ```
 ```sweet-exp
 args/spec-flag(spec "--verbose")
 args/spec-flag(spec "--dry-run")
 ;; At runtime:
-args/has?(result "--verbose")
+args/has?(result "verbose")
 ; => true/false
 ```
 
@@ -208,7 +225,7 @@ flags, options, and nested subcommands:
 (defn main [] : int
   (let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
-                       (args/spec-option "--output" "string" (cstr "a.out")))
+                       (args/spec-option "--output" "string" (cstr->int "a.out")))
         test-spec  (-> (args/spec-new)
                        (args/spec-flag "--verbose")
                        (args/spec-option "--filter" "string" 0))
@@ -223,24 +240,30 @@ flags, options, and nested subcommands:
         1)
       (let [sub (args/subcommand result)]
         (cond
-          (cstr= sub "build")
+          (cstr-same? sub "build")
             (let [r (args/sub-result result)]
-              (println "building, release:" (args/has? r "--release"))
+              (println "building, release:" (args/has? r "release"))
               0)
-          (cstr= sub "test")
+          (cstr-same? sub "test")
             (let [r (args/sub-result result)]
-              (println "testing, filter:" (args/get-str r "--filter"))
+              (println "testing, filter:" (args/get-str r "filter"))
               0)
           true
             (do
               (args/print-help spec)
               1))))))
+
+;; content comparison for cstr (=: on cstr compares pointers, not bytes)
+(defn cstr-same? [a : cstr b : cstr] : bool
+  ```c
+  return strcmp(a, b) == 0;
+  ```)
 ```
 ```sweet-exp
 defn main [] :int
   let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
-                       (args/spec-option "--output" "string" (cstr "a.out")))
+                       (args/spec-option "--output" "string" (cstr->int "a.out")))
         test-spec  (-> (args/spec-new)
                        (args/spec-flag "--verbose")
                        (args/spec-option "--filter" "string" 0))
@@ -255,24 +278,26 @@ defn main [] :int
         1
       let [sub (args/subcommand result)]
         cond
-          cstr=
-            sub
-            "build"
+          cstr-same?(sub "build")
           let
             [r (args/sub-result result)]
-            println("building, release:" args/has?(r "--release"))
+            println("building, release:" args/has?(r "release"))
             0
-          cstr=
-            sub
-            "test"
+          cstr-same?(sub "test")
           let
             [r (args/sub-result result)]
-            println("testing, filter:" args/get-str(r "--filter"))
+            println("testing, filter:" args/get-str(r "filter"))
             0
           true
           do
             args/print-help(spec)
             1
+
+;; content comparison for cstr (=: on cstr compares pointers, not bytes)
+defn cstr-same? [a :cstr b :cstr] :bool
+  ```c
+  return strcmp(a, b) == 0;
+  ```
 ```
 
 ```sh
@@ -288,12 +313,12 @@ result, then `args/subcommand` on the inner to walk the chain.
 `args/print-help` writes usage text to stdout based on the spec:
 
 ```turmeric
-(when (args/has? result "--help")
+(when (args/has? result "help")
   (args/print-help spec)
   (exit 0))
 ```
 ```sweet-exp
-when args/has?(result "--help")
+when args/has?(result "help")
   args/print-help(spec)
   exit(0)
 ```

@@ -114,8 +114,22 @@ Meta-commands:
   :doc  <sym>         print documentation for a symbol or builtin
   :reload <file>      evaluate a .tur file into the current session
   :load-string "<src>"  evaluate source directly (\n for newlines)
+  :run <file>         reset session, load file, auto-invoke (main)
+  :reset              clear session and start fresh
   :pwd                print the working directory
   :cd [dir]           change the working directory (bare :cd goes home)
+  :explain [code]     explain the most recent error, or a TUR-E#### code
+
+Tutorial commands:
+  :tutorial              list available tutorials
+  :tutorial <name>       start a tutorial
+  :tutorial <name> <n>   start a tutorial at step n
+  :next                  go to next step
+  :prev                  go to previous step
+  :hint                  show hint for current step
+  :skip                  skip current step
+  :quit-tutorial         exit tutorial mode
+  :tutorial-progress     show progress in current tutorial
 ```
 
 ### `:quit` / `:q`
@@ -375,12 +389,12 @@ The compiled library and its symbol manifest live under
 
 ```
 my-spice/
-├── build.tur
-├── src/
-│   └── lib.tur
-└── .tur-repl-cache/        <- auto-generated, gitignored
-    ├── lib-0.so            <- shared library (one per process generation)
-    └── exports.manifest    <- module/defn -> mangled C symbol :: signature
+|-- build.tur
+|-- src/
+|   `-- lib.tur
+`-- .tur-repl-cache/        <- auto-generated, gitignored
+    |-- lib-0.so            <- shared library (one per process generation)
+    `-- exports.manifest    <- module/defn -> mangled C symbol :: signature
 ```
 
 The first time the cache directory is created, `.tur-repl-cache/` is
@@ -427,9 +441,8 @@ built without `-DTUR_JIT=ON`, asking for the `jit` engine is a hard error
 rather than a silent fallback, because the two engines differ in semantics and
 guessing which one you got is worse than being told.
 
-> Before 0.34.0 this was spelled `tur --enable=jit repl`, behind the `jit`
-> experiment. That experiment graduated; the flag is now a warning-only no-op
-> and engine selection is the supported spelling.
+> `tur --enable=jit repl` (the retired experiment spelling) is accepted as a
+> warning-only no-op; engine selection is the supported spelling.
 
 ### (reload) -- pick up edits without restarting
 
@@ -509,11 +522,11 @@ Arguments are marshaled per the defn's signature recorded in
 The marshaler accepts compatible Turmeric values:
 
 ```
-turmeric> (sh/add42 100)         ; :int -> :int            ✓
+turmeric> (sh/add42 100)         ; :int -> :int            OK
 => 142
-turmeric> (sh/scale 2.5 4.0)     ; :float :float -> :float ✓
+turmeric> (sh/scale 2.5 4.0)     ; :float :float -> :float OK
 => 10
-turmeric> (sh/add42 1.5)         ; :float into :int slot   ✗ rejected
+turmeric> (sh/add42 1.5)         ; :float into :int slot   REJECTED
 error: ffi: 'sh/add42' arg 0: expected :int-class, got float
 ```
 
@@ -593,7 +606,7 @@ ordinary environment variable it is inherited by every child process and
 outlives the install that set it, so a stale value can point a freshly built
 `tur` at a stdlib that has since moved or been deleted.
 
-It is now validated before use: if `$TUR_STDLIB_DIR/macros.tur` is not
+It is validated before use: if `$TUR_STDLIB_DIR/macros.tur` is not
 readable, `tur` prints one line naming the variable, unsets it, and falls back
 to the stdlib beside the binary.
 
@@ -602,11 +615,9 @@ $ TUR_STDLIB_DIR=/gone tur repl
 tur: ignoring TUR_STDLIB_DIR=/gone (no readable macros.tur there); falling back to the stdlib beside the binary
 ```
 
-Previously the value was taken verbatim, and the first sign of trouble was a
-wall of `load: cannot open .../macros.tur` errors with nothing pointing at the
-variable that caused them.  A directory that *does* contain a stdlib is still
-honoured silently -- an explicit override remains an override, so pinning a
-host's bundled stdlib works exactly as before.
+A directory that *does* contain a stdlib is honoured silently -- an explicit
+override remains an override, so pinning a host's bundled stdlib works as
+expected.
 
 ---
 

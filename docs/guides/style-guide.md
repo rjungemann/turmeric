@@ -7,16 +7,20 @@ description: Canonical idioms and formatting conventions for Turmeric code -- fu
 # Turmeric Style Guide
 
 > **Status:** Living document -- updated as idioms are established.
-> **Last Updated:** 2026-05-27
+> **Last Updated:** 2026-08-19
 
 ---
 
 ## Function Arity
 
-### Hard parameter limit
+### Parameter count
 
-`MAX_FN_ARITY` is **16**. Functions with more than ~5 positional parameters
-are a code smell; 16 is an emergency escape hatch, not a target.
+There is **no hard cap** on positional parameters -- a function may declare
+an arbitrary number, matching the emitted C. Functions with more than ~5
+positional parameters are still a code smell, and declaring more than **16**
+emits the `TUR-W0041` lint nudge back to this guide. The high ceiling is an
+escape hatch for generated code, macro expansions, and wide interop shims,
+not a target.
 
 ### More than 5 params -- reach for `defstruct`
 

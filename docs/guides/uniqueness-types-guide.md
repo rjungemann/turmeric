@@ -130,12 +130,6 @@ moved in, and the parameter is mutable inside the body.
 > reference-counted) or a `:heap` struct (interior-mutable by declaration).
 > A `&Struct` receiver is rejected outright: `set! (.field s)` requires a
 > struct or an `rc<Struct>`.
->
-> Earlier revisions of this section called `^unique ^mut` "the
-> ownership-transfer equivalent of `&mut T`" and said such a parameter "may
-> mutate the value in place". Read plainly that promised caller-visible
-> mutation, which the language does not provide by this route; the wording is
-> corrected here.
 
 ```turmeric
 (defn increment! [^unique ^mut n : int] : ^unique int

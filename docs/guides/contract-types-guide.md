@@ -17,13 +17,11 @@ verified automatically at function boundaries and assignment sites.
 
 ## Why `#refine{...}`?
 
-Contract types used to be spelled with bare curly braces, `{ x : T | p }`.
-Bare `{...}` is now SRFI-105 curly-infix in every dialect (so `{a + b}`
-reads as `(+ a b)` in plain s-expression Turmeric, no `#lang sweet-exp`
-required), and contract types moved to the `#refine{...}` data-literal form
-alongside the rest of the `#`-prefixed family (`#map{...}`, `#set{...}`,
-`#row{...}`, `#r{...}`). The semantics are identical to the old form -- only
-the reader entry point changed.
+Bare `{...}` is SRFI-105 curly-infix in every dialect (so `{a + b}` reads as
+`(+ a b)` in plain s-expression Turmeric, no `#lang sweet-exp` required), so
+it can never mean a contract type. Contract types use the `#refine{...}`
+data-literal form, alongside the rest of the `#`-prefixed family
+(`#map{...}`, `#set{...}`, `#row{...}`, `#r{...}`).
 
 ---
 
@@ -36,9 +34,9 @@ the checks at every crossing point.
 
 | Approach | Where you write it | When it runs |
 |---|---|---|
-| `require!` macro (today) | Inside the function body | When execution reaches that line |
-| Contract type `:pre` (CT1) | On the `defn` declaration | Automatically at every call site |
-| Inline contract `#refine{ x : T \| p }` (CT1) | In the parameter or return type | At every use of that type |
+| `require!` macro | Inside the function body | When execution reaches that line |
+| Contract type `:pre` | On the `defn` declaration | Automatically at every call site |
+| Inline contract `#refine{ x : T \| p }` | In the parameter or return type | At every use of that type |
 
 Contract predicates are **ordinary Turmeric expressions** -- no special syntax beyond the
 `#refine{ x : T | p }` wrapper. They are **pure by default**; the elaborator enforces `#fx{}` on
@@ -167,8 +165,9 @@ defn example [v : (vec int)] : int
 Accept an untyped value and narrow it at runtime:
 
 ```turmeric no-check
+;; The #refine{...} on the return type inserts the runtime check on the
+;; returned value.
 (defn ensure-positive [x : any] : #refine{ y : int | (>= y 0) }
-  :contract (>= x 0)
   x)
 
 (defn pipeline [] : #refine{ y : int | (>= y 0) }
@@ -176,8 +175,9 @@ Accept an untyped value and narrow it at runtime:
 ```
 
 ```sweet-exp
+;; The #refine{...} on the return type inserts the runtime check on the
+;; returned value.
 defn ensure-positive [x : any] : #refine{ y : int | {y >= 0} }
-  :contract {x >= 0}
   x
 
 defn pipeline [] : #refine{ y : int | {y >= 0} }
@@ -269,14 +269,14 @@ binary as code written without contract annotations.
 
 ---
 
-## Error Codes
+## Failure Messages
 
-| Code | Message |
-|---|---|
-| `TUR_E0400` | Contract violated: `{predicate}` is false for value `{value}` |
-| `TUR_E0401` | Postcondition violated: `{predicate}` is false for result `{value}` |
-
-Run `tur explain TUR_E0400` for full diagnostic output with source location and predicate text.
+A violated check goes through `tur-contract-check` and the contract handler
+(panic by default). The message identifies the kind of check: a parameter or
+return `#refine{...}` reports `Contract violated`, `:pre` reports
+`Precondition failed`, and `:post` reports `Postcondition failed`. A contract
+predicate with side effects is rejected at compile time (`contract predicate
+has side effects; predicates must be pure`).
 
 ---
 
@@ -308,24 +308,11 @@ Use **contract types** when:
 
 ---
 
-## Implementation Phases
-
-Contract types are planned in four phases:
-
-| Phase | Goal |
-|---|---|
-| CT0 | Parse `#refine{ x : T \| p }` syntax; `TY_CONTRACT` type node; store `:pre`/`:post`/`:contract` on `FnDef` |
-| CT1 | Insert runtime checks at function entry, exit, let bindings, and `extern-c` boundaries |
-| CT2 | Propagate and simplify contracts through operations; subtype relation `#refine{ x : T \| p } <: T` |
-| CT3 | Eliminate provably-true checks at compile time; debug/release build switch |
-| CT4 | FFI contracts; `(cast x : T)` downcast from `any`; contract handler API; `tur explain` entries |
-
----
-
 ## See Also
 
 - [Error Handling Guide](error-handling-guide.md) -- `Result`, `Option`, `panic`, and today's contract macros
 - [C Integration Guide](c-integration-guide.md) -- FFI and `extern-c`
 - [Type Annotations Guide](type-annotations-guide.md) -- compound type syntax
 - [Reader Forms Guide](reader-forms-guide.md) -- bare `{...}` curly-infix and the `#refine{...}` data literal
-- [Advanced Type System Rationale](advanced-type-system-rationale.md) -- why contract types shipped and refinement types were deferred
+- [Advanced Type System Rationale](advanced-type-system-rationale.md) -- how contract types and refinement types layer together
+- [Refinement Types Guide](refinement-types-guide.md) -- static discharge of `#refine{...}` checks

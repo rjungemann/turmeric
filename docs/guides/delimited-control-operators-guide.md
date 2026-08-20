@@ -6,12 +6,14 @@ description: How shift/reset, shift0/reset0, call/cc, and escape differ -- promp
 
 # Delimited Control Operators: shift/reset vs shift0/escape
 
-Turmeric ships a family of delimited control operators: `shift`/`reset`,
-`shift0`/`reset0`, `call/cc`, and `escape` (plus the multi-shot `call/cc*` and
-the cloneable/serializable variants documented elsewhere). They look similar
-and share one runtime (`tur_cont`, one-shot delimited continuations backed by
-fiber-context save/restore), but they differ in two precise ways that decide
-which one you want. This guide explains those differences.
+Turmeric ships a family of control operators: the delimited `shift`/`reset`
+and `shift0`/`reset0`, and the undelimited `call/cc` and `escape` (plus the
+multi-shot `call/cc*` and the cloneable/serializable variants documented
+elsewhere). They look similar and share one continuation runtime (a bounded
+fiber-frame snapshot fast path in `tur_cont`, plus the heap-reified CPS
+substrate in `src/runtime/cps_rt.h` for unbounded capture), but they differ
+in precise ways that decide which one you want. This guide explains those
+differences.
 
 ## Overview
 
@@ -29,17 +31,19 @@ the answer to two questions:
 1. **On capture, is the enclosing delimiter consumed (popped) or left in place?**
 2. **On resuming `k`, is the delimiter re-installed around the resumed work?**
 
-`call/cc` and `escape` are sugar layered on top of `shift` and `shift0`
-respectively, specialized for the common "escape / early return" use case.
+`call/cc` and `escape` are **undelimited**: they capture against an implicit
+program-wide prompt installed around `main`, so they need no explicit
+`reset`/`reset0` boundary at all. They are specialized for the common
+"escape / early return" use case.
 
 ## The two axes
 
-|            | Pops delimiter on capture? | Re-installs delimiter on resume? | Value of `(k v)` surfaces at ... |
-|------------|----------------------------|----------------------------------|-----------------------------------|
-| `shift` / `reset`   | No  | Yes | the capture (`shift`) site |
-| `shift0` / `reset0` | Yes | No  | the boundary (`reset0`) |
-| `call/cc` (= `shift` sugar)  | No  | Yes | the `call/cc` site |
-| `escape` (= `shift0` sugar)  | Yes | No  | the boundary |
+|            | Delimiter | Re-installs prompt on resume? | Value of `(k v)` surfaces at ... |
+|------------|-----------|-------------------------------|-----------------------------------|
+| `shift` / `reset`   | nearest `reset`  | Yes | the capture (`shift`) site |
+| `shift0` / `reset0` | nearest `reset0` (popped on capture) | No  | the boundary (`reset0`) |
+| `call/cc` (undelimited)  | implicit program-wide prompt | -- (one-shot upward) | the `call/cc` site |
+| `escape` (undelimited, abort flavor)  | implicit program-wide prompt | No | the `escape` site |
 
 The remaining two corners of the lattice -- Felleisen's `control`/`prompt` and
 `control0`/`prompt0` -- differ in how *composed* continuations stack their
@@ -109,64 +113,60 @@ defn is-zero [n :int] :bool
       n)
 ```
 
-## `call/cc` -- delimited capture, value at the capture site
+## `call/cc` -- undelimited capture, value at the capture site
 
-`call/cc` is `shift`-flavored sugar:
-
-```
-(call/cc f)  ==>  (reset (shift k (f k)))
-```
-
-It allocates a one-shot continuation for "the rest of the computation from the
-`call/cc` site up to the boundary" and passes it to `f`:
+`call/cc` performs real undelimited capture against the implicit program-wide
+prompt -- no enclosing `reset` is required, and capture depth is unbounded
+(the heap-reified CPS substrate, not the 16-frame fiber fast path). `f` is
+typed `cont<T> -> T`; it receives a one-shot continuation handle for "the
+rest of the program from the `call/cc` site":
 
 1. If `f` returns normally, that value is the value of the `call/cc` expression
-   (the captured `k` is dropped).
+   (the captured `k` is dropped -- `k` defaults to `^unique`, one-shot with
+   drop allowed; annotate `^linear k` to require exactly-once use).
 2. If `f` (or anything it calls) invokes `(k v)`, control returns **to the
    `call/cc` site** with `v` as its value; whatever `f` was doing is abandoned.
 
-Because it is built on `shift`, the resumed continuation is re-delimited, and
-the value surfaces at the capture site -- not the boundary.
-
-> **Delimited, not undelimited.** Unlike Scheme's top-level
-> `call-with-current-continuation`, Turmeric's `call/cc` captures only up to the
-> nearest enclosing `reset`. Use `call/cc*` for the multi-shot cloneable
-> variant.
-
-## `escape` -- abort to the boundary
-
-`escape` is the abort-flavored sibling, lowered via `shift0`:
-
-```
-(escape f)  ==>  (reset (shift0 k (f k)))
+```turmeric
+;; (k 41) abandons the pending (+ 100 ...); call/cc yields 41, so this is 42.
+(defn t-capture [] : int
+  (+ 1 (call/cc (fn [k] (+ 100 (k 41))))))
 ```
 
-The difference from `call/cc` is *where the value surfaces*: invoking `(k v)`
-**unwinds to the boundary** and produces `v` from the *boundary* (the `reset`),
-not the `escape` site. Nothing is re-delimited on the way out. This is the
-classic non-local exit, matching C `longjmp`, Common Lisp `return-from`, Java
-`throw`, and OCaml `discontinue`.
+This matches Scheme's top-level `call-with-current-continuation`, restricted
+to one-shot upward use. Use `call/cc*` for the multi-shot cloneable variant.
+
+## `escape` -- undelimited abort
+
+`escape` is the abort-flavored sibling: the same undelimited capture as
+`call/cc`, but invoking `(k v)` unwinds to the `escape` site **without
+re-installing a prompt** (the `shift0`-style abort flavor). An intervening
+explicit `(reset ...)` does *not* delimit it -- control unwinds straight past
+it to the `escape` site. This is the classic non-local exit, matching C
+`longjmp`, Common Lisp `return-from`, Java `throw`, and OCaml `discontinue`.
+For one-shot upward use, `call/cc` and `escape` behave identically (the
+captured context is abandoned either way).
 
 Reach for `escape` when you want to bail out of deep recursion with a value and
 *not* resume -- early return without manual `Option`/`Result` plumbing:
 
 ```turmeric
-;; Conceptual: exit produces the value at the boundary, abandoning the rest.
+;; exit produces the value at the escape site, abandoning the rest.
 (defn first-negative [xs : list<int>] : int
   (escape (fn [exit]
     (for [x xs]
       (when (< x 0)
-        (exit x)))   ; unwinds straight to the boundary with x
+        (exit x)))   ; unwinds straight to the escape site with x
     0)))             ; no negative found
 ```
 ```sweet-exp
-;; Conceptual: exit produces the value at the boundary, abandoning the rest.
+;; exit produces the value at the escape site, abandoning the rest.
 defn first-negative [xs :list<int>] :int
   escape
     fn [exit]
       for [x xs]
         when <(x 0)
-          exit(x)   ; unwinds straight to the boundary with x
+          exit(x)   ; unwinds straight to the escape site with x
       0            ; no negative found
 ```
 
@@ -174,22 +174,16 @@ Where `shift`/`call/cc` is for splicing a captured slice back into a
 computation (possibly composed, possibly more than once with `call/cc*`),
 `escape` is purely abortive: you jump *out* and you do not re-enter.
 
-> **Implementation status.** `shift`/`reset` and `shift0`/`reset0` are
-> runtime-backed today. `call/cc`/`escape` are delimited sugar over them; the
-> full early-exit lowering (`escape` via `shift0`, an enforced enclosing
-> boundary) is tracked in
-> [`call-cc-completion-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/call-cc-completion-plan.md). Until
-> that lands, treat the semantics above as the contract and check the plan for
-> the current stub caveats.
+## Boundaries: delimited vs undelimited
 
-## The boundary requirement
+`shift`/`reset` and `shift0`/`reset0` are **delimited**: a capture extends
+only to the nearest enclosing `reset`/`reset0`. A captured `k` cannot escape
+past its boundary; calling `k` after the boundary has already returned is a
+defined runtime error, not undefined behavior.
 
-All four operators are **delimited**: a capture extends only to the nearest
-enclosing `reset`/`reset0`, never to the top of the program. A `call/cc` or
-`escape` with no enclosing boundary is a compile-time error (`TUR-E0705` once
-the completion plan lands) rather than an implicit whole-program capture. A
-captured `k` cannot escape past its boundary; calling `k` after the boundary
-has already returned is a defined runtime error, not undefined behavior.
+`call/cc` and `escape` are **undelimited**: they capture against the implicit
+program-wide prompt, need no enclosing boundary, and are not stopped by an
+intervening explicit `reset`.
 
 ## Decision guide
 
@@ -197,8 +191,8 @@ has already returned is a defined runtime error, not undefined behavior.
 |---|---|
 | Compose a captured continuation, resume inside a fresh scope, lower an effect handler | `shift` / `reset` |
 | Reach *past* the immediate prompt into an outer one (layered handlers, multi-prompt control) | `shift0` / `reset0` |
-| Capture once, resume with the value surfacing at the capture site | `call/cc` |
-| Non-local early exit -- bail out with a value, surface it at the boundary, do not resume | `escape` |
+| Capture the rest of the program with no explicit boundary, resume once at the capture site | `call/cc` |
+| Non-local early exit -- bail out with a value, surface it at the `escape` site, do not resume | `escape` |
 | Resume a captured continuation *more than once* (backtracking, generators) | `call/cc*` (cloneable) |
 | Persist or migrate a suspended computation across processes | `serial-shift` / `serial-reset` |
 
@@ -238,7 +232,7 @@ have been the root cause of silent miscompiles:
    `emit_value(body)`, the enclosed `shift` collapses to "return its operand"
    and the reset yields the wrong value (the abortive continuation is never
    discarded). The direct backend instead lowers a branch-bearing base reset
-   through a `setjmp`/`longjmp` escape (`emit_cps_reset_escape`) to the
+   through a `setjmp`/`longjmp` escape path (`emit_cps_reset`) to the
    innermost reset landing.
 
 Because the direct and CPS backends lower these shapes independently, they are
@@ -259,7 +253,6 @@ rather than a fallback.
 - [Checkpointing Guide](checkpointing-guide.md) -- Cloneable continuations for persistent workflows
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- Capturing and resuming across process boundaries
 - [Compiler Internals](compiler-internals.md) -- Effect lowering and the CPS pass
-- [`call-cc-completion-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/call-cc-completion-plan.md) -- The plan finishing `call/cc`/`escape`
 - [Bibliography](bibliography.md#delimited-continuations) -- Papers behind these operators
 
 ## References

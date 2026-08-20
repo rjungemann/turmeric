@@ -57,15 +57,17 @@ Key files in the Turmeric repository:
 |---|---|
 | `src/web/wasm_glue.h` | Exported C API (`turi_wasm_init`, `turi_wasm_eval`, etc.) |
 | `src/web/wasm_glue.c` | Implementation of the glue layer |
-| `src/CMakeLists.txt` lines 282-365 | How the `tur_wasm` CMake target is defined |
-| `web/main.js` | Reference JS integration using the WASM module |
+| `src/CMakeLists.txt` (`add_custom_target(tur_wasm ...)`, ~line 1499) | How the `tur_wasm` CMake target is defined |
+| `web/public/eval-worker.js` | Reference JS integration using the WASM module |
 
 The `emcc` link command in `CMakeLists.txt` exports these functions:
 
 ```
 _turi_wasm_init  _turi_wasm_reset  _turi_wasm_shutdown  _turi_wasm_eval
-_turi_wasm_eval_ex  _turi_wasm_version  _turi_wasm_format  _turi_doc_lookup
-_malloc  _free
+_turi_wasm_eval_ex  _turi_wasm_version  _turi_wasm_format
+_turi_wasm_lsp_request  _turi_wasm_lsp_flush  _turi_wasm_lsp_reset
+_turi_wasm_set_lang  _turi_wasm_get_lang  _turi_wasm_lang_registry
+_turi_doc_lookup  _turi_type_of  _turi_explain  _malloc  _free
 ```
 
 And these runtime methods:
@@ -143,8 +145,10 @@ cp build-wasm/wasm/turmeric.wasm hello-wasm/
       var input  = '(+ 1 2)';
 
       // Strings must be copied into WASM linear memory before passing to C.
-      // allocateUTF8 mallocs a buffer and writes the NUL-terminated string.
-      var ptr    = Module.allocateUTF8(input);
+      // Malloc a buffer and write the NUL-terminated UTF-8 string into it.
+      var len    = Module.lengthBytesUTF8(input) + 1;
+      var ptr    = Module._malloc(len);
+      Module.stringToUTF8(input, ptr, len);
 
       // _turi_wasm_eval returns a malloc'd char* with the result.
       var resPtr = Module._turi_wasm_eval(ptr);
@@ -154,9 +158,10 @@ cp build-wasm/wasm/turmeric.wasm hello-wasm/
 
       document.getElementById('output').textContent = result;
 
-      // Always free the input buffer. The result pointer is owned by the
-      // runtime and must NOT be freed by the caller.
+      // Free the input buffer, and the result buffer too -- the eval result
+      // is a malloc'd copy the caller owns.
       Module._free(ptr);
+      if (resPtr) Module._free(resPtr);
     });
   </script>
 </body>
@@ -165,8 +170,9 @@ cp build-wasm/wasm/turmeric.wasm hello-wasm/
 
 Why these helpers are needed:
 
-- **`allocateUTF8(str)`** -- allocates WASM memory and writes the JS string as
-  UTF-8, returning a pointer. You must `_free` this pointer when done.
+- **`lengthBytesUTF8(str)` + `_malloc` + `stringToUTF8(str, ptr, len)`** --
+  allocate WASM memory and write the JS string into it as NUL-terminated
+  UTF-8. You must `_free` the pointer when done.
 - **`UTF8ToString(ptr)`** -- reads a NUL-terminated C string from WASM memory
   back into a JS string.
 - **`Module._turi_wasm_eval`** -- note the leading underscore; Emscripten
@@ -252,11 +258,14 @@ Replace the inline `<script>` block from Project A with:
     Module._turi_wasm_init();
 
     var src = await fetch('program.tur').then(function(r) { return r.text(); });
-    var ptr = Module.allocateUTF8(src);
+    var len = Module.lengthBytesUTF8(src) + 1;
+    var ptr = Module._malloc(len);
+    Module.stringToUTF8(src, ptr, len);
     var res = Module._turi_wasm_eval(ptr);
 
     document.getElementById('output').textContent = Module.UTF8ToString(res);
     Module._free(ptr);
+    if (res) Module._free(res);
   });
 </script>
 ```
@@ -282,7 +291,9 @@ error handling use `turi_wasm_eval_ex`:
 var resultPtrAddr = Module._malloc(4);
 var errorPtrAddr  = Module._malloc(4);
 
-var inputPtr = Module.allocateUTF8(src);
+var inputLen = Module.lengthBytesUTF8(src) + 1;
+var inputPtr = Module._malloc(inputLen);
+Module.stringToUTF8(src, inputPtr, inputLen);
 var status   = Module._turi_wasm_eval_ex(inputPtr, resultPtrAddr, errorPtrAddr);
 
 // Read the pointer values out of WASM memory.
@@ -291,10 +302,10 @@ var errorPtr  = Module.getValue(errorPtrAddr,  'i32');
 
 if (status === 0) {
   console.log('result:', Module.UTF8ToString(resultPtr));
-  Module._turi_wasm_free_string(resultPtr);
+  Module._free(resultPtr);
 } else {
   console.error('error:', Module.UTF8ToString(errorPtr));
-  Module._turi_wasm_free_string(errorPtr);
+  Module._free(errorPtr);
 }
 
 Module._free(inputPtr);
@@ -302,9 +313,10 @@ Module._free(resultPtrAddr);
 Module._free(errorPtrAddr);
 ```
 
-Note: both `*out_result` and `*out_error` must be freed with
-`_turi_wasm_free_string` (not `_free`) because they are allocated by the glue
-layer with its own allocator.
+Note: both `*out_result` and `*out_error` are malloc'd strings the caller
+owns; free each non-NULL one with `_free`. (The C-side helper
+`turi_wasm_free_string` is a plain `free()` and is not in the exported
+function list, so `_free` is the way to release them from JS.)
 
 ---
 
@@ -366,10 +378,13 @@ export async function init() {
 
 export async function evalCode(src) {
   var mod = await init();
-  var ptr = mod.allocateUTF8(src);
+  var len = mod.lengthBytesUTF8(src) + 1;
+  var ptr = mod._malloc(len);
+  mod.stringToUTF8(src, ptr, len);
   var rp  = mod._turi_wasm_eval(ptr);
   var out = mod.UTF8ToString(rp);
   mod._free(ptr);
+  if (rp) mod._free(rp);
   return out;
 }
 
@@ -457,7 +472,9 @@ function or macro. It backs the doc panel in the web REPL.
 ```js
 async function docLookup(name) {
   var mod = await init();           // reuse the singleton from Project C: A Vite-Based Web App
-  var ptr = mod.allocateUTF8(name);
+  var len = mod.lengthBytesUTF8(name) + 1;
+  var ptr = mod._malloc(len);
+  mod.stringToUTF8(name, ptr, len);
   var rp  = mod._turi_doc_lookup(ptr);
   var doc = rp ? mod.UTF8ToString(rp) : '(no documentation)';
   mod._free(ptr);
@@ -486,7 +503,7 @@ and rebuild the WASM module to see the changes.
 | `_turi_wasm_init is not a function` | Missing `-sEXPORTED_FUNCTIONS` flag | Re-run `just wasm` with the correct CMake configuration |
 | `TypeError: WebAssembly.instantiate` fails | Server sends `.wasm` as `text/plain` | Configure MIME type `application/wasm` on your server |
 | Page hangs on first call | pthread pool not yet started | Call `_turi_wasm_init` inside the `.then()` callback, not at top level |
-| `allocateUTF8 is not a function` | Missing `EXPORTED_RUNTIME_METHODS` | Ensure `stringToUTF8,UTF8ToString,lengthBytesUTF8` are in the link flags |
+| `stringToUTF8 is not a function` | Missing `EXPORTED_RUNTIME_METHODS` | Ensure `stringToUTF8,UTF8ToString,lengthBytesUTF8` are in the link flags (`allocateUTF8` is NOT exported -- use `_malloc` + `stringToUTF8`) |
 | `.wasm` file not found (404) | Emscripten looks for `.wasm` next to `.js` | Copy both files to the same directory; do not rename them |
 
 ---

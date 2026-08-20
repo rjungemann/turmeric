@@ -13,8 +13,9 @@ facade, the codegen'd ClassDB facade, the editor plugin, the typed
 `godot-call` variants, and the known gaps you'll trip over while the
 binding matures.
 
-The plan in `docs/upcoming/v1/` is the source of truth for *what's
-coming*; this guide is the source of truth for *what works today*.
+The plans in `docs/upcoming/hold/` (the `godot-binding-*` plans) are the
+source of truth for *what's coming*; this guide is the source of truth
+for *what works today*.
 
 ---
 
@@ -221,6 +222,12 @@ completion-result Dictionary:
 The error message gets the `TUR-E####` code prefixed. Notes/help drop
 in v1; only errors and warnings reach the editor's error list panel.
 
+Unknown calls in eval mode surface a `TUR-W0040` warning at `_validate`
+time, so a typo shows up in the editor's error list before the script is
+attached. (The runtime-dispatch fallback is preserved for legitimately
+late-bound natives, so it's a warning, not a hard error.) See
+[docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md).
+
 ---
 
 ## Debugger
@@ -403,13 +410,13 @@ friends.
    stack-level *members* and *instance*, `_debug_get_globals`, and
    `_debug_get_current_stack_info`.
 
-2. **Handle types are opt-in, not enforced.** The bridge now emits a
+2. **Handle types are opt-in, not enforced.** The bridge emits a
    `defopaque <Class>Handle` newtype per allow-listed class (plus
    `Vec2Handle` / `Vec3Handle` / `ColorHandle` / `Rect2Handle` for the
    arena aggregates), and the marshaller recognizes them. But the
-   prelude and generated facade still trade in bare `:int` to compose
+   prelude and generated facade trade in bare `:int` to compose
    with each other, so by default a mistyped opaque arg (a Vector2
-   handle where an Object is expected) is still only caught at runtime
+   handle where an Object is expected) is only caught at runtime
    by `(godot-call)`'s shape check. Reach for the newtypes in your own
    script signatures when you want the compile-time distinction;
    unwrap with `(:: h :int)` at the call boundary.
@@ -421,25 +428,12 @@ friends.
    tactically as demos demand; the long tail is editor-internals /
    audio-server / 3D classes the average 2D game doesn't touch.
 
-5. **Some Variant types still don't cross the boundary.** Inspector
-   exports and prop-get/set now cover `float` / `int` / `bool` /
+5. **Some Variant types don't cross the boundary.** Inspector
+   exports and prop-get/set cover `float` / `int` / `bool` /
    `string` / `vec2` / `vec3` / `color` / `rect2` / `object` (Resource
    and Node refs). `Transform2D`, `Transform3D`, `Array`, and
    `Dictionary` are not yet exportable as inspector defaults (they lack
    arena builders on that path).
-
-### Recently closed
-
-- **Debugger** landed (see gap 1 for what's still stubbed).
-- **Eval-mode unknown calls** now surface a `TUR-W0040` warning at
-  `_validate` time instead of only firing at runtime -- a typo shows up
-  in the editor's error list before the script is attached. (The
-  runtime-dispatch fallback is preserved for legitimately late-bound
-  natives, so it's a warning, not a hard error.) See
-  [docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md).
-- **Inspector property types** expanded past the primitives (see gap 5).
-- **`signals.gd`** in `examples/spike/` parses again (`var sigs: Array =`
-  landed).
 
 ---
 

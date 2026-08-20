@@ -1,4 +1,7 @@
-Here's the full design -- open it in a browser to experience it fully. Here's what went into it:
+# Visual Design Notes -- web site styling
+
+Notes on the visual direction behind the Turmeric web pages (`web/` --
+see `web/styles.css`, `web/site.css`).
 
 **Aesthetic direction -- *Dark spice market***: Very deep, warm charcoal blacks with rich amber/gold as the sole accent. The Cormorant Garamond serif wordmark gives it an editorial, almost alchemical feel -- like a language that takes itself seriously. JetBrains Mono for code, DM Sans for UI chrome.
 

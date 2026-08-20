@@ -66,7 +66,7 @@ Opaques are *not* for:
 (defopaque Name :rep-type)
 (defopaque Name :rep-type :linear)
 (defopaque Name :rep-type :affine)
-(defopaque Name :rep-type :sealed)          ; experiment; see below
+(defopaque Name :rep-type :sealed)          ; see below
 (defopaque Name :rep-type :affine :sealed)  ; attributes compose
 ```
 
@@ -147,11 +147,9 @@ Conventions worth following:
 
 ## Sealing an opaque: `:sealed`
 
-> **Since 0.34.0**, `:sealed` enforces unconditionally. It shipped as the
-> `sealed-opaque` experiment in 0.32.2, where `--enable=sealed-opaque` was
-> needed to make it do anything; that flag is now a no-op that warns
-> (`TUR-W0063`), so a `build.tur` still naming it keeps working. Only code that
-> deliberately wrote `:sealed` is affected by the change. See
+> `:sealed` enforces unconditionally. `--enable=sealed-opaque` (the retired
+> experiment gate) is a no-op that warns (`TUR-W0063`), so a `build.tur` still
+> naming it keeps working. See
 > [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/sealed-opaque-plan.md).
 
 `::` is a **coercing** cast, not a checked one. That means a plain
@@ -270,12 +268,20 @@ and wraps back:
   (:: (+ (:: c :float) 273.15) :Kelvin))
 ```
 
-## Known limitations
+## Phantom type parameters
 
-`defopaque` does not currently accept type parameters --
-`(defopaque Box[T] :int)` is rejected. The same effect can be achieved
-with a phantom-typed `defstruct` today; the open ticket is
-[`docs/archive/history/parameterized-defopaque.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/parameterized-defopaque.md).
+`defopaque` accepts an optional type-parameter vector between the name and
+the base type:
+
+```turmeric
+(defopaque NonEmpty [A] :int)
+(defopaque Const [r a] :int)
+```
+
+The carrier stays the declared base type (always `int64_t` at the C
+level), but the newtype becomes a type constructor -- it can be spelled
+`(NonEmpty A)` in annotations and track an element or index type at the
+type level without storing it.
 
 ## Real-world examples
 
@@ -294,7 +300,7 @@ with a phantom-typed `defstruct` today; the open ticket is
 | [`stdlib/atomic.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/atomic.tur) | `AtomicCell` | `:ptr<void>` -- pointer to a heap-allocated atomic word |
 | [`stdlib/stm.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/stm.tur) | `TVar` | `:ptr` -- transactional-variable handle, distinct from the boxed `:ptr` values it holds |
 | [`stdlib/timer.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/timer.tur) | `TimerId` | `:int` -- branded handle returned by `reactor-add-timer` |
-| [`stdlib/fs.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/fs.tur) | `StatInfo`, `TmpFile` | `:int` -- stat block vs temp-file handle; can no longer be transposed |
+| [`stdlib/fs.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/fs.tur) | `StatInfo`, `TmpFile` | `:int` -- stat block vs temp-file handle; cannot be transposed |
 | [`stdlib/io.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/io.tur) | `FileHandle`, `FileStream`, `DirListing`, `FileSystem` | `:ptr<void>` -- `FileHandle` is `:linear`; `FileStream` wraps `FILE*` |
 | [`stdlib/ref.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/ref.tur) | `RefHandle` | `:int` -- heap pointer from `ref-new`, distinct from the `Ref` struct |
 

@@ -1,9 +1,8 @@
 # `tur compile` and `tur link` -- the compile/link split
 
-`tur build` has always been a single `cc` call that compiles **and** links in
+A monolithic `tur build` is a single `cc` call that compiles **and** links in
 one step. That call is uncacheable (ccache marks a multi-input compile+link
-invocation "Uncacheable") and re-compiles the autolinked runtime sources from
-scratch on every build. The `tur compile` + `tur link` pair splits that into a
+invocation "Uncacheable"). The `tur compile` + `tur link` pair splits it into a
 cacheable object compile followed by a cheap link -- the same mental model you
 already have from `cc -c` + `cc`.
 
@@ -79,24 +78,33 @@ Under `--split-build`, a single-file build runs the real `cmd_compile` then
 dir and cleaned up afterward), so `tur build`, `tur compile`, and `tur link`
 share one implementation and cannot drift.
 
-## `tur build --runtime=lib` -- link the prebuilt runtime
+## `tur build --runtime=` -- how the runtime gets linked
 
-By default a program that uses runtime facilities (maps, arc, reactor, ...)
-*autolinks the bare `src/runtime/*.c` sources* -- which means `cc` **recompiles**
-`hamt.c` (etc.) on every build. `--runtime=lib` links the prebuilt `libturi.a`
-archive instead, turning "recompile the runtime per build" into "link a static
-archive built once." Static linking dead-strips to only the referenced TUs, so
-the binary is unchanged.
+A program that uses runtime facilities (maps, arc, reactor, ...) needs the
+`src/runtime/*.c` sources linked in. Three modes:
+
+- `--runtime=auto` (the default) -- link the lean, non-sanitized
+  `libturt_runtime.a` archive when it is locatable, else transparently fall
+  back to recompiling the bare runtime sources. It never links the (possibly
+  ASan) full `libturi.a` on its own, so a default build is behaviorally
+  identical to the source path.
+- `--runtime=lib` -- force the archive link (lean archive preferred, else
+  `libturi.a`), turning "recompile the runtime per build" into "link a static
+  archive built once." Static linking dead-strips to only the referenced TUs,
+  so the binary is unchanged.
+- `--runtime=source` -- force recompiling the bare runtime sources
+  (`cc` recompiles `hamt.c` etc. on every build).
 
 ```
-tur build --runtime=lib foo.tur -o foo     # link libturi.a
-tur build --runtime=source foo.tur -o foo  # autolink+recompile sources (default)
+tur build --runtime=lib foo.tur -o foo     # force the archive link
+tur build --runtime=source foo.tur -o foo  # force autolink+recompile sources
 ```
 
-It also works with `tur compile` (the `.link` sidecar then records the runtime
-link) and composes with `--split-build`. `TUR_RUNTIME=lib` in the environment
-seeds the same default for every build (a CLI `--runtime=` flag still wins), so
-CI can flip the whole suite over with one env var.
+The mode also applies to `tur compile` (the `.link` sidecar then records the
+runtime link) and composes with `--split-build`.
+`TUR_RUNTIME=auto|lib|source` in the environment seeds the default for every
+build (a CLI `--runtime=` flag still wins), so CI can flip the whole suite
+over with one env var.
 
 ### Which archive gets linked
 

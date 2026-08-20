@@ -145,7 +145,7 @@ lookups within one request do not re-`getpeername(2)`.
 ### mw-static (MW2)
 
 Defers to `next` first; only serves a file when `next` returned 404
-(the default no-route signal from `router-mw`). The file path is the
+(the default no-route signal from `router-dispatch`). The file path is the
 request path joined onto the configured `root-dir`; any `..` segment
 is rejected as a path-traversal guard.
 
@@ -398,13 +398,9 @@ but not yet in stdlib:
   cancellation primitive, and the async path needs a `with-deadline`
   combinator before this can ship cleanly.
 - **`mw-recover`** -- catch a downstream panic and respond 500. The
-  primitive `(catch-unwind thunk)` exists at the surface level but
-  its current lowering does not propagate the closure env -- the
-  thunk cannot capture `next`. Tracked in
-  [`src/compiler/emit_expr.c`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/emit_expr.c) under
-  `EX_CATCH_UNWIND`.
-- **Compression middleware** -- spun out into its own plan
-  [`docs/archive/history/httpd-compression-zlib-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/httpd-compression-zlib-spice-plan.md).
+  primitive `(catch-unwind thunk)` propagates closure captures (the
+  thunk can capture `next`), so the blocker is gone; the middleware
+  itself has not been written.
 
 ## See also
 

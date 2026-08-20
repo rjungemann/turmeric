@@ -6,36 +6,37 @@ description: VS Code extension installation and configuration
 
 # VS Code Extension for Turmeric
 
-The Turmeric VS Code extension provides syntax highlighting for `.tur` files,
-including support for both standard S-expression syntax and sweet-exp
-(indentation-based) syntax.
+The Turmeric VS Code extension provides syntax highlighting for `.tur` files
+(both standard S-expression syntax and sweet-exp indentation-based syntax),
+document formatting via `tur format`, and a language client that launches the
+compiler's built-in language server (`tur lsp`).
 
-The extension lives in `vscode-syntax-ext/` at the repo root and ships a
-pre-built `.vsix` package.
+The extension lives in `vscode-syntax-ext/` at the repo root.
 
 ## Installation
 
-### From the pre-built package
-
-```sh
-cd vscode-syntax-ext
-code --install-extension turmeric-syntax-0.1.0.vsix
-```
-
-### From source (development)
+### From source
 
 ```sh
 cd vscode-syntax-ext
 
 # Option A: copy to extensions directory
-mkdir -p ~/.vscode/extensions/turmeric-syntax-0.1.0
-cp -r * ~/.vscode/extensions/turmeric-syntax-0.1.0/
+mkdir -p ~/.vscode/extensions/turmeric-syntax-0.2.0
+cp -r * ~/.vscode/extensions/turmeric-syntax-0.2.0/
 
 # Option B: symlink for live editing
 ln -s "$(pwd)" ~/.vscode/extensions/turmeric-syntax-dev
 ```
 
 Reload VS Code after either option.
+
+### From a packaged `.vsix`
+
+Build the package (see "Building a `.vsix`" below), then:
+
+```sh
+code --install-extension turmeric-syntax-0.2.0.vsix
+```
 
 ## Features
 
@@ -55,6 +56,19 @@ Once installed, any `.tur` file is automatically highlighted:
 - Bracket pair colorization and auto-close for `()`, `[]`, `{}`
 - Comment toggle with `Cmd+/` (`;` for line comments)
 - Auto-indentation increases after opening brackets and control forms
+
+### Formatting
+
+The extension registers a document formatter that pipes the buffer through
+`tur format` (requires `tur` on `PATH`). Use the standard Format Document
+command, the extension's "Format Turmeric Document" command, or enable
+`editor.formatOnSave` for the `[turmeric]` language.
+
+### Language server
+
+The extension launches `tur lsp` for `.tur` files (diagnostics, hover docs,
+go-to-definition). The `turmeric.serverPath` setting (default `"tur"`)
+points it at the executable to use.
 
 ## Recommended VS Code settings
 
@@ -92,9 +106,10 @@ Once installed, any `.tur` file is automatically highlighted:
 - Sweet-exp detection is heuristic (indentation patterns); a full parser
   would be needed for perfect accuracy.
 - Macro expansions are not highlighted differently from regular calls.
-- No LSP (IntelliSense, go-to-definition, hover docs) yet -- planned for Phase 2.
+- The language server requires a `tur` binary on `PATH` (or a
+  `turmeric.serverPath` setting pointing at one).
 
-## Rebuilding the `.vsix`
+## Building a `.vsix`
 
 ```sh
 cd vscode-syntax-ext
@@ -108,4 +123,5 @@ vsce package
 - `vscode-syntax-ext/` -- Extension source
 - `vscode-syntax-ext/syntaxes/turmeric.tmLanguage.json` -- TextMate grammar
 - `vscode-syntax-ext/language-configuration.json` -- Bracket / comment config
-- [formatter-guide.md](formatter-guide.md) -- `tur format` CLI (format-on-save planned)
+- [formatter-guide.md](formatter-guide.md) -- the `tur format` CLI the
+  extension's formatter shells out to

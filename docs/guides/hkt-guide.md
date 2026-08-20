@@ -163,8 +163,11 @@ __bind_option(opt fn([x] __opt_some({x * 2})))
 
 ## Container Values at Runtime
 
-HKT container values (like `Option<int>`) are stored as opaque `int64_t` handles.
-Use inline C blocks to allocate and dereference them:
+A hand-rolled HKT container (like the `__opt_*` Option used throughout this
+guide) can be represented as an opaque `int64_t` handle. Use inline C blocks
+to allocate and dereference such handles (built-in containers such as
+`Option`/`Result` use the by-value monomorphized ABI instead -- see the
+[monomorphization ABI guide](monomorphization-abi-guide.md)):
 
 ```turmeric
 (defn __opt_some [x] : int
@@ -657,7 +660,7 @@ let you control that step:
 | Variable | Default | Effect |
 |---|---|---|
 | `CC` | `cc` | C compiler executable |
-| `TUR_CC_FLAGS` | `-O2 -std=c99 -Wall` | Flags passed to every `cc` invocation |
+| `TUR_CC_FLAGS` | `-O2 -std=c99 -Wall -fno-strict-aliasing` | Flags passed to every `cc` invocation |
 
 Examples:
 
@@ -689,32 +692,26 @@ BENCHMINIT=10000 ./tests/run-bench.sh # increase minimum iterations
 
 Results are written to `tests/benchmarks/output/`.
 
-### Planned: `-O` monomorphization flag
+### Monomorphization
 
-> **Status: planned, not yet implemented.**
-
-In a future release, passing `-O` to `tur build` will trigger
-**monomorphization**: the compiler will specialise each typeclass method call
-for the concrete type known at the call site, eliminating the dictionary
-indirection entirely:
-
-```sh
-# planned syntax -- not yet available
-tur build -O app.tur -o app
-```
-
-Under `-O`, a call like `.fmap opt f` where `opt` is a known `option` container
-is lowered directly to `__fmap_option(opt, f)` with no dictionary lookup.
-Dictionary passing remains the default and is safe for all cases;
-`-O` is intended as a manual hot-path annotation for tight loops where the
-profiler shows typeclass dispatch is a bottleneck.
+There is no separate `-O` flag for this: the compiler monomorphizes by
+default. The elaborator specialises polymorphic defns and by-value HKT
+instance methods per concrete type at each call site, emitting
+`__spec__`-suffixed symbols (e.g. `Functor_fmap__spec__Option__int`)
+with no dictionary indirection on the specialised path. Dictionary
+passing remains the mechanism for the residual cases that have no
+by-value rewrite (see the
+[monomorphization ABI guide](monomorphization-abi-guide.md) for the
+full model, the spec-symbol naming rules, and the remaining carrier
+bridge).
 
 ## Recursive Types
 
 Turmeric supports self-referential and mutually-recursive `defdata`/`defstruct`
-definitions. Because all user-defined type values are stored as opaque `int64_t`
-pointers, recursive field types require no special C-level treatment -- the
-elaborator simply recognises the type name and records it as `TY_INT`.
+definitions. Recursive `defdata` payloads are heap-boxed and referenced as
+opaque `int64_t` pointers, so recursive field types require no special
+C-level treatment -- the elaborator recognises the type name and records the
+field as the pointer-width carrier.
 
 ### Self-referential ADTs
 

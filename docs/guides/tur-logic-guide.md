@@ -1,14 +1,16 @@
 ---
-title: tur/logic — Logic Programming Guide
+title: tur/logic -- Logic Programming Guide
 category: Advanced Control Flow
 description: How to use and extend tur/logic for miniKanren-style relational programming in Turmeric
 ---
 
-# `tur/logic` — Logic Programming Guide
+# `tur/logic` -- Logic Programming Guide
 
 `tur/logic` provides miniKanren-style logic programming: unification, logic
 variables, goals, and a backtracking search engine.  The module lives in
-`stdlib/logic.tur` and has no dependencies outside the standard C allocator.
+`stdlib/logic.tur` and is pure Turmeric (no inline-C): terms, substitutions,
+and the solution stream are `defdata` sum types, so the engine runs identically
+under the compiled path and the tree-walking interpreter.
 
 ---
 
@@ -41,17 +43,17 @@ The key primitives are:
 
 ```turmeric
 (import tur/logic :refer [term-int term-var term-nil term-pair
-                           lvar-next subs-empty
+                           subs-empty
                            lequal succeed fail conjoined disjoined fresh
                            run-logic first-state reify-walk
-                           term-int-val term-tag logic-walk])
+                           term-int-val logic-walk bt-length])
 
 ;; Q: is 5 equal to 5?
 (let [results (run-logic 1 (lequal (term-int 5) (term-int 5)))]
   (println (bt-length results)))   ; => 1
 
 ;; Q: what value does x have if x == 7?
-(let [x      (term-var (lvar-next))
+(let [x      (term-var 0)
       goal   (lequal x (term-int 7))
       result (run-logic 1 goal)
       walked (reify-walk x result)]
@@ -59,16 +61,16 @@ The key primitives are:
 ```
 ```sweet-exp
 import tur/logic :refer [term-int term-var term-nil term-pair
-                           lvar-next subs-empty
+                           subs-empty
                            lequal succeed fail conjoined disjoined fresh
                            run-logic first-state reify-walk
-                           term-int-val term-tag logic-walk]
+                           term-int-val logic-walk bt-length]
 ;; Q: is 5 equal to 5?
 let [results (run-logic 1 (lequal (term-int 5) (term-int 5)))]
   println(bt-length(results))
 ; => 1
 ;; Q: what value does x have if x == 7?
-let [x      (term-var (lvar-next))
+let [x      (term-var 0)
       goal   (lequal x (term-int 7))
       result (run-logic 1 goal)
       walked (reify-walk x result)]
@@ -82,17 +84,24 @@ let [x      (term-var (lvar-next))
 
 ### Terms
 
-A *term* is a tagged heap struct with three 64-bit fields: `tag`, `data1`,
-`data2`.
+A *term* is a `defdata` sum type (`Term`) with four constructors:
 
-| Tag | Kind | Constructor | Accessor(s) |
-|-----|------|-------------|-------------|
-| 0 | integer constant | `(term-int n)` | `(term-int-val t)` |
-| 1 | logic variable | `(term-var id)` | `(term-var-id t)` |
-| 2 | pair | `(term-pair a b)` | `(term-pair-fst t)`, `(term-pair-snd t)` |
-| 3 | nil | `(term-nil)` | — |
+| Kind | Constructor (helper / raw) | Accessor(s) |
+|------|----------------------------|-------------|
+| integer constant | `(term-int n)` / `(TInt n)` | `(term-int-val t)` |
+| logic variable | `(term-var id)` / `(TVar id)` | `(term-var-id t)` |
+| pair | `(term-pair a b)` / `(TPair a b)` | `(term-pair-fst t)`, `(term-pair-snd t)` |
+| nil | `(term-nil)` / `(TNil)` | -- |
 
-The tag of any term can be inspected with `(term-tag t)`.
+Inspect a term's shape with `match`:
+
+```turmeric
+(match t
+  (TInt n)    ...
+  (TVar id)   ...
+  (TPair a b) ...
+  (TNil)      ...)
+```
 
 Pairs nest to form lists in the usual cons-cell style:
 
@@ -111,37 +120,43 @@ let [lst (term-pair (term-int 1)
 
 ### Logic variables
 
-Every variable is identified by a unique integer id, obtained from the
-global counter `(lvar-next)`:
+Every variable is identified by an integer id.  Inside a goal, `(fresh ...)`
+allocates the next unused id from the search state itself (the substitution's
+base node carries the fresh-variable counter), so scoped variables never
+collide.  For a top-level query variable, construct one by hand with ids
+numbered from 0:
 
 ```turmeric
-(let [x (term-var (lvar-next))
-      y (term-var (lvar-next))]
+(let [x (term-var 0)
+      y (term-var 1)]
   ...)
 ```
 ```sweet-exp
-let [x (term-var (lvar-next))
-      y (term-var (lvar-next))]
+let [x (term-var 0)
+      y (term-var 1)]
   ...
 ```
 
-Prefer `(fresh ...)` (below) over manual `lvar-next` calls — it keeps
-variable scope explicit.
+Prefer `(fresh ...)` (below) over hand-numbered ids -- it keeps variable
+scope explicit and threads the counter for you.
 
 ### Substitutions
 
-A *substitution* maps variable ids to terms.  It is represented as an alist
-(a linked list of `{ var_id, term_ptr, next }` structs) whose empty value is
-`(subs-empty)` (i.e., 0).
+A *substitution* maps variable ids to terms.  It is a persistent `defdata`
+association list (`Subst`): `(SBind var-id term rest)` binding nodes over a
+base `(SNil next)` that carries the next unused fresh-variable id.  The empty
+substitution is `(subs-empty)`.
 
 You rarely manipulate substitutions directly; `run-logic` starts from the
 empty one and `reify-walk` lets you look up results.
 
 ### Goals
 
-A *goal* is a fat closure of type `UState → list UState` — it accepts a
-substitution and returns zero or more extended substitutions (the solution
-stream).
+A *goal* is an opaque `(Goal A)` handle over a function `Subst -> Stream` --
+it accepts a substitution and returns zero or more extended substitutions
+(the solution `Stream`).  `(apply-goal g state)` runs one directly.  `Goal`
+also carries Functor / Applicative / Monad / Alternative instances, so goals
+compose with `do-m` (conjunction) and `alt-or` (disjunction) as well.
 
 The built-in goal constructors:
 
@@ -185,21 +200,21 @@ fresh(fn([x] body-goal))
 run-logic(n goal)
 ```
 
-Returns a solution list of at most `n` substitutions.  Use helper functions
-to extract results:
+Returns a solution `Stream` of at most `n` substitutions.  Use helper
+functions to extract results:
 
 ```turmeric
-(first-state results)             ; first substitution, or 0
+(first-state results)             ; first substitution, or (subs-empty)
 (reify-walk term results)         ; walk a term through the first substitution
-(bt-length results)               ; number of solutions (from tur/logic, re-exported)
+(bt-length results)               ; number of solutions
 ```
 ```sweet-exp
 first-state(results)
-; first substitution, or 0
+; first substitution, or (subs-empty)
 reify-walk(term results)
 ; walk a term through the first substitution
 bt-length(results)
-; number of solutions (from tur/logic, re-exported)
+; number of solutions
 ```
 
 ---
@@ -218,10 +233,10 @@ let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
 ; => 0 (no solutions)
 ```
 
-### Disjunction — multiple answers
+### Disjunction -- multiple answers
 
 ```turmeric
-(let [x   (term-var (lvar-next))
+(let [x   (term-var 0)
       g   (disjoined (lequal x (term-int 1))
                      (disjoined (lequal x (term-int 2))
                                 (lequal x (term-int 3))))
@@ -229,7 +244,7 @@ let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
   (println (bt-length res)))       ; => 3
 ```
 ```sweet-exp
-let [x   (term-var (lvar-next))
+let [x   (term-var 0)
       g   (disjoined (lequal x (term-int 1))
                      (disjoined (lequal x (term-int 2))
                                 (lequal x (term-int 3))))
@@ -248,7 +263,8 @@ let [x   (term-var (lvar-next))
               (conjoined
                 (lequal x (term-int 42))
                 (succeed)))))]
-  (println (term-int-val (reify-walk x res))))  ; => 42
+  ;; the fresh variable received id 0 (the counter starts at 0)
+  (println (term-int-val (reify-walk (term-var 0) res))))  ; => 42
 ```
 ```sweet-exp
 let [res (run-logic 1
@@ -256,15 +272,16 @@ let [res (run-logic 1
               (conjoined
                 (lequal x (term-int 42))
                 (succeed)))))]
-  println(term-int-val(reify-walk(x res)))
+  ;; the fresh variable received id 0 (the counter starts at 0)
+  println(term-int-val(reify-walk(term-var(0) res)))
 ; => 42
 ```
 
 ### Pair unification
 
 ```turmeric
-(let [x   (term-var (lvar-next))
-      y   (term-var (lvar-next))
+(let [x   (term-var 0)
+      y   (term-var 1)
       lhs (term-pair x (term-int 2))
       rhs (term-pair (term-int 1) y)
       res (run-logic 1 (lequal lhs rhs))]
@@ -273,8 +290,8 @@ let [res (run-logic 1
   (println (term-int-val (reify-walk y res)))) ; => 2
 ```
 ```sweet-exp
-let [x   (term-var (lvar-next))
-      y   (term-var (lvar-next))
+let [x   (term-var 0)
+      y   (term-var 1)
       lhs (term-pair x (term-int 2))
       rhs (term-pair (term-int 1) y)
       res (run-logic 1 (lequal lhs rhs))]
@@ -290,25 +307,25 @@ let [x   (term-var (lvar-next))
 Build a chain of goals with `conjoined`:
 
 ```turmeric
-;; helper: (conjoin-all gs) folds a list of goals with conjoined
-(defn conjoin-all [gs] : ptr<void>
+;; helper: (conjoin-all gs) folds a cons list of goals with conjoined
+(defn conjoin-all [gs : int] : (Goal int)
   (if (= (tail gs) 0)
-    (head gs)
-    (conjoined (head gs) (conjoin-all (tail gs)))))
+    (:: (head gs) (Goal int))
+    (conjoined (:: (head gs) (Goal int)) (conjoin-all (tail gs)))))
 ```
 ```sweet-exp
-;; helper: (conjoin-all gs) folds a list of goals with conjoined
-defn conjoin-all [gs] :ptr<void>
+;; helper: (conjoin-all gs) folds a cons list of goals with conjoined
+defn conjoin-all [gs : int] : (Goal int)
   if =(tail(gs) 0)
-    head(gs)
-    conjoined(head(gs) conjoin-all(tail(gs)))
+    (:: (head gs) (Goal int))
+    conjoined((:: (head gs) (Goal int)) conjoin-all(tail(gs)))
 ```
 
 ### Family-tree relations
 
 ```turmeric
 ;; Encode people as integers; 0=Alice, 1=Bob, 2=Carol, 3=Dave
-(defn parento [parent child] : ptr<void>
+(defn parento [parent : Term child : Term] : (Goal int)
   (disjoined (conjoined (lequal parent (term-int 0))
                         (lequal child  (term-int 1)))
              (disjoined (conjoined (lequal parent (term-int 0))
@@ -317,26 +334,26 @@ defn conjoin-all [gs] :ptr<void>
                                    (lequal child  (term-int 3))))))
 
 ;; grandparento via fresh intermediate variable
-(defn grandparento [grand child] : ptr<void>
+(defn grandparento [grand : Term child : Term] : (Goal int)
   (fresh (fn [mid]
     (conjoined (parento grand mid)
                (parento mid child)))))
 
 ;; Query: who are the grandchildren of Alice (id=0)?
-(let [child (term-var (lvar-next))
+(let [child (term-var 0)
       res   (run-logic 10 (grandparento (term-int 0) child))]
   ;; walks each solution
   ...)
 ```
 ```sweet-exp
 ;; Encode people as integers; 0=Alice, 1=Bob, 2=Carol, 3=Dave
-defn parento [parent child] :ptr<void>
+defn parento [parent : Term child : Term] : (Goal int)
   disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(1))) disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(2))) conjoined(lequal(parent term-int(1)) lequal(child term-int(3)))))
 ;; grandparento via fresh intermediate variable
-defn grandparento [grand child] :ptr<void>
+defn grandparento [grand : Term child : Term] : (Goal int)
   fresh(fn([mid] conjoined(parento(grand mid) parento(mid child))))
 ;; Query: who are the grandchildren of Alice (id=0)?
-let [child (term-var (lvar-next))
+let [child (term-var 0)
       res   (run-logic 10 (grandparento (term-int 0) child))]
   ;; walks each solution
   ...
@@ -354,31 +371,28 @@ inspect terms:
 
 ```turmeric
 ;; goal: t must walk to an integer in the range [lo, hi]
-(defn range-goal [t lo hi] : ptr<void>
-  (fn [state]
-    (let [walked (logic-walk t state)
-          tag    (term-tag walked)]
-      (if (= tag 0)                             ; INT term
-        (let [v (term-int-val walked)]
-          (if (and (>= v lo) (<= v hi))
-            (mreturn state)
-            (mzero)))
-        (mzero)))))                             ; not ground -- fail
+(defn range-goal [t : Term lo : int hi : int] : (Goal int)
+  (:: (fn [state : Subst]
+        (match (logic-walk t state)
+          (TInt v) (if (and (>= v lo) (<= v hi))
+                     (mreturn state)
+                     (mzero))
+          _        (mzero)))                    ; not ground -- fail
+    :Goal))
 ```
 ```sweet-exp
 ;; goal: t must walk to an integer in the range [lo, hi]
-defn range-goal [t lo hi] :ptr<void>
-  fn [state]
-    let [walked (logic-walk t state)
-          tag    (term-tag walked)]
-      if =(tag 0)
-        ; INT term
-        let [v (term-int-val walked)]
-          if and(>=(v lo) <=(v hi))
-            mreturn(state)
-            mzero()
+defn range-goal [t : Term lo : int hi : int] : (Goal int)
+  ::
+    fn [state : Subst]
+      match logic-walk(t state)
+        TInt(v)
+        if and(>=(v lo) <=(v hi))
+          mreturn(state)
+          mzero()
+        _
         mzero()
-; not ground -- fail
+    :Goal
 ```
 
 ### Reification helpers
@@ -387,43 +401,25 @@ defn range-goal [t lo hi] :ptr<void>
 tree, walk recursively:
 
 ```turmeric
-(defn reify-term [t subs] : cstr
-  (let [walked (logic-walk t subs)
-        tag    (term-tag walked)]
-    (cond
-      (= tag 0) (int->cstr (term-int-val walked))
-      (= tag 1) "_"
-      (= tag 2) (str-concat "(" (str-concat (reify-term (term-pair-fst walked) subs)
-                                            (str-concat " . " (str-concat (reify-term (term-pair-snd walked) subs) ")"))))
-      (= tag 3) "nil"
-      :else     "?")))
+(defn reify-term [t : Term subs : Subst] : cstr
+  (match (logic-walk t subs)
+    (TInt n)    (int->cstr n)
+    (TVar id)   "_"
+    (TPair a b) (str-concat "(" (str-concat (reify-term a subs)
+                                            (str-concat " . " (str-concat (reify-term b subs) ")"))))
+    (TNil)      "nil"))
 ```
 ```sweet-exp
-defn reify-term [t subs] :cstr
-  let [walked (logic-walk t subs)
-        tag    (term-tag walked)]
-    cond
-      =
-        tag
-        0
-      int->cstr
-        term-int-val(walked)
-      =
-        tag
-        1
-      "_"
-      =
-        tag
-        2
-      str-concat
-        "("
-        str-concat(reify-term(term-pair-fst(walked) subs) str-concat(" . " str-concat(reify-term(term-pair-snd(walked) subs) ")")))
-      =
-        tag
-        3
-      "nil"
-      :else
-      "?"
+defn reify-term [t : Term subs : Subst] : cstr
+  match logic-walk(t subs)
+    TInt(n)
+    int->cstr(n)
+    TVar(id)
+    "_"
+    TPair(a b)
+    str-concat("(" str-concat(reify-term(a subs) str-concat(" . " str-concat(reify-term(b subs) ")"))))
+    TNil()
+    "nil"
 ```
 
 Each `str-concat` / `int->cstr` here returns a fresh "caller frees" `cstr`, and
@@ -467,22 +463,21 @@ search replace `mplus` with an interleaving version:
 
 ```turmeric
 ;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
-(defn mplus-i [xs ys] : int
-  ;; swap xs and ys for every cons cell so solutions alternate
-  (if (= xs 0) ys
-    (let [head-val (bt-head xs)
-          rest     (bt-tail xs)]
-      (bt-cons head-val (mplus-i ys rest)))))
+(defn mplus-i [xs : Stream ys : Stream] : Stream
+  ;; swap xs and ys at every step so solutions alternate
+  (match xs
+    (StNil)         ys
+    (StCons v rest) (StCons v (mplus-i ys rest))))
 ```
 ```sweet-exp
 ;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
-defn mplus-i [xs ys] :int
-  ;; swap xs and ys for every cons cell so solutions alternate
-  if =(xs 0)
+defn mplus-i [xs : Stream ys : Stream] : Stream
+  ;; swap xs and ys at every step so solutions alternate
+  match xs
+    StNil()
     ys
-    let [head-val (bt-head xs)
-          rest     (bt-tail xs)]
-      bt-cons(head-val mplus-i(ys rest))
+    StCons(v rest)
+    StCons(v mplus-i(ys rest))
 ```
 
 Then define `disjoined-i` analogously and use it in place of `disjoined`
@@ -525,10 +520,10 @@ defn tabled [name goal-fn args subs] :int
 
 ## Integration with `tur/backtrack`
 
-`tur/logic` inlines the backtracking monad (`mzero`, `mreturn`, `mplus`,
-`mbind`) directly for performance.  If you are building tools on top of the
-same monad without the full logic layer, `stdlib/backtrack.tur` exports these
-primitives separately.
+`tur/logic` defines its own copies of the backtracking monad primitives
+(`mzero`, `mreturn`, `mplus`, `mbind`) over its typed `Stream`.  If you are
+building tools on top of the same monad without the full logic layer,
+`stdlib/backtrack.tur` exports these primitives separately.
 
 ---
 
@@ -549,50 +544,50 @@ primitives separately.
 
 ### The miniKanren language and theory
 
-- **"The Reasoned Schemer" (2nd ed.)** — Daniel P. Friedman, William E. Byrd,
+- **"The Reasoned Schemer" (2nd ed.)** -- Daniel P. Friedman, William E. Byrd,
   Oleg Kiselyov, Jason Hemann (MIT Press, 2018).  The canonical introduction;
   every concept in `tur/logic` maps directly to a chapter.
 
-- **"miniKanren, Live and Untagged"** — William Byrd et al., 2012 Workshop
+- **"miniKanren, Live and Untagged"** -- William Byrd et al., 2012 Workshop
   on Scheme and Functional Programming.
   <https://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf>
 
-- **µKanren** (micro-Kanren) — Jason Hemann & Daniel Friedman, 2013.
-  The minimal core (≈ 40 lines of Scheme) that `tur/logic` is modeled after.
+- **muKanren** (micro-Kanren) -- Jason Hemann & Daniel Friedman, 2013.
+  The minimal core (~40 lines of Scheme) that `tur/logic` is modeled after.
   <http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf>
 
-- **miniKanren.org** — canonical reference implementation, papers, and talks.
+- **miniKanren.org** -- canonical reference implementation, papers, and talks.
   <http://minikanren.org>
 
 ### Unification
 
-- **"An Efficient Unification Algorithm"** — Martelli & Montanari (1982),
+- **"An Efficient Unification Algorithm"** -- Martelli & Montanari (1982),
   *ACM Transactions on Programming Languages and Systems*.
   Describes the linear-time algorithm; `tur/logic` uses the simpler quadratic
   alist walk, suitable for small substitutions.
 
-- **"Unification: A Multidisciplinary Survey"** — Kevin Knight (1989).
+- **"Unification: A Multidisciplinary Survey"** -- Kevin Knight (1989).
   <https://dl.acm.org/doi/10.1145/62029.62030>
 
 ### Logic programming broadly
 
-- **"The Art of Prolog"** — Sterling & Shapiro (MIT Press, 1994).
+- **"The Art of Prolog"** -- Sterling & Shapiro (MIT Press, 1994).
   Classical treatment of resolution, unification, and search strategies.
 
-- **core.logic** (Clojure) — a production miniKanren embedding closest in
+- **core.logic** (Clojure) -- a production miniKanren embedding closest in
   spirit to `tur/logic`.  Good source of idioms and constraint extensions.
   <https://github.com/clojure/core.logic>
 
-- **Kanren** (original, Scheme) — Byrd & Friedman.
+- **Kanren** (original, Scheme) -- Byrd & Friedman.
   <https://github.com/webyrd/miniKanren>
 
 ### Related guides in this documentation
 
-- [backtracking-guide.md](backtracking-guide.md) — The `tur/backtrack` monad
+- [backtracking-guide.md](backtracking-guide.md) -- The `tur/backtrack` monad
   that `tur/logic` is built on.
 - [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md)
-  — A runnable worked example building a family-graph query.
-- [datalog-01-concepts.md](datalog-01-concepts.md) — Datalog, a cousin of
+  -- A runnable worked example building a family-graph query.
+- [datalog-01-concepts.md](datalog-01-concepts.md) -- Datalog, a cousin of
   miniKanren suited to database-style queries.
-- [effects-system-guide.md](effects-system-guide.md) — Algebraic effects,
+- [effects-system-guide.md](effects-system-guide.md) -- Algebraic effects,
   an alternative to the monad-based search strategy used here.

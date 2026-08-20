@@ -313,8 +313,7 @@ raylib is on the cmake-deps path.
   collects `:reads`/`:writes` vectors and **enforces them at
   elaboration time** as substructural capabilities. A body that
   writes a component not listed in `:writes` fails to elaborate with
-  `unbound symbol '<Comp>-write-cap'`. Shipped 2026-06-11 via Phases
-  I1-I6; see
+  `unbound symbol '<Comp>-write-cap'`. See
   [docs/guides/substructural-types-guide.md](substructural-types-guide.md)
   for the underlying cap machinery.
 - **Aliveness**: runtime by default, via generation comparison --
@@ -536,8 +535,8 @@ so an undeclared write fails with the same
 
 ### Plumbing: world boxes and component-id bindings
 
-A cross-world setup needs three pieces of glue per world type. As of
-GEN-V0, a single macro emits the trio:
+A cross-world setup needs three pieces of glue per world type. A
+single macro emits the trio:
 
 ```turmeric
 (import ecs/xworld :refer [defworld-box-helpers])
@@ -553,11 +552,11 @@ GEN-V0, a single macro emits the trio:
 Each helper is a thin wrapper over the polymorphic `box-world` /
 `load-world` / `free-world-box` defined in `ecs/xworld`; the inline-C
 bodies reflect the concrete world's C struct name via the
-`__TUR_TY_W__` template marker, so a per-world inline-C block is no
-longer needed.
+`__TUR_TY_W__` template marker, so no per-world inline-C block is
+needed.
 
-Plus a `(def <C>-cid <n>)` per component, per world. As of GEN-V0 the
-numbered constants are also macro-emitted:
+Plus a `(def <C>-cid <n>)` per component, per world. The numbered
+constants are also macro-emitted:
 
 ```turmeric
 (import ecs/world :refer [defcomponent-cids])
@@ -665,7 +664,7 @@ Every component storage in a sized world shares the same `n`:
 
 Lowers to a loop indexed `0..n` where the bound is the first
 storage's type-level capacity, not a runtime min. Inside the loop body
-the elaborator already knows `i ∈ [0, n)` structurally, so the
+the elaborator already knows `i in [0, n)` structurally, so the
 generated accessor codegen elides bounds checks. A mixed-capacity
 invocation fails at elaboration:
 
@@ -745,8 +744,8 @@ intended sweet spot.
 ## Where to look next
 
 - `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` -- the
-  refinement-typed roadmap: strict aliveness (RE1, shipped 2026-07-26
-  as `ecs/refined-world` + `for-each-alive!`), bounded slot indices
+  refinement-typed roadmap: strict aliveness (RE1, shipped as
+  `ecs/refined-world` + `for-each-alive!`), bounded slot indices
   (RE2, gated on loop invariants and a profile).
 - `docs/upcoming/v1/ecs-component-set-bounds-plan.md` -- the structural
   "any world with `Pos` and `Vel`" bound, split out of the above.

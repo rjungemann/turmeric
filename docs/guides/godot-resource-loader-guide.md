@@ -229,5 +229,5 @@ each time someone wires a new scripting binding from this codebase.
   graduates from "known-needed" to "implemented."
 - `docs/archive/history/libturi-embed-include-paths.md` and
   `docs/archive/history/libturi-embed-interpret-mode-flag.md` -- the *other* two
-  rough edges surfaced during the G1 slice; both are turmeric-side and
-  remain open reports.
+  rough edges surfaced during the G1 slice; both were turmeric-side and are
+  resolved (archived).

@@ -461,8 +461,9 @@ weaker one starts requiring boilerplate at every call site.
 ## See also
 
 - Design rationale: [advanced-type-system-rationale.md](advanced-type-system-rationale.md)
-  -- why these specific mechanisms, and why dependent / refinement types
-  were deferred
+  -- why these specific mechanisms, and why dependent types were deferred
+  (refinement types have since shipped; see
+  [refinement-types-guide.md](refinement-types-guide.md))
 - [type-annotations-guide.md](type-annotations-guide.md) -- syntax for
   writing the types this guide refers to
 - [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md),

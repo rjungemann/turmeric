@@ -6,15 +6,14 @@ description: Validate untyped boundary data (HTTP bodies, config, IPC) with comp
 
 # Runtime Schema Validation with `tur/schema`
 
-> **Status:** SC0--SC4 shipped (scalar/object/array/optional/union/literal/
-> transform/recursive schemas, accumulating path-tagged errors). SC5 shipped:
-> the `HasSchema` typeclass with return-type-directed `decode!` and the
-> `#json-str<T>(...)` reader macro. **SC7 is complete:** the combinator layer
-> (`always`/`never`/`ap`/`field-of`/`fmap`/`alt`, Validation semantics) *and* the
-> `Functor`/`Applicative`/`Alternative` typeclass *instances* over the phantom
-> `(Schema a)` wrapper -- so object decoders can be assembled applicatively with
-> `fmap`/`ap`/`alt-or`, including building a struct field-by-field. See
-> "Applicative combinators" and "HKT instances" below.
+> **Scope:** scalar/object/array/optional/union/literal/transform/recursive
+> schemas with accumulating path-tagged errors; the `HasSchema` typeclass with
+> return-type-directed `decode!` and the `#json-str<T>(...)` reader macro; a
+> combinator layer (`always`/`never`/`ap`/`field-of`/`fmap`/`alt`, Validation
+> semantics); and `Functor`/`Applicative`/`Alternative` typeclass instances
+> over the phantom `(Schema a)` wrapper -- so object decoders can be assembled
+> applicatively with `fmap`/`ap`/`alt-or`, including building a struct
+> field-by-field. See "Applicative combinators" and "HKT instances" below.
 
 Turmeric's type system enforces invariants *within* a program. The gap is at
 **dynamic boundaries** -- an HTTP response body, a config file, a channel
@@ -243,7 +242,7 @@ The two are complementary: use `tur/schema` to validate data **at the
 boundary**, turning untyped JSON into values you trust, then use `tur/contract`
 to enforce invariants on those values **inside** the program.
 
-## Typed decoding with `HasSchema` (SC5)
+## Typed decoding with `HasSchema`
 
 `schema-decode` hands back the *validated node* (read fields with `json/get!`);
 to land directly in a typed value, implement the `HasSchema` typeclass. Its one
@@ -319,13 +318,13 @@ defn parse-user [body :cstr] :User
 
 Unlike `#json(...)`, the inner is an ordinary Turmeric expression (read with the
 normal reader), not a verbatim JSON blob. The bare `#json<T>(...)` literal form
-now also wraps its node tree in `(:: node T)`.
+also wraps its node tree in `(:: node T)`.
 
 The panic-on-violation `#json-str<T>` is implemented; the Result-returning
 `#json-str?<T>` and file-reading `#json-file<T>` remain future work
 (`#json-str?` emits a "not yet implemented" diagnostic).
 
-## Applicative combinators (SC7)
+## Applicative combinators
 
 Object decoders compose from smaller pieces with the **Validation applicative**:
 `schema/ap` decodes both arms against the same input and **accumulates** their
@@ -368,7 +367,7 @@ need to choose a later schema based on a decoded value, decode in two explicit
 steps (decode the discriminant, then dispatch on it) rather than reaching for a
 monad. Note also the O(arms) cost: `ap`/`union` decode every arm.
 
-## HKT instances (SC7)
+## HKT instances
 
 The combinators above are also surfaced as `Functor`/`Applicative`/`Alternative`
 typeclass instances over a phantom wrapper, so object decoders can be assembled

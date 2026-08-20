@@ -44,8 +44,8 @@ float bit-reinterpret note below).
    the workaround for the by-value Vec-element shape
    (`vec-byvalue-struct-element-invalid-c`, resolved by increment 3).
 
-   Since 2026-07-31 (increment 3) **container element slots follow one
-   width-independent rule** per element class: scalar bits inline, heap
+   **Container element slots follow one width-independent rule** (increment
+   3) per element class: scalar bits inline, heap
    pointer as-is, by-value ADT product (ANY width) heap-boxed on insert and
    deref-unboxed on read, fn value as a fat handle. The decision lives in
    `type_is_boxed_container_elem` (`src/compiler/types.c`), consulted by
@@ -72,8 +72,8 @@ Function values are their own zoo. The per-boundary decision today spans
 is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 
 1. **`tur_poly_fn_t {env, fn}` carrier** -- for plain, non-effectful,
-   carrier-safe signatures with no named tyvar.  Since 2026-07-31 the
-   carrier<->fat seam is alias- and join-aware: the stage-2 tail walkers
+   carrier-safe signatures with no named tyvar.  The carrier<->fat seam is
+   alias- and join-aware: the stage-2 tail walkers
    resolve a let-ALIAS of a carrier param to its origin (converting via
    poly-to-fat like the direct leaf), the `if` unifier admits a
    carrier-param arm against a boxed fn result by inserting the conversion
@@ -83,29 +83,26 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 3. **`:ptr<void>`-fat sink** -- carries an `is_fat` flag disambiguating
    thin-vs-fat dispatch at the invoke (`src/compiler/emit_expr.c` ~4246).
 4. **Nominal bare `TY_FN` pointer** -- a thin code pointer with nowhere to
-   put an environment. Fat-normalization has all but retired it in PARAM
-   position: stage 1 (2026-07-30) normalized concrete effect-free
-   signatures, and increment 2 (2026-08-01) added tyvar signatures once the
-   two carrier-side feeds were shimmed as well -- a call THROUGH a
-   rank-2/forall param (`elab_poly_call`) and the make-struct fn-field
-   store, which had been boxing an already-normalized param a second time.
-   The thin form now survives only for cfnptr, variadic, and arity>5
-   signatures; passing a capturing closure into an *effect-annotated* such
-   param is a call-site TUR-E0007. The effect-row exclusion -- the last
-   broad thin holdout -- was lifted 2026-08-16 by the CPS increment: the
-   E2a twin registry's call sites dispatch fat (slot 0 = a registered
-   capturing-lambda entry whose `__cps` twin takes the env, slot 1 = the
-   fatshim box's stashed bare-fn direct entry), threadable capturing
-   lambdas are CPS-admitted with the direct thunk's env-unpack preamble,
-   and effect-row checking peels the `EX_FN_TO_FAT` shim
+   put an environment. Fat-normalization has retired it in PARAM position
+   for concrete, tyvar, and effect-annotated signatures alike; the two
+   carrier-side feeds -- a call THROUGH a rank-2/forall param
+   (`elab_poly_call`) and the make-struct fn-field store -- are shimmed so
+   an already-normalized param is not boxed a second time. The thin form
+   survives only for cfnptr, variadic, and arity>5 signatures; passing a
+   capturing closure into an *effect-annotated* such param is a call-site
+   TUR-E0007. Effect-row call sites dispatch fat through the E2a twin
+   registry (slot 0 = a registered capturing-lambda entry whose `__cps`
+   twin takes the env, slot 1 = the fatshim box's stashed bare-fn direct
+   entry), threadable capturing lambdas are CPS-admitted with the direct
+   thunk's env-unpack preamble, and effect-row checking peels the
+   `EX_FN_TO_FAT` shim
    (`poly-result-hof-capturing-closure-sigbus`, archived -- every row).
 
    The `{ shim, orig }` box a bare fn is shimmed into is `malloc`'d per
-   execution of the bridge.  At a normalized nominal param nothing frees it,
-   so that was a leak per call (5e6 iterations of `(apply1 add3 acc)` peaked
-   at 122 MiB); such a box is a constant when the boxed value is a global fn,
-   so it is now allocated once at file scope and filled from
-   `__tur_static_init`.
+   execution of the bridge.  At a normalized nominal param nothing frees it
+   -- a leak per call if allocated there -- but such a box is a constant when
+   the boxed value is a global fn, so it is allocated once at file scope and
+   filled from `__tur_static_init`.
 
    A `^fat` sink takes the same hoist when the callee provably neither
    retains nor drops the argument -- `nonretain_param_mask` bit set for that
@@ -146,8 +143,8 @@ Each of these is a crossing where a bridge may be needed:
 - `let` binding / ascription `(:: e T)`
 - generic (tyvar-typed) call argument and result
 - typeclass method dispatch result (bare and dotted spellings)
-- `Vec` element slot (push and get) -- **instrumented 2026-08-15** (increment
-  4 stage 3). Two mechanisms box an element here and they are easy to
+- `Vec` element slot (push and get) -- **instrumented** (increment 4 stage
+  3). Two mechanisms box an element here and they are easy to
   confuse: a nominal by-value ADT/struct element takes the box/deref bridge
   behind `type_is_boxed_container_elem`, while a concrete by-value *app*
   element (`(Vec (Option int))`) takes a monomorph-aware path -- malloc the
@@ -155,8 +152,8 @@ Each of these is a crossing where a bridge may be needed:
   box on read. Both really do box; only the first consults the predicate. The
   second is layout-safe because every parametric monomorph's payload occupies
   exactly one word.
-- struct field store / load -- **instrumented and measured silent
-  2026-08-15** (increment 4 stage 3). The declaration side of this boundary
+- struct field store / load -- **instrumented and measured silent**
+  (increment 4 stage 3). The declaration side of this boundary
   is one chokepoint, `adt_ctor_field_c_type`, which all nine field-emission
   sites route through; a `repr_of` shadow there found 84 disagreements and
   all 84 were one word spelled two ways, not seams. Worth knowing when you
@@ -175,17 +172,13 @@ report is one missing cell.
 **Open cells.** These are the crossings that still have no working bridge;
 each has a live report in `docs/reported/`. This table is the campaign's
 index -- a repr cell with a filed report belongs here, so if you file one,
-add the row. All four were re-verified against `main` on 2026-08-01; two moved
-that day (the first row narrowed to the effect row, and the `^fat` leak row was
-filed); the `^fat` leak row was resolved and removed 2026-08-13, and the
-generic-closure-return-type-app and poly-result-hof-capturing-closure-sigbus
-(effect row -- the CPS increment) rows on 2026-08-16.
+add the row.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| *(none -- the table emptied 2026-08-16 when the merge-temp row closed)* | |
+| *(none currently)* | |
 
-The empty table is a milestone, not an end state: the matrix above still has
+An empty table is a milestone, not an end state: the matrix above still has
 unexercised pairings, and the R3 shadow ICE plus the census are what turn the
 next one someone hits into a row here. File a new repr cell in this table as
 well as in `docs/reported/`.
@@ -217,9 +210,9 @@ A structural note the last closed row exposes: the representation decision today
 not one function but (at least) three hand-maintained `TypeKind` switches in
 `src/compiler/types.c` -- `type_c_name`, `type_has_concrete_codegen_layout`
 (fails closed: a missing kind silently falls back to the carrier), and
-`append_type_mangle` (failed open to `"opaque"` until 2026-07-29) -- and
-codegen is correct only when all three agree. Since 2026-07-31 (increment 4
-stage 1) the triplication is removed for payload-free kinds: the
+`append_type_mangle` -- and
+codegen is correct only when all three agree. The triplication is removed
+(increment 4 stage 1) for payload-free kinds: the
 `TY_SIMPLE_REPR_ROWS` table in `types.c` carries one row per simple kind
 with all three answers, and each switch expands the rows with its own
 projection -- adding a kind without all three answers is a build failure,
@@ -248,8 +241,8 @@ pinned by `--known-probes` instead, so a red run means a NEW cell.
 
 The convention-level fix for the closure rows -- normalize every non-carrier
 fn boundary onto the fat protocol instead of deciding representation
-per-boundary -- is planned in
-`docs/archive/fn-value-fat-normalization-plan.md` (complete 2026-08-16). The campaign-level
+per-boundary -- is complete; see
+`docs/archive/fn-value-fat-normalization-plan.md`. The campaign-level
 strategy governing that plan and its successors (which seams consolidate in
 which order, the probe/blast-radius discipline, and the performance
 guardrails) is `docs/archive/representation-consolidation-meta-plan.md`;

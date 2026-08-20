@@ -8,7 +8,7 @@ description: Haskell-style partial application and over-application of Turmeric 
 
 Turmeric supports Haskell-style currying: every N-argument function is also a valid
 `(N-1)`-argument function that returns a closure waiting for the remaining argument.
-There is no special syntax — supply fewer arguments than declared and the elaborator
+There is no special syntax -- supply fewer arguments than declared and the elaborator
 synthesizes a partial-application closure for you.
 
 ---
@@ -98,7 +98,7 @@ Usage:
   (add1 41))    ; => 42
 ```
 
-Most of the time you don't need `curry` — direct partial application (`(add 1)`)
+Most of the time you don't need `curry` -- direct partial application (`(add 1)`)
 is shorter and produces the same closure.
 
 ---
@@ -109,7 +109,7 @@ Turmeric uses the **worker/wrapper** model (the same approach as OCaml and MLton
 not GHC-style full currying:
 
 - The compiled function keeps its N-argument C calling convention (the *worker*).
-  Fully-saturated calls have zero overhead — no extra allocation, no extra indirection.
+  Fully-saturated calls have zero overhead -- no extra allocation, no extra indirection.
 - When a call site provides fewer arguments than the function expects, the elaborator
   synthesizes a fresh anonymous closure (the *wrapper*) that captures the supplied
   arguments and exposes the remaining arity.
@@ -127,9 +127,10 @@ type system is `(-> ...)`; partial-application closures share it with everything
   positional params (returning a variadic closure), but you cannot partially
   apply *into* the rest slot. See [Function Arity Style Guide](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md#function-arity-style-guide).
 
-- **`MAX_FN_ARITY` still applies.** The remaining-parameter list of any partial
-  application is a subset of the original arity, so the 16-arg cap is automatically
-  satisfied — but if your function is already near the cap, the wrapper inherits it.
+- **No hard arity cap.** There is no fixed limit on positional parameters
+  (declaring more than 16 draws the `TUR-W0041` style nudge), and a partial
+  application's remaining-parameter list is always a subset of the original
+  arity.
 
 - **One heap allocation per partial.** Each under-saturated call site allocates
   one closure. For tight inner loops, hoist the partial application outside the
@@ -143,6 +144,6 @@ type system is `(-> ...)`; partial-application closures share it with everything
 
 ## See also
 
-- [Binding Forms Guide](binding-forms-guide.md) — `let`, `fn`, `defn` semantics
-- [Effects System Guide](effects-system-guide.md) — how effect rows flow through partial applications
-- `stdlib/macros.tur` — the `curry` macro source
+- [Binding Forms Guide](binding-forms-guide.md) -- `let`, `fn`, `defn` semantics
+- [Effects System Guide](effects-system-guide.md) -- how effect rows flow through partial applications
+- `stdlib/macros.tur` -- the `curry` macro source

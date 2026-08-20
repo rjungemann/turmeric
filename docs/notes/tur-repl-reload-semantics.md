@@ -1,8 +1,17 @@
 # `tur repl :reload` semantics -- recon memo (L1)
 
-Context: [repl-load-definitions-plan.md](../upcoming/repl-load-definitions-plan.md) L1.
+Context: repl-load-definitions-plan L1 (the plan document itself is not
+checked into the repo).
 Goal: nail down what `:reload <file>` actually does today so the rest of the
 plan (cmd+r driving the running REPL) can be designed honestly.
+
+> **Outcome:** shape A below shipped. The REPL now has `:run <file>`
+> (`cmd_run` in `src/turi/repl.c`, which cites this memo) and
+> `:load-string "<src>"` for evaluating a multi-line region without a
+> scratch file. The `:reload` mechanics described in the findings are
+> unchanged. Line references inside the findings are from the v0.25.x
+> tree this memo was written against and have drifted; the Pointers
+> section at the bottom carries current (v0.36.0) anchors.
 
 ## Findings
 
@@ -71,6 +80,9 @@ printing them on top of the diagnostic the diag layer already rendered
 
 ### 6. No `:eval` meta-command
 
+(Since superseded: `:load-string "<src>"` now evaluates source handed over
+directly, so a host can send a multi-line region without a scratch file.)
+
 There is no "evaluate this string in the current env" meta-command. Plain
 top-level input at the prompt IS that primitive (the REPL loop's normal
 `turi_eval` path), but there is no machinery to scope-isolate or
@@ -99,18 +111,21 @@ viable shapes:
 
 L2 takes shape A: add `:run <file>` to `src/turi/repl.c`, and push
 `:run <abs-path>` from any client (the `(main)` call is auto-invoked by
-`:run`, so no client-side probe is needed).
+`:run`, so no client-side probe is needed). This shipped -- see `cmd_run`
+in `src/turi/repl.c`, which resets the env, reloads the file, and
+auto-invokes `(main)` when it resolves to a closure.
 
 L3 (diagnostic surfacing) and L4 (stale chip) are unblocked by A. L5
 (send-form-at-cursor) just sends the form text to the existing prompt path,
 unchanged.
 
-## Pointers
+## Pointers (as of v0.36.0)
 
-- `src/turi/repl.c:382` -- `cmd_reload`
-- `src/turi/repl.c:852` -- `:reset` handler
-- `src/turi/eval.c:8357` -- `turi_eval_file`
-- `src/turi/eval.c:8065` -- `turi_eval` entry
-- `src/turi/eval.c:8138-8145` -- source accumulator concatenation
-- `src/turi/eval.c:8336-8340` -- post-success accumulator update
-- `src/turi/eval.c:6437-6515` -- defn / def evaluation (`turi_env_set`)
+- `src/turi/repl.c:850` -- `cmd_reload`
+- `src/turi/repl.c:957` -- `cmd_run` (`:run <file>`, shipped from this memo's shape A)
+- `src/turi/repl.c:1494` -- `:reset` handler
+- `src/turi/eval.c:11780` -- `turi_eval_file`
+- `src/turi/eval.c:10575` -- `turi_eval` entry
+- `src/turi/eval.c:11430-11431` -- source accumulator concatenation
+- `src/turi/eval.c:11713-11714` -- post-success accumulator update
+- `src/turi/eval.c:8868-8945` -- def / defn evaluation (`turi_env_set`)

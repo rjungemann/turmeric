@@ -77,9 +77,9 @@ to drive the generic into a struct-specialized clone:
   ...)
 ```
 
-(Since the handle was lifted to `(Dense A)` in E2d-P1, the annotation
-is often inferable from the handle's own type and you can omit it. Keep
-it when reading through an `:int` you haven't yet typed.)
+(The annotation is often inferable from the handle's own `(Dense A)`
+type, so you can usually omit it. Keep it when reading through an
+`:int` you haven't yet typed.)
 
 **Pick `Dense` when** most entities carry the component. This is the
 v1 default; `defworld` field handles default to dense and the standard

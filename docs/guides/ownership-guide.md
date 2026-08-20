@@ -35,8 +35,8 @@ first one that fits, not the most general one.
 
 ## Where the stdlib actually sits
 
-A 2026-07-24 audit of all ~138 stdlib modules found that **the standard library
-builds no `rc<T>` graphs at all** -- cyclic or otherwise -- and therefore needs
+**The standard library builds no `rc<T>` graphs at all** -- cyclic or
+otherwise -- and therefore needs
 `weak<T>` nowhere. `rc<T>` appears only in `stdlib/rc.tur` (the module that
 defines it), the opt-in `stdlib/rcchain.tur`, and the generated
 `stdlib/docstrings.tur`.

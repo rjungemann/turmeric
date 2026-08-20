@@ -86,18 +86,24 @@ value.
 Use a type-level natural number to track vector length at compile time. Safe
 `head` and `vzip-with` become expressible without `option`.
 
+> **Caveat -- the index is phantom today.** The declarations below sketch the
+> full length-indexed design. In current Turmeric the `n` parameter is a
+> *phantom*: it does not yet prove non-emptiness or equal lengths at compile
+> time (true compile-time length safety awaits a dependent-types phase), which
+> is why the stdlib module ships `gvec-head-or` with an explicit default
+> rather than a bare `head`.
+
 ```turmeric
-; Type-level naturals
+; Type-level naturals (canonical constructor syntax: fields, then ': return-type')
 (defgadt Nat []
-  (Zero : Nat)
-  (Succ : Nat -> Nat))
+  (Zero : (Nat))
+  (Succ (Nat) : (Nat)))
 
 ; Length-indexed int vector: (Vec n) has exactly n elements.
-; (Uses int elements; polymorphic element type requires HKT --
-;  see stdlib/gadt-vec.tur for a working implementation.)
+; (Uses int elements; see stdlib/gadt-vec.tur for the shipped module.)
 (defgadt Vec [n]
-  (VNil  :                          (Vec Zero))
-  (VCons : int -> (Vec n) -> (Vec (Succ n))))
+  (VNil            : (Vec Zero))
+  (VCons int (Vec n) : (Vec (Succ n))))
 
 ; Length is computable at compile time -- no bounds check needed.
 (defn vec-len [v] : int
@@ -128,17 +134,16 @@ Use a type-level natural number to track vector length at compile time. Safe
 ```
 
 ```sweet-exp
-; Type-level naturals
+; Type-level naturals (canonical constructor syntax: fields, then ': return-type')
 defgadt Nat []
-  (Zero : Nat)
-  (Succ : Nat -> Nat)
+  (Zero : (Nat))
+  (Succ (Nat) : (Nat))
 
 ; Length-indexed int vector: (Vec n) has exactly n elements.
-; (Uses int elements; polymorphic element type requires HKT --
-;  see stdlib/gadt-vec.tur for a working implementation.)
+; (Uses int elements; see stdlib/gadt-vec.tur for the shipped module.)
 defgadt Vec [n]
-  (VNil  :                          (Vec Zero))
-  (VCons : int -> (Vec n) -> (Vec (Succ n)))
+  (VNil            : (Vec Zero))
+  (VCons int (Vec n) : (Vec (Succ n)))
 
 ; Length is computable at compile time -- no bounds check needed.
 defn vec-len [v] :int
@@ -173,9 +178,11 @@ defn main [] :int
   0
 ```
 
-**Stdlib:** `stdlib/gadt-vec.tur` provides `vec-nil`, `vec-cons`, `vec-len`,
-`vec-sum`, `vec-head-or`, `vec-tail`, `vmap`, and `vzip-with` as a reusable
-module. Import it with `(load "stdlib/gadt-vec.tur")`.
+**Stdlib:** `stdlib/gadt-vec.tur` provides `gvec-nil`, `gvec-cons`,
+`gvec-len`, `gvec-sum`, `gvec-head-or`, `gvec-tail`, `gvmap`, and
+`gvzip-with` as a reusable module (a phantom-typed `GVec` of int elements;
+true compile-time length safety awaits a dependent-types phase). Import it
+with `(load "stdlib/gadt-vec.tur")`.
 
 ---
 
@@ -239,9 +246,8 @@ defn main [] :int
 ```
 
 **Practical note:** A full type-safe printf encoding the full argument list
-`(cons int (cons bool nil))` requires higher-kinded type-level lists, which
-are deferred pending the HKT phase. The pattern above shows the core idea
-with fixed arity.
+`(cons int (cons bool nil))` requires type-level lists, which Turmeric does
+not provide. The pattern above shows the core idea with fixed arity.
 
 ---
 

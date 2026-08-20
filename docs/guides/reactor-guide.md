@@ -132,7 +132,7 @@ promptly.
     (reactor-free r)))
 
 ;; From any other thread (safe because reactor-wake is thread-safe):
-(defn request-shutdown [stop-ch : ptr<void> r : ptr<void>] : nil
+(defn request-shutdown [stop-ch : ptr<void> ^borrow r : Reactor] : nil
   (chan-send stop-ch 1)
   (reactor-wake r))
 ```
@@ -156,7 +156,7 @@ defn run-with-stop [stop-ch :ptr<void>] :nil
     reactor-free r
 
 ;; From any other thread (safe because reactor-wake is thread-safe):
-defn request-shutdown [stop-ch :ptr<void> r :ptr<void>] :nil
+defn request-shutdown [stop-ch :ptr<void> ^borrow r :Reactor] :nil
   chan-send stop-ch 1
   reactor-wake r
 ```
@@ -165,7 +165,7 @@ The key constraint: `reactor-add-chan` is one-shot. If you need a
 persistent channel watcher, re-register from inside the callback:
 
 ```turmeric
-(defn watch-chan-loop [r : ptr<void> ch : ptr<void>] : nil
+(defn watch-chan-loop [^borrow r : Reactor ch : ptr<void>] : nil
   (reactor-add-chan r ch
     (fn [id v user] : nil
       (handle-message v)
@@ -175,7 +175,7 @@ persistent channel watcher, re-register from inside the callback:
 ```
 
 ```sweet-exp
-defn watch-chan-loop [r :ptr<void> ch :ptr<void>] :nil
+defn watch-chan-loop [^borrow r :Reactor ch :ptr<void>] :nil
   reactor-add-chan r ch
     fn [id v user] :nil
       handle-message v
@@ -205,7 +205,7 @@ remaining sources, or when `reactor-stop` is called.
 
 ;; Echo one line from each of two pipe read-ends, concurrently, on a single
 ;; thread -- no global scheduler involved.
-(defn serve [r : ptr<void> g : ptr<void> read-fd : int] : nil
+(defn serve [g : ptr<void> read-fd : int] : nil
   ;; Park until the fd is readable (or 5s elapses), then handle it.
   (let [ev (local-park-fd g read-fd READ 5000)]
     (if (= ev -2)
@@ -215,8 +215,8 @@ remaining sources, or when `reactor-stop` is called.
 (defn main [] : int
   (let [r (reactor-new)
         g (local-fiber-group-new r)]
-    (local-spawn g (fn [u] : nil (serve r g conn-a)) nil)
-    (local-spawn g (fn [u] : nil (serve r g conn-b)) nil)
+    (local-spawn g (fn [u] : nil (serve g conn-a)) nil)
+    (local-spawn g (fn [u] : nil (serve g conn-b)) nil)
     ;; Drives both fibers: each runs until it parks on its fd, the reactor
     ;; polls, and whichever fd fires first resumes its fiber.
     (reactor-run-fibers g)

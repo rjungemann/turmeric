@@ -167,7 +167,7 @@ through the matched ctor without the caller re-listing every field, and
 `(.field s)` reads the variant's field directly:
 
 ```turmeric
-(defadt Shape :copy
+(defdata Shape :copy
   (Circle [radius : float])
   (Rect   [w : float h : float]))
 
@@ -227,11 +227,6 @@ defn unwrap-right [e : int] : int
 The marker is the *only* escape hatch; without it a non-exhaustive match does
 not compile. Use it sparingly and leave a comment explaining why the missing
 arm is unreachable.
-
-> Note: this guide's plan ([sum-types-either-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md)) originally specced
-> exhaustiveness as a *warning*. The implementation keeps it a hard **error**
-> (the stronger, pre-existing behaviour) and adds `#fx{NonExhaustive}` as the
-> deliberate opt-out -- see that plan's ADR for the rationale.
 
 ## The `Either` module
 

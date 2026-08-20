@@ -204,8 +204,7 @@ The state is an ordinary `let`-bound `^mut`. A clause is emitted as its own C
 frame, so the compiler promotes a mutable that a clause touches to a shared
 cell behind the scenes -- every view of it (the enclosing frame, each clause,
 the code after the `handle`) reads and writes the same storage, which is what
-the source says. Earlier releases required a hand-rolled heap cell here; that
-workaround still works but is no longer needed.
+the source says.
 
 ### Nondeterminism
 
@@ -626,14 +625,10 @@ pins the type:
 (defn mk [] : (Option int) (pure 42))   ;; OK -- return type pins it
 ```
 
-The `for` comprehension macro used to be caught by this and no longer is. It
-desugars the body to `.pure`, and the dot form asks the wrong question for a
-return-directed method -- `.m` means "dispatch on the first argument", but
-`pure`'s first argument is the payload, not the class type, so the receiver was
-an erased `int64_t` and every `Applicative` instance matched by name. The
-expected type was there all along (`bind`'s signature pins the lambda's result);
-the dot-dispatch path just was not asking for it. It does now, so `for` resolves
-against the auto-loaded instances:
+The `for` comprehension macro is not caught by this. It desugars the body to
+`.pure`, and the dot-dispatch path consults the expected type (`bind`'s
+signature pins the lambda's result), so `for` resolves against the auto-loaded
+instances:
 
 ```turmeric no-check
 (defn sums [] : (Option int)
@@ -641,8 +636,7 @@ against the auto-loaded instances:
 ```
 
 `do-m` remains the more explicit spelling and is what most of this guide uses;
-it desugars only to `.bind`, which is receiver-directed. See
-[docs/archive/for-comprehension-pure-ambiguous-against-stdlib.md](../archive/for-comprehension-pure-ambiguous-against-stdlib.md).
+it desugars only to `.bind`, which is receiver-directed.
 
 ### Type erasure at instance boundaries
 
@@ -677,8 +671,8 @@ one:
   compiler rejects that with a located error naming the workaround (hoist the
   loop into a helper function and call it from the clause).
 
-The second is an open compiler defect tracked in `docs/reported/`; the first
-and third are designed evictions with their own diagnostics.
+The second is a compiler limitation; the first and third are designed
+evictions with their own diagnostics.
 
 ## Compared to Haskell
 
