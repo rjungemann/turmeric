@@ -1,8 +1,12 @@
 ;; TCE / test-suite-idioms Phase E: typed empty-container literals.
-;; A fused `:T` element-type suffix on a vec or set literal pins the
-;; collection's element type, so an empty `[]:int` / `#set{}:int`
-;; recovers its element type without a verbose `(:: (vec-new) (Vec int))`
-;; ascription.  Desugars to `(:: <literal> (Vec T))` / `(:: <literal> (Set T))`.
+;; A fused `:T` element-type suffix on a vec, set, or map literal pins the
+;; collection's type parameters, so an empty `[]:int` / `#set{}:int` /
+;; `#map{}:(cstr int)` recovers them without a verbose
+;; `(:: (vec-new) (Vec int))` ascription.  Desugars to
+;; `(:: <literal> (Vec T))` / `(:: <literal> (Set T))` / `(:: <literal> (Map K V))`.
+;;
+;; Map is the one two-parameter case: its suffix is a parenthesised PAIR, so
+;; the arity is explicit.  See docs/archive/typed-empty-map-literal-suffix.md.
 (defn main [] : int
   ;; []:int -- empty typed vec; .eq? dispatch recovers Eq[Vec[int]]
   (let [a []:int
@@ -20,7 +24,20 @@
   ;; #set{}:int -- empty typed set
   (let [s (set-add #set{}:int 7 7)]
     (println (set-count s)))  ; 1
-  ;; nested (parenthesized) element type
+  ;; nested (parenthesized) element type -- ONE element type that happens to
+  ;; be parenthesised, not a pair.  Contrast with the map rows below.
   (let [vv []:(Vec int)]
     (println (vec-len vv)))   ; 0
+  ;; #map{}:(K V) -- empty typed map; the suffix is a (key value) pair
+  (let [m #map{}:(cstr int)]
+    (println (map-count m)))  ; 0
+  ;; ... and it survives being built up, with .eq? dispatch recovering
+  ;; Eq[Map[cstr, int]] from the pinned type
+  (let [a (map-assoc #map{}:(cstr int) "k" 1)
+        b (map-assoc #map{}:(cstr int) "k" 1)
+        c (map-assoc #map{}:(cstr int) "k" 9)]
+    (println (.eq? a b))      ; true:  both {"k" 1}
+    (println (.eq? a c)))     ; false: 1 vs 9
+  ;; two empty typed maps compare equal without any value to infer from
+  (println (.eq? #map{}:(cstr int) #map{}:(cstr int)))  ; true
   0)

@@ -73,7 +73,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
 | [readme-structural-equality-op-missing](readme-structural-equality-op-missing.md) | low | README advertises `=struct=`, which has never existed |
 | [repl-doc-table-lists-removed-try-catch-throw](repl-doc-table-lists-removed-try-catch-throw.md) | low | REPL `:doc` still documents try/catch/throw, deleted in v0.25.0 |
-| [typed-empty-map-literal-suffix](typed-empty-map-literal-suffix.md) | low | `[]:T` and `#set{}:T` exist; `#map{}` has no typed-empty suffix |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tur-audit-not-implemented](tur-audit-not-implemented.md) | low | security docs promise `tur audit`; only audit-spans exists |
 | [justfile-test-recipe-lost-ctest-j](justfile-test-recipe-lost-ctest-j.md) | low | Justfile test recipe dropped ctest -j, the documented soft regression |
