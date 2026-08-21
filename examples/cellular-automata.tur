@@ -91,26 +91,26 @@
 
   printf("Blinker (5x5, period 2):\n");
   printf("Generation 0:\n");
-  grid_print_raw(pattern_blinker(), 5, 5);
+  __TUR_CNAME_grid-print-raw__(__TUR_CNAME_pattern-blinker__(), 5, 5);
 
   printf("\nGeneration 1:\n");
   int64_t *g1 = malloc(25 * sizeof(int64_t));
-  life_step(pattern_blinker(), 5, 5, (void *)g1);
-  grid_print_raw((void *)g1, 5, 5);
+  __TUR_CNAME_life-step__(__TUR_CNAME_pattern-blinker__(), 5, 5, (void *)g1);
+  __TUR_CNAME_grid-print-raw__((void *)g1, 5, 5);
 
   printf("\nGeneration 2 (matches Gen 0):\n");
   int64_t *g2 = malloc(25 * sizeof(int64_t));
-  life_step((void *)g1, 5, 5, (void *)g2);
-  grid_print_raw((void *)g2, 5, 5);
+  __TUR_CNAME_life-step__((void *)g1, 5, 5, (void *)g2);
+  __TUR_CNAME_grid-print-raw__((void *)g2, 5, 5);
   free(g1); free(g2);
 
   printf("\nBlock (4x4, stable):\n");
   printf("Generation 0:\n");
-  grid_print_raw(pattern_block(), 4, 4);
+  __TUR_CNAME_grid-print-raw__(__TUR_CNAME_pattern-block__(), 4, 4);
   printf("\nGeneration 1 (matches Gen 0):\n");
   int64_t *b1 = malloc(16 * sizeof(int64_t));
-  life_step(pattern_block(), 4, 4, (void *)b1);
-  grid_print_raw((void *)b1, 4, 4);
+  __TUR_CNAME_life-step__(__TUR_CNAME_pattern-block__(), 4, 4, (void *)b1);
+  __TUR_CNAME_grid-print-raw__((void *)b1, 4, 4);
   free(b1);
   return 0;
   ```)

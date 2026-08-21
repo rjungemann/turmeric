@@ -1364,6 +1364,7 @@ Expr *elab_unsafe(Elab *e, const Form *call) {
 
     /* Create handle expression */
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    memset(handle, 0, sizeof(HandleExpr));   /* arena memory is not zeroed */
     handle->body = body;
     handle->cases = unsafe_case;
     handle->n_cases = 1;

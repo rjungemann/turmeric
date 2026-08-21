@@ -48,7 +48,8 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | --- | --- | --- |
 | [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
 | [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
-| [examples-tree-does-not-run](examples-tree-does-not-run.md) | medium | all 5 datalog examples compile, four SIGSEGV at runtime; 9 of 17 examples still fail `tur check`. The ratchet checks, nothing runs |
+| [guestbook-example-has-no-import-graph](guestbook-example-has-no-import-graph.md) | medium | the guestbook's 7 files are one problem: nothing loads them (its CMake `DEPENDS` is not an import), plus stale `extern-c`/`unit`/`Serializable` syntax, plus a dependency on the unimplemented serializable-continuation surface |
+| [perform-inside-loop-has-no-lowering](perform-inside-loop-has-no-lowering.md) | medium | a `perform` reachable from a `while` body has no CPS lowering -- and the diagnostic prescribes a hoist that does not escape it. Blocks every event-loop-shaped effect, `examples/snake` included |
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
@@ -212,7 +213,8 @@ mattered rather than just being untidy:
   "a codegen scoping bug inside `sch_hydecode_hyrec_hy`" -- was wrong, and its
   "attribution unverified" note is closed: neither bug was branch-specific.
   The runtime residue is now the open row
-  [examples-tree-does-not-run](examples-tree-does-not-run.md) above.
+  [examples-tree-does-not-run](../archive/examples-tree-does-not-run.md),
+  filed and resolved the same day (see the note below).
 - `logic-guide-documents-unimplemented-backtracking-api` was archived with its
   narrative sections still a design sketch, labelled as one in the file.
 
@@ -220,6 +222,31 @@ Archiving a PARTIALLY resolved report is what made both invisible. If a
 resolution leaves work behind, the leftover belongs in a new `docs/reported/`
 file with its own row -- not in a "Remaining work" heading inside
 `docs/archive/`.
+
+`examples-tree-does-not-run` was filed and resolved 2026-08-21 (same day) and
+moved to [docs/archive](../archive/examples-tree-does-not-run.md). Everything
+in `examples/` that compiles now also runs. Both of its runtime items were
+example code, not the compiler, and the answers were cheap once anyone
+actually looked: the four datalog segfaults were `return (int)vec->data[i];`
+in hand-written inline C -- C's `int` is 32 bits, so a 64-bit datum pointer
+came back truncated -- and `datalog.tur`'s TUR-E0201 was a `defdata` that
+moves by default being used twice, which wants `:copy` (now documented in
+`docs/guides/datalog-02-minimal-impl.md`, where a reader meets the trap).
+`cli_args_demo.tur` was fictional twice over (`print` and a bare `getenv`,
+neither of which exists) and is rewritten against the real `env/get`.
+`cellular-automata.tur` checked clean but never linked -- its inline C called
+sibling Turmeric functions by their unmangled names instead of
+`__TUR_CNAME_<name>__`.
+
+The lesson worth keeping is the ratchet's, not any individual fix:
+`tests/check-examples.sh` only ever ran `tur check`, and `tur check` passing
+was mistaken for "works" twice in this tree's history. It now RUNS every
+example that checks clean and requires exit 0, and it fails on any sanitizer
+line the Debug compiler prints while checking one -- which is how a live union
+type-confusion in `emit_stmt` (a `(perform ...)` in statement position reading
+`is_unsafe_marker` out of a `PerformExpr`) got found and fixed. That one could
+not be pinned by a fixture, since whether the garbage byte is non-zero is
+uninitialized memory; the sweep pins it instead.
 
 ## Value representation (the consolidation campaign)
 

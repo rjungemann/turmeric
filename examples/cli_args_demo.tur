@@ -1,12 +1,29 @@
-;;; cli_args_demo -- Demonstrates how to access environment variables.
+;;; cli_args_demo -- Demonstrates how to read environment variables.
 ;;;
 ;;; Example:
 ;;;   ARG1=hello ARG2=world tur run examples/cli_args_demo.tur
-;;;   ; => hello world
+;;;   ; => Environment variables: hello world
+;;;
+;;; Two things this example is careful about, both of which it used to get
+;;; wrong:
+;;;
+;;;   - There is no `print`. `println` is the output primitive and it takes
+;;;     exactly one argument, so a line assembled from several pieces is built
+;;;     with `str-concat` and printed once.
+;;;   - There is no bare `getenv` either. Environment access lives in
+;;;     `stdlib/env.tur` and returns an `(Option cstr)`, because a variable
+;;;     that is not set is a real possibility rather than a NULL to trip over.
+;;;     `env-or` below is this file's own helper for "or this default".
+
+(load "stdlib/env.tur")
+(load "stdlib/str-build.tur")
+
+(defn env-or [name : cstr dflt : cstr] : cstr
+  (let [v (env/get name)]
+    (if (.is-some v) (.value v) dflt)))
 
 (defn main [] : void
-  (print "Environment variables: ")
-  (print (getenv "ARG1"))
-  (print " ")
-  (print (getenv "ARG2"))
-  (println ""))
+  (println (str-concat "Environment variables: "
+                       (str-concat (env-or "ARG1" "(unset)")
+                                   (str-concat " "
+                                               (env-or "ARG2" "(unset)"))))))
