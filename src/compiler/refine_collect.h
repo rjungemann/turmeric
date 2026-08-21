@@ -96,9 +96,8 @@ typedef struct RefineFnInfo {
     /* R2 + R4 slice 1 (trusted-refinement-claims-plan): positive evidence
      * the `#reads` frame above is broken (the body directly reads a mutable
      * global, or mutable state rooted in a parameter the frame omits).
-     * Mirrors Binding.reads_frame_omits_state.  Consulted only under
-     * `--enable=checked-reads`, where it refuses the congruence grant; false
-     * means "no evidence", never "verified clean". */
+     * Mirrors Binding.reads_frame_omits_state.  Refuses the congruence grant;
+     * false means "no evidence", never "verified clean". */
     bool         reads_frame_omits_state;
     /* WF1/WF2 / #writes: this callee's declared write frame, mirroring the
      * Binding fields of the same names.  `writes_declared` distinguishes "the
@@ -187,9 +186,9 @@ typedef struct RefineObligation {
      * kept".  When set, runtime_guarded is false (the crossing is proof-only)
      * and the W0372 text branches to the no-fallback wording. */
     bool         reads_no_runtime;
-    /* R2 (`--enable=checked-reads`): the `#reads` measure this crossing
-     * depends on carries broken-frame evidence and the gate is on, so the
-     * congruence grant was REFUSED.  Only refines the W0372 wording: "guard
+    /* R2: the `#reads` measure this crossing depends on carries broken-frame
+     * evidence, so the congruence grant was REFUSED.  Only refines the W0372
+     * wording: "guard
      * it inside a `frozen` region" is misleading advice when the crossing IS
      * frozen and the frame is what failed. */
     bool         reads_grant_refused;

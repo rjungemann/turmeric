@@ -255,11 +255,12 @@ question is answered.~~
 > and ONE ECS DECISION IS ITS TRIGGER.**
 > [`trusted-refinement-claims-plan.md`](../trusted-refinement-claims-plan.md)
 > covers the promise C2's answer rests on. Two pieces are already live and
-> cost the ECS nothing today: `TUR-W0383` warns, gatelessly, when a `#reads`
-> measure's body *demonstrably* reads a mutable global, and
-> `--enable=checked-reads` refuses the congruence grant on that same
-> evidence -- every ECS measure is inline-C, which yields no evidence, so
-> both stay silent for the spice as it stands.
+> cost the ECS nothing today: `TUR-W0383` warns when a `#reads` measure's
+> body *demonstrably* reads a mutable global, and the same evidence refuses
+> the congruence grant (gated as `--enable=checked-reads` when this note was
+> written; unconditional since it graduated in 0.37.0) -- every ECS measure
+> is inline-C, which yields no evidence, so both stay silent for the spice as
+> it stands, graduation included.
 >
 > The piece that waits on this plan is **R4, the general checked `#reads`**:
 > it is blocked on the measure layer holding its state in Turmeric-visible

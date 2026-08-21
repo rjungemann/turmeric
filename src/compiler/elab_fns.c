@@ -2,8 +2,7 @@
 #include "elab_internal.h"
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
-#include "globals.h"            /* repr-trace: g_emit_abi_trace; WF1: g_opt_write_frames */
-#include "experiments.h"        /* WF1: experiment_warn_if_used("write-frames") */
+#include "globals.h"            /* repr-trace: g_emit_abi_trace; G1: g_dump_write_frames */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
  * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
@@ -1970,7 +1969,7 @@ static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovere
 void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
                         const Form *defn_form, uint32_t body_start,
                         const Form *annot) {
-    if (!e || !fn || !g_opt_write_frames) return;
+    if (!e || !fn) return;
     if (e->n_wf_frame_sites == e->cap_wf_frame_sites) {
         uint32_t ncap = e->cap_wf_frame_sites ? e->cap_wf_frame_sites * 2 : 8;
         WriteFrameSite *nb = (WriteFrameSite *)arena_alloc(
@@ -1991,7 +1990,7 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
 }
 
 void wf_resolve_write_frames(Elab *e) {
-    if (!e || !g_opt_write_frames || e->n_wf_frame_sites == 0) return;
+    if (!e || e->n_wf_frame_sites == 0) return;
     /* Iterate to a fixed point: channel 3 consults a callee's `writes_checked`,
      * which a later pass may raise, so one linear sweep would under-verify a
      * caller purely because its callee had not been visited yet.  Verdicts only
@@ -2409,8 +2408,6 @@ void rf_resolve_read_frames(Elab *e) {
                     s->fn->reads_params_mask, &budget, &witness) != WF_EXCEEDED)
             continue;
         s->fn->reads_frame_omits_state = true;
-        if (g_opt_checked_reads)
-            experiment_warn_if_used("checked-reads");
         if (!s->is_clone) {
             char frame_txt[256];
             size_t fo = 0;
@@ -2500,8 +2497,9 @@ void rf_resolve_read_frames(Elab *e) {
  *     would let a promise elide a check, which is the thing the checked tier
  *     exists to prevent.
  *
- * Gated on the experiment, because it consumes WF2's verdicts and changes which
- * programs prove. */
+ * Unconditional since write-frames graduated (2026-08-20): it consumes WF2's
+ * verdicts, and a body with no checked frame in reach simply answers "assume
+ * it writes", which is what it answered before the checked tier existed. */
 
 /* Can the callee named `head` write the argument it receives in `slot`
  * (0-based)?  Conservative: true unless something positively says otherwise. */
@@ -3587,12 +3585,11 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     /* A borrowed local is the one way a callee could write this frame's slot,
      * so an assigned name that is also borrowed is not provably disjoint --
      * unless every borrow of it provably goes nowhere that writes, which is
-     * the question WF2's checked frames made askable.  Without the experiment
-     * there are no checked frames to ask, so the guard stays unconditional. */
+     * the question WF2's checked frames made askable.  A body with no checked
+     * frame in reach answers "no" and the guard stays as strict as it was. */
     for (uint32_t i = 0; i < nw; i++)
         if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0) &&
-            !(g_opt_write_frames &&
-              wf_borrow_write_free(e, cs->caller_body, wtgt[i], 0)))
+            !wf_borrow_write_free(e, cs->caller_body, wtgt[i], 0))
             return saved;
 
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
@@ -3760,8 +3757,8 @@ void refine_resolve_call_sites(Elab *e) {
             ob->runtime_guarded = !reads_crossing;
             ob->reads_no_runtime = reads_crossing;
             /* R2: only consulted for the W0372 wording; computed only when
-             * the crossing is a #reads one at all and the gate is on. */
-            ob->reads_grant_refused = reads_crossing && g_opt_checked_reads &&
+             * the crossing is a #reads one at all. */
+            ob->reads_grant_refused = reads_crossing &&
                                       rt_pred_reads_measure_refused(e, pred);
             bool inst_ok = refine_discharge_one(ob, e->arena);
 
@@ -6334,7 +6331,6 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             body_start++;  /* skip past the #reads annotation */
         } else if (maybe->fx_prov == (uint8_t)PROV_WRITES) {
-            experiment_warn_if_used("write-frames");
             if (writes_declared_defn) {
                 diag_emit_with_code(DIAG_ERROR, maybe->span,
                                     TUR_E0381_WRITES_FRAME_INVALID,
@@ -8002,12 +7998,6 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * encoder's refusal must see it whichever binding a call resolves
              * to.  Only the WARNING is deduped by the bare_fat guard below. */
             b->reads_frame_omits_state = true;
-            /* The refusal is the experiment's behaviour, so its lifecycle
-             * warning fires where the refusal becomes live: evidence found
-             * AND the gate on.  A gate enabled over a clean program stays
-             * quiet -- it changed nothing. */
-            if (g_opt_checked_reads)
-                experiment_warn_if_used("checked-reads");
             if (!e->bare_fat_spec_active) {
                 /* The frame may name several parameters, so render the whole
                  * list -- quoting just the first would misreport which claim

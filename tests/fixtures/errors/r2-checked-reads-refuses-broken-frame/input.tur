@@ -1,5 +1,5 @@
-;; R2 (docs/upcoming/trusted-refinement-claims-plan.md): under
-;; `--enable=checked-reads`, positive evidence that a `#reads` frame omits
+;; R2 (docs/upcoming/trusted-refinement-claims-plan.md, graduated
+;; 2026-08-20): positive evidence that a `#reads` frame omits
 ;; mutable state the body reads (the same evidence TUR-W0383 reports
 ;; gatelessly) REFUSES the congruence override.  This is the exact program of
 ;; tests/fixtures/refine-reads-frame-omits-global -- which still proves and

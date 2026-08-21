@@ -12,7 +12,7 @@
 ;; fixture pins the trust boundary.  If a future change makes inline-C bodies
 ;; walkable, `lie!` becomes TUR-E0382 and this fixture moves to errors/.
 ;;
-;; Expected: compiles clean under --enable=write-frames and prints 0.
+;; Expected: compiles clean (an inline-C body stays trusted) and prints 0.
 (defopaque Buf :int)
 
 (defn buf-new [cap : int] #fx{} : Buf

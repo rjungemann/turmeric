@@ -1,1 +1,1 @@
---strict-refine --enable=checked-reads
+--strict-refine

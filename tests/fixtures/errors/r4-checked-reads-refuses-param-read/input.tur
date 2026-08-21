@@ -1,10 +1,19 @@
-;; R4 slice 1: the refine-reads-frame-omits-param program under
-;; `--enable=checked-reads --strict-refine`. The same omitted-parameter
-;; evidence that draws TUR-W0383 by default now REFUSES the congruence
-;; override, so the crossing that proves gate-off becomes an undischarged
-;; TUR-W0372 -- with the refusal wording that points at the frame, not the
-;; region. The sibling r2-checked-reads-refuses-broken-frame pins the same
-;; escalation for the mutable-global evidence kind.
+;; R4 slice 1, OMITTED-PARAMETER evidence: `linked?` declares `#reads w` and
+;; then reads state reached through `g`, a parameter the frame does not name.
+;; That evidence draws TUR-W0383 and REFUSES the congruence override, so the
+;; crossing inside the frozen region is undischarged -- a hard TUR-W0372 under
+;; `--strict-refine`, carrying the refusal wording that points at the frame
+;; rather than the region.
+;;
+;; Both halves are asserted here. Before checked-reads graduated (2026-08-20)
+;; the W0383 wording lived on a passing twin, refine-reads-frame-omits-param,
+;; which pinned the gate-off default of proving anyway; graduation made that
+;; twin byte-for-byte this program with the opposite expectation, so its
+;; assertions were folded in here rather than left to contradict this one.
+;;
+;; The sibling r2-checked-reads-refuses-broken-frame pins the same escalation
+;; for the mutable-global evidence kind, and
+;; r4-checked-reads-refuses-callee-frame-read for the call-shape kind.
 (defstruct Wld [gens : ptr<void>])
 (defstruct Grd [gens : ptr<void>])
 

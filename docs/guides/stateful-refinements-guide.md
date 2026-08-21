@@ -333,13 +333,14 @@ semantics break:
    bounds work.
 
 Treat today's `#reads` as step 1 of that path, not as a finished `reads`-clause
-feature. **Step 2 has landed behind `--enable=write-frames`** --
-`#writes w` / `#writes [a b]` declares which arguments a body may write, and a
-frame on a body with no inline C is *checked* rather than believed. See
+feature. **Step 2 has landed** (as the `write-frames` experiment, graduated in
+0.37.0) -- `#writes w` / `#writes [a b]` declares which arguments a body may
+write, and a frame on a body with no inline C is *checked* rather than
+believed. See
 [`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/checked-write-frames-plan.md).
 
-`#reads` itself is unchanged by it: still trusted, still refinement-only,
-still step 1. What a checked `#writes` frame buys today is on the
+`#reads` itself is unchanged by it: still trusted where it cannot be checked,
+still refinement-only, still step 1. What a checked `#writes` frame buys today is on the
 *invalidation* side -- a borrowed local no longer forces every hypothesis in
 the body to be dropped when the borrow provably reaches nothing that writes.
 
@@ -421,32 +422,38 @@ pointer chases back to an unframed parameter -- including inside the
 `(unsafe ...)` block those loads require). Both draw `TUR-W0383` at the
 definition ("`#reads w` omits mutable state the body reads"); the
 omitted-parameter wording tells you the fix is `#reads [w g]`, after which
-the grant requires *both* frozen at the site. The warning is gateless and
-changes nothing proved -- the override still grants congruence -- because
-positive evidence of the broken promise is worth reporting even before any
-decision to refuse it. Only a *demonstrable* read warns: an inline-C body
-yields no evidence and stays silent (so every measure from before mutable
-globals existed is unaffected), and a read behind a call the walk cannot
-follow stays silent too. `tur --explain TUR-W0383` has the full story.
+the grant requires *both* frozen at the site. Only a *demonstrable* read
+warns: an inline-C body yields no evidence and stays silent (so every measure
+from before mutable globals existed is unaffected), and a read behind a call
+the walk cannot follow stays silent too. `tur --explain TUR-W0383` has the
+full story.
 
-Behind `--enable=checked-reads`, the same evidence **refuses the override**:
-the measure encodes fresh-per-occurrence like any unframed impure callee, the
-crossing that used to be proved from the broken promise becomes `TUR-W0372`
-(with wording that says the frame failed, not the region -- the "guard it
-inside a `frozen` region" advice would be misleading when the region is
-present), and `--strict-refine` makes it a hard error. Refusal keys on "saw a
-read", never "could not see", so an inline-C measure keeps the trusted grant
-even under the gate. See
+Since 0.37.0 (the `checked-reads` experiment, graduated) that same evidence
+also **refuses the override**: the measure encodes fresh-per-occurrence like
+any unframed impure callee, the crossing that used to be proved from the
+broken promise becomes `TUR-W0372` (with wording that says the frame failed,
+not the region -- the "guard it inside a `frozen` region" advice would be
+misleading when the region is present), and `--strict-refine` makes it a hard
+error. Refusal keys on "saw a read", never "could not see", so an inline-C
+measure keeps the trusted grant.
+
+Note what refusing does **not** do. A `#reads` crossing is proof-only by
+design -- there is no runtime fallback to fall back to -- so refusing buys a
+diagnostic, not a check. Outside `--strict-refine` the program still compiles
+and still runs the unearned crossing; what changed is that the compiler now
+says so rather than staying silent. Fix the frame. See
 [`trusted-refinement-claims-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/trusted-refinement-claims-plan.md)
 (R2 for the mutable-global evidence, R4 slice 1 for the omitted-parameter
-evidence -- the fixture triple `refine-reads-frame-omits-param`,
-`errors/r4-checked-reads-refuses-param-read`,
-`refine-reads-multi-param-visible-quiet` pins warn / refuse / fixed-frame).
+evidence -- `errors/r4-checked-reads-refuses-param-read` pins the refusal and
+`refine-reads-multi-param-visible-quiet` the fixed frame, while
+`refine-reads-frame-omits-global` pins the non-strict "warns, still runs"
+half).
 
 There is also a **verification** tier now, layered on the evidence tier:
-a deferred footprint walk runs gatelessly over each `#reads` function's
-elaborated body, and `--dump-read-frames` (a diagnostic knob, usable with
-or without the experiment) prints one of three verdicts per frame:
+a deferred footprint walk runs over each `#reads` function's
+elaborated body, and `--dump-read-frames` (a diagnostic knob -- it reports
+what the pass decided and changes nothing) prints one of three verdicts per
+frame:
 
 - `VERIFIED` -- the walk saw the whole body and every read of mutable state
   attributes to a frame-named parameter. This includes reads made *through*
@@ -456,10 +463,10 @@ or without the experiment) prints one of three verdicts per frame:
 - `EXCEEDED` -- a read the frame omits, possibly reached through a verified
   callee's frame. That last shape is one the definition-site evidence scan
   cannot see (it is behind a call), so the verification pass feeds it into
-  the same evidence tier itself: the finding draws the gateless `TUR-W0383`
-  (with wording that names the callee-frame route), and under
-  `--enable=checked-reads` it refuses the congruence grant exactly like the
-  direct findings. One finding, one warning, whichever tier saw it first.
+  the same evidence tier itself: the finding draws `TUR-W0383` (with wording
+  that names the callee-frame route) and refuses the congruence grant exactly
+  like the direct findings. One finding, one warning, whichever tier saw it
+  first.
 - `UNVERIFIED` -- something could not be vouched for: an inline-C body, an
   indirect or unframed call, an unmodeled form. Not a finding -- the frame
   simply stays at the trusted tier it is at today.

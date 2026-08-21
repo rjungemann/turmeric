@@ -9,6 +9,12 @@
 > **G5b closed 2026-08-18: `global-state` GRADUATED in 0.35.0** (§21) -- every
 > feature is unconditional and the row is retired. Every phase is done; this
 > plan is a record rather than open work.
+> **Addendum 2026-08-20: `write-frames` GRADUATED in 0.37.0.** Read every
+> "behind `--enable=write-frames`" below as historical -- a `#writes` frame
+> is checked unconditionally now, including the G1 global-write downgrade and
+> the §22 blast-radius argument, which was scoped to the gate that no longer
+> exists. Nothing else in this plan changes; see
+> [`checked-write-frames-plan.md`](../archive/checked-write-frames-plan.md).
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up

@@ -1,12 +1,14 @@
 ;; WF3 widening: a borrowed assignment target is rescued when every borrow of
 ;; it provably goes nowhere that writes.
 ;;
-;; This is byte-for-byte errors/refine-wf3-borrowed-target -- the fixture that
-;; pins the UN-widened behavior -- plus `--enable=write-frames`.  There, the
-;; `(& acc)` borrow forces the whole-body decline on the grounds that a callee
-;; could write `acc`'s slot through it.  True, and until WF2 there was no way
-;; to ask whether one actually does, so assuming the worst was the only sound
-;; answer.
+;; Before WF2, the `(& acc)` borrow forced a whole-body decline on the grounds
+;; that a callee could write `acc`'s slot through it.  True, and there was no
+;; way to ask whether one actually does, so assuming the worst was the only
+;; sound answer.  errors/refine-wf3-borrowed-target used to pin that
+;; un-widened behavior by withholding `--enable=write-frames`; when the
+;; experiment graduated (2026-08-20) it became byte-for-byte this fixture with
+;; the opposite expectation, so it was folded in here rather than left to
+;; assert a state the compiler no longer has.
 ;;
 ;; With checked frames there is a question to ask.  `__b` is never passed
 ;; anywhere -- it is never used at all -- so no callee receives the borrow and

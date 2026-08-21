@@ -1,17 +1,18 @@
-;; R4 slice 1, the fixed-frame quadrant: the refine-reads-frame-omits-param
-;; program with the frame WIDENED to `#reads [w g]` -- exactly what the
+;; R4 slice 1, the fixed-frame quadrant: the
+;; errors/r4-checked-reads-refuses-param-read program with the frame WIDENED
+;; to `#reads [w g]` -- exactly what the
 ;; W0383 message tells the author to write. Both named parameters are
 ;; frozen at the site, so the conjunctive grant applies; the evidence walk
 ;; finds every raw load rooted in a FRAMED parameter and stays silent; and
-;; the program proves and prints 100 even with `--enable=checked-reads` on.
+;; the program proves and prints 100 even with the checked-reads refusal live.
 ;;
 ;; This pins two properties at once, STRUCTURALLY rather than by stderr
 ;; diffing (the harness can only assert substrings present, not absent):
-;; with the gate on, any residual evidence would REFUSE the grant and the
-;; --strict-refine crossing would hard-error, so this fixture printing 100
-;; is itself the proof that naming the parameter cleared the finding. And
-;; it pins that the R2/R4 refusal keys on evidence, never on the mere
-;; presence of the gate over a clean program.
+;; any residual evidence would REFUSE the grant and the --strict-refine
+;; crossing would hard-error, so this fixture printing 100 is itself the
+;; proof that naming the parameter cleared the finding. And it pins that the
+;; R2/R4 refusal keys on evidence, never on the mere presence of a `#reads`
+;; frame over a clean program.
 (defstruct Wld [gens : ptr<void>])
 (defstruct Grd [gens : ptr<void>])
 

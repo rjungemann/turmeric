@@ -1,11 +1,18 @@
-;; R4 slice 3: the refine-reads-callee-frame-omits-param program under
-;; `--enable=checked-reads --strict-refine`. The call-shape evidence -- the
-;; body reaches g's state through gen-at's own verified `#reads` frame,
-;; and the `#reads w` frame omits g -- refuses the congruence override,
-;; so the crossing that proves gate-off becomes an undischarged TUR-W0372
-;; with the fix-the-frame refusal wording. Pins that the verification
-;; pass's evidence sweep runs BEFORE crossing resolution and stamps every
-;; binding the encoder might resolve to.
+;; R4 slice 3, CALL-SHAPE evidence: `cross?` declares `#reads w`, and its body
+;; reaches g's state through `gen-at`'s own verified `#reads` frame -- a read
+;; the defn-site structural scans cannot see, found by the verification pass
+;; instead. It refuses the congruence override like any other evidence kind,
+;; so the crossing is undischarged: a hard TUR-W0372 under `--strict-refine`,
+;; with the fix-the-frame refusal wording.
+;;
+;; Also pins that the evidence sweep runs BEFORE crossing resolution and
+;; stamps every binding the encoder might resolve to.
+;;
+;; Both halves are asserted here. Before checked-reads graduated (2026-08-20)
+;; the W0383 wording lived on a passing twin,
+;; refine-reads-callee-frame-omits-param, which pinned the gate-off default of
+;; proving anyway; graduation made that twin this same program with the
+;; opposite expectation, so its assertions were folded in here.
 (defstruct Wld [gens : ptr<void>])
 (defn wld-new [] : Wld
   (unsafe (let [p (raw-malloc 32)]

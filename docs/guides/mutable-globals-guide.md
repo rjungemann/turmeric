@@ -81,9 +81,9 @@ outright for writing something the frame had no way to name:
 Declared-but-never-written is fine -- a frame is an *upper bound*. Frames may
 mix parameters and globals: `#writes [a hits]`.
 
-Naming a global is unconditional, but `write-frames` is what *checks* frames at
-all: without `--enable=write-frames` a frame naming a global parses and imposes
-nothing.
+Frames are checked (WF2's three verdicts) as of 0.37.0, when the `write-frames`
+experiment graduated -- before that a frame parsed and imposed nothing unless
+you passed `--enable=write-frames`.
 
 `#reads` is deliberately **not** part of this and still rejects a non-parameter
 name. It is the annotation that *grants* congruence, so a global there would let
@@ -193,7 +193,7 @@ discipline for you.
 | `^mut` | top level | `set!` is allowed | none |
 | `^atomic` | top level | accesses are sequentially consistent; needs `^mut`; 8-byte scalars | none |
 | `^thread-local` | top level | one copy per thread, initialized per thread | none |
-| `#writes [g]` | on a `defn` | the frame may name a global | `write-frames` to check it |
+| `#writes [g]` | on a `defn` | the frame may name a global, and is checked | none |
 | `(export (mut g))` | in `defmodule` | importers may write `g` | none |
 
 ## See also

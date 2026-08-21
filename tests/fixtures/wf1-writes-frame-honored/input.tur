@@ -10,7 +10,7 @@
 ;;   drive!  -- passes `a` to a callee whose CHECKED frame covers exactly `a`,
 ;;              which is the transitive channel; declaring `[a]` honors it.
 ;;
-;; Expected: compiles clean under --enable=write-frames and prints 0.
+;; Expected: compiles clean (WF2 verifies the frame) and prints 0.
 ;;
 ;; `main` deliberately does NOT read a struct back after mutating it through a
 ;; callee, and prints a freshly-constructed value instead.  Whether such a

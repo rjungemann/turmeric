@@ -499,10 +499,9 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                                 what, reason ? reason : "outside the supported fragment",
                                 ob->reads_grant_refused
                                   ? "no runtime fallback for an impure #reads "
-                                    "measure, and its congruence grant was refused "
-                                    "(--enable=checked-reads): the frame omits "
-                                    "mutable state the body reads (TUR-W0383) -- "
-                                    "fix the frame, not the region"
+                                    "measure, and its congruence grant was refused: "
+                                    "the frame omits mutable state the body reads "
+                                    "(TUR-W0383) -- fix the frame, not the region"
                                 : ob->reads_no_runtime
                                   ? "no runtime fallback for an impure #reads "
                                     "measure -- the crossing must be proven (guard "
@@ -627,10 +626,9 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                                     "%s", what,
                                     ob->reads_grant_refused
                                       ? "no runtime fallback for an impure #reads "
-                                        "measure, and its congruence grant was refused "
-                                        "(--enable=checked-reads): the frame omits "
-                                        "mutable state the body reads (TUR-W0383) -- "
-                                        "fix the frame, not the region"
+                                        "measure, and its congruence grant was refused: "
+                                        "the frame omits mutable state the body reads "
+                                        "(TUR-W0383) -- fix the frame, not the region"
                                     : ob->reads_no_runtime
                                       ? "no runtime fallback for an impure #reads "
                                         "measure -- the crossing must be proven (guard "

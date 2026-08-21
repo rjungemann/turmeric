@@ -9,7 +9,7 @@
 ;; hypothesis does not mention it, and the body never borrows it. Assign a
 ;; place expression, a mentioned name, or a borrowed local instead and the full
 ;; decline returns -- see errors/refine-stateful-mutation-invalidates,
-;; errors/refine-macrogen-set-in-expansion, errors/refine-wf3-borrowed-target.
+;; errors/refine-macrogen-set-in-expansion, errors/wf3-borrow-reaches-writer.
 ;;
 ;; Expected: refine: 1 proven, and the program prints 7.
 (defstruct World [n : int])

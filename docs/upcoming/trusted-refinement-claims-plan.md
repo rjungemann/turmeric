@@ -4,10 +4,12 @@
 > mutable-globals work, exactly where
 > [`mutable-globals-plan.md`](mutable-globals-plan.md) section 14 said it
 > should be: after G2 landed, from findings that came out of doing that work
-> rather than from guessing at them.  **R1 (the warning) and R2 (the gated
-> refusal, `--enable=checked-reads`) LANDED 2026-08-17** (see section 4).
+> rather than from guessing at them.  **R1 (the warning) and R2 (the
+> refusal) LANDED 2026-08-17** behind `--enable=checked-reads` (see section
+> 4), and **R2 GRADUATED 2026-08-20 in 0.37.0** -- the refusal is
+> unconditional and the gate is retired (section 5).
 > **R3 LANDED 2026-08-18** (commit 9376c6c3; see its section).  R4 belongs
-> to the ECS/spice side.
+> to the ECS/spice side and is still open.
 > **Type:** Language / refinement checking
 > **Depends on:** nothing.  Section 14 of the mutable-globals plan is explicit
 > that the read side blocks nothing and must not become a precondition.
@@ -133,7 +135,7 @@ anything outside this plan.
 
 See 1.4.  Remaining follow-through lives in R2's fixture note.
 
-### R2 -- the gated refusal (LANDED 2026-08-17; see section 4)
+### R2 -- the refusal (LANDED 2026-08-17 gated; GRADUATED 2026-08-20; see sections 4-5)
 
 Escalate positive evidence from "warn" to "refuse the congruence override":
 when `reads_scan_mut_global` (or its R2 extension) finds an outside mutable
@@ -559,8 +561,45 @@ Exactly the sketch above, plus one addition it did not anticipate:
 ### 4.3 What R3/R4 inherit
 
 Unchanged mechanically; R3 landed 2026-08-18 (see its section).  R4 still
-belongs to the measure layer.  If `checked-reads` graduates, the
-default flips from "trusted grant + warning" to "refusal on evidence" -- the
-sweep at that point is the fixture fold-together above plus retiring the
-gate language in stateful-refinements-guide.md and the TUR-W0383 --explain
-text.
+belongs to the measure layer.  The predicted graduation sweep is section 5.
+
+## 5. R2 graduation record (2026-08-20, v0.37.0)
+
+The default flipped from "trusted grant + warning" to "refusal on evidence".
+`g_opt_checked_reads` and its three read sites are gone; the name is in
+`GRADUATED[]`, so a lingering `--enable=checked-reads` is a TUR-W0063 no-op.
+
+Section 4.3 predicted the sweep exactly, and it was executed as written:
+
+- **The fixture fold-together.**  Each gate-off/gate-on pair became the same
+  program with contradictory expectations, so each was folded rather than
+  "repaired":
+  - `refine-reads-frame-omits-param` and
+    `refine-reads-callee-frame-omits-param` were byte-identical to their
+    `errors/r4-checked-reads-refuses-*` siblings (both already
+    `--strict-refine`), so they were deleted and the TUR-W0383 wording
+    needles they alone asserted were moved onto the survivors.
+  - `refine-reads-frame-omits-global` was **kept and flipped** rather than
+    folded away.  Dropping its `--strict-refine` makes it assert something
+    its errors sibling cannot -- see the next bullet.
+- **What the graduation does NOT change, made explicit.**  A `#reads`
+  crossing is proof-only: there is no runtime fallback to fall back to, so
+  refusing the grant buys a diagnostic, not a check.  Outside
+  `--strict-refine` the unearned crossing still executes and the flipped
+  fixture still prints 7.  The old guide line "the warning changes nothing
+  proved" needed a narrower correction than "now it does": what the refusal
+  changes is the proof, not the runtime.  Said plainly in
+  stateful-refinements-guide.md and pinned by that fixture, whose header now
+  says why it asserts the 7 -- so nobody "fixes" it by inserting a check the
+  design says does not exist.
+- **Gate language retired** in stateful-refinements-guide.md,
+  refinement-types-guide.md, mutable-globals-guide.md,
+  experimental-flags-guide.md, the TUR-W0383 `--explain` text, and the W0372
+  refusal wording itself, which named the flag inline ("its congruence grant
+  was refused (--enable=checked-reads)") and now does not.
+
+Evidence: the first full `bash tests/run.sh` after the flip came back **2673
+passed, 2 failed**, and the two failures were exactly the two twins above --
+nothing else in the corpus moved.  That is the reach the R2 record predicted:
+refusal keys on positive evidence from a walkable body, and essentially every
+measure in the tree is inline C.
