@@ -10524,7 +10524,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(bname);
                     }
 
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -10608,7 +10610,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
 
                     /* Emit arm body */
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -10749,7 +10753,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             free(gv);
                             ctx->indent += 4;
                         }
-                        if (!nil_result) {
+                        /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                         * as a statement, leaving the result temp at its zero init. */
+                        if (!nil_result && arm->body->type.kind != TY_NEVER) {
                             char *bv = emit_value(ctx, body, arm->body);
                             indent_buf(body, ctx->indent);
                             buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -10982,7 +10988,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
 
                     /* Emit body */
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -11103,7 +11111,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
 
                     /* Emit body */
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);

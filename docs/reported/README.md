@@ -51,7 +51,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
 | [performance-guide-fictional-stdlib-api](performance-guide-fictional-stdlib-api.md) | medium | performance-guide's middle sections document nonexistent stdlib modules/functions |
 | [logic-guide-documents-unimplemented-backtracking-api](logic-guide-documents-unimplemented-backtracking-api.md) | medium | logic-programming-guide's API summary (`choice-point`/`run`/`do-backtrack`) does not exist |
-| [match-nested-constructor-patterns](match-nested-constructor-patterns.md) | medium | match arms cannot nest constructor patterns; everything flattens with inner match |
+| [match-adt-var-arm-does-not-bind](match-adt-var-arm-does-not-bind.md) | low-medium | a variable (non-`_`) catch-all arm on an ADT match never binds its variable |
 | [datalog-examples-do-not-compile](datalog-examples-do-not-compile.md) | medium | 4 of 5 examples/datalog/*.tur fail `tur check`; the tutorial series quotes them |
 | [tur-run-test-blocked-by-doctest-failures](tur-run-test-blocked-by-doctest-failures.md) | medium | `tur run test` exits in ~24s: the doctest dep fails, so the ctest line never runs |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
@@ -91,6 +91,18 @@ so rejecting the future alone would have deferred the same process death
 rather than removing it. Awaiting a rejected task now re-raises the task's own
 panic at the await, where a `catch-unwind` can catch it. The spawn-side frame
 is the boundary, so a panic after a re-park is still outside it.
+
+`match-nested-constructor-patterns` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/match-nested-constructor-patterns.md) -- by a
+FORM-level rewrite in front of `elab_match`, not the decision-tree rewrite its
+fix direction proposed, so the arm loop, exhaustiveness check, linear/borrow
+machinery and codegen are untouched. Depth falls out of recursion: the inner
+`match` forms the lowering emits go back through `elab_match`. Two
+prerequisites were separate defects with their own repros, both fixed there: a
+`!`-typed (`(panic ...)`) arm was rejected as incompatible with its peers, and
+match arms did not rewind MOVE state the way `if` branches do, so consuming the
+same value in two arms was a spurious TUR-E0005. One limitation found on the way
+is filed above as `match-adt-var-arm-does-not-bind`.
 
 ## Value representation (the consolidation campaign)
 

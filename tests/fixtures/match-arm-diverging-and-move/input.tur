@@ -1,0 +1,37 @@
+;;; Two match-arm properties the nested-pattern lowering needs, each a defect
+;;; in its own right before it:
+;;;
+;;;   1. A `!`-typed arm (`(panic ...)`) is compatible with any peer arm.  It
+;;;      used to be "match: arm types are incompatible -- expected int, got !",
+;;;      so a match could not have a panicking arm at all.
+;;;   2. Match arms are ALTERNATIVES, like the branches of an `if`: a value
+;;;      consumed in one arm must not read as moved in the next.  `if` has
+;;;      always rewound that state; `match` rewound only the LINEAR state, so
+;;;      the `pick` below was a spurious TUR-E0005 use-after-move while the
+;;;      identical if/else was accepted.
+
+(defdata Expr (Lit :int) (Add :Expr :Expr))
+(defdata Tag  (TA) (TB))
+
+(defn eval-e [e : Expr] : int
+  (match e
+    (Lit v)   v
+    (Add l r) (+ (eval-e l) (eval-e r))))
+
+;; (1) a diverging arm next to a value arm
+(defn must-lit [e : Expr] : int
+  (match e
+    (Lit v)   v
+    (Add l r) (panic "not a literal")))
+
+;; (2) the same value consumed in two different arms
+(defn pick [t : Tag x : Expr] : int
+  (match t
+    (TA) (eval-e x)
+    (TB) (eval-e x)))
+
+(defn main [] : int
+  (println (must-lit (Lit 42)))
+  (println (pick (TA) (Lit 5)))
+  (println (pick (TB) (Add (Lit 2) (Lit 3))))
+  0)
