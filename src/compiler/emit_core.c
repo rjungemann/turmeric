@@ -3656,9 +3656,17 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             break;
         }
         case BS_DIV_CHECK:
-            /* Division with zero check: (a / b) checks b != 0 */
-            buf_printf(&out, "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
-                       arg_strs[1], arg_strs[0], arg_strs[1]);
+            /* Integer division by zero is UB with no value to produce, so it
+             * keeps the runtime guard. Float division by zero is defined by
+             * IEEE 754 (inf / NaN) -- guarding it would abort on a legitimate
+             * value, cost a branch per division, and draw
+             * -Wliteral-conversion on a constant divisor. */
+            if (builtin_div_is_ieee(spec)) {
+                buf_printf(&out, "(%s) / (%s)", arg_strs[0], arg_strs[1]);
+            } else {
+                buf_printf(&out, "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
+                           arg_strs[1], arg_strs[0], arg_strs[1]);
+            }
             break;
         case BS_PREFIX_UNARY:
             buf_printf(&out, "%s(%s)", spec->c_op, arg_strs[0]);

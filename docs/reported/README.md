@@ -524,9 +524,22 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 ## Soundness limits and UB
 
+`float-division-aborts-instead-of-ieee-inf` was resolved 2026-08-21 and moved
+to [docs/archive](../archive/float-division-aborts-instead-of-ieee-inf.md). Its
+open question -- was the abort *intended*? -- was settled by a fact the filing
+did not have: the interpreter never aborted (`src/turi/eval.c` has always
+divided floats straight through), so this was a compiled-vs-interpreted
+divergence, not a language decision. `builtin_div_is_ieee()` now gates the
+guard on `spec->arg_type.kind`, keeping it for the integer rows only. All three
+symptoms went with it: the abort, the branch per division, and the
+`-Wliteral-conversion` noise on constant divisors. Pinned by
+`tests/fixtures/float-division-ieee/`; one snapshot
+(`map-multiword-struct-value`, whose stdlib `Num` float instances lose the
+guard) regenerated in the same commit, which was the whole blast radius --
+suite 2687 passed, 0 failed.
+
 | Report | Severity | One line |
 | --- | --- | --- |
-| [float-division-aborts-instead-of-ieee-inf](float-division-aborts-instead-of-ieee-inf.md) | medium | `BS_DIV_CHECK` applies the INTEGER divide-by-zero guard to float division, so `7.1 / 0.0` aborts the process instead of evaluating to `inf`. Correct for `:int`, wrong for `:float`, where IEEE 754 defines the result -- any code relying on inf/NaN propagation gets an abort instead of a value |
 | [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
 
 Indexed 2026-08-21. It had **no row at all** since it was filed -- the only

@@ -83,3 +83,72 @@ Worth deciding which, because the two readings point opposite ways.
 `docs/reported/user-defn-named-div-collides-with-libc.md` was found in the
 same session and by the same repro file -- the first attempt named the
 function `div`, which does not compile at all.
+
+---
+
+## Resolution (2026-08-21)
+
+Fixed via the first fix direction: the guard is now gated on the operand type.
+The report's closing question -- whether aborting was *intended* -- is settled
+by a fact it did not have: **the interpreter never aborted.**
+`src/turi/eval.c:3600` has always branched on `args[0].tag == TURI_FLOAT` and
+divided floats straight through, so `tur --interpret` printed `inf` / `-nan`
+for the exact repro that made `tur run` abort:
+
+```
+$ tur --interpret fdiv.tur     $ tur run fdiv.tur
+inf                            division by zero
+-nan                           Aborted
+2.84
+```
+
+So this was not a language decision leaking; it was the compiled path
+disagreeing with the interpreted one. The fix makes them agree.
+
+### Change
+
+`builtin_div_is_ieee()` (src/compiler/builtins.c) answers "is this
+`BS_DIV_CHECK` row a float row" from `spec->arg_type.kind` -- the builtins
+table already carries separate `TY_INT` / `TY_FLOAT` / `TY_FLOAT32` rows for
+`/`, so no new type plumbing was needed. Both C emitters consult it:
+
+- `src/compiler/emit_core.c` (direct emitter)
+- `src/compiler/emit_cps_ir.c` `prim_expr` (CPS-IR emitter)
+
+Integer, sized-int and unsigned rows keep the guard unchanged.
+
+### All three reported symptoms, verified
+
+```c
+static double fdiv(double a, double b)   { return (a) / (b); }      /* was guarded */
+static double fconst(double a)           { return (a) / (8.0); }    /* was guarded */
+static float  f32div(float a, float b)   { return (a) / (b); }      /* was guarded */
+static int64_t idiv(int64_t a, int64_t b) {
+    return ((b) ? ((a) / (b)) : (fprintf(stderr, "division by zero\n"), abort(), 0));
+}
+```
+
+1. **Semantics.** `7.1/0.0` -> `inf`, `-7.1/0.0` -> `-inf`, `0.0/0.0` -> `-nan`,
+   and `inf` propagates instead of terminating. `(idiv 7 0)` still aborts.
+2. **Branch per division.** Gone for floats -- the emission is strictly
+   smaller.
+3. **`-Wliteral-conversion`.** Gone. Confirmed in both directions: the old
+   shape `((8.0) ? ((a) / (8.0)) : ...)` compiled under
+   `clang -Wliteral-conversion` reproduces
+   `implicit conversion from 'double' to '_Bool' changes value from 8 to true`;
+   the new emission produces 0 such warnings.
+
+### Tests
+
+New fixture `tests/fixtures/float-division-ieee/` pins the semantics (stdout)
+and the emission shape (`expected.c`), including the constant-divisor case.
+
+One existing snapshot moved and was regenerated in the same commit:
+`map-multiword-struct-value/expected.c`, whose `__inst_Num_div_float` and
+`__inst_Num_div_float32` (stdlib `Num` typeclass instances) lose the guard.
+That was the *entire* blast radius -- the full suite went from
+`2686 passed, 1 failed` to **2687 passed, 0 failed**.
+
+No guides described the old behavior; the `safe-div` exercises in
+`repl-tutorial.md` and `quickstart-tutorial-plan.md` are integer-division
+teaching examples and are unaffected.
