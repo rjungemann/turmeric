@@ -1,5 +1,9 @@
 ; TY2.2: heap-box a by-value struct into `any` (it cannot ride the int64_t
 ; carrier), then recover it with a checked cast and read its fields.
+;
+; type-of-cast-kind-granularity: the tag is a per-monomorph id now, so `type-of`
+; names the struct ("Point") instead of reporting "struct" for every struct
+; alike -- and a cast to a DIFFERENT struct type fails instead of succeeding.
 
 (defstruct Point [x : int y : int])
 

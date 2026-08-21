@@ -1496,7 +1496,11 @@ struct Expr {
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */
         /* TY3: (is? x T) — runtime type test; emits TUR_GETTAG(x) == test_tag. */
-        struct { struct Expr *value; int64_t test_tag; } any_is_;
+        /* type-of-cast-kind-granularity: `test_type` carries the NAMED target
+         * (a struct/ADT) so emit can allocate the same per-monomorph box id the
+         * inject site does; `test_tag` remains the TypeKind for primitives and
+         * as the fallback when no named type was resolved. */
+        struct { struct Expr *value; int64_t test_tag; Type test_type; } any_is_;
         /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch. */
         struct {
             struct Expr *value;

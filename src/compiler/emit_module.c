@@ -630,6 +630,81 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
     return strdup(base);
 }
 
+/* type-of-cast-kind-granularity: per-monomorph `any` box tags.
+ *
+ * The tag used to be the payload's TypeKind, so every struct was `TY_STRUCT`
+ * and every ADT `TY_ADT`: `type-of` reported "struct" for all of them, and
+ * `(cast a OtherStruct)` on an `any` holding a `Point` PASSED the check and
+ * handed back a reinterpreted payload.  A struct/ADT now interns its monomorph
+ * C name and rides `TUR_ANY_ID_BASE + index`; primitives keep their TypeKind,
+ * which is what the preamble's name switch and the float/bool special cases
+ * still key on.  The inject site, the cast target and the is? target all route
+ * through this one function, so they cannot disagree. */
+#define TUR_ANY_ID_BASE 1000
+
+int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
+    Type r = ctx ? emit_resolve_type(ctx, t) : t;
+    AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
+    bool named = (r.kind == TY_ADT && r.as.adt_.def) || app_def != NULL;
+    if (!ctx || !named) return (int64_t)any_box_tag_for_type(&r);
+
+    /* Identity is `type_name`, not the C name: a carrier ADT's C name is
+     * `int64_t`, which every carrier ADT shares -- keying on it would give two
+     * different ADTs the same id and reintroduce the very confusion this
+     * replaces.  `type_name` renders a TY_APP per instantiation
+     * ("(type-app Box int)"), so `(Box int)` and `(Box float)` are distinct. */
+    const char *key = type_name(r);
+    if (!key || !*key) return (int64_t)any_box_tag_for_type(&r);
+    /* What `type-of` reports: the source-level name.  A type application shows
+     * its head ("Box"), since the parenthesised internal rendering is not what
+     * a program printing a type name wants to see. */
+    const char *shown = (r.kind == TY_ADT && r.as.adt_.def)
+                            ? r.as.adt_.def->name
+                            : (app_def ? app_def->name : key);
+
+    for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+        if (strcmp(ctx->any_type_names[i], key) == 0)
+            return (int64_t)(TUR_ANY_ID_BASE + i);
+    }
+    if (ctx->n_any_type_names >= ctx->cap_any_type_names) {
+        uint32_t nc = ctx->cap_any_type_names ? ctx->cap_any_type_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->any_type_names, nc * sizeof(char *));
+        char **ns = (char **)realloc(ctx->any_type_shown, nc * sizeof(char *));
+        if (!nn || !ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_type_names = nn;
+        ctx->any_type_shown = ns;
+        ctx->cap_any_type_names = nc;
+    }
+    char *kdup = strdup(key);
+    char *sdup = strdup(shown ? shown : key);
+    if (!kdup || !sdup) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->any_type_names[ctx->n_any_type_names] = kdup;
+    ctx->any_type_shown[ctx->n_any_type_names] = sdup;
+    ctx->n_any_type_names++;
+    return (int64_t)(TUR_ANY_ID_BASE + ctx->n_any_type_names - 1);
+}
+
+void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
+    if (!out) return;
+    if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to name */
+    buf_puts(out, "static const char *__tur_any_name_ext(int64_t tag) {\n");
+    if (ctx && ctx->n_any_type_names) {
+        buf_puts(out, "    switch (tag) {\n");
+        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+            buf_printf(out, "        case %d: return \"%s\";\n",
+                       (int)(TUR_ANY_ID_BASE + i), ctx->any_type_shown[i]);
+        }
+        buf_puts(out, "        default: break;\n");
+        buf_puts(out, "    }\n");
+    }
+    buf_puts(out, "    (void)tag;\n    return \"unknown\";\n}\n");
+    /* Installed from __tur_static_init (the KEYS band runs before any user
+     * code), so the preamble's __tur_any_type_name can reach it. */
+    buf_puts(out, "static void __tur_any_names_init(void) {\n");
+    buf_puts(out, "    g_tur_any_name_ext = __tur_any_name_ext;\n}\n");
+    static_init_register("__tur_any_names_init", STATIC_INIT_KEYS);
+}
+
 static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -8204,7 +8279,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * hard-coded integers (their numeric values move as the enum grows).  Note
      * the tag carries kind granularity only: every struct shares the "struct"
      * tag and every ADT the "adt" tag (see the union-intersection guide). */
+    /* type-of-cast-kind-granularity: struct/ADT box tags are per-monomorph ids
+     * allocated by the PROGRAM half, so their names cannot live in this
+     * preamble.  The program installs its name table through this pointer from
+     * __tur_static_init; a preamble compiled standalone (the S2 split runtime
+     * TU) simply leaves it NULL and answers "unknown", which is what it did for
+     * every struct before.  A forward-declared per-program function would not
+     * do: that TU has no definition to link. */
+    emit_rt_global(out, shared,
+                   "const char *(*g_tur_any_name_ext)(int64_t) = 0;\n",
+                   "const char *(*g_tur_any_name_ext)(int64_t)");
     buf_puts(out, "static const char *__tur_any_type_name(int64_t tag) {\n");
+    buf_puts(out, "    if (tag >= 1000)\n");
+    buf_puts(out, "        return g_tur_any_name_ext ? g_tur_any_name_ext(tag) : \"unknown\";\n");
     buf_puts(out, "    switch (tag) {\n");
     buf_printf(out, "        case %d: return \"nil\";\n",   (int)TY_NIL);
     buf_printf(out, "        case %d: return \"bool\";\n",  (int)TY_BOOL);
@@ -13272,6 +13359,7 @@ int emit_program(Buf *out, const Expr *program) {
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
+    emit_any_type_name_table(&ctx, &thunk_typedefs);
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
@@ -13380,6 +13468,12 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
+        free(ctx.any_type_names[i]);
+        free(ctx.any_type_shown[i]);
+    }
+    free(ctx.any_type_names);
+    free(ctx.any_type_shown);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
@@ -14661,6 +14755,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     type_codegen_emit_fn_ptr_typedefs(&impl_fn_ptr_typedefs);
     if (impl_fn_ptr_typedefs.len) { buf_write(out, impl_fn_ptr_typedefs.data, impl_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     buf_free(&impl_fn_ptr_typedefs);
+    emit_any_type_name_table(&ctx, &thunk_typedefs2);
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
     /* dead-base-thunk-chain-references-undefined-ctor: per-TU static trap
      * stand-ins for base ctors of heap parametric ADTs referenced by the dead
@@ -14721,6 +14816,12 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
+        free(ctx.any_type_names[i]);
+        free(ctx.any_type_shown[i]);
+    }
+    free(ctx.any_type_names);
+    free(ctx.any_type_shown);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);

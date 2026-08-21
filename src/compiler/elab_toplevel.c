@@ -143,6 +143,7 @@ Expr *elab_is_q(Elab *e, const Form *call) {
         return NULL;
     }
     TypeKind test_kind = typekind_from_symbol(type_form->as.sym->name);
+    Type test_type = type_simple(TY_UNKNOWN, CK_COPY);
     if (test_kind == TY_UNKNOWN) {
         Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
         if (!named) {
@@ -151,13 +152,21 @@ Expr *elab_is_q(Elab *e, const Form *call) {
             return NULL;
         }
         /* CONV-S1: struct-origin lowered ADT tests as TY_STRUCT, matching the
-         * box tag set by elab_coerce_to_any. */
+         * box tag set by elab_coerce_to_any.
+         * type-of-cast-kind-granularity: keep the named type too -- emit turns
+         * it into the same per-monomorph box id the inject site allocates, so
+         * `(is? a OtherStruct)` on an `any` holding a Point is false rather
+         * than true-for-every-struct. */
         test_kind = any_box_tag_for_type(named);
+        test_type = *named;
+    } else {
+        test_type = type_simple(test_kind, CK_COPY);
     }
     Type bool_t = type_simple(TY_BOOL, CK_COPY);
     Expr *out = expr_new(e->arena, EX_ANY_IS, bool_t, call->span);
     out->as.any_is_.value = val;
     out->as.any_is_.test_tag = (int64_t)test_kind;
+    out->as.any_is_.test_type = test_type;
     return out;
 }
 

@@ -1,0 +1,14 @@
+;;; type-of-cast-kind-granularity: casting an `any` to the WRONG struct type
+;;; panics.  It used to succeed: both types boxed as TY_STRUCT, the tag check
+;;; compared equal, and the payload was handed back reinterpreted as the other
+;;; struct -- a silent wrong-type read with no diagnostic anywhere.
+
+(defstruct Point [x : int y : int])
+(defstruct Other [a : int b : int])
+
+(defn main [] : int
+  (let [p (make-struct Point 3 4)
+        a (:: p any)]
+    (println "boxed")
+    (println (.a (cast a Other))))
+  0)

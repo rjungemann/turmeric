@@ -3851,6 +3851,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *inner = emit_value(ctx, body, e->as.union_inject_.value);
             Buf out; buf_init(&out);
             int64_t tag = e->as.union_inject_.tag_idx;
+            /* type-of-cast-kind-granularity: an `any` box carries a
+             * per-monomorph id for a struct/ADT payload so two struct types are
+             * distinguishable.  A TY_UNION inject's tag_idx is a MEMBER INDEX,
+             * not a TypeKind, so it is left alone. */
+            if (e->type.kind == TY_ANY)
+                tag = emit_any_type_id(ctx, e->as.union_inject_.value->type);
             /* structdef-retirement DS-C: box_struct (a StructDef*) is always NULL
              * now -- a by-value struct is a record ADT, heap-boxed by the
              * byvalue-ADT branch below; the StructDef heap-box arm is removed. */
@@ -3898,8 +3904,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* TY3: (is? x T) — compare the box tag to the tested TypeKind. */
             char *inner = emit_value(ctx, body, e->as.any_is_.value);
             Buf out; buf_init(&out);
+            /* type-of-cast-kind-granularity: the same per-monomorph id the
+             * inject site allocated, when the target was a named type. */
+            int64_t test_tag = e->as.any_is_.test_type.kind != TY_UNKNOWN
+                                   ? emit_any_type_id(ctx, e->as.any_is_.test_type)
+                                   : e->as.any_is_.test_tag;
             buf_printf(&out, "(TUR_GETTAG(%s) == %lld)",
-                       inner, (long long)e->as.any_is_.test_tag);
+                       inner, (long long)test_tag);
             buf_putc(&out, '\0');
             free(inner);
             char *result = strdup(out.data);
@@ -3911,7 +3922,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the target TypeKind; tur_panic on mismatch, otherwise unbox.
              * TY2.2: a struct target unboxes by dereferencing the heap pointer. */
             char *inner = emit_value(ctx, body, e->as.any_cast_.value);
-            int64_t target_tag = (int64_t)e->as.any_cast_.target_kind;
+            /* type-of-cast-kind-granularity: `e->type` IS the named target
+             * type, so the cast checks per-monomorph identity -- casting an
+             * `any` holding a Point to OtherStruct now panics instead of
+             * reinterpreting the payload. */
+            int64_t target_tag = emit_any_type_id(ctx, e->type);
             Buf out; buf_init(&out);
             /* structdef-retirement DS-C: target_struct (a StructDef*) is always
              * NULL now -- a struct target is a record ADT, unboxed by the

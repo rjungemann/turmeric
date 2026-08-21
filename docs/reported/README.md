@@ -55,7 +55,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [tur-run-test-blocked-by-doctest-failures](tur-run-test-blocked-by-doctest-failures.md) | medium | `tur run test` exits in ~24s: the doctest dep fails, so the ctest line never runs |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
-| [type-of-cast-kind-granularity](type-of-cast-kind-granularity.md) | low-medium | `cast` between two different struct types via `any` succeeds -- tag is TypeKind, not type id |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
 | [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | medium | mw-recover blocked by closure/fat-handle codegen defects: lifted thunk references an unthreaded name, plus a drop-glue use-after-free -- 4 repros inside |
@@ -145,6 +144,20 @@ spice whose error payload type could not be verified here. The doc lint the
 report proposes (extract fenced blocks, `tur check` the self-contained ones) is
 NOT built; the `no-check` fence marker some guides already carry is the seed of
 the opt-in convention it would need.
+
+`type-of-cast-kind-granularity` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/type-of-cast-kind-granularity.md). An `any` box now
+carries a per-monomorph id for a struct/ADT payload, so `(cast a OtherStruct)`
+on a box holding a `Point` panics instead of reinterpreting, and `type-of`
+names the type. One correction to the filed direction: the mangled-C-name
+intern table it points at is the wrong key -- every carrier ADT's C name is
+`int64_t`, so two ADTs would have collided; the key is `type_name()`. Two
+mechanism notes: the id->name table cannot live in the preamble (ids are
+per-program) NOR be a forward-declared per-program function (the S2 split
+runtime compiles the preamble standalone), so it is installed through a
+function pointer from `__tur_static_init`; and the interpreter, whose
+`type-of` comment said it was deliberately matching the old kind granularity,
+was updated in step.
 
 ## Value representation (the consolidation campaign)
 
