@@ -3895,20 +3895,28 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * not a warning: `return 0;` from a by-value-aggregate function does
          * not compile (caught by catch-unwind-aggregate-thunk). */
         emit_stmt(ctx, file, fd->body);
-        if (result_kind != TY_NIL || is_main) {
+        /* Only when the EMITTED C type is a known non-void.  `result_kind`
+         * cannot decide this on its own: a `: !` (never) function is
+         * TY_NEVER, not TY_NIL, and emits as `void` -- so keying off the kind
+         * put `return 0;` in a void function, which clang rejects outright
+         * ("void function 'inner' should not return a value") while gcc only
+         * warns.  panic-trace is that fixture, and it broke macOS CI while
+         * passing on Linux.
+         *
+         * The bias when the C type is unknown is to emit NOTHING: a missing
+         * return is a -Wreturn-type warning, a wrong one is a build failure,
+         * and this branch exists to remove a warning in the first place. */
+        const char *rc = ctx->current_fn_ret_ctype;
+        bool rc_is_void = (!rc || !*rc || strcmp(rc, "void") == 0);
+        if (is_main && result_kind == TY_INT) {
             indent_buf(file, ctx->indent);
-            if (is_main && result_kind == TY_INT) {
-                buf_puts(file, "return (int)0;\n");
+            buf_puts(file, "return (int)0;\n");
+        } else if (!rc_is_void && result_kind != TY_NIL) {
+            indent_buf(file, ctx->indent);
+            if (emit_c_type_is_scalar(rc)) {
+                buf_printf(file, "return ((%s)0);\n", rc);
             } else {
-                const char *rc = ctx->current_fn_ret_ctype;
-                if (!rc || !*rc || strcmp(rc, "void") == 0) {
-                    buf_printf(file, "return %s;\n",
-                               (result_kind == TY_BOOL) ? "false" : "0");
-                } else if (emit_c_type_is_scalar(rc)) {
-                    buf_printf(file, "return ((%s)0);\n", rc);
-                } else {
-                    buf_printf(file, "return (%s){0};\n", rc);
-                }
+                buf_printf(file, "return (%s){0};\n", rc);
             }
         }
     } else if (fd->body->kind == EX_INLINE_C) {

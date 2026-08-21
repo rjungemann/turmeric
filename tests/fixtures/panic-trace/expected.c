@@ -7808,7 +7808,6 @@ static int64_t replace(int64_t old, int64_t new) {
 static void inner() {
         tur_panic("test panic");
         if (tur_panicking) return;
-        return 0;
 }
 
 static void outer() {
