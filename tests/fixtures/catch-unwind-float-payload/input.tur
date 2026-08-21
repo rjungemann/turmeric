@@ -6,9 +6,10 @@
 ;;; with its real signature and returns the value's BITS, which is exactly
 ;;; what that union expects.
 ;;;
-;;; The Result type is spelled out because that is the shape that reinterprets;
-;;; see docs/reported/ok-val-untyped-catch-box-loses-float.md for the
-;;; unannotated one, which truncates on a different path entirely.
+;;; Both shapes are covered.  The annotated one reads the payload through the
+;;; typed Result monomorph; the unannotated one reads it through the ERASED
+;;; `tur_adt_Result` (whose ok_val really is an `int64_t`), which used to let C
+;;; convert the bit pattern numerically -- 4.62013e+18 for 7.5.
 
 (defn boom [] : float (panic "no float for you"))
 
@@ -19,8 +20,12 @@
   (catch-unwind (fn [] : float (boom))))
 
 (defn main [] : int
+  ;; annotated: the typed Result monomorph reinterprets
   (let [r (f)]
     (if (ok? r) (println (ok-val r)) (println 0.0)))     ; 7.5
   (let [r (g)]
     (if (ok? r) (println (ok-val r)) (println -1.0)))    ; -1
+  ;; unannotated: the erased carrier read has to reinterpret too
+  (let [r (catch-unwind (fn [] : float 2.25))]
+    (if (ok? r) (println (ok-val r)) (println 0.0)))     ; 2.25
   0)

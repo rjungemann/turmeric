@@ -59,3 +59,31 @@ picks the int overload. That is the display divergence family archived as
 ## Guides to update when fixed
 
 - none (no guide documents the untyped-box accessor shape)
+
+## Resolution (2026-08-21, same day)
+
+Fixed at the site the report names, and the fix is one branch in the erased-
+carrier field read (`emit_expr.c`): when the spec-recovered field type is a
+float kind and the erased struct's field is `int64_t`, reinterpret through the
+same union the typed construction path uses instead of casting.
+
+The report's framing was right that the box's contract ("a float payload rides
+as its bits") was honoured by one consumer and not the other; what it did not
+say is that the `:heap`-ADT branch two cases above already carries a comment
+about exactly this trap for float/cstr fields -- but a CAST is the correct fix
+there (a heap monomorph cell really has a `double` field) and the wrong one
+here (the erased `tur_adt_Result` really has an `int64_t`). Same symptom, two
+different repairs; that is why the erased path was not covered by the earlier
+one.
+
+`err-val` over a float err payload goes through the identical branch and is
+covered by the same change. `unwrap-or-carrier` was checked and needs nothing:
+it is declared `[o : int dflt : int] : int`, so no float ever reaches it
+through that spelling.
+
+Pinned by `tests/fixtures/catch-unwind-float-payload/`, which now asserts both
+shapes -- the annotated `(Result float int)` and the unannotated
+`(let [r (catch-unwind (fn [] : float 2.25))] (ok-val r))`.
+
+The `bool`-payload display divergence noted under "Adjacent, not the same" is
+unchanged and still belongs to its own family.

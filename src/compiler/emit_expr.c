@@ -9459,6 +9459,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* borrow-struct-field: bare member lvalue (no rvalue cast). */
                     buf_printf(&hb, "((tur_adt_%s *)(intptr_t)(%s))->%s",
                                adt_mn, sv, mp);
+                } else if ((fld_rty.kind == TY_FLOAT || fld_rty.kind == TY_FLOAT32 ||
+                            fld_rty.kind == TY_FLOAT64) &&
+                           fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
+                           cty && strcmp(cty, "int64_t") == 0) {
+                    /* ok-val-untyped-catch-box-loses-float: the ERASED
+                     * Result/Option carrier declares `int64_t ok_val`, and a
+                     * float payload rides in it as its BITS -- that is the
+                     * contract the typed construction path honours
+                     * (`((union { int64_t s; double d; }){.s = ...}).d`,
+                     * emit_core.c).  Reading it through the erased struct and
+                     * letting C convert int64 -> double converts the bit
+                     * pattern NUMERICALLY instead: `(ok-val r)` on an
+                     * unannotated `(catch-unwind (fn [] : float 7.5))` gave
+                     * 4.62013e+18.  Reinterpret, as the other consumer does. */
+                    buf_printf(&hb,
+                        "((union { int64_t s; %s d; }){.s = ((tur_adt_%s *)(intptr_t)(%s))->%s}).d",
+                        fld_rcty, adt_mn, sv, mp);
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                cty, adt_mn, sv, mp);
