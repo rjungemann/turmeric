@@ -1129,6 +1129,57 @@ else
     echo "SKIP jit-ffi-call-ptr-struct-interp (needs a JIT build on a known libc)"
 fi
 
+# jit-ffi-call-ptr-struct-nested-interp: a NESTED by-value record field is
+# inlined in the emitted C layout (adt_field_is_inline_byval), so the
+# interpreter's sig must render it as a nested `{...}` -- it used to class
+# the field as an int64 carrier ('q'), building a thunk whose ABI shape
+# disagreed with the natively compiled callee (silent wrong answers, the
+# same failure mode as the aarch64 HFA report but on every arch).  The
+# callee is compiled with the native cc so the thunk really crosses the
+# c2mir <-> native ABI boundary; both directions are asserted.
+if [ "$HAS_JIT" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _nested_dir="$(mktemp -d -t tur-ffi-nested-XXXXXX)"
+    # Mixed int/float leaves, NOT an HFA -- an all-float nested aggregate
+    # would (correctly) hit the aarch64 HFA refusal instead of the marshaller.
+    cat > "$_nested_dir/helper.c" <<'EOF'
+typedef struct { int a; float b; } IW;
+typedef struct { IW lo; double c; } NX;
+double nx_sum(NX v) { return (double)v.lo.a * 10000.0
+                           + (double)v.lo.b * 100.0 + v.c; }
+NX mk_nx(int a, double b, double c) {
+    NX r; r.lo.a = a; r.lo.b = (float)b; r.c = c; return r;
+}
+EOF
+    if cc -shared -fPIC -o "$_nested_dir/libnested.so" "$_nested_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct IW [a : int32 b : float32])
+(defstruct NX [lo : IW c : float])
+(defn main [] : int
+  (unsafe
+    (let [h (dlopen "$_nested_dir/libnested.so")]
+      (println (call-ptr (dlsym h "nx_sum") [NX -> :float]
+                         (NX (IW (:: 3 :int32) (:: 2.25 :float32)) 1.5)))
+      (let [r (call-ptr (dlsym h "mk_nx") [:int :float :float -> NX]
+                        3 2.25 1.5)]
+        (println (:: (.a (.lo r)) :int))
+        (println (:: (.b (.lo r)) :float))
+        (println (.c r)))))
+  0)
+TURFFI
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+        if [ "$(echo "$out" | tr '\n' ' ')" != "30226.5 3 2.25 1.5 " ]; then
+            fail "jit-ffi-call-ptr-struct-nested-interp" "expected nested aggregate to marshal as 30226.5 / 3 / 2.25 / 1.5, got: $out"
+        else
+            pass "jit-ffi-call-ptr-struct-nested-interp"
+        fi
+    else
+        echo "SKIP jit-ffi-call-ptr-struct-nested-interp (cc could not build the helper .so)"
+    fi
+    rm -rf "$_nested_dir"
+else
+    echo "SKIP jit-ffi-call-ptr-struct-nested-interp (needs a JIT build and cc)"
+fi
+
 # jit-ffi-call-ptr-hfa-refused: on aarch64 the interpreter must REFUSE a
 # floating-point aggregate rather than emit a thunk that mis-passes it --
 # MIR has no HFA class and would put it in x0..x7 where a natively compiled

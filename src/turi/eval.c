@@ -915,22 +915,73 @@ static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, Tur
  * back as a boolean and a :cstr field as a string instead of both collapsing
  * to an integer. */
 
+/* How one record field sits in the emitted C aggregate.  Must agree with
+ * codegen's adt_field_is_inline_byval -- that predicate is what decides the
+ * emitted layout, and a sig that disagrees with it describes a struct the
+ * callee does not have (the exact miscall F4 exists to prevent). */
+typedef enum {
+    AGGF_SCALAR,       /* a scalar member, or an int64 carrier (boxed /
+                        * :heap-pointer / drop-glue field) -- 8 bytes either
+                        * way, member_code_for_kind(kind) describes it */
+    AGGF_NESTED,       /* a by-value record inlined as a nested C struct */
+    AGGF_UNSUPPORTED,  /* inlined in the emitted C, but the interpreter
+                        * cannot render its layout (a TY_APP monomorph field
+                        * needs per-application substitution) -- refuse
+                        * rather than mis-describe */
+} AggFieldClass;
+
+static AggFieldClass agg_field_class(const CtorField *f,
+                                     const AdtDef **out_def) {
+    if (adt_field_is_inline_byval(f)) {
+        if (f->full_type->kind == TY_ADT) {
+            if (out_def) *out_def = f->full_type->as.adt_.def;
+            return AGGF_NESTED;
+        }
+        return AGGF_UNSUPPORTED;
+    }
+    return AGGF_SCALAR;
+}
+
 /* Number of sig bytes an aggregate for `def` needs, including braces. */
 static size_t agg_sig_len(const AdtDef *def) {
-    return (size_t)def->ctors[0]->n_fields + 2;
+    const CtorDef *ct = def->ctors[0];
+    size_t n = 2;
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        n += (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED)
+                 ? agg_sig_len(in)
+                 : 1;
+    }
+    return n;
 }
 
 /* Render `{...}` for a record ADT into buf (which must hold agg_sig_len
- * bytes).  Returns the number of bytes written, or 0 if any field has no
- * by-value member code (which elaboration already rejected). */
+ * bytes).  A nested by-value record field renders as its own inline
+ * `{...}`, matching the layout codegen inlines.  Returns the number of
+ * bytes written, or 0 if any field has no by-value member representation
+ * the interpreter can describe. */
 static size_t agg_sig_render(const AdtDef *def, char *buf) {
     const CtorDef *ct = def->ctors[0];
     size_t pos = 0;
     buf[pos++] = '{';
     for (uint32_t i = 0; i < ct->n_fields; i++) {
-        char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
-        if (!c) return 0;
-        buf[pos++] = c;
+        const AdtDef *in = NULL;
+        switch (agg_field_class(&ct->fields[i], &in)) {
+            case AGGF_NESTED: {
+                size_t w = agg_sig_render(in, buf + pos);
+                if (!w) return 0;
+                pos += w;
+                break;
+            }
+            case AGGF_SCALAR: {
+                char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
+                if (!c) return 0;
+                buf[pos++] = c;
+                break;
+            }
+            default:
+                return 0;
+        }
     }
     buf[pos++] = '}';
     return pos;
@@ -1003,6 +1054,64 @@ static TuriValue agg_load_member(const void *base, size_t off, char code,
     }
     if (field_kind == TY_BOOL) return turi_bool(out != 0);
     return turi_int(out);
+}
+
+/* Flatten `v` (a record value of type `def`) into leaf TuriValues in
+ * declaration order, recursing into nested by-value record fields -- the
+ * same flattening tur_jit_ffi_struct_layout applies to the sig, so leaf i
+ * here lands at offs[i]/codes[i] there.  Returns false on a shape mismatch
+ * (not a record, wrong field count, or a nested field that is not the
+ * record value its slot declares). */
+static bool agg_collect_leaves(const AdtDef *def, TuriValue v,
+                               TuriValue *out, int max, int *n) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    const CtorDef *ct = def->ctors[0];
+    if (v.as_struct->n_fields != ct->n_fields) return false;
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
+            if (!agg_collect_leaves(in, v.as_struct->fields[i], out, max, n))
+                return false;
+        } else {
+            if (*n >= max) return false;
+            out[(*n)++] = v.as_struct->fields[i];
+        }
+    }
+    return true;
+}
+
+/* Rebuild a record value of type `def` from the C bytes at `base`, reading
+ * leaves at offs[*cur]/codes[*cur] onward (the flattened order the layout
+ * engine produced) and reconstructing nested records recursively.  Advances
+ * *cur past the leaves consumed. */
+static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
+                                 const void *base, const size_t *offs,
+                                 const char *codes, int nleaf, int *cur) {
+    const CtorDef *ct = def->ctors[0];
+    TuriValue fields[64];
+    if (ct->n_fields > 64)
+        return turi_error("call-ptr: aggregate return has too many fields");
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
+            fields[i] = agg_build_value(env, in, base, offs, codes,
+                                        nleaf, cur);
+            if (turi_is_error(fields[i])) return fields[i];
+        } else {
+            if (*cur >= nleaf)
+                return turi_error("call-ptr: aggregate return layout is "
+                                  "shorter than its record declares");
+            fields[i] = agg_load_member(base, offs[*cur], codes[*cur],
+                                        ct->fields[i].kind);
+            (*cur)++;
+        }
+    }
+    TuriValue r = make_struct_val(env, ct->name, ct->n_fields, fields);
+    /* Carry the ctor so field access and `type-of` see a struct, the same
+     * thing adt_ctor_native does for a value built in turi. */
+    if (r.tag == TURI_STRUCT && r.as_struct)
+        r.as_struct->ctor = ct;
+    return r;
 }
 
 /* jit-ffi-c2mir-plan F5: `(callback-ptr f [sig])` under the interpreter.
@@ -1170,14 +1279,13 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
                                      "aggregate layout", (unsigned)k);
                 goto cleanup;
             }
-            const CtorDef *ct = adef->ctors[0];
-            if ((uint32_t)nleaf != ct->n_fields ||
-                av.as_struct->n_fields != ct->n_fields) {
-                result = turi_errorf("call-ptr: arg %u has %u field(s) but "
-                                     "'%s' declares %u", (unsigned)k,
-                                     (unsigned)av.as_struct->n_fields,
-                                     adef->name ? adef->name : "?",
-                                     (unsigned)ct->n_fields);
+            TuriValue leaves[64];
+            int       n_leaves = 0;
+            if (!agg_collect_leaves(adef, av, leaves, 64, &n_leaves) ||
+                n_leaves != nleaf) {
+                result = turi_errorf("call-ptr: arg %u does not match the "
+                                     "shape '%s' declares", (unsigned)k,
+                                     adef->name ? adef->name : "?");
                 goto cleanup;
             }
             /* calloc, not malloc: tail padding is passed too, and handing
@@ -1191,8 +1299,7 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
             agg_bufs[k] = bytes;
             s_vals[k]   = bytes;
             for (int i = 0; i < nleaf; i++)
-                agg_store_member(bytes, offs[i], codes[i],
-                                 av.as_struct->fields[i]);
+                agg_store_member(bytes, offs[i], codes[i], leaves[i]);
         } else if (cls == 'i') {
             switch (av.tag) {
                 case TURI_INT:  i_vals[k] = av.as_int; break;
@@ -1251,22 +1358,12 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
         jt(fn, i_vals, f_vals, s_vals, &out_i, &out_f, out_s_buf);
 
         if (rdef) {
-            const CtorDef *ct = rdef->ctors[0];
-            TuriValue *fields = (TuriValue *)calloc(rleaf ? (size_t)rleaf : 1,
-                                                    sizeof(TuriValue));
-            if (!fields) {
-                result = turi_error("call-ptr: out of memory");
-                goto cleanup;
-            }
-            for (int i = 0; i < rleaf; i++)
-                fields[i] = agg_load_member(out_s_buf, roffs[i], rcodes[i],
-                                            ct->fields[i].kind);
-            result = make_struct_val(env, ct->name, (uint32_t)rleaf, fields);
-            /* Carry the ctor so field access and `type-of` see a struct, the
-             * same thing adt_ctor_native does for a value built in turi. */
-            if (result.tag == TURI_STRUCT && result.as_struct)
-                result.as_struct->ctor = ct;
-            free(fields);
+            int cur = 0;
+            result = agg_build_value(env, rdef, out_s_buf, roffs, rcodes,
+                                     rleaf, &cur);
+            if (!turi_is_error(result) && cur != rleaf)
+                result = turi_error("call-ptr: aggregate return layout is "
+                                    "longer than its record declares");
             goto cleanup;
         }
 
