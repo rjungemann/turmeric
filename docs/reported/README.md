@@ -46,7 +46,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [async-panic-task-boundary](async-panic-task-boundary.md) | medium | panic in a plain `(async ...)` body unwinds the caller instead of rejecting the future |
 | [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
 | [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
@@ -79,6 +78,18 @@ helper slipped between a docstring and its public `defn` steals the
 docstring in `docs/api/`. `argv` / `args/positional` stay `:int` on purpose:
 they are the `*args*` cons list, which the elaborator itself declares as a
 global `:int`.
+
+`async-panic-task-boundary` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/async-panic-task-boundary.md), with its root cause
+corrected: the async body runs **inline on the caller's stack**, so there was
+no fiber whose `panic_jmpbuf` the fix could arm -- the boundary is a
+`tur_handler_chain` node like `tur_catch_unwind_box`'s, and the emitted body's
+existing `if (tur_panicking) return ...` checks do the unwinding. The other
+half the report did not have: `await` on a rejected future used to `abort()`,
+so rejecting the future alone would have deferred the same process death
+rather than removing it. Awaiting a rejected task now re-raises the task's own
+panic at the await, where a `catch-unwind` can catch it. The spawn-side frame
+is the boundary, so a panic after a re-park is still outside it.
 
 ## Value representation (the consolidation campaign)
 

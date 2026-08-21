@@ -661,26 +661,47 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 
 ## Panic inside async tasks
 
-> **Today.** `(async ...)` runs its body on the caller's stack until the
-> body's first suspension point, and there is no per-task panic boundary. A
-> panic inside an async body propagates through the caller's stack exactly as
-> a normal panic would -- there is nothing async-specific about it, and
-> `catch-unwind` at the call site catches it like any other panic. (Fibers
-> spawned into a *task group* are the exception: a panic there is caught at
-> the fiber boundary and auto-cancels the group.)
-
-> **Planned (task-boundary panics).** A future revision gives every async
-> task a panic boundary:
+> **Today.** Every `(async ...)` task has its own panic boundary. `(async ...)`
+> still runs its body on the caller's stack until the body's first suspension
+> point, but a panic there is caught at the task boundary rather than unwinding
+> whoever spawned it: the task's future is **rejected** carrying the panic
+> message, and the spawn returns normally. (Fibers spawned into a *task group*
+> keep their own boundary: a panic there auto-cancels the group.)
 >
-> 1. A panic inside an async task is caught at the task boundary; the task's
->    future resolves to a rejected state carrying the panic payload. Use
->    `catch-unwind` at the join point to recover.
-> 2. If a task is cancelled while a panic is in progress, the panic takes
+> The rejection is re-raised at the point that demands the result. `(await f)`
+> on a rejected task raises the task's own panic *at the await*, so a
+> `catch-unwind` around the await catches it -- and with no handler in scope it
+> prints the task's message and aborts, exactly as an uncaught panic does
+> anywhere else. A task whose panic nobody ever awaits does not terminate the
+> program.
+
+```turmeric
+(defn boom [] : int (panic "task exploded"))
+
+(defn main [] : int
+  (let [fut (async boom)]
+    (println "the spawn itself does not unwind"))   ; runs
+
+  (let [fut (async boom)
+        r   (catch-unwind (fn [] : int (await fut)))]
+    (if (err? r)
+      (println "recovered from the task's panic")   ; taken
+      (println "no panic")))
+  0)
+```
+
+> **Still planned.** Three parts of the task-boundary design are not built yet:
+>
+> 1. If a task is cancelled while a panic is in progress, the panic takes
 >    precedence.
-> 3. An uncaught panic in async main terminates the process with a nonzero exit
+> 2. An uncaught panic in async main terminates the process with a nonzero exit
 >    code after all defer thunks have fired.
-> 4. On the WASM target, panics lower to the WebAssembly `unreachable`
+> 3. On the WASM target, panics lower to the WebAssembly `unreachable`
 >    instruction.
+>
+> A panic raised *after* a task re-parks on a pending `await` is also outside
+> the boundary today: the boundary is the spawn-side frame, so it is gone by
+> the time the parked continuation resumes.
 
 ---
 

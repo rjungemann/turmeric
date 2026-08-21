@@ -9856,6 +9856,36 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
 
+    /* async-panic-task-boundary: a panic inside an (async ...) body must
+     * reject THAT task's future, not unwind whoever spawned it.  The body runs
+     * inline on the caller's stack (there is no fiber to carry a per-fiber
+     * panic_jmpbuf), so the boundary is a handler node exactly like
+     * tur_catch_unwind_box's: with a node installed, tur_panic stages the
+     * payload, sets tur_panicking and RETURNS, and the emitted body's
+     * per-call-site `if (tur_panicking) return ...` checks unwind it back here.
+     *
+     * The rejection message takes ownership of the payload's strdup'd string
+     * (TurFuture::error is a plain const char * the future never frees), so the
+     * payload struct is released without its value. */
+    buf_puts(out, "static int tur_async_reject_if_panicking(TurFuture *future) {\n");
+    buf_puts(out, "    if (!tur_panicking) return 0;\n");
+    buf_puts(out, "    tur_panicking = 0; tur_panic_in_progress = 0;\n");
+    buf_puts(out, "    tur_panic_payload *__p = global_panic_payload;\n");
+    buf_puts(out, "    global_panic_payload = NULL;\n");
+    buf_puts(out, "    const char *__msg = \"panic\";\n");
+    buf_puts(out, "    if (__p) {\n");
+    buf_puts(out, "        if (__p->type_tag == 5 && __p->value) {\n");
+    buf_puts(out, "            __msg = (const char *)__p->value;\n");
+    buf_puts(out, "            __p->owns_value = 0;  /* the future owns it now */\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        panic_payload_free(__p);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_future_reject(future, __msg);\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    return 1;\n");
+    buf_puts(out, "}\n\n");
+
     /* Create a future that runs fn() and fulfills it with the result.
      *
      * F3.2 (cps-async): fn() is the async body.  When it is CPS-colored and its
@@ -9874,7 +9904,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = fn();\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* body parked on a pending await: leave `future` pending; the parked\n");
     buf_puts(out, "         * resume fulfills it when the awaited future completes. */\n");
@@ -9901,7 +9935,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = __fn(clos);\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        tur_async_pending_park->outer = future;\n");
     buf_puts(out, "    } else {\n");
@@ -9918,8 +9956,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            /* Re-raise the task's panic at the point that demanded the\n");
+    buf_puts(out, "             * result: with a catch-unwind in scope this is catchable, and\n");
+    buf_puts(out, "             * with none tur_panic prints the task's message and aborts. */\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return f->value;\n");
     buf_puts(out, "    }\n");
@@ -9941,8 +9982,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_fiber_block_yield(0);\n");
     buf_puts(out, "        /* When we resume, the future should be done */\n");
     buf_puts(out, "        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return f->value;\n");
     buf_puts(out, "    }\n");
@@ -9984,8 +10025,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            /* Same re-raise as tur_await_future; the resumed continuation\n");
+    buf_puts(out, "             * sees tur_panicking and unwinds through its own checks. */\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return dk_invoke(subk, 0);\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return dk_invoke(subk, f->value);\n");
     buf_puts(out, "    }\n");
