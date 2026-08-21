@@ -116,3 +116,83 @@ call directly rather than through a bare var:
 
 or hoist the block into its own defn, which is what
 `spices/secret/src/secret/kdf.tur` and `hex.tur` do for the same reason.
+
+---
+
+## Resolution (2026-08-21)
+
+Fixed exactly along the report's own fix direction, and it turned out to be
+small -- the analysis was the expensive part, and the report had already done
+it.
+
+### The change
+
+`emit_arm_is_recorded_byval_agg()` asks the question the report identified:
+not "is this TYPE by-value" but "what representation does the value in hand
+actually have HERE". At the `emit_if` merge the arm's emitted text exists, so
+the localvar side table can be consulted directly:
+
+```c
+static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v, Type bv) {
+    if (!v || bv.kind == TY_UNKNOWN || !emit_str_is_bare_ident(v)) return false;
+    const char *lv = emit_localvar_lookup_ctype(v);
+    if (!lv) return false;
+    const char *want = emit_type_c_name(ctx, bv);
+    return want && strcmp(lv, want) == 0 &&
+           strcmp(lv, "int64_t") != 0 && strchr(lv, '*') == NULL;
+}
+```
+
+It gates the carrier->concrete bridge in **both** `emit_if` arms. The report's
+repro only exercises the else arm, but the then arm is the same code and got
+the same guard.
+
+This is the `init_val_recorded_byval_agg` shape from the let-binding path,
+which is what the report pointed at. The obstacle it named --
+"`expr_emits_byvalue_carrier_abi` runs on the `Expr` before the arm's value
+string exists, so it has no identifier to look up" -- is why the check went to
+the merge site rather than into that predicate.
+
+### The ten-fixture blast radius did not materialize
+
+That was the report's stated reason for not widening the type test, and it was
+correct about the type test. It does not apply to a position-sensitive check:
+all ten named fixtures pass unchanged --
+
+```
+defopaque-struct-payload-through-unsafe-lift   generic-inline-c-struct-through-unsafe
+map-move-typed-value                           map-multiword-struct-value
+map-narrow-struct-value                        typeclass-assoc-type-method-return
+typeclass-assoc-type-parametric-struct-element vec-multiword-struct-element
+vec-multiword-struct-eq                        vec-multiword-struct-mutate
+```
+
+-- because at those seams the value's recorded C type IS the carrier, so the
+predicate returns false and the bridge they need still fires. The report's
+table of "the same type answers differently in two positions" is exactly why
+consulting the position works where consulting the type cannot.
+
+Suite: 2690 passed, **0 failed**. No snapshot regenerated.
+
+### Before / after
+
+```c
+/* before */  __t161 = (*(tur_adt_Pt *)(intptr_t)(__t163));  /* __t163 IS a tur_adt_Pt */
+/* after  */  __t161 = __t163;
+```
+
+### Tests
+
+`tests/fixtures/byvalue-product-tail-var-nonparametric/` carries the report's
+repro (else arm), the mirrored then-arm shape, and a parametric
+`(Box2 int int)` case so the already-fixed half cannot regress alongside the
+new predicate. It asserts field VALUES, not just that the program compiles --
+a double-unbox that happened to type-check would still read the wrong bytes.
+`expected.c` has zero `(*(tur_adt_... *)(intptr_t)` merge sites.
+
+### The workaround is no longer needed
+
+The report's advice -- return the call directly, or hoist the block into its
+own defn, as `spices/secret/src/secret/kdf.tur` and `hex.tur` do -- still
+works, but is no longer required for this shape. Those spice files live in the
+sibling `turmeric-spices` checkout and were not touched here.

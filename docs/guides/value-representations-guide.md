@@ -174,18 +174,28 @@ each has a live report in `docs/reported/`. This table is the campaign's
 index -- a repr cell with a filed report belongs here, so if you file one,
 add the row.
 
-| Open cell (producer -> boundary) | Report |
-| --- | --- |
-| CAPTURELESS closure (bare fn pointer) -> `let` merge temp decided `fat-handle` | [`let-returning-noncapturing-lambda-ices-at-merge-temp`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/let-returning-noncapturing-lambda-ices-at-merge-temp.md) |
+*(No open cells as of 2026-08-21.)*
 
-The row above is the R3 shadow ICE doing its job: it is loud (`repr-shadow
-merge-temp ... want=fat-handle got=carrier-i64`) and benign under
-`TUR_REPR_NO_SHADOW_ICE=1`, whereas the *same* producer reaching a `:fn`
-**argument** was silent and segfaulted (the archived
-`let-bound-noncapturing-lambda-segfaults-as-fn-arg`, closed with the
-signature-keyed `ensure_bare_fnptr_poly_shim` adapter). Same producer, two
-boundaries, one bridge built -- which is the shape this table exists to make
-visible. File a new repr cell in this table as well as in `docs/reported/`.
+The last two closed on the same day, and the `let` merge-temp one is worth a
+note because its filing had the arrow backwards. It was recorded here as
+"CAPTURELESS closure (bare fn pointer) -> `let` merge temp decided
+`fat-handle`", i.e. a thin producer reaching a fat boundary -- the same shape
+as the archived `let-bound-noncapturing-lambda-segfaults-as-fn-arg`, which
+really was that and was closed with the signature-keyed
+`ensure_bare_fnptr_poly_shim` adapter. It was the opposite: the tail already
+emitted a proper fat box and the merge TEMP was declared thin, so reusing that
+adapter would have boxed an already-boxed value. The lesson for this table is
+that a cell's *direction* is worth confirming against the emitted C before
+pairing it with a neighbour's bridge -- the shadow line names the two forms but
+not which side is the producer.
+
+It was also not benign under `TUR_REPR_NO_SHADOW_ICE=1`, which is how it read
+at filing time: that repro exits 0, but a variant that returns and CALLS the
+closure emits `-Wint-conversion` on the temp assignment -- a hard error under
+GCC >= 14. A loud-but-benign shadow is worth re-testing with the value actually
+consumed before trusting the "benign".
+
+File a new repr cell in this table as well as in `docs/reported/`.
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --
@@ -193,6 +203,8 @@ the next cell in this family is usually adjacent to one of them.
 
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
+| fn value reaching a `let` merge temp in RESULT position -- the TAIL emitted the fat `{ thunk, env... }` box while the TEMP was declared thin `R (*)(A...)`, so the assignment was `-Wint-conversion` (hard error under GCC >= 14) and the R3 shadow ICE'd on it | the two sites keyed fat-vs-thin off different facts -- `emit_temp_decl` off `type.as.fn.boxed` (a TYPE fact), stage-2 tail normalization off `fn_result_type_is_fat_normalized` (a POSITION fact). `merge_temp_fn_is_fat()` asks `repr_of` in RESULT position instead, and the decl and its ctype mirror both spell the temp from it | [`let-returning-noncapturing-lambda-ices-at-merge-temp`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md) |
+| bare-var tail of a NON-parametric by-value product -> `emit_if` merge temp (the parametric half was already bridged) | position-sensitive, not type-sensitive: `emit_arm_is_recorded_byval_agg()` asks the localvar side table what representation the arm's value actually has HERE, and suppresses the carrier->concrete bridge when it is already the aggregate. A TYPE-level widening regressed ten fixtures because the same type rides the carrier at the vec/map element and assoc-type seams; the recorded type differs there, so those keep their bridge | [`byvalue-product-tail-var-double-unboxed-nonparametric`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/byvalue-product-tail-var-double-unboxed-nonparametric.md) |
 | `^mut` rebinding of a concrete heap container (merge-temp position) -- carrier where chokepoint 1 says typed pointer, travelling with a spec-materialization hole (a generic call in a `set!` RHS never interned its spec: LINK error past tur check) | chokepoint 1's concrete-heap rule extracted to `emit_repr_concrete_heap_ptr_c_name` and shared by the let-bind decl, the merge-temp decl, and its ctype mirror (the existing int<->ptr bridge reconciles a carrier tail); `emit_abi_scan_expr` gains its missing `EX_SET` case | [`mut-map-reassign-missing-spec-link-error`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mut-map-reassign-missing-spec-link-error.md) |
 | capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (the report's LAST row; concrete and tyvar signatures were already fat-normalized) | the CPS increment (2026-08-16): effect-annotated fn params join `fn_param_type_is_fat_normalized`; the E2a registry call sites dispatch fat (slot 0 = a registered capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the fatshim's stashed bare-fn entry); threadable capturing lambdas are CPS-admitted with the direct thunk's env-unpack preamble; the effect_check walkers peel the shim. Capturing PERFORMING callbacks -- previously no working spelling -- thread the handler chain too. Thin remainder (cfnptr/variadic/arity>5 effectful) keeps a call-site TUR-E0007 | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) -- the `(type-app ? ?)` shell at the checker AND the never-emitted `ctor_Cons` at link | Defect A: result-graft recovery at the thunk-type clobber in `elab_call.c` (the binding's own ground `result_full_type` survives the swap; the `elab_fns.c` grounding gate is untouched). Defect B: `inner_app` clone trigger + body-type-derived clone result + head-keyed clone resolution at the thunk direct-call, so the per-spec inner-closure clone is both emitted and the one actually invoked | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/generic-closure-return-type-app.md) |

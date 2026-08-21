@@ -266,9 +266,21 @@ not this file -- these each have a row there, and the guide carries the
 matrix, the structural note about which `TypeKind` switch is authoritative, and
 the plan links. File a new repr cell there as well as here.
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [byvalue-product-tail-var-double-unboxed-nonparametric](byvalue-product-tail-var-double-unboxed-nonparametric.md) | medium | residue of `result-block-value-double-unboxed`: a bare-var tail of a NON-parametric by-value product (`tur_adt_Pt`) is still deref-unboxed by the `emit_if` merge. Not widenable -- the same type rides the carrier at the vec/map element and assoc-type seams, so extending the type test regresses 10 named fixtures. Needs a position-sensitive predicate (the `emit_localvar_lookup_ctype` trick) moved to the merge site, where the arm's emitted text exists |
+Both rows that were here are now archived (2026-08-21).
+
+`byvalue-product-tail-var-double-unboxed-nonparametric` was resolved
+2026-08-21 and moved to
+[docs/archive](../archive/byvalue-product-tail-var-double-unboxed-nonparametric.md),
+along the fix direction it filed. `emit_arm_is_recorded_byval_agg()` gates the
+carrier->concrete bridge in both `emit_if` arms on what the localvar side table
+records the value's representation to be HERE, rather than on what its type is
+-- which is why the ten-fixture regression the report measured for a TYPE-level
+widening does not occur: at the vec/map element and assoc-type seams the
+recorded type IS the carrier, so those fixtures still get the bridge they need.
+All ten pass unchanged, no snapshot regenerated, suite 2690 passed / 0 failed.
+Pinned by `tests/fixtures/byvalue-product-tail-var-nonparametric/`, which
+asserts field values (a double-unbox that type-checked would still read wrong
+bytes) and covers the then arm and the parametric half too.
 
 `let-returning-noncapturing-lambda-ices-at-merge-temp` was resolved 2026-08-21
 and moved to

@@ -1903,6 +1903,33 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
     emit_localvar_record_ctype(name, emit_type_c_name(ctx, type));
 }
 
+/* byvalue-product-tail-var-double-unboxed-nonparametric: true when the EMITTED
+ * text `v` is a bare local whose RECORDED C type is already the by-value
+ * aggregate `bv` -- so a carrier->concrete bridge over it would deref a value
+ * that is not a pointer (`(*(T *)(intptr_t)(<T value>))`, a hard cc error).
+ *
+ * This is the position-sensitive question the type-level predicates cannot
+ * answer. `expr_emits_byvalue_carrier_abi`'s EX_VAR arm was narrowed to
+ * PARAMETRIC apps because widening it to non-parametric products regressed ten
+ * fixtures: at the vec/map element and assoc-type-return seams a
+ * non-parametric product genuinely DOES ride the carrier and needs the bridge,
+ * and the type there is identical, so no test on the type can separate the two
+ * positions. What separates them is the representation the value actually has
+ * HERE, which the localvar side table already records at the declaration.
+ *
+ * Same shape as the `init_val_recorded_byval_agg` check on the let-binding
+ * path; this is the emit_if merge companion, which can only ask it because the
+ * arm's emitted text exists by this point. */
+static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
+                                            Type bv) {
+    if (!v || bv.kind == TY_UNKNOWN || !emit_str_is_bare_ident(v)) return false;
+    const char *lv = emit_localvar_lookup_ctype(v);
+    if (!lv) return false;
+    const char *want = emit_type_c_name(ctx, bv);
+    return want && strcmp(lv, want) == 0 &&
+           strcmp(lv, "int64_t") != 0 && strchr(lv, '*') == NULL;
+}
+
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
  * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
  * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
@@ -2871,7 +2898,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * only the bare-param arm needs the deref.) */
         bool then_is_byptr_param = expr_is_pbp_param(ctx, th) && !temp_is_ptr;
         if (if_bv.kind != TY_UNKNOWN &&
-            !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_)) {
+            !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_) &&
+            !emit_arm_is_recorded_byval_agg(ctx, t, if_bv)) {
             /* by-value merge temp, carrier-producing arm: bridge to concrete */
             t = emit_carrier_bridge(ctx, body, t, CK_CARRIER, CK_CONCRETE, if_bv);
             indent_buf(body, ctx->indent);
@@ -2913,7 +2941,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * parameter returned as the else-branch result. */
             bool else_is_byptr_param = expr_is_pbp_param(ctx, eb) && !temp_is_ptr2;
             if (if_bv.kind != TY_UNKNOWN &&
-                !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null)) {
+                !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null) &&
+                !emit_arm_is_recorded_byval_agg(ctx, el, if_bv)) {
                 el = emit_carrier_bridge(ctx, body, el, CK_CARRIER, CK_CONCRETE, if_bv);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);
