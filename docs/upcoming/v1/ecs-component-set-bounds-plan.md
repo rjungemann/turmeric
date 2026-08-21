@@ -9,7 +9,47 @@ description: The third polymorphism encoding for ECS systems -- a structural "th
 **Status:** the cheap step (3) is **done 2026-08-01** -- shipped spice-side as
 `defworld-classes`, though not in the shape this plan recommended; see the note
 under "Why this is not urgent". The structural `(has ...)` bound itself is not
-started and remains deliberately unscheduled. Split out of
+started and remains deliberately unscheduled.
+
+> **THE PROFILE THIS PLAN GATES ON NOW EXISTS, AND IT DECLINES THE FEATURE
+> (2026-08-20).** Point 2 below sets the entry condition: "This plan does not
+> start without a profile showing dictionary dispatch in an ECS hot path."
+> The benchmark is written -- `turmeric-spices/spices/ecs/bench/`, 100k
+> entities x 100 frames of dense float `Pos`/`Vel` integration -- and it
+> includes a matched pair built for exactly this question:
+>
+> | variant | ms | vs hand-rolled C |
+> |---|---|---|
+> | `poly-dispatch` -- `<Comp>-storage-of` called inside the loop (2 x 10M dispatches) | 37.4 | 8.56x |
+> | `poly-hoisted` -- identical program, the two lookups hoisted (2 dispatches total) | 37.3 | 8.53x |
+>
+> **Twenty million dictionary lookups cost nothing measurable** -- the two
+> rows differ by 0.3%, which is inside run-to-run noise. `cc -O2` hoists the
+> dispatch out of the loop by itself, so even the source-level hoist changes
+> nothing. There is no hot path in which this indirection is visible, because
+> by the time the code runs the indirection is not there.
+>
+> Point 2's own analogy holds up exactly: it warned that whole-program
+> entry-check elision "measured at **zero** ... because `cc -O2` was already
+> doing it", and guessed monomorphized dispatch "may well be in the same
+> category". It is.
+>
+> The benchmark also shows where the ECS time actually goes, which is nowhere
+> near this plan: `for-each2`'s iteration machinery is free (a hand-written
+> loop with no `for-each` ties it), Turmeric's codegen is free (a raw-buffer
+> Turmeric loop runs 1.04x C), and the cost is concentrated in the unsized
+> `dense-set!` write path -- an auto-grow capacity branch plus a `present[]`
+> byte write plus a `len` update, per store. The whole ECS path is 8.42x
+> hand-rolled and the sized path 3.50x, so the archived parent plan's
+> within-2x target is missed regardless of anything this plan would do. See
+> `spices/ecs/bench/README.md`.
+>
+> **Recommendation: keep (c) unscheduled, and stop treating the profile as
+> the missing input.** The profile is no longer missing; it is negative. If
+> this plan is ever revived it should be on the declaration-site ergonomics
+> argument alone -- and `defworld-classes` already took most of that.
+
+Split out of
 [`ecs-refinement-typed-apis-plan.md`](ecs-refinement-typed-apis-plan.md),
 where it was tracked as a refinement type and should not have been.
 

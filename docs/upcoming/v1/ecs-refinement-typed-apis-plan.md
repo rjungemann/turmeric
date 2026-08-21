@@ -597,6 +597,56 @@ nanoseconds, and the parent plan's benchmarking section is a standing warning
 that this class of win tends to evaporate under `cc -O2`, which already proves
 locally-derived bounds for free. **RE2 does not start without a profile.**
 
+> **THE PROFILE EXISTS AS OF 2026-08-20, and it reframes RE2 rather than
+> greenlighting it.** `turmeric-spices/spices/ecs/bench/` -- 100k entities x
+> 100 frames of dense float `Pos`/`Vel` integration, against a hand-rolled C
+> baseline. Best of 5 on an M2, `tur` v0.37.0:
+>
+> | variant | ms | vs C |
+> |---|---|---|
+> | `c-baseline` (flat arrays, hand-rolled C) | 4.4 | 1.00x |
+> | `manual` (raw Turmeric, flat buffers, no ECS) | 4.6 | 1.04x |
+> | `ecs-unsized` (`defworld` + `for-each2`) | 36.9 | 8.42x |
+> | `ecs-sized` (`sized-defworld` + `sized-for-each`) | 15.3 | 3.50x |
+>
+> Three findings bear on RE2, in decreasing order of comfort:
+>
+> 1. **The archived parent plan's within-2x target is missed by a wide
+>    margin** -- 8.42x unsized, 3.50x sized. This is the first measurement
+>    and it is worse than the plan assumed. Worth recording plainly.
+> 2. **The cost is not where RE2 is aiming.** It is not codegen (`manual`
+>    runs 1.04x C) and not the query macro (a hand-written loop with no
+>    `for-each` anywhere ties it, despite `for-each2` doing strictly more work
+>    per slot). Reading `ecs/storage.tur`, the unsized `dense-set!`
+>    emits per write: an `elem_sz` init test, a capacity test guarding a
+>    `realloc` auto-grow path, the store, a second array write to
+>    `present[idx]`, and a `len` update branch. RE2 refines a slot index to
+>    discharge `0 <= i < cap`; that maps onto the **auto-grow guard**, not a
+>    pure bounds check, and removing it leaves the `present[]` write and the
+>    `len` update untouched.
+> 3. **`ecs-sized` already banks most of the available win, with no
+>    refinement types at all.** A sized world's capacity is static, so its
+>    grow branch is already dead -- and it still runs 3.50x. So the
+>    36.9 -> 15.3 part of the gap is had today, and the remaining
+>    15.3 -> 4.4 is not something a refined index addresses.
+>
+> **What this changes.** RE2's *performance* justification does not survive
+> this profile: the cheaper first move, if speed is the goal, is a
+> `dense-reserve!` / non-growing write path on the unsized storage, which is
+> ordinary spice work and needs no compiler feature. RE2's *correctness*
+> justification -- compile-time rejection of an out-of-range slot -- is
+> untouched and stands on its own; it just should not be sold on this
+> benchmark. The probe update above (bounds discharge works today in the
+> recursion shape, no C3 needed) still holds, so if RE2 is built for the
+> type-level property it remains cheap to build.
+>
+> Not separately measured: the per-cost attribution *inside* `dense-set!`.
+> An ablation that removes the grow branch and the `present[]` write
+> independently would settle how much of the 36.9 -> 15.3 each accounts for,
+> and is the obvious next probe. (`ecs-sized` still does a `present[]` write
+> and a struct copy per store, so its 3.50x is not the grow branch alone.)
+> See `spices/ecs/bench/README.md`.
+
 ### RE3 -- Documentation (DONE 2026-07-26)
 
 - Fix the two false statements in the table above. *(Landed with the plan
