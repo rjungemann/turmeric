@@ -107,23 +107,20 @@ Two conventions to know:
 
 - Registration names **include** the dashes (`"--verbose"`); result accessors
   (`args/has?`, `args/get-*`) take the name **without** dashes (`"verbose"`).
-- An option's default is passed as a `cstr` smuggled through the `:int`
-  `dflt` slot -- define a tiny reinterpret helper (as below) -- or `0` to
-  make the option required.
+- An option's default is an `(Option cstr)`: `(some "1")` for a default of
+  `1`, `(none)` to make the option required.
+- A spec handle is an `ArgSpec` and a parse result is an `ArgResult` -- two
+  distinct `defopaque` newtypes, so passing one where the other belongs is a
+  compile error rather than a silently wrong pointer.
 
 ```turmeric
-(defn cstr->int [s : cstr] : int
-  ```c
-  return (int64_t)(intptr_t)s;
-  ```)
-
 (defn main [] : int
   (let [spec (-> (args/spec-new)
                  (args/spec-prog "mytool")
                  (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" 0)                 ; required
-                 (args/spec-option "--count"  "int"    (cstr->int "1"))   ; default 1
-                 (args/spec-option "--output" "string" (cstr->int "out.txt")))
+                 (args/spec-option "--input"  "string" (none))       ; required
+                 (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                 (args/spec-option "--output" "string" (some "out.txt")))
         result (args/parse spec *args*)]
     (if (args/error? result)
       (do
@@ -138,18 +135,13 @@ Two conventions to know:
         0))))
 ```
 ```sweet-exp
-defn cstr->int [s :cstr] :int
-  ```c
-  return (int64_t)(intptr_t)s;
-  ```
-
 defn main [] :int
   let [spec (-> (args/spec-new)
                  (args/spec-prog "mytool")
                  (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" 0)                 ; required
-                 (args/spec-option "--count"  "int"    (cstr->int "1"))   ; default 1
-                 (args/spec-option "--output" "string" (cstr->int "out.txt")))
+                 (args/spec-option "--input"  "string" (none))       ; required
+                 (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                 (args/spec-option "--output" "string" (some "out.txt")))
         result (args/parse spec *args*)]
     if args/error?(result)
       do
@@ -225,10 +217,10 @@ flags, options, and nested subcommands:
 (defn main [] : int
   (let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
-                       (args/spec-option "--output" "string" (cstr->int "a.out")))
+                       (args/spec-option "--output" "string" (some "a.out")))
         test-spec  (-> (args/spec-new)
                        (args/spec-flag "--verbose")
-                       (args/spec-option "--filter" "string" 0))
+                       (args/spec-option "--filter" "string" (none)))
         spec       (-> (args/spec-new)
                        (args/spec-prog "myapp")
                        (args/spec-subcommand "build" build-spec)
@@ -242,11 +234,13 @@ flags, options, and nested subcommands:
         (cond
           (cstr-eq? sub "build")
             (let [r (args/sub-result result)]
-              (println "building, release:" (args/has? r "release"))
+              (println "building, release:"
+                       (args/has? (.value r) "release"))
               0)
           (cstr-eq? sub "test")
             (let [r (args/sub-result result)]
-              (println "testing, filter:" (args/get-str r "filter"))
+              (println "testing, filter:"
+                       (args/get-str (.value r) "filter"))
               0)
           true
             (do
@@ -257,10 +251,10 @@ flags, options, and nested subcommands:
 defn main [] :int
   let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
-                       (args/spec-option "--output" "string" (cstr->int "a.out")))
+                       (args/spec-option "--output" "string" (some "a.out")))
         test-spec  (-> (args/spec-new)
                        (args/spec-flag "--verbose")
-                       (args/spec-option "--filter" "string" 0))
+                       (args/spec-option "--filter" "string" (none)))
         spec       (-> (args/spec-new)
                        (args/spec-prog "myapp")
                        (args/spec-subcommand "build" build-spec)
@@ -275,12 +269,12 @@ defn main [] :int
           cstr-eq?(sub "build")
           let
             [r (args/sub-result result)]
-            println("building, release:" args/has?(r "release"))
+            println("building, release:" args/has?(.value(r) "release"))
             0
           cstr-eq?(sub "test")
           let
             [r (args/sub-result result)]
-            println("testing, filter:" args/get-str(r "filter"))
+            println("testing, filter:" args/get-str(.value(r) "filter"))
             0
           true
           do
@@ -299,6 +293,11 @@ import `cstr`.
 tur run myapp.tur -- build --release
 tur run myapp.tur -- test --filter=core --verbose
 ```
+
+`args/sub-result` returns an `(Option ArgResult)` -- `(none)` when no
+subcommand matched. The `cond` arms above have already established which
+subcommand ran, so they take `(.value r)` directly; a caller that has not
+should test `(.is-some r)` first.
 
 Nested subcommands work the same way: call `args/sub-result` on the outer
 result, then `args/subcommand` on the inner to walk the chain.
@@ -351,24 +350,24 @@ args/result-free(result)
 
 | Function | Signature | Description |
 |---|---|---|
-| `args/spec-new` | `-> :int` | Create an empty arg spec |
-| `args/spec-prog` | `spec :int name :cstr -> :int` | Set program name for help |
-| `args/spec-flag` | `spec :int name :cstr -> :int` | Register a boolean flag |
-| `args/spec-option` | `spec :int name :cstr type :cstr dflt :int -> :int` | Register a named option |
-| `args/spec-subcommand` | `spec :int name :cstr sub :int -> :int` | Register a subcommand |
-| `args/parse` | `spec :int argv :int -> :int` | Parse `*args*` against spec |
-| `args/has?` | `result :int key :cstr -> :bool` | True if flag/option was supplied |
-| `args/get-str` | `result :int key :cstr -> :cstr` | Get option value as string |
-| `args/get-int` | `result :int key :cstr -> :int` | Get option value as int |
-| `args/get-bool` | `result :int key :cstr -> :bool` | Get option value as bool |
-| `args/positional` | `result :int -> :int` | Cons list of positional args |
-| `args/subcommand` | `result :int -> :cstr` | Matched subcommand name |
-| `args/sub-result` | `result :int -> :int` | Parse result for subcommand |
-| `args/error?` | `result :int -> :bool` | True if parsing failed |
-| `args/error-msg` | `result :int -> :cstr` | Error description string |
-| `args/print-help` | `spec :int -> :void` | Print usage to stdout |
-| `args/spec-free` | `spec :int -> :void` | Free spec memory |
-| `args/result-free` | `result :int -> :void` | Free result memory |
+| `args/spec-new` | `-> ArgSpec` | Create an empty arg spec |
+| `args/spec-prog` | `spec :ArgSpec name :cstr -> ArgSpec` | Set program name for help |
+| `args/spec-flag` | `spec :ArgSpec name :cstr -> ArgSpec` | Register a boolean flag |
+| `args/spec-option` | `spec :ArgSpec name :cstr type :cstr dflt :(Option cstr) -> ArgSpec` | Register a named option |
+| `args/spec-subcommand` | `spec :ArgSpec name :cstr sub :ArgSpec -> ArgSpec` | Register a subcommand |
+| `args/parse` | `spec :ArgSpec argv :int -> ArgResult` | Parse `*args*` against spec |
+| `args/has?` | `result :ArgResult key :cstr -> :bool` | True if flag/option was supplied |
+| `args/get-str` | `result :ArgResult key :cstr -> :cstr` | Get option value as string |
+| `args/get-int` | `result :ArgResult key :cstr -> :int` | Get option value as int |
+| `args/get-bool` | `result :ArgResult key :cstr -> :bool` | Get option value as bool |
+| `args/positional` | `result :ArgResult -> :int` | Cons list of positional args |
+| `args/subcommand` | `result :ArgResult -> :cstr` | Matched subcommand name |
+| `args/sub-result` | `result :ArgResult -> (Option ArgResult)` | Parse result for subcommand |
+| `args/error?` | `result :ArgResult -> :bool` | True if parsing failed |
+| `args/error-msg` | `result :ArgResult -> :cstr` | Error description string |
+| `args/print-help` | `spec :ArgSpec -> :void` | Print usage to stdout |
+| `args/spec-free` | `spec :ArgSpec -> :void` | Free spec memory |
+| `args/result-free` | `result :ArgResult -> :void` | Free result memory |
 
 ## CLAUDE.md Rule
 

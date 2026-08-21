@@ -48,7 +48,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | --- | --- | --- |
 | [async-panic-task-boundary](async-panic-task-boundary.md) | medium | panic in a plain `(async ...)` body unwinds the caller instead of rejecting the future |
 | [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
-| [args-api-int-erased-handles](args-api-int-erased-handles.md) | medium | stdlib/args.tur types spec/result handles and the option default as bare `:int` (no-lazy-int violation) |
 | [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
 | [performance-guide-fictional-stdlib-api](performance-guide-fictional-stdlib-api.md) | medium | performance-guide's middle sections document nonexistent stdlib modules/functions |
@@ -66,6 +65,20 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+
+`args-api-int-erased-handles` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/args-api-int-erased-handles.md). `ArgSpec` /
+`ArgResult` are `defopaque` newtypes now, the option default is
+`(Option cstr)`, and `args/sub-result` returns `(Option ArgResult)`; the
+`args-defaults` fixture's `cstr->int` reinterpret helper is deleted. Two
+notes worth carrying: an inline-C body **cannot** take a by-value
+`(Option cstr)` -- it lowers to `tur_adt_Option__cstr`, not the `int64_t`
+carrier `tur_is_some` accepts, so the option is peeled in a pure-Turmeric
+wrapper -- and a `;;;` block binds to the NEXT definition, so an internal
+helper slipped between a docstring and its public `defn` steals the
+docstring in `docs/api/`. `argv` / `args/positional` stay `:int` on purpose:
+they are the `*args*` cons list, which the elaborator itself declares as a
+global `:int`.
 
 ## Value representation (the consolidation campaign)
 
