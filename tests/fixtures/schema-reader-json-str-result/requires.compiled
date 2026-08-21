@@ -1,0 +1,7 @@
+The OK path of this fixture needs the interpreter's catch-unwind to carry an
+aggregate payload, which it does not: `(ok-val r)` yields the struct handle, so
+`.name` prints a pointer.  Same defect as
+tests/fixtures/catch-unwind-aggregate-thunk -- filed as
+docs/reported/turi-catch-unwind-aggregate-payload.md.  The ERR path (the point
+of this fixture) does work under turi since schema-decode-abort became a
+catchable panic there too; drop this marker when the payload defect is fixed.

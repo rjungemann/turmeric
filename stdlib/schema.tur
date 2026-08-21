@@ -1050,9 +1050,9 @@
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res ? res->err_val : 0;
   ```)
-;;; schema-decode-abort -- internal: print an error Vec to stderr and abort.
+;;; schema-decode-report -- internal: print an error Vec to stderr.
 
-(defn schema-decode-abort [errs : int] : int
+(defn schema-decode-report [errs : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   fprintf(stderr, "schema-decode!: validation failed\n");
@@ -1063,9 +1063,21 @@
     if (path && path[0]) fprintf(stderr, "  %s: %s\n", path, msg);
     else                 fprintf(stderr, "  %s\n", msg);
   }
-  abort();
   return 0;
   ```)
+;;; schema-decode-abort -- internal: report an error Vec and raise.
+;;;
+;;; A `panic`, not a bare `abort()`: with no catch boundary in scope the two are
+;;; indistinguishable (both print and die), but a panic is what makes
+;;; `(catch-unwind (fn [] : T (decode! ...)))` -- and with it the
+;;; Result-returning `#json-str?<T>` reader -- able to recover from a schema
+;;; violation instead of taking the process down.  The errors are printed
+;;; first, so the diagnostic detail survives either way.
+
+(defn schema-decode-abort [errs : int] : int
+  (do
+    (schema-decode-report errs)
+    (panic "schema-decode!: validation failed")))
 ;;; schema-decode! -- decode against a schema, panicking on any violation.
 ;;;
 ;;; Parameters:

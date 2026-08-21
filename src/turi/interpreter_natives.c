@@ -1795,7 +1795,7 @@ static TuriValue native_schema_decode_errors(TuriEnv *e, TuriValue *a, uint32_t 
     return turi_int(json_node_ptr(a[0])[2]);
 }
 static TuriValue native_schema_decode_abort(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     tur_json_vec *v = (n >= 1) ? (tur_json_vec *)(intptr_t)a[0].as_int : NULL;
     fprintf(stderr, "schema-decode!: validation failed\n");
     if (v) for (size_t i = 0; i < v->len; i++) {
@@ -1805,7 +1805,13 @@ static TuriValue native_schema_decode_abort(TuriEnv *e, TuriValue *a, uint32_t n
         if (path && path[0]) fprintf(stderr, "  %s: %s\n", path, msg);
         else                 fprintf(stderr, "  %s\n", msg);
     }
-    abort();
+    /* A catchable panic, not abort(): this is the interpreter half of the
+     * change in stdlib/schema.tur that lets `#json-str?<T>` (a catch-unwind
+     * around the panicking decode) recover from a schema violation.  With no
+     * catch boundary in scope turi_runtime_panic still prints and exits, so a
+     * plain `schema-decode!` failure dies as loudly as it always did. */
+    turi_runtime_panic(e, "schema-decode!: validation failed");
+    return turi_int(0);
 }
 
 static void wk_register_schema_natives(TuriEnv *env) {

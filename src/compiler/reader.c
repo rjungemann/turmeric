@@ -1897,16 +1897,28 @@ static Form *try_read_json(Reader *r) {
     return val;
 }
 
-/* RD2: #json-str<T>(expr) -- typed decode of a runtime JSON string.
+/* RD2: #json-str<T>(expr) / #json-str?<T>(expr) -- typed decode of a runtime
+ * JSON string, panicking or Result-returning.
  *
- *   #json-str<T>(e)  ==>  (:: (decode! (json/decode e)) T)
+ *   #json-str<T>(e)   ==>  (:: (decode! (json/decode e)) T)
+ *   #json-str?<T>(e)  ==>  (:: (catch-unwind
+ *                               (fn [] : T (:: (decode! (json/decode e)) T)))
+ *                             (Result T int))
  *
  * Unlike #json(...), the inner is an ordinary Turmeric expression (a :cstr at
  * runtime), read with the normal reader -- no JSON sub-parser is involved.
- * The panic-on-violation
- * #json-str<T> is implemented here; the Result-returning #json-str?<T> and the
- * file-reading #json-file<T> remain future work (a clear diagnostic is emitted
- * for the '?' form). */
+ *
+ * The `?` form is the panicking one behind a catch boundary rather than a
+ * second decode path: `HasSchema` has exactly one method and the schema lives
+ * inside each instance's `decode!` body, so a reader macro has nothing else to
+ * branch on.  Two things had to be true first, and both now are -- a schema
+ * violation raises a catchable `panic` instead of calling `abort()`
+ * (stdlib/schema.tur, schema-decode-abort), and `catch-unwind` over a thunk
+ * returning a by-value aggregate no longer miscompiles (see
+ * docs/archive/catch-unwind-aggregate-return-miscompiled.md); a typed decode
+ * lands in a struct by definition, so it hit that every time.
+ *
+ * The file-reading #json-file<T> remains future work. */
 static Form *try_read_json_str(Reader *r) {
     if (!(peek_at(r, 1) == 'j' && peek_at(r, 2) == 's' && peek_at(r, 3) == 'o' &&
           peek_at(r, 4) == 'n' && peek_at(r, 5) == '-' && peek_at(r, 6) == 's' &&
@@ -1920,13 +1932,10 @@ static Form *try_read_json_str(Reader *r) {
     size_t   so = r->pos;
     for (int k = 0; k < 9; k++) advance(r); /* "#json-str" */
 
+    bool result_form = false;
     if (peek(r) == '?') {
-        Span s = span_from_to(r, sl, sc, so, r->pos);
-        diag_emit(DIAG_ERROR, s,
-                  "#json-str?<...>: the Result-returning typed-decode reader is "
-                  "not yet implemented; use #json-str<...> (panics on a schema "
-                  "violation) or call schema-decode directly");
-        r->error = true; return NULL;
+        result_form = true;
+        advance(r); /* consume '?' */
     }
 
     /* <Type> hint (required). */
@@ -1987,7 +1996,40 @@ static Form *try_read_json_str(Reader *r) {
     items[0] = form_sym(r->arena, s, asc);
     items[1] = decoded;
     items[2] = type_form;
-    return form_list(r->arena, s, items, 3);
+    Form *ascribed = form_list(r->arena, s, items, 3);
+    if (!result_form) return ascribed;
+
+    /* (fn [] : T <ascribed>) -- the return annotation is not decoration: the
+     * catch boundary reads the thunk's declared return type to decide whether
+     * the value needs heap-boxing across the int64 result box. */
+    Form **fnitems = (Form **)arena_alloc(r->arena, 4 * sizeof(Form *));
+    fnitems[0] = form_sym(r->arena, s, symtab_intern(r->st, strslice("fn", 2)));
+    fnitems[1] = form_vec(r->arena, s, NULL, 0);
+    fnitems[2] = form_type_ann(r->arena, s, type_form);
+    fnitems[3] = ascribed;
+    Form *thunk = form_list(r->arena, s, fnitems, 4);
+
+    /* (catch-unwind <thunk>) */
+    Form **cuitems = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    cuitems[0] = form_sym(r->arena, s,
+                          symtab_intern(r->st, strslice("catch-unwind", 12)));
+    cuitems[1] = thunk;
+    Form *caught = form_list(r->arena, s, cuitems, 2);
+
+    /* (:: (catch-unwind ...) (Result T int)) -- the err slot carries the
+     * panic payload handle, which `err?` / `panic-msg`-style readers consume;
+     * `int` is the payload's carrier type at this surface. */
+    Form **ritems = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    ritems[0] = form_sym(r->arena, s, symtab_intern(r->st, strslice("Result", 6)));
+    ritems[1] = type_form;
+    ritems[2] = form_sym(r->arena, s, symtab_intern(r->st, strslice("int", 3)));
+    Form *result_ty = form_list(r->arena, s, ritems, 3);
+
+    Form **aitems = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    aitems[0] = form_sym(r->arena, s, asc);
+    aitems[1] = caught;
+    aitems[2] = result_ty;
+    return form_list(r->arena, s, aitems, 3);
 }
 
 /* RR: Is form an operator symbol (<, <=, >, >=, =)? */

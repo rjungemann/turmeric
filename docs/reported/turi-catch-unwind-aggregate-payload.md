@@ -43,10 +43,20 @@ struct value (`native_catch_unwind` / the result-box construction in
 
 ## Blast radius
 
-`tests/fixtures/catch-unwind-aggregate-thunk/` carries a `requires.compiled`
-marker naming this report; removing the marker is how to re-check it. That
-fixture covers both catch forms, a `defstruct` and a `defdata` payload, a
-capturing-closure thunk and the panic path, so it is a ready-made probe.
+Two fixtures carry a `requires.compiled` marker naming this report; removing
+the markers is how to re-check it.
+
+- `tests/fixtures/catch-unwind-aggregate-thunk/` -- both catch forms, a
+  `defstruct` and a `defdata` payload, a capturing-closure thunk and the panic
+  path. A ready-made probe.
+- `tests/fixtures/schema-reader-json-str-result/` -- the `#json-str?<T>`
+  reader, whose expansion is a catch-unwind around a typed decode, so every
+  successful decode lands on this. Its ERR path runs correctly under turi (the
+  interpreter's `schema-decode-abort` native raises a catchable panic now, in
+  step with `stdlib/schema.tur`); only the OK path is wrong.
+
+So this defect is what stands between the interpreter and a working
+`#json-str?<T>`, not just an obscure catch-unwind corner.
 
 ## Guides to update when fixed
 
