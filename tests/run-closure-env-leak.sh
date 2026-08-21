@@ -64,7 +64,7 @@ if ! "$CC" -g -O0 -fno-strict-aliasing -fsanitize=address,undefined \
 fi
 
 probe=$(ASAN_OPTIONS="detect_leaks=1" "$BIN" 2>&1)
-if printf '%s' "$probe" | grep -q "detect_leaks is not supported"; then
+if grep -q "detect_leaks is not supported" <<< "$probe"; then
     echo "PASS closure-env-leak (skipped: LeakSanitizer unsupported on this platform)"
     echo "closure-env-leak summary: skipped -- no LSan on this platform"
     exit 0
@@ -75,20 +75,20 @@ rc=$?
 
 fail=0
 # (1) Output sanity: both lines must be present (the program ran to completion).
-if ! printf '%s\n' "$out" | grep -qx "202"; then
+if ! grep -qx "202" <<< "$out"; then
     echo "FAIL closure-env-leak -- expected handler result 202 not in output"
     fail=1
 fi
-if ! printf '%s\n' "$out" | grep -qx "500500"; then
+if ! grep -qx "500500" <<< "$out"; then
     echo "FAIL closure-env-leak -- expected loop result 500500 not in output"
     fail=1
 fi
 # (2) The real assertion: no LeakSanitizer leak report, clean exit.
-if printf '%s' "$out" | grep -q "LeakSanitizer: detected memory leaks"; then
+if grep -q "LeakSanitizer: detected memory leaks" <<< "$out"; then
     echo "FAIL closure-env-leak -- LeakSanitizer reported a leak"
     fail=1
 fi
-if printf '%s' "$out" | grep -q "runtime error:"; then
+if grep -q "runtime error:" <<< "$out"; then
     echo "FAIL closure-env-leak -- UBSan reported undefined behavior"
     fail=1
 fi

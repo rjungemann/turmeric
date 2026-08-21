@@ -30,7 +30,7 @@ run_out=$(ASAN_OPTIONS="detect_leaks=1:exitcode=23" \
           UBSAN_OPTIONS="halt_on_error=1:exitcode=24" "$BIN" 2>&1)
 rc=$?
 
-if printf '%s' "$run_out" | grep -q "detect_leaks is not supported"; then
+if grep -q "detect_leaks is not supported" <<< "$run_out"; then
     run_out=$(ASAN_OPTIONS="exitcode=23" UBSAN_OPTIONS="halt_on_error=1:exitcode=24" \
               "$BIN" 2>&1)
     rc=$?
@@ -44,7 +44,7 @@ if [ "$rc" -ne 0 ]; then
     echo "FAIL hamt-del-lineage -- sanitizer reported an issue (rc=$rc)"
     exit 1
 fi
-if ! printf '%s' "$run_out" | grep -q "all hamt del-lineage tests passed"; then
+if ! grep -q "all hamt del-lineage tests passed" <<< "$run_out"; then
     echo "FAIL hamt-del-lineage -- test did not complete"
     exit 1
 fi

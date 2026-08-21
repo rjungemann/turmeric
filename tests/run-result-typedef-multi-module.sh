@@ -62,7 +62,7 @@ build_rc=$?
 if [ $build_rc -ne 0 ]; then
     # The specific failure we are pinning against: a `redefinition` error on
     # the Result__cstr__cstr typedef.
-    if echo "$build_out" | grep -q "redefinition of 'Result__cstr__cstr'"; then
+    if grep -q "redefinition of 'Result__cstr__cstr'" <<< "$build_out"; then
         fail "result-typedef-no-redefinition" "redefinition of Result__cstr__cstr re-emerged: $build_out"
     else
         fail "result-typedef-no-redefinition" "tur build --shared exit=$build_rc: $build_out"

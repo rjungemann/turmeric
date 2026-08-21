@@ -350,6 +350,16 @@ add_test(
   COMMAND bash tests/check-cc-warn-ratchet.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `cmd | grep -q` under `set -o pipefail` reports a FALSE failure when the
+# pattern IS found: grep exits at the first match, the writer takes SIGPIPE
+# (141), and pipefail promotes that to the pipeline's status.  Load- and
+# payload-dependent, so it reads as a product bug and re-runs green.  Bitten
+# three times; see docs/archive/pipefail-grep-q-false-failures.md.
+add_test(
+  NAME tur_pipefail_grep_q_lint
+  COMMAND bash tests/check-pipefail-grep-q.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests

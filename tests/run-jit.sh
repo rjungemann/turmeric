@@ -367,7 +367,7 @@ JIT_FILTER="${JIT_FILTER:-${TUR_TEST_FILTER:-}}"
 FILTERED_DIRS=()
 for d in "${ALL_DIRS[@]}"; do
     name="${d#tests/fixtures/}"
-    if [ -z "$JIT_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$JIT_FILTER"; then
+    if [ -z "$JIT_FILTER" ] || grep -E -q "$JIT_FILTER" <<< "$name"; then
         FILTERED_DIRS+=("$d")
     fi
 done
@@ -381,7 +381,7 @@ ERROR_DIRS=()
 for d in tests/fixtures/errors/*/; do
     d="${d%/}"; [ -d "$d" ] || continue
     name="${d#tests/fixtures/}"
-    if [ -z "$JIT_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$JIT_FILTER"; then
+    if [ -z "$JIT_FILTER" ] || grep -E -q "$JIT_FILTER" <<< "$name"; then
         ERROR_DIRS+=("$d")
     fi
 done

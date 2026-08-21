@@ -77,7 +77,7 @@ run() {
 
 # -------- scenario 1: in-process load (no .so artifact) -------------------
 out=$(run ':quit\n')
-if   echo "$out" | grep -q "Loaded spice from .* (4 exports)" \
+if   grep -q "Loaded spice from .* (4 exports)" <<< "$out" \
   && ! ls "$PROJ"/.tur-repl-cache/lib-*.so >/dev/null 2>&1; then
     pass "j2-load-in-process"
 else
@@ -88,10 +88,10 @@ fi
 # Float probe uses a NON-INTEGER result (1.5 * 3.0 = 4.5) so int/float
 # marshalling divergence cannot hide behind a whole-number answer.
 out=$(run '(add42 1)\n(oth/triple 14)\n(scale 1.5 3.0)\n(sum12 1 2 3 4 5 6 7 8 9 10 11 12)\n:quit\n')
-if   echo "$out" | grep -qx '=> 43' \
-  && echo "$out" | grep -qx '=> 42' \
-  && echo "$out" | grep -qx '=> 4.5' \
-  && echo "$out" | grep -qx '=> 78'; then
+if   grep -qx '=> 43' <<< "$out" \
+  && grep -qx '=> 42' <<< "$out" \
+  && grep -qx '=> 4.5' <<< "$out" \
+  && grep -qx '=> 78' <<< "$out"; then
     pass "j2-calls"
 else
     fail "j2-calls" "$out"
@@ -107,8 +107,8 @@ cat > "$P2/src/sh.tur" <<'EOF'
 (defmodule sh (export f) (defn f [] :int (no-such-name)))
 EOF
 out=$(cd "$P2" && echo ':quit' | "$TUR_BIN" repl --engine jit 2>&1)
-if   echo "$out" | grep -q "spice rebuild failed" \
-  && echo "$out" | grep -q "(reload)"; then
+if   grep -q "spice rebuild failed" <<< "$out" \
+  && grep -q "(reload)" <<< "$out"; then
     pass "j2-compile-error-hint"
 else
     fail "j2-compile-error-hint" "$out"

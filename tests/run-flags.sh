@@ -44,7 +44,7 @@ if [ $rc -ne 0 ]; then
     fail "tur-explain-kind-mismatch" "non-zero exit ($rc)"
 elif [ -z "$out" ]; then
     fail "tur-explain-kind-mismatch" "empty output"
-elif ! echo "$out" | grep -qi "Kind"; then
+elif ! grep -qi "Kind" <<< "$out"; then
     fail "tur-explain-kind-mismatch" "output did not mention 'Kind'"
 else
     pass "tur-explain-kind-mismatch"
@@ -54,7 +54,7 @@ fi
 out=$("$TUR" --explain TUR-E0013 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "tur-explain-orphan-instance" "non-zero exit ($rc)"
-elif ! echo "$out" | grep -qi "orphan\|instance"; then
+elif ! grep -qi "orphan\|instance" <<< "$out"; then
     fail "tur-explain-orphan-instance" "output did not mention 'orphan/instance'"
 else
     pass "tur-explain-orphan-instance"
@@ -98,7 +98,7 @@ fi
 # dump-kinds-no-output: without --dump-kinds, the same file should NOT print
 # kind annotations mixed into the C output.
 out=$("$TUR" emit-c "$FIXTURE" 2>/dev/null); rc=$?
-if echo "$out" | grep -q "defclass Functor param"; then
+if grep -q "defclass Functor param" <<< "$out"; then
     fail "dump-kinds-no-output" "kind dump appeared without --dump-kinds flag"
 else
     pass "dump-kinds-no-output"
@@ -167,9 +167,9 @@ _fmt_input='(defpackage my-project-with-longer-name :name "my-project-with-longe
 _fmt_out=$(echo "$_fmt_input" | "$TUR" format 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "fmt-defpackage-basic" "tur format exited $rc: $_fmt_out"
-elif ! echo "$_fmt_out" | grep -q ':name'; then
+elif ! grep -q ':name' <<< "$_fmt_out"; then
     fail "fmt-defpackage-basic" ":name not present in output: $_fmt_out"
-elif ! echo "$_fmt_out" | grep -q '^  :version'; then
+elif ! grep -q '^  :version' <<< "$_fmt_out"; then
     fail "fmt-defpackage-basic" ":version not on its own indented line: $_fmt_out"
 else
     pass "fmt-defpackage-basic"
@@ -190,7 +190,7 @@ _fmt_spices_in='(defpackage my-application :name "my-application" :version "0.1.
 _fmt_spices_out=$(echo "$_fmt_spices_in" | "$TUR" format 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "fmt-defpackage-spices-block" "tur format exited $rc"
-elif ! echo "$_fmt_spices_out" | grep -q '#{$'; then
+elif ! grep -q '#{$' <<< "$_fmt_spices_out"; then
     fail "fmt-defpackage-spices-block" ":spices map was not expanded to block: $_fmt_spices_out"
 else
     pass "fmt-defpackage-spices-block"
@@ -210,7 +210,7 @@ fi
 _fmt_cmt_out=$(printf '; This is a comment\n(defpackage my-app\n  :name    "my-app"\n  :version "0.1.0")' | "$TUR" format 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "fmt-defpackage-comments" "tur format exited $rc: $_fmt_cmt_out"
-elif ! echo "$_fmt_cmt_out" | grep -q 'This is a comment'; then
+elif ! grep -q 'This is a comment' <<< "$_fmt_cmt_out"; then
     fail "fmt-defpackage-comments" "comment lost after formatting: $_fmt_cmt_out"
 else
     pass "fmt-defpackage-comments"
@@ -430,7 +430,7 @@ rm -f "$err"
 out=$("$TUR" --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-global" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "usage:"; then
+elif ! grep -q "usage:" <<< "$out"; then
     fail "help-global" "output did not contain 'usage:'"
 else
     pass "help-global"
@@ -440,7 +440,7 @@ fi
 out=$("$TUR" -h 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-short" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "usage:"; then
+elif ! grep -q "usage:" <<< "$out"; then
     fail "help-short" "output did not contain 'usage:'"
 else
     pass "help-short"
@@ -450,7 +450,7 @@ fi
 out=$("$TUR" build --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-build" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur build"; then
+elif ! grep -q "tur build" <<< "$out"; then
     fail "help-build" "output did not mention 'tur build'"
 else
     pass "help-build"
@@ -460,7 +460,7 @@ fi
 out=$("$TUR" run --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-run" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur run"; then
+elif ! grep -q "tur run" <<< "$out"; then
     fail "help-run" "output did not mention 'tur run'"
 else
     pass "help-run"
@@ -470,7 +470,7 @@ fi
 out=$("$TUR" check --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-check" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur check"; then
+elif ! grep -q "tur check" <<< "$out"; then
     fail "help-check" "output did not mention 'tur check'"
 else
     pass "help-check"
@@ -480,7 +480,7 @@ fi
 out=$("$TUR" eval --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-eval" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur eval"; then
+elif ! grep -q "tur eval" <<< "$out"; then
     fail "help-eval" "output did not mention 'tur eval'"
 else
     pass "help-eval"
@@ -490,7 +490,7 @@ fi
 out=$("$TUR" format --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-format" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur format"; then
+elif ! grep -q "tur format" <<< "$out"; then
     fail "help-format" "output did not mention 'tur format'"
 else
     pass "help-format"
@@ -500,7 +500,7 @@ fi
 out=$("$TUR" test --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-test" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur test"; then
+elif ! grep -q "tur test" <<< "$out"; then
     fail "help-test" "output did not mention 'tur test'"
 else
     pass "help-test"
@@ -510,7 +510,7 @@ fi
 out=$("$TUR" repl --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "help-repl" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur repl"; then
+elif ! grep -q "tur repl" <<< "$out"; then
     fail "help-repl" "output did not mention 'tur repl'"
 else
     pass "help-repl"
@@ -524,7 +524,7 @@ fi
 out=$("$TUR" --version 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "version-long" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "^tur: the Turmeric compiler "; then
+elif ! grep -q "^tur: the Turmeric compiler " <<< "$out"; then
     fail "version-long" "output '$out' did not start with 'tur: the Turmeric compiler '"
 else
     pass "version-long"
@@ -534,7 +534,7 @@ fi
 out=$("$TUR" -V 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "version-short" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "^tur: the Turmeric compiler "; then
+elif ! grep -q "^tur: the Turmeric compiler " <<< "$out"; then
     fail "version-short" "output '$out' did not start with 'tur: the Turmeric compiler '"
 else
     pass "version-short"
@@ -607,7 +607,7 @@ cat > "$TMP_CU" <<'CUEOF'
 CUEOF
 out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" eval --file "$TMP_CU" 2>&1); rc=$?
 rm -f "$TMP_CU"
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "ok" && printf '%s' "$out" | grep -q "caught"; then
+if [ $rc -eq 0 ] && grep -q "ok" <<< "$out" && grep -q "caught" <<< "$out"; then
     pass "eval-catch-unwind"
 else
     fail "eval-catch-unwind" "expected ok+caught, got rc=$rc output: $out"
@@ -627,7 +627,7 @@ cat > "$TMP_MUST" <<'MUSTEOF'
 MUSTEOF
 out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" eval --file "$TMP_MUST" 2>&1); rc=$?
 rm -f "$TMP_MUST"
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "must-caught" && printf '%s' "$out" | grep -q "must-passthrough"; then
+if [ $rc -eq 0 ] && grep -q "must-caught" <<< "$out" && grep -q "must-passthrough" <<< "$out"; then
     pass "eval-must-catchable"
 else
     fail "eval-must-catchable" "expected must-caught+must-passthrough, got rc=$rc output: $out"
@@ -638,7 +638,7 @@ TMP_MUST2=$(mktemp /tmp/tur_must2_XXXXXX.tur)
 echo '(defn main [] :int (result-must (err 1)))' > "$TMP_MUST2"
 out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" eval --file "$TMP_MUST2" 2>&1); rc=$?
 rm -f "$TMP_MUST2"
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "result-must: called on err"; then
+if [ $rc -ne 0 ] && grep -q "result-must: called on err" <<< "$out"; then
     pass "eval-must-uncaught"
 else
     fail "eval-must-uncaught" "expected nonzero + panic msg, got rc=$rc output: $out"
@@ -675,7 +675,7 @@ fi
 out=$("$TUR" doc "+" 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "doc-builtin-plus" "expected exit 0, got $rc; output: $out"
-elif ! echo "$out" | grep -q "+"; then
+elif ! grep -q "+" <<< "$out"; then
     fail "doc-builtin-plus" "output '$out' did not contain '+'"
 else
     pass "doc-builtin-plus"
@@ -685,7 +685,7 @@ fi
 out=$("$TUR" doc "let" 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "doc-builtin-let" "expected exit 0, got $rc; output: $out"
-elif ! echo "$out" | grep -q "let"; then
+elif ! grep -q "let" <<< "$out"; then
     fail "doc-builtin-let" "output '$out' did not contain 'let'"
 else
     pass "doc-builtin-let"
@@ -695,7 +695,7 @@ fi
 out=$("$TUR" doc "defstruct" 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "doc-builtin-defstruct" "expected exit 0, got $rc; output: $out"
-elif ! echo "$out" | grep -q "defstruct"; then
+elif ! grep -q "defstruct" <<< "$out"; then
     fail "doc-builtin-defstruct" "output '$out' did not contain 'defstruct'"
 else
     pass "doc-builtin-defstruct"
@@ -713,7 +713,7 @@ fi
 out=$("$TUR" doc --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "doc-help" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur doc"; then
+elif ! grep -q "tur doc" <<< "$out"; then
     fail "doc-help" "output '$out' did not mention 'tur doc'"
 else
     pass "doc-help"
@@ -727,7 +727,7 @@ fi
 out=$(echo '(println (+ 40 2))' | "$TUR" run - 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "run-stdin" "expected exit 0, got $rc; output: $out"
-elif ! echo "$out" | grep -q "42"; then
+elif ! grep -q "42" <<< "$out"; then
     fail "run-stdin" "expected '42' in output, got '$out'"
 else
     pass "run-stdin"
@@ -741,7 +741,7 @@ fi
 out=$("$TUR" explain --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "explain-help" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "tur explain"; then
+elif ! grep -q "tur explain" <<< "$out"; then
     fail "explain-help" "output '$out' did not mention 'tur explain'"
 else
     pass "explain-help"
@@ -785,7 +785,7 @@ out=$("$TUR" format --diff "$TMP_UGLY" 2>&1); rc=$?
 rm -f "$TMP_UGLY"
 if [ $rc -eq 0 ]; then
     fail "format-diff-changed" "expected exit 1 for unformatted file, got 0"
-elif ! echo "$out" | grep -q "^[-+]"; then
+elif ! grep -q "^[-+]" <<< "$out"; then
     fail "format-diff-changed" "expected diff output, got '$out'"
 else
     pass "format-diff-changed"
@@ -795,7 +795,7 @@ fi
 out=$("$TUR" format --help 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "format-help-diff" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q -- "--diff"; then
+elif ! grep -q -- "--diff" <<< "$out"; then
     fail "format-help-diff" "format --help did not mention --diff"
 else
     pass "format-help-diff"
@@ -809,9 +809,9 @@ fi
 out=$("$TUR" --json doc "+" 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "json-doc" "expected exit 0, got $rc; output: $out"
-elif ! echo "$out" | grep -q '"name"'; then
+elif ! grep -q '"name"' <<< "$out"; then
     fail "json-doc" "expected JSON with 'name' field, got '$out'"
-elif ! echo "$out" | grep -q '"doc"'; then
+elif ! grep -q '"doc"' <<< "$out"; then
     fail "json-doc" "expected JSON with 'doc' field, got '$out'"
 else
     pass "json-doc"
@@ -955,11 +955,11 @@ fi
 # the fix the second #s"..." kept reading as a String.
 out=$(printf '#lang turmeric stringed\n#s"on"\n#lang turmeric\n#s"off"\n:quit\n' \
       | "$TUR" repl 2>&1); rc=$?
-if ! echo "$out" | grep -q '=> "on"'; then
+if ! grep -q '=> "on"' <<< "$out"; then
     fail "lang-layer-toggle-off" "stringed layer did not activate (#s\"on\" not evaluated)"
-elif echo "$out" | grep -q '=> "off"'; then
+elif grep -q '=> "off"' <<< "$out"; then
     fail "lang-layer-toggle-off" "#s\"...\" still dispatched after the layer was dropped"
-elif ! echo "$out" | grep -q "unknown reader string macro '#s'"; then
+elif ! grep -q "unknown reader string macro '#s'" <<< "$out"; then
     fail "lang-layer-toggle-off" "expected an unknown-reader-macro error once stringed is off"
 else
     pass "lang-layer-toggle-off"
@@ -969,11 +969,11 @@ fi
 # slash-namespaced spelling; the legacy `sweet-exp` alias is accepted on
 # input but never generated, so the round-trip is stable.
 out=$(printf '#lang sweet-exp\n#lang turmeric/sweet\n:quit\n' | "$TUR" repl 2>&1); rc=$?
-if ! echo "$out" | grep -q "; reader set to turmeric/sweet (session reset)"; then
+if ! grep -q "; reader set to turmeric/sweet (session reset)" <<< "$out"; then
     fail "reader-name-canonical" "legacy alias did not report canonical 'turmeric/sweet'"
-elif ! echo "$out" | grep -q "; reader already set to turmeric/sweet"; then
+elif ! grep -q "; reader already set to turmeric/sweet" <<< "$out"; then
     fail "reader-name-canonical" "canonical spelling not recognized as the same reader"
-elif echo "$out" | grep -q "reader (set to\|already set to) sweet-exp"; then
+elif grep -q "reader (set to\|already set to) sweet-exp" <<< "$out"; then
     fail "reader-name-canonical" "legacy 'sweet-exp' spelling was generated"
 else
     pass "reader-name-canonical"
@@ -983,9 +983,9 @@ fi
 # reset the session (turi_env_apply_lang is a no-op when nothing changes).
 out=$(printf '#lang turmeric stringed\n(def keep 41)\n#lang turmeric stringed\n(+ keep 1)\n:quit\n' \
       | "$TUR" repl 2>&1); rc=$?
-if ! echo "$out" | grep -q "; reader already set to turmeric"; then
+if ! grep -q "; reader already set to turmeric" <<< "$out"; then
     fail "lang-layer-same-set-no-reset" "identical #lang line was not treated as a no-op"
-elif ! echo "$out" | grep -q "=> 42"; then
+elif ! grep -q "=> 42" <<< "$out"; then
     fail "lang-layer-same-set-no-reset" "binding did not survive an identical #lang line"
 else
     pass "lang-layer-same-set-no-reset"
@@ -999,13 +999,13 @@ fi
 # documented in their place.
 out=$(printf ':doc try\n:doc catch\n:doc throw\n:doc panic\n:doc catch-unwind\n:quit\n' \
       | "$TUR" repl 2>&1); rc=$?
-if echo "$out" | grep -qi "catch runtime errors\|raise a runtime error\|error handler clause"; then
+if grep -qi "catch runtime errors\|raise a runtime error\|error handler clause" <<< "$out"; then
     fail "repl-doc-no-exceptions" "the removed try/catch/throw docs are still in the :doc table"
 elif [ "$(echo "$out" | grep -c "no documentation for")" -lt 3 ]; then
     fail "repl-doc-no-exceptions" "expected try/catch/throw to report no documentation"
-elif ! echo "$out" | grep -q "abort with an unrecoverable error"; then
+elif ! grep -q "abort with an unrecoverable error" <<< "$out"; then
     fail "repl-doc-no-exceptions" ":doc panic did not describe the panic form"
-elif ! echo "$out" | grep -q "catch-unwind thunk"; then
+elif ! grep -q "catch-unwind thunk" <<< "$out"; then
     fail "repl-doc-no-exceptions" ":doc catch-unwind did not describe the Result-returning form"
 else
     pass "repl-doc-no-exceptions"
@@ -1035,7 +1035,7 @@ case "$probe_out" in *"no JIT engine"*) HAS_JIT=0 ;; esac
 printf '(extern-c strtol [s :cstr endp :int base :int] :int)\n(defn main [] : int (println (strtol "123abc" 0 10)) 0)\n' > "$TMP_FFI"
 if [ "$HAS_JIT" = "1" ]; then
     out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
-    if ! echo "$out" | grep -q "^123$"; then
+    if ! grep -q "^123$" <<< "$out"; then
         fail "jit-ffi-extern-c-real" "expected strtol to return 123 under --interpret, got: $out"
     else
         pass "jit-ffi-extern-c-real"
@@ -1051,7 +1051,7 @@ fi
 if [ "$HAS_JIT" = "1" ] && [ "$(uname)" = "Linux" ]; then
     printf '(defn main [] : int\n  (unsafe\n    (let [h (dlopen "libm.so.6")\n          p (dlsym h "cbrt")]\n      (println (call-ptr p [:float -> :float] 27.0))))\n  0)\n' > "$TMP_FFI"
     out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
-    if ! echo "$out" | grep -q "^3$"; then
+    if ! grep -q "^3$" <<< "$out"; then
         fail "jit-ffi-call-ptr-interp" "expected cbrt(27) = 3 via call-ptr under --interpret, got: $out"
     else
         pass "jit-ffi-call-ptr-interp"
@@ -1067,7 +1067,7 @@ fi
 if [ "$HAS_JIT" = "0" ]; then
     printf '(defn main [] : int\n  (unsafe (println (call-ptr 1 [-> :int])))\n  0)\n' > "$TMP_FFI"
     out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
-    if ! echo "$out" | grep -q "requires a JIT-enabled build"; then
+    if ! grep -q "requires a JIT-enabled build" <<< "$out"; then
         fail "jit-ffi-call-ptr-nonjit-diag" "expected the clean non-JIT diagnostic, got: $out"
     else
         pass "jit-ffi-call-ptr-nonjit-diag"
@@ -1081,7 +1081,7 @@ if [ "$HAS_JIT" = "0" ]; then
   0)
 TURFFI
     out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
-    if ! echo "$out" | grep -q "requires a JIT-enabled build"; then
+    if ! grep -q "requires a JIT-enabled build" <<< "$out"; then
         fail "jit-ffi-callback-nonjit-diag" "expected the clean non-JIT diagnostic, got: $out"
     else
         pass "jit-ffi-callback-nonjit-diag"
@@ -1147,7 +1147,7 @@ if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ]; then
   0)
 TURFFI
     out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
-    if ! echo "$out" | grep -q "AAPCS64 HFA"; then
+    if ! grep -q "AAPCS64 HFA" <<< "$out"; then
         fail "jit-ffi-call-ptr-hfa-refused" "expected the aarch64 HFA refusal, got: $out"
     else
         pass "jit-ffi-call-ptr-hfa-refused"
@@ -1205,7 +1205,7 @@ TURFFI
 out=$("$TUR" --enable=jit-ffi emit-c "$TMP_FFI" 2>&1); rc=$?
 if [ $rc -eq 0 ]; then
     fail "jit-ffi-callback-needs-toplevel" "a lambda was accepted as a C callback"
-elif ! echo "$out" | grep -q "captured environment"; then
+elif ! grep -q "captured environment" <<< "$out"; then
     fail "jit-ffi-callback-needs-toplevel" "expected the top-level-function diagnostic, got: $out"
 else
     pass "jit-ffi-callback-needs-toplevel"
@@ -1217,7 +1217,7 @@ printf '(defn main [] : int\n  (unsafe (println (call-ptr 1 [-> :int])))\n  0)\n
 out=$("$TUR" emit-c "$TMP_FFI" 2>&1); rc=$?
 if [ $rc -eq 0 ]; then
     fail "jit-ffi-gate" "call-ptr compiled without --enable=jit-ffi"
-elif ! echo "$out" | grep -q "enable=jit-ffi"; then
+elif ! grep -q "enable=jit-ffi" <<< "$out"; then
     fail "jit-ffi-gate" "gate diagnostic did not point at --enable=jit-ffi"
 else
     pass "jit-ffi-gate"

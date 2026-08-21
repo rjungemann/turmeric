@@ -391,6 +391,19 @@ Pinned by four `errors/` negatives and
 | Report | Severity | One line |
 | --- | --- | --- |
 
+`pipefail-grep-q-false-failures` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/pipefail-grep-q-false-failures.md); it was filed
+2026-08-20 and never got a row here. All 180 pipe-into-`grep -q` sites in the
+39 `tests/*.sh` that set `pipefail` are here-strings now, and
+`tests/check-pipefail-grep-q.sh` (ctest target `tur_pipefail_grep_q_lint`)
+fails on a new one. The lint earned its keep on its first run, catching four
+sites the sweep's own regex missed because they spell the flags as two tokens
+(`grep -E -q` / `grep -F -q`). Two harness defects found while verifying,
+both pre-existing and fixed there: `repl-spice-load.sh` corrupted an
+**absolute** `$TUR` into `$PWD/$TUR` (6 of 9 assertions failed for any caller
+that exported one), and `eval-async-io.sh` lacked its siblings'
+`detect_leaks=0` opt-out, so standalone it exited 1 with no output at all.
+
 `ecs-defsystem-writes-fixture-expects-old-spices` was resolved 2026-08-18 and
 moved to
 [docs/archive](../archive/ecs-defsystem-writes-fixture-expects-old-spices.md).

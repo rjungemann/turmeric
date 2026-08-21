@@ -44,7 +44,7 @@ fail=0
 
 expect() {
   local desc="$1" needle="$2"
-  if printf '%s' "$out" | grep -qF -- "$needle"; then
+  if grep -qF -- "$needle" <<< "$out"; then
     echo "PASS dap: $desc"
     pass=$((pass + 1))
   else
@@ -55,7 +55,7 @@ expect() {
 
 refute() {
   local desc="$1" needle="$2"
-  if printf '%s' "$out" | grep -qF -- "$needle"; then
+  if grep -qF -- "$needle" <<< "$out"; then
     echo "FAIL dap: $desc (unexpected: $needle)"
     fail=$((fail + 1))
   else

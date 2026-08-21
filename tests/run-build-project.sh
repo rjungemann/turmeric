@@ -47,7 +47,7 @@ else
 fi
 
 # The manifest must never be compiled as source.
-if echo "$build_out" | grep -q "unbound symbol 'tur-build-project-smoke'"; then
+if grep -q "unbound symbol 'tur-build-project-smoke'" <<< "$build_out"; then
     fail "build-project-skips-manifest" "build.tur was compiled as source"
 else
     pass "build-project-skips-manifest"
@@ -82,7 +82,7 @@ cat > "$GHOST/src/app/util.tur" <<'EOF'
 EOF
 ghost_out=$(cd "$WORK" && "$TUR" build "$GHOST" -o "$WORK/ghostbin" 2>&1)
 ghost_rc=$?
-if [ $ghost_rc -ne 0 ] && echo "$ghost_out" | grep -q "declares export 'app/missing'"; then
+if [ $ghost_rc -ne 0 ] && grep -q "declares export 'app/missing'" <<< "$ghost_out"; then
     pass "build-project-missing-export-fails"
 else
     fail "build-project-missing-export-fails" "rc=$ghost_rc out=$ghost_out"
@@ -104,7 +104,7 @@ EOF
 flat_out=$(cd "$WORK" && "$TUR" build "$FLAT" -o "$WORK/flatbin" 2>&1)
 flat_rc=$?
 if [ $flat_rc -eq 0 ] && [ -x "$WORK/flatbin" ] \
-   && ! echo "$flat_out" | grep -q "unbound symbol 'tur-flat'"; then
+   && ! grep -q "unbound symbol 'tur-flat'" <<< "$flat_out"; then
     pass "build-project-flat-skips-manifest"
 else
     fail "build-project-flat-skips-manifest" "rc=$flat_rc out=$flat_out"
@@ -135,7 +135,7 @@ hamt_rc=$?
 hamt_proj_out=$(cd "$HAMT" && "$TUR" run --offline 2>&1)
 hamt_proj_rc=$?
 if [ $hamt_rc -eq 0 ] && [ $hamt_proj_rc -eq 0 ] \
-   && ! echo "$hamt_out$hamt_proj_out" | grep -q "src/runtime/hamt.c: No such file"; then
+   && ! grep -q "src/runtime/hamt.c: No such file" <<< "$hamt_out$hamt_proj_out"; then
     pass "run-project-resolves-runtime-from-foreign-cwd"
 else
     fail "run-project-resolves-runtime-from-foreign-cwd" \
@@ -906,7 +906,7 @@ cat > "$FXROW/src/app/main.tur" <<'EOF'
 EOF
 fxrow_out=$(cd "$WORK" && "$TUR" build "$FXROW" -o "$WORK/fxrowbin" 2>&1)
 fxrow_rc=$?
-if [ $fxrow_rc -ne 0 ] && echo "$fxrow_out" | grep -q "TUR-E0620"; then
+if [ $fxrow_rc -ne 0 ] && grep -q "TUR-E0620" <<< "$fxrow_out"; then
     pass "build-project-exports-fx-row-rejected"
 else
     fail "build-project-exports-fx-row-rejected" "rc=$fxrow_rc out=$fxrow_out"
@@ -1032,8 +1032,8 @@ EOF
     brace_out=$(cd "$WORK" && "$TUR" build "$BRACEDIR" -o "$WORK/bracebin" 2>&1)
     brace_rc=$?
     if [ $brace_rc -ne 0 ] &&
-       echo "$brace_out" | grep -q 'use `#map{\.\.\.}`' &&
-       echo "$brace_out" | grep -q 'curly-infix'; then
+       grep -q 'use `#map{\.\.\.}`' <<< "$brace_out" &&
+       grep -q 'curly-infix' <<< "$brace_out"; then
         pass "build-project-manifest-bare-brace-hint-$brace_name"
     else
         fail "build-project-manifest-bare-brace-hint-$brace_name" \

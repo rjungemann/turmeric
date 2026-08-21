@@ -17,7 +17,7 @@ check() {
     local desc="$1"
     local expected="$2"
     local actual="$3"
-    if echo "$actual" | grep -qF "$expected"; then
+    if grep -qF "$expected" <<< "$actual"; then
         echo "PASS: $desc"
         PASS=$((PASS + 1))
     else

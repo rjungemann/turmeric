@@ -133,8 +133,8 @@ make_project "$PROJ1"
 write_lib "$PROJ1" 42
 out=$(cd "$PROJ1" && printf '(answer)\n:quit\n' \
       | "$TUR_BIN" repl --watch 2>&1)
-if echo "$out" | grep -qx '=> 42' \
-    && ! echo "$out" | grep -q 'rebuilt'; then
+if grep -qx '=> 42' <<< "$out" \
+    && ! grep -q 'rebuilt' <<< "$out"; then
     pass "rp6-watch-no-changes"
 else
     fail "rp6-watch-no-changes" \
@@ -146,9 +146,9 @@ PROJ2="$WORK/p2"
 make_project "$PROJ2"
 write_lib "$PROJ2" 42
 out=$(run_edit_session "$PROJ2" repl --watch)
-if   echo "$out" | grep -qx '=> 42' \
-  && echo "$out" | grep -q '(reload) rebuilt 1 export' \
-  && echo "$out" | grep -qx '=> 99'; then
+if   grep -qx '=> 42' <<< "$out" \
+  && grep -q '(reload) rebuilt 1 export' <<< "$out" \
+  && grep -qx '=> 99' <<< "$out"; then
     pass "rp6-watch-edit-auto-reload"
 else
     fail "rp6-watch-edit-auto-reload" \
@@ -162,7 +162,7 @@ write_lib "$PROJ3" 42
 out=$(run_edit_session "$PROJ3" repl)
 # Both (answer) calls should return 42 -- no auto-rebuild fired.
 got_42=$(echo "$out" | grep -cx '=> 42')
-if [ "$got_42" = "2" ] && ! echo "$out" | grep -q 'rebuilt'; then
+if [ "$got_42" = "2" ] && ! grep -q 'rebuilt' <<< "$out"; then
     pass "rp6-no-watch-skips-auto-reload"
 else
     fail "rp6-no-watch-skips-auto-reload" \
@@ -182,7 +182,7 @@ fi
 # the cause of the intermittent CI red on this target, and it flakes the two
 # assertions below and no others (they were the only piped ones).
 out=$("$TUR" repl --watch --help 2>&1)
-if echo "$out" | grep -q 'tur repl'; then
+if grep -q 'tur repl' <<< "$out"; then
     pass "rp6-watch-with-help"
 else
     fail "rp6-watch-with-help" \
@@ -191,7 +191,7 @@ fi
 
 # Unknown flag still errors.
 out=$("$TUR" repl --nope 2>&1)
-if ! echo "$out" | grep -q "unknown option"; then
+if ! grep -q "unknown option" <<< "$out"; then
     fail "rp6-watch-unknown-flag" "no 'unknown option' diagnostic; got: $out"
 else
     pass "rp6-watch-unknown-flag"
