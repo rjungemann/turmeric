@@ -248,6 +248,16 @@ type-confusion in `emit_stmt` (a `(perform ...)` in statement position reading
 not be pinned by a fixture, since whether the garbage byte is non-zero is
 uninitialized memory; the sweep pins it instead.
 
+Three rows above (`env-doctests-are-machine-dependent`,
+`float-division-aborts-instead-of-ieee-inf`,
+`user-defn-named-div-collides-with-libc`) were added 2026-08-21 by
+`tests/check-reported-index.sh` doing its job on its first real merge: they
+arrived from `main` in PRs #775 and #777 as report FILES with no rows here, and
+the lint failed the build naming all three. That is the drift this index has
+had twice before and could not previously detect -- it is now caught at the
+merge that introduces it rather than at the next triage pass that happens to
+notice.
+
 ## Value representation (the consolidation campaign)
 
 The scoreboard for this family is the open-cells table in
@@ -464,6 +474,7 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [user-defn-named-div-collides-with-libc](user-defn-named-div-collides-with-libc.md) | low | a top-level `(defn div ...)` is emitted verbatim as a C identifier and collides with `stdlib.h`'s `div()`; the user sees three cc errors about code they did not write, with no pointer back to their source |
 
 `reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
 and moved to
@@ -515,6 +526,7 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [float-division-aborts-instead-of-ieee-inf](float-division-aborts-instead-of-ieee-inf.md) | medium | `BS_DIV_CHECK` applies the INTEGER divide-by-zero guard to float division, so `7.1 / 0.0` aborts the process instead of evaluating to `inf`. Correct for `:int`, wrong for `:float`, where IEEE 754 defines the result -- any code relying on inf/NaN propagation gets an abort instead of a value |
 | [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
 
 Indexed 2026-08-21. It had **no row at all** since it was filed -- the only
@@ -591,6 +603,7 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [env-doctests-are-machine-dependent](env-doctests-are-machine-dependent.md) | medium | five `stdlib/env.tur` `;;;` examples are illustrative but `doctest.py` asserts every `; =>`, so they only pass on the author's machine -- and because `test: build doctest`, a failure there stops `just test` before ctest ever runs |
 
 `pipefail-grep-q-false-failures` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/pipefail-grep-q-false-failures.md); it was filed
