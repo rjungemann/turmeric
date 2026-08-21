@@ -2056,6 +2056,8 @@
     "cstr-sub",
     "cstr-sub-string",
     "empty-seq",
+    "env/set",
+    "env/unset",
     "err-val",
     "err?",
     "exp",

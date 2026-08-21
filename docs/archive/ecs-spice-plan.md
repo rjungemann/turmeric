@@ -632,9 +632,26 @@ do land.
   accessor fails to elaborate.
 - **`tur-ecs-raylib` demo** runnable via `tur run` from
   `../turmeric-spices/spices/ecs-raylib/`.
-- **Bench** -- still TODO; the original 100k-entity dense
-  `Pos`/`Vel` integration vs. hand-rolled comparison has not been
-  written. Within-2x-of-hand-rolled is the target.
+- **Bench** -- ~~still TODO~~ **WRITTEN 2026-08-20, and the target is
+  MISSED.** `turmeric-spices/spices/ecs/bench/` implements the
+  100k-entity dense `Pos`/`Vel` integration vs. hand-rolled C
+  (100 frames, float components, checksum-verified across every
+  variant). Best of 9 on an M2, `tur` v0.37.0: hand-rolled C 4.4ms;
+  raw Turmeric over flat buffers 4.6ms (**1.04x** -- the backend is
+  not the problem); `defworld` + `for-each2` 36.9ms (**8.42x**);
+  `sized-defworld` + `sized-for-each` 15.3ms (**3.50x**).
+  Within-2x-of-hand-rolled was the target and neither ECS path
+  reaches it.
+  The cost is not codegen and not the query macro (a hand-written
+  loop with no `for-each` ties `for-each2`, which does strictly more
+  work per slot); it concentrates in the unsized `dense-set!` write
+  path, which carries an auto-grow capacity branch, a `present[]`
+  byte write, and a `len` update per store. Dictionary dispatch on
+  the typeclass-polymorphic path is a non-issue: 20M lookups are
+  unmeasurable (37.4ms vs 37.3ms hoisted -- `cc -O2` hoists it
+  itself). Full write-up and the
+  consequences for the two deferred plans (ECB declined, RE2
+  reframed) in `spices/ecs/bench/README.md`.
 
 ## Resolved design decisions
 

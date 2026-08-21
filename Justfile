@@ -316,6 +316,16 @@ rebuild: clean configure build
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup,
 # and web/public/doc-names.json for the web REPL search bar.
+#
+# stdlib/docstrings.tur is TRACKED, and its `doc-verified?` table comes from
+# `just doctest`'s manifest (tests/doctest-generated/verified.txt), which is
+# gitignored. This recipe deliberately does NOT depend on `doctest`: that would
+# put a build plus the full doctest run in front of every docs regen, including
+# the one inside `wasm` -> `web` -> `deploy-web`. Instead gendocs carries the
+# existing table forward when the manifest is missing, and says so on stderr.
+# So: run `just doctest` before this if you want the table REFRESHED; without
+# it the table is preserved, never emptied.
+# See docs/archive/docstrings-verified-table-zeroed-by-regen.md.
 # Spice symbols are folded into doc-names.json via --extra-json so the web
 # search bar surfaces stdlib + spices in a single list.
 docs: guides spices
@@ -374,6 +384,14 @@ web: wasm web-deps
 # Depends on `web`, so the wasm is always rebuilt from the current tree before
 # publishing -- the artifacts it writes into web/public/ are gitignored and
 # must not be committed.
+#
+# That is not the whole account of what this touches. The chain reaches `docs`
+# (deploy-web -> web -> wasm -> docs), which rewrites the TRACKED
+# stdlib/docstrings.tur. It is now idempotent when the doctest manifest is
+# absent -- it used to empty the file's `doc-verified?` table, which is how a
+# zeroed table repeatedly reached main via release commits. If a deploy leaves
+# stdlib/docstrings.tur dirty, that is a real regen (new/changed docstrings),
+# not noise: read the diff before discarding it.
 deploy-web: web
     cd web && npm run deploy
 
