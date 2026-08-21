@@ -64,6 +64,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+| [guides-two-arg-println-and-when-body](guides-two-arg-println-and-when-body.md) | low-medium | guide examples call `println` with 2 args / `when` with 2 body forms; neither exists (12 sites left in frame-guide) |
 
 `args-api-int-erased-handles` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/args-api-int-erased-handles.md). `ArgSpec` /

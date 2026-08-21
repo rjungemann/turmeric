@@ -25,59 +25,86 @@ Everything after `--` is forwarded to the script as a cons list bound to
 ## Raw Access via `*args*`
 
 `*args*` is a pre-declared cons list of `:cstr` values. Each element is one
-argument string, in order.
+argument string, in order. The binding itself is typed `:int` (the elaborator
+declares it as a global `:int` carrying the cons-cell pointer), so walking it
+means `list-head` / `list-tail` from `stdlib/list.tur` plus a `::` ascription
+to recover the element's `:cstr` type:
 
 ```turmeric
 ;; script.tur
+(load "stdlib/list.tur")
+(load "stdlib/str-build.tur")   ;; str-concat / int->str
+
 (defn main [] : int
-  (println "arg 0:" (head *args*))
-  (println "arg 1:" (head (tail *args*)))
+  (println (str-concat "arg 0: " (:: (list-head *args*) :cstr)))
+  (println (str-concat "arg 1: " (:: (list-head (list-tail *args*)) :cstr)))
   0)
 ```
 ```sweet-exp
 ;; script.tur
+load("stdlib/list.tur")
+load("stdlib/str-build.tur")
+
 defn main [] :int
-  println("arg 0:" head(*args*))
-  println("arg 1:" head(tail(*args*)))
+  println $ str-concat "arg 0: " (:: list-head(*args*) :cstr)
+  println $ str-concat "arg 1: " (:: list-head(list-tail(*args*)) :cstr)
   0
 ```
 
 ```turmeric
-;; Walk all arguments
+;; Walk all arguments.  `when` takes exactly one body form -- wrap two in `do`.
+(load "stdlib/list.tur")
+
 (defn print-args [args : int] : void
   (when (not (= args 0))
-    (println (head args))
-    (print-args (tail args))))
+    (do
+      (println (:: (list-head args) :cstr))
+      (print-args (list-tail args)))))
 
 (print-args *args*)
 ```
 ```sweet-exp
 ;; Walk all arguments
+load("stdlib/list.tur")
+
 defn print-args [args :int] :void
   when not(=(args 0))
-    println(head(args))
-    print-args(tail(args))
+    do
+      println (:: list-head(args) :cstr)
+      print-args(list-tail(args))
 print-args(*args*)
 ```
 
-For scripts that do not import stdlib, `head` and `tail` are available as
-stdlib natives automatically:
+`cstr->parse-int` (from `stdlib/str.tur`) turns one of those strings into an
+`:int`. It takes the raw `:int` cell value, so no `::` ascription is needed:
 
 ```turmeric
+(load "stdlib/list.tur")
+(load "stdlib/str.tur")
+(load "stdlib/str-build.tur")
+
 (defn main [] : int
-  (let [n (cstr->parse-int (head *args*))]
-    (println "count:" n)
+  (let [n (cstr->parse-int (list-head *args*))]
+    (println (str-concat "count: " (int->str n)))
     0))
 ```
 ```sweet-exp
+load("stdlib/list.tur")
+load("stdlib/str.tur")
+load("stdlib/str-build.tur")
+
 defn main [] :int
-  let [n (cstr->parse-int (head *args*))]
-    println("count:" n)
+  let [n cstr->parse-int(list-head(*args*))]
+    println $ str-concat "count: " int->str(n)
     0
 ```
 
-> **Note:** `cstr->parse-int` parses a C string into `:int`. It is available
-> without any import.
+> **Note:** `head` / `tail` are **not** bound in the compiled path -- a self-contained script that does
+> not load `stdlib/list.tur` has to define its own inline-C `head`/`tail`
+> stubs, which the interpreter then overrides with its natives (see the
+> CLI-argument rule in `CLAUDE.md`). Note the interpreter's `head` yields the
+> element as an `:int`, so the same `::` ascription is what makes `println`
+> print the string rather than the pointer.
 
 ## Structured Parsing with `stdlib/args.tur`
 
@@ -95,10 +122,11 @@ For anything more complex than a positional argument or two, use
 
 ```turmeric
 (load "stdlib/args.tur")
+(load "stdlib/str-build.tur")   ;; str-concat / int->str, for the examples below
 ```
 ```sweet-exp
 load("stdlib/args.tur")
-```
+load("stdlib/str-build.tur")
 
 ### Building a Spec
 
@@ -124,14 +152,14 @@ Two conventions to know:
         result (args/parse spec *args*)]
     (if (args/error? result)
       (do
-        (println "error:" (args/error-msg result))
+        (println (str-concat "error: " (args/error-msg result)))
         1)
       (do
         (when (args/has? result "verbose")
           (println "verbose mode on"))
-        (println "input: " (args/get-str result "input"))
-        (println "count: " (args/get-int result "count"))
-        (println "output:" (args/get-str result "output"))
+        (println (str-concat "input:  " (args/get-str result "input")))
+        (println (str-concat "count:  " (int->str (args/get-int result "count"))))
+        (println (str-concat "output: " (args/get-str result "output")))
         0))))
 ```
 ```sweet-exp
@@ -145,14 +173,14 @@ defn main [] :int
         result (args/parse spec *args*)]
     if args/error?(result)
       do
-        println("error:" args/error-msg(result))
+        println $ str-concat "error: " args/error-msg(result)
         1
       do
         when args/has?(result "verbose")
           println("verbose mode on")
-        println("input: " args/get-str(result "input"))
-        println("count: " args/get-int(result "count"))
-        println("output:" args/get-str(result "output"))
+        println $ str-concat "input:  " args/get-str(result "input")
+        println $ str-concat "count:  " int->str(args/get-int(result "count"))
+        println $ str-concat "output: " args/get-str(result "output")
         0
 ```
 
@@ -191,17 +219,22 @@ args/has?(result "verbose")
 ### Positional Arguments
 
 Positional arguments are everything that is not a flag or option value.
-Access them as a cons list:
+Access them as a cons list. **The list is in reverse order** -- the LAST
+positional argument is the head:
 
 ```turmeric
+(load "stdlib/list.tur")
+
 (let [pos (args/positional result)]
-  (println "first file:" (head pos))
-  (println "second file:" (head (tail pos))))
+  (println (str-concat "last positional:   " (:: (list-head pos) :cstr)))
+  (println (str-concat "second from last:  " (:: (list-head (list-tail pos)) :cstr))))
 ```
 ```sweet-exp
+load("stdlib/list.tur")
+
 let [pos (args/positional result)]
-  println("first file:" head(pos))
-  println("second file:" head(tail(pos)))
+  println $ str-concat "last positional:   " (:: list-head(pos) :cstr)
+  println $ str-concat "second from last:  " (:: list-head(list-tail(pos)) :cstr)
 ```
 
 ```sh
@@ -234,15 +267,17 @@ flags, options, and nested subcommands:
         (cond
           (cstr-eq? sub "build")
             (let [r (args/sub-result result)]
-              (println "building, release:"
-                       (args/has? (.value r) "release"))
+              (println (str-concat "building, release: "
+                                   (if (args/has? (.value r) "release")
+                                     "yes"
+                                     "no")))
               0)
           (cstr-eq? sub "test")
             (let [r (args/sub-result result)]
-              (println "testing, filter:"
-                       (args/get-str (.value r) "filter"))
+              (println (str-concat "testing, filter: "
+                                   (args/get-str (.value r) "filter")))
               0)
-          true
+          :else
             (do
               (args/print-help spec)
               1))))))
@@ -269,14 +304,14 @@ defn main [] :int
           cstr-eq?(sub "build")
           let
             [r (args/sub-result result)]
-            println("building, release:" args/has?(.value(r) "release"))
+            println $ str-concat "building, release: " (if args/has?(.value(r) "release") "yes" "no")
             0
           cstr-eq?(sub "test")
           let
             [r (args/sub-result result)]
-            println("testing, filter:" args/get-str(.value(r) "filter"))
+            println $ str-concat "testing, filter: " args/get-str(.value(r) "filter")
             0
-          true
+          :else
           do
             args/print-help(spec)
             1
