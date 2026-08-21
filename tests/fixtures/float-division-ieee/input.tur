@@ -18,12 +18,27 @@
 ;; A constant divisor: the shape that drew -Wliteral-conversion.
 (defn fconst [a : float] : float (/ a 8.0))
 
+;; NaN is the only value not equal to itself. Used instead of printing the NaN,
+;; because IEEE 754 does not specify the SIGN BIT of the NaN that 0.0/0.0
+;; produces, and printf renders that sign: glibc prints "-nan" where macOS
+;; prints "nan". Asserting the rendering would make this fixture assert its
+;; author's libc -- the same defect as the machine-dependent `stdlib/env.tur`
+;; doctests (docs/archive/env-doctests-are-machine-dependent.md). What the fix
+;; is actually about is that 0.0/0.0 yields a VALUE at all instead of aborting,
+;; and that property is portable.
+(defn nan? [x : float] : bool (not= x x))
+
 (defn main [] : int
   (do
     ;; Division by zero is a value, not an abort.
     (println (fdiv 7.1 0.0))
     (println (fdiv -7.1 0.0))
-    (println (fdiv 0.0 0.0))
+    ;; 0.0/0.0 is a NaN (sign-independent -- see nan? above), not an abort.
+    (println (nan? (fdiv 0.0 0.0)))
+    ;; Negative control: an assertion that cannot fail proves nothing, so show
+    ;; nan? discriminating. An ordinary quotient and an inf are both not-NaN.
+    (println (nan? (fdiv 7.1 2.5)))
+    (println (nan? (fdiv 7.1 0.0)))
     ;; Ordinary float division is unchanged (non-zero fractional part, so a
     ;; truncation regression would show).
     (println (fdiv 7.1 2.5))
