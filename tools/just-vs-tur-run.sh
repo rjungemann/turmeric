@@ -39,7 +39,7 @@ for fixture_dir in "$FIXTURES_DIR"/ok-*/; do
         # Skip recipes that require actual tools (tur build etc.)
         # We only compare recipes that have @echo or echo bodies.
         body=$(awk "/^${recipe}[[:space:]]*:/{found=1;next} found && /^\t/{print;next} found{exit}" "$jf")
-        if echo "$body" | grep -qE "tur (build|test|fmt|check|docs|install)"; then
+        if grep -qE "tur (build|test|fmt|check|docs|install)" <<< "$body"; then
             continue
         fi
 

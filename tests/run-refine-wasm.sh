@@ -72,7 +72,7 @@ fi
 
 result=$(node "$OUT/refsolver.js" 2>&1); run_rc=$?
 echo "  wasm32: $result"
-if [ $run_rc -ne 0 ] || ! printf '%s' "$result" | grep -q "0 failure"; then
+if [ $run_rc -ne 0 ] || ! grep -q "0 failure" <<< "$result"; then
   echo "FAIL refine-wasm: solver checks did not pass at wasm32"
   rc=1
 else

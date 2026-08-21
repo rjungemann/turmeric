@@ -44,7 +44,7 @@ run_out=$(ASAN_OPTIONS="$ASAN_OPTIONS" UBSAN_OPTIONS="halt_on_error=1:exitcode=2
           "$BIN" 2>&1)
 rc=$?
 
-if printf '%s' "$run_out" | grep -q "detect_leaks is not supported"; then
+if grep -q "detect_leaks is not supported" <<< "$run_out"; then
     # Retry without LSan: ASan/UBSan still validate no double-free / UAF.
     run_out=$(ASAN_OPTIONS="exitcode=23" UBSAN_OPTIONS="halt_on_error=1:exitcode=24" \
               "$BIN" 2>&1)
@@ -59,7 +59,7 @@ if [ "$rc" -ne 0 ]; then
     echo "FAIL hamt-val-ops -- sanitizer reported an issue (rc=$rc)"
     exit 1
 fi
-if ! printf '%s' "$run_out" | grep -q "all value-ops tests passed"; then
+if ! grep -q "all value-ops tests passed" <<< "$run_out"; then
     echo "FAIL hamt-val-ops -- test did not complete"
     exit 1
 fi

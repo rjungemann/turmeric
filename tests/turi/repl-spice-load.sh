@@ -50,7 +50,7 @@ fail() { FAIL=$((FAIL + 1)); echo "FAIL $1 -- $2"; }
 NOPROJ="$WORK/no-project"
 mkdir -p "$NOPROJ"
 out=$(cd "$NOPROJ" && echo ':quit' | "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q 'Loaded spice'; then
+if grep -q 'Loaded spice' <<< "$out"; then
     fail "repl-spice-load-outside-project" \
          "unexpected 'Loaded spice' line: $out"
 else
@@ -69,7 +69,7 @@ cat > "$PROJ/src/smoke.tur" <<'EOF'
   (defn add42 [x :int] :int (+ x 42)))
 EOF
 out=$(cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q 'Loaded spice from .*proj (1 export)'; then
+if grep -q 'Loaded spice from .*proj (1 export)' <<< "$out"; then
     pass "repl-spice-load-initial"
 else
     fail "repl-spice-load-initial" "missing/wrong status line: $out"
@@ -130,7 +130,7 @@ cat > "$NOAUTOPROJ/src/x.tur" <<'EOF'
 EOF
 out=$(cd "$NOAUTOPROJ" && echo ':quit' \
         | TUR_NO_AUTO_SPICE=1 "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q 'Loaded spice'; then
+if grep -q 'Loaded spice' <<< "$out"; then
     fail "repl-spice-load-no-auto-spice" \
          "TUR_NO_AUTO_SPICE=1 was ignored: $out"
 elif [ -d "$NOAUTOPROJ/.tur-repl-cache" ]; then

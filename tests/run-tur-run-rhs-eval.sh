@@ -40,7 +40,7 @@ EOF
 unset TUR_RUN_TEST_UNSET
 OUT="$("$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q 'val=fallback-value'; then
+if [ "$RC" -eq 0 ] && grep -q 'val=fallback-value' <<< "$OUT"; then
   pass "balanced-parens: env_var_or_default default is honored"
 else
   fail "balanced-parens: got rc=$RC out=$OUT"
@@ -57,7 +57,7 @@ show:
 EOF
 OUT="$("$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q 'd=build/debug'; then
+if [ "$RC" -eq 0 ] && grep -q 'd=build/debug' <<< "$OUT"; then
   pass "slash-concat: 'build' / 'debug' -> build/debug"
 else
   fail "slash-concat: got rc=$RC out=$OUT"
@@ -74,7 +74,7 @@ show:
 EOF
 OUT="$("$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q 's=foobar'; then
+if [ "$RC" -eq 0 ] && grep -q 's=foobar' <<< "$OUT"; then
   pass "plus-concat: 'foo' + 'bar' -> foobar"
 else
   fail "plus-concat: got rc=$RC out=$OUT"
@@ -91,7 +91,7 @@ show:
 EOF
 OUT="$("$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q 'p=yes'; then
+if [ "$RC" -eq 0 ] && grep -q 'p=yes' <<< "$OUT"; then
   pass "conditional: matched host OS branch"
 else
   fail "conditional: got rc=$RC out=$OUT"
@@ -112,7 +112,7 @@ EOF
 unset TUR_RUN_TEST_PRESET_UNSET
 OUT="$("$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q 'preset=host-debug build_dir=build/host-debug'; then
+if [ "$RC" -eq 0 ] && grep -q 'preset=host-debug build_dir=build/host-debug' <<< "$OUT"; then
   pass "nested: env_var_or_default + if + / concat compose"
 else
   fail "nested: got rc=$RC out=$OUT"
@@ -129,7 +129,7 @@ show:
 EOF
 TUR_RUN_TEST_OVERRIDE="from-env" OUT="$(TUR_RUN_TEST_OVERRIDE=from-env "$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q 'p=from-env'; then
+if [ "$RC" -eq 0 ] && grep -q 'p=from-env' <<< "$OUT"; then
   pass "env override wins over default"
 else
   fail "env override: got rc=$RC out=$OUT"
@@ -147,7 +147,7 @@ show:
 EOF
 OUT="$("$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -ne 0 ] && echo "$OUT" | grep -q "unknown variable 'b'"; then
+if [ "$RC" -ne 0 ] && grep -q "unknown variable 'b'" <<< "$OUT"; then
   pass "forward-ref: clear error"
 else
   fail "forward-ref: got rc=$RC out=$OUT"
@@ -167,7 +167,7 @@ show:
 EOF
 OUT="$("$TUR" run show 2>&1)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q 'b=hello'; then
+if [ "$RC" -eq 0 ] && grep -q 'b=hello' <<< "$OUT"; then
   pass "bare-ident RHS resolves to prior var"
 else
   fail "bare-ident RHS: got rc=$RC out=$OUT"

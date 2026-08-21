@@ -13,7 +13,7 @@ FAIL=0
 
 check() {
     local desc="$1" expected="$2" actual="$3"
-    if echo "$actual" | grep -qF -- "$expected"; then
+    if grep -qF -- "$expected" <<< "$actual"; then
         echo "PASS: $desc"
         PASS=$((PASS + 1))
     else
@@ -26,7 +26,7 @@ check() {
 
 check_absent() {
     local desc="$1" unexpected="$2" actual="$3"
-    if echo "$actual" | grep -qF -- "$unexpected"; then
+    if grep -qF -- "$unexpected" <<< "$actual"; then
         echo "FAIL: $desc"
         echo "  did not expect substring: $unexpected"
         echo "  got: $actual"

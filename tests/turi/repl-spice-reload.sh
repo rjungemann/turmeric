@@ -38,7 +38,7 @@ fail() { FAIL=$((FAIL + 1)); echo "FAIL $1 -- $2"; }
 NOPROJ="$WORK/no-project"
 mkdir -p "$NOPROJ"
 out=$(cd "$NOPROJ" && printf '(reload)\n:quit\n' | "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q "no spice loaded"; then
+if grep -q "no spice loaded" <<< "$out"; then
     pass "rp5-reload-outside-project"
 else
     fail "rp5-reload-outside-project" "$out"
@@ -59,7 +59,7 @@ out=$(cd "$PROJ" && printf '(reload)\n:quit\n' | "$TUR_BIN" repl 2>&1)
 # First call rebuilds (no cache yet), second invocation would say "no
 # changes" -- this test runs a single REPL, so the (reload) call here
 # happens *after* the startup load fired, and the sources are fresh.
-if echo "$out" | grep -q "no changes"; then
+if grep -q "no changes" <<< "$out"; then
     pass "rp5-reload-no-changes"
 else
     fail "rp5-reload-no-changes" "$out"
@@ -123,7 +123,7 @@ rm -f "$FIFO"
 
 # -------- scenario 4: arity check ----------------------------------------
 out=$(cd "$PROJ" && printf '(reload 1)\n:quit\n' | "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q "(reload) takes no arguments"; then
+if grep -q "(reload) takes no arguments" <<< "$out"; then
     pass "rp5-reload-arity-check"
 else
     fail "rp5-reload-arity-check" "$out"

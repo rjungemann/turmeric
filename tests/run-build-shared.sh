@@ -60,7 +60,7 @@ pass "build-shared-smoke-link"
 # misleading "symbol not found".
 if command -v nm >/dev/null 2>&1; then
     nm_out=$(nm "$LIB" 2>/dev/null)
-    if printf '%s\n' "$nm_out" | grep -qE '(^| )_?smokelib__add42( |$)'; then
+    if grep -qE '(^| )_?smokelib__add42( |$)' <<< "$nm_out"; then
         pass "build-shared-smoke-symbol-present"
     else
         fail "build-shared-smoke-symbol-present" "smokelib__add42 not found in $LIB"
@@ -83,7 +83,7 @@ fi
 pass "build-shared-smoke-harness-compile"
 
 if out=$("$HARNESS" "$LIB" 2>&1); then
-    if echo "$out" | grep -q 'smokelib__add42(100) = 142'; then
+    if grep -q 'smokelib__add42(100) = 142' <<< "$out"; then
         pass "build-shared-smoke-dlopen-call"
     else
         fail "build-shared-smoke-dlopen-call" "unexpected output: $out"

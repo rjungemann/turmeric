@@ -28,7 +28,7 @@ actual=$({ "$TUR" --interpret "$FIXTURE" 2>&1 || true; } \
 check_line() {
     local desc="$1"
     local expected="$2"
-    if echo "$actual" | grep -qF "$expected"; then
+    if grep -qF "$expected" <<< "$actual"; then
         echo "PASS: $desc"
         PASS=$((PASS + 1))
     else

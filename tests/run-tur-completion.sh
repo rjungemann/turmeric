@@ -36,20 +36,20 @@ EOF
 # ---------------------------------------------------------------- listing ---
 
 OUT="$("$TUR" run --list 2>/dev/null)"
-if echo "$OUT" | grep -q '^  b  # alias for `build`$'; then
+if grep -q '^  b  # alias for `build`$' <<< "$OUT"; then
   pass "aliases appear in --list"
 else
   fail "aliases appear in --list (got: $OUT)"
 fi
 
-if echo "$OUT" | grep -qE '^  (_helper|secret)'; then
+if grep -qE '^  (_helper|secret)' <<< "$OUT"; then
   fail "[private] and _-prefixed recipes are hidden from --list (got: $OUT)"
 else
   pass "[private] and _-prefixed recipes are hidden from --list"
 fi
 
 OUT_ALL="$("$TUR" run --list --all 2>/dev/null)"
-if echo "$OUT_ALL" | grep -q '^  _helper' && echo "$OUT_ALL" | grep -q '^  secret'; then
+if grep -q '^  _helper' <<< "$OUT_ALL" && grep -q '^  secret' <<< "$OUT_ALL"; then
   pass "--list --all reveals hidden recipes"
 else
   fail "--list --all reveals hidden recipes (got: $OUT_ALL)"
@@ -57,7 +57,7 @@ fi
 
 # A hidden recipe is hidden, not disabled.
 OUT="$("$TUR" run secret 2>&1)"
-if [ $? -eq 0 ] && echo "$OUT" | grep -q "^secret$"; then
+if [ $? -eq 0 ] && grep -q "^secret$" <<< "$OUT"; then
   pass "[private] recipes remain runnable by name"
 else
   fail "[private] recipes remain runnable by name (got: $OUT)"
@@ -91,7 +91,7 @@ EOF
 
 OUT="$("$TUR" run --justfile Justfile.confirm --list 2>/dev/null)"
 RC=$?
-if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q '^  good'; then
+if [ "$RC" -eq 0 ] && grep -q '^  good' <<< "$OUT"; then
   pass "an unsupported attribute degrades --list instead of blanking it"
 else
   fail "an unsupported attribute degrades --list instead of blanking it (rc=$RC, out=$OUT)"
@@ -125,7 +125,7 @@ for shell in zsh bash; do
   fi
 done
 
-if head -1 script.zsh | grep -q '^#compdef tur$'; then
+if grep -q '^#compdef tur$' <<< "$(head -1 script.zsh)"; then
   pass "zsh script carries the #compdef tag"
 else
   fail "zsh script carries the #compdef tag"
@@ -163,7 +163,7 @@ if command -v bash >/dev/null 2>&1; then
     _tur
     printf "%s\n" "${COMPREPLY[@]}"
   ' 2>/dev/null)"
-  if echo "$RECIPES" | grep -qx build && echo "$RECIPES" | grep -qx b; then
+  if grep -qx build <<< "$RECIPES" && grep -qx b <<< "$RECIPES"; then
     pass "bash completion returns recipe names and aliases"
   else
     fail "bash completion returns recipe names and aliases (got: $RECIPES)"

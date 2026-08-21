@@ -77,7 +77,7 @@ eligible=()
 for dir in tests/fixtures/*/; do
   [ -f "$dir/input.tur" ] || continue
   [ -f "$dir/expected.stdout" ] || continue
-  ls "$dir" | grep -qE '^(flags|args|requires\.|expected\.status|expected\.stderr)' && continue
+  grep -qE '^(flags|args|requires\.|expected\.status|expected\.stderr)' <<< "$(ls "$dir")" && continue
   eligible+=("$dir")
 done
 echo "eligible: ${#eligible[@]}  binary: $TURJIT"

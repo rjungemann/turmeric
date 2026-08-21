@@ -44,7 +44,7 @@ expect() {
   local out="$1"; shift
   local ok=1 missing=""
   for needle in "$@"; do
-    if ! printf '%s' "$out" | grep -qF -- "$needle"; then
+    if ! grep -qF -- "$needle" <<< "$out"; then
       ok=0; missing="$missing
     missing: $needle"
     fi
@@ -64,7 +64,7 @@ expect() {
 # refute <desc> <output> <needle> -- needle must NOT appear.
 refute() {
   local desc="$1" out="$2" needle="$3"
-  if printf '%s' "$out" | grep -qF -- "$needle"; then
+  if grep -qF -- "$needle" <<< "$out"; then
     echo "FAIL debugger: $desc (unexpected: $needle)"
     echo "---- actual ----"
     printf '%s\n' "$out" | sed 's/^/    /'

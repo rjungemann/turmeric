@@ -39,7 +39,7 @@ for dir in tests/fixtures/*/; do
   [ -f "$dir/expected.stdout" ] || continue
   # Fixtures needing CLI flags, args, skip markers, or a stderr/status contract
   # are out of sample scope -- the spike harness has no equivalent plumbing.
-  ls "$dir" | grep -qE '^(flags|args|requires\.|expected\.status|expected\.stderr)' && continue
+  grep -qE '^(flags|args|requires\.|expected\.status|expected\.stderr)' <<< "$(ls "$dir")" && continue
   count=$((count + 1))
   (( count % stride == 0 )) || continue
 

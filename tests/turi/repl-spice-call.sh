@@ -96,33 +96,33 @@ run() {
 # --- happy paths ---------------------------------------------------------
 
 out=$(run '(add42 100)')
-if echo "$out" | grep -qx '=> 142'; then pass "rp4-call-int->int"
+if grep -qx '=> 142' <<< "$out"; then pass "rp4-call-int->int"
 else fail "rp4-call-int->int" "$out"; fi
 
 # Qualified name resolves to the same shim.
 out=$(run '(sh/add42 99)')
-if echo "$out" | grep -qx '=> 141'; then pass "rp4-call-qualified-name"
+if grep -qx '=> 141' <<< "$out"; then pass "rp4-call-qualified-name"
 else fail "rp4-call-qualified-name" "$out"; fi
 
 out=$(run '(mul 6 7)')
-if echo "$out" | grep -qx '=> 42'; then pass "rp4-call-int-int->int"
+if grep -qx '=> 42' <<< "$out"; then pass "rp4-call-int-int->int"
 else fail "rp4-call-int-int->int" "$out"; fi
 
 out=$(run '(scale 2.5 4.0)')
-if echo "$out" | grep -qx '=> 10'; then pass "rp4-call-float-float->float"
+if grep -qx '=> 10' <<< "$out"; then pass "rp4-call-float-float->float"
 else fail "rp4-call-float-float->float" "$out"; fi
 
 out=$(run '(scale 1.5 3.0)')
-if echo "$out" | grep -qx '=> 4.5'; then pass "rp4-call-float-non-integer-result"
+if grep -qx '=> 4.5' <<< "$out"; then pass "rp4-call-float-non-integer-result"
 else fail "rp4-call-float-non-integer-result" "$out"; fi
 
 out=$(run '(answer)')
-if echo "$out" | grep -qx '=> 42'; then pass "rp4-call-zero-arg"
+if grep -qx '=> 42' <<< "$out"; then pass "rp4-call-zero-arg"
 else fail "rp4-call-zero-arg" "$out"; fi
 
 # Side-effect call returning :void: must print the arg AND yield => nil.
 out=$(run '(noisy 99)')
-if echo "$out" | grep -qx '99' && echo "$out" | grep -qx '=> nil'; then
+if grep -qx '99' <<< "$out" && grep -qx '=> nil' <<< "$out"; then
     pass "rp4-call-void-return"
 else
     fail "rp4-call-void-return" "$out"
@@ -134,31 +134,31 @@ fi
 # time with "no registered dispatcher for shape"; now they resolve.
 
 out=$(run '(sum12 1 2 3 4 5 6 7 8 9 10 11 12)')
-if echo "$out" | grep -qx '=> 78'; then pass "rp4-call-arity12-all-int"
+if grep -qx '=> 78' <<< "$out"; then pass "rp4-call-arity12-all-int"
 else fail "rp4-call-arity12-all-int" "$out"; fi
 
 # Interleaved int/float params: the shim must read fv[1],fv[3],fv[5],fv[7]
 # (b+d+f+h = 1.5+2.25+0.25+4.0 = 8.0), proving per-position class dispatch.
 out=$(run '(wide-mix 1 1.5 2 2.25 3 0.25 4 4.0)')
-if echo "$out" | grep -qx '=> 8'; then pass "rp4-call-arity8-int-float-split"
+if grep -qx '=> 8' <<< "$out"; then pass "rp4-call-arity8-int-float-split"
 else fail "rp4-call-arity8-int-float-split" "$out"; fi
 
 # Wide all-int, int return: 100 - (1+2+3+4+5+6+7+8) = 64.
 out=$(run '(imix9 100 1 2 3 4 5 6 7 8)')
-if echo "$out" | grep -qx '=> 64'; then pass "rp4-call-arity9-int-return"
+if grep -qx '=> 64' <<< "$out"; then pass "rp4-call-arity9-int-return"
 else fail "rp4-call-arity9-int-return" "$out"; fi
 
 # --- error surface -------------------------------------------------------
 
 out=$(run '(add42)')
-if echo "$out" | grep -q "expects 1 arg, got 0"; then
+if grep -q "expects 1 arg, got 0" <<< "$out"; then
     pass "rp4-call-arity-too-few"
 else
     fail "rp4-call-arity-too-few" "$out"
 fi
 
 out=$(run '(add42 1 2)')
-if echo "$out" | grep -q "expects 1 arg, got 2"; then
+if grep -q "expects 1 arg, got 2" <<< "$out"; then
     pass "rp4-call-arity-too-many"
 else
     fail "rp4-call-arity-too-many" "$out"
@@ -166,7 +166,7 @@ fi
 
 # Float passed where :int-class is required: must reject.
 out=$(run '(add42 1.5)')
-if echo "$out" | grep -q "expected :int-class, got float"; then
+if grep -q "expected :int-class, got float" <<< "$out"; then
     pass "rp4-call-type-mismatch"
 else
     fail "rp4-call-type-mismatch" "$out"
@@ -177,7 +177,7 @@ fi
 out=$(run '(add42 1)
 (+ 1 2)')
 # After the FFI call we should still get the => 3 from the second expr.
-if echo "$out" | grep -qx '=> 43' && echo "$out" | grep -qx '=> 3'; then
+if grep -qx '=> 43' <<< "$out" && grep -qx '=> 3' <<< "$out"; then
     pass "rp4-call-env-unaffected"
 else
     fail "rp4-call-env-unaffected" "$out"
@@ -189,17 +189,17 @@ fi
 # trailing int64 slot -- the same list the compiled call sites build.
 
 out=$(run '(vsum 1 2 3 4)')
-if echo "$out" | grep -qx '=> 10'; then pass "s2-variadic-rest"
+if grep -qx '=> 10' <<< "$out"; then pass "s2-variadic-rest"
 else fail "s2-variadic-rest" "expected => 10 from (vsum 1 2 3 4); got: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 
 out=$(run '(vsum 5)')
-if echo "$out" | grep -qx '=> 5'; then pass "s2-variadic-empty-rest"
+if grep -qx '=> 5' <<< "$out"; then pass "s2-variadic-empty-rest"
 else fail "s2-variadic-empty-rest" "expected => 5 from (vsum 5); got: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 
 out=$(run '(vsum)')
-if echo "$out" | grep -q 'expects at least 1'; then pass "s2-variadic-underflow"
+if grep -q 'expects at least 1' <<< "$out"; then pass "s2-variadic-underflow"
 else fail "s2-variadic-underflow" "expected an at-least-arity error for (vsum); got: $(echo "$out" | tail -3 | tr '\n' ' ')"
 fi
 

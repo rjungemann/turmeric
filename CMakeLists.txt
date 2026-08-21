@@ -194,6 +194,15 @@ add_test(
   COMMAND bash tests/check-examples.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Bans `... | grep -q` in any harness that sets pipefail: grep -q exits at its
+# first match and SIGPIPEs the writer, so under pipefail the pipeline reports
+# failure precisely BECAUSE the pattern matched. Has bitten this repo three
+# times, each time reading as a product bug. See the script's header.
+add_test(
+  NAME tur_no_pipe_grep_q
+  COMMAND bash tests/check-no-pipe-grep-q.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
 # the backing check for tools/check-guide-pairs.py.
 add_test(
