@@ -83,3 +83,61 @@ names are absent from that table on this machine and present on one where they
 pass -- i.e. the tracked `stdlib/docstrings.tur` has a machine-dependent
 component. Small today (5 of ~150 names), and it argues for (1) or (3) over
 leaving them failing.
+
+---
+
+## Resolution (2026-08-21)
+
+Fixed via fix direction (1) -- except that the opt-out marker the report asks
+for **already existed**: `; doctest: <reason>` (`DOCTEST_ANNOT_RE`,
+tools/gendocs.py:488), added for the `tur/term` examples that need a tty. The
+five `env` examples simply were not using it. Annotating them is the whole
+change on the extractor side:
+
+```turmeric
+;;;   (env/user)  ; => "alice"  ; doctest: value depends on the environment
+```
+
+`extract_doctest_cases` reports each opt-out by name rather than dropping it
+silently, so the module says what it stopped covering.
+
+### The masking segfault, and the real defect underneath
+
+On this box the reported five FAILs did **not** appear -- the whole `env`
+module came back `SKIP env (7 cases) -- interpreter error (exit 139) --
+Segmentation fault`, so it was masked, not passing. The cause was one of the
+same five examples:
+
+```
+$ echo $USER          # unset in this container
+$ tur run 'println (env/user)'
+Segmentation fault
+```
+
+`env/home`, `env/path`, `env/user`, and `env/shell` each returned `getenv(...)`
+as a bare `: cstr`, i.e. a **nullable pointer with no way to say "unset"** --
+their own docstrings said "or NULL if not set". `println` then dereferences it.
+That is the nullable-sentinel defect CLAUDE.md's "No Lazy `:int` Stand-Ins"
+rule names ("Is it nullable / optional? -> `option<T>`"), in `cstr` clothing.
+
+The module already had the right idiom one screen up: `env/get` returns
+`(Option cstr)`. So the four wrappers are now defined in terms of it --
+
+```turmeric
+(defn env/user [] #fx{Proc} : (Option cstr) (env/get "USER"))
+```
+
+-- which was free to change: `grep` found **zero** callers outside `env.tur`
+(`examples/cli_args_demo.tur` uses `env/get`, already an Option). `env/get!`
+was left alone; it panics with a named message rather than segfaulting, which
+is a defensible second surface.
+
+### Result
+
+`env` goes from `SKIP (segfault, 7 cases)` to passing with its 2 stable cases
+(`env/set`, `env/unset`). Suite-wide: **161 passed, 0 failed, 258 skipped**,
+exit 0, so `tur run test` reaches ctest.
+
+The report's closing question -- whether a doctest failure should gate
+`just test` at all -- is left open; it is an ordering decision, not part of
+this defect.

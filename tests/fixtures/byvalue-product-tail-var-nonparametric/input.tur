@@ -1,0 +1,71 @@
+;; byvalue-product-tail-var-double-unboxed-nonparametric.
+;;
+;; A `let`/`do` block evaluating to a by-value product, returned through an
+;; `if` branch as a BARE VAR, had the boxed-carrier -> struct conversion applied
+;; to a value that was already a struct:
+;;
+;;   __t161 = (*(tur_adt_Pt *)(intptr_t)(__t163));   /* __t163 is a tur_adt_Pt */
+;;   error: aggregate value used where an integer was expected
+;;
+;; The PARAMETRIC half was fixed via type_is_byvalue_product_app. Widening that
+;; TYPE test to non-parametric products regresses ten fixtures, because at the
+;; vec/map element and assoc-type-return seams a non-parametric product
+;; genuinely does ride the carrier and needs the bridge -- and the type in both
+;; positions is identical, so no test on the type can tell them apart.
+;;
+;; The fix is position-sensitive instead: at the emit_if merge the arm's
+;; emitted text exists, so the localvar side table can be asked what
+;; representation the value actually has here. Same trick the let-binding path
+;; already used (init_val_recorded_byval_agg).
+
+(defstruct Pt [x : int y : int])
+
+(defn mk [n : int] : Pt (make-struct Pt n 7))
+(defn side [x : int] : int x)
+
+;; The report's repro: bare-var tail in the ELSE arm.
+(defn via-block [n : int] : Pt
+  (if (= n 0)
+    (mk 0)
+    (let [r (mk n)
+          _ (side n)]
+      (do
+        (side n)
+        r))))
+
+;; The THEN arm takes the same code path, so pin it too.
+(defn via-block-then [n : int] : Pt
+  (if (not= n 0)
+    (let [r (mk n)]
+      (do
+        (side n)
+        r))
+    (mk 0)))
+
+;; The parametric half stayed fixed (type_is_byvalue_product_app), so it must
+;; keep working alongside the new predicate.
+(defstruct Box2 [A B] (fst A) (snd B))
+
+(defn mk2 [n : int] : (Box2 int int) (make-struct Box2 n 7))
+
+(defn via-block-parametric [n : int] : (Box2 int int)
+  (if (= n 0)
+    (mk2 0)
+    (let [r (mk2 n)]
+      (do
+        (side n)
+        r))))
+
+;; Values, not just compilation: a double-unbox that happened to compile would
+;; still read the wrong bytes.
+(defn main [] : int
+  (do
+    (println (.x (via-block 3)))
+    (println (.y (via-block 3)))
+    (println (.x (via-block 0)))
+    (println (.x (via-block-then 4)))
+    (println (.y (via-block-then 4)))
+    (println (.x (via-block-then 0)))
+    (println (.fst (via-block-parametric 5)))
+    (println (.snd (via-block-parametric 5)))
+    0))

@@ -135,6 +135,41 @@ int main(void) {
      * length guard tur_name_collides_libc uses). */
     CHECK(!tur_name_is_c_keyword("intx", 3), "slice 'int' of \"intx\" must not match");
 
+    /* user-defn-named-div-collides-with-libc: every one of these was a name a
+     * user could reasonably pick for a helper, and every one emitted a bare
+     * `static ... <name>(...)` that cc rejected against the system headers --
+     * as errors in generated C under /tmp, with nothing pointing back at the
+     * user's own source. The list they were missing from is derived from the
+     * headers now rather than grown one report at a time; these twelve are the
+     * ones measured breaking, kept here as the concrete oracle.
+     *
+     * `gets` is the interesting one: glibc declares it only via <bits/stdio2.h>
+     * under _FORTIFY_SOURCE, which -O2 turns on -- so it broke `tur run` while
+     * `tur emit-c | cc` (no -O2) compiled clean. */
+    static const char *const libc_hits[] = {
+        "div", "ldiv", "lldiv", "llabs", "atexit", "putchar",
+        "getchar", "gets", "chown", "execl", "drand48", "erand48",
+        /* already covered before, kept so a regeneration cannot drop them */
+        "read", "write", "time", "free", "malloc", "printf", "strlen",
+    };
+    for (size_t i = 0; i < sizeof libc_hits / sizeof libc_hits[0]; i++)
+        CHECK(tur_name_collides_libc(libc_hits[i], strlen(libc_hits[i])),
+              "'%s' should collide with libc", libc_hits[i]);
+
+    /* Ordinary turmeric names must NOT be guarded -- over-matching is harmless
+     * for correctness but renames symbols for no reason. */
+    static const char *const libc_misses[] = {
+        "fdiv", "my-div", "divide", "reader", "writer", "timer",
+        "user-main", "list-map", "",
+    };
+    for (size_t i = 0; i < sizeof libc_misses / sizeof libc_misses[0]; i++)
+        CHECK(!tur_name_collides_libc(libc_misses[i], strlen(libc_misses[i])),
+              "'%s' should NOT collide with libc", libc_misses[i]);
+
+    /* Same whole-identifier guard as the keyword table: a slice that merely
+     * starts with a libc name is not that name. */
+    CHECK(!tur_name_collides_libc("divx", 3), "slice 'div' of \"divx\" must not match");
+
     /* The guard prefix survives mangling as data: a user name literally
      * spelled `tur_u_double` cannot alias the guarded form of `double`,
      * because its literal '_' encodes as "_un". */

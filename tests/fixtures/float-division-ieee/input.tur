@@ -1,0 +1,49 @@
+;; BS_DIV_CHECK backs both integer and floating-point `/`, and used to emit one
+;; guard shape for both: `((b) ? ((a) / (b)) : (..., abort(), 0))`.
+;;
+;; That is right for :int -- division by zero is UB in C, with no value to
+;; produce -- and wrong for :float, where IEEE 754 defines the result. It also
+;; cost a branch per division and, on a constant divisor, made clang report
+;; `implicit conversion from 'double' to '_Bool'` (-Wliteral-conversion) in
+;; generated code the user cannot edit.
+;;
+;; The compiled path also disagreed with the interpreter, which has always
+;; divided floats straight through (src/turi/eval.c BS_DIV_CHECK).
+;;
+;; See docs/archive/float-division-aborts-instead-of-ieee-inf.md.
+
+(defn fdiv [a : float b : float] : float (/ a b))
+(defn f32div [a : float32 b : float32] : float32 (/ a b))
+
+;; A constant divisor: the shape that drew -Wliteral-conversion.
+(defn fconst [a : float] : float (/ a 8.0))
+
+;; NaN is the only value not equal to itself. Used instead of printing the NaN,
+;; because IEEE 754 does not specify the SIGN BIT of the NaN that 0.0/0.0
+;; produces, and printf renders that sign: glibc prints "-nan" where macOS
+;; prints "nan". Asserting the rendering would make this fixture assert its
+;; author's libc -- the same defect as the machine-dependent `stdlib/env.tur`
+;; doctests (docs/archive/env-doctests-are-machine-dependent.md). What the fix
+;; is actually about is that 0.0/0.0 yields a VALUE at all instead of aborting,
+;; and that property is portable.
+(defn nan? [x : float] : bool (not= x x))
+
+(defn main [] : int
+  (do
+    ;; Division by zero is a value, not an abort.
+    (println (fdiv 7.1 0.0))
+    (println (fdiv -7.1 0.0))
+    ;; 0.0/0.0 is a NaN (sign-independent -- see nan? above), not an abort.
+    (println (nan? (fdiv 0.0 0.0)))
+    ;; Negative control: an assertion that cannot fail proves nothing, so show
+    ;; nan? discriminating. An ordinary quotient and an inf are both not-NaN.
+    (println (nan? (fdiv 7.1 2.5)))
+    (println (nan? (fdiv 7.1 0.0)))
+    ;; Ordinary float division is unchanged (non-zero fractional part, so a
+    ;; truncation regression would show).
+    (println (fdiv 7.1 2.5))
+    (println (fconst 16.5))
+    (println (f32div (:: 7.5 :float32) (:: 2.5 :float32)))
+    ;; inf propagates rather than terminating the program.
+    (println (fdiv 1.0 (fdiv 1.0 0.0)))
+    0))

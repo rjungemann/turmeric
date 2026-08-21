@@ -1816,6 +1816,29 @@ bool emit_str_is_bare_ident(const char *s) {
     return true;
 }
 
+/* let-returning-noncapturing-lambda-ices-at-merge-temp: true when a merge temp
+ * of type `t` must be declared with the FAT-HANDLE spelling (`void *`, the
+ * { thunk, env... } box) rather than a thin `R (*)(A...)` function pointer.
+ *
+ * emit_temp_decl picks thin-vs-fat off `t.as.fn.boxed`, which is a fact about
+ * the TYPE.  Stage-2 tail normalization picks it off
+ * fn_result_type_is_fat_normalized, which is a fact about the POSITION -- a fn
+ * value reaching a result slot gets boxed into a fat pair whether or not its
+ * type carries the flag.  For a captureless lambda in a `let` tail the two
+ * disagreed: the tail emitted the fat box, the temp was declared thin, and the
+ * assignment between them was `int64_t (*)(int64_t) = (int64_t)(intptr_t)box`
+ * -- a -Wint-conversion warning, i.e. a hard error under GCC >= 14, and the
+ * repr-shadow ICE that reported it.
+ *
+ * repr_of is the arbiter (repr-decision-function-plan): ask it in RESULT
+ * position and spell the temp to match, rather than re-deriving a second
+ * answer here. */
+static bool merge_temp_fn_is_fat(EmitCtx *ctx, Type type) {
+    Type r = emit_resolve_type(ctx, type);
+    if (r.kind != TY_FN) return false;
+    return repr_of(&r, REPR_POS_RESULT) == REPR_FAT_HANDLE;
+}
+
 static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
                                           const Expr *tail_expr, const char *name) {
     /* generic-instance-result-byvalue-struct-okarm: when the control form's tail
@@ -1864,8 +1887,47 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
         emit_localvar_record_ctype(name, "int64_t");
         return;
     }
+    /* let-returning-noncapturing-lambda-ices-at-merge-temp: a fn value that
+     * reaches this slot is normalized to the fat { thunk, env... } box, so the
+     * temp is that box's `void *`, not a thin function pointer. */
+    if (merge_temp_fn_is_fat(ctx, type)) {
+        indent_buf(body, ctx->indent);
+        /* Spelled `void * name` to match the generic emit_type_c_name path,
+         * which already reaches this same declaration for a type-level boxed
+         * fn -- the two must agree byte for byte or snapshots fork. */
+        buf_printf(body, "void * %s;\n", name);
+        emit_localvar_record_ctype(name, "void *");
+        return;
+    }
     emit_temp_decl(ctx, body, type, name, NULL);
     emit_localvar_record_ctype(name, emit_type_c_name(ctx, type));
+}
+
+/* byvalue-product-tail-var-double-unboxed-nonparametric: true when the EMITTED
+ * text `v` is a bare local whose RECORDED C type is already the by-value
+ * aggregate `bv` -- so a carrier->concrete bridge over it would deref a value
+ * that is not a pointer (`(*(T *)(intptr_t)(<T value>))`, a hard cc error).
+ *
+ * This is the position-sensitive question the type-level predicates cannot
+ * answer. `expr_emits_byvalue_carrier_abi`'s EX_VAR arm was narrowed to
+ * PARAMETRIC apps because widening it to non-parametric products regressed ten
+ * fixtures: at the vec/map element and assoc-type-return seams a
+ * non-parametric product genuinely DOES ride the carrier and needs the bridge,
+ * and the type there is identical, so no test on the type can separate the two
+ * positions. What separates them is the representation the value actually has
+ * HERE, which the localvar side table already records at the declaration.
+ *
+ * Same shape as the `init_val_recorded_byval_agg` check on the let-binding
+ * path; this is the emit_if merge companion, which can only ask it because the
+ * arm's emitted text exists by this point. */
+static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
+                                            Type bv) {
+    if (!v || bv.kind == TY_UNKNOWN || !emit_str_is_bare_ident(v)) return false;
+    const char *lv = emit_localvar_lookup_ctype(v);
+    if (!lv) return false;
+    const char *want = emit_type_c_name(ctx, bv);
+    return want && strcmp(lv, want) == 0 &&
+           strcmp(lv, "int64_t") != 0 && strchr(lv, '*') == NULL;
 }
 
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
@@ -1907,6 +1969,9 @@ static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
              fn_body_tail_is_carrier_producer(tail) &&
              !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
         out = "int64_t";
+    else if (merge_temp_fn_is_fat(ctx, type))
+        /* Mirror emit_control_result_temp_decl's fat-fn branch exactly. */
+        out = "void *";
     else
         out = emit_type_c_name(ctx, type);
     /* Shadow against the RECOVERED type when the walker found one: the
@@ -2833,7 +2898,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * only the bare-param arm needs the deref.) */
         bool then_is_byptr_param = expr_is_pbp_param(ctx, th) && !temp_is_ptr;
         if (if_bv.kind != TY_UNKNOWN &&
-            !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_)) {
+            !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_) &&
+            !emit_arm_is_recorded_byval_agg(ctx, t, if_bv)) {
             /* by-value merge temp, carrier-producing arm: bridge to concrete */
             t = emit_carrier_bridge(ctx, body, t, CK_CARRIER, CK_CONCRETE, if_bv);
             indent_buf(body, ctx->indent);
@@ -2875,7 +2941,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * parameter returned as the else-branch result. */
             bool else_is_byptr_param = expr_is_pbp_param(ctx, eb) && !temp_is_ptr2;
             if (if_bv.kind != TY_UNKNOWN &&
-                !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null)) {
+                !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null) &&
+                !emit_arm_is_recorded_byval_agg(ctx, el, if_bv)) {
                 el = emit_carrier_bridge(ctx, body, el, CK_CARRIER, CK_CONCRETE, if_bv);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);

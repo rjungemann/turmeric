@@ -241,6 +241,11 @@ const BuiltinSpec *builtin_first_with_name(const Symbol *name) {
     return NULL;
 }
 
+bool builtin_div_is_ieee(const BuiltinSpec *spec) {
+    if (!spec || spec->shape != BS_DIV_CHECK) return false;
+    return spec->arg_type.kind == TY_FLOAT || spec->arg_type.kind == TY_FLOAT32;
+}
+
 uint32_t builtin_collect_with_name(const Symbol *name,
                                    const BuiltinSpec **out,
                                    uint32_t max_out) {

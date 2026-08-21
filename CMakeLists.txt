@@ -223,6 +223,16 @@ add_test(
   COMMAND bash tests/check-monomorph-name-collision.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# user-defn-named-div-collides-with-libc: tur_name_collides_libc() bsearches
+# libc_names[], so the table's sort order is a correctness precondition -- one
+# entry out of place makes bsearch quietly miss names and the symptom is a cc
+# error cascade in generated C, not a failed lookup.  Source-text check, no
+# build needed.
+add_test(
+  NAME tur_libc_collision_list
+  COMMAND bash tests/check-libc-collision-list.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Increment 4 stage 4 (repr-decision-function-plan): representation-DECISION
 # predicates must not gain new inline call sites -- new code consults
 # repr_of / the shared predicates at chokepoints, or consciously updates the

@@ -5356,10 +5356,16 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
             break;
         }
         case BS_DIV_CHECK:
-            buf_printf(&b,
-                "((%s) ? ((%s) / (%s)) : "
-                "(fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
-                as[1], as[0], as[1]);
+            /* See emit_core.c: the guard is for the integer rows only; float
+             * division by zero is an IEEE 754 value, not an error. */
+            if (builtin_div_is_ieee(sp)) {
+                buf_printf(&b, "(%s) / (%s)", as[0], as[1]);
+            } else {
+                buf_printf(&b,
+                    "((%s) ? ((%s) / (%s)) : "
+                    "(fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
+                    as[1], as[0], as[1]);
+            }
             break;
         case BS_PREFIX_UNARY:
             buf_printf(&b, "%s(%s)", sp->c_op, as[0]);

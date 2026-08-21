@@ -181,8 +181,8 @@ undeclared identifier -- and (B) was the drop glue owning a `^fat` handle the
 catch thunk only **borrows** from the frame it is created and dropped in.
 Repro (A) did **not** fall out; it is re-filed, narrowed to a three-line
 repro with no httpd and no `catch-unwind`, as
-[let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md)
-under "Value representation".
+[let-returning-noncapturing-lambda-ices-at-merge-temp](../archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md)
+-- since resolved (2026-08-21) and archived.
 
 Four rows were removed 2026-08-21 as **stale index entries**, not as new work:
 `performance-guide-fictional-stdlib-api`,
@@ -266,10 +266,38 @@ not this file -- these each have a row there, and the guide carries the
 matrix, the structural note about which `TypeKind` switch is authoritative, and
 the plan links. File a new repr cell there as well as here.
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [byvalue-product-tail-var-double-unboxed-nonparametric](byvalue-product-tail-var-double-unboxed-nonparametric.md) | medium | residue of `result-block-value-double-unboxed`: a bare-var tail of a NON-parametric by-value product (`tur_adt_Pt`) is still deref-unboxed by the `emit_if` merge. Not widenable -- the same type rides the carrier at the vec/map element and assoc-type seams, so extending the type test regresses 10 named fixtures. Needs a position-sensitive predicate (the `emit_localvar_lookup_ctype` trick) moved to the merge site, where the arm's emitted text exists |
-| [let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md) | medium | a `let` merge temp holding a CAPTURELESS lambda lowers to a bare fn pointer while the temp was decided `fat-handle`; the repr-shadow guard ICEs. Benign under `TUR_REPR_NO_SHADOW_ICE=1`, but the same disagreement was silent and segfaulted at the *argument* boundary (see the archived `let-bound-noncapturing-lambda-segfaults-as-fn-arg`) |
+Both rows that were here are now archived (2026-08-21).
+
+`byvalue-product-tail-var-double-unboxed-nonparametric` was resolved
+2026-08-21 and moved to
+[docs/archive](../archive/byvalue-product-tail-var-double-unboxed-nonparametric.md),
+along the fix direction it filed. `emit_arm_is_recorded_byval_agg()` gates the
+carrier->concrete bridge in both `emit_if` arms on what the localvar side table
+records the value's representation to be HERE, rather than on what its type is
+-- which is why the ten-fixture regression the report measured for a TYPE-level
+widening does not occur: at the vec/map element and assoc-type seams the
+recorded type IS the carrier, so those fixtures still get the bridge they need.
+All ten pass unchanged, no snapshot regenerated, suite 2690 passed / 0 failed.
+Pinned by `tests/fixtures/byvalue-product-tail-var-nonparametric/`, which
+asserts field values (a double-unbox that type-checked would still read wrong
+bytes) and covers the then arm and the parametric half too.
+
+`let-returning-noncapturing-lambda-ices-at-merge-temp` was resolved 2026-08-21
+and moved to
+[docs/archive](../archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md),
+with its diagnosis inverted. The value was **not** a bare fn pointer needing a
+shim: the tail already built a proper fat box, and the merge TEMP was declared
+thin (`int64_t (*)(int64_t)`), so `repr_of` was right and the declaration was
+wrong. Nor was it benign -- the exit-0 repro hid it, but a variant that returns
+and CALLS the closure emits `-Wint-conversion` on the temp assignment, i.e. a
+hard error under GCC >= 14. Root cause was two sites asking different
+questions: `emit_temp_decl` keys fat-vs-thin off `type.as.fn.boxed` (a TYPE
+fact), stage-2 tail normalization off `fn_result_type_is_fat_normalized` (a
+POSITION fact). The merge temp asks `repr_of` in RESULT position now. `do` and
+the direct return escaped only because the shadow check hangs off the `let`
+path's bridge, not because they were spelled correctly. Zero fixtures
+regenerated (the `void * name` spacing matches the generic path deliberately);
+pinned by `tests/fixtures/let-tail-noncapturing-lambda-fat-temp/`.
 
 `mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
 and fixed the same day, both defects along its own fix directions) and moved
@@ -472,9 +500,26 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 ## Surface / expressiveness
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [user-defn-named-div-collides-with-libc](user-defn-named-div-collides-with-libc.md) | low | a top-level `(defn div ...)` is emitted verbatim as a C identifier and collides with `stdlib.h`'s `div()`; the user sees three cc errors about code they did not write, with no pointer back to their source |
+`user-defn-named-div-collides-with-libc` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/user-defn-named-div-collides-with-libc.md). Two
+corrections worth carrying. First, the `tur_u_` guard the report proposed as
+"the real fix" **already existed** -- `(defn strlen ...)` was already emitted
+as `tur_u_strlen`; `div` was just missing from a `libc_names[]` table whose own
+comment called it "grown on demand". Second, the report's "only `div`
+reproduces" was wrong: its six-name control group was clean because five were
+already in the table, and a 104-name sweep found **12** breakers (`div`,
+`ldiv`, `lldiv`, `llabs`, `atexit`, `putchar`, `getchar`, `gets`, `chown`,
+`execl`, `drand48`, `erand48`). The table is derived from the generated TU's
+headers now (136 -> 713 entries) rather than grown per report. `gets` is the
+case that shows why a plain header scrape is not enough -- glibc declares it
+only under `_FORTIFY_SOURCE`, which `-O2` turns on, so it broke `tur run` while
+`tur emit-c | cc` compiled clean. Zero fixture churn. The front-end diagnostic
+the report also asked for was deliberately NOT added: these names work now, and
+rejecting them would trade the bug for a restriction. Pinned by
+`tests/fixtures/libc-collision-guard/`, `tests/mangle_test.c`, and
+`tests/check-libc-collision-list.sh` (ctest `tur_libc_collision_list`), which
+guards the bsearch sort-order precondition.
+
 
 `reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
 and moved to
@@ -524,9 +569,22 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 ## Soundness limits and UB
 
+`float-division-aborts-instead-of-ieee-inf` was resolved 2026-08-21 and moved
+to [docs/archive](../archive/float-division-aborts-instead-of-ieee-inf.md). Its
+open question -- was the abort *intended*? -- was settled by a fact the filing
+did not have: the interpreter never aborted (`src/turi/eval.c` has always
+divided floats straight through), so this was a compiled-vs-interpreted
+divergence, not a language decision. `builtin_div_is_ieee()` now gates the
+guard on `spec->arg_type.kind`, keeping it for the integer rows only. All three
+symptoms went with it: the abort, the branch per division, and the
+`-Wliteral-conversion` noise on constant divisors. Pinned by
+`tests/fixtures/float-division-ieee/`; one snapshot
+(`map-multiword-struct-value`, whose stdlib `Num` float instances lose the
+guard) regenerated in the same commit, which was the whole blast radius --
+suite 2687 passed, 0 failed.
+
 | Report | Severity | One line |
 | --- | --- | --- |
-| [float-division-aborts-instead-of-ieee-inf](float-division-aborts-instead-of-ieee-inf.md) | medium | `BS_DIV_CHECK` applies the INTEGER divide-by-zero guard to float division, so `7.1 / 0.0` aborts the process instead of evaluating to `inf`. Correct for `:int`, wrong for `:float`, where IEEE 754 defines the result -- any code relying on inf/NaN propagation gets an abort instead of a value |
 | [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
 
 Indexed 2026-08-21. It had **no row at all** since it was filed -- the only
@@ -601,9 +659,15 @@ Pinned by four `errors/` negatives and
 
 ## Build / CI / performance
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [env-doctests-are-machine-dependent](env-doctests-are-machine-dependent.md) | medium | five `stdlib/env.tur` `;;;` examples are illustrative but `doctest.py` asserts every `; =>`, so they only pass on the author's machine -- and because `test: build doctest`, a failure there stops `just test` before ctest ever runs |
+`env-doctests-are-machine-dependent` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/env-doctests-are-machine-dependent.md). The five
+`stdlib/env.tur` examples now carry the `; doctest: <reason>` opt-out that
+already existed for `tur/term`'s tty-dependent ones. The report's five FAILs
+were masked on some boxes by a *segfault* in the same module -- `env/home`,
+`env/path`, `env/user`, `env/shell` returned a bare nullable `: cstr`, so
+`(println (env/user))` with `$USER` unset dereferenced NULL; all four now
+return `(Option cstr)` via `env/get`, which had zero callers to break.
+Doctests: 161 passed, 0 failed, exit 0.
 
 `pipefail-grep-q-false-failures` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/pipefail-grep-q-false-failures.md); it was filed
