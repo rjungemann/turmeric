@@ -185,6 +185,15 @@ add_test(
   COMMAND bash tests/run-fmt.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `tur check` sweep over examples/, ratcheted against
+# examples/examples-check-baseline.txt. Nothing referenced examples/ before
+# this, so nothing compiled them and they rotted -- 9 of 17 were failing when
+# the sweep was added. See docs/archive/datalog-examples-do-not-compile.md.
+add_test(
+  NAME tur_examples_check
+  COMMAND bash tests/check-examples.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
 # the backing check for tools/check-guide-pairs.py.
 add_test(

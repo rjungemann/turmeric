@@ -1,0 +1,18 @@
+# Examples that fail `tur check` today. tests/check-examples.sh treats these as
+# expected failures, and fails if one starts passing (drop it from here) or if
+# any example NOT listed starts failing.
+#
+# Added 2026-08-20 while resolving docs/reported/datalog-examples-do-not-compile.
+# Each needs its own fix; see docs/archive/datalog-examples-do-not-compile.md
+# for the datalog one.
+
+examples/cli_args_demo.tur          uses `print`, which does not exist (only println)
+examples/datalog/datalog.tur        TUR-E0201: cannot copy unique value 'e-val' in match-one-datum
+examples/guestbook/src/conts.tur    needs its project context / stdlib loads
+examples/guestbook/src/handlers.tur needs its project context / stdlib loads
+examples/guestbook/src/main.tur     needs its project context / stdlib loads
+examples/guestbook/src/router.tur   needs its project context / stdlib loads
+examples/guestbook/src/security.tur needs its project context / stdlib loads
+examples/guestbook/src/store.tur    typeclass 'Serializable' is not defined (stdlib/serial.tur not loaded)
+examples/guestbook/src/templates.tur needs its project context / stdlib loads
+examples/snake/src/main.tur         `import` outside defmodule

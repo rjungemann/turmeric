@@ -135,7 +135,7 @@
 ;; Returns a fresh rvec of matching datum pointers
 ;; ============================================================
 
-(defn db-q [db : int pred] : ptr<void>
+(defn db-q [db : int pred : (fn [int] bool)] : ptr<void>
   (let [n (db-count db)]
     (let [result (rvec-new)]
       (let [^mut i 0]
@@ -186,30 +186,30 @@
 ;; ============================================================
 
 ;; Match datums by entity ID
-(defn q-entity [e : int]
-  (fn [d] (= (datum-entity d) e)))
+(defn q-entity [e : int] : (fn [int] bool)
+  (fn [d : int] : bool (= (datum-entity d) e)))
 
 ;; Match datums by attribute name
-(defn q-attr [a : cstr]
-  (fn [d] (cstr-eq? (datum-attr d) (cstr->int a))))
+(defn q-attr [a : cstr] : (fn [int] bool)
+  (fn [d : int] : bool (cstr-eq? (datum-attr d) (cstr->int a))))
 
 ;; Match datums by entity AND attribute
-(defn q-ea [e : int a : cstr]
-  (fn [d]
+(defn q-ea [e : int a : cstr] : (fn [int] bool)
+  (fn [d : int] : bool
     (and (= (datum-entity d) e)
          (cstr-eq? (datum-attr d) (cstr->int a)))))
 
 ;; Logical AND of two predicates
-(defn q-and [p q]
-  (fn [d] (and (p d) (q d))))
+(defn q-and [p : (fn [int] bool) q : (fn [int] bool)] : (fn [int] bool)
+  (fn [d : int] : bool (and (p d) (q d))))
 
 ;; Logical OR of two predicates
-(defn q-or [p q]
-  (fn [d] (or (p d) (q d))))
+(defn q-or [p : (fn [int] bool) q : (fn [int] bool)] : (fn [int] bool)
+  (fn [d : int] : bool (or (p d) (q d))))
 
 ;; Logical NOT of a predicate
-(defn q-not [p]
-  (fn [d] (not (p d))))
+(defn q-not [p : (fn [int] bool)] : (fn [int] bool)
+  (fn [d : int] : bool (not (p d))))
 
 ;; ============================================================
 ;; Demo
