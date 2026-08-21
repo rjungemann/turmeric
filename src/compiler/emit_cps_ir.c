@@ -8776,6 +8776,17 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params   = fd->params;
     ctx->n_fn_params = fd->n_params;
 
+    /* inline-c-locals-invisible-to-inline-c-blocks: the same raw-spelling rule
+     * for locals an inline-C block in this body names.  It has to be set on
+     * BOTH emitters for the same reason the parameter context above does -- a
+     * delegated CT_LETRAW body runs through the direct emitter, so a local
+     * declared here and used from pasted C text must agree across the two. */
+    const Binding **saved_ic_locals   = ctx->inline_c_raw_locals;
+    uint32_t        saved_n_ic_locals = ctx->n_inline_c_raw_locals;
+    emit_inline_c_raw_locals_collect(fd->body, fd->params, fd->n_params,
+                                     &ctx->inline_c_raw_locals,
+                                     &ctx->n_inline_c_raw_locals);
+
     /* Emit the body into a temporary buffer, accumulating any lifted reset/shift
      * helpers into `helpers`; then write helpers (which must precede their uses),
      * the signature, and the body. */
@@ -8920,6 +8931,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         } else {
             buf_puts(file, "    return __mret;\n}\n");
         }
+        free((void *)ctx->inline_c_raw_locals);
+        ctx->inline_c_raw_locals   = saved_ic_locals;
+        ctx->n_inline_c_raw_locals = saved_n_ic_locals;
         ctx->fn_params   = saved_fn_params;
         ctx->n_fn_params = saved_n_fn_params;
         g_cps_mono_resolver = NULL;
@@ -9040,6 +9054,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         static_init_register(e2init, STATIC_INIT_REGISTRY);
     }
 
+    free((void *)ctx->inline_c_raw_locals);
+    ctx->inline_c_raw_locals   = saved_ic_locals;
+    ctx->n_inline_c_raw_locals = saved_n_ic_locals;
     ctx->fn_params   = saved_fn_params;
     ctx->n_fn_params = saved_n_fn_params;
     g_cps_mono_resolver = NULL;   /* G3a: end of island-monomorph emit (no-op otherwise) */

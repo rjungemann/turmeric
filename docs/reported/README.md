@@ -48,11 +48,8 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | --- | --- | --- |
 | [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
 | [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
+| [examples-tree-does-not-run](examples-tree-does-not-run.md) | medium | all 5 datalog examples compile, four SIGSEGV at runtime; 9 of 17 examples still fail `tur check`. The ratchet checks, nothing runs |
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
-| [performance-guide-fictional-stdlib-api](performance-guide-fictional-stdlib-api.md) | medium | performance-guide's middle sections document nonexistent stdlib modules/functions |
-| [logic-guide-documents-unimplemented-backtracking-api](logic-guide-documents-unimplemented-backtracking-api.md) | medium | logic-programming-guide's API summary (`choice-point`/`run`/`do-backtrack`) does not exist |
-| [datalog-examples-do-not-compile](datalog-examples-do-not-compile.md) | medium | 4 of 5 examples/datalog/*.tur fail `tur check`; the tutorial series quotes them |
-| [tur-run-test-blocked-by-doctest-failures](tur-run-test-blocked-by-doctest-failures.md) | medium | `tur run test` exits in ~24s: the doctest dep fails, so the ctest line never runs |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
@@ -185,6 +182,44 @@ Repro (A) did **not** fall out; it is re-filed, narrowed to a three-line
 repro with no httpd and no `catch-unwind`, as
 [let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md)
 under "Value representation".
+
+Four rows were removed 2026-08-21 as **stale index entries**, not as new work:
+`performance-guide-fictional-stdlib-api`,
+`logic-guide-documents-unimplemented-backtracking-api`,
+`datalog-examples-do-not-compile` and `tur-run-test-blocked-by-doctest-failures`
+were all resolved and archived on 2026-08-20, but their table rows were left
+behind -- so a triage pass read four open findings that were not open. Worth
+noticing as a class: an index that can drift like this is worse than no index,
+because it is trusted. Their archived files carry the resolutions
+([performance-guide](../archive/performance-guide-fictional-stdlib-api.md),
+[logic-guide](../archive/logic-guide-documents-unimplemented-backtracking-api.md),
+[datalog](../archive/datalog-examples-do-not-compile.md),
+[tur-run-test](../archive/tur-run-test-blocked-by-doctest-failures.md)).
+
+Two of those archives were hiding live work, which is the reason the drift
+mattered rather than just being untidy:
+
+- `datalog-examples-do-not-compile` was archived **partially** resolved, with
+  a "Remaining work" list inside it. Its item 2 ("reduce the
+  undeclared-identifier codegen bug") turned out to be **two** codegen bugs,
+  both now fixed: an inline-C block could not name a `let`-bound local (only a
+  parameter), and a lifted lambda could not read a top-level `def` (Pass 1
+  forward-declares functions, never global storage, and lifted lambdas are
+  prepended to the item list). Both reduced to programs of under a dozen lines
+  with no datalog in them; both fixed with **zero snapshot churn**; pinned by
+  `tests/fixtures/inline-c-names-let-local/` and
+  `tests/fixtures/global-def-read-by-lifted-lambda/`. The report's own guess --
+  "a codegen scoping bug inside `sch_hydecode_hyrec_hy`" -- was wrong, and its
+  "attribution unverified" note is closed: neither bug was branch-specific.
+  The runtime residue is now the open row
+  [examples-tree-does-not-run](examples-tree-does-not-run.md) above.
+- `logic-guide-documents-unimplemented-backtracking-api` was archived with its
+  narrative sections still a design sketch, labelled as one in the file.
+
+Archiving a PARTIALLY resolved report is what made both invisible. If a
+resolution leaves work behind, the leftover belongs in a new `docs/reported/`
+file with its own row -- not in a "Remaining work" heading inside
+`docs/archive/`.
 
 ## Value representation (the consolidation campaign)
 
@@ -451,7 +486,15 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 ## Soundness limits and UB
 
-No open findings in this family.
+| Report | Severity | One line |
+| --- | --- | --- |
+| [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
+
+Indexed 2026-08-21. It had **no row at all** since it was filed -- the only
+open report in the tree that this index never listed, and the
+highest-severity one. Found by sweeping `docs/reported/*.md` against the rows
+here; that sweep is worth repeating whenever you touch this file, in both
+directions (a row with no file, a file with no row).
 
 `reads-grant-survives-callee-global-write` was filed and resolved 2026-08-18,
 and moved to

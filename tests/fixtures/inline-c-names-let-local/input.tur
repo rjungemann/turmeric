@@ -1,0 +1,67 @@
+;; inline-c-locals-invisible-to-inline-c-blocks: an inline-C block pasted into
+;; a mixed Turmeric body can name a `let`-bound local by its SOURCE spelling,
+;; the same way it can already name a parameter.
+;;
+;; Before the fix a parameter worked (raw C name) but a local did not -- it
+;; carried an `_<id>` suffix, so the pasted text hit `'y' undeclared` from cc,
+;; with nothing pointing back at the Turmeric line.
+;;
+;; The block both READS and WRITES the local, because the local really is the
+;; C variable here -- not a copy of it.  `sum` is proof: the Turmeric `while`
+;; below reads back what the inline C stored.
+
+(defn show [tag : cstr v : int] : nil
+  ```c printf("%s=%lld\n", tag, (long long)v); ```)
+
+(defn f [x : int] : int
+  (do
+    ```c
+    /* a parameter: worked before this fix, kept working after */
+    printf("param=%lld\n", (long long)x);
+    ```
+    (let [y (+ x 1)]
+      (do
+        ```c
+        printf("local=%lld\n", (long long)y);
+        ```
+        (let [^mut sum 0]
+          (do
+            ```c
+            /* writing the local is a write to the real variable */
+            sum = y * 2;
+            ```
+            (show "after-inline-c" sum)
+            (set! sum (+ sum 1))
+            (show "after-set" sum)
+            sum))))))
+
+;; A name that appears in an inline-C block but is SHADOWED inside the same
+;; function keeps its id suffix -- there is no single raw spelling that could
+;; mean either binding, so neither gets one and the block does not silently
+;; pick the wrong one.  `dup` here is never named by any inline C, so this only
+;; asserts that shadowing still compiles.
+(defn shadowed [] : int
+  (let [dup 1]
+    (+ dup (let [dup 2] dup))))
+
+;; A `match` arm binds locals the same way a `let` does, and an inline-C block
+;; in the arm body names them the same way.
+(defdata Shape
+  (Circle int)
+  (Square int))
+
+(defn area [s : Shape] : int
+  (match s
+    (Circle r) (do
+                 ```c
+                 printf("radius=%lld\n", (long long)r);
+                 ```
+                 (* r r))
+    (Square w) (* w w)))
+
+(defn main [] : int
+  (do
+    (show "f" (f 7))
+    (show "shadowed" (shadowed))
+    (show "area" (area (Circle 3)))
+    0))

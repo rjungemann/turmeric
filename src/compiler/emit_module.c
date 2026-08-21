@@ -11891,6 +11891,153 @@ static void emit_mark_byval_fn_field_closures(const Expr *e) {
     }
 }
 
+
+/* ---------------------------------------------------------------------------
+ * global-def-read-before-its-declaration
+ *
+ * Pass 1 forward-declares every top-level FUNCTION, which is what lets a
+ * lifted lambda call a `defn` that appears later in the file.  Top-level `def`
+ * STORAGE never got the same treatment -- and every lambda the elaborator
+ * lifts is PREPENDED to the item list (elab_toplevel.c, "Phase 3: Prepend
+ * file-scope definitions"), so it is emitted ahead of every `def` in the
+ * program no matter where its source line sits.  The result:
+ *
+ *     (def kw ":k")
+ *     (defn mk [] (apply1 (fn [d] (+ d (c2i kw))) 1))
+ *
+ * emitted `__fn_N`, which reads `kw_NNNN`, thousands of lines above
+ * `static const char *kw_NNNN;`, and cc rejected it as undeclared.  A `defn`
+ * in the same position compiles, because of the forward-declaration pass this
+ * one mirrors.
+ *
+ * Only the globals actually read before their own declaration point are
+ * forward-declared.  Declaring all of them would be simpler and equally
+ * correct (a repeated tentative definition is legal C), but it would move a
+ * line in the snapshot of every program that was never broken.
+ * ------------------------------------------------------------------------- */
+
+static void gdef_ref_push(const Binding ***a, uint32_t *n, uint32_t *cap, const Binding *b) {
+    if (!b) return;
+    for (uint32_t i = 0; i < *n; i++) if ((*a)[i] == b) return;
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 16;
+        *a = (const Binding **)realloc((void *)*a, *cap * sizeof(**a));
+        if (!*a) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*a)[(*n)++] = b;
+}
+
+/* Collect the bindings an item READS.  An unmodeled kind contributes nothing,
+ * which degrades to today's behaviour (no forward declaration, so a reference
+ * from inside it stays broken) rather than to a wrong declaration. */
+static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, uint32_t *cap) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR: gdef_ref_push(a, n, cap, e->as.var.binding); return;
+        case EX_SET:
+            gdef_ref_push(a, n, cap, e->as.set_.target);
+            gdef_collect_refs(e->as.set_.value, a, n, cap);
+            return;
+        case EX_FN_DEF: if (e->as.fn_def_.fn) gdef_collect_refs(e->as.fn_def_.fn->body, a, n, cap); return;
+        case EX_FN:     if (e->as.fn_.fn)     gdef_collect_refs(e->as.fn_.fn->body, a, n, cap);     return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure) {
+                struct Closure *c = e->as.closure_.closure;
+                if (c->fn) gdef_collect_refs(c->fn->body, a, n, cap);
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    gdef_ref_push(a, n, cap, c->captures[i]);
+            }
+            return;
+        case EX_INLINE_C: {
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (!ic) return;
+            for (uint32_t i = 0; i < ic->n_captures; i++) gdef_ref_push(a, n, cap, ic->captures[i]);
+            for (uint32_t i = 0; i < ic->n_val_exprs; i++) gdef_collect_refs(ic->val_exprs[i], a, n, cap);
+            return;
+        }
+        case EX_DEF: gdef_collect_refs(e->as.def_.init, a, n, cap); return;
+        case EX_CALL:
+            gdef_collect_refs(e->as.call_.fn_expr, a, n, cap);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                gdef_collect_refs(e->as.call_.args[i], a, n, cap);
+            gdef_collect_refs(e->as.call_.dict_arg, a, n, cap);
+            return;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                gdef_collect_refs(e->as.let_.bindings[i].init, a, n, cap);
+            gdef_collect_refs(e->as.let_.body, a, n, cap);
+            return;
+        case EX_IF:
+            gdef_collect_refs(e->as.if_.cond, a, n, cap);
+            gdef_collect_refs(e->as.if_.then_, a, n, cap);
+            gdef_collect_refs(e->as.if_.else_or_null, a, n, cap);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) gdef_collect_refs(e->as.do_.items[i], a, n, cap);
+            return;
+        case EX_WHILE:
+            gdef_collect_refs(e->as.while_.cond, a, n, cap);
+            gdef_collect_refs(e->as.while_.body, a, n, cap);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) gdef_collect_refs(e->as.builtin.args[i], a, n, cap);
+            return;
+        case EX_MATCH:
+            gdef_collect_refs(e->as.match_.scrutinee, a, n, cap);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                gdef_collect_refs(e->as.match_.arms[i].guard, a, n, cap);
+                gdef_collect_refs(e->as.match_.arms[i].body, a, n, cap);
+            }
+            return;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                gdef_collect_refs(e->as.make_struct_.field_values[i], a, n, cap);
+            return;
+        case EX_ASCRIBE: gdef_collect_refs(e->as.ascribe_.inner, a, n, cap); return;
+        case EX_CAST:    gdef_collect_refs(e->as.cast_.expr, a, n, cap);     return;
+        case EX_RETURN:  gdef_collect_refs(e->as.return_.value, a, n, cap);  return;
+        default: return;
+    }
+}
+
+/* Emit `static <T> <name>;` into `out` for every top-level `def` some earlier
+ * item reads.  Mirrors emit_fn_forward_decls, one band later in the file. */
+static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
+                                          const Expr **items, uint32_t n_items) {
+    const Binding **need = NULL; uint32_t n_need = 0, cap_need = 0;
+    const Binding **refs = NULL; uint32_t n_refs = 0, cap_refs = 0;
+
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind == EX_DEF) continue;      /* its own declaration is here */
+        n_refs = 0;
+        gdef_collect_refs(e, &refs, &n_refs, &cap_refs);
+        if (n_refs == 0) continue;
+        /* A reference counts only when the def it names is emitted LATER. */
+        for (uint32_t j = i + 1; j < n_items; j++) {
+            const Expr *d = items[j];
+            if (d->kind != EX_DEF) continue;
+            Binding *db = d->as.def_.binding;
+            if (!db || db->is_thread_local || def_is_opaque_type_decl(d)) continue;
+            for (uint32_t r = 0; r < n_refs; r++)
+                if (refs[r] == db) { gdef_ref_push(&need, &n_need, &cap_need, db); break; }
+        }
+    }
+    free((void *)refs);
+    if (n_need == 0) { free((void *)need); return; }
+
+    buf_puts(out, "/* Forward declarations for globals read by an earlier-emitted item\n"
+                  " * (a lifted lambda is prepended to the item list, so it can read a\n"
+                  " * `def` whose storage is declared far below it). */\n");
+    for (uint32_t i = 0; i < n_need; i++) {
+        char *bn = name_for_binding(ctx, (Binding *)need[i]);
+        buf_printf(out, "static %s %s;\n", type_c_name(need[i]->type), bn);
+        free(bn);
+    }
+    buf_putc(out, '\n');
+    free((void *)need);
+}
+
 /* J2: when set, emit_program appends the per-export `<mangled>__ffi` shims
  * (normally a --shared-only emission).  Set by the REPL's in-process spice
  * build only; every other emission keeps byte-identical output. */
@@ -12461,6 +12608,7 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
         emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
     }
+    emit_global_def_forward_decls(&ctx, &fwd_decls, items, n_items);
 
     /* Phase M5: collect top-level EX_DEFER nodes (module-level defers). */
     uint32_t n_prog_defers = 0;

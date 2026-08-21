@@ -3756,6 +3756,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
 
+    /* inline-c-locals-invisible-to-inline-c-blocks: same idea one level down --
+     * the locals this body's inline-C blocks name get their raw spelling too.
+     * Collected per body; empty (and therefore free) for every function whose
+     * inline C does not name a local, which is nearly all of them. */
+    const Binding **saved_ic_locals = ctx->inline_c_raw_locals;
+    uint32_t saved_n_ic_locals = ctx->n_inline_c_raw_locals;
+    emit_inline_c_raw_locals_collect(fd->body, fd->params, fd->n_params,
+                                     &ctx->inline_c_raw_locals,
+                                     &ctx->n_inline_c_raw_locals);
+
     /* Phase D: record which params are pbp for field-access and call-site handling. */
     uint32_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
@@ -4418,6 +4428,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* Restore previous context */
+    free((void *)ctx->inline_c_raw_locals);
+    ctx->inline_c_raw_locals   = saved_ic_locals;
+    ctx->n_inline_c_raw_locals = saved_n_ic_locals;
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
     ctx->no_unwind = saved_no_unwind;  /* Phase R5 */

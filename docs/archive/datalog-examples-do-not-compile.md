@@ -1,6 +1,8 @@
 # Four of the five examples/datalog/*.tur fail `tur check`
 
-**PARTIALLY RESOLVED 2026-08-20.** `tur check` now passes on 4 of 5 (was
+**PARTIALLY RESOLVED 2026-08-20; the codegen half closed 2026-08-21 (see the
+follow-up below). The runtime residue moved to
+`docs/reported/examples-tree-does-not-run.md`.** `tur check` now passes on 4 of 5 (was
 1 of 5), and a ratcheted sweep stops any example rotting silently again.
 But the report understated the damage in two ways -- see below. **None of
 the five actually runs**, and the wider `examples/` tree is 9-of-17 broken.
@@ -184,10 +186,70 @@ reason each, and the sweep fails in **both** directions:
 The second direction is what stops the baseline decaying into a list nobody
 revisits. Both were tested by deliberately breaking each way, then restored.
 
+## Follow-up 2026-08-21: remaining-work item 2 is done -- it was TWO codegen bugs
+
+The `cc` failures in `blog.tur` and `query.tur` were not one bug and were not
+in `stdlib/schema.tur`. The report guessed at "a codegen scoping bug ... inside
+`sch_hydecode_hyrec_hy`"; the emitted C says otherwise. Each reduced to a
+program of under a dozen lines with no datalog, no schema, and no httpd:
+
+**`query.tur` -- an inline-C block cannot name a `let`-bound local.** A
+function PARAMETER reaches inline C by its source name; a local took the
+`<name>_<id>` path in `name_for_binding`, so `history`'s insertion sort --
+`{ ... vec->data[j + 1] = key; }` over `raw`, `j`, `key` -- emitted three
+`undeclared` errors. Reduced:
+
+```turmeric
+(defn f [x : int] : int
+  (let [y (+ x 1)]
+    (do ```c printf("%lld\n", (long long)y); ``` y)))
+```
+
+`x` compiled, `y` did not. Fixed by giving a local the same raw spelling as a
+parameter when that is unambiguous -- a plain C identifier, unshadowed within
+the function, not a keyword or libc symbol, and actually named by one of the
+function's inline-C blocks (that last condition is what keeps codegen
+byte-identical everywhere else). Pinned by
+`tests/fixtures/inline-c-names-let-local/`, documented in
+`docs/guides/c-integration-guide.md`.
+
+**`blog.tur` -- a lifted lambda cannot read a top-level `def`.** Nothing to do
+with the first bug. Pass 1 forward-declares every top-level FUNCTION, which is
+why a lambda can call a `defn` defined later; top-level `def` STORAGE had no
+such pass, and every lifted lambda is PREPENDED to the item list
+(`elab_toplevel.c`, "Phase 3: Prepend file-scope definitions"), so it is
+emitted above every `def` in the program regardless of source order. Reduced:
+
+```turmeric
+(def kw ":k")
+(defn mk [] : int (apply1 (fn [d : int] : int (+ d (c2i kw))) 1))
+```
+
+`'kw_1334' undeclared`. Fixed by forward-declaring exactly the globals some
+earlier-emitted item reads. Pinned by
+`tests/fixtures/global-def-read-by-lifted-lambda/`.
+
+The report's "attribution unverified" note can be closed: neither bug was an
+interaction with that branch's `:fn` adapter change, and neither was newly
+introduced -- both are structural, both predate the branch, and the `pred` fix
+merely made them reachable. `run.sh` 2687/0 and `run-turi.sh` 1852/0 with
+**zero snapshot churn**, which is the strongest evidence available that
+nothing else depended on either spelling.
+
+All five datalog examples now compile; `blog`, `indexed`, `minimal` and
+`query` still segfault at runtime and `datalog.tur` still fails `tur check`.
+That residue is now tracked as an OPEN report --
+`docs/reported/examples-tree-does-not-run.md` -- rather than as a "Remaining
+work" list inside an archived file, which is where it was invisible.
+
 ## Remaining work
 
+*(Tracked in `docs/reported/examples-tree-does-not-run.md`; item 2 below is
+resolved -- see the follow-up above.)*
+
 1. Debug the two segfaults in the hand-rolled `rvec`/`db`/EAVT inline-C.
-2. Reduce the undeclared-identifier codegen bug and check it against `main`.
+2. ~~Reduce the undeclared-identifier codegen bug and check it against
+   `main`.~~ **Done 2026-08-21** -- two separate codegen bugs, both fixed.
 3. Fix `datalog.tur`'s `TUR-E0201`.
 4. Re-sync the quoted snippets in `docs/guides/datalog-0*.md` **after** the
    code actually runs -- syncing them now would just propagate broken code.

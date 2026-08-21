@@ -360,6 +360,16 @@ add_test(
   COMMAND bash tests/check-pipefail-grep-q.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# docs/reported/README.md is the triage index: it must list every open finding
+# and nothing else.  It has drifted BOTH ways -- four rows left behind after
+# their reports were archived (so triage read four findings that were not open),
+# and a severity-HIGH report that never got a row at all.  Cheap to check,
+# expensive to miss, and it can only fail on a docs edit.
+add_test(
+  NAME tur_reported_index_lint
+  COMMAND bash tests/check-reported-index.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests

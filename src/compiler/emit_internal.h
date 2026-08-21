@@ -249,6 +249,22 @@ typedef struct EmitCtx {
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
     uint32_t  n_fn_params;
+    /* inline-c-locals-invisible-to-inline-c-blocks: local bindings in the
+     * function currently being emitted that an inline-C block in that same
+     * function references BY THEIR SOURCE NAME.  A parameter already reaches
+     * inline C that way (`raw_name_for_binding` above the id-suffix path), and
+     * raw_name_for_binding's own comment states the intent for locals too --
+     * but a local got `<name>_<id>`, so `(let [key ...] ```c ... key ... ```)`
+     * emitted `'key' undeclared`.  These bindings are spelled raw so the two
+     * agree.  Populated per function body and heavily filtered (see
+     * emit_inline_c_raw_locals_collect): a name only lands here when it is a
+     * plain C identifier, unshadowed within the function, not a parameter
+     * name, not a C keyword or libc symbol, AND actually mentioned as an
+     * identifier token by one of the function's inline-C blocks -- so a
+     * function whose inline C does not name a local emits exactly what it
+     * emitted before. */
+    const Binding **inline_c_raw_locals;
+    uint32_t        n_inline_c_raw_locals;
     /* Phase 3: Track emitted env struct names to avoid duplicates */
     const Symbol **env_struct_names;
     uint8_t   n_env_struct_names;
@@ -592,6 +608,14 @@ const char *emit_sig_lookup_ret_ctype(const char *cname);
  * (so a type-based check under-fires) while keying on the type broadly over-fires
  * (139-fixture churn).  Consulting the temp's REAL emitted C type bridges only the
  * genuine straddle.  emit_localvar_reset() clears it per program. */
+/* inline-c-locals-invisible-to-inline-c-blocks: collect the locals of `body`
+ * that an inline-C block inside it names, so they can be emitted by their raw
+ * source name.  Does not descend into nested fn-defs (those are emitted as
+ * their own C functions and run their own collection).  Allocates *out with
+ * malloc; the caller frees it.  Yields nothing when the body has no inline C. */
+void emit_inline_c_raw_locals_collect(const struct Expr *body,
+                                      struct Binding **params, uint32_t n_params,
+                                      const struct Binding ***out, uint32_t *out_n);
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
