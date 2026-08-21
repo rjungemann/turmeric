@@ -124,9 +124,11 @@ For anything more complex than a positional argument or two, use
 (load "stdlib/args.tur")
 (load "stdlib/str-build.tur")   ;; str-concat / int->str, for the examples below
 ```
+
 ```sweet-exp
 load("stdlib/args.tur")
-load("stdlib/str-build.tur")
+load("stdlib/str-build.tur")   ; str-concat / int->str, for the examples below
+```
 
 ### Building a Spec
 
