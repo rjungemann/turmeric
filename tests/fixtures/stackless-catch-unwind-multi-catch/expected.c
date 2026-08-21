@@ -4719,6 +4719,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
 static int64_t __fn_1332() {
         tur_panic("x");
         if (tur_panicking) return ((int64_t)0);
+        return ((int64_t)0);
 }
 
 struct __env_1336 { tur_thunk_int64_t_t __fn; int64_t n; };
@@ -7775,6 +7776,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         (void)(__ps_152);
         tur_panic("schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
+        return ((int64_t)0);
 }
 
 static int64_t schema_hydecode_ex(int64_t schema, int64_t node) {

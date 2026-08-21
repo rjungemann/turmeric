@@ -3865,8 +3865,52 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* M2b carrier-emit synth (above) already wrote a `return tur_*(...)`
          * line; skip the make-struct body so it doesn't double-emit. */
     } else if (body_diverges) {
-        /* Body diverges on every path - emit as statements only */
+        /* Body diverges on every path - emit as statements only, then a
+         * trailing `return` that is dead code by construction.
+         *
+         * `panic` is NOT `noreturn` on the compiled path: it sets
+         * tur_panicking and returns, and the per-call-site
+         * `if (tur_panicking) return ...;` is what unwinds.  So a C compiler
+         * reading a value-returning function whose body ends in a panic sees
+         * control reach the closing brace:
+         *
+         *   warning: non-void function does not return a value in all control
+         *   paths [-Wreturn-type]
+         *
+         * That is not just noise.  One such function in stdlib
+         * (`schema-decode-abort`) put a clang warning on stderr of every
+         * program that loaded the module, which is how it broke
+         * tests/run-offtree-load.sh: that harness captures 2>&1 and compares
+         * against expected stdout, so the program printed the right answer
+         * and the assertion failed anyway -- on macOS only, because gcc and
+         * clang word and trigger this warning differently.
+         *
+         * Fixing it in the stdlib source does not work: a value written after
+         * the panic is unreachable, and elaboration elides it, so the body
+         * still diverges and the emitted C is unchanged.  It has to be here.
+         *
+         * The default follows the same scalar/aggregate split as every other
+         * synthesized zero in the emitter -- `((T)0)` for a scalar, `(T){0}`
+         * for a struct/ADT typedef.  Getting this wrong is a build failure,
+         * not a warning: `return 0;` from a by-value-aggregate function does
+         * not compile (caught by catch-unwind-aggregate-thunk). */
         emit_stmt(ctx, file, fd->body);
+        if (result_kind != TY_NIL || is_main) {
+            indent_buf(file, ctx->indent);
+            if (is_main && result_kind == TY_INT) {
+                buf_puts(file, "return (int)0;\n");
+            } else {
+                const char *rc = ctx->current_fn_ret_ctype;
+                if (!rc || !*rc || strcmp(rc, "void") == 0) {
+                    buf_printf(file, "return %s;\n",
+                               (result_kind == TY_BOOL) ? "false" : "0");
+                } else if (emit_c_type_is_scalar(rc)) {
+                    buf_printf(file, "return ((%s)0);\n", rc);
+                } else {
+                    buf_printf(file, "return (%s){0};\n", rc);
+                }
+            }
+        }
     } else if (fd->body->kind == EX_INLINE_C) {
         /* Inline C body - emit as-is (it contains its own return statements) */
         emit_stmt(ctx, file, fd->body);

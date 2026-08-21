@@ -7760,6 +7760,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         (void)(__ps_151);
         tur_panic("schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
+        return ((int64_t)0);
 }
 
 static int64_t schema_hydecode_ex(int64_t schema, int64_t node) {
@@ -7829,6 +7830,7 @@ int main(int argc, char **argv) {
         tur_panic_set_frame(&__frame_160);
 tur_panic("outer panic");
         /* panic-return-signal: ret ctype unknown; no propagation here */
+        return (int)0;
 }
 
 static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int o) {

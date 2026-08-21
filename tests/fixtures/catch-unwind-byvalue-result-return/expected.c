@@ -4749,6 +4749,7 @@ static int64_t __fn_1336() {
 static int64_t __fn_1338() {
         tur_panic("boom");
         if (tur_panicking) return ((int64_t)0);
+        return ((int64_t)0);
 }
 
 static void * array_hyget(void * arr, int64_t idx) {
@@ -7793,6 +7794,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         (void)(__ps_151);
         tur_panic("schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
+        return ((int64_t)0);
 }
 
 static int64_t schema_hydecode_ex(int64_t schema, int64_t node) {

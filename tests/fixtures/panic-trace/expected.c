@@ -7756,6 +7756,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         (void)(__ps_151);
         tur_panic("schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
+        return ((int64_t)0);
 }
 
 static int64_t schema_hydecode_ex(int64_t schema, int64_t node) {
@@ -7807,6 +7808,7 @@ static int64_t replace(int64_t old, int64_t new) {
 static void inner() {
         tur_panic("test panic");
         if (tur_panicking) return;
+        return 0;
 }
 
 static void outer() {
