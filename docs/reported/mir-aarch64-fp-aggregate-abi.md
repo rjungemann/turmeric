@@ -130,9 +130,21 @@ the case rather than mis-call it**: classify the aggregate at thunk-build
 time and return a clean diagnostic for an HFA on aarch64, instead of
 emitting a thunk that silently reads the wrong registers.
 
-x86-64 is believed unaffected (c2mir implements the full SysV eightbyte
-classification there) but was **not** measured -- there is no x86-64 host in
-this session. That verification is outstanding.
+**x86-64 verified clean, 2026-08-21.** Measured on an x86-64 host against
+cc-compiled callees for every SysV class -- packed float pair (one SSE
+eightbyte), two-SSE, INTEGER+SSE in both member orders, single-GP,
+MEMORY-class (>16 bytes), nested, and aggregate returns of each. All
+correct, so the `#if defined(__aarch64__)` scope of the refusal is right.
+(The same sweep did find a *nested*-aggregate miscall on every
+architecture, but that was a turi sig-rendering bug, not an ABI one --
+fixed, see [jit-ffi-c2mir-plan](../upcoming/jit-ffi-c2mir-plan.md).)
+
+**The refusal now covers both directions, 2026-08-21.** F5 callbacks
+gained aggregate parameters and returns, which is the same hazard
+mirrored: for an inbound HFA the *natively compiled caller* writes
+`v0..v7` and the c2mir-generated callback would read `x0..x7`. The
+provider refuses an HFA in a callback signature exactly as it does in a
+call signature.
 
 ## Also worth knowing
 

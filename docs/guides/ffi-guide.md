@@ -63,15 +63,27 @@ All four require an enclosing `(unsafe ...)` block; `call-ptr` (and
 
 ### Signature vocabulary
 
-| Type token | C parameter type | Register class |
+| Type token | C type used | Register class |
 |---|---|---|
-| `:int`, sized ints, `:bool` | `long long` (cast down as declared) | integer |
+| `:int`, `:int64`, `:uint64` | `long long` | integer |
+| `:bool`, `:int8` / `:uint8` | `signed char` / `unsigned char` | integer |
+| `:int16` / `:uint16` | `short` / `unsigned short` | integer |
+| `:int32` / `:uint32` | `int` / `unsigned int` | integer |
 | `:cstr` | `const char *` | integer |
 | `:ptr` | `void *` | integer |
 | `:float` | `double` | float |
 | `:float32` | `float` (exact -- not widened) | float |
 | `:void` / `:nil` | return position only | -- |
 | a record type name | that record, by value | see below |
+
+Widths are **exact**, and that matters most in **return** position: a C
+function returning `int` leaves the upper half of the return register
+unspecified, so declaring such a callee `-> :int` (64-bit) reads garbage
+for negative results -- `-1234` comes back as `4294966062`. Declare the
+width the callee actually returns (`-> :int32`) and the value is extended
+correctly, by signedness. Argument position is more forgiving: any
+integer-class value may be passed to any integer-class slot, and the cast
+to the declared width happens at the boundary.
 
 The **pointer expression** may be a `dlsym` result (`ptr<void>`) or a raw
 `:int` address (e.g. one you got from inline C).
@@ -98,7 +110,10 @@ signature just names it. Requirements on the record:
   API declares);
 - not `:heap` (its ABI is a pointer -- declare the slot `:ptr`);
 - monomorphic (a parametric record has no single layout);
-- every field a scalar from the table above.
+- every field a scalar from the table above, or itself such a record
+  (a nested by-value record is inlined, exactly as the emitted C inlines
+  it; a field of concrete *parametric* monomorph type is refused under
+  `--interpret` today).
 
 Arguments are matched by **type identity**, not by shape: two records with
 the same field types are still different C types, and passing one where the
@@ -148,8 +163,13 @@ error channel through a C callback slot, and unwinding through the foreign
 frames in between is not safe. The error is printed to stderr and the
 callback returns a zero result, so handle failure inside the callback.
 
-Aggregates are supported outbound (`call-ptr`) but not yet inbound -- a
-callback cannot take or return a record by value.
+Aggregates cross in both directions: a callback may take a record by value
+(the C caller's struct is rebuilt into a record before your function sees
+it) and return one (packed back into the C caller's return slot).  The
+same record requirements as `call-ptr` apply, including the aarch64 HFA
+refusal under `--interpret` -- inbound, the native caller writes the SIMD
+registers and MIR-generated code would read the general-purpose ones, the
+same mismatch mirrored.
 
 ### How it executes
 
@@ -343,9 +363,22 @@ autolink step dlopened. A symbol from a library the process never linked
 needs an explicit `(dlopen ...)` first (a handle-less global load is all
 it takes; the handle can be ignored).
 
-Variadic declarations and signatures with struct parameters fall back to
-the nil stub -- representable signatures only, loudly documented over
-silently wrong.
+Struct-by-value crosses extern-c too: annotate the slot with a record name
+(`[v : InAddr]`, or `: DivT` in return position) and the same requirements
+as `call-ptr` apply -- the interpreter packs/rebuilds the record through
+the thunk engine, and compiled code emits the record's C type in the
+prototype.  Variadic declarations still fall back to the nil stub --
+representable signatures only, loudly documented over silently wrong.
+
+```turmeric
+(defstruct DivT [quot : int32 rem : int32])
+(extern-c div [a :int b :int] : DivT)      ;; div_t div(int, int)
+;; (.quot (div 47 10)) => 4 under --interpret
+```
+
+(Redeclaring a symbol a libc header already declares -- `div` above --
+still trips the C compiler on the *compiled* path, as with any extern-c;
+use the real header type or a symbol of your own there.)
 
 ---
 

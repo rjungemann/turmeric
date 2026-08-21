@@ -950,10 +950,16 @@ Expr *elab_call_ptr(Elab *e, const Form *call) {
         }
         char want = tur_jit_ffi_class_for_kind(param_types[a].kind, 0);
         char got  = tur_jit_ffi_class_for_kind(args[a]->type.kind, 0);
-        /* int-class accepts any int-class value; float-class also accepts
-         * ints (widened, matching the interpreter's marshaller). */
-        bool okc = (want == got) ||
-                   ((want == 'f' || want == 'F') && got == 'i');
+        /* int-class accepts any int-class value -- the exact-width codes
+         * (scalar-width-fidelity) distinguish the C declaration the thunk
+         * emits, not what an argument may be passed as; the width cast
+         * happens at the boundary.  Float-class also accepts ints
+         * (widened, matching the interpreter's marshaller). */
+        bool okc = (tur_jit_ffi_class_is_int(want) &&
+                    tur_jit_ffi_class_is_int(got)) ||
+                   (want == got) ||
+                   ((want == 'f' || want == 'F') &&
+                    tur_jit_ffi_class_is_int(got));
         if (!okc) {
             diag_emit(DIAG_ERROR, call->as.list.items[3 + a]->span,
                       "call-ptr: argument %u is %s, but the signature "
@@ -1021,26 +1027,6 @@ Expr *elab_callback_ptr(Elab *e, const Form *call) {
                            &ret_type, &param_types, &n_params))
         return NULL;
 
-    /* An aggregate crossing INTO a Turmeric closure would have to be
-     * unpacked by the trampoline, which is a separate marshaller from the
-     * one F4 built (that one packs outward).  Rejected explicitly rather
-     * than half-supported. */
-    for (uint32_t i = 0; i < n_params; i++) {
-        if (param_types[i].kind == TY_ADT) {
-            diag_emit(DIAG_ERROR, call->as.list.items[2]->span,
-                      "callback-ptr: parameter %u is a by-value record -- "
-                      "aggregates are supported outbound (call-ptr) but not "
-                      "yet inbound to a callback", (unsigned)i);
-            return NULL;
-        }
-    }
-    if (ret_type.kind == TY_ADT) {
-        diag_emit(DIAG_ERROR, call->as.list.items[2]->span,
-                  "callback-ptr: returning a by-value record from a callback "
-                  "is not supported yet");
-        return NULL;
-    }
-
     Expr *fexpr = elab_form(e, call->as.list.items[1]);
     if (!fexpr) return NULL;
     if (fexpr->type.kind != TY_FN) {
@@ -1094,9 +1080,28 @@ Expr *elab_callback_ptr(Elab *e, const Form *call) {
      * so it is worth catching at the site rather than at the crash. */
     for (uint32_t i = 0; i < n_params; i++) {
         TypeKind fk = (TypeKind)fexpr->type.as.fn.arg_kinds[i];
+        /* F4 follow-on: a record slot requires the function to take a record
+         * there too.  The fn type carries per-arg KINDS only, so identity
+         * (same record, not just "a record") is enforced where the type
+         * survives: the interpreter's dispatch builds the SIG's record and
+         * the compiled adapter passes the aggregate through uncast, so a
+         * wrong record is a C type error in the generated adapter. */
+        if (param_types[i].kind == TY_ADT) {
+            if (fk != TY_ADT) {
+                diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                          "callback-ptr: parameter %u is the by-value record "
+                          "%s in the signature but %s in the function",
+                          (unsigned)i, type_name(param_types[i]),
+                          typekind_to_string(fk));
+                return NULL;
+            }
+            continue;
+        }
         char want = tur_jit_ffi_class_for_kind(param_types[i].kind, 0);
         char got  = tur_jit_ffi_class_for_kind(fk, 0);
-        bool okc = (want == got) ||
+        bool okc = (tur_jit_ffi_class_is_int(want) &&
+                    tur_jit_ffi_class_is_int(got)) ||
+                   (want == got) ||
                    ((want == 'f' || want == 'F') && (got == 'f' || got == 'F'));
         if (!okc) {
             diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
@@ -1109,14 +1114,26 @@ Expr *elab_callback_ptr(Elab *e, const Form *call) {
     }
     {
         TypeKind fr = fexpr->type.as.fn.result_kind;
-        char want = tur_jit_ffi_class_for_kind(ret_type.kind, 1);
-        char got  = tur_jit_ffi_class_for_kind(fr, 1);
-        bool okc = (want == got) ||
-                   ((want == 'f' || want == 'F') && (got == 'f' || got == 'F'));
-        /* A :void C return discards whatever the closure produced, which is
-         * the ordinary way to adapt a value-returning function to a void
-         * callback slot -- allowed rather than an error. */
-        if (want == 'v') okc = true;
+        bool okc;
+        if (ret_type.kind == TY_ADT) {
+            /* F4 follow-on: an aggregate return requires an aggregate-
+             * returning function, and identity when the fn type carries it. */
+            const Type *rft = fexpr->type.as.fn.result_full_type;
+            okc = (fr == TY_ADT) &&
+                  (!rft || rft->kind != TY_ADT ||
+                   rft->as.adt_.def == ret_type.as.adt_.def);
+        } else {
+            char want = tur_jit_ffi_class_for_kind(ret_type.kind, 1);
+            char got  = tur_jit_ffi_class_for_kind(fr, 1);
+            okc = (tur_jit_ffi_class_is_int(want) &&
+                   tur_jit_ffi_class_is_int(got)) ||
+                  (want == got) ||
+                  ((want == 'f' || want == 'F') && (got == 'f' || got == 'F'));
+            /* A :void C return discards whatever the closure produced, which
+             * is the ordinary way to adapt a value-returning function to a
+             * void callback slot -- allowed rather than an error. */
+            if (want == 'v') okc = true;
+        }
         if (!okc) {
             diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                       "callback-ptr: the signature returns %s but the function "

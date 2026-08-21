@@ -259,9 +259,10 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * call site.  AOT codegen is a pure cast-and-call; under --interpret it
      * routes through the c2mir thunk provider, so it works only in
      * -DTUR_JIT=ON builds there (a clean diagnostic otherwise).  Gated
-     * because the signature vocabulary is young (scalars only; the
-     * struct-by-value "{...}" extension is the plan's F4) and should be
-     * able to move without breaking early adopters.  The plan's F1/F2
+     * because the signature vocabulary is young (scalars plus the F4
+     * struct-by-value "{...}" slots, including nested records and F5
+     * callback aggregates) and should be able to move without breaking
+     * early adopters.  The plan's F1/F2
      * plumbing -- runtime spice-export thunks and thunk-backed extern-c
      * under --interpret -- is a behavior-preserving upgrade and is NOT
      * behind this flag. */

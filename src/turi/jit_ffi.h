@@ -12,11 +12,19 @@
  *
  *     sig := <ret-class> ':' <arg-class>*
  *
- *     'i'  int64 register class (:int, :bool, :cstr, :ptr<T>, sized ints)
+ *     'i'  64-bit integer class (:int, :int64, :uint64, :cstr, :ptr<T>)
+ *     'b'/'B'  signed/unsigned  8-bit integer (:bool, :int8 / :uint8)
+ *     'h'/'H'  signed/unsigned 16-bit integer (:int16 / :uint16)
+ *     'w'/'W'  signed/unsigned 32-bit integer (:int32 / :uint32)
  *     'f'  double
  *     'F'  float32 (exact ABI class -- NOT widened at the call boundary)
  *     'v'  void (return position only)
  *     '{'  ... '}'  struct by value (F4, see below)
+ *
+ * The narrow codes exist for RETURN fidelity (scalar-width-fidelity): a C
+ * callee returning `int` leaves the upper register bits unspecified, so
+ * the thunk must declare the exact C type and let the C cast extend.  On
+ * the argument side they are equivalent to 'i' on both supported ABIs.
  *
  * e.g. "i:ifi" = int64 f(int64, double, int64); "v:" = void f(void);
  * "{ff}:{ff}{ff}" = struct{double,double} f(struct{...}, struct{...}).
@@ -104,9 +112,17 @@ const TurJitFfiProvider *tur_jit_ffi_provider(void);
 /* Classify a TypeKind for the signature vocabulary above.  Mirrors codegen's
  * ffi_shim_class_for_kind (emit_module.c) except that float32 reports its
  * exact 'F' class here -- the thunk implements the precise ABI, so it must
- * not widen.  '?' = not representable as a scalar (structs, ADTs, carriers);
- * the caller declines and falls back / errors cleanly. */
+ * not widen -- and narrow integers report exact-width classes ('b'/'h'/'w',
+ * capitalized for unsigned) so a thunk's C declaration carries the true
+ * return width: a callee returning `int` leaves the upper register bits
+ * unspecified, and only the exact type makes the read-back extend
+ * correctly.  '?' = not representable as a scalar (structs, ADTs,
+ * carriers); the caller declines and falls back / errors cleanly. */
 char tur_jit_ffi_class_for_kind(TypeKind k, int is_return);
+
+/* True for every integer-register scalar class ('i' and the exact-width
+ * codes) -- the marshalling-side complement of the 'f'/'F' float classes. */
+bool tur_jit_ffi_class_is_int(char c);
 
 /* Render `n` parameter kinds + a return kind into `buf` as a sig string.
  * Returns 0 on success, -1 (buf untouched) when any kind classifies '?' or

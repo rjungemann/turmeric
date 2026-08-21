@@ -1019,8 +1019,20 @@ fi
 # probe the binary once and PASS-skip those cases against a JIT-less tur
 # (mirroring how run-jit.sh treats an engine-less binary).  The non-JIT
 # diagnostics ARE asserted either way.
-TMP_FFI=$(mktemp -t tur-jit-ffi.XXXXXX.tur)
-trap 'rm -f "$TMP_FFI"' EXIT
+# A temp DIRECTORY plus a fixed filename, rather than `mktemp -t
+# tur-jit-ffi.XXXXXX.tur`.  `-t` is not portable in the way that spelling
+# assumes: GNU coreutils reads the argument as a TEMPLATE (so the name ends
+# in `.tur`), while BSD/macOS reads it as a PREFIX and appends its own
+# `.XXXXXXXX` -- leaving a file that does NOT end in `.tur`.  `tur run
+# <path>` then declines to see it as a source file, falls through to
+# project-task resolution, and dies with "recipe not found / available:
+# <the whole Justfile>".  That is what made the two compiled-path cases
+# below fail on the macOS legs only, with an empty stdout and no clue.
+# The other cases never noticed because emit-c / --interpret / check take
+# the path as given.
+TMP_FFI_DIR=$(mktemp -d -t tur-jit-ffi-XXXXXX)
+TMP_FFI="$TMP_FFI_DIR/case.tur"
+trap 'rm -rf "$TMP_FFI_DIR"' EXIT
 # NOTE: captured via command substitution, not a pipeline -- this script
 # runs `set -o pipefail`, and `tur jit`'s non-zero exit (or the SIGPIPE from
 # grep -q's early close) would mask a successful match.
@@ -1107,6 +1119,17 @@ case "$(uname)" in
   Linux)  LIBC_SO="libc.so.6" ;;
   *)      LIBC_SO="" ;;
 esac
+# Shared-library extension for the helper libraries the jit-ffi cases below
+# build with cc.  Load-bearing on macOS, not cosmetic: Apple's linker
+# resolves `-lfoo` against libfoo.dylib / libfoo.tbd / libfoo.a and does NOT
+# consider libfoo.so, so an autolinked helper named .so fails to LINK there
+# and the fixture dies before printing anything.  (dlopen by absolute path
+# does not care about the extension, but there is no reason for the two
+# cases to disagree.)
+case "$(uname)" in
+  Darwin) SOEXT="dylib" ;;
+  *)      SOEXT="so" ;;
+esac
 if [ "$HAS_JIT" = "1" ] && [ -n "$LIBC_SO" ]; then
     cat > "$TMP_FFI" <<TURFFI
 (defstruct IPair [a : int32 b : int32])
@@ -1127,6 +1150,152 @@ TURFFI
     fi
 else
     echo "SKIP jit-ffi-call-ptr-struct-interp (needs a JIT build on a known libc)"
+fi
+
+# jit-ffi-call-ptr-struct-nested-interp: a NESTED by-value record field is
+# inlined in the emitted C layout (adt_field_is_inline_byval), so the
+# interpreter's sig must render it as a nested `{...}` -- it used to class
+# the field as an int64 carrier ('q'), building a thunk whose ABI shape
+# disagreed with the natively compiled callee (silent wrong answers, the
+# same failure mode as the aarch64 HFA report but on every arch).  The
+# callee is compiled with the native cc so the thunk really crosses the
+# c2mir <-> native ABI boundary; both directions are asserted.
+if [ "$HAS_JIT" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _nested_dir="$(mktemp -d -t tur-ffi-nested-XXXXXX)"
+    # Mixed int/float leaves, NOT an HFA -- an all-float nested aggregate
+    # would (correctly) hit the aarch64 HFA refusal instead of the marshaller.
+    cat > "$_nested_dir/helper.c" <<'EOF'
+typedef struct { int a; float b; } IW;
+typedef struct { IW lo; double c; } NX;
+double nx_sum(NX v) { return (double)v.lo.a * 10000.0
+                           + (double)v.lo.b * 100.0 + v.c; }
+NX mk_nx(int a, double b, double c) {
+    NX r; r.lo.a = a; r.lo.b = (float)b; r.c = c; return r;
+}
+EOF
+    if cc -shared -fPIC -o "$_nested_dir/libnested.$SOEXT" "$_nested_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct IW [a : int32 b : float32])
+(defstruct NX [lo : IW c : float])
+(defn main [] : int
+  (unsafe
+    (let [h (dlopen "$_nested_dir/libnested.$SOEXT")]
+      (println (call-ptr (dlsym h "nx_sum") [NX -> :float]
+                         (NX (IW (:: 3 :int32) (:: 2.25 :float32)) 1.5)))
+      (let [r (call-ptr (dlsym h "mk_nx") [:int :float :float -> NX]
+                        3 2.25 1.5)]
+        (println (:: (.a (.lo r)) :int))
+        (println (:: (.b (.lo r)) :float))
+        (println (.c r)))))
+  0)
+TURFFI
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+        if [ "$(echo "$out" | tr '\n' ' ')" != "30226.5 3 2.25 1.5 " ]; then
+            fail "jit-ffi-call-ptr-struct-nested-interp" "expected nested aggregate to marshal as 30226.5 / 3 / 2.25 / 1.5, got: $out"
+        else
+            pass "jit-ffi-call-ptr-struct-nested-interp"
+        fi
+    else
+        echo "SKIP jit-ffi-call-ptr-struct-nested-interp (cc could not build the helper .so)"
+    fi
+    rm -rf "$_nested_dir"
+else
+    echo "SKIP jit-ffi-call-ptr-struct-nested-interp (needs a JIT build and cc)"
+fi
+
+# jit-ffi-extern-c-struct-interp: extern-c with by-value AGGREGATE slots
+# (the plan's "extern-c with aggregate parameters" open item).  div(3)
+# RETURNS div_t {int quot; int rem;}; inet_ntoa(3) TAKES struct in_addr by
+# value.  Both live in the already-loaded libc, so dlsym(RTLD_DEFAULT)
+# resolves them at registration with no dlopen.  0x0100007F -> "127.0.0.1".
+if [ "$HAS_JIT" = "1" ] && [ -n "$LIBC_SO" ]; then
+    cat > "$TMP_FFI" <<'TURFFI'
+(defstruct DivT [quot : int32 rem : int32])
+(defstruct InAddr [addr : uint32])
+(extern-c div [a :int b :int] : DivT)
+(extern-c inet_ntoa [a : InAddr] : cstr)
+(defn main [] : int
+  (let [r (div 47 10)]
+    (println (:: (.quot r) :int))
+    (println (:: (.rem r) :int)))
+  (println (inet_ntoa (InAddr (:: 16777343 :uint32))))
+  0)
+TURFFI
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
+    if [ "$(echo "$out" | tr '\n' ' ')" != "4 7 127.0.0.1 " ]; then
+        fail "jit-ffi-extern-c-struct-interp" "expected div/inet_ntoa through aggregate extern-c to print 4 / 7 / 127.0.0.1, got: $out"
+    else
+        pass "jit-ffi-extern-c-struct-interp"
+    fi
+else
+    echo "SKIP jit-ffi-extern-c-struct-interp (needs a JIT build on a known libc)"
+fi
+
+# jit-ffi-extern-c-struct-compiled: the same declarations on the COMPILED
+# path -- the prototype emitter spells the record's C type
+# (`extern tur_adt_IqFd mk_iqfd(...)`), the C linker binds it to the
+# layout-identical symbol in the helper .so, and result_full_type is what
+# makes `.field` on the aggregate return resolve.  Works in every build
+# (pure codegen; no JIT needed).
+if command -v cc >/dev/null 2>&1; then
+    _ecagg_dir="$(mktemp -d -t tur-ecagg-XXXXXX)"
+    cat > "$_ecagg_dir/helper.c" <<'EOF'
+typedef struct { long long n; double d; } IqFd;
+double iqfd_sum(IqFd v) { return (double)v.n * 100.0 + v.d; }
+IqFd mk_iqfd(long long n, double d) { IqFd r = { n, d }; return r; }
+EOF
+    if cc -shared -fPIC -o "$_ecagg_dir/libecagg.$SOEXT" "$_ecagg_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct IqFd [n : int d : float])
+(defn __link [] : int
+  \`\`\`c
+  /* __tur_autolink__: -L$_ecagg_dir -lecagg */
+  return 0;
+  \`\`\`)
+(extern-c iqfd_sum [v : IqFd] : float)
+(extern-c mk_iqfd [n :int d :float] : IqFd)
+(defn main [] : int
+  (println (iqfd_sum (IqFd 42 6.125)))
+  (let [r (mk_iqfd 42 6.125)]
+    (println (.n r))
+    (println (.d r)))
+  0)
+TURFFI
+        # stderr is CAPTURED, not discarded: when this failed on the macOS
+        # leg it reported `got: ` with no other information, which says the
+        # program never printed -- i.e. it died in cc -- but not why.  A
+        # compile/link diagnostic in the failure line is the difference
+        # between one push and a blind round trip.
+        _ec_err="$_ecagg_dir/stderr.txt"
+        out=$(LD_LIBRARY_PATH="$_ecagg_dir" DYLD_LIBRARY_PATH="$_ecagg_dir" "$TUR" run "$TMP_FFI" 2>"$_ec_err")
+        if [ "$(echo "$out" | tr '\n' ' ')" != "4206.12 42 6.125 " ]; then
+            fail "jit-ffi-extern-c-struct-compiled" "expected compiled aggregate extern-c to print 4206.12 / 42 / 6.125, got: $out; stderr: $(tr '\n' ' ' < "$_ec_err" | tail -c 600)"
+        else
+            pass "jit-ffi-extern-c-struct-compiled"
+        fi
+    else
+        echo "SKIP jit-ffi-extern-c-struct-compiled (cc could not build the helper .so)"
+    fi
+    rm -rf "$_ecagg_dir"
+else
+    echo "SKIP jit-ffi-extern-c-struct-compiled (needs cc)"
+fi
+
+# jit-ffi-extern-c-struct-rejects-heap: a :heap record's ABI is a pointer
+# to its header, not the aggregate -- naming one in an extern-c slot is a
+# hard elaboration error on every build.
+cat > "$TMP_FFI" <<'TURFFI'
+(defstruct Boxy :heap [n : int])
+(extern-c bad_fn [v : Boxy] : int)
+(defn main [] : int 0)
+TURFFI
+out=$("$TUR" emit-c "$TMP_FFI" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "jit-ffi-extern-c-struct-rejects-heap" "a :heap record was accepted as a by-value extern-c parameter"
+elif ! grep -q "cannot cross the C boundary by value" <<< "$out"; then
+    fail "jit-ffi-extern-c-struct-rejects-heap" "expected the by-value aggregate diagnostic, got: $out"
+else
+    pass "jit-ffi-extern-c-struct-rejects-heap"
 fi
 
 # jit-ffi-call-ptr-hfa-refused: on aarch64 the interpreter must REFUSE a
@@ -1187,6 +1356,111 @@ TURFFI
     fi
 else
     echo "SKIP jit-ffi-callback-interp (needs a JIT build on a known libc)"
+fi
+
+# jit-ffi-narrow-return: scalar-width fidelity.  A C callee returning `int`
+# (or `short`) leaves the upper bits of the return register unspecified, so
+# a thunk that declared the call as returning `long long` read garbage for
+# any negative value -- neg_int(1234) came back as 4294966062, not -1234.
+# The sig now carries exact-width scalar codes, so the thunk declares the
+# callee's true C type and the cast extends correctly.
+if [ "$HAS_JIT" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _narrow_dir="$(mktemp -d -t tur-narrow-XXXXXX)"
+    cat > "$_narrow_dir/helper.c" <<'EOF'
+int neg_int(int x) { return -x; }
+short neg_short(short x) { return (short)-x; }
+unsigned int big_uint(void) { return 4294967295u; }
+EOF
+    if cc -shared -fPIC -o "$_narrow_dir/libnarrow.$SOEXT" "$_narrow_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defn main [] : int
+  (unsafe
+    (let [h (dlopen "$_narrow_dir/libnarrow.$SOEXT")]
+      (println (:: (call-ptr (dlsym h "neg_int")   [:int32 -> :int32] 1234) :int))
+      (println (:: (call-ptr (dlsym h "neg_short") [:int16 -> :int16] 77) :int))
+      (println (:: (call-ptr (dlsym h "big_uint")  [-> :uint32]) :int))))
+  0)
+TURFFI
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+        if [ "$(echo "$out" | tr '\n' ' ')" != "-1234 -77 4294967295 " ]; then
+            fail "jit-ffi-narrow-return" "expected exact-width returns -1234 / -77 / 4294967295, got: $out"
+        else
+            pass "jit-ffi-narrow-return"
+        fi
+    else
+        echo "SKIP jit-ffi-narrow-return (cc could not build the helper .so)"
+    fi
+    rm -rf "$_narrow_dir"
+else
+    echo "SKIP jit-ffi-narrow-return (needs a JIT build and cc)"
+fi
+
+# jit-ffi-callback-struct: aggregates INBOUND to a callback (the last F4/F5
+# open item) -- a native caller passes a record by value into a Turmeric
+# comparator-style function, and a callback RETURNS a record by value that
+# the native caller hands back.  Mixed int/float members (not an HFA), so it
+# runs on aarch64 too.  Asserted on both paths: the interpreter's dispatch
+# rebuilds the record from raw bytes; the compiled per-site adapter passes
+# the aggregate through uncast.
+if command -v cc >/dev/null 2>&1; then
+    _cbagg_dir="$(mktemp -d -t tur-cbagg-XXXXXX)"
+    cat > "$_cbagg_dir/helper.c" <<'EOF'
+typedef struct { long long n; double d; } IqFd;
+long long call_n(long long (*cb)(IqFd), long long n, double d) {
+    IqFd v = { n, d }; return cb(v);
+}
+double call_d(double (*cb)(IqFd), long long n, double d) {
+    IqFd v = { n, d }; return cb(v);
+}
+IqFd call_mk(IqFd (*cb)(long long, double), long long n, double d) {
+    return cb(n, d);
+}
+EOF
+    if cc -shared -fPIC -o "$_cbagg_dir/libcbagg.$SOEXT" "$_cbagg_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct IqFd [n : int d : float])
+(defn iqfd-n [v : IqFd] : int   (.n v))
+(defn iqfd-d [v : IqFd] : float (.d v))
+(defn mk-iqfd [n : int d : float] : IqFd (IqFd n d))
+(defn main [] : int
+  (unsafe
+    (let [h (dlopen "$_cbagg_dir/libcbagg.$SOEXT")]
+      (println (call-ptr (dlsym h "call_n") [:ptr :int :float -> :int]
+                         (callback-ptr iqfd-n [IqFd -> :int]) 42 6.125))
+      (println (call-ptr (dlsym h "call_d") [:ptr :int :float -> :float]
+                         (callback-ptr iqfd-d [IqFd -> :float]) 42 6.125))
+      (let [r (call-ptr (dlsym h "call_mk") [:ptr :int :float -> IqFd]
+                        (callback-ptr mk-iqfd [:int :float -> IqFd]) 42 6.125)]
+        (println (.n r))
+        (println (.d r)))))
+  0)
+TURFFI
+        if [ "$HAS_JIT" = "1" ]; then
+            out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+            if [ "$(echo "$out" | tr '\n' ' ')" != "42 6.125 42 6.125 " ]; then
+                fail "jit-ffi-callback-struct-interp" "expected inbound/outbound callback aggregates to print 42 / 6.125 / 42 / 6.125, got: $out"
+            else
+                pass "jit-ffi-callback-struct-interp"
+            fi
+        else
+            echo "SKIP jit-ffi-callback-struct-interp (needs a JIT build)"
+        fi
+        # stderr CAPTURED -- see the note on jit-ffi-extern-c-struct-compiled.
+        _cb_err="$_cbagg_dir/stderr.txt"
+        out=$("$TUR" --enable=jit-ffi run "$TMP_FFI" 2>"$_cb_err")
+        if [ "$(echo "$out" | tr '\n' ' ')" != "42 6.125 42 6.125 " ]; then
+            fail "jit-ffi-callback-struct-compiled" "expected inbound/outbound callback aggregates to print 42 / 6.125 / 42 / 6.125, got: $out; stderr: $(tr '\n' ' ' < "$_cb_err" | tail -c 600)"
+        else
+            pass "jit-ffi-callback-struct-compiled"
+        fi
+    else
+        echo "SKIP jit-ffi-callback-struct-interp (cc could not build the helper .so)"
+        echo "SKIP jit-ffi-callback-struct-compiled (cc could not build the helper .so)"
+    fi
+    rm -rf "$_cbagg_dir"
+else
+    echo "SKIP jit-ffi-callback-struct-interp (needs cc)"
+    echo "SKIP jit-ffi-callback-struct-compiled (needs cc)"
 fi
 
 # jit-ffi-callback-needs-toplevel: a CAPTURING closure cannot become a C
