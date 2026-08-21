@@ -63,7 +63,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
-| [guides-two-arg-println-and-when-body](guides-two-arg-println-and-when-body.md) | low-medium | guide examples call `println` with 2 args / `when` with 2 body forms; neither exists (12 sites left in frame-guide) |
 
 `args-api-int-erased-handles` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/args-api-int-erased-handles.md). `ArgSpec` /
@@ -136,6 +135,16 @@ two cases above carries a comment about the same trap but fixes it with a CAST
 -- correct there (the monomorph cell really has a `double` field), wrong here.
 Moved to
 [docs/archive](../archive/ok-val-untyped-catch-box-loses-float.md).
+
+`guides-two-arg-println-and-when-body` was filed and resolved 2026-08-21 and
+moved to
+[docs/archive](../archive/guides-two-arg-println-and-when-body.md). Every
+`(println "label:" v)` in `docs/guides/` is gone -- frame-guide's 12 use the
+two-call form rather than `str-concat`, since `tur-frame` is a sibling-repo
+spice whose error payload type could not be verified here. The doc lint the
+report proposes (extract fenced blocks, `tur check` the self-contained ones) is
+NOT built; the `no-check` fence marker some guides already carry is the seed of
+the opt-in convention it would need.
 
 ## Value representation (the consolidation campaign)
 

@@ -72,3 +72,26 @@ be covered.
 
 - docs/guides/frame-guide.md
 - docs/guides/developing-spices-guide.md
+
+## Resolution (2026-08-21, same day)
+
+Swept. `docs/guides/cli-args-guide.md` was already fully corrected when this was
+filed; the remaining 13 sites are now fixed too:
+
+- `docs/guides/frame-guide.md` (12) -- the four `(println "error:" e)` match
+  arms and the two pointer prints, in both dialects. They use the **two-call**
+  form (`(do (println "error:") (println e))`, `do(println("...") println(e))`
+  in sweet-exp) rather than `str-concat`, deliberately: `tur-frame` lives in the
+  sibling `../turmeric-spices` checkout, so the error payload's TYPE could not
+  be verified here, and two calls are correct whatever it is. A one-line note at
+  the first site says why a label and a value are two calls.
+- `docs/guides/developing-spices-guide.md` (1) -- the `;;;` docstring example.
+
+`grep -rE '\(println "[^"]*" [^)]|println\("[^"]*" ' docs/guides/*.md` is now
+empty across every guide.
+
+The lint idea in the fix direction is NOT done: extracting fenced ```turmeric
+blocks and `tur check`ing the self-contained ones is worth building, but it
+needs an opt-in marker (most snippets are fragments) and is a bigger piece than
+this sweep. The `no-check` fence marker some guides already carry
+(`schema-guide.md` uses it) looks like the seed of exactly that convention.

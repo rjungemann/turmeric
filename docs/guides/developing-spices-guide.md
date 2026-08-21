@@ -774,7 +774,7 @@ definition. The standard format (from CLAUDE.md):
 ;;; Example:
 ;;;   (match (db-open "app.db")
 ;;;     (ok db) (println "opened")
-;;;     (err m) (println "failed:" m))
+;;;     (err m) (do (println "failed:") (println m)))
 ;;;
 ;;; Since: Phase P2
 (defn db-open [path :cstr] (result :ptr)
