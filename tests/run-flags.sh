@@ -1019,8 +1019,20 @@ fi
 # probe the binary once and PASS-skip those cases against a JIT-less tur
 # (mirroring how run-jit.sh treats an engine-less binary).  The non-JIT
 # diagnostics ARE asserted either way.
-TMP_FFI=$(mktemp -t tur-jit-ffi.XXXXXX.tur)
-trap 'rm -f "$TMP_FFI"' EXIT
+# A temp DIRECTORY plus a fixed filename, rather than `mktemp -t
+# tur-jit-ffi.XXXXXX.tur`.  `-t` is not portable in the way that spelling
+# assumes: GNU coreutils reads the argument as a TEMPLATE (so the name ends
+# in `.tur`), while BSD/macOS reads it as a PREFIX and appends its own
+# `.XXXXXXXX` -- leaving a file that does NOT end in `.tur`.  `tur run
+# <path>` then declines to see it as a source file, falls through to
+# project-task resolution, and dies with "recipe not found / available:
+# <the whole Justfile>".  That is what made the two compiled-path cases
+# below fail on the macOS legs only, with an empty stdout and no clue.
+# The other cases never noticed because emit-c / --interpret / check take
+# the path as given.
+TMP_FFI_DIR=$(mktemp -d -t tur-jit-ffi-XXXXXX)
+TMP_FFI="$TMP_FFI_DIR/case.tur"
+trap 'rm -rf "$TMP_FFI_DIR"' EXIT
 # NOTE: captured via command substitution, not a pipeline -- this script
 # runs `set -o pipefail`, and `tur jit`'s non-zero exit (or the SIGPIPE from
 # grep -q's early close) would mask a successful match.
