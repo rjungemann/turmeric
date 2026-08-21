@@ -1,0 +1,56 @@
+;; let-returning-noncapturing-lambda-ices-at-merge-temp.
+;;
+;; A `let` whose result is a NON-capturing lambda ICE'd on the repr-shadow
+;; guard: `want=fat-handle got=carrier-i64`. The report read that as the value
+;; being a bare function pointer where a fat handle was wanted, but it is the
+;; other way round -- the TAIL already emitted a proper fat { thunk, env... }
+;; box, and the merge TEMP was declared thin:
+;;
+;;   int64_t (*__t160)(int64_t);
+;;   __t160 = (int64_t)(intptr_t)(__t163);   <- -Wint-conversion
+;;
+;; i.e. a hard error under GCC >= 14, not merely a shadow complaint.
+;;
+;; The two sites keyed the fat/thin choice off different things: emit_temp_decl
+;; off `type.as.fn.boxed` (a fact about the TYPE), stage-2 tail normalization
+;; off fn_result_type_is_fat_normalized (a fact about the POSITION). The merge
+;; temp asks repr_of in RESULT position now, so it agrees with the value.
+;;
+;; The three narrowing conditions from the report, all still exercised below:
+;; a `let` (not `do`), a captureless lambda (not capturing), reached through a
+;; wrapping form (not returned directly).
+
+;; The original repro verbatim: enclosing defn returns :int. Never called --
+;; the ICE fired while EMITTING this body, so merely defining it is the test
+;; (the report's own repro had `main` return a bare 0). Its value is a heap
+;; pointer, so printing it would make this fixture machine-dependent.
+(defn wrap [] : int
+  (let [_x 1]
+    (fn [c : int] : int c)))
+
+;; The load-bearing one: the fn value is actually RETURNED and CALLED, so a
+;; mistyped temp is observable as a wrong answer or a crash, not just a
+;; diagnostic. 7 + 100 = 107.
+(defn wrap-callable [] : (fn [int] int)
+  (let [_x 1]
+    (fn [c : int] : int (+ c 100))))
+
+;; Contrast arms -- each compiled before the fix and must keep working.
+(defn capturing [] : (fn [int] int)
+  (let [x 5]
+    (fn [c : int] : int (+ c x))))
+
+(defn via-do [] : (fn [int] int)
+  (do 1
+    (fn [c : int] : int (+ c 200))))
+
+(defn direct [] : (fn [int] int)
+  (fn [c : int] : int (+ c 300)))
+
+(defn main [] : int
+  (do
+    (println ((wrap-callable) 7))
+    (println ((capturing) 7))
+    (println ((via-do) 7))
+    (println ((direct) 7))
+    0))

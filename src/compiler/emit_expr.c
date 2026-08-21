@@ -1816,6 +1816,29 @@ bool emit_str_is_bare_ident(const char *s) {
     return true;
 }
 
+/* let-returning-noncapturing-lambda-ices-at-merge-temp: true when a merge temp
+ * of type `t` must be declared with the FAT-HANDLE spelling (`void *`, the
+ * { thunk, env... } box) rather than a thin `R (*)(A...)` function pointer.
+ *
+ * emit_temp_decl picks thin-vs-fat off `t.as.fn.boxed`, which is a fact about
+ * the TYPE.  Stage-2 tail normalization picks it off
+ * fn_result_type_is_fat_normalized, which is a fact about the POSITION -- a fn
+ * value reaching a result slot gets boxed into a fat pair whether or not its
+ * type carries the flag.  For a captureless lambda in a `let` tail the two
+ * disagreed: the tail emitted the fat box, the temp was declared thin, and the
+ * assignment between them was `int64_t (*)(int64_t) = (int64_t)(intptr_t)box`
+ * -- a -Wint-conversion warning, i.e. a hard error under GCC >= 14, and the
+ * repr-shadow ICE that reported it.
+ *
+ * repr_of is the arbiter (repr-decision-function-plan): ask it in RESULT
+ * position and spell the temp to match, rather than re-deriving a second
+ * answer here. */
+static bool merge_temp_fn_is_fat(EmitCtx *ctx, Type type) {
+    Type r = emit_resolve_type(ctx, type);
+    if (r.kind != TY_FN) return false;
+    return repr_of(&r, REPR_POS_RESULT) == REPR_FAT_HANDLE;
+}
+
 static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
                                           const Expr *tail_expr, const char *name) {
     /* generic-instance-result-byvalue-struct-okarm: when the control form's tail
@@ -1864,6 +1887,18 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
         emit_localvar_record_ctype(name, "int64_t");
         return;
     }
+    /* let-returning-noncapturing-lambda-ices-at-merge-temp: a fn value that
+     * reaches this slot is normalized to the fat { thunk, env... } box, so the
+     * temp is that box's `void *`, not a thin function pointer. */
+    if (merge_temp_fn_is_fat(ctx, type)) {
+        indent_buf(body, ctx->indent);
+        /* Spelled `void * name` to match the generic emit_type_c_name path,
+         * which already reaches this same declaration for a type-level boxed
+         * fn -- the two must agree byte for byte or snapshots fork. */
+        buf_printf(body, "void * %s;\n", name);
+        emit_localvar_record_ctype(name, "void *");
+        return;
+    }
     emit_temp_decl(ctx, body, type, name, NULL);
     emit_localvar_record_ctype(name, emit_type_c_name(ctx, type));
 }
@@ -1907,6 +1942,9 @@ static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
              fn_body_tail_is_carrier_producer(tail) &&
              !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
         out = "int64_t";
+    else if (merge_temp_fn_is_fat(ctx, type))
+        /* Mirror emit_control_result_temp_decl's fat-fn branch exactly. */
+        out = "void *";
     else
         out = emit_type_c_name(ctx, type);
     /* Shadow against the RECOVERED type when the walker found one: the

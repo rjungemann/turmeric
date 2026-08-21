@@ -181,8 +181,8 @@ undeclared identifier -- and (B) was the drop glue owning a `^fat` handle the
 catch thunk only **borrows** from the frame it is created and dropped in.
 Repro (A) did **not** fall out; it is re-filed, narrowed to a three-line
 repro with no httpd and no `catch-unwind`, as
-[let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md)
-under "Value representation".
+[let-returning-noncapturing-lambda-ices-at-merge-temp](../archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md)
+-- since resolved (2026-08-21) and archived.
 
 Four rows were removed 2026-08-21 as **stale index entries**, not as new work:
 `performance-guide-fictional-stdlib-api`,
@@ -269,7 +269,23 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [byvalue-product-tail-var-double-unboxed-nonparametric](byvalue-product-tail-var-double-unboxed-nonparametric.md) | medium | residue of `result-block-value-double-unboxed`: a bare-var tail of a NON-parametric by-value product (`tur_adt_Pt`) is still deref-unboxed by the `emit_if` merge. Not widenable -- the same type rides the carrier at the vec/map element and assoc-type seams, so extending the type test regresses 10 named fixtures. Needs a position-sensitive predicate (the `emit_localvar_lookup_ctype` trick) moved to the merge site, where the arm's emitted text exists |
-| [let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md) | medium | a `let` merge temp holding a CAPTURELESS lambda lowers to a bare fn pointer while the temp was decided `fat-handle`; the repr-shadow guard ICEs. Benign under `TUR_REPR_NO_SHADOW_ICE=1`, but the same disagreement was silent and segfaulted at the *argument* boundary (see the archived `let-bound-noncapturing-lambda-segfaults-as-fn-arg`) |
+
+`let-returning-noncapturing-lambda-ices-at-merge-temp` was resolved 2026-08-21
+and moved to
+[docs/archive](../archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md),
+with its diagnosis inverted. The value was **not** a bare fn pointer needing a
+shim: the tail already built a proper fat box, and the merge TEMP was declared
+thin (`int64_t (*)(int64_t)`), so `repr_of` was right and the declaration was
+wrong. Nor was it benign -- the exit-0 repro hid it, but a variant that returns
+and CALLS the closure emits `-Wint-conversion` on the temp assignment, i.e. a
+hard error under GCC >= 14. Root cause was two sites asking different
+questions: `emit_temp_decl` keys fat-vs-thin off `type.as.fn.boxed` (a TYPE
+fact), stage-2 tail normalization off `fn_result_type_is_fat_normalized` (a
+POSITION fact). The merge temp asks `repr_of` in RESULT position now. `do` and
+the direct return escaped only because the shadow check hangs off the `let`
+path's bridge, not because they were spelled correctly. Zero fixtures
+regenerated (the `void * name` spacing matches the generic path deliberately);
+pinned by `tests/fixtures/let-tail-noncapturing-lambda-fat-temp/`.
 
 `mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
 and fixed the same day, both defects along its own fix directions) and moved
