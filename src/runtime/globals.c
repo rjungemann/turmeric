@@ -269,15 +269,16 @@ bool g_opt_owning_cloneable_capture = true;
  * that declared H, unconditionally.  The enable bit and its gate are gone.  See
  * docs/archive/sealed-opaque-plan.md. */
 
-/* write-frames (docs/archive/checked-write-frames-plan.md): `#writes w` /
- * `#writes [a b]` declares which of a function's arguments its body may write.
- * Off by default; when off the annotation still PARSES and is recorded but
- * nothing checks it and nothing acts on it, so a spice can adopt it without
- * breaking consumers who have not enabled the experiment. */
-bool g_opt_write_frames = false;
-/* checked-reads (docs/upcoming/trusted-refinement-claims-plan.md, R2):
- * refuse the #reads congruence override on positive broken-promise evidence. */
-bool g_opt_checked_reads = false;
+/* write-frames GRADUATED 2026-08-20 -- `#writes w` / `#writes [a b]` declares
+ * which of a function's arguments its body may write, and WF2 now CHECKS every
+ * declared frame unconditionally (VERIFIED / EXCEEDED -> TUR-E0382 /
+ * UNVERIFIED).  The enable bit and its gates are gone.  See
+ * docs/archive/checked-write-frames-plan.md. */
+
+/* checked-reads GRADUATED 2026-08-20 -- the #reads congruence override is
+ * refused on positive broken-promise evidence, unconditionally.  The enable bit
+ * and its gates are gone.  See docs/upcoming/trusted-refinement-claims-plan.md
+ * (R2). */
 /* jit-ffi (docs/upcoming/jit-ffi-c2mir-plan.md): gates the call-ptr form. */
 bool g_opt_jit_ffi = false;
 

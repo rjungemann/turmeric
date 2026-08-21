@@ -106,9 +106,8 @@ extern bool g_dump_write_frames;
  * print the read-frame verification verdict for every `#reads`-annotated
  * function (VERIFIED / EXCEEDED / UNVERIFIED).  Same character as
  * --dump-write-frames: a diagnostic knob, not an experiment -- it reports
- * what rf_resolve_read_frames decided and changes nothing.  Setting it also
- * makes that pass run even without --enable=checked-reads, so the verdicts
- * are inspectable before opting into the refusal tier. */
+ * what rf_resolve_read_frames decided and changes nothing.  The pass itself
+ * runs unconditionally; this flag only makes its verdicts visible. */
 extern bool g_dump_read_frames;
 
 /* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
@@ -289,25 +288,18 @@ extern bool g_opt_owning_cloneable_capture;
  * ascribe_check_sealed gate are gone.  See
  * docs/archive/sealed-opaque-plan.md. */
 
-/* write-frames (WF1/WF2, docs/archive/checked-write-frames-plan.md): gates the
- * `#writes` write-frame annotation -- its CHECKING (WF2's TUR-E0382) and every
- * consumer that acts on a checked frame (WF3's callee-frame widening, WF4's
- * entry-check elision).  The annotation itself always PARSES so that adding one
- * is not a breaking change for a consumer who has not enabled the experiment;
- * what the gate withholds is the checking and the acting.
- *
- * `#reads` lived under the `refined` experiment, but that graduated 2026-08-01,
- * so this feature needs its own lifecycle home rather than a retired one. */
-extern bool g_opt_write_frames;
+/* write-frames GRADUATED 2026-08-20 -- WF2 checks every declared `#writes`
+ * frame and WF3 may widen on a checked callee frame, both unconditionally; the
+ * g_opt_write_frames enable bit and its gates are gone.  See
+ * docs/archive/checked-write-frames-plan.md. */
 
-/* `checked-reads` experiment (docs/upcoming/trusted-refinement-claims-plan.md,
- * R2): on positive evidence that a `#reads` measure's body reads a mutable
- * global (the same evidence TUR-W0383 reports gatelessly), REFUSE the
- * congruence override instead of merely warning -- the crossing then gets the
- * ordinary TUR-W0372 an unframed impure measure gets.  Refusal keys on "saw a
- * read", never on "could not see": an inline-C body yields no evidence and
- * keeps today's trusted behaviour even with the gate on. */
-extern bool g_opt_checked_reads;
+/* checked-reads GRADUATED 2026-08-20 -- positive evidence that a `#reads`
+ * measure's body reads mutable state the frame omits REFUSES the congruence
+ * override (the crossing gets the ordinary TUR-W0372) rather than merely
+ * warning; the g_opt_checked_reads enable bit and its gates are gone.  Refusal
+ * still keys on "saw a read", never on "could not see" -- an inline-C body
+ * yields no evidence and keeps the trusted grant.  See
+ * docs/upcoming/trusted-refinement-claims-plan.md (R2). */
 
 /* `jit-ffi` experiment (docs/upcoming/jit-ffi-c2mir-plan.md, F3): the
  * `(unsafe (call-ptr p [T1 T2 -> R] args...))` form -- call an arbitrary

@@ -197,59 +197,62 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * reaches only code that deliberately wrote `:sealed`.  The name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
      * docs/archive/sealed-opaque-plan.md. */
-    /* write-frames: step 2 of the trajectory stateful-refinements-guide.md
-     * sketches ("trusted now -> checkable later -> effect-row eventually").
-     * `#reads` is step 1 and graduated with `refined`; this is the checked
-     * tier, which is what an optimization may act on.  Gated because the
-     * CHECKING can reject a body that compiles today (TUR-E0382) and because
-     * WF4 ELIDES a runtime check on the strength of the frame -- neither should
-     * arrive unasked-for.  The annotation parses either way.
+    /* write-frames GRADUATED 2026-08-20 -- `#writes w` / `#writes [a b]` is now
+     * CHECKED unconditionally (WF2's three verdicts, TUR-E0382 on EXCEEDED),
+     * and WF3's borrow widening may consult a checked callee frame without an
+     * opt-in.  The gate existed for two reasons and both are settled:
      *
-     * G1 (docs/upcoming/mutable-globals-plan.md) narrows what VERIFIED claims:
-     * a frame speaks about PARAMETERS, so a body that writes a mutable global
-     * is downgraded to UNVERIFIED rather than stamped with a fact an
-     * optimization may act on.  Silent -- a global is outside the frame's
-     * vocabulary, not outside the declared frame. */
-    { "write-frames",
-      "`#writes w` / `#writes [a b]` -- a checked per-argument write frame; "
-      "backs frame-aware hypothesis invalidation and entry-check elision",
-      "docs/archive/checked-write-frames-plan.md",
-      "0.34.0",                  /* introduced */
-      "0.38.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_write_frames },
+     *   1. "The checking can reject a body that compiles today."  It can, but
+     *      only a body that DECLARED a frame -- an annotation nobody writes by
+     *      accident -- and only when the body demonstrably exceeds it.  The
+     *      unverifiable case was designed as a silent downgrade (UNVERIFIED)
+     *      precisely so adopting a frame never cascades into a caller's
+     *      callees, so the reachable blast radius is "you wrote `#writes` and
+     *      the body writes something else", which is the diagnostic's point.
+     *   2. "WF4 elides a runtime check on the strength of the frame."  WF4 is
+     *      RETIRED -- the check it proposed to elide does not exist and never
+     *      did (`rt_inject_param_checks` already skips entry-check injection
+     *      for any `#reads`-mentioning refinement).  Nothing elides on the
+     *      strength of a frame, so the half of the gate that guarded an
+     *      unasked-for optimization has no subject.
+     *
+     * What remains is a checker that reports a broken promise, which is the
+     * ordinary tier.  G1's narrowing survives graduation unchanged: a frame
+     * speaks about PARAMETERS, so a body that writes a mutable global is
+     * downgraded to UNVERIFIED rather than stamped with a fact a consumer may
+     * act on -- silently, because a global is outside the frame's vocabulary,
+     * not outside the declared frame.  The name moves to GRADUATED[] below (a
+     * lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/checked-write-frames-plan.md. */
     /* global-state GRADUATED 2026-08-18 (G5b of mutable-globals-plan) -- a
      * `#writes` frame may name a mutable global, an exported global is
      * read-only outside its defining module, and `^atomic` / `^thread-local`
      * are ordinary global annotations.  All unconditional; the name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op). */
-    /* checked-reads: R2 of docs/upcoming/trusted-refinement-claims-plan.md.
-     * `#reads` is the one TRUSTED claim the refinement solver believes, and
-     * its consumer GRANTS congruence -- so a frame that omits mutable state
-     * the body reads buys a proof it has not earned, with no runtime fallback
-     * at the crossing it enables.  TUR-W0383 already reports the broken
-     * promise gatelessly; this gate ESCALATES the same positive evidence (a
-     * direct read of a mutable global in the elaborated body) from warn to
-     * refuse-the-override, so the crossing becomes the ordinary TUR-W0372 an
-     * unframed impure measure gets.
+    /* checked-reads GRADUATED 2026-08-20 (R2 of
+     * docs/upcoming/trusted-refinement-claims-plan.md) -- positive evidence
+     * that a `#reads` measure's body reads mutable state the frame omits now
+     * REFUSES the congruence override unconditionally, instead of merely
+     * warning.  The crossing it used to decide becomes the ordinary TUR-W0372
+     * an unframed impure measure gets.
      *
-     * Gated because it can only ever turn a currently-proving program into a
-     * diagnostic.  Refusal keys on "saw a read", never "could not see": an
-     * inline-C measure -- essentially every measure that predates mutable
-     * globals -- yields no evidence and keeps trusted behaviour even with the
-     * gate on, which is what keeps the nine strict-refine #reads fixtures
-     * green under the flag. */
-    { "checked-reads",
-      "refuse the `#reads` congruence override when the body demonstrably "
-      "reads a mutable global the frame omits (escalates TUR-W0383 from "
-      "warn to refuse)",
-      "docs/upcoming/trusted-refinement-claims-plan.md",
-      "0.34.0",                  /* introduced */
-      "0.38.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_checked_reads },
+     * The gate existed because this can only ever turn a currently-proving
+     * program into a diagnostic.  That is still true, and it is exactly why
+     * it should be the default: `#reads` is the ONE trusted claim the
+     * refinement solver believes, its consumer GRANTS congruence on the
+     * strength of it, and at the crossing it enables there is no runtime
+     * fallback -- so a frame that omits state the body reads buys a proof it
+     * has not earned.  A program that "stops proving" here was never entitled
+     * to the proof; TUR-W0383 has been reporting the broken promise
+     * gatelessly since 0.34, so the finding is not new, only the consequence.
+     *
+     * Refusal keys on "saw a read", never on "could not see".  An inline-C
+     * measure -- essentially every measure that predates mutable globals --
+     * yields no evidence and keeps the trusted grant, which is what kept the
+     * nine strict-refine `#reads` fixtures byte-identical under the flag and
+     * is what bounds the graduation's reach to frames the checker can read.
+     * The name moves to GRADUATED[] below (a lingering --enable is a
+     * TUR-W0063 no-op). */
     /* jit-ffi: the `(unsafe (call-ptr p [T1 T2 -> R] args...))` form of
      * docs/upcoming/jit-ffi-c2mir-plan.md -- invoke an arbitrary function
      * pointer (typically a dlsym result) with a signature stated at the
@@ -298,6 +301,8 @@ static const char *const GRADUATED[] = {
     "jit",           /* graduated 2026-08-17; `tur jit` needs only the -DTUR_JIT=ON build gate */
     "sealed-opaque", /* graduated 2026-08-17; `:sealed` enforcement is unconditional */
     "global-state",  /* graduated 2026-08-18; globals in write frames, read-only exported globals, ^atomic / ^thread-local */
+    "write-frames",  /* graduated 2026-08-20; `#writes` frames are checked unconditionally (WF2/WF3) */
+    "checked-reads", /* graduated 2026-08-20; broken-`#reads`-frame evidence refuses the congruence grant */
     NULL,
 };
 

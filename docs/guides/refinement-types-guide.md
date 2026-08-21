@@ -990,9 +990,9 @@ anyway.
   `docs/archive/frozen-region-aliasing-via-coercing-cast.md`. Trust is no
   longer the whole story, though: a demonstrably broken frame (a direct read
   of a mutable global, or of state rooted in a parameter the frame omits)
-  draws `TUR-W0383` gatelessly and is refused under `--enable=checked-reads`,
-  and `--dump-read-frames` runs a verification walk that can stamp a
-  walkable body's frame VERIFIED. An inline-C body stays exactly as trusted
+  draws `TUR-W0383` and is refused the congruence grant, and
+  `--dump-read-frames` shows the verification walk's verdict, which can stamp
+  a walkable body's frame VERIFIED. An inline-C body stays exactly as trusted
   as this entry describes. See the
   [Stateful Refinements guide](stateful-refinements-guide.md).
 

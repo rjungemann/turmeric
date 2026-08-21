@@ -374,9 +374,9 @@ struct Binding {
      * that this function's `#reads` frame is broken -- the elaborated body
      * directly reads a mutable global the frame cannot name, or mutable
      * state rooted in a PARAMETER the frame omits.  Stamped where the frame
-     * is stamped; TUR-W0383 reports it gatelessly, and under
-     * `--enable=checked-reads` the refinement encoder refuses the congruence
-     * override on it.  False never means "clean", only "no evidence" -- an
+     * is stamped; TUR-W0383 reports it, and the refinement encoder refuses
+     * the congruence override on it.  False never means "clean", only "no
+     * evidence" -- an
      * inline-C body is unwalkable and stays false by design. */
     bool                reads_frame_omits_state;
     /* R4 slice 2 (trusted-refinement-claims-plan): the read-side mirror of
@@ -384,10 +384,9 @@ struct Binding {
      * pass saw the WHOLE elaborated body and attributed every read of
      * mutable state to a frame-named parameter -- silence is never enough,
      * so an inline-C body, an unvouchable call, or an unmodeled form all
-     * leave it false (UNVERIFIED, not broken).  Stamped only when the pass
-     * runs (--enable=checked-reads or --dump-read-frames); nothing consumes
-     * it behaviorally yet -- the dump is the surface, and the first real
-     * consumer is a post-v1 decision recorded in the plan. */
+     * leave it false (UNVERIFIED, not broken).  Nothing consumes it
+     * behaviorally yet -- `--dump-read-frames` is the surface, and the first
+     * real consumer is a post-v1 decision recorded in the plan. */
     bool                reads_checked;
     /* WF1 / #writes: the per-argument WRITE frame -- which parameters' mutable
      * state this function's body may write.  A bitmask (bit i = parameter i is

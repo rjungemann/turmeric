@@ -12,7 +12,7 @@
 ;;                         call); since slice 3 the verification pass's
 ;;                         evidence sweep feeds it to the same gateless
 ;;                         TUR-W0383 tier (expected.stderr pins the call-shape
-;;                         wording), and under --enable=checked-reads the same
+;;                         wording), and the same
 ;;                         evidence refuses the congruence grant
 ;;                         (errors/r4-checked-reads-refuses-callee-frame-read).
 ;;   opaque?   UNVERIFIED  an inline-C body -- unwalkable, stays trusted;

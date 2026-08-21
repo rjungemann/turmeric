@@ -2194,9 +2194,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * be defined later in the unit. */
     wf_resolve_write_frames(&e);
     /* R4 slice 2: verify `#reads` frames against their elaborated bodies,
-     * stamping reads_checked where every read attributes to the frame.  Runs
-     * only under --enable=checked-reads / --dump-read-frames; emits nothing
-     * but the optional dump (evidence diagnostics are slice 1's job). */
+     * stamping reads_checked where every read attributes to the frame.  Emits
+     * nothing but the optional --dump-read-frames dump plus slice 3's
+     * EXCEEDED evidence (TUR-W0383). */
     rf_resolve_read_frames(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);

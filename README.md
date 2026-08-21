@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.36.0` -- `defmacro*` procedural macros: a macro body is ordinary Turmeric run at expansion time over first-class `Syntax`, with `(import m :for-macros)` for macro-time deps, `tur expand` and REPL `:expand`, and reader macros by composition; plus jit-ffi struct-by-value and callbacks, and `tur completion` for zsh and bash.
+**Latest release:** `v0.37.0` -- the `#writes` and `#reads` frame checkers graduate out of `--enable`: a declared write frame is verified, and a `#reads` frame that omits mutable state its body reads no longer buys a congruence proof; plus `tur audit`, `(export-from ...)`, and an Arc/barrier/STM-sync concurrency stdlib.
 
 ## What
 

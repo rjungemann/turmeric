@@ -1,11 +1,31 @@
 # Checked write frames -- `#writes`, frame-aware hypothesis invalidation
 
+> **Status 2026-08-20 -- GRADUATED in v0.37.0.** `--enable=write-frames` is
+> retired: WF2 checks every declared frame and WF3 may widen on a checked
+> callee frame, both unconditionally. A lingering `--enable=write-frames` is
+> a TUR-W0063 no-op.
+>
+> The gate had two jobs and neither survived contact. It withheld a CHECK
+> that can only reject a body which *declared* a frame and then exceeded it
+> -- the unverifiable case was designed as a silent downgrade precisely so
+> adoption never cascades into a caller's callees -- and it withheld an
+> ACTING (WF4's elision) that turned out not to exist. What is left is a
+> checker that reports a broken promise, which is the ordinary tier.
+>
+> One fixture moved at graduation. `errors/refine-wf3-borrowed-target`
+> pinned the un-widened behavior by withholding the flag, which made it
+> byte-for-byte `wf3-borrow-write-free` with the opposite expectation, so it
+> was folded into that fixture rather than repaired toward it (verified
+> first: the program proves and prints 7 with the gate gone). Every other
+> `--enable=write-frames` fixture simply dropped the flag.
+
 > **Status 2026-08-02 -- WF1, WF2, and the WF3 borrow widening are LANDED.
 > WF4 is RETIRED: its premise turned out to be false.**
 >
 > Behind `--enable=write-frames` (a new experiment; `#reads`'s old home, the
-> `refined` experiment, graduated 2026-08-01). The annotation always parses;
-> the gate withholds the checking and the acting.
+> `refined` experiment, graduated 2026-08-01) -- the gate the block above
+> retires. The annotation always parses; the gate withheld the checking and
+> the acting.
 >
 > - **WF1** -- `#writes w` / `#writes [a b]`, parsed to `(writes ...)` stamped
 >   `PROV_WRITES`, resolved to a per-argument bitmask on the `Binding`.

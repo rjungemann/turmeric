@@ -2,6 +2,67 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.37.0] -- 2026-08-20
+
+### Added
+
+- **`tur audit` -- where this build fetches code from.** Reads `build.tur` plus
+  `tur.lock` and prints every origin, spices and `:cmake-deps` in separate
+  sections, with URL, ref, subdir, and the resolved commit and SHA-256 where
+  the lock has pinned it. Unpinned origins are called out with the fix. It
+  verifies nothing, and says so on every run.
+- **A concurrency stdlib layer**: `arc.tur` (the language surface over the Arc
+  runtime), `barrier.tur` (a reusable counting barrier), `stm-sync.tur`
+  (`TMVar` and `TChan` over `tvar` + `check`), and `with-lock` /
+  `with-read-lock` / `with-write-lock`.
+- **`(export-from <mod> name ...)`** -- re-export a name from another module
+  without importing it locally.
+- **`:entry` in `build.tur`**, `#map{}:(K V)` typed-empty map literals, and
+  `cstr-eq?` / `cstr-free` in `stdlib/cstr`.
+- **A verification tier for `#reads` frames.** A deferred footprint walk
+  reports VERIFIED / EXCEEDED / UNVERIFIED per frame via `--dump-read-frames`,
+  and an EXCEEDED reached through a callee's own frame -- a read the
+  definition-site scans cannot see -- joins the `TUR-W0383` evidence tier.
+
+### Changed
+
+- **`write-frames` graduated: a `#writes` frame is checked without
+  `--enable`.** WF2's three verdicts (VERIFIED, EXCEEDED -> `TUR-E0382`,
+  silent UNVERIFIED) and WF3's borrow widening are now unconditional. WF4's
+  entry-check elision was retired before graduation -- the check it proposed
+  to elide does not exist -- so what graduated is a checker that reports a
+  broken promise, not an optimization acting on one.
+- **`checked-reads` graduated: a broken `#reads` frame no longer buys a
+  proof.** When a measure's body demonstrably reads mutable state its frame
+  omits, the congruence override is refused and the crossing becomes the
+  ordinary `TUR-W0372` (a hard error under `--strict-refine`). Refusal keys on
+  "saw a read", never "could not see", so an inline-C measure -- essentially
+  every measure predating mutable globals -- is unaffected. Note what this does
+  not do: a `#reads` crossing is proof-only, so refusing buys a diagnostic
+  rather than a check, and outside `--strict-refine` the program still runs.
+- **`schan-recv` returns `(Pair T (SChan R))`** instead of writing through an
+  out-parameter.
+- **An int literal ascribed to a float is the number, not its bits.**
+  `(:: 3 :float)` printed `1.4822e-323` -- the double whose bit pattern is
+  `0x3` -- and now folds to `3.0`. The tell that this was an accident rather
+  than a semantic: `(:: 3 :float32)` already printed `3`, because the
+  same-width reinterpret rule missed at 8 != 4.
+- **The Send-across-await check runs at every await point**, not just the
+  first.
+
+### Fixed
+
+- **A SIGSEGV passing a let-bound non-capturing lambda as a `:fn` argument.**
+- **`TUR-W0033` fired on the very `(unsafe ...)` block it requires.**
+- **`tur run test` now reaches ctest** and passes 108/108.
+
+### Docs
+
+- **A repo-wide documentation accuracy pass.** The guides that had drifted from
+  the shipping API were rewritten against it (performance, logic,
+  checkpointing, the quickstart tutorial, the datalog examples), and 33 reports
+  were filed for what could not be fixed in place.
+
 ## [0.36.0] -- 2026-08-19
 
 ### Added

@@ -885,8 +885,8 @@ typedef struct Elab {
      * verification pass (rf_resolve_read_frames).  Same deferral rationale
      * as WriteFrameSite: a callee's own frame verdict may not exist yet at
      * this defn's elaboration.  Registration is unconditional and one
-     * pointer-triple cheap; the PASS runs only under --enable=checked-reads
-     * or --dump-read-frames. */
+     * pointer-triple cheap, and since R4 slice 3 the pass is unconditional
+     * too. */
     struct RfReadsSite    *rf_reads_sites;
     uint32_t               n_rf_reads_sites;
     uint32_t               cap_rf_reads_sites;
@@ -1032,8 +1032,7 @@ typedef struct WriteFrameSite {
     const Form   *annot;       /* the `#writes` form, for the diagnostic span */
 } WriteFrameSite;
 
-/* Record an annotated function for the deferred WF2 walk.  No-op unless the
- * `write-frames` experiment is on. */
+/* Record an annotated function for the deferred WF2 walk. */
 void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
                         const Form *defn_form, uint32_t body_start,
                         const Form *annot);
@@ -1067,10 +1066,9 @@ void rf_note_reads_site(Elab *e, Binding *fn, Binding **params,
 /* Verify every recorded `#reads` frame against its elaborated body, stamping
  * `reads_checked` on the ones where every read of mutable state attributes to
  * a frame-named parameter.  No diagnostic: EXCEEDED evidence is the slice-1
- * scan's job (TUR-W0383 / the checked-reads refusal); this pass only decides
- * whether SILENCE was "saw everything, all clean" (VERIFIED) or "could not
- * see" (UNVERIFIED).  Runs only under --enable=checked-reads or
- * --dump-read-frames. */
+ * scan's job (TUR-W0383 and the congruence refusal it carries); this pass only
+ * decides whether SILENCE was "saw everything, all clean" (VERIFIED) or "could
+ * not see" (UNVERIFIED).  Only the DUMP is behind --dump-read-frames. */
 void rf_resolve_read_frames(Elab *e);
 
 /* G4a: may this kind be loaded/stored atomically in one machine operation? */
