@@ -44,7 +44,17 @@ for sym in chain__mid__low_hyadd chain__hi__low_hyadd chain__mid__twice chain__h
 done
 
 # And the call site really does reach the original.
-if ! printf '%s\n' "$c" | grep -q 'chain__low__low_hyadd(INT64_C(20), INT64_C(22))'; then
+#
+# Substring-match in bash rather than `printf ... | grep -q`. Under the
+# `set -o pipefail` above, `grep -q` exits at its FIRST match and SIGPIPEs the
+# still-writing `printf`, so the pipeline reports 141 -- a failure -- exactly
+# when the pattern IS present. `$c` is a whole emitted C file, so the writer
+# is never done first and the `!` then turns a match into a false FAIL. That
+# is what "call site does not dispatch to chain__low__low_hyadd" meant in CI
+# while the same assertion passed when run by hand on a smaller build.
+# Reproduced 10/10 with a pattern sitting on line 1. Third time this repo has
+# hit grep -q + pipefail; see docs/reported/pipefail-grep-q-false-failures.md.
+if [[ "$c" != *'chain__low__low_hyadd(INT64_C(20), INT64_C(22))'* ]]; then
     echo "FAIL export-from-no-wrapper: call site does not dispatch to chain__low__low_hyadd"
     status=1
 fi
