@@ -1107,6 +1107,17 @@ case "$(uname)" in
   Linux)  LIBC_SO="libc.so.6" ;;
   *)      LIBC_SO="" ;;
 esac
+# Shared-library extension for the helper libraries the jit-ffi cases below
+# build with cc.  Load-bearing on macOS, not cosmetic: Apple's linker
+# resolves `-lfoo` against libfoo.dylib / libfoo.tbd / libfoo.a and does NOT
+# consider libfoo.so, so an autolinked helper named .so fails to LINK there
+# and the fixture dies before printing anything.  (dlopen by absolute path
+# does not care about the extension, but there is no reason for the two
+# cases to disagree.)
+case "$(uname)" in
+  Darwin) SOEXT="dylib" ;;
+  *)      SOEXT="so" ;;
+esac
 if [ "$HAS_JIT" = "1" ] && [ -n "$LIBC_SO" ]; then
     cat > "$TMP_FFI" <<TURFFI
 (defstruct IPair [a : int32 b : int32])
@@ -1150,13 +1161,13 @@ NX mk_nx(int a, double b, double c) {
     NX r; r.lo.a = a; r.lo.b = (float)b; r.c = c; return r;
 }
 EOF
-    if cc -shared -fPIC -o "$_nested_dir/libnested.so" "$_nested_dir/helper.c" 2>/dev/null; then
+    if cc -shared -fPIC -o "$_nested_dir/libnested.$SOEXT" "$_nested_dir/helper.c" 2>/dev/null; then
         cat > "$TMP_FFI" <<TURFFI
 (defstruct IW [a : int32 b : float32])
 (defstruct NX [lo : IW c : float])
 (defn main [] : int
   (unsafe
-    (let [h (dlopen "$_nested_dir/libnested.so")]
+    (let [h (dlopen "$_nested_dir/libnested.$SOEXT")]
       (println (call-ptr (dlsym h "nx_sum") [NX -> :float]
                          (NX (IW (:: 3 :int32) (:: 2.25 :float32)) 1.5)))
       (let [r (call-ptr (dlsym h "mk_nx") [:int :float :float -> NX]
@@ -1221,7 +1232,7 @@ typedef struct { long long n; double d; } IqFd;
 double iqfd_sum(IqFd v) { return (double)v.n * 100.0 + v.d; }
 IqFd mk_iqfd(long long n, double d) { IqFd r = { n, d }; return r; }
 EOF
-    if cc -shared -fPIC -o "$_ecagg_dir/libecagg.so" "$_ecagg_dir/helper.c" 2>/dev/null; then
+    if cc -shared -fPIC -o "$_ecagg_dir/libecagg.$SOEXT" "$_ecagg_dir/helper.c" 2>/dev/null; then
         cat > "$TMP_FFI" <<TURFFI
 (defstruct IqFd [n : int d : float])
 (defn __link [] : int
@@ -1238,9 +1249,15 @@ EOF
     (println (.d r)))
   0)
 TURFFI
-        out=$(LD_LIBRARY_PATH="$_ecagg_dir" DYLD_LIBRARY_PATH="$_ecagg_dir" "$TUR" run "$TMP_FFI" 2>/dev/null)
+        # stderr is CAPTURED, not discarded: when this failed on the macOS
+        # leg it reported `got: ` with no other information, which says the
+        # program never printed -- i.e. it died in cc -- but not why.  A
+        # compile/link diagnostic in the failure line is the difference
+        # between one push and a blind round trip.
+        _ec_err="$_ecagg_dir/stderr.txt"
+        out=$(LD_LIBRARY_PATH="$_ecagg_dir" DYLD_LIBRARY_PATH="$_ecagg_dir" "$TUR" run "$TMP_FFI" 2>"$_ec_err")
         if [ "$(echo "$out" | tr '\n' ' ')" != "4206.12 42 6.125 " ]; then
-            fail "jit-ffi-extern-c-struct-compiled" "expected compiled aggregate extern-c to print 4206.12 / 42 / 6.125, got: $out"
+            fail "jit-ffi-extern-c-struct-compiled" "expected compiled aggregate extern-c to print 4206.12 / 42 / 6.125, got: $out; stderr: $(tr '\n' ' ' < "$_ec_err" | tail -c 600)"
         else
             pass "jit-ffi-extern-c-struct-compiled"
         fi
@@ -1342,11 +1359,11 @@ int neg_int(int x) { return -x; }
 short neg_short(short x) { return (short)-x; }
 unsigned int big_uint(void) { return 4294967295u; }
 EOF
-    if cc -shared -fPIC -o "$_narrow_dir/libnarrow.so" "$_narrow_dir/helper.c" 2>/dev/null; then
+    if cc -shared -fPIC -o "$_narrow_dir/libnarrow.$SOEXT" "$_narrow_dir/helper.c" 2>/dev/null; then
         cat > "$TMP_FFI" <<TURFFI
 (defn main [] : int
   (unsafe
-    (let [h (dlopen "$_narrow_dir/libnarrow.so")]
+    (let [h (dlopen "$_narrow_dir/libnarrow.$SOEXT")]
       (println (:: (call-ptr (dlsym h "neg_int")   [:int32 -> :int32] 1234) :int))
       (println (:: (call-ptr (dlsym h "neg_short") [:int16 -> :int16] 77) :int))
       (println (:: (call-ptr (dlsym h "big_uint")  [-> :uint32]) :int))))
@@ -1387,7 +1404,7 @@ IqFd call_mk(IqFd (*cb)(long long, double), long long n, double d) {
     return cb(n, d);
 }
 EOF
-    if cc -shared -fPIC -o "$_cbagg_dir/libcbagg.so" "$_cbagg_dir/helper.c" 2>/dev/null; then
+    if cc -shared -fPIC -o "$_cbagg_dir/libcbagg.$SOEXT" "$_cbagg_dir/helper.c" 2>/dev/null; then
         cat > "$TMP_FFI" <<TURFFI
 (defstruct IqFd [n : int d : float])
 (defn iqfd-n [v : IqFd] : int   (.n v))
@@ -1395,7 +1412,7 @@ EOF
 (defn mk-iqfd [n : int d : float] : IqFd (IqFd n d))
 (defn main [] : int
   (unsafe
-    (let [h (dlopen "$_cbagg_dir/libcbagg.so")]
+    (let [h (dlopen "$_cbagg_dir/libcbagg.$SOEXT")]
       (println (call-ptr (dlsym h "call_n") [:ptr :int :float -> :int]
                          (callback-ptr iqfd-n [IqFd -> :int]) 42 6.125))
       (println (call-ptr (dlsym h "call_d") [:ptr :int :float -> :float]
@@ -1416,9 +1433,11 @@ TURFFI
         else
             echo "SKIP jit-ffi-callback-struct-interp (needs a JIT build)"
         fi
-        out=$("$TUR" --enable=jit-ffi run "$TMP_FFI" 2>/dev/null)
+        # stderr CAPTURED -- see the note on jit-ffi-extern-c-struct-compiled.
+        _cb_err="$_cbagg_dir/stderr.txt"
+        out=$("$TUR" --enable=jit-ffi run "$TMP_FFI" 2>"$_cb_err")
         if [ "$(echo "$out" | tr '\n' ' ')" != "42 6.125 42 6.125 " ]; then
-            fail "jit-ffi-callback-struct-compiled" "expected inbound/outbound callback aggregates to print 42 / 6.125 / 42 / 6.125, got: $out"
+            fail "jit-ffi-callback-struct-compiled" "expected inbound/outbound callback aggregates to print 42 / 6.125 / 42 / 6.125, got: $out; stderr: $(tr '\n' ' ' < "$_cb_err" | tail -c 600)"
         else
             pass "jit-ffi-callback-struct-compiled"
         fi
