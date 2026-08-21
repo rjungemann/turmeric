@@ -63,6 +63,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+| [ok-val-untyped-catch-box-loses-float](ok-val-untyped-catch-box-loses-float.md) | low-medium | `(ok-val r)` on an unannotated catch box reads a float payload's bits as an integer |
 | [guides-two-arg-println-and-when-body](guides-two-arg-println-and-when-body.md) | low-medium | guide examples call `println` with 2 args / `when` with 2 body forms; neither exists (12 sites left in frame-guide) |
 
 `args-api-int-erased-handles` was resolved 2026-08-21 and moved to
@@ -276,7 +277,17 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-catch-unwind-aggregate-payload](turi-catch-unwind-aggregate-payload.md) | medium | `catch-unwind` over an aggregate-returning thunk yields the handle, not the value (compiled path fixed) |
+
+`turi-catch-unwind-aggregate-payload` was filed and resolved 2026-08-21 and
+moved to
+[docs/archive](../archive/turi-catch-unwind-aggregate-payload.md). One line:
+`turi_ok_result_box` took a bare `int64_t` and always built the 3-int box --
+the flattening `native_ok`'s own comment describes and avoids -- so the
+catch-unwind boundary lost the tag of every heap payload. It takes a
+`TuriValue` and applies the same rule now. Wider than the struct repro it was
+filed for: `cstr` came back as a pointer and `float` was tag-flattened too.
+Both `catch-unwind-aggregate-thunk` and `schema-reader-json-str-result` dropped
+their `requires.compiled` markers.
 
 `interp-hkt-pure-return-dispatch-elab-error` was resolved 2026-08-17, the
 day after filing, and moved to

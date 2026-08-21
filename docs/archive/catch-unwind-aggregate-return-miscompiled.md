@@ -158,3 +158,28 @@ and the fixture carries a `requires.compiled` marker naming it.
 runtime-split artifacts with them). This also unblocks
 `json-str-result-and-file-readers-missing`, whose `#json-str?<T>` expansion
 decodes into a struct behind a `catch-unwind`.
+
+
+## Follow-on (2026-08-21, same day): the FLOAT half
+
+The report's boundary table probed `: int` and struct thunks. A `: float` thunk
+is the same defect in the other direction -- the double comes back in a
+floating-point register while `TUR_APPLY0` reads the integer one -- and the
+typed consumer already expects the box to carry the value's BITS
+(`((union { int64_t s; double d; }){.s = ok_val}).d`, emit_core.c:4392). So
+`(catch-unwind (fn [] : float 7.5))` yielded `0.0`.
+
+`ensure_catch_bits_shim` is the float counterpart of the boxing trampoline: it
+calls with the real signature and returns the bits. Since it allocates nothing,
+the `_via` helpers grew an `__owns` flag so only the aggregate trampoline's box
+is freed on the panic path. Pinned by
+`tests/fixtures/catch-unwind-float-payload/`.
+
+The UNANNOTATED shape is still wrong (`(let [r (catch-unwind (fn [] : float
+7.5))] (ok-val r))` reads the bits as an integer) -- a different consumer, the
+untyped-box accessor monomorph, filed as
+[ok-val-untyped-catch-box-loses-float](../reported/ok-val-untyped-catch-box-loses-float.md).
+
+The interpreter half filed alongside this report is also fixed --
+[turi-catch-unwind-aggregate-payload](turi-catch-unwind-aggregate-payload.md)
+-- so both fixtures now run on both engines with no `requires.compiled`.

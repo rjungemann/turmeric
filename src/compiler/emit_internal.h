@@ -870,6 +870,8 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
 /* catch-unwind-aggregate-return-miscompiled: per-type boxing trampoline for an
  * aggregate-returning catch-unwind / catch-panic-of thunk. */
 const char *ensure_catch_box_shim(EmitCtx *ctx, Type result_type);
+/* ... and the float-return half, which returns the value's BITS. */
+const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type);
 
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);

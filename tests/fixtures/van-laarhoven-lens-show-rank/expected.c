@@ -981,13 +981,13 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
     return tur_box_ok(__v);
 }
 
-static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk) {
+static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk, int __owns) {
     tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
     __node->parent = tur_handler_chain; tur_handler_chain = __node;
     int64_t __v = __call((void *)(intptr_t)thunk);
     tur_handler_chain = __node->parent; free(__node);
     if (tur_panicking) {
-        free((void *)(intptr_t)__v);
+        if (__owns) free((void *)(intptr_t)__v);
         tur_panicking = 0; tur_panic_in_progress = 0;
         tur_panic_payload *__p = global_panic_payload;
         global_panic_payload = NULL;
@@ -996,13 +996,13 @@ static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk
     return tur_box_ok(__v);
 }
 
-static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(void *), int64_t thunk) {
+static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(void *), int64_t thunk, int __owns) {
     tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
     __node->parent = tur_handler_chain; tur_handler_chain = __node;
     int64_t __v = __call((void *)(intptr_t)thunk);
     tur_handler_chain = __node->parent; free(__node);
     if (tur_panicking) {
-        free((void *)(intptr_t)__v);
+        if (__owns) free((void *)(intptr_t)__v);
         tur_panic_payload *__p = global_panic_payload;
         if (__p && __p->type_tag == expected_type) {
             tur_panicking = 0; tur_panic_in_progress = 0;

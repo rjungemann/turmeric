@@ -1582,12 +1582,27 @@ typedef struct TuriPanicPayload {
     int         line;       /* source line, or 0 */
 } TuriPanicPayload;
 
-/* Build the 3-int Result box { is_ok, ok_val, err_val } the native ok/err
- * helpers also use, in its Ok shape. */
-static TuriValue turi_ok_result_box(TuriEnv *env, int64_t ok_val) {
+/* Build the Result the native ok/err helpers also build, in its Ok shape.
+ *
+ * turi-catch-unwind-aggregate-payload: this used to take a bare `int64_t` and
+ * always build the 3-int box, which FLATTENS the payload -- exactly the trap
+ * `native_ok` documents and avoids.  A struct / cstr / closure / float payload
+ * lost its tag, so `(ok-val r)` handed back a TURI_INT and a downstream field
+ * read or `println` saw the raw handle: `(catch-unwind (fn [] : Q ...))`
+ * printed a pointer where the compiled path printed the field.  Same rule as
+ * `native_ok` now: a heap-tagged payload becomes a make-struct Result whose
+ * fields hold full TuriValues, everything else keeps the int64 box the
+ * carrier-ABI fixtures depend on.  `result_field` reads both shapes, so every
+ * accessor stays uniform. */
+static TuriValue turi_ok_result_box(TuriEnv *env, TuriValue ok_val) {
+    if (ok_val.tag == TURI_STRUCT || ok_val.tag == TURI_CSTR ||
+        ok_val.tag == TURI_CLOSURE || ok_val.tag == TURI_FLOAT) {
+        TuriValue fields[3] = { turi_bool(true), ok_val, turi_int(0) };
+        return turi_make_struct(env, "Result", fields, 3);
+    }
     /* Escaping payload: the box is returned as a Result carrier. */
     int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
-    box[0] = 1; box[1] = ok_val; box[2] = 0;
+    box[0] = 1; box[1] = ok_val.as_int; box[2] = 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
 }
@@ -7482,7 +7497,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else if (turi_is_error(cur) || env_signaled(env)) {
                     /* propagate cur unchanged */
                 } else {
-                    cur = turi_ok_result_box(env, cur.as_int);
+                    cur = turi_ok_result_box(env, cur);
                 }
                 free(b);
                 len--;
@@ -9845,7 +9860,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * Result-box layout { is_ok, ok_val, err_val } that the native
              * ok/err/ok?/err? helpers produce and read, so the value composes
              * with ok?/err?/ok-val just like any other Result (Phase R2). */
-            return turi_ok_result_box(env, result.as_int);
+            return turi_ok_result_box(env, result);
         } else {
             /* A panic was caught — restore env and return (err payload).  TI5:
              * the err slot carries a boxed TuriPanicPayload so panic-payload-*
@@ -9892,7 +9907,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->catch_jmp = prev_jmp;
             if (turi_is_error(result) || env_signaled(env))
                 return result;
-            return turi_ok_result_box(env, result.as_int);
+            return turi_ok_result_box(env, result);
         } else {
             /* A panic reached this boundary.  Restore the saved control state
              * (the payload fields in env still describe the in-flight panic). */

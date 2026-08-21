@@ -1,0 +1,26 @@
+;;; A catch-unwind thunk returning a FLOAT is the same function-pointer
+;;; mismatch as the aggregate one: the double comes back in a floating-point
+;;; register while TUR_APPLY0 reads the integer register, so the box carried
+;;; whatever was in rax and the consumer's `((union {int64_t s; double d;})
+;;; {.s = ok_val}).d` read it back as 0.  A bits trampoline calls the thunk
+;;; with its real signature and returns the value's BITS, which is exactly
+;;; what that union expects.
+;;;
+;;; The Result type is spelled out because that is the shape that reinterprets;
+;;; see docs/reported/ok-val-untyped-catch-box-loses-float.md for the
+;;; unannotated one, which truncates on a different path entirely.
+
+(defn boom [] : float (panic "no float for you"))
+
+(defn f [] : (Result float int)
+  (catch-unwind (fn [] : float 7.5)))
+
+(defn g [] : (Result float int)
+  (catch-unwind (fn [] : float (boom))))
+
+(defn main [] : int
+  (let [r (f)]
+    (if (ok? r) (println (ok-val r)) (println 0.0)))     ; 7.5
+  (let [r (g)]
+    (if (ok? r) (println (ok-val r)) (println -1.0)))    ; -1
+  0)

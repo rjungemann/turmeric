@@ -61,3 +61,32 @@ So this defect is what stands between the interpreter and a working
 ## Guides to update when fixed
 
 - none (no guide documents a divergence here)
+
+## Resolution (2026-08-21)
+
+One line, in the place the interpreter already documents the trap.
+`turi_ok_result_box` (`src/turi/eval.c`) took a bare `int64_t` and always built
+the 3-int box -- the exact flattening `native_ok`'s own comment describes and
+avoids ("loses the tag of a *heap* payload ... and a downstream field access /
+println reads garbage"). The catch-unwind boundary was the one caller that
+still went through it.
+
+It takes a `TuriValue` now and applies `native_ok`'s rule: a
+STRUCT / CSTR / CLOSURE / FLOAT payload becomes a make-struct `Result` whose
+fields hold full TuriValues; int and bool payloads keep the int64 box the
+carrier-ABI fixtures depend on. `result_field` already read both shapes, so
+every accessor stayed uniform and nothing else changed.
+
+The blast radius was wider than the report's struct repro: a `cstr` payload
+came back as a pointer printed as an int, and a `float` payload was
+tag-flattened too. Both are correct now.
+
+Both fixtures dropped their `requires.compiled` markers and pass under
+`run-turi.sh`: `catch-unwind-aggregate-thunk` (all seven of its cases) and
+`schema-reader-json-str-result`, so `#json-str?<T>` works on both engines.
+
+Not fixed, and noted here because it is one tag away: a `bool` payload still
+prints `1` under `--interpret` where the compiled path prints `true`. Adding
+TURI_BOOL to the heap set would change the box shape for every bool Result, so
+it belongs with the display-divergence family
+(`ascribe-bool-to-int-prints-differently-per-path`), not here.
