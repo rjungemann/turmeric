@@ -60,8 +60,23 @@ stamp_write() {
 # Main loop
 # ---------------------------------------------------------------------------
 
-# Truncate verified.txt; it is rebuilt entirely on each run (cached or fresh)
-> "$VERIFIED_OUT"
+# Names accumulate in a temp file and are moved into place only when the loop
+# finishes.  This used to truncate $VERIFIED_OUT here and append as it went,
+# which had two costs, both paid by gendocs.py downstream:
+#
+#   1. An interrupted run (^C, a crash, the `exit 1` below for an empty
+#      generated dir) left a short or empty manifest that is indistinguishable
+#      from a complete one -- and gendocs stamps that manifest into the TRACKED
+#      stdlib/docstrings.tur, so a partial run silently shrinks `doc-verified?`.
+#   2. Even the no-generated-files path truncated first and bailed after, so
+#      running this script in a tree without generated tests destroyed a good
+#      manifest and produced nothing.
+#
+# Writing once, at the end, with a `# complete:` header is what lets gendocs
+# tell "this run finished and its verdict is total" from "I have no data".
+# See docs/reported/docstrings-verified-table-zeroed-by-regen.md.
+VERIFIED_TMP="$(mktemp)"
+trap 'rm -f "$VERIFIED_TMP"' EXIT
 
 shopt -s nullglob
 tur_files=("$GENERATED"/*.tur)
@@ -88,7 +103,7 @@ for tur_file in "${tur_files[@]}"; do
         # verified without re-running.
         while IFS= read -r fname || [ -n "$fname" ]; do
             [ -z "$fname" ] && continue
-            echo "$fname" >> "$VERIFIED_OUT"
+            echo "$fname" >> "$VERIFIED_TMP"
             PASS=$((PASS + 1))
         done < "$names_file"
         continue
@@ -154,7 +169,7 @@ for tur_file in "${tur_files[@]}"; do
         fname="${names_arr[$idx]:-?}"
 
         if [ "$actual_line" = "$exp" ]; then
-            echo "$fname" >> "$VERIFIED_OUT"
+            echo "$fname" >> "$VERIFIED_TMP"
             PASS=$((PASS + 1))
         else
             printf 'FAIL %s:%s -- got "%s", expected "%s"\n' \
@@ -170,8 +185,20 @@ for tur_file in "${tur_files[@]}"; do
     $module_ok && stamp_write "$mod_name" "$tur_file"
 done
 
+# Publish the manifest.  The header marks the run COMPLETE, which is a claim
+# about coverage, not about success: a module whose cases failed is complete
+# and correctly absent from the list.  gendocs.py trusts a manifest carrying
+# this marker and carries the previous table forward without one.
+{
+    echo "# tools/run-doctests.sh manifest -- consumed by tools/gendocs.py --emit-tur."
+    echo "# Names below have a doctest that ran and matched its expected output."
+    echo "# complete: $PASS passed, $FAIL failed, $SKIP skipped"
+    sort -u "$VERIFIED_TMP"
+} > "$VERIFIED_OUT"
+
 echo ""
 echo "Doctest results: $PASS passed, $FAIL failed, $SKIP skipped (interpreter incompatible)"
+echo "Wrote $VERIFIED_OUT ($(grep -cv '^#' "$VERIFIED_OUT") verified names)"
 
 if [ "${#FAILED[@]}" -gt 0 ]; then
     echo "Failed (wrong output):"

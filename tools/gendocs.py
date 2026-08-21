@@ -1501,13 +1501,72 @@ def _build_doc_entry(defn):
     return '\n'.join(parts)
 
 
+VERIFIED_MANIFEST = Path('tests/doctest-generated/verified.txt')
+VERIFIED_COMPLETE_MARKER = '# complete:'
+
+
+def read_verified_manifest(path=VERIFIED_MANIFEST):
+    """
+    Read the doctest manifest.  Returns (names, reason) where `names` is a set
+    when the manifest is authoritative and None when it is not.
+
+    None is not the empty set, and the distinction is the whole point of this
+    function.  `verified.txt` is a GITIGNORED build artifact
+    (.gitignore: tests/doctest-generated/) but its contents are stamped into
+    stdlib/docstrings.tur, which is TRACKED.  Treating "I have no doctest
+    results" as "no function passes its doctests" is what let a plain
+    `just docs` in a fresh clone delete the whole table -- silently, into a
+    tracked file, on the release path, for most of the feature's life.
+    See docs/reported/docstrings-verified-table-zeroed-by-regen.md.
+
+    A manifest is authoritative only when run-doctests.sh finished and said so
+    with its `# complete:` header.  Anything else -- absent, or present without
+    the marker (an interrupted run, or one written by the pre-2026-08-20
+    append-as-you-go script) -- is no data.
+    """
+    if not path.exists():
+        return None, f'{path} not found'
+    text = path.read_text(encoding='utf-8')
+    complete = any(l.startswith(VERIFIED_COMPLETE_MARKER) for l in text.splitlines())
+    if not complete:
+        return None, f'{path} has no "{VERIFIED_COMPLETE_MARKER}" header (partial or stale run)'
+    names = set(
+        l.strip() for l in text.splitlines()
+        if l.strip() and not l.lstrip().startswith('#')
+    )
+    return names, None
+
+
+def read_existing_verified(out_path):
+    """
+    Recover the verified name list already embedded in `out_path`, so a regen
+    with no manifest can carry it forward instead of dropping it.  Returns a
+    set (possibly empty) or None when the file does not exist or has no block.
+    """
+    p = Path(out_path)
+    if not p.exists():
+        return None
+    names, in_block = set(), False
+    for line in p.read_text(encoding='utf-8').splitlines():
+        if 'static const char *verified[] = {' in line:
+            in_block = True
+            continue
+        if in_block:
+            if 'NULL' in line:
+                break
+            m = re.match(r'\s*"((?:[^"\\]|\\.)*)"\s*,\s*$', line)
+            if m:
+                names.add(m.group(1).replace('\\"', '"').replace('\\\\', '\\'))
+    return names if in_block else None
+
+
 def emit_docstrings_tur(modules, out_path, verified_names=None):
     """
     Emit stdlib/docstrings.tur with C-backed doc-lookup and doc-verified? functions.
 
-    verified_names -- optional set of function names that have passing doctests.
-    When provided, a doc-verified? function is exported that returns true for
-    those names.  When absent (or empty), doc-verified? always returns false.
+    verified_names -- the set of function names with passing doctests, or None
+    for "no authoritative data".  None carries the existing file's list forward
+    rather than emitting an empty one; see read_verified_manifest.
     """
     entries = []
     for module in modules:
@@ -1574,7 +1633,14 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
         '',
     ]
 
-    # Phase D5: emit doc-verified? backed by the verified names set
+    # Phase D5: emit doc-verified? backed by the verified names set.
+    # verified_names is None when no authoritative manifest was found; carry the
+    # existing file's list forward rather than silently emptying it.
+    carried = False
+    if verified_names is None:
+        prior = read_existing_verified(out_path)
+        if prior:
+            verified_names, carried = prior, True
     vnames = sorted(verified_names) if verified_names else []
     lines += [
         '(defn doc-verified? [name : cstr] : bool',
@@ -1599,7 +1665,8 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
     ]
 
     Path(out_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    print(f'  Wrote {out_path} ({len(deduped)} entries, {len(vnames)} verified)')
+    how = ' carried forward' if carried else ''
+    print(f'  Wrote {out_path} ({len(deduped)} entries, {len(vnames)} verified{how})')
 
 
 # ---------------------------------------------------------------------------
@@ -1761,14 +1828,14 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
 
     # Optionally emit docstrings.tur
     if emit_tur:
-        # Phase D5: read verified function names from doctest manifest if present
-        verified_names = None
-        verified_path = Path('tests/doctest-generated/verified.txt')
-        if verified_path.exists():
-            verified_names = set(
-                l.strip() for l in verified_path.read_text(encoding='utf-8').splitlines()
-                if l.strip()
-            )
+        # Phase D5: read verified function names from the doctest manifest.
+        # A missing or partial manifest is "no data", NOT "nothing is verified"
+        # -- emit_docstrings_tur carries the existing table forward for it.
+        verified_names, why = read_verified_manifest()
+        if why:
+            print(f'  note: no doctest manifest ({why});', file=sys.stderr)
+            print(f'        carrying the existing doc-verified? table forward. '
+                  f'Run `just doctest` to refresh it.', file=sys.stderr)
         emit_docstrings_tur(modules, emit_tur, verified_names=verified_names)
 
     # Optionally emit doc-names.json for the web search bar
