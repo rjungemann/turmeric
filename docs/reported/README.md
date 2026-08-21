@@ -104,6 +104,20 @@ match arms did not rewind MOVE state the way `if` branches do, so consuming the
 same value in two arms was a spurious TUR-E0005. One limitation found on the way
 is filed above as `match-adt-var-arm-does-not-bind`.
 
+`catch-unwind-aggregate-return-miscompiled` was resolved 2026-08-21 and moved
+to [docs/archive](../archive/catch-unwind-aggregate-return-miscompiled.md); it
+was filed 2026-08-20 and never got a row here. A catch boundary over a thunk
+returning a by-value aggregate now calls it through a per-type BOXING
+trampoline (`__tur_catchbox_<ctype>`) and `tur_catch_unwind_box_via` /
+`tur_catch_panic_of_box_via`, instead of the `TUR_APPLY0` cast that read the
+struct's return register as an `int64_t` and handed the consumer garbage to
+dereference. The detail its root-cause section lacked: the thunk reaches
+codegen as a `ptr<void>` fat handle, so the ascription has to be peeled to find
+the `TY_FN` that carries the return type. Two follow-ons: this unblocks
+`json-str-result-and-file-readers-missing`, and the INTERPRETER has the same
+symptom by a different mechanism, filed as
+`turi-catch-unwind-aggregate-payload` above.
+
 ## Value representation (the consolidation campaign)
 
 The scoreboard for this family is the open-cells table in
@@ -253,6 +267,7 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [turi-catch-unwind-aggregate-payload](turi-catch-unwind-aggregate-payload.md) | medium | `catch-unwind` over an aggregate-returning thunk yields the handle, not the value (compiled path fixed) |
 
 `interp-hkt-pure-return-dispatch-elab-error` was resolved 2026-08-17, the
 day after filing, and moved to

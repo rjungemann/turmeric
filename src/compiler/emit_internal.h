@@ -867,6 +867,10 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                  const char *fnptr);
+/* catch-unwind-aggregate-return-miscompiled: per-type boxing trampoline for an
+ * aggregate-returning catch-unwind / catch-panic-of thunk. */
+const char *ensure_catch_box_shim(EmitCtx *ctx, Type result_type);
+
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a

@@ -1,0 +1,6 @@
+The interpreter has its own instance of this defect: `(catch-unwind (fn [] : Q
+...))` yields the struct HANDLE where the compiled path yields the struct, so
+`(.x (ok-val r))` prints a pointer.  `(ok (make-struct Q 3 4))` without the
+catch is correct there, exactly as it was on the compiled path.  Filed as
+docs/reported/turi-catch-unwind-aggregate-payload.md; drop this marker when
+that is fixed.

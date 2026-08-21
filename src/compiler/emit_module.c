@@ -739,6 +739,48 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     return name;
 }
 
+/* catch-unwind-aggregate-return-miscompiled: the per-type boxing trampoline a
+ * catch boundary uses for an aggregate-returning thunk.  Calls the fat box
+ * through slot 0 with the thunk's REAL signature (`T (*)(void *)`, which is
+ * what both the typed fatshim and a capturing closure's entry are) and returns
+ * a heap copy, so the int64 the result box carries really is a `T *`.
+ * Deduped by name in the same table as the typed fatshims. */
+const char *ensure_catch_box_shim(EmitCtx *ctx, Type result_type) {
+    if (!ctx) return NULL;
+    const char *ct = type_c_name(result_type);
+    if (!ct || !*ct) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_catchbox_");
+    append_sanitized_c_token(&nb, ct);
+    buf_putc(&nb, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], nb.data) == 0) {
+            const char *found = ctx->fatshim_names[i];
+            buf_free(&nb);
+            return found;
+        }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e) {\n", name);
+    buf_printf(target, "    %s *__b = (%s *)malloc(sizeof(%s));\n", ct, ct, ct);
+    buf_printf(target, "    *__b = ((%s (*)(void *))(intptr_t)((int64_t *)__e)[0])(__e);\n", ct);
+    buf_puts(target, "    return (int64_t)(intptr_t)__b;\n}\n");
+    return name;
+}
+
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params) {
     /* The call site invokes the boxed fn through the typed-thunk cast only when
@@ -8792,6 +8834,53 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "         * inspecting this value; allocating a box here only leaks it\n");
         buf_puts(out, "         * (the re-raise skips its scope-exit free).  A stray free of a\n");
         buf_puts(out, "         * NULL box is a safe no-op. */\n");
+        buf_puts(out, "        return 0;\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "    return tur_box_ok(__v);\n");
+        buf_puts(out, "}\n\n");
+
+        /* catch-unwind-aggregate-return-miscompiled: a thunk whose declared
+         * return type is a by-value AGGREGATE cannot be called through
+         * TUR_APPLY0 -- that casts slot 0 to `int64_t (*)(void *)`, while the
+         * emitted thunk returns the struct in a register pair or through a
+         * hidden sret pointer, so whatever lands in the int64 slot was boxed
+         * as ok_val and the consumer then dereferenced it as a `T *`.  For
+         * those the call site passes a per-type BOXING trampoline
+         * (`__tur_catchbox_<ctype>`, ensure_catch_box_shim) which calls the
+         * thunk with its real signature and heap-boxes the result -- the
+         * pointer the Result monomorph's `ok_val` field already expects, and
+         * the same ownership the direct `(ok <struct>)` path uses.
+         *
+         * The trampoline has always allocated by the time a panic unwinds
+         * through it, so the panic arms free the box rather than leaking one
+         * per caught panic. */
+        buf_puts(out, "static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk) {\n");
+        buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+        buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
+        buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
+        buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        free((void *)(intptr_t)__v);\n");
+        buf_puts(out, "        tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+        buf_puts(out, "        global_panic_payload = NULL;\n");
+        buf_puts(out, "        return tur_box_err((int64_t)(intptr_t)__p);\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "    return tur_box_ok(__v);\n");
+        buf_puts(out, "}\n\n");
+        buf_puts(out, "static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(void *), int64_t thunk) {\n");
+        buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+        buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
+        buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
+        buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        free((void *)(intptr_t)__v);\n");
+        buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+        buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
+        buf_puts(out, "            tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "            global_panic_payload = NULL;\n");
+        buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
+        buf_puts(out, "        }\n");
         buf_puts(out, "        return 0;\n");
         buf_puts(out, "    }\n");
         buf_puts(out, "    return tur_box_ok(__v);\n");

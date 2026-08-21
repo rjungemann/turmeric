@@ -862,6 +862,38 @@ static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     return false;
 }
 
+/* catch-unwind-aggregate-return-miscompiled: when a catch boundary's thunk
+ * returns a by-value AGGREGATE, the generic `TUR_APPLY0` call in
+ * tur_catch_unwind_box is a function-pointer type mismatch -- it casts slot 0
+ * to `int64_t (*)(void *)` while the thunk really returns the struct by value,
+ * so the int64 that gets boxed as ok_val is whatever happened to be in the
+ * return register.  The consumer then reads it as a `T *`.  Return the name of
+ * a boxing trampoline for such a thunk (NULL when the generic path is right,
+ * which is every scalar / pointer / :heap-ADT return). */
+static const char *catch_thunk_box_shim(EmitCtx *ctx, const Expr *thunk) {
+    if (!ctx || !thunk) return NULL;
+    /* The thunk reaches codegen as a fat-closure handle: the fn literal is
+     * wrapped in an ascription (and possibly a fn-to-fat shim), whose own type
+     * is `ptr<void>`.  Peel those to reach the TY_FN that still carries the
+     * declared return type. */
+    const Expr *fnexpr = thunk;
+    for (int guard = 0; fnexpr && guard < 8; guard++) {
+        if (fnexpr->kind == EX_ASCRIBE && fnexpr->as.ascribe_.inner)
+            fnexpr = fnexpr->as.ascribe_.inner;
+        else if (fnexpr->kind == EX_FN_TO_FAT && fnexpr->as.fn_to_fat_.inner)
+            fnexpr = fnexpr->as.fn_to_fat_.inner;
+        else break;
+    }
+    if (!fnexpr) return NULL;
+    Type fnty = fnexpr->type;
+    if (fnty.kind != TY_FN) return NULL;
+    Type ret = fnty.as.fn.result_full_type
+                   ? *fnty.as.fn.result_full_type
+                   : emit_type_from_kind(fnty.as.fn.result_kind);
+    if (!emit_type_is_byvalue_adt(ctx, ret)) return NULL;
+    return ensure_catch_box_shim(ctx, emit_resolve_type(ctx, ret));
+}
+
 /* B4 (byvalue-recursive-carrier): true when `t` resolves to a single-carrier
  * recursive ADT wrapper (Re/Expr) whose by-value representation is its int64
  * carrier.  At a fat-closure boundary such a value crosses as the raw int64
@@ -4020,9 +4052,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * result box (ok = thunk value, err = opaque Panic handle). */
             const Expr *thunk = e->as.catch_unwind_.thunk;
             char *thunk_val = emit_value(ctx, body, thunk);
+            const char *box_shim = catch_thunk_box_shim(ctx, thunk);
             char result_var[64];
             snprintf(result_var, sizeof(result_var), "__catch_result_%d", ctx->tmp_n++);
             indent_buf(body, ctx->indent);
+            if (box_shim) {
+                buf_printf(body,
+                    "int64_t %s = tur_catch_unwind_box_via(%s, (int64_t)(intptr_t)%s);\n",
+                    result_var, box_shim, thunk_val);
+            } else
             buf_printf(body, "int64_t %s = tur_catch_unwind_box((int64_t)(intptr_t)%s);\n",
                        result_var, thunk_val);
             /* catch-unwind-thunk-closure-leak: reclaim the thunk fat box once the
@@ -4047,9 +4085,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *thunk = e->as.catch_panic_of_.thunk;
             TypeKind type_kind = e->as.catch_panic_of_.type_kind;
             char *thunk_val = emit_value(ctx, body, thunk);
+            const char *box_shim = catch_thunk_box_shim(ctx, thunk);
             char result_var[64];
             snprintf(result_var, sizeof(result_var), "__catch_panic_of_result_%d", ctx->tmp_n++);
             indent_buf(body, ctx->indent);
+            if (box_shim) {
+                buf_printf(body,
+                    "int64_t %s = tur_catch_panic_of_box_via(%d, %s, (int64_t)(intptr_t)%s);\n",
+                    result_var, (int)type_kind, box_shim, thunk_val);
+            } else
             buf_printf(body, "int64_t %s = tur_catch_panic_of_box(%d, (int64_t)(intptr_t)%s);\n",
                        result_var, (int)type_kind, thunk_val);
             /* catch-unwind-thunk-closure-leak: reclaim the owned thunk fat box

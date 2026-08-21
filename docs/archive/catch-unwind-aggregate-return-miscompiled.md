@@ -106,3 +106,55 @@ only ever exercise the err slot.
 - `docs/reported/json-str-result-and-file-readers-missing.md` -- a
   Result-returning `#json-str?<T>` decodes into a struct by definition, so the
   natural `catch-unwind`-based expansion hits exactly this.
+
+## Resolution (2026-08-21)
+
+Fixed by the report's fix direction 1 (box in the thunk), with the boxing put in
+a per-type trampoline rather than in the thunk itself -- the thunk is an
+ordinary closure whose fat box is shared with every other consumer, so
+re-emitting it differently for one call site would have been a wider change
+than boxing at the boundary.
+
+Three pieces:
+
+- `ensure_catch_box_shim` (emit_module.c) emits, once per aggregate C type,
+  `static int64_t __tur_catchbox_<ctype>(void *__e)`. It calls the fat box's
+  slot 0 with the thunk's REAL signature -- `<ctype> (*)(void *)`, which is what
+  both the typed fatshim and a capturing closure's entry already are -- and
+  returns a heap copy. That pointer is exactly what the Result monomorph's
+  `ok_val` field is declared as (`tur_adt_Q *`), and it is the same ownership the
+  working `(ok <struct>)` path uses (`ok__spec__*` mallocs a copy too).
+- `tur_catch_unwind_box_via` / `tur_catch_panic_of_box_via` in the preamble take
+  that trampoline as a function pointer instead of going through `TUR_APPLY0`.
+  Their panic arms `free()` the box: the trampoline has always allocated by the
+  time the panic signal unwinds back through it, so without that the fix would
+  trade a segfault for a leak per caught panic.
+- `catch_thunk_box_shim` (emit_expr.c) decides, at both `EX_CATCH_UNWIND` and
+  `EX_CATCH_PANIC_OF`. One thing the report's root-cause section did not have:
+  the thunk reaches codegen as a fat-closure handle, so `thunk->type` is
+  `ptr<void>`, not the `TY_FN` that carries the return type -- the ascription
+  (and any fn-to-fat wrapper) has to be peeled first. Reading the type off the
+  unpeeled expression silently selects the old path and looks like the fix not
+  working.
+
+Everything else keeps the generic `TUR_APPLY0` path: scalars, pointers, `:heap`
+ADTs (already pointer-shaped), `cstr`. `emit_type_is_byvalue_adt` is the
+predicate, the same one the union-inject boxing uses.
+
+Pinned by `tests/fixtures/catch-unwind-aggregate-thunk/`, which covers both
+catch forms, a `defstruct` and a `defdata` payload, a capturing-closure thunk
+(slot 0 is the closure entry, not a typed fatshim), the panic path for each, and
+the scalar thunk that always worked -- the shape `stdlib/panic.tur`'s own
+example uses, which is why this went unnoticed.
+
+**The interpreter has its own instance and is NOT fixed here**: under
+`--interpret` the same program prints the struct's handle instead of `3`. The
+mechanism is different (turi has no function-pointer cast), so it is filed
+separately as
+[turi-catch-unwind-aggregate-payload](../reported/turi-catch-unwind-aggregate-payload.md)
+and the fixture carries a `requires.compiled` marker naming it.
+
+`bash tests/run.sh`: 2680 passed, 0 failed (142 preamble snapshots regenerated,
+runtime-split artifacts with them). This also unblocks
+`json-str-result-and-file-readers-missing`, whose `#json-str?<T>` expansion
+decodes into a struct behind a `catch-unwind`.
