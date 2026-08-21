@@ -271,10 +271,27 @@ fi
 NAME="fmt-bootstrap-stdlib"
 BOOTSTRAP_DIRTY=""
 BOOTSTRAP_SEEN=0
+BOOTSTRAP_WHY=""
 while IFS= read -r -d '' f; do
     BOOTSTRAP_SEEN=$((BOOTSTRAP_SEEN + 1))
     if ! "$TUR" fmt --check "$f" > /dev/null 2>&1; then
         BOOTSTRAP_DIRTY="$BOOTSTRAP_DIRTY $f"
+        # Record WHY, not just WHICH.  `--check` exits 1 both for "would
+        # change" and for an I/O error or a crash, and the bare file list is
+        # unactionable when the failure does not reproduce on the machine
+        # reading it -- which is exactly what happened: three stdlib files
+        # failed on CI, passed locally on a fresh sanitized build, and the
+        # log said nothing that could distinguish the two cases.  Capture the
+        # exit code, any stderr, and a bounded diff.
+        _rc_out=$("$TUR" fmt --check "$f" 2>&1 >/dev/null); _rc=$?
+        BOOTSTRAP_WHY="$BOOTSTRAP_WHY
+  --- $f (fmt --check exit $_rc)"
+        if [ -n "$_rc_out" ]; then
+            BOOTSTRAP_WHY="$BOOTSTRAP_WHY
+      stderr: $(printf '%s' "$_rc_out" | head -3 | tr '\n' '|')"
+        fi
+        BOOTSTRAP_WHY="$BOOTSTRAP_WHY
+$("$TUR" fmt --diff "$f" 2>&1 | head -20 | sed 's/^/      /')"
     fi
 done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0)
 # Same guard as FT8 below: this check also passes by default, so an
@@ -284,7 +301,7 @@ if [ "$BOOTSTRAP_SEEN" -eq 0 ]; then
 elif [ -z "$BOOTSTRAP_DIRTY" ]; then
     pass "$NAME"
 else
-    fail "$NAME" "stdlib is not self-formatted:$BOOTSTRAP_DIRTY"
+    fail "$NAME" "stdlib is not self-formatted:$BOOTSTRAP_DIRTY$BOOTSTRAP_WHY"
 fi
 
 # ---------------------------------------------------------------------------

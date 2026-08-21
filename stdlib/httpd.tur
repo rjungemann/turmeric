@@ -4306,5 +4306,4 @@
   (let [_n next]
     (fn [c : ptr<void>] : nil
       (let [r (catch-unwind (fn [] : int (do (httpd-call _n c) 0)))]
-        (when (err? r)
-          (httpd-mw-recover-500 c))))))
+        (when (err? r) (httpd-mw-recover-500 c))))))

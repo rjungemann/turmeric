@@ -1075,9 +1075,7 @@
 ;;; first, so the diagnostic detail survives either way.
 
 (defn schema-decode-abort [errs : int] : int
-  (do
-    (schema-decode-report errs)
-    (panic "schema-decode!: validation failed")))
+  (do (schema-decode-report errs) (panic "schema-decode!: validation failed")))
 ;;; schema-decode! -- decode against a schema, panicking on any violation.
 ;;;
 ;;; Parameters:

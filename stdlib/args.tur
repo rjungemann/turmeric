@@ -98,8 +98,7 @@
   ```)
 ;;; args/-spec-option-raw -- register an option whose default is a cstr or NULL.
 
-(defn args/-spec-option-raw [spec : ArgSpec name : cstr type : cstr
-                             dflt : cstr] : ArgSpec
+(defn args/-spec-option-raw [spec : ArgSpec name : cstr type : cstr dflt : cstr] : ArgSpec
   ```c
   int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(4 * sizeof(int64_t));
@@ -128,7 +127,9 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-option [spec : ArgSpec name : cstr type : cstr
+(defn args/spec-option [spec : ArgSpec
+                        name : cstr
+                        type : cstr
                         dflt : (Option cstr)] : ArgSpec
   ;; none is the "required" marker: the cell stores NULL, which is what the
   ;; default-injection pass and print-help both read as "no default".
