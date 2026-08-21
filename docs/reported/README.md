@@ -472,9 +472,26 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 ## Surface / expressiveness
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [user-defn-named-div-collides-with-libc](user-defn-named-div-collides-with-libc.md) | low | a top-level `(defn div ...)` is emitted verbatim as a C identifier and collides with `stdlib.h`'s `div()`; the user sees three cc errors about code they did not write, with no pointer back to their source |
+`user-defn-named-div-collides-with-libc` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/user-defn-named-div-collides-with-libc.md). Two
+corrections worth carrying. First, the `tur_u_` guard the report proposed as
+"the real fix" **already existed** -- `(defn strlen ...)` was already emitted
+as `tur_u_strlen`; `div` was just missing from a `libc_names[]` table whose own
+comment called it "grown on demand". Second, the report's "only `div`
+reproduces" was wrong: its six-name control group was clean because five were
+already in the table, and a 104-name sweep found **12** breakers (`div`,
+`ldiv`, `lldiv`, `llabs`, `atexit`, `putchar`, `getchar`, `gets`, `chown`,
+`execl`, `drand48`, `erand48`). The table is derived from the generated TU's
+headers now (136 -> 713 entries) rather than grown per report. `gets` is the
+case that shows why a plain header scrape is not enough -- glibc declares it
+only under `_FORTIFY_SOURCE`, which `-O2` turns on, so it broke `tur run` while
+`tur emit-c | cc` compiled clean. Zero fixture churn. The front-end diagnostic
+the report also asked for was deliberately NOT added: these names work now, and
+rejecting them would trade the bug for a restriction. Pinned by
+`tests/fixtures/libc-collision-guard/`, `tests/mangle_test.c`, and
+`tests/check-libc-collision-list.sh` (ctest `tur_libc_collision_list`), which
+guards the bsearch sort-order precondition.
+
 
 `reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
 and moved to
