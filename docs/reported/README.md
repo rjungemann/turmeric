@@ -601,9 +601,15 @@ Pinned by four `errors/` negatives and
 
 ## Build / CI / performance
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [env-doctests-are-machine-dependent](env-doctests-are-machine-dependent.md) | medium | five `stdlib/env.tur` `;;;` examples are illustrative but `doctest.py` asserts every `; =>`, so they only pass on the author's machine -- and because `test: build doctest`, a failure there stops `just test` before ctest ever runs |
+`env-doctests-are-machine-dependent` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/env-doctests-are-machine-dependent.md). The five
+`stdlib/env.tur` examples now carry the `; doctest: <reason>` opt-out that
+already existed for `tur/term`'s tty-dependent ones. The report's five FAILs
+were masked on some boxes by a *segfault* in the same module -- `env/home`,
+`env/path`, `env/user`, `env/shell` returned a bare nullable `: cstr`, so
+`(println (env/user))` with `$USER` unset dereferenced NULL; all four now
+return `(Option cstr)` via `env/get`, which had zero callers to break.
+Doctests: 161 passed, 0 failed, exit 0.
 
 `pipefail-grep-q-false-failures` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/pipefail-grep-q-false-failures.md); it was filed
