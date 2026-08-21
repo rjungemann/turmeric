@@ -563,6 +563,215 @@ bool expr_contains_return_or_throw(const Expr *e) {
  * true (assume it might hide inline-C), so the non-retention inference only ever
  * DISqualifies a fn -- it never wrongly greenlights a free.  Only the common,
  * fully-understood control/leaf kinds return false. */
+/* ---------------------------------------------------------------------------
+ * inline-c-locals-invisible-to-inline-c-blocks
+ *
+ * A function PARAMETER reaches an inline-C block by its source name -- that is
+ * what the `ctx->fn_params` branch of name_for_binding buys, and what
+ * raw_name_for_binding's own comment describes ("inline-C bodies reference
+ * them by their source names").  A `let`-bound LOCAL did not: it takes the
+ * `<name>_<id>` path, so
+ *
+ *     (let [key (rvec-get raw i)]
+ *       ```c vec->data[j + 1] = key; ```)
+ *
+ * emitted `'key' undeclared` from the C compiler, deep in generated code, with
+ * nothing pointing back at the Turmeric line.
+ *
+ * The id suffix exists so two bindings with the same source name cannot
+ * collide in C, so it cannot simply be dropped.  Instead a local is spelled
+ * raw only when doing so is unambiguous AND actually needed:
+ *
+ *   - the name is already a plain C identifier (no kebab, no sigils), so the
+ *     legacy mangler is the identity on it;
+ *   - it is neither a C keyword nor a libc symbol;
+ *   - no other local in the same function body, and no parameter, shares it
+ *     (no shadowing to resolve);
+ *   - it carries no storage indirection of its own (atomic / thread-local /
+ *     by-ref cell / extern-c / c_export_name), which have their own spellings;
+ *   - and one of the function's inline-C blocks mentions it as an identifier
+ *     token.
+ *
+ * That last condition is what keeps this from churning codegen: a function
+ * whose inline C never names a local emits byte-for-byte what it emitted
+ * before.
+ * ------------------------------------------------------------------------- */
+
+static bool ic_ident_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_';
+}
+
+/* True when `name` occurs in `ic`'s C text as a whole identifier token.  This
+ * over-approximates on purpose -- a hit inside a string literal or a comment
+ * costs at most a raw spelling for a name that was already unambiguous. */
+static bool ic_text_names(const InlineC *ic, const char *name, size_t len) {
+    if (!ic || !ic->code.p || len == 0) return false;
+    const char *p = ic->code.p;
+    size_t n = ic->code.len;
+    if (len > n) return false;
+    for (size_t i = 0; i + len <= n; i++) {
+        if (memcmp(p + i, name, len) != 0) continue;
+        if (i > 0 && ic_ident_char(p[i - 1])) continue;
+        if (i + len < n && ic_ident_char(p[i + len])) continue;
+        return true;
+    }
+    return false;
+}
+
+typedef struct {
+    const Binding **locals; uint32_t n_locals; uint32_t cap_locals;
+    const InlineC **ics;    uint32_t n_ics;    uint32_t cap_ics;
+} ICScan;
+
+static void ic_scan_push_local(ICScan *sc, const Binding *b) {
+    if (!b) return;
+    if (sc->n_locals == sc->cap_locals) {
+        sc->cap_locals = sc->cap_locals ? sc->cap_locals * 2 : 16;
+        sc->locals = (const Binding **)realloc(sc->locals,
+                                               sc->cap_locals * sizeof(*sc->locals));
+        if (!sc->locals) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    sc->locals[sc->n_locals++] = b;
+}
+
+static void ic_scan_push_ic(ICScan *sc, const InlineC *ic) {
+    if (!ic) return;
+    if (sc->n_ics == sc->cap_ics) {
+        sc->cap_ics = sc->cap_ics ? sc->cap_ics * 2 : 8;
+        sc->ics = (const InlineC **)realloc(sc->ics, sc->cap_ics * sizeof(*sc->ics));
+        if (!sc->ics) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    sc->ics[sc->n_ics++] = ic;
+}
+
+/* Walk the kinds that can hold a `let` or an inline-C block.  An unmodeled kind
+ * simply contributes nothing, which degrades to today's behaviour (the local
+ * keeps its id suffix) rather than to a wrong name. */
+static void ic_scan_expr(ICScan *sc, const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_INLINE_C:
+            ic_scan_push_ic(sc, e->as.inline_c_.inline_c);
+            return;
+        case EX_FN_DEF:
+            /* Emitted as its own C function; it runs its own collection. */
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                ic_scan_push_local(sc, e->as.let_.bindings[i].binding);
+                ic_scan_expr(sc, e->as.let_.bindings[i].init);
+            }
+            ic_scan_expr(sc, e->as.let_.body);
+            return;
+        case EX_CALL:
+            ic_scan_expr(sc, e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                ic_scan_expr(sc, e->as.call_.args[i]);
+            ic_scan_expr(sc, e->as.call_.dict_arg);
+            return;
+        case EX_IF:
+            ic_scan_expr(sc, e->as.if_.cond);
+            ic_scan_expr(sc, e->as.if_.then_);
+            ic_scan_expr(sc, e->as.if_.else_or_null);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) ic_scan_expr(sc, e->as.do_.items[i]);
+            return;
+        case EX_WHILE:
+            ic_scan_expr(sc, e->as.while_.cond);
+            ic_scan_expr(sc, e->as.while_.body);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) ic_scan_expr(sc, e->as.builtin.args[i]);
+            return;
+        case EX_MATCH:
+            ic_scan_expr(sc, e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                const MatchArm *arm = &e->as.match_.arms[i];
+                for (uint32_t j = 0; j < arm->pattern.n_bindings; j++)
+                    ic_scan_push_local(sc, arm->pattern.bindings[j]);
+                ic_scan_push_local(sc, arm->pattern.var_binding);
+                ic_scan_expr(sc, arm->guard);
+                ic_scan_expr(sc, arm->body);
+            }
+            return;
+        case EX_ASCRIBE: ic_scan_expr(sc, e->as.ascribe_.inner); return;
+        case EX_CAST:    ic_scan_expr(sc, e->as.cast_.expr);     return;
+        case EX_RETURN:  ic_scan_expr(sc, e->as.return_.value);  return;
+        default:
+            return;
+    }
+}
+
+static bool ic_name_is_plain_c_ident(const char *p, size_t len) {
+    if (len == 0) return false;
+    if (!((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z') || p[0] == '_'))
+        return false;
+    for (size_t i = 1; i < len; i++) if (!ic_ident_char(p[i])) return false;
+    return true;
+}
+
+void emit_inline_c_raw_locals_collect(const Expr *body,
+                                      Binding **params, uint32_t n_params,
+                                      const Binding ***out, uint32_t *out_n) {
+    *out = NULL;
+    *out_n = 0;
+    if (!body) return;
+
+    ICScan sc;
+    memset(&sc, 0, sizeof sc);
+    ic_scan_expr(&sc, body);
+    if (sc.n_ics == 0 || sc.n_locals == 0) { free(sc.locals); free(sc.ics); return; }
+
+    const Binding **keep = (const Binding **)malloc(sc.n_locals * sizeof(*keep));
+    if (!keep) { fprintf(stderr, "tur: oom\n"); abort(); }
+    uint32_t n_keep = 0;
+
+    for (uint32_t i = 0; i < sc.n_locals; i++) {
+        const Binding *b = sc.locals[i];
+        if (!b || !b->name || b->is_global || b->is_extern_c || b->c_export_name) continue;
+        if (b->is_atomic || b->is_thread_local) continue;
+        if (emit_binding_is_byref_cell(b)) continue;
+        const char *nm = b->name->name;
+        size_t nl = b->name->len;
+        if (!ic_name_is_plain_c_ident(nm, nl)) continue;
+        if (tur_name_is_c_keyword(nm, nl) || tur_name_collides_libc(nm, nl)) continue;
+
+        /* Unshadowed: no other collected local, and no parameter, shares the
+         * source name.  With two `key`s in one function there is no single raw
+         * spelling that could mean either, so both keep their id suffix. */
+        bool ambiguous = false;
+        for (uint32_t j = 0; j < sc.n_locals && !ambiguous; j++) {
+            if (j == i) continue;
+            const Binding *o = sc.locals[j];
+            if (o && o != b && o->name && o->name->len == nl
+                && memcmp(o->name->name, nm, nl) == 0) ambiguous = true;
+        }
+        for (uint32_t j = 0; j < n_params && !ambiguous; j++) {
+            const Binding *pb = params ? params[j] : NULL;
+            if (pb && pb->name && pb->name->len == nl
+                && memcmp(pb->name->name, nm, nl) == 0) ambiguous = true;
+        }
+        if (ambiguous) continue;
+
+        /* Needed: some inline-C block in this function names it. */
+        bool named = false;
+        for (uint32_t j = 0; j < sc.n_ics && !named; j++)
+            named = ic_text_names(sc.ics[j], nm, nl);
+        if (!named) continue;
+
+        keep[n_keep++] = b;
+    }
+
+    free(sc.locals);
+    free(sc.ics);
+    if (n_keep == 0) { free(keep); return; }
+    *out = keep;
+    *out_n = n_keep;
+}
+
 bool expr_subtree_has_inline_c(const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -2740,6 +2949,21 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     if (ctx->fn_params) {
         for (uint32_t i = 0; i < ctx->n_fn_params; i++) {
             if (ctx->fn_params[i] == b) {
+                return raw_name_for_binding(b);
+            }
+        }
+    }
+    /* inline-c-locals-invisible-to-inline-c-blocks: a local an inline-C block
+     * in this same function names by its source spelling.  Same treatment as a
+     * parameter one line above, and for the same reason -- the C text is
+     * pasted verbatim, so the only name it can use is the one the author
+     * wrote.  Membership is decided per function body by
+     * emit_inline_c_raw_locals_collect, which admits a binding only when the
+     * raw spelling is unambiguous; everything else still takes the id-suffixed
+     * path below. */
+    if (ctx->inline_c_raw_locals) {
+        for (uint32_t i = 0; i < ctx->n_inline_c_raw_locals; i++) {
+            if (ctx->inline_c_raw_locals[i] == b) {
                 return raw_name_for_binding(b);
             }
         }

@@ -15,7 +15,7 @@
 
 (let [spec (args/spec-new)]
   (args/spec-flag   spec "--verbose")
-  (args/spec-option spec "--input" "string" 0)
+  (args/spec-option spec "--input" "string" (none))
   (let [res (args/parse spec *args*)]
     (print-cstr (args/get-str res "input"))
     (print-bool (args/get-bool res "verbose"))

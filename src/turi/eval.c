@@ -878,6 +878,19 @@ static bool turi_struct_is_struct_like(TuriValue v) {
     return cd && cd->adt && cd->adt->from_struct_lowering;
 }
 
+/* type-of-cast-kind-granularity: the interpreter's counterpart of the compiled
+ * per-monomorph `any` box id.  The compiled tag names the ADT/struct now, so
+ * turi answers with the same name rather than "struct"/"adt" for everything.
+ * An ADT value reports its ADT's name (a `(Circle 5)` is a "Shape"), not the
+ * constructor's; a struct-lowered record reports its own. */
+static const char *turi_any_named_type(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return NULL;
+    if (!turi_struct_is_struct_like(v) && v.as_struct->ctor &&
+        v.as_struct->ctor->adt && v.as_struct->ctor->adt->name)
+        return v.as_struct->ctor->adt->name;
+    return v.as_struct->name;
+}
+
 TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
     return make_struct_val_def(env, name, n, fields);
 }
@@ -1582,12 +1595,27 @@ typedef struct TuriPanicPayload {
     int         line;       /* source line, or 0 */
 } TuriPanicPayload;
 
-/* Build the 3-int Result box { is_ok, ok_val, err_val } the native ok/err
- * helpers also use, in its Ok shape. */
-static TuriValue turi_ok_result_box(TuriEnv *env, int64_t ok_val) {
+/* Build the Result the native ok/err helpers also build, in its Ok shape.
+ *
+ * turi-catch-unwind-aggregate-payload: this used to take a bare `int64_t` and
+ * always build the 3-int box, which FLATTENS the payload -- exactly the trap
+ * `native_ok` documents and avoids.  A struct / cstr / closure / float payload
+ * lost its tag, so `(ok-val r)` handed back a TURI_INT and a downstream field
+ * read or `println` saw the raw handle: `(catch-unwind (fn [] : Q ...))`
+ * printed a pointer where the compiled path printed the field.  Same rule as
+ * `native_ok` now: a heap-tagged payload becomes a make-struct Result whose
+ * fields hold full TuriValues, everything else keeps the int64 box the
+ * carrier-ABI fixtures depend on.  `result_field` reads both shapes, so every
+ * accessor stays uniform. */
+static TuriValue turi_ok_result_box(TuriEnv *env, TuriValue ok_val) {
+    if (ok_val.tag == TURI_STRUCT || ok_val.tag == TURI_CSTR ||
+        ok_val.tag == TURI_CLOSURE || ok_val.tag == TURI_FLOAT) {
+        TuriValue fields[3] = { turi_bool(true), ok_val, turi_int(0) };
+        return turi_make_struct(env, "Result", fields, 3);
+    }
     /* Escaping payload: the box is returned as a Result carrier. */
     int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
-    box[0] = 1; box[1] = ok_val; box[2] = 0;
+    box[0] = 1; box[1] = ok_val.as_int; box[2] = 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
 }
@@ -7482,7 +7510,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else if (turi_is_error(cur) || env_signaled(env)) {
                     /* propagate cur unchanged */
                 } else {
-                    cur = turi_ok_result_box(env, cur.as_int);
+                    cur = turi_ok_result_box(env, cur);
                 }
                 free(b);
                 len--;
@@ -9845,7 +9873,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * Result-box layout { is_ok, ok_val, err_val } that the native
              * ok/err/ok?/err? helpers produce and read, so the value composes
              * with ok?/err?/ok-val just like any other Result (Phase R2). */
-            return turi_ok_result_box(env, result.as_int);
+            return turi_ok_result_box(env, result);
         } else {
             /* A panic was caught — restore env and return (err payload).  TI5:
              * the err slot carries a boxed TuriPanicPayload so panic-payload-*
@@ -9892,7 +9920,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->catch_jmp = prev_jmp;
             if (turi_is_error(result) || env_signaled(env))
                 return result;
-            return turi_ok_result_box(env, result.as_int);
+            return turi_ok_result_box(env, result);
         } else {
             /* A panic reached this boundary.  Restore the saved control state
              * (the payload fields in env still describe the in-flight panic). */
@@ -10194,18 +10222,27 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TY_BOOL: ok = (v.tag == TURI_BOOL); break;
         case TY_CSTR: ok = (v.tag == TURI_CSTR); break;
         case TY_STRUCT:
-            /* A defstruct lowered to a record ADT carries a from_struct_lowering
-             * CtorDef -- it is "struct" at the surface (CONV-S1). */
-            ok = (v.tag == TURI_STRUCT && v.as_struct && turi_struct_is_struct_like(v));
+        case TY_ADT: {
+            /* type-of-cast-kind-granularity: compare the TYPE, not the kind.
+             * Casting an `any` holding a Point to Other used to pass here and
+             * on the compiled path alike, handing back a reinterpreted value.
+             * `e->type` is the named target the elaborator resolved. */
+            const char *have = turi_any_named_type(v);
+            const char *want = type_name(e->type);
+            ok = (v.tag == TURI_STRUCT && have && want && strcmp(have, want) == 0);
             break;
-        case TY_ADT:
-            /* A genuine ADT value was not synthesized from a defstruct lowering. */
-            ok = (v.tag == TURI_STRUCT && v.as_struct && !turi_struct_is_struct_like(v));
-            break;
+        }
         default: ok = true; break;
         }
         if (!ok) {
-            turi_runtime_panic(env, "cast: any holds a value of a different type");
+            {
+                const char *have = turi_any_named_type(v);
+                char msg[160];
+                snprintf(msg, sizeof(msg), "cast: any holds %s, not %s",
+                         have ? have : "a value of a different type",
+                         type_name(e->type));
+                turi_runtime_panic(env, msg);
+            }
             return turi_nil(); /* unreachable: turi_runtime_panic never returns */
         }
         return v;
@@ -10222,14 +10259,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TURI_CSTR:    tname = "cstr";    break;
         case TURI_NIL:     tname = "nil";     break;
         case TURI_CLOSURE: tname = "fn";      break;
-        case TURI_STRUCT:
-            /* W4: match the compiled __tur_any_type_name, which carries only
-             * kind granularity -- every struct is "struct" and every ADT is
-             * "adt" (emit_module.c), NOT the specific type name.  A defstruct
-             * lowered to a record ADT reads as "struct" via its CtorDef. */
-            tname = (v.as_struct && turi_struct_is_struct_like(v))
-                        ? "struct" : "adt";
+        case TURI_STRUCT: {
+            /* Match the compiled __tur_any_type_name, which names the specific
+             * type now (type-of-cast-kind-granularity) rather than answering
+             * "struct" / "adt" for every struct and every ADT alike. */
+            const char *named = turi_any_named_type(v);
+            tname = named ? named
+                          : ((v.as_struct && turi_struct_is_struct_like(v))
+                                 ? "struct" : "adt");
             break;
+        }
         default: break;
         }
         return turi_cstr(tname);
@@ -10240,6 +10279,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue v = eval_expr(env, frame, e->as.any_is_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
         /* Map the runtime TuriValue tag to a TypeKind and compare to test_tag. */
+        /* A NAMED target compares by type identity, exactly as the compiled
+         * per-monomorph box id does -- `(is? a Other)` on an `any` holding a
+         * Point is false, where the old TypeKind compare said true for every
+         * struct.  Primitives keep the kind compare. */
+        const char *named = turi_any_named_type(v);
+        if (named && e->as.any_is_.test_type.kind != TY_UNKNOWN) {
+            const char *want = type_name(e->as.any_is_.test_type);
+            return turi_bool(want && strcmp(named, want) == 0);
+        }
         TypeKind vk = TY_UNKNOWN;
         switch (v.tag) {
         case TURI_INT:    vk = TY_INT;      break;

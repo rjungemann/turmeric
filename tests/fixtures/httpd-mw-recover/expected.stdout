@@ -1,0 +1,3 @@
+resp /boom: HTTP/1.0 500 Internal Server Error
+resp /ok: HTTP/1.0 200 OK
+done

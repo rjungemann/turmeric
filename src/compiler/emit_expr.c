@@ -122,7 +122,7 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                     "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
                     cf, cf);
                 free(cf);
-            } else if (cap && cap->is_fat &&
+            } else if (cap && cap->is_fat && !closure->fat_captures_borrowed &&
                        !(cap->closure_fn_binding && closure->fn &&
                          closure->fn->binding &&
                          cap->closure_fn_binding == closure->fn->binding)) {
@@ -860,6 +860,44 @@ static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
         return adt_app_is_byvalue_product(r);
     }
     return false;
+}
+
+/* catch-unwind-aggregate-return-miscompiled: when a catch boundary's thunk
+ * returns a by-value AGGREGATE, the generic `TUR_APPLY0` call in
+ * tur_catch_unwind_box is a function-pointer type mismatch -- it casts slot 0
+ * to `int64_t (*)(void *)` while the thunk really returns the struct by value,
+ * so the int64 that gets boxed as ok_val is whatever happened to be in the
+ * return register.  The consumer then reads it as a `T *`.  Return the name of
+ * a boxing trampoline for such a thunk (NULL when the generic path is right,
+ * which is every scalar / pointer / :heap-ADT return). */
+static const char *catch_thunk_box_shim(EmitCtx *ctx, const Expr *thunk, int *owns) {
+    if (!ctx || !thunk) return NULL;
+    /* The thunk reaches codegen as a fat-closure handle: the fn literal is
+     * wrapped in an ascription (and possibly a fn-to-fat shim), whose own type
+     * is `ptr<void>`.  Peel those to reach the TY_FN that still carries the
+     * declared return type. */
+    const Expr *fnexpr = thunk;
+    for (int guard = 0; fnexpr && guard < 8; guard++) {
+        if (fnexpr->kind == EX_ASCRIBE && fnexpr->as.ascribe_.inner)
+            fnexpr = fnexpr->as.ascribe_.inner;
+        else if (fnexpr->kind == EX_FN_TO_FAT && fnexpr->as.fn_to_fat_.inner)
+            fnexpr = fnexpr->as.fn_to_fat_.inner;
+        else break;
+    }
+    if (!fnexpr) return NULL;
+    Type fnty = fnexpr->type;
+    if (fnty.kind != TY_FN) return NULL;
+    Type ret = fnty.as.fn.result_full_type
+                   ? *fnty.as.fn.result_full_type
+                   : emit_type_from_kind(fnty.as.fn.result_kind);
+    Type rr = emit_resolve_type(ctx, ret);
+    if (rr.kind == TY_FLOAT || rr.kind == TY_FLOAT32 || rr.kind == TY_FLOAT64) {
+        if (owns) *owns = 0;
+        return ensure_catch_bits_shim(ctx, rr);
+    }
+    if (!emit_type_is_byvalue_adt(ctx, ret)) return NULL;
+    if (owns) *owns = 1;
+    return ensure_catch_box_shim(ctx, rr);
 }
 
 /* B4 (byvalue-recursive-carrier): true when `t` resolves to a single-carrier
@@ -3813,6 +3851,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *inner = emit_value(ctx, body, e->as.union_inject_.value);
             Buf out; buf_init(&out);
             int64_t tag = e->as.union_inject_.tag_idx;
+            /* type-of-cast-kind-granularity: an `any` box carries a
+             * per-monomorph id for a struct/ADT payload so two struct types are
+             * distinguishable.  A TY_UNION inject's tag_idx is a MEMBER INDEX,
+             * not a TypeKind, so it is left alone. */
+            if (e->type.kind == TY_ANY)
+                tag = emit_any_type_id(ctx, e->as.union_inject_.value->type);
             /* structdef-retirement DS-C: box_struct (a StructDef*) is always NULL
              * now -- a by-value struct is a record ADT, heap-boxed by the
              * byvalue-ADT branch below; the StructDef heap-box arm is removed. */
@@ -3860,8 +3904,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* TY3: (is? x T) — compare the box tag to the tested TypeKind. */
             char *inner = emit_value(ctx, body, e->as.any_is_.value);
             Buf out; buf_init(&out);
+            /* type-of-cast-kind-granularity: the same per-monomorph id the
+             * inject site allocated, when the target was a named type. */
+            int64_t test_tag = e->as.any_is_.test_type.kind != TY_UNKNOWN
+                                   ? emit_any_type_id(ctx, e->as.any_is_.test_type)
+                                   : e->as.any_is_.test_tag;
             buf_printf(&out, "(TUR_GETTAG(%s) == %lld)",
-                       inner, (long long)e->as.any_is_.test_tag);
+                       inner, (long long)test_tag);
             buf_putc(&out, '\0');
             free(inner);
             char *result = strdup(out.data);
@@ -3873,7 +3922,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the target TypeKind; tur_panic on mismatch, otherwise unbox.
              * TY2.2: a struct target unboxes by dereferencing the heap pointer. */
             char *inner = emit_value(ctx, body, e->as.any_cast_.value);
-            int64_t target_tag = (int64_t)e->as.any_cast_.target_kind;
+            /* type-of-cast-kind-granularity: `e->type` IS the named target
+             * type, so the cast checks per-monomorph identity -- casting an
+             * `any` holding a Point to OtherStruct now panics instead of
+             * reinterpreting the payload. */
+            int64_t target_tag = emit_any_type_id(ctx, e->type);
             Buf out; buf_init(&out);
             /* structdef-retirement DS-C: target_struct (a StructDef*) is always
              * NULL now -- a struct target is a record ADT, unboxed by the
@@ -4020,9 +4073,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * result box (ok = thunk value, err = opaque Panic handle). */
             const Expr *thunk = e->as.catch_unwind_.thunk;
             char *thunk_val = emit_value(ctx, body, thunk);
+            int box_owns = 1;
+            const char *box_shim = catch_thunk_box_shim(ctx, thunk, &box_owns);
             char result_var[64];
             snprintf(result_var, sizeof(result_var), "__catch_result_%d", ctx->tmp_n++);
             indent_buf(body, ctx->indent);
+            if (box_shim) {
+                buf_printf(body,
+                    "int64_t %s = tur_catch_unwind_box_via(%s, (int64_t)(intptr_t)%s, %d);\n",
+                    result_var, box_shim, thunk_val, box_owns);
+            } else
             buf_printf(body, "int64_t %s = tur_catch_unwind_box((int64_t)(intptr_t)%s);\n",
                        result_var, thunk_val);
             /* catch-unwind-thunk-closure-leak: reclaim the thunk fat box once the
@@ -4047,9 +4107,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *thunk = e->as.catch_panic_of_.thunk;
             TypeKind type_kind = e->as.catch_panic_of_.type_kind;
             char *thunk_val = emit_value(ctx, body, thunk);
+            int box_owns = 1;
+            const char *box_shim = catch_thunk_box_shim(ctx, thunk, &box_owns);
             char result_var[64];
             snprintf(result_var, sizeof(result_var), "__catch_panic_of_result_%d", ctx->tmp_n++);
             indent_buf(body, ctx->indent);
+            if (box_shim) {
+                buf_printf(body,
+                    "int64_t %s = tur_catch_panic_of_box_via(%d, %s, (int64_t)(intptr_t)%s, %d);\n",
+                    result_var, (int)type_kind, box_shim, thunk_val, box_owns);
+            } else
             buf_printf(body, "int64_t %s = tur_catch_panic_of_box(%d, (int64_t)(intptr_t)%s);\n",
                        result_var, (int)type_kind, thunk_val);
             /* catch-unwind-thunk-closure-leak: reclaim the owned thunk fat box
@@ -9407,6 +9474,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* borrow-struct-field: bare member lvalue (no rvalue cast). */
                     buf_printf(&hb, "((tur_adt_%s *)(intptr_t)(%s))->%s",
                                adt_mn, sv, mp);
+                } else if ((fld_rty.kind == TY_FLOAT || fld_rty.kind == TY_FLOAT32 ||
+                            fld_rty.kind == TY_FLOAT64) &&
+                           fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
+                           cty && strcmp(cty, "int64_t") == 0) {
+                    /* ok-val-untyped-catch-box-loses-float: the ERASED
+                     * Result/Option carrier declares `int64_t ok_val`, and a
+                     * float payload rides in it as its BITS -- that is the
+                     * contract the typed construction path honours
+                     * (`((union { int64_t s; double d; }){.s = ...}).d`,
+                     * emit_core.c).  Reading it through the erased struct and
+                     * letting C convert int64 -> double converts the bit
+                     * pattern NUMERICALLY instead: `(ok-val r)` on an
+                     * unannotated `(catch-unwind (fn [] : float 7.5))` gave
+                     * 4.62013e+18.  Reinterpret, as the other consumer does. */
+                    buf_printf(&hb,
+                        "((union { int64_t s; %s d; }){.s = ((tur_adt_%s *)(intptr_t)(%s))->%s}).d",
+                        fld_rcty, adt_mn, sv, mp);
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                cty, adt_mn, sv, mp);
@@ -10524,7 +10608,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(bname);
                     }
 
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -10608,7 +10694,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
 
                     /* Emit arm body */
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -10749,7 +10837,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             free(gv);
                             ctx->indent += 4;
                         }
-                        if (!nil_result) {
+                        /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                         * as a statement, leaving the result temp at its zero init. */
+                        if (!nil_result && arm->body->type.kind != TY_NEVER) {
                             char *bv = emit_value(ctx, body, arm->body);
                             indent_buf(body, ctx->indent);
                             buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -10902,6 +10992,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     ctx->indent += 4;
 
+                    /* match-adt-var-arm-does-not-bind: a variable catch-all arm
+                     * binds the WHOLE scrutinee.  `__scrut` is the by-value
+                     * aggregate, a pbp pointer to it, or the carrier pointer,
+                     * so the read matches how it was bound above. */
+                    if (pat->is_var && pat->var_binding) {
+                        const char *vct = type_c_name(pat->var_binding->type);
+                        char *vname = name_for_binding(ctx, pat->var_binding);
+                        indent_buf(body, ctx->indent);
+                        if (adt_byval_pbp)
+                            buf_printf(body, "%s %s = *__scrut;\n", vct, vname);
+                        else if (adt_byval)
+                            buf_printf(body, "%s %s = __scrut;\n", vct, vname);
+                        else
+                            buf_printf(body, "%s %s = (%s)(intptr_t)__scrut;\n",
+                                       vct, vname, vct);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "(void)%s;\n", vname);
+                        free(vname);
+                    }
+
                     /* Bind fields */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
                         char *_mctor = mangle_field_name(pat->ctor->name);
@@ -10982,7 +11092,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
 
                     /* Emit body */
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -11050,6 +11162,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     ctx->indent += 4;
 
+                    /* match-adt-var-arm-does-not-bind: the variable catch-all
+                     * binds the whole scrutinee (carrier pointer here). */
+                    if (pat->is_var && pat->var_binding) {
+                        const char *vct = type_c_name(pat->var_binding->type);
+                        char *vname = name_for_binding(ctx, pat->var_binding);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (%s)(intptr_t)__scrut;\n",
+                                   vct, vname, vct);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "(void)%s;\n", vname);
+                        free(vname);
+                    }
+
                     /* Bind field variables for constructor patterns */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
                         char *_mctor = mangle_field_name(pat->ctor->name);
@@ -11103,7 +11228,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
 
                     /* Emit body */
-                    if (!nil_result) {
+                    /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
+                     * as a statement, leaving the result temp at its zero init. */
+                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);

@@ -1,0 +1,64 @@
+;;; match-nested-constructor-patterns: constructor patterns nest inside arms.
+;;;
+;;; Before this, an arm could bind exactly ONE constructor level -- a
+;;; sub-pattern in a field position was rejected with "match: field binding
+;;; must be a symbol", so every nested test had to be hand-flattened into an
+;;; inner match.  The four functions below cover what the lowering has to get
+;;; right: arm ORDER (a more specific arm wins over a later general one),
+;;; DEPTH (three levels), scalar LITERAL sub-patterns, when-GUARDS on a nested
+;;; arm, and a `_` fallback reached from inside the chain.
+
+(defdata Expr
+  (Lit :int)
+  (Add :Expr :Expr))
+
+(defdata Inner (IA :int) (IB))
+(defdata Mid   (MA :Inner) (MB :int))
+(defdata Outer (OA :Mid :int) (OB))
+
+(defn eval-e [e : Expr] : int
+  (match e
+    (Lit v)   v
+    (Add l r) (+ (eval-e l) (eval-e r))))
+
+;; The report's own example: a nested literal, then a general arm for the
+;; same constructor.  Order decides -- (Add (Lit 0) r) must win for a zero
+;; left operand and fall through to (Add l r) for everything else.
+(defn simplify [e : Expr] : int
+  (match e
+    (Lit v)         v
+    (Add (Lit 0) r) (eval-e r)
+    (Add l r)       (+ (eval-e l) (eval-e r))))
+
+;; Depth 3 with a literal at the bottom.  No wildcard arm: the group provably
+;; covers Mid (MA via its own covered Inner arms, MB), which is what lets the
+;; lowering skip the fallback rather than demanding a catch-all.
+(defn classify [o : Outer] : int
+  (match o
+    (OA (MA (IA 0)) k) (+ 100 k)
+    (OA (MA (IA n)) k) (+ n k)
+    (OA (MA (IB)) k)   (+ 200 k)
+    (OA (MB m) k)      (+ m k)
+    (OB)               -1))
+
+;; A guard on a nested arm falls through to the next arm of the SAME group,
+;; and the group as a whole falls through to the `_` arm.
+(defn guarded [o : Outer] : int
+  (match o
+    (OA (MB m) k) when (> m 10) (* m k)
+    (OA (MB m) k)               (+ m k)
+    _                           0))
+
+(defn main [] : int
+  (println (simplify (Add (Lit 0) (Lit 7))))   ; 7   -- nested arm wins
+  (println (simplify (Add (Lit 3) (Lit 4))))   ; 7   -- falls through
+  (println (simplify (Lit 9)))                 ; 9
+  (println (classify (OA (MA (IA 0)) 5)))      ; 105 -- depth-3 literal
+  (println (classify (OA (MA (IA 7)) 5)))      ; 12
+  (println (classify (OA (MA (IB)) 5)))        ; 205
+  (println (classify (OA (MB 3) 5)))           ; 8
+  (println (classify (OB)))                    ; -1
+  (println (guarded (OA (MB 20) 3)))           ; 60  -- guard holds
+  (println (guarded (OA (MB 2) 3)))            ; 5   -- guard fails, next arm
+  (println (guarded (OB)))                     ; 0   -- group falls to _
+  0)

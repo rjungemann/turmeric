@@ -14,7 +14,7 @@ OUTPUT=$(printf ':reload %s\n:quit\n' "$FIXTURE" | "$TUR" repl 2>/dev/null | sed
 
 check() {
     local expected="$1"
-    if ! echo "$OUTPUT" | grep -qF "$expected"; then
+    if ! grep -qF "$expected" <<< "$OUTPUT"; then
         echo "FAIL: expected '$expected' in output"
         echo "--- output ---"
         echo "$OUTPUT"

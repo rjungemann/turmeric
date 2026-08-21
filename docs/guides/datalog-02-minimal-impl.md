@@ -43,6 +43,33 @@ so it can pass through the database machinery without triggering the borrow
 checker.
 `EntityVal` holds an entity ID, enabling typed cross-entity references.
 
+**A `defdata` value moves by default.** Binding one and then using it twice is
+an error:
+
+```
+error [TUR-E0201]: cannot copy unique value 'e-val' --
+unique values may be used at most once
+```
+
+That is the right default for an ADT that owns something, but a `Value` here
+is a tag plus a machine word -- there is nothing to own, and the later steps of
+this tutorial genuinely do want to use one twice (unify a term against it,
+*then* bind the term to it). Annotate the type `:copy` when you reach that
+point:
+
+```turmeric
+(defdata Value :copy
+  (LongVal :int)
+  (StrVal :int)
+  (EntityVal :int))
+```
+
+`examples/datalog/datalog.tur` carries the annotation for exactly this reason;
+`minimal.tur` does not need it, because nothing in it uses a `Value` twice.
+Reach for `:copy` when the checker asks for it, not before -- the error names
+the binding and the second use, so it is a precise instruction rather than a
+puzzle.
+
 Constructors wrap the raw int:
 
 ```turmeric

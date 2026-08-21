@@ -3,11 +3,16 @@
 # any example NOT listed starts failing.
 #
 # Added 2026-08-20 while resolving docs/reported/datalog-examples-do-not-compile.
-# Each needs its own fix; see docs/archive/datalog-examples-do-not-compile.md
-# for the datalog one.
+# Each needs its own fix; the open residue is tracked in
+# docs/reported/examples-tree-does-not-run.md.
+#
+# The five datalog files and cli_args_demo left this list on 2026-08-21. Of
+# what remains, only ONE entry is example code being wrong -- snake's is a
+# compiler limitation with its own report, and the guestbook seven are
+# arguably the wrong invocation (they are a multi-file program with no
+# import/load between the files, compiled as a unit by their CMakeLists, so
+# `tur check <one member>` was never going to work).
 
-examples/cli_args_demo.tur          uses `print`, which does not exist (only println)
-examples/datalog/datalog.tur        TUR-E0201: cannot copy unique value 'e-val' in match-one-datum
 examples/guestbook/src/conts.tur    needs its project context / stdlib loads
 examples/guestbook/src/handlers.tur needs its project context / stdlib loads
 examples/guestbook/src/main.tur     needs its project context / stdlib loads
@@ -15,4 +20,4 @@ examples/guestbook/src/router.tur   needs its project context / stdlib loads
 examples/guestbook/src/security.tur needs its project context / stdlib loads
 examples/guestbook/src/store.tur    typeclass 'Serializable' is not defined (stdlib/serial.tur not loaded)
 examples/guestbook/src/templates.tur needs its project context / stdlib loads
-examples/snake/src/main.tur         `import` outside defmodule
+examples/snake/src/main.tur         perform inside a `while` has no lowering (compiler limitation; see docs/reported/perform-inside-loop-has-no-lowering.md)

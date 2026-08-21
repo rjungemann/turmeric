@@ -93,6 +93,26 @@ Use this while actively developing a dependency alongside your project.
 Local path spices are not recorded in `tur.lock` and are never fetched
 from the network.
 
+### Globally installed spices
+
+A spice you installed with `tur install` can be consumed as a library by
+declaring it `:global` -- there is no `tur add` flag for this yet, so write the
+entry by hand:
+
+```turmeric
+:spices #map{
+  "notebook" #map{:global true}
+}
+```
+
+It resolves through the install registry rather than `<project>/spices/`, so
+nothing is fetched and no `tur.lock` row is written (as with a `:path` dep). If
+the spice is not installed, `tur fetch` says so and fails rather than letting
+the build reach `module not found`. `:global` takes neither `:url` nor `:path`
+-- those name a different resolution source. See
+[Global Spices as Libraries](developing-spices-guide.md#global-spices-as-libraries)
+for the full rules.
+
 ---
 
 ## What `tur add` Changes

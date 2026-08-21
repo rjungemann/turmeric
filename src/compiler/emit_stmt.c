@@ -997,7 +997,16 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * run, without forcing the value through a typed temp (whose
              * carrier-vs-struct type we cannot recover here).  The value
              * position is handled in emit_effects_handle. */
-            if (e->as.handle_.handle &&
+            /* `e->kind == EX_HANDLE` is NOT redundant: this block is shared
+             * with EX_GEN / EX_GEN_NEXT / EX_GEN_DONE / EX_PERFORM above, and
+             * `as` is a union.  Without the test, a `(perform ...)` in
+             * statement position reinterpreted its PerformExpr as a
+             * HandleExpr and read `is_unsafe_marker` out of unrelated bytes --
+             * UBSan: "load of value 190, which is not a valid value for type
+             * '_Bool'".  A non-zero byte there sent the emitter down the
+             * pure-Unsafe path and made it emit `handle->body`, a pointer read
+             * from the wrong union member. */
+            if (e->kind == EX_HANDLE && e->as.handle_.handle &&
                 emit_handle_is_pure_unsafe(e->as.handle_.handle)) {
                 emit_stmt(ctx, body, e->as.handle_.handle->body);
                 return;

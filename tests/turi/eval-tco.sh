@@ -19,7 +19,7 @@ actual=$(printf ':reload %s\n:quit\n' "$FIXTURE" \
 check_line() {
     local desc="$1"
     local expected="$2"
-    if echo "$actual" | grep -qF "$expected"; then
+    if grep -qF "$expected" <<< "$actual"; then
         echo "PASS: $desc"
         PASS=$((PASS + 1))
     else

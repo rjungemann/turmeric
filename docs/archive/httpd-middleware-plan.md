@@ -1,7 +1,7 @@
 # httpd Middleware Plan
 
 > **Status:** Partially shipped -- forward-looking items remain
-> **Last Updated:** 2026-06-02 (MW1 body-size + MW2 request attrs, rate-limit, static shipped; mw-recover and mw-timeout deferred)
+> **Last Updated:** 2026-08-21 (MW3 mw-recover shipped; mw-timeout still deferred)
 > **Type:** Networking / stdlib
 > **Supersedes (historically):** the bulk of the original v0 surface was
 > reframed and shipped under the now-archived
@@ -240,15 +240,14 @@ negligible for single-digit key counts.
   `tests/fixtures/httpd-mw-body-size/` covers both the over-cap (413)
   and within-cap (200) paths and asserts the base handler is bypassed
   on the over-cap request.
-- **Deferred:** `mw-recover`. The Turmeric primitive `(catch-unwind
-  thunk)` exists at the surface level, but its current lowering
-  (`EX_CATCH_UNWIND` in `src/compiler/emit_expr.c`) passes `NULL` as the
-  thunk env and casts the closure value directly as `tur_thunk_fn`.
-  That works for nullary literal C functions but not for fat closures
-  that capture `next` -- which is exactly what a middleware needs. The
-  cleanest unblock is to teach the catch-unwind lowering to invoke the
-  fat-closure dispatcher (mirroring `httpd-call`) so the thunk can
-  capture state; revisit `mw-recover` after that lands.
+- **Shipped (2026-08-21, as MW3):** `mw-recover`. The unblock landed in
+  two parts: `EX_CATCH_UNWIND` / `EX_CATCH_PANIC_OF` gained a case in
+  `collect_free_vars` (so a lifted catch thunk threads the enclosing
+  names it references into its env), and the drop glue learned to skip
+  `TUR_CLOSURE_DROP` for a catch thunk's borrowed `^fat` captures. See
+  `stdlib/httpd.tur` (MW3) and `tests/fixtures/httpd-mw-recover/`, which
+  sends two requests -- the panicking one and a following good one --
+  because "the server survived" is the property that matters.
 
 ### Phase MW2 -- State-carrying middleware + request attrs
 

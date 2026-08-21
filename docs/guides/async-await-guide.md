@@ -66,6 +66,28 @@ A **fiber** is a user-space thread (lightweight thread) that:
 - Can be awaited with `(await fut)`.
 - Composable: multiple `await`s sequence operations.
 
+### Task panics
+
+A panic inside an `(async ...)` body is that **task's** failure, not the
+spawner's. It is caught at the task boundary and the future is left in a
+rejected state carrying the panic message, so:
+
+- the spawn returns normally -- the statement after it runs;
+- a task whose failure nobody demands never terminates the program;
+- `(await f)` on a rejected task re-raises the task's panic **at the await**,
+  which a `catch-unwind` there catches, and which prints the task's own
+  message and aborts when no handler is in scope.
+
+```turmeric
+(let [fut (async boom)
+      r   (catch-unwind (fn [] : int (await fut)))]
+  (if (err? r) (println "task failed") (println "ok")))
+```
+
+See the "Panic inside async tasks" section of the
+[Error Handling Guide](error-handling-guide.md) for what is still planned
+(cancel-vs-panic precedence, async-main exit codes, the WASM lowering).
+
 ### Scheduling
 
 The default scheduler is single-threaded: all fibers run on one OS thread, avoiding data races. A multi-threaded work-stealing scheduler (fibers distributed across a pool of OS threads) is available separately via `stdlib/scheduler_mt.tur`.

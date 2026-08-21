@@ -1,6 +1,9 @@
 ; TY2.2/TY2.4: box an ADT value into `any` (ADTs are pointer-carried handles,
 ; so they ride the int64_t carrier), read its tag with type-of, then cast it
 ; back and match on it.
+;
+; type-of-cast-kind-granularity: the tag is a per-monomorph id now, so `type-of`
+; names the ADT ("Shape") instead of reporting "adt" for every ADT alike.
 
 (defdata Shape (Circle :int) (Square :int))
 

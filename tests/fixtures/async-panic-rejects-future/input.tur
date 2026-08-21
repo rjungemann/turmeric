@@ -1,0 +1,39 @@
+;;; async-panic-task-boundary: a panic inside an (async ...) body is that
+;;; TASK's failure, not the spawner's.
+;;;
+;;; Three properties, in order:
+;;;   1. Spawning a task that panics does not unwind the spawner -- the line
+;;;      after the spawn runs.  (It used to abort the process at the spawn,
+;;;      because the body runs inline on the caller's stack with no boundary.)
+;;;   2. A task whose panic nobody demands never kills the program.
+;;;   3. Awaiting a rejected task re-raises the panic AT THE AWAIT, carrying
+;;;      the task's own message, so a catch-unwind there catches it.
+
+(defn panic-msg [r : int] : cstr
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res || res->is_ok) return "(ok)";
+  tur_panic_payload *p = (tur_panic_payload*)(intptr_t)res->err_val;
+  return p ? (const char*)tur_panic_payload_value(p) : "(null)";
+  ```)
+
+(defn boom [] : int (panic "task exploded"))
+
+(defn fine [] : int 7)
+
+(defn main [] : int
+  ;; A task that does not panic is unaffected.
+  (let [good (async fine)]
+    (println (await good)))
+
+  ;; (1) the spawn returns; (2) nothing demands the result, nothing aborts.
+  (let [orphan (async boom)]
+    (println "spawn survived"))
+
+  ;; (3) the panic surfaces at the await and is catchable there.
+  (let [fut (async boom)
+        r   (catch-unwind (fn [] : int (await fut)))]
+    (if (err? r) (println (panic-msg r)) (println "no panic")))
+
+  (println "survived")
+  0)

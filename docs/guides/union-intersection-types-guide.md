@@ -8,8 +8,10 @@ description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual ty
 
 > **Status:** `any` boxing codegen, the checked `cast`, and `type-of` ship for
 > every payload kind (int/bool/float/nil/cstr/ptr, ADTs, and heap-boxed
-> structs). The one deferred item is general `struct { int tag; union { ... } }`
-> tagged-union C emission. See [Deferred](#deferred) below.
+> structs), at per-TYPE granularity -- `type-of` names the struct or ADT and
+> `cast` rejects a different one. The one deferred item is general
+> `struct { int tag; union { ... } }` tagged-union C emission. See
+> [Deferred](#deferred) below.
 
 Union types (`A | B`) and intersection types (`A & B`) extend the Turmeric type system with
 structural type combinations. Together they enable gradual typing, flexible APIs, and
@@ -273,10 +275,10 @@ defn typed-print [x : (int | cstr)] : unit
 A value widened to `any` is boxed into a `tur_tagged_t` that records the
 payload's runtime type. Two forms read that box back:
 
-- **`(type-of x)`** returns the payload's type name as a `cstr`:
-  `"int"`, `"bool"`, `"float"`, `"cstr"`, `"ptr"`, `"struct"`, or `"adt"`. The
-  tag has *kind* granularity -- every struct reports `"struct"` and every ADT
-  `"adt"`, not the specific struct/ADT name.
+- **`(type-of x)`** returns the payload's type name as a `cstr`. A primitive
+  reports its kind -- `"int"`, `"bool"`, `"float"`, `"cstr"`, `"ptr"` -- and a
+  struct or ADT reports **its own name**: `"Point"`, `"Shape"`. (It used to
+  answer `"struct"` for every struct and `"adt"` for every ADT.)
 - **`(cast x : T)`** is a *checked* downcast. It verifies the box tag matches
   `T` and returns the unboxed value; on a mismatch it **panics** (aborts with a
   message like `cast: any holds cstr, not int`). `T` may be a primitive type
@@ -292,6 +294,25 @@ payload's runtime type. Two forms read that box back:
     ;; (cast a int)          ;; would panic: any holds cstr, not int
     0))
 ```
+
+The check is by TYPE, not by kind, so two struct types are distinguishable:
+
+```turmeric
+(defstruct Point [x : int y : int])
+(defstruct Other [a : int b : int])
+
+(let [a (:: (make-struct Point 3 4) any)]
+  (println (type-of a))     ;; => Point
+  (println (is? a Point))   ;; => true
+  (println (is? a Other))   ;; => false
+  ;; (cast a Other)         ;; panics: cast: any holds Point, not Other
+  (.x (cast a Point)))      ;; => 3
+```
+
+Under the hood the box tag is a per-monomorph id for a struct/ADT payload (a
+primitive keeps its `TypeKind`), and the program carries a table naming the ids
+it allocated. `(Box int)` and `(Box float)` get distinct ids; `type-of` reports
+the head name (`"Box"`) for both.
 
 By-value structs are heap-boxed on widening (a `malloc`'d copy) and unboxed by
 dereference on `cast`; ADTs and `cstr` are pointer-carried and ride the carrier
@@ -420,7 +441,6 @@ The following items are not yet implemented:
 | Item | Notes |
 |---|---|
 | Tagged union C codegen | General `struct { int tag; union { A a; B b; } data; }` emission for `(A \| B)` unions (the `any` top type ships via `tur_tagged_t`) |
-| Per-name `type-of`/`cast` granularity | `type-of` reports `"struct"`/`"adt"`, not the specific struct/ADT name; `cast` checks at that same granularity |
 | ADT-as-union sugar | Not pursued -- infeasible against monomorphic unions (defdata is parametric/HKT/recursive/GADT). ADTs already interoperate with unions via `any` boxing; see [ADTs and Unions](#adts-and-unions-interop-via-any-not-a-desugar). |
 | Instance intersection on unions | Deferred failure during instance resolution may be hard to diagnose |
 

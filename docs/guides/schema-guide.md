@@ -320,9 +320,40 @@ Unlike `#json(...)`, the inner is an ordinary Turmeric expression (read with the
 normal reader), not a verbatim JSON blob. The bare `#json<T>(...)` literal form
 also wraps its node tree in `(:: node T)`.
 
-The panic-on-violation `#json-str<T>` is implemented; the Result-returning
-`#json-str?<T>` and file-reading `#json-file<T>` remain future work
-(`#json-str?` emits a "not yet implemented" diagnostic).
+### `#json-str?<T>(...)` -- the Result-returning form
+
+Add a `?` and a schema violation becomes a value instead of a process death:
+
+```turmeric no-check
+(defn try-user [body :cstr] :(Result User int)
+  #json-str?<User>(body))
+
+;; (ok? r) -- decoded; (ok-val r) is the User
+;; (err? r) -- the body did not satisfy User's schema
+```
+
+It expands to the panicking form behind a catch boundary:
+
+```turmeric no-check
+(:: (catch-unwind (fn [] : T (:: (decode! (json/decode expr)) T)))
+    (Result T int))
+```
+
+which is the whole design: `HasSchema` has one method and each instance's
+schema lives inside its own `decode!` body, so there is nothing else for a
+reader macro to branch on. Two consequences worth knowing:
+
+- **The violation detail still goes to stderr.** `schema-decode!` prints every
+  failing path before it raises, on the recovered path too. The `Result` tells
+  you *that* it failed; stderr tells you *what* failed.
+- **The err payload is the panic handle**, carried as `:int` at this surface --
+  `(Result T int)`. Branch with `ok?` / `err?`; there is no structured error
+  value to destructure yet.
+
+The file-reading `#json-file<T>` remains future work: `read-file` returns
+`ptr<void>` (NULL on any error) rather than `:cstr`, so it needs a defined
+answer for an unreadable file and an owner for the buffer -- see
+[docs/reported/json-str-result-and-file-readers-missing.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/json-str-result-and-file-readers-missing.md).
 
 ## Applicative combinators
 

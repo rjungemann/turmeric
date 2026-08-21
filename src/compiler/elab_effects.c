@@ -824,6 +824,11 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
     cases[0].body           = hbody;
 
     HandleExpr *h = (HandleExpr *)arena_alloc(e->arena, sizeof(HandleExpr));
+    /* Arena memory is not zeroed, and every field of this struct is read
+     * unconditionally at emit time -- `shallow` was left uninitialized here,
+     * which UBSan catches as "load of value 190, which is not a valid value
+     * for type '_Bool'".  Zero first, then set what this site means. */
+    memset(h, 0, sizeof(HandleExpr));
     h->body            = body_B;
     h->cases           = cases;
     h->n_cases         = 1;
@@ -2122,6 +2127,7 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
 
     /* Create the handle expression */
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    memset(handle, 0, sizeof(HandleExpr));   /* arena memory is not zeroed */
     handle->body = body;
     handle->cases = cases;
     handle->n_cases = n_cases;
@@ -2308,6 +2314,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     if (!cases[0].body) return NULL;
 
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    memset(handle, 0, sizeof(HandleExpr));   /* arena memory is not zeroed */
     handle->body = NULL;          /* literal: detached from any body (FH design) */
     handle->cases = cases;
     handle->n_cases = 1;

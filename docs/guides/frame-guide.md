@@ -178,14 +178,18 @@ let [s  schema(list(field("x" type-int64()   0)
 (let [df (read-csv "data/sales.csv" (default-csv-opts))]
   (match df
     [(ok f)  (print-frame f)]
-    [(err e) (println "error:" e)]))
+    [(err e) (do (println "error:") (println e))]))
 ```
+
+> `println` takes exactly one argument (there is an overload per argument type,
+> each arity 1), so a label and a value are two calls -- or one
+> `(println (str-concat "error: " e))` when the value is already a `cstr`.
 
 ```sweet-exp
 let [df read-csv("data/sales.csv" default-csv-opts())]
   match df
     [ok(f)  print-frame(f)]
-    [err(e) println("error:" e)]
+    [err(e) do(println("error:") println(e))]
 ```
 
 The type inference order is int64 -> float64 -> date32 -> timestamp -> bool -> utf8.
@@ -400,7 +404,7 @@ output column names, input column names, and aggregation tags.
                 (list (agg-sum)     (agg-count)))]
   (match summary
     [(ok f)  (print-frame f)]
-    [(err e) (println "agg error:" e)]))
+    [(err e) (do (println "agg error:") (println e))]))
 ```
 
 ```sweet-exp
@@ -411,7 +415,7 @@ let [grouped group-by(df vec-of("grade"))
                  list(agg-sum() agg-count()))]
   match summary
     [ok(f)  print-frame(f)]
-    [err(e) println("agg error:" e)]
+    [err(e) do(println("agg error:") println(e))]
 ```
 
 Available aggregation functions:
@@ -479,7 +483,7 @@ of column names -- left-side key names and right-side key names.
                     (list "id"))]
        (match result
          [(ok df) (print-frame df)]
-         [(err e) (println "join error:" e)]))]
+         [(err e) (do (println "join error:") (println e))]))]
     [_ (println "csv read error")]))
 ```
 
@@ -493,7 +497,7 @@ let [orders   read-csv("orders.csv"   default-csv-opts())
                     (list "id"))]
        (match result
          [(ok df) (print-frame df)]
-         [(err e) (println "join error:" e)]))]
+         [(err e) (do (println "join error:") (println e))]))]
     [_ (println "csv read error")]
 ```
 
@@ -598,16 +602,20 @@ directly.
   ;; Hand the two raw pointers to Python via ctypes or cffi:
   ;; import pyarrow as pa
   ;; tbl = pa.RecordBatch._import_from_c(array_ptr, schema_ptr)
-  (println "schema ptr:" schema-p)
-  (println "array ptr:"  array-p))
+  (println "schema ptr:")
+  (println schema-p)
+  (println "array ptr:")
+  (println array-p))
 ```
 
 ```sweet-exp
 let [ptrs     arrow-export(df)
      schema-p head(ptrs)
      array-p  head(tail(ptrs))]
-  println("schema ptr:" schema-p)
-  println("array ptr:"  array-p)
+  println("schema ptr:")
+  println(schema-p)
+  println("array ptr:")
+  println(array-p)
 ```
 
 The exporting side transfers ownership: the consumer must call the release
@@ -627,14 +635,14 @@ callbacks embedded in the structs when done. PyArrow does this automatically.
 (let [df (arrow-import schema-ptr array-ptr)]
   (match df
     [(ok f)  (print-frame f)]
-    [(err e) (println "import error:" e)]))
+    [(err e) (do (println "import error:") (println e))]))
 ```
 
 ```sweet-exp
 let [df arrow-import(schema-ptr array-ptr)]
   match df
     [ok(f)  print-frame(f)]
-    [err(e) println("import error:" e)]
+    [err(e) do(println("import error:") println(e))]
 ```
 
 ### Column-level export

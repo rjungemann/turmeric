@@ -4253,3 +4253,57 @@
     (fn [c : ptr<void>] : nil
       (httpd-call _n c)
       (httpd-mw-static-fallback c _root))))
+
+;; =============================================================================
+;; MW3: mw-recover -- turn a downstream panic into a 500 response
+;; =============================================================================
+;;
+;; Runs `next` under `catch-unwind`.  When the downstream handler panics,
+;; the unwind is caught at the middleware boundary, the worker thread
+;; survives, and the client gets a 500 instead of a dropped connection.
+;;
+;; The status/body are only written when the handler had not already set a
+;; status before it panicked -- a handler that got as far as
+;; `(httpd-resp-status! c 201)` and then blew up keeps its own status
+;; rather than having it silently rewritten.
+
+;;; httpd-mw-recover-500 -- internal: write a 500 response unless the
+;;; handler already set a status before panicking. Always returns nil.
+
+(defn httpd-mw-recover-500 [conn : ptr<void>] : nil
+  (when (= 0 (httpd-resp-status-get conn))
+    (do
+      (httpd-resp-status! conn 500)
+      (httpd-resp-body! conn "Internal Server Error"))))
+
+;;; mw-recover -- catch a downstream panic and respond 500.
+;;;
+;;; Wraps a base handler so that a `panic` (or any unwind) raised inside
+;;; `next` is caught at the middleware boundary.  Without it a panicking
+;;; handler unwinds out of the worker and takes the process (or at best
+;;; the connection) with it; with it the request gets a 500 and the
+;;; server keeps serving.
+;;;
+;;; Put it OUTERMOST in the middleware chain -- it can only recover
+;;; panics raised by handlers it wraps, and an outer middleware's
+;;; post-processing still runs on the 500 response.
+;;;
+;;; Parameters:
+;;;   next -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>).
+;;;
+;;; Example:
+;;;   (let [base     (fn [c :ptr<void>] :nil (panic "boom"))
+;;;         composed (compose-middleware base mw-recover)]
+;;;     (httpd-new 0 composed))
+;;;   ; => client sees "500 Internal Server Error"; the server stays up
+;;;
+;;; Since: Phase H8 (MW3)
+
+(defn mw-recover [^fat next : int] : ptr<void>
+  (let [_n next]
+    (fn [c : ptr<void>] : nil
+      (let [r (catch-unwind (fn [] : int (do (httpd-call _n c) 0)))]
+        (when (err? r) (httpd-mw-recover-500 c))))))

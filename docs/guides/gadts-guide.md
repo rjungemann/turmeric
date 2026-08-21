@@ -570,31 +570,43 @@ defn print-as-int [x : any] :int
 
 ---
 
+## Nested patterns
+
+A constructor pattern may appear in a field position, to any depth, and scalar
+literals may appear there too. Arms are tried in order, so a specific arm can
+precede a general one for the same constructor:
+
+```turmeric
+(defgadt Expr [a]
+  (Lit int                   : (Expr int))
+  (Add (Expr int) (Expr int) : (Expr int)))
+
+(defn simplify [e : (Expr int)] : int
+  (match e
+    (Lit v)         v
+    (Add (Lit 0) r) (eval-expr r)      ; nested literal wins for a zero left
+    (Add l r)       (+ (eval-expr l) (eval-expr r))))
+```
+
+The nested arms for one constructor must cover it: either a later arm for the
+same constructor binds plain names (as `(Add l r)` does above), the nested
+sub-patterns provably cover the sub-type's constructors, or a `_` arm follows.
+Otherwise the compiler reports
+
+```
+match: the nested patterns for constructor 'Add' are not exhaustive --
+add a `(Add ...)` arm binding plain names, or a `_` arm after it
+```
+
+rather than turning the gap into a runtime failure. A `when` guard on a nested
+arm falls through to the next arm of the same group when it fails.
+
 ## Current Limitations
 
 **Unsupported:**
 
 - **No dependent types.** Type parameters must be types, not values. You cannot
   index a GADT by a runtime integer directly; use a type-level Nat GADT instead.
-
-- **No nested patterns in GADT arms.** You cannot write:
-
-  ```
-  (match e
-    (Add (Lit 0) r) r   ; nested pattern -- not yet supported
-    ...)
-  ```
-
-  Flatten with a let binding instead:
-
-  ```
-  (match e
-    (Add l r)
-      (match l
-        (Lit 0) r
-        _       (Add l r))
-    ...)
-  ```
 
 - **No mutual recursion across files.** Mutually recursive GADTs must be
   defined in the same file.

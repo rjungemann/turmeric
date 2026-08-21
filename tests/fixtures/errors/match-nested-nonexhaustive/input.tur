@@ -1,0 +1,11 @@
+;; Nested patterns that do not cover the sub-ADT, with no catch-all: the
+;; lowering refuses rather than turning the gap into a runtime panic.
+(defdata Inner (IA :int) (IB))
+(defdata Outer (OA :Inner) (OB))
+
+(defn f [o : Outer] : int
+  (match o
+    (OA (IA n)) n
+    (OB)        0))
+
+(defn main [] : int (println (f (OB))))

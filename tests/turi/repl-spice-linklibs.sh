@@ -106,7 +106,7 @@ run() {
 }
 
 out=$(run '(shim-answer 4 5)')
-if echo "$out" | grep -qx '=> 99'; then
+if grep -qx '=> 99' <<< "$out"; then
     pass "s1-linklibs-call"
 else
     fail "s1-linklibs-call" "expected => 99 calling through the manifest-declared library; got: $(echo "$out" | tail -5 | tr '\n' ' ')"

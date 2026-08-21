@@ -295,9 +295,11 @@ element type is itself `Eq`:
 (load "stdlib/args.tur")
 (let [spec (args/spec-new)]
   (args/spec-flag   spec "--verbose")
-  (args/spec-option spec "--output" "file" "out.txt")
+  (args/spec-option spec "--output" "string" (some "out.txt"))
   (let [result (args/parse spec *args*)]
-    (println (args/get result "--output"))))
+    (println (args/get-str result "output"))
+    (args/result-free result))
+  (args/spec-free spec))
 ```
 
 **Math and bitwise stdlib:**

@@ -3128,7 +3128,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                             "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
                             cf, cf);
                         free(cf);
-                    } else if (cap && cap->is_fat &&
+                    } else if (cap && cap->is_fat && !fd->closure->fat_captures_borrowed &&
                                !(cap->closure_fn_binding &&
                                  fd->binding &&
                                  cap->closure_fn_binding == fd->binding)) {
@@ -3756,6 +3756,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
 
+    /* inline-c-locals-invisible-to-inline-c-blocks: same idea one level down --
+     * the locals this body's inline-C blocks name get their raw spelling too.
+     * Collected per body; empty (and therefore free) for every function whose
+     * inline C does not name a local, which is nearly all of them. */
+    const Binding **saved_ic_locals = ctx->inline_c_raw_locals;
+    uint32_t saved_n_ic_locals = ctx->n_inline_c_raw_locals;
+    emit_inline_c_raw_locals_collect(fd->body, fd->params, fd->n_params,
+                                     &ctx->inline_c_raw_locals,
+                                     &ctx->n_inline_c_raw_locals);
+
     /* Phase D: record which params are pbp for field-access and call-site handling. */
     uint32_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
@@ -3855,8 +3865,60 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* M2b carrier-emit synth (above) already wrote a `return tur_*(...)`
          * line; skip the make-struct body so it doesn't double-emit. */
     } else if (body_diverges) {
-        /* Body diverges on every path - emit as statements only */
+        /* Body diverges on every path - emit as statements only, then a
+         * trailing `return` that is dead code by construction.
+         *
+         * `panic` is NOT `noreturn` on the compiled path: it sets
+         * tur_panicking and returns, and the per-call-site
+         * `if (tur_panicking) return ...;` is what unwinds.  So a C compiler
+         * reading a value-returning function whose body ends in a panic sees
+         * control reach the closing brace:
+         *
+         *   warning: non-void function does not return a value in all control
+         *   paths [-Wreturn-type]
+         *
+         * That is not just noise.  One such function in stdlib
+         * (`schema-decode-abort`) put a clang warning on stderr of every
+         * program that loaded the module, which is how it broke
+         * tests/run-offtree-load.sh: that harness captures 2>&1 and compares
+         * against expected stdout, so the program printed the right answer
+         * and the assertion failed anyway -- on macOS only, because gcc and
+         * clang word and trigger this warning differently.
+         *
+         * Fixing it in the stdlib source does not work: a value written after
+         * the panic is unreachable, and elaboration elides it, so the body
+         * still diverges and the emitted C is unchanged.  It has to be here.
+         *
+         * The default follows the same scalar/aggregate split as every other
+         * synthesized zero in the emitter -- `((T)0)` for a scalar, `(T){0}`
+         * for a struct/ADT typedef.  Getting this wrong is a build failure,
+         * not a warning: `return 0;` from a by-value-aggregate function does
+         * not compile (caught by catch-unwind-aggregate-thunk). */
         emit_stmt(ctx, file, fd->body);
+        /* Only when the EMITTED C type is a known non-void.  `result_kind`
+         * cannot decide this on its own: a `: !` (never) function is
+         * TY_NEVER, not TY_NIL, and emits as `void` -- so keying off the kind
+         * put `return 0;` in a void function, which clang rejects outright
+         * ("void function 'inner' should not return a value") while gcc only
+         * warns.  panic-trace is that fixture, and it broke macOS CI while
+         * passing on Linux.
+         *
+         * The bias when the C type is unknown is to emit NOTHING: a missing
+         * return is a -Wreturn-type warning, a wrong one is a build failure,
+         * and this branch exists to remove a warning in the first place. */
+        const char *rc = ctx->current_fn_ret_ctype;
+        bool rc_is_void = (!rc || !*rc || strcmp(rc, "void") == 0);
+        if (is_main && result_kind == TY_INT) {
+            indent_buf(file, ctx->indent);
+            buf_puts(file, "return (int)0;\n");
+        } else if (!rc_is_void && result_kind != TY_NIL) {
+            indent_buf(file, ctx->indent);
+            if (emit_c_type_is_scalar(rc)) {
+                buf_printf(file, "return ((%s)0);\n", rc);
+            } else {
+                buf_printf(file, "return (%s){0};\n", rc);
+            }
+        }
     } else if (fd->body->kind == EX_INLINE_C) {
         /* Inline C body - emit as-is (it contains its own return statements) */
         emit_stmt(ctx, file, fd->body);
@@ -4418,6 +4480,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* Restore previous context */
+    free((void *)ctx->inline_c_raw_locals);
+    ctx->inline_c_raw_locals   = saved_ic_locals;
+    ctx->n_inline_c_raw_locals = saved_n_ic_locals;
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
     ctx->no_unwind = saved_no_unwind;  /* Phase R5 */

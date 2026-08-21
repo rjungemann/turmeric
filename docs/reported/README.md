@@ -46,26 +46,217 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [async-panic-task-boundary](async-panic-task-boundary.md) | medium | panic in a plain `(async ...)` body unwinds the caller instead of rejecting the future |
 | [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
-| [args-api-int-erased-handles](args-api-int-erased-handles.md) | medium | stdlib/args.tur types spec/result handles and the option default as bare `:int` (no-lazy-int violation) |
 | [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
+| [guestbook-example-has-no-import-graph](guestbook-example-has-no-import-graph.md) | medium | the guestbook's 7 files are one problem: nothing loads them (its CMake `DEPENDS` is not an import), plus stale `extern-c`/`unit`/`Serializable` syntax, plus a dependency on the unimplemented serializable-continuation surface |
+| [perform-inside-loop-has-no-lowering](perform-inside-loop-has-no-lowering.md) | medium | a `perform` reachable from a `while` body has no CPS lowering -- and the diagnostic prescribes a hoist that does not escape it. Blocks every event-loop-shaped effect, `examples/snake` included |
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
-| [performance-guide-fictional-stdlib-api](performance-guide-fictional-stdlib-api.md) | medium | performance-guide's middle sections document nonexistent stdlib modules/functions |
-| [logic-guide-documents-unimplemented-backtracking-api](logic-guide-documents-unimplemented-backtracking-api.md) | medium | logic-programming-guide's API summary (`choice-point`/`run`/`do-backtrack`) does not exist |
-| [match-nested-constructor-patterns](match-nested-constructor-patterns.md) | medium | match arms cannot nest constructor patterns; everything flattens with inner match |
-| [datalog-examples-do-not-compile](datalog-examples-do-not-compile.md) | medium | 4 of 5 examples/datalog/*.tur fail `tur check`; the tutorial series quotes them |
-| [tur-run-test-blocked-by-doctest-failures](tur-run-test-blocked-by-doctest-failures.md) | medium | `tur run test` exits in ~24s: the doctest dep fails, so the ctest line never runs |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
-| [type-of-cast-kind-granularity](type-of-cast-kind-granularity.md) | low-medium | `cast` between two different struct types via `any` succeeds -- tag is TypeKind, not type id |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
-| [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
-| [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | medium | mw-recover blocked by closure/fat-handle codegen defects: lifted thunk references an unthreaded name, plus a drop-glue use-after-free -- 4 repros inside |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
-| [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
+| [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+
+`args-api-int-erased-handles` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/args-api-int-erased-handles.md). `ArgSpec` /
+`ArgResult` are `defopaque` newtypes now, the option default is
+`(Option cstr)`, and `args/sub-result` returns `(Option ArgResult)`; the
+`args-defaults` fixture's `cstr->int` reinterpret helper is deleted. Two
+notes worth carrying: an inline-C body **cannot** take a by-value
+`(Option cstr)` -- it lowers to `tur_adt_Option__cstr`, not the `int64_t`
+carrier `tur_is_some` accepts, so the option is peeled in a pure-Turmeric
+wrapper -- and a `;;;` block binds to the NEXT definition, so an internal
+helper slipped between a docstring and its public `defn` steals the
+docstring in `docs/api/`. `argv` / `args/positional` stay `:int` on purpose:
+they are the `*args*` cons list, which the elaborator itself declares as a
+global `:int`.
+
+`async-panic-task-boundary` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/async-panic-task-boundary.md), with its root cause
+corrected: the async body runs **inline on the caller's stack**, so there was
+no fiber whose `panic_jmpbuf` the fix could arm -- the boundary is a
+`tur_handler_chain` node like `tur_catch_unwind_box`'s, and the emitted body's
+existing `if (tur_panicking) return ...` checks do the unwinding. The other
+half the report did not have: `await` on a rejected future used to `abort()`,
+so rejecting the future alone would have deferred the same process death
+rather than removing it. Awaiting a rejected task now re-raises the task's own
+panic at the await, where a `catch-unwind` can catch it. The spawn-side frame
+is the boundary, so a panic after a re-park is still outside it.
+
+`match-nested-constructor-patterns` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/match-nested-constructor-patterns.md) -- by a
+FORM-level rewrite in front of `elab_match`, not the decision-tree rewrite its
+fix direction proposed, so the arm loop, exhaustiveness check, linear/borrow
+machinery and codegen are untouched. Depth falls out of recursion: the inner
+`match` forms the lowering emits go back through `elab_match`. Two
+prerequisites were separate defects with their own repros, both fixed there: a
+`!`-typed (`(panic ...)`) arm was rejected as incompatible with its peers, and
+match arms did not rewind MOVE state the way `if` branches do, so consuming the
+same value in two arms was a spurious TUR-E0005. One limitation found on the way
+is filed above as `match-adt-var-arm-does-not-bind`.
+
+`catch-unwind-aggregate-return-miscompiled` was resolved 2026-08-21 and moved
+to [docs/archive](../archive/catch-unwind-aggregate-return-miscompiled.md); it
+was filed 2026-08-20 and never got a row here. A catch boundary over a thunk
+returning a by-value aggregate now calls it through a per-type BOXING
+trampoline (`__tur_catchbox_<ctype>`) and `tur_catch_unwind_box_via` /
+`tur_catch_panic_of_box_via`, instead of the `TUR_APPLY0` cast that read the
+struct's return register as an `int64_t` and handed the consumer garbage to
+dereference. The detail its root-cause section lacked: the thunk reaches
+codegen as a `ptr<void>` fat handle, so the ascription has to be peeled to find
+the `TY_FN` that carries the return type. Two follow-ons: this unblocks
+`json-str-result-and-file-readers-missing`, and the INTERPRETER has the same
+symptom by a different mechanism, filed as
+`turi-catch-unwind-aggregate-payload` above.
+
+`match-adt-var-arm-does-not-bind` was filed and resolved 2026-08-21 (found
+while implementing nested patterns, whose group fallthrough emits exactly this
+shape) and moved to
+[docs/archive](../archive/match-adt-var-arm-does-not-bind.md). Both halves were
+needed: the elaborator now binds the var arm in its own scope, and both ADT arm
+emitters declare the C variable -- from `*__scrut`, `__scrut` or
+`(T)(intptr_t)__scrut` depending on which of the three ways the scrutinee was
+bound. No narrowing: a var arm is reached for any remaining variant, so there
+is nothing to narrow to.
+
+`ok-val-untyped-catch-box-loses-float` was filed and resolved 2026-08-21. One
+branch in the erased-carrier field read: the erased `tur_adt_Result` declares
+`int64_t ok_val` and a float payload rides in it as BITS, so reading it and
+letting C convert int64 -> double converted the bit pattern numerically. It
+reinterprets now, like the typed construction path. Note the `:heap`-ADT branch
+two cases above carries a comment about the same trap but fixes it with a CAST
+-- correct there (the monomorph cell really has a `double` field), wrong here.
+Moved to
+[docs/archive](../archive/ok-val-untyped-catch-box-loses-float.md).
+
+`guides-two-arg-println-and-when-body` was filed and resolved 2026-08-21 and
+moved to
+[docs/archive](../archive/guides-two-arg-println-and-when-body.md). Every
+`(println "label:" v)` in `docs/guides/` is gone -- frame-guide's 12 use the
+two-call form rather than `str-concat`, since `tur-frame` is a sibling-repo
+spice whose error payload type could not be verified here. The doc lint the
+report proposes (extract fenced blocks, `tur check` the self-contained ones) is
+NOT built; the `no-check` fence marker some guides already carry is the seed of
+the opt-in convention it would need.
+
+`type-of-cast-kind-granularity` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/type-of-cast-kind-granularity.md). An `any` box now
+carries a per-monomorph id for a struct/ADT payload, so `(cast a OtherStruct)`
+on a box holding a `Point` panics instead of reinterpreting, and `type-of`
+names the type. One correction to the filed direction: the mangled-C-name
+intern table it points at is the wrong key -- every carrier ADT's C name is
+`int64_t`, so two ADTs would have collided; the key is `type_name()`. Two
+mechanism notes: the id->name table cannot live in the preamble (ids are
+per-program) NOR be a forward-declared per-program function (the S2 split
+runtime compiles the preamble standalone), so it is installed through a
+function pointer from `__tur_static_init`; and the interpreter, whose
+`type-of` comment said it was deliberately matching the old kind granularity,
+was updated in step.
+
+`global-spice-library-consumption` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/global-spice-library-consumption.md). `#{:global
+true}` resolves a dep through the `tur install` registry (`state.tur`), is
+never fetched, and errors clearly when the spice is not installed. Two things
+the filing did not anticipate: **four** resolution ladders had to learn the new
+shape, not one (pkg.c's plus three in main.c, each carrying its own copy of the
+workspace-sibling -> `:path` -> `spices/<name>-<ref>` chain), and the
+`:global`+`:url` conflict has to be reported with `diag_emit` -- a bare
+`fprintf` leaves the manifest ACCEPTED, since `pkg_manifest_read` judges the
+read by `diag_had_error()`. Deliberately not done: `:global-policy`, version
+validation / the `tur.lock` SHA (no range syntax to validate against yet), and
+library-only installs (`tur install` still requires a `:bin`).
+
+`httpd-mw-recover-unblocked-but-unwritten` was resolved 2026-08-21 and moved
+to [docs/archive](../archive/httpd-mw-recover-unblocked-but-unwritten.md).
+`mw-recover` ships as MW3 in `stdlib/httpd.tur`, pinned by
+`tests/fixtures/httpd-mw-recover/` (two requests -- the panicking one and a
+following good one, because "the server survived" is the property that
+matters and a single request would pass even with the use-after-free). Three
+of its four repros are fixed: (C)/(D) were one defect -- `collect_free_vars`
+had **no case** for `EX_CATCH_UNWIND`/`EX_CATCH_PANIC_OF`, so a name used
+only inside a catch thunk was never captured and the lifted thunk emitted an
+undeclared identifier -- and (B) was the drop glue owning a `^fat` handle the
+catch thunk only **borrows** from the frame it is created and dropped in.
+Repro (A) did **not** fall out; it is re-filed, narrowed to a three-line
+repro with no httpd and no `catch-unwind`, as
+[let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md)
+under "Value representation".
+
+Four rows were removed 2026-08-21 as **stale index entries**, not as new work:
+`performance-guide-fictional-stdlib-api`,
+`logic-guide-documents-unimplemented-backtracking-api`,
+`datalog-examples-do-not-compile` and `tur-run-test-blocked-by-doctest-failures`
+were all resolved and archived on 2026-08-20, but their table rows were left
+behind -- so a triage pass read four open findings that were not open. Worth
+noticing as a class: an index that can drift like this is worse than no index,
+because it is trusted. Their archived files carry the resolutions
+([performance-guide](../archive/performance-guide-fictional-stdlib-api.md),
+[logic-guide](../archive/logic-guide-documents-unimplemented-backtracking-api.md),
+[datalog](../archive/datalog-examples-do-not-compile.md),
+[tur-run-test](../archive/tur-run-test-blocked-by-doctest-failures.md)).
+
+Two of those archives were hiding live work, which is the reason the drift
+mattered rather than just being untidy:
+
+- `datalog-examples-do-not-compile` was archived **partially** resolved, with
+  a "Remaining work" list inside it. Its item 2 ("reduce the
+  undeclared-identifier codegen bug") turned out to be **two** codegen bugs,
+  both now fixed: an inline-C block could not name a `let`-bound local (only a
+  parameter), and a lifted lambda could not read a top-level `def` (Pass 1
+  forward-declares functions, never global storage, and lifted lambdas are
+  prepended to the item list). Both reduced to programs of under a dozen lines
+  with no datalog in them; both fixed with **zero snapshot churn**; pinned by
+  `tests/fixtures/inline-c-names-let-local/` and
+  `tests/fixtures/global-def-read-by-lifted-lambda/`. The report's own guess --
+  "a codegen scoping bug inside `sch_hydecode_hyrec_hy`" -- was wrong, and its
+  "attribution unverified" note is closed: neither bug was branch-specific.
+  The runtime residue is now the open row
+  [examples-tree-does-not-run](../archive/examples-tree-does-not-run.md),
+  filed and resolved the same day (see the note below).
+- `logic-guide-documents-unimplemented-backtracking-api` was archived with its
+  narrative sections still a design sketch, labelled as one in the file.
+
+Archiving a PARTIALLY resolved report is what made both invisible. If a
+resolution leaves work behind, the leftover belongs in a new `docs/reported/`
+file with its own row -- not in a "Remaining work" heading inside
+`docs/archive/`.
+
+`examples-tree-does-not-run` was filed and resolved 2026-08-21 (same day) and
+moved to [docs/archive](../archive/examples-tree-does-not-run.md). Everything
+in `examples/` that compiles now also runs. Both of its runtime items were
+example code, not the compiler, and the answers were cheap once anyone
+actually looked: the four datalog segfaults were `return (int)vec->data[i];`
+in hand-written inline C -- C's `int` is 32 bits, so a 64-bit datum pointer
+came back truncated -- and `datalog.tur`'s TUR-E0201 was a `defdata` that
+moves by default being used twice, which wants `:copy` (now documented in
+`docs/guides/datalog-02-minimal-impl.md`, where a reader meets the trap).
+`cli_args_demo.tur` was fictional twice over (`print` and a bare `getenv`,
+neither of which exists) and is rewritten against the real `env/get`.
+`cellular-automata.tur` checked clean but never linked -- its inline C called
+sibling Turmeric functions by their unmangled names instead of
+`__TUR_CNAME_<name>__`.
+
+The lesson worth keeping is the ratchet's, not any individual fix:
+`tests/check-examples.sh` only ever ran `tur check`, and `tur check` passing
+was mistaken for "works" twice in this tree's history. It now RUNS every
+example that checks clean and requires exit 0, and it fails on any sanitizer
+line the Debug compiler prints while checking one -- which is how a live union
+type-confusion in `emit_stmt` (a `(perform ...)` in statement position reading
+`is_unsafe_marker` out of a `PerformExpr`) got found and fixed. That one could
+not be pinned by a fixture, since whether the garbage byte is non-zero is
+uninitialized memory; the sweep pins it instead.
+
+Three rows above (`env-doctests-are-machine-dependent`,
+`float-division-aborts-instead-of-ieee-inf`,
+`user-defn-named-div-collides-with-libc`) were added 2026-08-21 by
+`tests/check-reported-index.sh` doing its job on its first real merge: they
+arrived from `main` in PRs #775 and #777 as report FILES with no rows here, and
+the lint failed the build naming all three. That is the drift this index has
+had twice before and could not previously detect -- it is now caught at the
+merge that introduces it rather than at the next triage pass that happens to
+notice.
 
 ## Value representation (the consolidation campaign)
 
@@ -78,6 +269,7 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [byvalue-product-tail-var-double-unboxed-nonparametric](byvalue-product-tail-var-double-unboxed-nonparametric.md) | medium | residue of `result-block-value-double-unboxed`: a bare-var tail of a NON-parametric by-value product (`tur_adt_Pt`) is still deref-unboxed by the `emit_if` merge. Not widenable -- the same type rides the carrier at the vec/map element and assoc-type seams, so extending the type test regresses 10 named fixtures. Needs a position-sensitive predicate (the `emit_localvar_lookup_ctype` trick) moved to the merge site, where the arm's emitted text exists |
+| [let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md) | medium | a `let` merge temp holding a CAPTURELESS lambda lowers to a bare fn pointer while the temp was decided `fat-handle`; the repr-shadow guard ICEs. Benign under `TUR_REPR_NO_SHADOW_ICE=1`, but the same disagreement was silent and segfaulted at the *argument* boundary (see the archived `let-bound-noncapturing-lambda-segfaults-as-fn-arg`) |
 
 `mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
 and fixed the same day, both defects along its own fix directions) and moved
@@ -217,6 +409,17 @@ into a frame env again.
 | Report | Severity | One line |
 | --- | --- | --- |
 
+`turi-catch-unwind-aggregate-payload` was filed and resolved 2026-08-21 and
+moved to
+[docs/archive](../archive/turi-catch-unwind-aggregate-payload.md). One line:
+`turi_ok_result_box` took a bare `int64_t` and always built the 3-int box --
+the flattening `native_ok`'s own comment describes and avoids -- so the
+catch-unwind boundary lost the tag of every heap payload. It takes a
+`TuriValue` and applies the same rule now. Wider than the struct repro it was
+filed for: `cstr` came back as a pointer and `float` was tag-flattened too.
+Both `catch-unwind-aggregate-thunk` and `schema-reader-json-str-result` dropped
+their `requires.compiled` markers.
+
 `interp-hkt-pure-return-dispatch-elab-error` was resolved 2026-08-17, the
 day after filing, and moved to
 [docs/archive](../archive/interp-hkt-pure-return-dispatch-elab-error.md).
@@ -271,6 +474,7 @@ informative. Pinned by `tests/fixtures/ascribe-bool-to-numeric-prints/`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [user-defn-named-div-collides-with-libc](user-defn-named-div-collides-with-libc.md) | low | a top-level `(defn div ...)` is emitted verbatim as a C identifier and collides with `stdlib.h`'s `div()`; the user sees three cc errors about code they did not write, with no pointer back to their source |
 
 `reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
 and moved to
@@ -320,7 +524,16 @@ negatives and `tests/fixtures/definstance-constraint-user-type/`.
 
 ## Soundness limits and UB
 
-No open findings in this family.
+| Report | Severity | One line |
+| --- | --- | --- |
+| [float-division-aborts-instead-of-ieee-inf](float-division-aborts-instead-of-ieee-inf.md) | medium | `BS_DIV_CHECK` applies the INTEGER divide-by-zero guard to float division, so `7.1 / 0.0` aborts the process instead of evaluating to `inf`. Correct for `:int`, wrong for `:float`, where IEEE 754 defines the result -- any code relying on inf/NaN propagation gets an abort instead of a value |
+| [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
+
+Indexed 2026-08-21. It had **no row at all** since it was filed -- the only
+open report in the tree that this index never listed, and the
+highest-severity one. Found by sweeping `docs/reported/*.md` against the rows
+here; that sweep is worth repeating whenever you touch this file, in both
+directions (a row with no file, a file with no row).
 
 `reads-grant-survives-callee-global-write` was filed and resolved 2026-08-18,
 and moved to
@@ -390,6 +603,20 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [env-doctests-are-machine-dependent](env-doctests-are-machine-dependent.md) | medium | five `stdlib/env.tur` `;;;` examples are illustrative but `doctest.py` asserts every `; =>`, so they only pass on the author's machine -- and because `test: build doctest`, a failure there stops `just test` before ctest ever runs |
+
+`pipefail-grep-q-false-failures` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/pipefail-grep-q-false-failures.md); it was filed
+2026-08-20 and never got a row here. All 180 pipe-into-`grep -q` sites in the
+39 `tests/*.sh` that set `pipefail` are here-strings now, and
+`tests/check-pipefail-grep-q.sh` (ctest target `tur_pipefail_grep_q_lint`)
+fails on a new one. The lint earned its keep on its first run, catching four
+sites the sweep's own regex missed because they spell the flags as two tokens
+(`grep -E -q` / `grep -F -q`). Two harness defects found while verifying,
+both pre-existing and fixed there: `repl-spice-load.sh` corrupted an
+**absolute** `$TUR` into `$PWD/$TUR` (6 of 9 assertions failed for any caller
+that exported one), and `eval-async-io.sh` lacked its siblings'
+`detect_leaks=0` opt-out, so standalone it exited 1 with no output at all.
 
 `ecs-defsystem-writes-fixture-expects-old-spices` was resolved 2026-08-18 and
 moved to

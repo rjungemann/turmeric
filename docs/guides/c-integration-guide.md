@@ -226,6 +226,48 @@ parameters are available by name as C local variables with their translated
 types. You **must** provide an explicit `return` if the function has a
 non-`void` return type.
 
+### Naming `let`-bound locals from inline C
+
+An inline-C block does not have to be a whole `defn` body -- it can sit in
+statement position inside a mixed Turmeric body, and there it can name the
+enclosing `let`-bound locals the same way it names parameters:
+
+```turmeric
+(defn history [db : int] : ptr<void>
+  (let [raw (db-q db)]
+    (let [^mut i 1]
+      (let [key (rvec-get raw i)]
+        ```c
+        { struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)raw;
+          vec->data[i] = key; }
+        ```))))
+```
+
+The local **is** the C variable, not a copy of it: reads see whatever the
+Turmeric code last stored, and a write from inline C is visible to the
+Turmeric code that follows.
+
+Two rules decide whether a local is reachable this way, and both are about
+there being exactly one thing the name could mean:
+
+- The source name must already be a valid C identifier. `raw` and `key`
+  qualify; `raw-vec`, `key?`, and `db/raw` do not -- they go through the
+  mangler, and the mangled spelling is an unstable implementation detail you
+  must not write down.
+- The name must be unambiguous within the function. If two `let`s in the same
+  `defn` both bind `key`, or a local shares a name with a parameter, neither
+  is reachable -- there is no single spelling that could mean one and not the
+  other. Rename one of them.
+
+A local that fails either rule is not an error; it is simply not declared
+under that name, so the C compiler reports it as undeclared. When that
+happens, rename the local rather than guessing at a mangled spelling.
+
+Locals bound by `match` arms follow the same rules. A `^atomic`,
+`^thread-local`, or captured-by-a-lifted-body local does not participate --
+those carry their own access protocol (an accessor call, an indirection) that
+a bare name could not express.
+
 Inline C is the escape hatch for anything the type system cannot yet express:
 struct definitions, platform intrinsics, `#include`s for system headers inside
 a function scope, etc.

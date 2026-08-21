@@ -37,6 +37,7 @@
 #include "fmt.h"
 #include "forms.h"
 #include "pkg.h"
+#include "global.h"
 #include "reader.h"
 #include "symbols.h"
 #include "platform_fs.h"
@@ -245,6 +246,20 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         s->subdir   = form_str_dup(map_get_kw(val, "subdir"));
         const Form *opt_f = map_get_kw(val, "optional");
         s->optional = form_bool_val(opt_f);
+        /* global-spice-library-consumption: `#{:global true}` resolves through
+         * the `tur install` registry rather than <root>/spices. */
+        s->is_global = form_bool_val(map_get_kw(val, "global"));
+        if (s->is_global && (s->url || s->path)) {
+            /* diag_emit, not fprintf: pkg_manifest_read judges the read by
+             * diag_had_error(), so a bare stderr write would leave the
+             * manifest ACCEPTED with a message nobody acted on. */
+            diag_emit(DIAG_ERROR, val->span,
+                "spice \"%s\" declares :global true together with %s -- a "
+                "global dep resolves from the installed-spice registry, so it "
+                "takes neither",
+                s->name ? s->name : "?", s->url ? ":url" : ":path");
+            return false;
+        }
     }
     return true;
 }
@@ -1859,6 +1874,7 @@ typedef struct FetchItem {
     char *ref;
     char *path;   /* NULL = git dep */
     char *subdir; /* NULL = repo root; set for monorepo sub-packages */
+    bool  is_global; /* `#{:global true}` -- owned by `tur install`, never fetched */
     bool  is_cmake;
     bool  from_root; /* LS3: true iff this item came from the root manifest */
     /* origin for error reporting */
@@ -2140,6 +2156,7 @@ bool pkg_fetch_all(const char *project_dir,
         it->ref      = s->ref    ? tur_strdup(s->ref)    : NULL;
         it->path     = s->path   ? tur_strdup(s->path)   : NULL;
         it->subdir   = s->subdir ? tur_strdup(s->subdir) : NULL;
+        it->is_global = s->is_global;
         it->is_cmake = false;
         it->from_root = true;
         it->from     = tur_strdup("(root)");
@@ -2152,6 +2169,32 @@ bool pkg_fetch_all(const char *project_dir,
 
         if (it->is_cmake) {
             /* cmake deps are handled in pkg_gen_cmake_deps, not fetched here */
+            free(it->name); free(it->url); free(it->ref);
+            free(it->path); free(it->subdir); free(it->from);
+            continue;
+        }
+
+        /* global-spice-library-consumption: a `:global` dep is owned by
+         * `tur install`; there is nothing to fetch and no lock row to keep
+         * (its checkout is the registry's, recorded in state.tur).  A direct
+         * (root) dep that is not installed is a hard error, symmetric with a
+         * `:path` dep whose directory is missing -- the alternative is a
+         * "module not found" a hundred lines later with no hint that a spice
+         * was never installed. */
+        if (it->is_global) {
+            if (it->from_root) {
+                char gdir[4096];
+                if (!tur_installed_spice_dir(it->name, gdir, sizeof(gdir),
+                                             NULL, NULL)) {
+                    fprintf(stderr,
+                        "spice: '%s' declares :global true but no such spice "
+                        "is installed -- run `tur install <source>` first "
+                        "(from %s)\n",
+                        it->name, it->from);
+                    ok = false;
+                }
+            }
+            (void)lock_remove(lock, it->name, false);
             free(it->name); free(it->url); free(it->ref);
             free(it->path); free(it->subdir); free(it->from);
             continue;
@@ -2568,6 +2611,15 @@ static char *resolve_spice_dep_dir(const char *root_project_dir,
                                    const PkgSpice *s) {
     if (!root_project_dir || !s || !s->name) return NULL;
     char dep_dir[4096];
+    /* global-spice-library-consumption: an explicitly `:global` dep resolves
+     * from the install registry and nowhere else -- falling back to a
+     * project-local guess would silently use a different spice than the one
+     * the manifest asked for. */
+    if (s->is_global) {
+        if (!tur_installed_spice_dir(s->name, dep_dir, sizeof(dep_dir), NULL, NULL))
+            return NULL;
+        return tur_strdup(dep_dir);
+    }
     char *ws = s->path ? NULL
                        : pkg_workspace_member_path(root_project_dir, s->name);
     bool from_path = false;

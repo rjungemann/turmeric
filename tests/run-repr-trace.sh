@@ -61,7 +61,7 @@ vtrace="$("$TUR" emit-c --emit-abi-trace "$tmp/vprobe.tur" 2>&1 >/dev/null | gre
 rc=0
 check() {
   local label="$1" pattern="$2"
-  if echo "$trace" | grep -qE "$pattern"; then
+  if grep -qE "$pattern" <<< "$trace"; then
     echo "  ok  $label"
   else
     echo "  FAIL $label -- no line matching: $pattern"
@@ -80,7 +80,7 @@ check "bare-to-fat bridge traced"   "^repr-trace [0-9]+:[0-9]+ bridge bare-to-fa
 # Value-position bridge classifications, from the second probe.
 vcheck() {
   local label="$1" pattern="$2"
-  if echo "$vtrace" | grep -qE "$pattern"; then
+  if grep -qE "$pattern" <<< "$vtrace"; then
     echo "  ok  $label"
   else
     echo "  FAIL $label -- no line matching: $pattern"

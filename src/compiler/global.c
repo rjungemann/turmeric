@@ -417,3 +417,59 @@ bool tur_state_remove(TurState *st, const char *name) {
     }
     return false;
 }
+
+/* global-spice-library-consumption: resolve an INSTALLED spice's source
+ * directory by name, for a manifest dep declared `#{:global true}`.
+ *
+ * Mirrors `tur list`'s reconstruction (install.c: inst_entry_src_dir): a
+ * `--path` install points at the local checkout, a git install at
+ * `spices/<name>-<sanitized-ref>` plus any `:subdir`.  Returns false when the
+ * spice is not installed or its directory is gone, so callers can report
+ * "install it first" rather than falling through to a project-local guess.
+ *
+ * `out_version` / `out_resolved`, when non-NULL, receive the state entry's
+ * recorded version and resolved SHA (borrowed from the caller-owned state, so
+ * they are copied out here).  A `--path` install has no SHA; *out_resolved is
+ * left NULL then. */
+bool tur_installed_spice_dir(const char *name, char *out, size_t out_sz,
+                             char **out_version, char **out_resolved) {
+    if (out_version)  *out_version  = NULL;
+    if (out_resolved) *out_resolved = NULL;
+    if (!name || !*name || !out || out_sz == 0) return false;
+
+    char state_path[4096];
+    if (!tur_global_state_path(state_path, sizeof(state_path))) return false;
+    TurState st; memset(&st, 0, sizeof(st));
+    if (!tur_state_read(state_path, &st)) return false;
+
+    bool found = false;
+    TurStateEntry *e = tur_state_find(&st, name);
+    if (e) {
+        char dir[4096];
+        if (e->path) {
+            snprintf(dir, sizeof(dir), "%s", e->path);
+        } else {
+            char spices_dir[4096];
+            if (tur_global_spices_dir(spices_dir, sizeof(spices_dir))) {
+                char ref_tag[128];
+                snprintf(ref_tag, sizeof(ref_tag), "%s", e->ref ? e->ref : "HEAD");
+                for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
+                char base[4096];
+                snprintf(base, sizeof(base), "%s/%s-%s", spices_dir, name, ref_tag);
+                if (e->subdir) snprintf(dir, sizeof(dir), "%s/%s", base, e->subdir);
+                else           snprintf(dir, sizeof(dir), "%s", base);
+            } else {
+                dir[0] = '\0';
+            }
+        }
+        struct stat ds;
+        if (dir[0] && stat(dir, &ds) == 0 && S_ISDIR(ds.st_mode)) {
+            snprintf(out, out_sz, "%s", dir);
+            if (out_version && e->version)   *out_version  = tur_strdup(e->version);
+            if (out_resolved && e->resolved) *out_resolved = tur_strdup(e->resolved);
+            found = true;
+        }
+    }
+    tur_state_free(&st);
+    return found;
+}

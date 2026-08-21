@@ -630,6 +630,81 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
     return strdup(base);
 }
 
+/* type-of-cast-kind-granularity: per-monomorph `any` box tags.
+ *
+ * The tag used to be the payload's TypeKind, so every struct was `TY_STRUCT`
+ * and every ADT `TY_ADT`: `type-of` reported "struct" for all of them, and
+ * `(cast a OtherStruct)` on an `any` holding a `Point` PASSED the check and
+ * handed back a reinterpreted payload.  A struct/ADT now interns its monomorph
+ * C name and rides `TUR_ANY_ID_BASE + index`; primitives keep their TypeKind,
+ * which is what the preamble's name switch and the float/bool special cases
+ * still key on.  The inject site, the cast target and the is? target all route
+ * through this one function, so they cannot disagree. */
+#define TUR_ANY_ID_BASE 1000
+
+int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
+    Type r = ctx ? emit_resolve_type(ctx, t) : t;
+    AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
+    bool named = (r.kind == TY_ADT && r.as.adt_.def) || app_def != NULL;
+    if (!ctx || !named) return (int64_t)any_box_tag_for_type(&r);
+
+    /* Identity is `type_name`, not the C name: a carrier ADT's C name is
+     * `int64_t`, which every carrier ADT shares -- keying on it would give two
+     * different ADTs the same id and reintroduce the very confusion this
+     * replaces.  `type_name` renders a TY_APP per instantiation
+     * ("(type-app Box int)"), so `(Box int)` and `(Box float)` are distinct. */
+    const char *key = type_name(r);
+    if (!key || !*key) return (int64_t)any_box_tag_for_type(&r);
+    /* What `type-of` reports: the source-level name.  A type application shows
+     * its head ("Box"), since the parenthesised internal rendering is not what
+     * a program printing a type name wants to see. */
+    const char *shown = (r.kind == TY_ADT && r.as.adt_.def)
+                            ? r.as.adt_.def->name
+                            : (app_def ? app_def->name : key);
+
+    for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+        if (strcmp(ctx->any_type_names[i], key) == 0)
+            return (int64_t)(TUR_ANY_ID_BASE + i);
+    }
+    if (ctx->n_any_type_names >= ctx->cap_any_type_names) {
+        uint32_t nc = ctx->cap_any_type_names ? ctx->cap_any_type_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->any_type_names, nc * sizeof(char *));
+        char **ns = (char **)realloc(ctx->any_type_shown, nc * sizeof(char *));
+        if (!nn || !ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_type_names = nn;
+        ctx->any_type_shown = ns;
+        ctx->cap_any_type_names = nc;
+    }
+    char *kdup = strdup(key);
+    char *sdup = strdup(shown ? shown : key);
+    if (!kdup || !sdup) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->any_type_names[ctx->n_any_type_names] = kdup;
+    ctx->any_type_shown[ctx->n_any_type_names] = sdup;
+    ctx->n_any_type_names++;
+    return (int64_t)(TUR_ANY_ID_BASE + ctx->n_any_type_names - 1);
+}
+
+void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
+    if (!out) return;
+    if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to name */
+    buf_puts(out, "static const char *__tur_any_name_ext(int64_t tag) {\n");
+    if (ctx && ctx->n_any_type_names) {
+        buf_puts(out, "    switch (tag) {\n");
+        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+            buf_printf(out, "        case %d: return \"%s\";\n",
+                       (int)(TUR_ANY_ID_BASE + i), ctx->any_type_shown[i]);
+        }
+        buf_puts(out, "        default: break;\n");
+        buf_puts(out, "    }\n");
+    }
+    buf_puts(out, "    (void)tag;\n    return \"unknown\";\n}\n");
+    /* Installed from __tur_static_init (the KEYS band runs before any user
+     * code), so the preamble's __tur_any_type_name can reach it. */
+    buf_puts(out, "static void __tur_any_names_init(void) {\n");
+    buf_puts(out, "    g_tur_any_name_ext = __tur_any_name_ext;\n}\n");
+    static_init_register("__tur_any_names_init", STATIC_INIT_KEYS);
+}
+
 static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -736,6 +811,92 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
 
     static char name[96];
     snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)idx);
+    return name;
+}
+
+/* catch-unwind-aggregate-return-miscompiled: the per-type boxing trampoline a
+ * catch boundary uses for an aggregate-returning thunk.  Calls the fat box
+ * through slot 0 with the thunk's REAL signature (`T (*)(void *)`, which is
+ * what both the typed fatshim and a capturing closure's entry are) and returns
+ * a heap copy, so the int64 the result box carries really is a `T *`.
+ * Deduped by name in the same table as the typed fatshims. */
+const char *ensure_catch_box_shim(EmitCtx *ctx, Type result_type) {
+    if (!ctx) return NULL;
+    const char *ct = type_c_name(result_type);
+    if (!ct || !*ct) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_catchbox_");
+    append_sanitized_c_token(&nb, ct);
+    buf_putc(&nb, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], nb.data) == 0) {
+            const char *found = ctx->fatshim_names[i];
+            buf_free(&nb);
+            return found;
+        }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e) {\n", name);
+    buf_printf(target, "    %s *__b = (%s *)malloc(sizeof(%s));\n", ct, ct, ct);
+    buf_printf(target, "    *__b = ((%s (*)(void *))(intptr_t)((int64_t *)__e)[0])(__e);\n", ct);
+    buf_puts(target, "    return (int64_t)(intptr_t)__b;\n}\n");
+    return name;
+}
+
+/* catch-unwind-aggregate-return-miscompiled (float half): the same
+ * function-pointer mismatch bites a FLOAT-returning thunk -- the double comes
+ * back in a floating-point register while `TUR_APPLY0` reads the integer one,
+ * so `(catch-unwind (fn [] : float 7.5))` boxed whatever was in rax and the
+ * consumer's `((union { int64_t s; double d; }){.s = ok_val}).d` read it back
+ * as 0.  This trampoline calls with the real signature and returns the BITS,
+ * which is what that union expects.  Unlike the aggregate one it allocates
+ * nothing, so its `_via` call passes owns=0. */
+const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type) {
+    if (!ctx) return NULL;
+    const char *ct = type_c_name(result_type);
+    if (!ct || !*ct) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_catchbits_");
+    append_sanitized_c_token(&nb, ct);
+    buf_putc(&nb, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], nb.data) == 0) {
+            const char *found = ctx->fatshim_names[i];
+            buf_free(&nb);
+            return found;
+        }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e) {\n", name);
+    buf_printf(target, "    union { int64_t s; %s f; } __u; __u.s = 0;\n", ct);
+    buf_printf(target, "    __u.f = ((%s (*)(void *))(intptr_t)((int64_t *)__e)[0])(__e);\n", ct);
+    buf_puts(target, "    return __u.s;\n}\n");
     return name;
 }
 
@@ -8118,7 +8279,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * hard-coded integers (their numeric values move as the enum grows).  Note
      * the tag carries kind granularity only: every struct shares the "struct"
      * tag and every ADT the "adt" tag (see the union-intersection guide). */
+    /* type-of-cast-kind-granularity: struct/ADT box tags are per-monomorph ids
+     * allocated by the PROGRAM half, so their names cannot live in this
+     * preamble.  The program installs its name table through this pointer from
+     * __tur_static_init; a preamble compiled standalone (the S2 split runtime
+     * TU) simply leaves it NULL and answers "unknown", which is what it did for
+     * every struct before.  A forward-declared per-program function would not
+     * do: that TU has no definition to link. */
+    emit_rt_global(out, shared,
+                   "const char *(*g_tur_any_name_ext)(int64_t) = 0;\n",
+                   "const char *(*g_tur_any_name_ext)(int64_t)");
     buf_puts(out, "static const char *__tur_any_type_name(int64_t tag) {\n");
+    buf_puts(out, "    if (tag >= 1000)\n");
+    buf_puts(out, "        return g_tur_any_name_ext ? g_tur_any_name_ext(tag) : \"unknown\";\n");
     buf_puts(out, "    switch (tag) {\n");
     buf_printf(out, "        case %d: return \"nil\";\n",   (int)TY_NIL);
     buf_printf(out, "        case %d: return \"bool\";\n",  (int)TY_BOOL);
@@ -8792,6 +8965,53 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "         * inspecting this value; allocating a box here only leaks it\n");
         buf_puts(out, "         * (the re-raise skips its scope-exit free).  A stray free of a\n");
         buf_puts(out, "         * NULL box is a safe no-op. */\n");
+        buf_puts(out, "        return 0;\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "    return tur_box_ok(__v);\n");
+        buf_puts(out, "}\n\n");
+
+        /* catch-unwind-aggregate-return-miscompiled: a thunk whose declared
+         * return type is a by-value AGGREGATE cannot be called through
+         * TUR_APPLY0 -- that casts slot 0 to `int64_t (*)(void *)`, while the
+         * emitted thunk returns the struct in a register pair or through a
+         * hidden sret pointer, so whatever lands in the int64 slot was boxed
+         * as ok_val and the consumer then dereferenced it as a `T *`.  For
+         * those the call site passes a per-type BOXING trampoline
+         * (`__tur_catchbox_<ctype>`, ensure_catch_box_shim) which calls the
+         * thunk with its real signature and heap-boxes the result -- the
+         * pointer the Result monomorph's `ok_val` field already expects, and
+         * the same ownership the direct `(ok <struct>)` path uses.
+         *
+         * The trampoline has always allocated by the time a panic unwinds
+         * through it, so the panic arms free the box rather than leaking one
+         * per caught panic. */
+        buf_puts(out, "static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk, int __owns) {\n");
+        buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+        buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
+        buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
+        buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        if (__owns) free((void *)(intptr_t)__v);\n");
+        buf_puts(out, "        tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+        buf_puts(out, "        global_panic_payload = NULL;\n");
+        buf_puts(out, "        return tur_box_err((int64_t)(intptr_t)__p);\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "    return tur_box_ok(__v);\n");
+        buf_puts(out, "}\n\n");
+        buf_puts(out, "static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(void *), int64_t thunk, int __owns) {\n");
+        buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+        buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
+        buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
+        buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        if (__owns) free((void *)(intptr_t)__v);\n");
+        buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+        buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
+        buf_puts(out, "            tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "            global_panic_payload = NULL;\n");
+        buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
+        buf_puts(out, "        }\n");
         buf_puts(out, "        return 0;\n");
         buf_puts(out, "    }\n");
         buf_puts(out, "    return tur_box_ok(__v);\n");
@@ -9856,6 +10076,36 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
 
+    /* async-panic-task-boundary: a panic inside an (async ...) body must
+     * reject THAT task's future, not unwind whoever spawned it.  The body runs
+     * inline on the caller's stack (there is no fiber to carry a per-fiber
+     * panic_jmpbuf), so the boundary is a handler node exactly like
+     * tur_catch_unwind_box's: with a node installed, tur_panic stages the
+     * payload, sets tur_panicking and RETURNS, and the emitted body's
+     * per-call-site `if (tur_panicking) return ...` checks unwind it back here.
+     *
+     * The rejection message takes ownership of the payload's strdup'd string
+     * (TurFuture::error is a plain const char * the future never frees), so the
+     * payload struct is released without its value. */
+    buf_puts(out, "static int tur_async_reject_if_panicking(TurFuture *future) {\n");
+    buf_puts(out, "    if (!tur_panicking) return 0;\n");
+    buf_puts(out, "    tur_panicking = 0; tur_panic_in_progress = 0;\n");
+    buf_puts(out, "    tur_panic_payload *__p = global_panic_payload;\n");
+    buf_puts(out, "    global_panic_payload = NULL;\n");
+    buf_puts(out, "    const char *__msg = \"panic\";\n");
+    buf_puts(out, "    if (__p) {\n");
+    buf_puts(out, "        if (__p->type_tag == 5 && __p->value) {\n");
+    buf_puts(out, "            __msg = (const char *)__p->value;\n");
+    buf_puts(out, "            __p->owns_value = 0;  /* the future owns it now */\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        panic_payload_free(__p);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_future_reject(future, __msg);\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    return 1;\n");
+    buf_puts(out, "}\n\n");
+
     /* Create a future that runs fn() and fulfills it with the result.
      *
      * F3.2 (cps-async): fn() is the async body.  When it is CPS-colored and its
@@ -9874,7 +10124,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = fn();\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* body parked on a pending await: leave `future` pending; the parked\n");
     buf_puts(out, "         * resume fulfills it when the awaited future completes. */\n");
@@ -9901,7 +10155,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = __fn(clos);\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        tur_async_pending_park->outer = future;\n");
     buf_puts(out, "    } else {\n");
@@ -9918,8 +10176,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            /* Re-raise the task's panic at the point that demanded the\n");
+    buf_puts(out, "             * result: with a catch-unwind in scope this is catchable, and\n");
+    buf_puts(out, "             * with none tur_panic prints the task's message and aborts. */\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return f->value;\n");
     buf_puts(out, "    }\n");
@@ -9941,8 +10202,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_fiber_block_yield(0);\n");
     buf_puts(out, "        /* When we resume, the future should be done */\n");
     buf_puts(out, "        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return f->value;\n");
     buf_puts(out, "    }\n");
@@ -9984,8 +10245,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            /* Same re-raise as tur_await_future; the resumed continuation\n");
+    buf_puts(out, "             * sees tur_panicking and unwinds through its own checks. */\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return dk_invoke(subk, 0);\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return dk_invoke(subk, f->value);\n");
     buf_puts(out, "    }\n");
@@ -11628,6 +11891,153 @@ static void emit_mark_byval_fn_field_closures(const Expr *e) {
     }
 }
 
+
+/* ---------------------------------------------------------------------------
+ * global-def-read-before-its-declaration
+ *
+ * Pass 1 forward-declares every top-level FUNCTION, which is what lets a
+ * lifted lambda call a `defn` that appears later in the file.  Top-level `def`
+ * STORAGE never got the same treatment -- and every lambda the elaborator
+ * lifts is PREPENDED to the item list (elab_toplevel.c, "Phase 3: Prepend
+ * file-scope definitions"), so it is emitted ahead of every `def` in the
+ * program no matter where its source line sits.  The result:
+ *
+ *     (def kw ":k")
+ *     (defn mk [] (apply1 (fn [d] (+ d (c2i kw))) 1))
+ *
+ * emitted `__fn_N`, which reads `kw_NNNN`, thousands of lines above
+ * `static const char *kw_NNNN;`, and cc rejected it as undeclared.  A `defn`
+ * in the same position compiles, because of the forward-declaration pass this
+ * one mirrors.
+ *
+ * Only the globals actually read before their own declaration point are
+ * forward-declared.  Declaring all of them would be simpler and equally
+ * correct (a repeated tentative definition is legal C), but it would move a
+ * line in the snapshot of every program that was never broken.
+ * ------------------------------------------------------------------------- */
+
+static void gdef_ref_push(const Binding ***a, uint32_t *n, uint32_t *cap, const Binding *b) {
+    if (!b) return;
+    for (uint32_t i = 0; i < *n; i++) if ((*a)[i] == b) return;
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 16;
+        *a = (const Binding **)realloc((void *)*a, *cap * sizeof(**a));
+        if (!*a) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*a)[(*n)++] = b;
+}
+
+/* Collect the bindings an item READS.  An unmodeled kind contributes nothing,
+ * which degrades to today's behaviour (no forward declaration, so a reference
+ * from inside it stays broken) rather than to a wrong declaration. */
+static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, uint32_t *cap) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR: gdef_ref_push(a, n, cap, e->as.var.binding); return;
+        case EX_SET:
+            gdef_ref_push(a, n, cap, e->as.set_.target);
+            gdef_collect_refs(e->as.set_.value, a, n, cap);
+            return;
+        case EX_FN_DEF: if (e->as.fn_def_.fn) gdef_collect_refs(e->as.fn_def_.fn->body, a, n, cap); return;
+        case EX_FN:     if (e->as.fn_.fn)     gdef_collect_refs(e->as.fn_.fn->body, a, n, cap);     return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure) {
+                struct Closure *c = e->as.closure_.closure;
+                if (c->fn) gdef_collect_refs(c->fn->body, a, n, cap);
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    gdef_ref_push(a, n, cap, c->captures[i]);
+            }
+            return;
+        case EX_INLINE_C: {
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (!ic) return;
+            for (uint32_t i = 0; i < ic->n_captures; i++) gdef_ref_push(a, n, cap, ic->captures[i]);
+            for (uint32_t i = 0; i < ic->n_val_exprs; i++) gdef_collect_refs(ic->val_exprs[i], a, n, cap);
+            return;
+        }
+        case EX_DEF: gdef_collect_refs(e->as.def_.init, a, n, cap); return;
+        case EX_CALL:
+            gdef_collect_refs(e->as.call_.fn_expr, a, n, cap);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                gdef_collect_refs(e->as.call_.args[i], a, n, cap);
+            gdef_collect_refs(e->as.call_.dict_arg, a, n, cap);
+            return;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                gdef_collect_refs(e->as.let_.bindings[i].init, a, n, cap);
+            gdef_collect_refs(e->as.let_.body, a, n, cap);
+            return;
+        case EX_IF:
+            gdef_collect_refs(e->as.if_.cond, a, n, cap);
+            gdef_collect_refs(e->as.if_.then_, a, n, cap);
+            gdef_collect_refs(e->as.if_.else_or_null, a, n, cap);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) gdef_collect_refs(e->as.do_.items[i], a, n, cap);
+            return;
+        case EX_WHILE:
+            gdef_collect_refs(e->as.while_.cond, a, n, cap);
+            gdef_collect_refs(e->as.while_.body, a, n, cap);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) gdef_collect_refs(e->as.builtin.args[i], a, n, cap);
+            return;
+        case EX_MATCH:
+            gdef_collect_refs(e->as.match_.scrutinee, a, n, cap);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                gdef_collect_refs(e->as.match_.arms[i].guard, a, n, cap);
+                gdef_collect_refs(e->as.match_.arms[i].body, a, n, cap);
+            }
+            return;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                gdef_collect_refs(e->as.make_struct_.field_values[i], a, n, cap);
+            return;
+        case EX_ASCRIBE: gdef_collect_refs(e->as.ascribe_.inner, a, n, cap); return;
+        case EX_CAST:    gdef_collect_refs(e->as.cast_.expr, a, n, cap);     return;
+        case EX_RETURN:  gdef_collect_refs(e->as.return_.value, a, n, cap);  return;
+        default: return;
+    }
+}
+
+/* Emit `static <T> <name>;` into `out` for every top-level `def` some earlier
+ * item reads.  Mirrors emit_fn_forward_decls, one band later in the file. */
+static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
+                                          const Expr **items, uint32_t n_items) {
+    const Binding **need = NULL; uint32_t n_need = 0, cap_need = 0;
+    const Binding **refs = NULL; uint32_t n_refs = 0, cap_refs = 0;
+
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind == EX_DEF) continue;      /* its own declaration is here */
+        n_refs = 0;
+        gdef_collect_refs(e, &refs, &n_refs, &cap_refs);
+        if (n_refs == 0) continue;
+        /* A reference counts only when the def it names is emitted LATER. */
+        for (uint32_t j = i + 1; j < n_items; j++) {
+            const Expr *d = items[j];
+            if (d->kind != EX_DEF) continue;
+            Binding *db = d->as.def_.binding;
+            if (!db || db->is_thread_local || def_is_opaque_type_decl(d)) continue;
+            for (uint32_t r = 0; r < n_refs; r++)
+                if (refs[r] == db) { gdef_ref_push(&need, &n_need, &cap_need, db); break; }
+        }
+    }
+    free((void *)refs);
+    if (n_need == 0) { free((void *)need); return; }
+
+    buf_puts(out, "/* Forward declarations for globals read by an earlier-emitted item\n"
+                  " * (a lifted lambda is prepended to the item list, so it can read a\n"
+                  " * `def` whose storage is declared far below it). */\n");
+    for (uint32_t i = 0; i < n_need; i++) {
+        char *bn = name_for_binding(ctx, (Binding *)need[i]);
+        buf_printf(out, "static %s %s;\n", type_c_name(need[i]->type), bn);
+        free(bn);
+    }
+    buf_putc(out, '\n');
+    free((void *)need);
+}
+
 /* J2: when set, emit_program appends the per-export `<mangled>__ffi` shims
  * (normally a --shared-only emission).  Set by the REPL's in-process spice
  * build only; every other emission keeps byte-identical output. */
@@ -12198,6 +12608,7 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
         emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
     }
+    emit_global_def_forward_decls(&ctx, &fwd_decls, items, n_items);
 
     /* Phase M5: collect top-level EX_DEFER nodes (module-level defers). */
     uint32_t n_prog_defers = 0;
@@ -13096,6 +13507,7 @@ int emit_program(Buf *out, const Expr *program) {
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
+    emit_any_type_name_table(&ctx, &thunk_typedefs);
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
@@ -13204,6 +13616,12 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
+        free(ctx.any_type_names[i]);
+        free(ctx.any_type_shown[i]);
+    }
+    free(ctx.any_type_names);
+    free(ctx.any_type_shown);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
@@ -14485,6 +14903,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     type_codegen_emit_fn_ptr_typedefs(&impl_fn_ptr_typedefs);
     if (impl_fn_ptr_typedefs.len) { buf_write(out, impl_fn_ptr_typedefs.data, impl_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     buf_free(&impl_fn_ptr_typedefs);
+    emit_any_type_name_table(&ctx, &thunk_typedefs2);
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
     /* dead-base-thunk-chain-references-undefined-ctor: per-TU static trap
      * stand-ins for base ctors of heap parametric ADTs referenced by the dead
@@ -14545,6 +14964,12 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
+        free(ctx.any_type_names[i]);
+        free(ctx.any_type_shown[i]);
+    }
+    free(ctx.any_type_names);
+    free(ctx.any_type_shown);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);

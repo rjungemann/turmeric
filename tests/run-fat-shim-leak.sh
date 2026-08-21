@@ -68,7 +68,7 @@ if ! "$CC" -g -O0 -fno-strict-aliasing -fsanitize=address,undefined \
 fi
 
 probe=$(ASAN_OPTIONS="detect_leaks=1" "$BIN" 2>&1)
-if printf '%s' "$probe" | grep -q "detect_leaks is not supported"; then
+if grep -q "detect_leaks is not supported" <<< "$probe"; then
     echo "PASS fat-shim-leak (skipped: LeakSanitizer unsupported on this platform)"
     echo "fat-shim-leak summary: skipped -- no LSan on this platform"
     exit 0
@@ -79,16 +79,16 @@ rc=$?
 
 fail=0
 # (1) Output sanity: the program ran to completion.
-if ! printf '%s\n' "$out" | grep -qx "6000"; then
+if ! grep -qx "6000" <<< "$out"; then
     echo "FAIL fat-shim-leak -- expected loop result 6000 not in output"
     fail=1
 fi
 # (2) The real assertion: no LeakSanitizer leak report, clean exit.
-if printf '%s' "$out" | grep -q "LeakSanitizer: detected memory leaks"; then
+if grep -q "LeakSanitizer: detected memory leaks" <<< "$out"; then
     echo "FAIL fat-shim-leak -- LeakSanitizer reported a leak"
     fail=1
 fi
-if printf '%s' "$out" | grep -q "runtime error:"; then
+if grep -q "runtime error:" <<< "$out"; then
     echo "FAIL fat-shim-leak -- UBSan reported undefined behavior"
     fail=1
 fi

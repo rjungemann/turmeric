@@ -249,6 +249,22 @@ typedef struct EmitCtx {
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
     uint32_t  n_fn_params;
+    /* inline-c-locals-invisible-to-inline-c-blocks: local bindings in the
+     * function currently being emitted that an inline-C block in that same
+     * function references BY THEIR SOURCE NAME.  A parameter already reaches
+     * inline C that way (`raw_name_for_binding` above the id-suffix path), and
+     * raw_name_for_binding's own comment states the intent for locals too --
+     * but a local got `<name>_<id>`, so `(let [key ...] ```c ... key ... ```)`
+     * emitted `'key' undeclared`.  These bindings are spelled raw so the two
+     * agree.  Populated per function body and heavily filtered (see
+     * emit_inline_c_raw_locals_collect): a name only lands here when it is a
+     * plain C identifier, unshadowed within the function, not a parameter
+     * name, not a C keyword or libc symbol, AND actually mentioned as an
+     * identifier token by one of the function's inline-C blocks -- so a
+     * function whose inline C does not name a local emits exactly what it
+     * emitted before. */
+    const Binding **inline_c_raw_locals;
+    uint32_t        n_inline_c_raw_locals;
     /* Phase 3: Track emitted env struct names to avoid duplicates */
     const Symbol **env_struct_names;
     uint8_t   n_env_struct_names;
@@ -264,6 +280,15 @@ typedef struct EmitCtx {
     char    **fatshim_names;
     uint32_t  n_fatshim_names;
     uint32_t  cap_fatshim_names;
+    /* type-of-cast-kind-granularity: per-monomorph identity for `any` box tags.
+     * A primitive keeps its TypeKind as its tag; a struct/ADT interns its
+     * monomorph C name here and rides TUR_ANY_ID_BASE + index, so `cast` / `is?`
+     * / `type-of` distinguish two struct types instead of both reading
+     * "struct". */
+    char    **any_type_names;   /* identity key: type_name(), per monomorph */
+    char    **any_type_shown;   /* what type-of reports for that id */
+    uint32_t  n_any_type_names;
+    uint32_t  cap_any_type_names;
     /* poly-to-fat-typed-shim-plan: per-signature typed poly-to-fat shim tracking.
      * EX_POLY_TO_FAT boxes a typeclass-method closure (tur_poly_fn_t) as
      * { shim, fn, env }; for a non-int64 method signature the slot-0 shim must
@@ -583,6 +608,14 @@ const char *emit_sig_lookup_ret_ctype(const char *cname);
  * (so a type-based check under-fires) while keying on the type broadly over-fires
  * (139-fixture churn).  Consulting the temp's REAL emitted C type bridges only the
  * genuine straddle.  emit_localvar_reset() clears it per program. */
+/* inline-c-locals-invisible-to-inline-c-blocks: collect the locals of `body`
+ * that an inline-C block inside it names, so they can be emitted by their raw
+ * source name.  Does not descend into nested fn-defs (those are emitted as
+ * their own C functions and run their own collection).  Allocates *out with
+ * malloc; the caller frees it.  Yields nothing when the body has no inline C. */
+void emit_inline_c_raw_locals_collect(const struct Expr *body,
+                                      struct Binding **params, uint32_t n_params,
+                                      const struct Binding ***out, uint32_t *out_n);
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
@@ -867,6 +900,20 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                  const char *fnptr);
+/* catch-unwind-aggregate-return-miscompiled: per-type boxing trampoline for an
+ * aggregate-returning catch-unwind / catch-panic-of thunk. */
+/* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
+ * for a primitive, an interned per-monomorph id for a struct/ADT. */
+int64_t emit_any_type_id(EmitCtx *ctx, Type t);
+/* Emit the per-program name table `__tur_any_name_ext` for the ids allocated
+ * above.  Always emitted (a stub when none were), since the preamble
+ * forward-declares it. */
+void emit_any_type_name_table(EmitCtx *ctx, Buf *out);
+
+const char *ensure_catch_box_shim(EmitCtx *ctx, Type result_type);
+/* ... and the float-return half, which returns the value's BITS. */
+const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type);
+
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a

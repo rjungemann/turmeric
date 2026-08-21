@@ -1,0 +1,8 @@
+param=7
+local=8
+after-inline-c=16
+after-set=17
+f=17
+shadowed=3
+radius=3
+area=9

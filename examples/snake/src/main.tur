@@ -34,7 +34,7 @@
 ;; Raylib + game-state FFI  (implemented in rayLibShim.c)
 ;; Key codes, window, drawing, input, and snake state bindings.
 ;; ============================================================
-(import examples/snake/src/raylib)
+(load "examples/snake/src/raylib.tur")
 
 ;; ============================================================
 ;; Typeclass demonstration — Describable

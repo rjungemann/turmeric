@@ -98,13 +98,13 @@
 (defn rvec-len [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->len;
+  return (int64_t)vec->len;
   ```)
 
 (defn rvec-get [v : ptr<void> i : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->data[i];
+  return vec->data[i];
   ```)
 
 (defn rvec-push! [v : ptr<void> val : int]

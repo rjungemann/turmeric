@@ -176,12 +176,16 @@ add the row.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| *(none currently)* | |
+| CAPTURELESS closure (bare fn pointer) -> `let` merge temp decided `fat-handle` | [`let-returning-noncapturing-lambda-ices-at-merge-temp`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/let-returning-noncapturing-lambda-ices-at-merge-temp.md) |
 
-An empty table is a milestone, not an end state: the matrix above still has
-unexercised pairings, and the R3 shadow ICE plus the census are what turn the
-next one someone hits into a row here. File a new repr cell in this table as
-well as in `docs/reported/`.
+The row above is the R3 shadow ICE doing its job: it is loud (`repr-shadow
+merge-temp ... want=fat-handle got=carrier-i64`) and benign under
+`TUR_REPR_NO_SHADOW_ICE=1`, whereas the *same* producer reaching a `:fn`
+**argument** was silent and segfaulted (the archived
+`let-bound-noncapturing-lambda-segfaults-as-fn-arg`, closed with the
+signature-keyed `ensure_bare_fnptr_poly_shim` adapter). Same producer, two
+boundaries, one bridge built -- which is the shape this table exists to make
+visible. File a new repr cell in this table as well as in `docs/reported/`.
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --

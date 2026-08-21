@@ -82,3 +82,52 @@ error and ownership decisions made explicitly.
 ## Guides to update when fixed
 
 - docs/guides/schema-guide.md
+
+
+## Partial resolution (2026-08-21): `#json-str?<T>` landed
+
+`#json-str?<T>(expr)` is implemented and expands to the panicking form behind a
+catch boundary -- the report's second route, taken after its blocker cleared:
+
+```
+#json-str?<T>(e)  ==>  (:: (catch-unwind (fn [] : T (:: (decode! (json/decode e)) T)))
+                          (Result T int))
+```
+
+Blocker 1 is gone in two steps, and the report was right that neither half was
+reader work:
+
+- `catch-unwind-aggregate-return-miscompiled` is fixed (archived), so a thunk
+  returning a struct no longer boxes its return register as `ok_val`. A typed
+  decode lands in a struct by definition, which is why every SUCCESS hit it.
+- **A schema violation was an `abort()`, not a panic**, in both engines --
+  `schema-decode-abort` in `stdlib/schema.tur` and `native_schema_decode_abort`
+  in `src/turi/interpreter_natives.c`. Nothing catchable was ever raised, so
+  even a correct catch-unwind expansion could not have recovered. Both now
+  `panic` (turi's through `turi_runtime_panic`), printing the failing paths
+  first so the diagnostic detail survives on the recovered path too. With no
+  catch boundary in scope a `schema-decode!` failure still prints and dies, so
+  the `!` form's contract is unchanged.
+
+The `decode?` default-method route was NOT taken and is now moot for this
+purpose: it would have needed a second, parallel failure path through every
+`HasSchema` instance, where the catch boundary reuses the one that exists.
+
+Pinned by `tests/fixtures/schema-reader-json-str-result/`. That fixture carries
+`requires.compiled`: the interpreter recovers correctly (its ERR path passes)
+but hands back the struct HANDLE on the OK path -- filed as
+[turi-catch-unwind-aggregate-payload](turi-catch-unwind-aggregate-payload.md),
+which is now the one thing between `--interpret` and a working `#json-str?<T>`.
+
+### Still open: `#json-file<T>`
+
+Blocker 2 is untouched -- `read-file` returns `ptr<void>` (NULL on any error),
+so the expansion still needs the autoload, the `ptr<void>` -> `cstr` bridge, a
+defined answer for an unreadable file (a panic of its own for the `!` form, an
+err for a future `?` form), and an owner for the malloc'd buffer. Those are the
+parts worth designing rather than bolting on, and nothing above decides them.
+
+`docs/guides/schema-guide.md` documents the `?` form, including the two
+consequences of the catch-boundary design: violation detail still goes to
+stderr on the recovered path, and the err payload is the panic handle carried
+as `:int`.
