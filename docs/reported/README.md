@@ -51,7 +51,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
 | [performance-guide-fictional-stdlib-api](performance-guide-fictional-stdlib-api.md) | medium | performance-guide's middle sections document nonexistent stdlib modules/functions |
 | [logic-guide-documents-unimplemented-backtracking-api](logic-guide-documents-unimplemented-backtracking-api.md) | medium | logic-programming-guide's API summary (`choice-point`/`run`/`do-backtrack`) does not exist |
-| [match-adt-var-arm-does-not-bind](match-adt-var-arm-does-not-bind.md) | low-medium | a variable (non-`_`) catch-all arm on an ADT match never binds its variable |
 | [datalog-examples-do-not-compile](datalog-examples-do-not-compile.md) | medium | 4 of 5 examples/datalog/*.tur fail `tur check`; the tutorial series quotes them |
 | [tur-run-test-blocked-by-doctest-failures](tur-run-test-blocked-by-doctest-failures.md) | medium | `tur run test` exits in ~24s: the doctest dep fails, so the ctest line never runs |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
@@ -117,6 +116,16 @@ the `TY_FN` that carries the return type. Two follow-ons: this unblocks
 `json-str-result-and-file-readers-missing`, and the INTERPRETER has the same
 symptom by a different mechanism, filed as
 `turi-catch-unwind-aggregate-payload` above.
+
+`match-adt-var-arm-does-not-bind` was filed and resolved 2026-08-21 (found
+while implementing nested patterns, whose group fallthrough emits exactly this
+shape) and moved to
+[docs/archive](../archive/match-adt-var-arm-does-not-bind.md). Both halves were
+needed: the elaborator now binds the var arm in its own scope, and both ADT arm
+emitters declare the C variable -- from `*__scrut`, `__scrut` or
+`(T)(intptr_t)__scrut` depending on which of the three ways the scrutinee was
+bound. No narrowing: a var arm is reached for any remaining variant, so there
+is nothing to narrow to.
 
 ## Value representation (the consolidation campaign)
 

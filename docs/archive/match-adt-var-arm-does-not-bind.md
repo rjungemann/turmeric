@@ -52,3 +52,30 @@ type is right.
 
 - docs/guides/sum-types-guide.md (the pattern-matching bullet list mentions
   `_` only)
+
+## Resolution (2026-08-21)
+
+Fixed in both halves the report names, and they were both needed -- the
+elaborator change alone gets past the "unbound symbol" and then fails in the C
+compiler with `'whole_1336' undeclared`.
+
+- `elab_structs.c`: the ADT arm loop's var branch calls `binding_new` with the
+  scrutinee's type and elaborates the arm body inside a scope holding it, the
+  same shape the literal path uses.
+- `emit_expr.c`: both ADT arm emitters declare the variable from `__scrut`.
+  Three reads, because `__scrut` is bound three different ways: `*__scrut` for a
+  pass-by-pointer by-value scrutinee, `__scrut` for a by-value aggregate, and
+  `(T)(intptr_t)__scrut` for the carrier pointer (the switch-dispatch form is
+  always the last).
+
+The report's open question -- whether the bound variable should be narrowed the
+way `scrut_narrow_binding` narrows a bare-symbol scrutinee -- is answered as it
+guessed: no. A var arm sits after some constructor arms and is reached for any
+remaining variant, so there is nothing to narrow it to; it gets the scrutinee's
+own type.
+
+Pinned by `tests/fixtures/match-adt-var-arm/`, which covers all three
+representations (carrier ADT, by-value `:copy` product, switch form) plus a var
+arm reached from inside a nested-pattern group's fallthrough -- the shape that
+found this defect in the first place. Passes under `run.sh` and `run-turi.sh`
+alike.

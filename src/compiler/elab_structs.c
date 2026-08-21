@@ -4000,12 +4000,21 @@ Expr *elab_match(Elab *e, const Form *call) {
                 pat->is_wildcard = true;
                 has_wildcard = true;
             } else {
-                /* Variable binding — captures entire scrutinee */
+                /* Variable binding — captures entire scrutinee.
+                 *
+                 * match-adt-var-arm-does-not-bind: this used to record
+                 * `is_var`/`var_sym` and then elaborate the body with NO
+                 * binding and no scope, so `(match o (OA n) n whole (g whole))`
+                 * was "unbound symbol 'whole'" -- the ADT path's only usable
+                 * catch-all was `_`, while the literal path 500 lines above
+                 * bound its var arm properly.  Bind it to the scrutinee's type,
+                 * exactly as that path does. */
                 pat->is_var = true;
                 pat->var_sym = sym;
                 has_wildcard = true; /* covers all remaining */
+                pat->var_binding = binding_new(e, sym, scrutinee->type,
+                                               false, false, pat_form->span);
             }
-            /* No new scope needed; elaborate body directly */
             /* LT1: Restore outer linear state before this arm's body. */
             if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
@@ -4014,7 +4023,22 @@ Expr *elab_match(Elab *e, const Form *call) {
                 move_state_restore(match_move_bindings, match_move_before, n_match_move);
             }
             bool _s_wc = e->in_match_arm; e->in_match_arm = true;
-            Expr *body = elab_form(e, body_form);
+            Expr *body = NULL;
+            if (pat->is_var && pat->var_binding) {
+                /* The binder must be visible to the arm body (and, once guards
+                 * reach this path, to its own when-guard -- the same order the
+                 * literal path was corrected to). */
+                Scope var_scope;
+                scope_init(&var_scope, e->scope);
+                Scope *saved_var_scope = e->scope;
+                e->scope = &var_scope;
+                scope_add(&var_scope, pat->var_binding);
+                body = elab_form(e, body_form);
+                e->scope = saved_var_scope;
+                scope_free(&var_scope);
+            } else {
+                body = elab_form(e, body_form);
+            }
             e->in_match_arm = _s_wc;
             if (!body) { goto match_fail; }
             /* LT1: Capture outer linear state after this arm's body. */

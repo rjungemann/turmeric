@@ -10952,6 +10952,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     ctx->indent += 4;
 
+                    /* match-adt-var-arm-does-not-bind: a variable catch-all arm
+                     * binds the WHOLE scrutinee.  `__scrut` is the by-value
+                     * aggregate, a pbp pointer to it, or the carrier pointer,
+                     * so the read matches how it was bound above. */
+                    if (pat->is_var && pat->var_binding) {
+                        const char *vct = type_c_name(pat->var_binding->type);
+                        char *vname = name_for_binding(ctx, pat->var_binding);
+                        indent_buf(body, ctx->indent);
+                        if (adt_byval_pbp)
+                            buf_printf(body, "%s %s = *__scrut;\n", vct, vname);
+                        else if (adt_byval)
+                            buf_printf(body, "%s %s = __scrut;\n", vct, vname);
+                        else
+                            buf_printf(body, "%s %s = (%s)(intptr_t)__scrut;\n",
+                                       vct, vname, vct);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "(void)%s;\n", vname);
+                        free(vname);
+                    }
+
                     /* Bind fields */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
                         char *_mctor = mangle_field_name(pat->ctor->name);
@@ -11101,6 +11121,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(body, "case %u: {\n", pat->ctor->tag);
                     }
                     ctx->indent += 4;
+
+                    /* match-adt-var-arm-does-not-bind: the variable catch-all
+                     * binds the whole scrutinee (carrier pointer here). */
+                    if (pat->is_var && pat->var_binding) {
+                        const char *vct = type_c_name(pat->var_binding->type);
+                        char *vname = name_for_binding(ctx, pat->var_binding);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (%s)(intptr_t)__scrut;\n",
+                                   vct, vname, vct);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "(void)%s;\n", vname);
+                        free(vname);
+                    }
 
                     /* Bind field variables for constructor patterns */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {

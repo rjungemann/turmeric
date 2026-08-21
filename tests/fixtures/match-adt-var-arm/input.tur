@@ -1,0 +1,43 @@
+;;; A variable (non-`_`) catch-all arm on an ADT match binds the whole
+;;; scrutinee.  It used to be "unbound symbol": the ADT arm path recorded the
+;;; pattern's var_sym and then elaborated the body with no Binding and no
+;;; scope, and the emitter treated `is_var` exactly like `is_wildcard`, so the
+;;; only usable catch-all on an ADT match was `_`.  The literal-match path a
+;;; few hundred lines away had bound its var arm properly all along.
+;;;
+;;; All three scrutinee representations are covered, because the emitter binds
+;;; from a different expression in each: a carrier ADT (pointer), a by-value
+;;; `:copy` product (the aggregate itself), and the switch-dispatch form.
+
+(defdata Outer (OA :int) (OB))
+(defdata Sh :copy (Circle :int) (Rect :int :int))
+(defdata Inner (IA :int) (IB))
+(defdata Wrap (W :Inner) (Empty))
+
+;; carrier ADT, re-matched through the bound name
+(defn f [o : Outer] : int
+  (match o
+    (OA n) n
+    whole  (match whole (OA i) i (OB) -1)))
+
+;; by-value :copy product
+(defn area [s : Sh] : int
+  (match s
+    (Circle r) (* 3 (* r r))
+    whole      (match whole (Rect w h) (* w h) _ 0)))
+
+;; a var catch-all reached from INSIDE a nested-pattern group's fallthrough
+(defn size [w : Wrap] : int
+  (match w
+    (W (IA n)) n
+    whole      (match whole (W i) 99 (Empty) -1)))
+
+(defn main [] : int
+  (println (f (OA 7)))        ; 7
+  (println (f (OB)))          ; -1  via the var arm
+  (println (area (Circle 2))) ; 12
+  (println (area (Rect 5 7))) ; 35  via the var arm
+  (println (size (W (IA 5)))) ; 5
+  (println (size (W (IB))))   ; 99  via the var arm, from a nested fallthrough
+  (println (size (Empty)))    ; -1
+  0)
