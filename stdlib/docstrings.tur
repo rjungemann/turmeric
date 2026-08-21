@@ -641,6 +641,8 @@
     {"httpd-mw-static-try", "httpd-mw-static-try -- internal: attempt to serve `path` from `root`"},
     {"httpd-mw-static-fallback", "mw-static -- serve files from a root directory when next returns 404.\n\nParameters:\n  root-dir -- filesystem path to serve files from\n  next -- downstream handler closure (fat-closure :int)\n\nReturns:\n  A wrapped handler closure (:ptr<void>).\n\nExample:\n  (let [composed (mw-static \"./public\" router-handler)]\n      (httpd-new 0 composed))\n\nSince: Phase H8 (MW2)"},
     {"mw-static", "mw-static"},
+    {"httpd-mw-recover-500", "httpd-mw-recover-500 -- internal: write a 500 response unless the"},
+    {"mw-recover", "mw-recover -- catch a downstream panic and respond 500.\n\nParameters:\n  next -- downstream handler closure (fat-closure :int)\n\nReturns:\n  A wrapped handler closure (:ptr<void>).\n\nExample:\n  (let [base     (fn [c :ptr<void>] :nil (panic \"boom\"))\n          composed (compose-middleware base mw-recover)]\n      (httpd-new 0 composed))\n    ; => client sees \"500 Internal Server Error\"; the server stays up\n\nSince: Phase H8 (MW3)"},
     {"tur/httpd", "tur/httpd -- Lightweight HTTP/1.0 and HTTP/1.1 server.\n\nSince: Phase H1"},
     {"image/build-stamp", "image/build-stamp -- SHA-256 (32 bytes) of the running executable.\n\nReturns:\n  A malloc'd 32-byte buffer (caller frees with image/free-stamp) as an int\n    pointer, or 0 if the executable image could not be read.\n\nSince: Phase AI"},
     {"image/free-stamp", "image/free-stamp -- free a build stamp returned by image/build-stamp."},

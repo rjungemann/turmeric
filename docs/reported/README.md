@@ -56,7 +56,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
-| [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | medium | mw-recover blocked by closure/fat-handle codegen defects: lifted thunk references an unthreaded name, plus a drop-glue use-after-free -- 4 repros inside |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
@@ -171,6 +170,22 @@ read by `diag_had_error()`. Deliberately not done: `:global-policy`, version
 validation / the `tur.lock` SHA (no range syntax to validate against yet), and
 library-only installs (`tur install` still requires a `:bin`).
 
+`httpd-mw-recover-unblocked-but-unwritten` was resolved 2026-08-21 and moved
+to [docs/archive](../archive/httpd-mw-recover-unblocked-but-unwritten.md).
+`mw-recover` ships as MW3 in `stdlib/httpd.tur`, pinned by
+`tests/fixtures/httpd-mw-recover/` (two requests -- the panicking one and a
+following good one, because "the server survived" is the property that
+matters and a single request would pass even with the use-after-free). Three
+of its four repros are fixed: (C)/(D) were one defect -- `collect_free_vars`
+had **no case** for `EX_CATCH_UNWIND`/`EX_CATCH_PANIC_OF`, so a name used
+only inside a catch thunk was never captured and the lifted thunk emitted an
+undeclared identifier -- and (B) was the drop glue owning a `^fat` handle the
+catch thunk only **borrows** from the frame it is created and dropped in.
+Repro (A) did **not** fall out; it is re-filed, narrowed to a three-line
+repro with no httpd and no `catch-unwind`, as
+[let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md)
+under "Value representation".
+
 ## Value representation (the consolidation campaign)
 
 The scoreboard for this family is the open-cells table in
@@ -182,6 +197,7 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [byvalue-product-tail-var-double-unboxed-nonparametric](byvalue-product-tail-var-double-unboxed-nonparametric.md) | medium | residue of `result-block-value-double-unboxed`: a bare-var tail of a NON-parametric by-value product (`tur_adt_Pt`) is still deref-unboxed by the `emit_if` merge. Not widenable -- the same type rides the carrier at the vec/map element and assoc-type seams, so extending the type test regresses 10 named fixtures. Needs a position-sensitive predicate (the `emit_localvar_lookup_ctype` trick) moved to the merge site, where the arm's emitted text exists |
+| [let-returning-noncapturing-lambda-ices-at-merge-temp](let-returning-noncapturing-lambda-ices-at-merge-temp.md) | medium | a `let` merge temp holding a CAPTURELESS lambda lowers to a bare fn pointer while the temp was decided `fat-handle`; the repr-shadow guard ICEs. Benign under `TUR_REPR_NO_SHADOW_ICE=1`, but the same disagreement was silent and segfaulted at the *argument* boundary (see the archived `let-bound-noncapturing-lambda-segfaults-as-fn-arg`) |
 
 `mut-map-reassign-missing-spec-link-error` was resolved 2026-08-16 (filed
 and fixed the same day, both defects along its own fix directions) and moved

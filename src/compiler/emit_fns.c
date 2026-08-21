@@ -3128,7 +3128,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                             "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
                             cf, cf);
                         free(cf);
-                    } else if (cap && cap->is_fat &&
+                    } else if (cap && cap->is_fat && !fd->closure->fat_captures_borrowed &&
                                !(cap->closure_fn_binding &&
                                  fd->binding &&
                                  cap->closure_fn_binding == fd->binding)) {

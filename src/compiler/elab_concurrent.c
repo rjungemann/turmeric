@@ -422,6 +422,19 @@ static Expr *catch_thunk_to_fat(Elab *e, Expr *thunk) {
     return thunk;
 }
 
+/* httpd-mw-recover-unblocked-but-unwritten (B): mark a catch boundary's thunk
+ * so its env drop-glue does not release captured `^fat` handles -- see the
+ * `fat_captures_borrowed` comment on struct Closure. */
+static void catch_thunk_mark_borrowed(Expr *thunk) {
+    Expr *t = thunk;
+    while (t && (t->kind == EX_ASCRIBE || t->kind == EX_FN_TO_FAT)) {
+        t = (t->kind == EX_ASCRIBE) ? t->as.ascribe_.inner
+                                    : t->as.fn_to_fat_.inner;
+    }
+    if (t && t->kind == EX_CLOSURE && t->as.closure_.closure)
+        t->as.closure_.closure->fat_captures_borrowed = true;
+}
+
 /* Phase R2: (catch-unwind thunk) — catch any panic at a boundary.
  * thunk is a nullary function; returns result<T, panic-payload>.
  * In v1, result is (Result :int :ptr<void>); lowering uses tur_catch_unwind_box. */
@@ -437,6 +450,7 @@ Expr *elab_catch_unwind(Elab *e, const Form *call) {
     if (!thunk) return NULL;
     Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
+    catch_thunk_mark_borrowed(thunk);
     Expr *out = expr_new(e->arena, EX_CATCH_UNWIND, result_ty, call->span);
     out->as.catch_unwind_.thunk = thunk;
     return out;
@@ -466,6 +480,7 @@ Expr *elab_catch_panic_of(Elab *e, const Form *call) {
     if (!thunk) return NULL;
     Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
+    catch_thunk_mark_borrowed(thunk);
     Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF, result_ty, call->span);
     out->as.catch_panic_of_.type_kind = type_kind;
     out->as.catch_panic_of_.thunk = thunk;

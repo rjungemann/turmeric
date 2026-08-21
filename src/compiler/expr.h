@@ -956,6 +956,16 @@ struct Closure {
      * -- unlike a general capturing closure, which is not a valid indirect callee
      * (see indirect_callee_ok).  Scoped strictly to __Shift receivers. */
     bool           is_shift_receiver;
+    /* httpd-mw-recover-unblocked-but-unwritten (B): set on the THUNK closure of
+     * a `catch-unwind` / `catch-panic-of`.  Such a thunk is created and dropped
+     * at the catch site in the same frame, so any `^fat` handle it captured is
+     * BORROWED from that frame -- which still holds it.  Releasing it in the
+     * thunk env's drop glue frees a handle the enclosing closure still owns:
+     * the first call through a captured handle worked and the second read freed
+     * memory (`heap-use-after-free ... freed by drop_glue___env_NNNN`).  Only
+     * the fat-handle release is suppressed; an rc capture still balances the
+     * env-fill retain. */
+    bool           fat_captures_borrowed;
     /* cps-dk-multishot-user-effects (Phase A): set when this closure is the fn
      * PAYLOAD of a resumable-payload user effect (`(perform (E g))` where E is
      * resumed through g).  The user-effect analogue of is_shift_receiver: it is

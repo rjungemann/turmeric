@@ -122,7 +122,7 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                     "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
                     cf, cf);
                 free(cf);
-            } else if (cap && cap->is_fat &&
+            } else if (cap && cap->is_fat && !closure->fat_captures_borrowed &&
                        !(cap->closure_fn_binding && closure->fn &&
                          closure->fn->binding &&
                          cap->closure_fn_binding == closure->fn->binding)) {

@@ -1,5 +1,37 @@
 # mw-recover (panic -> 500 middleware) cannot be written: three compiler defects block it
 
+> **RESOLVED 2026-08-21.** `mw-recover` ships in `stdlib/httpd.tur` as MW3,
+> with `tests/fixtures/httpd-mw-recover/` sending the two requests this
+> report asked for. Three of the four repros are fixed:
+>
+> - **(C)/(D) -- lifted thunk referencing an unthreaded name.** Root cause:
+>   `collect_free_vars` (`src/compiler/elab_core.c`) had **no case** for
+>   `EX_CATCH_UNWIND` / `EX_CATCH_PANIC_OF`; both fell through to
+>   `default: break`. A closure whose only use of an enclosing name was
+>   inside `(catch-unwind (fn [] ... name ...))` therefore never captured
+>   it, and the lifted thunk's env-fill emitted `'next_1337' undeclared`.
+>   Fixed by adding a case that mirrors `EX_CALLCC`: recurse into the thunk
+>   lambda, collecting its free vars minus its own params. This is exactly
+>   the "capture analysis does not see through a nested lambda" the report
+>   guessed at in (D).
+> - **(B) -- use-after-free on the second call.** A catch thunk is created
+>   and dropped at the catch site in the same frame, so any `^fat` handle
+>   it captured is **borrowed** from that frame, not owned. Added
+>   `Closure.fat_captures_borrowed` (`src/compiler/expr.h`), set by
+>   `catch_thunk_mark_borrowed()` in `src/compiler/elab_concurrent.c` for
+>   both catch forms, and guarded the `is_fat` -> `TUR_CLOSURE_DROP` arm in
+>   both drop-glue emitters (`emit_expr.c`, `emit_fns.c`). The second call
+>   no longer finds a freed env.
+> - **(A) -- the merge-temp ICE.** Did **not** fall out, and is a real
+>   defect of its own rather than a guard question. Re-filed, narrowed, as
+>   `docs/reported/let-returning-noncapturing-lambda-ices-at-merge-temp.md`:
+>   the trigger is a `let` merge temp holding a captureless lambda, and it
+>   is independent of both httpd and `catch-unwind`.
+>
+> `mw-recover` does not need (A): it captures `_n`, so its returned closure
+> is not captureless. Both suites are green (`run.sh` 2687/0,
+> `run-turi.sh` 1852/0).
+
 **Severity: medium** (was: low). Found in the 2026-08-20 docs audit; **rewritten
 2026-08-20 after attempting the implementation**.
 

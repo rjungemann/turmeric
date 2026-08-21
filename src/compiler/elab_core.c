@@ -911,6 +911,50 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * lambda is closure-converted).  For the raw form, recursively
              * collect the receiver body's free vars excluding its own params and
              * merge them. */
+            /* httpd-mw-recover-unblocked-but-unwritten (C)/(D): a catch
+             * boundary's THUNK is a lambda like call/cc's receiver, and its
+             * free variables are free in the enclosing scope too.  Neither
+             * catch form was walked here at all (they fell through to
+             * `default:`), so a closure whose only use of an enclosing name
+             * was inside `(catch-unwind (fn [] ... name ...))` never captured
+             * it -- and the lifted thunk's env-fill then referenced a name
+             * that is not in scope there: `'next_1337' undeclared`.
+             * Same two receiver shapes as call/cc, so the same handling. */
+            case EX_CATCH_UNWIND:
+            case EX_CATCH_PANIC_OF: {
+                const Expr *rf = (cur->kind == EX_CATCH_UNWIND)
+                                     ? cur->as.catch_unwind_.thunk
+                                     : cur->as.catch_panic_of_.thunk;
+                while (rf && rf->kind == EX_ASCRIBE) rf = rf->as.ascribe_.inner;
+                FnDef *rfn = NULL;
+                if (rf && rf->kind == EX_FN)          rfn = rf->as.fn_.fn;
+                else if (rf && rf->kind == EX_FN_DEF) rfn = rf->as.fn_def_.fn;
+                if (rfn && rfn->body) {
+                    uint32_t sub_n = 0;
+                    Binding **sub = collect_free_vars(rfn->body, rfn->params,
+                                                      rfn->n_params,
+                                                      self_exclude, n_self_exclude,
+                                                      &sub_n);
+                    for (uint32_t si = 0; si < sub_n; si++) {
+                        Binding *sb = sub[si];
+                        if (!sb || sb->is_global) continue;
+                        bool skip = false;
+                        for (uint32_t i = 0; i < n_params; i++) if (params[i] == sb) { skip = true; break; }
+                        for (uint32_t i = 0; !skip && i < n_local; i++) if (local_defs[i] == sb) skip = true;
+                        for (uint32_t i = 0; !skip && i < n; i++) if (result[i] == sb) skip = true;
+                        if (skip) continue;
+                        if (n >= cap) {
+                            cap = cap ? cap * 2 : 8;
+                            result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                        }
+                        result[n++] = sb;
+                    }
+                    free(sub);
+                } else if (rf) {
+                    stack[sp++] = (Expr *)rf;   /* EX_CLOSURE folds captures */
+                }
+                break;
+            }
             case EX_CALLCC: {
                 const Expr *rf = cur->as.callcc_.fn;
                 while (rf && rf->kind == EX_ASCRIBE) rf = rf->as.ascribe_.inner;
