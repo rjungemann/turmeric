@@ -1,0 +1,33 @@
+;; ascribe-int-literal-to-float: an INTEGER literal ascribed to a float kind is
+;; the number, not its bit pattern.
+;;
+;; `(:: 3 :float)` used to print 1.4822e-323 -- the double whose bit pattern is
+;; 0x0000000000000003 -- because :int and :float are both 8 bytes and
+;; elab_ascribe's same-size rule turned the ascription into a bit reinterpret.
+;; The tell that this was an accident rather than a semantic: `(:: 3 :float32)`
+;; printed 3 on the same build, since 8 != 4 misses that rule. One operator
+;; disagreed with itself purely by target width.
+;;
+;; Per CLAUDE.md's float rule every probe below carries a non-zero fractional
+;; part somewhere in the expression, so a surviving truncation or reinterpret
+;; shows up as a changed value rather than a coincidentally-equal integer.
+;;
+;; See docs/archive/ascribe-int-to-float-reinterprets.md.
+(defn main [] : int
+  ;; every float width agrees
+  (println (:: 3 :float))                  ; 3
+  (println (:: 3 :float32))                ; 3
+  (println (:: 3 :float64))                ; 3
+  ;; through an integer-typed ascription hop
+  (println (:: (:: 3 :int32) :float32))    ; 3
+  ;; sign and zero
+  (println (:: -7 :float))                 ; -7
+  (println (:: 0 :float))                  ; 0
+  ;; the converted value is a real float downstream, not a denormal that
+  ;; vanishes into a sum -- the failure mode that made the original bug easy
+  ;; to miss was a wrong term reading as a DROPPED one
+  (println (+ (:: 3 :float) 0.25))         ; 3.25
+  (println (* (:: 4 :float) 0.5))          ; 2
+  ;; a float literal ascribed to a float kind is unaffected (control)
+  (println (:: 3.25 :float))               ; 3.25
+  0)

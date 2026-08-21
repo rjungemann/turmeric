@@ -470,37 +470,63 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
      * by index before writing the collected exports back into it. */
     slot = &e->loaded_modules[slot_idx];
 
-    /* Collect exported bindings: those in the global scope owned by this module. */
+    /* Collect exported bindings: those in the global scope owned by this
+     * module, plus any this module re-exports via (export-from ...).  A
+     * re-exported entry is the DEFINING module's Binding, not a copy -- the
+     * consumer resolves to the same mangled symbol it would have reached by
+     * importing the defining module directly, so re-export costs no wrapper
+     * and no indirection. */
+    uint32_t n_reexp = (loaded_defmod != NULL) ? loaded_defmod->n_reexports : 0;
     uint32_t n_exp = 0;
     for (uint32_t i = 0; i < e->global.n; i++) {
         Binding *b = e->global.bindings[i];
         if (b->defining_module_name == name && b->is_exported) n_exp++;
     }
-    Binding **exp_arr = (n_exp == 0) ? NULL :
-        (Binding **)arena_alloc(e->arena, n_exp * sizeof(Binding *));
+    Binding **exp_arr = (n_exp == 0 && n_reexp == 0) ? NULL :
+        (Binding **)arena_alloc(e->arena, (n_exp + n_reexp) * sizeof(Binding *));
     uint32_t idx = 0;
     for (uint32_t i = 0; i < e->global.n; i++) {
         Binding *b = e->global.bindings[i];
         if (b->defining_module_name == name && b->is_exported)
             exp_arr[idx++] = b;
     }
+    for (uint32_t i = 0; i < n_reexp; i++) {
+        /* Already validated in elab_defmodule, which proved the source module
+         * EXPORTS this name.  Deliberately not re-checking defining_module_name
+         * against the source here: in a chain (low -> mid -> hi) the binding hi
+         * re-exports from mid was defined by low, so that check would break the
+         * second hop.  A name with no binding is a re-exported MACRO, collected
+         * by the macro pass below instead. */
+        Binding *rb = scope_lookup(&e->global, loaded_defmod->reexports[i]);
+        if (rb && rb->is_exported)
+            exp_arr[idx++] = rb;
+    }
 
     slot->exports   = exp_arr;
-    slot->n_exports = n_exp;
+    slot->n_exports = idx;
 
     /* Phase M4: Collect exported macros from this module.
      * A macro is exported if its defining_module_name matches this module's name
      * AND its name appears in the module's (export ...) list. */
     slot->exported_macros   = NULL;
     slot->n_exported_macros = 0;
-    if (loaded_defmod != NULL && loaded_defmod->n_exports > 0) {
+    if (loaded_defmod != NULL
+        && (loaded_defmod->n_exports > 0 || loaded_defmod->n_reexports > 0)) {
+        /* A macro qualifies either by being defined here and named in the
+         * export list, or by being named in an (export-from src ...) whose
+         * src defines it -- the re-export case forwards the MacroDef itself,
+         * so an importer expands the original definition. */
         uint32_t n_mexp = 0;
         for (uint32_t i = 0; i < e->n_macros; i++) {
             MacroDef *m = e->macros[i];
-            if (m->defining_module_name != name) continue;
-            /* Check if this macro's name is in the export list */
-            for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
-                if (loaded_defmod->exports[j] == m->name) { n_mexp++; break; }
+            if (m->defining_module_name == name) {
+                for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                    if (loaded_defmod->exports[j] == m->name) { n_mexp++; break; }
+                }
+                continue;
+            }
+            for (uint32_t j = 0; j < loaded_defmod->n_reexports; j++) {
+                if (loaded_defmod->reexports[j] == m->name) { n_mexp++; break; }
             }
         }
         if (n_mexp > 0) {
@@ -509,15 +535,22 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
             uint32_t midx = 0;
             for (uint32_t i = 0; i < e->n_macros; i++) {
                 MacroDef *m = e->macros[i];
-                if (m->defining_module_name != name) continue;
-                for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
-                    if (loaded_defmod->exports[j] == m->name) {
+                if (m->defining_module_name == name) {
+                    for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                        if (loaded_defmod->exports[j] == m->name) {
+                            mexp_arr[midx++] = m; break;
+                        }
+                    }
+                    continue;
+                }
+                for (uint32_t j = 0; j < loaded_defmod->n_reexports; j++) {
+                    if (loaded_defmod->reexports[j] == m->name) {
                         mexp_arr[midx++] = m; break;
                     }
                 }
             }
             slot->exported_macros   = mexp_arr;
-            slot->n_exported_macros = n_mexp;
+            slot->n_exported_macros = midx;
         }
     }
 
@@ -750,6 +783,12 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     uint32_t n_imports = 0;
     uint32_t cap_imports = 0;
 
+    /* (export-from <mod> name ...) -- parallel arrays, one entry per name. */
+    const Symbol **reexports = NULL;
+    const Symbol **reexport_srcs = NULL;
+    uint32_t n_reexports = 0;
+    uint32_t cap_reexports = 0;
+
     /* Consume (export ...) and (import ...) forms */
     while (i < call->as.list.len) {
         Form *item = call->as.list.items[i];
@@ -777,6 +816,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                         diag_emit(DIAG_ERROR, ename_f->span,
                                   "effect name in export list must be a symbol");
                         free(exports); free(exp_effects); free(exp_mut); free(imports);
+                    free(reexports); free(reexport_srcs);
                         return NULL;
                     }
                     if (n_exp_effects >= cap_exp_effects) {
@@ -795,6 +835,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                         diag_emit(DIAG_ERROR, gname_f->span,
                                   "name in (mut ...) export must be a symbol");
                         free(exports); free(exp_effects); free(exp_mut); free(imports);
+                    free(reexports); free(reexport_srcs);
                         return NULL;
                     }
                     if (n_exports >= cap_exports) {
@@ -812,8 +853,51 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                               "export list entries must be symbols, (effect Name), "
                               "or (mut global) forms");
                     free(exports); free(exp_effects); free(exp_mut); free(imports);
+                    free(reexports); free(reexport_srcs);
                     return NULL;
                 }
+            }
+            i++;
+        } else if (head->as.sym == e->sym_export_from) {
+            /* Parse (export-from <mod> name1 name2 ...).  Only shape is
+             * checked here; that <mod> is imported and actually exports each
+             * name is validated after the body is elaborated, alongside the
+             * ordinary export list. */
+            if (item->as.list.len < 3) {
+                diag_emit(DIAG_ERROR, item->span,
+                          "(export-from ...) needs a module name and at least "
+                          "one symbol -- (export-from other-module foo bar)");
+                free(exports); free(exp_effects); free(exp_mut); free(imports);
+                free(reexports); free(reexport_srcs);
+                return NULL;
+            }
+            Form *src_f = item->as.list.items[1];
+            if (src_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, src_f->span,
+                          "the module in (export-from ...) must be a symbol");
+                free(exports); free(exp_effects); free(exp_mut); free(imports);
+                free(reexports); free(reexport_srcs);
+                return NULL;
+            }
+            for (uint32_t j = 2; j < item->as.list.len; j++) {
+                Form *nf = item->as.list.items[j];
+                if (nf->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, nf->span,
+                              "(export-from %s ...) entries must be symbols",
+                              src_f->as.sym->name);
+                    free(exports); free(exp_effects); free(exp_mut); free(imports);
+                    free(reexports); free(reexport_srcs);
+                    return NULL;
+                }
+                if (n_reexports >= cap_reexports) {
+                    cap_reexports = cap_reexports ? cap_reexports * 2 : 4;
+                    reexports = (const Symbol **)realloc(
+                        reexports, cap_reexports * sizeof(Symbol *));
+                    reexport_srcs = (const Symbol **)realloc(
+                        reexport_srcs, cap_reexports * sizeof(Symbol *));
+                }
+                reexports[n_reexports]       = nf->as.sym;
+                reexport_srcs[n_reexports++] = src_f->as.sym;
             }
             i++;
         } else if (head->as.sym == e->sym_import) {
@@ -824,6 +908,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
             }
             if (!parse_import_spec(e, item, &imports[n_imports])) {
                 free(exports); free(exp_effects); free(exp_mut); free(imports);
+                    free(reexports); free(reexport_srcs);
                 return NULL;
             }
             n_imports++;
@@ -865,6 +950,21 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
         mod->n_exported_effects = n_exp_effects;
     }
     free(exp_effects); exp_effects = NULL;
+
+    /* Copy the re-export list to the arena beside the exports. */
+    if (n_reexports > 0) {
+        mod->reexports = (const Symbol **)arena_alloc(
+            e->arena, n_reexports * sizeof(Symbol *));
+        mod->reexport_srcs = (const Symbol **)arena_alloc(
+            e->arena, n_reexports * sizeof(Symbol *));
+        for (uint32_t j = 0; j < n_reexports; j++) {
+            mod->reexports[j]     = reexports[j];
+            mod->reexport_srcs[j] = reexport_srcs[j];
+        }
+        mod->n_reexports = n_reexports;
+    }
+    free(reexports); reexports = NULL;
+    free(reexport_srcs); reexport_srcs = NULL;
 
     /* Copy imports to arena (needed for alias resolution during elaboration) */
     if (n_imports > 0) {
@@ -941,11 +1041,36 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                 MacroDef *alias = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
                 *alias = *ref_macro;
                 alias->is_referred = true;
-                /* Check for name collision with existing global macros. */
-                if (elab_lookup_macro(e, ref_sym) != NULL) {
+                /* Check for name collision with existing global macros.
+                 *
+                 * The SAME macro arriving by a second path is not a collision.
+                 * Macro registration is global, so a diamond -- top imports
+                 * both low and mid, and mid also refers low's macro -- used to
+                 * report low's macro as conflicting with itself. Re-exporting
+                 * a macro via (export-from ...) hits the identical shape. A
+                 * macro is identified by (defining module, name); a module
+                 * cannot define two macros with one name, so matching both
+                 * means it is one definition reached twice. Keep the existing
+                 * registration and move on.
+                 *
+                 * A genuine collision -- two DIFFERENT modules exporting the
+                 * same macro name -- still errors, which is the case the
+                 * check was written for. */
+                MacroDef *prior = elab_lookup_macro(e, ref_sym);
+                if (prior != NULL) {
+                    if (prior->defining_module_name
+                        == ref_macro->defining_module_name) {
+                        continue;
+                    }
                     diag_emit(DIAG_ERROR, imp->span,
                               "macro '%s' from module '%s' conflicts with an existing macro",
                               ref_sym->name, imp->module_name->name);
+                    if (prior->defining_module_name)
+                        diag_emit(DIAG_NOTE, imp->span,
+                                  "the macro already in scope is defined by "
+                                  "module '%s' -- two different modules cannot "
+                                  "supply the same macro name",
+                                  prior->defining_module_name->name);
                     e->current_module_name = NULL;
                     e->current_module = NULL;
                     return NULL;
@@ -1104,6 +1229,87 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                 break;
             }
         }
+    }
+
+    /* Validate (export-from <mod> name ...).  Runs after the body so the
+     * imports have been processed and the source module's bindings are in the
+     * global scope.  Nothing is marked or emitted here: the binding is already
+     * `is_exported` in its own module, and a consumer of THIS module resolves
+     * to that same Binding -- same mangled symbol, no forwarding wrapper.
+     * What this loop does is prove each claim, so a typo or a missing import
+     * is an error here rather than an unresolved symbol in a downstream file. */
+    for (uint32_t j = 0; j < mod->n_reexports; j++) {
+        const Symbol *src  = mod->reexport_srcs[j];
+        const Symbol *nm   = mod->reexports[j];
+
+        /* The source module must be imported.  export-from deliberately does
+         * not load on its own: a second load path with its own resolution
+         * rules is how two modules end up disagreeing about which file a name
+         * came from. */
+        bool imported = false;
+        for (uint32_t k = 0; k < mod->n_imports; k++) {
+            if (mod->imports[k].module_name == src) { imported = true; break; }
+        }
+        if (!imported) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "(export-from %s %s): module '%s' is not imported by "
+                      "this module",
+                      src->name, nm->name, src->name);
+            diag_emit(DIAG_NOTE, call->span,
+                      "add (import %s) to (defmodule %s ...) -- export-from "
+                      "re-exports from a module you already import, it does "
+                      "not load one",
+                      src->name, mod->name->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+
+        /* The question is "does `src` EXPORT this name", not "does `src`
+         * DEFINE it" -- otherwise a chain (low -> mid -> hi) breaks at the
+         * second hop, where mid re-exports a name low defined.  So consult
+         * src's own export table, which already carries its re-exports. */
+        ElabModule *srcmod = elab_find_loaded_module(e, src);
+        bool exported_there = false;
+        if (srcmod) {
+            for (uint32_t k = 0; k < srcmod->n_exports; k++) {
+                if (srcmod->exports[k]->name == nm) { exported_there = true; break; }
+            }
+            for (uint32_t k = 0; !exported_there && k < srcmod->n_exported_macros; k++) {
+                if (srcmod->exported_macros[k]->name == nm) { exported_there = true; break; }
+            }
+        }
+        if (exported_there) continue;
+
+        /* Not exported by src.  Separate "defined there but private" from
+         * "not there at all" -- the first is a visibility decision the author
+         * of src made, the second is a typo, and telling them apart is the
+         * difference between one edit and a hunt. */
+        Binding *rb = scope_lookup(&e->global, nm);
+        bool defined_there = (rb && rb->defining_module_name == src);
+        if (!defined_there) {
+            for (uint32_t k = 0; k < e->n_macros; k++) {
+                if (e->macros[k]->name == nm &&
+                    e->macros[k]->defining_module_name == src) {
+                    defined_there = true;
+                    break;
+                }
+            }
+        }
+        if (defined_there) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "(export-from %s %s): '%s' is defined by '%s' but not "
+                      "exported from it",
+                      src->name, nm->name, nm->name, src->name);
+        } else {
+            diag_emit(DIAG_ERROR, call->span,
+                      "(export-from %s %s): '%s' is not exported by module "
+                      "'%s'",
+                      src->name, nm->name, nm->name, src->name);
+        }
+        e->current_module_name = NULL;
+        e->current_module = NULL;
+        return NULL;
     }
 
     /* PR5-3-B: Validate and mark exported effects. */

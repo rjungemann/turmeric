@@ -9482,6 +9482,42 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 thunk_arity ? spill_params : NULL, thunk_arity);
                         }
                     }
+                    /* let-bound-noncapturing-lambda-segfaults-as-fn-arg: a
+                     * `:fn` value has three lowerings, and this branch assumed
+                     * two of them.  A capturing closure and a forwarded fn
+                     * parameter are boxes whose slot 0 is the code pointer; a
+                     * let-bound NON-capturing lambda is the raw
+                     * `int64_t (*)(int64_t)` with no box at all, so the slot-0
+                     * read below dereferenced the function's own machine code
+                     * and jumped to it (SIGSEGV, no diagnostic, while the
+                     * interpreter got it right).
+                     *
+                     * Detect it by the one thing that separates the shapes: an
+                     * UNBOXED TY_FN binding.  A capturing closure is boxed or
+                     * :ptr<void>; a fn-typed parameter arrives as a
+                     * tur_poly_fn_t and is boxed too.  Route the unboxed case
+                     * through a signature-keyed adapter instead of teaching
+                     * the consumer a second calling convention. */
+                    char *bare_shim = NULL;
+                    if (!fat_spill && !thunk_typedef) {
+                        const Expr *bi = e->as.poly_wrap_.inner;
+                        while (bi && bi->kind == EX_ASCRIBE) bi = bi->as.ascribe_.inner;
+                        const Binding *bb = (bi && bi->kind == EX_VAR)
+                            ? bi->as.var.binding : NULL;
+                        if (bb && bb->type.kind == TY_FN && !bb->type.as.fn.boxed &&
+                            !bb->closure_fn_binding && bb->type.as.fn.arity > 0 &&
+                            bb->type.as.fn.arity <= MAX_FN_ARITY) {
+                            uint8_t bn = (uint8_t)bb->type.as.fn.arity;
+                            Type bparams[MAX_FN_ARITY];
+                            for (uint8_t bi2 = 0; bi2 < bn; bi2++)
+                                bparams[bi2] = emit_resolve_type(
+                                    ctx, emit_fn_arg_type_from_type(bb->type, bi2));
+                            Type bres = emit_resolve_type(
+                                ctx, emit_fn_result_type_from_type(bb->type));
+                            bare_shim = ensure_bare_fnptr_poly_shim(
+                                ctx, bres, bn ? bparams : NULL, bn);
+                        }
+                    }
                     indent_buf(body, ctx->indent);
                     /* The closure value may be carried as int64_t (a let-bound
                      * :ptr<void> closure value) or as a void *; cast through
@@ -9497,6 +9533,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             "(tur_poly_fn_t){ %s, "
                             "(int64_t(*)(void*,int64_t))(*( %s *)(%s)) }",
                             tmp, thunk_typedef, tmp);
+                    } else if (bare_shim) {
+                        /* The value is a bare C function pointer, not a box:
+                         * carry it in the env slot and let the shim cast it
+                         * back to its env-less signature.  Reading slot 0 here
+                         * would read the function's own machine code. */
+                        buf_printf(&out, "(tur_poly_fn_t){ %s, "
+                                         "(int64_t(*)(void*,int64_t))%s }",
+                                   tmp, bare_shim);
                     } else {
                         buf_printf(&out,
                             "(tur_poly_fn_t){ %s, "
@@ -9506,6 +9550,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
+                    free(bare_shim);
                     free(fat_spill);
                     free(thunk_typedef);
                     free(tmp);

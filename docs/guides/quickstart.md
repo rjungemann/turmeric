@@ -194,29 +194,29 @@ factorial(10)    ; => 3628800
 
 ### `Option`: values that might be absent
 
-`option-some` wraps a value; `option-none` represents absence.
+`some` wraps a value; `none` represents absence.
 
 ```turmeric
-(option-some? (option-some 42))    ; => true
-(option-none? (option-none))       ; => true
-(option-some? (option-none))       ; => false
+(some? (some 42))    ; => true
+(none? (none))       ; => true
+(some? (none))       ; => false
 ```
 ```sweet-exp
-option-some?(option-some(42))    ; => true
-option-none?(option-none())      ; => true
-option-some?(option-none())      ; => false
+some?(some(42))    ; => true
+none?(none())      ; => true
+some?(none())      ; => false
 ```
 
-Extract the value with `option-unwrap` (panics on none) or provide a fallback
-with `option-unwrap-or`:
+Extract the value with `unwrap` (panics on none) or provide a fallback
+with `unwrap-or`:
 
 ```turmeric
-(option-unwrap     (option-some 99))    ; => 99
-(option-unwrap-or  (option-none) -1)    ; => -1
+(unwrap     (some 99))    ; => 99
+(unwrap-or  (none) -1)    ; => -1
 ```
 ```sweet-exp
-option-unwrap(option-some(99))        ; => 99
-option-unwrap-or(option-none() -1)    ; => -1
+unwrap(some(99))        ; => 99
+unwrap-or(none() -1)    ; => -1
 ```
 
 Returning `Option` instead of crashing is idiomatic for operations that
@@ -224,19 +224,19 @@ might not produce a value:
 
 ```turmeric
 (defn safe-div [a : int b : int]
-  (if (= b 0) (option-none) (option-some (/ a b))))
+  (if (= b 0) (none) (some (/ a b))))
 
-(option-unwrap    (safe-div 10 2))     ; => 5
-(option-unwrap-or (safe-div 10 0) -1)  ; => -1
+(unwrap    (safe-div 10 2))     ; => 5
+(unwrap-or (safe-div 10 0) -1)  ; => -1
 ```
 ```sweet-exp
 defn safe-div [a :int b :int]
   if {b = 0}
-    option-none()
-    option-some({a / b})
+    none()
+    some({a / b})
 
-option-unwrap(safe-div(10 2))            ; => 5
-option-unwrap-or(safe-div(10 0) -1)     ; => -1
+unwrap(safe-div(10 2))            ; => 5
+unwrap-or(safe-div(10 0) -1)     ; => -1
 ```
 
 ### `Result`: success or failure
@@ -268,8 +268,8 @@ Combine predicates inside `cond` to dispatch on either type:
         :else    (println "unknown")))
 
 (defn describe-option [o]
-  (cond (option-some? o) (println "some!")
-        (option-none? o) (println "none!")
+  (cond (some? o) (println "some!")
+        (none? o) (println "none!")
         :else            (println "unknown")))
 ```
 ```sweet-exp
@@ -284,9 +284,9 @@ defn describe-result [r]
 
 defn describe-option [o]
   cond
-    option-some?(o)
+    some?(o)
     println("some!")
-    option-none?(o)
+    none?(o)
     println("none!")
     :else
     println("unknown")
@@ -324,36 +324,54 @@ let [v vec-new()]
 The `!` suffix on `vec-push!` signals mutation -- the function modifies the
 vector in place rather than returning a new one.
 
-### The `for` macro
+### Counting with `while`
 
-`(for i lo hi body)` binds `i` to each integer in `[lo, hi)` and evaluates
-`body` once per value:
+Turmeric has **no counted `for`**. `for` is the monadic comprehension
+(`(for [x coll] body)`, from `stdlib/macros.tur`); a counted loop is `while`
+plus a `^mut` binding and `set!`:
 
 ```turmeric
-(for i 0 5 (println i))
+(let [^mut i 0]
+  (while (< i 5)
+    (println i)
+    (set! i (+ i 1))))
 ; prints 0 through 4
 ```
 ```sweet-exp
-for i 0 5 println(i)
+let [^mut i 0]
+  while {i < 5}
+    println(i)
+    set!(i {i + 1})
 ; prints 0 through 4
 ```
 
-Combining `for` with a vector is a common pattern for building sequences:
+`^mut` is what makes the binding writable -- without it `set!` is rejected --
+so the loop counter is visibly the one mutable thing in the form.
+
+Building a sequence follows the same shape:
 
 ```turmeric
-(let [squares (vec-new)]
-  (for i 1 6
-    (vec-push! squares (* i i)))
-  (for i 0 5
-    (println (vec-get squares i))))
+(let [squares (vec-new)
+      ^mut i  1]
+  (while (<= i 5)
+    (vec-push! squares (* i i))
+    (set! i (+ i 1)))
+  (let [^mut j 0]
+    (while (< j 5)
+      (println (vec-get squares j))
+      (set! j (+ j 1)))))
 ; prints 1 4 9 16 25
 ```
 ```sweet-exp
-let [squares vec-new()]
-  for i 1 6
+let [squares vec-new()
+     ^mut i  1]
+  while {i <= 5}
     vec-push!(squares {i * i})
-  for i 0 5
-    println(vec-get(squares i))
+    set!(i {i + 1})
+  let [^mut j 0]
+    while {j < 5}
+      println(vec-get(squares j))
+      set!(j {j + 1})
 ; prints 1 4 9 16 25
 ```
 
@@ -425,15 +443,15 @@ name; field accessors are generated as `StructName-fieldname`:
 (defstruct Point [x : int y : int])
 
 (let [p (Point 3 4)]
-  (println (Point-x p))    ; 3
-  (println (Point-y p)))   ; 4
+  (println (.x p))    ; 3
+  (println (.y p)))   ; 4
 ```
 ```sweet-exp
 defstruct Point [x :int y :int]
 
 let [p Point(3 4)]
-  println(Point-x(p))    ; 3
-  println(Point-y(p))    ; 4
+  println(.x(p))    ; 3
+  println(.y(p))    ; 4
 ```
 
 Struct values are heap-allocated. `:type (Point 1 2)` in the REPL confirms

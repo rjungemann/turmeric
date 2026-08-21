@@ -1,0 +1,124 @@
+;;; tur/barrier -- counting barrier: N threads rendezvous, then all proceed.
+;;;
+;;; `barrier-wait` blocks until the Nth caller arrives; then all N are released
+;;; together and the barrier resets for the next round. That reuse is the point
+;;; -- a barrier is for phased work (every worker finishes phase 1 before any
+;;; starts phase 2), which is what separates it from a one-shot latch.
+;;;
+;;; Built from mutex + condvar rather than `pthread_barrier_t`, which is an
+;;; optional POSIX feature that macOS does not ship -- the same reason
+;;; stdlib/sync.tur hand-rolls its semaphore instead of using `sem_t`.
+;;;
+;;; The implementation is a sense-reversing barrier: each round bumps a
+;;; generation counter, and a waiter sleeps until the generation it arrived in
+;;; is over. Without that counter a thread that races around the loop and
+;;; re-enters could be released by its OWN round's broadcast, which is the
+;;; classic way a hand-rolled barrier lets one thread run a phase ahead.
+;;;
+;;; Load it explicitly: `(load "stdlib/barrier.tur")`.
+;;;
+;;; Example:
+;;;   (let [b (barrier-new 3)]
+;;;     ;; ... three threads each call (barrier-wait b) ...
+;;;     (barrier-free b))
+;;;
+;;; Since: 2026-08-20
+;; ---- Opaque handle newtype ----
+;; Barrier wraps its :ptr<void> with a nominally distinct type, so it cannot be
+;; passed where a Mutex or CondVar belongs. :linear because a barrier owns a
+;; mutex and a condvar and must be torn down exactly once.
+(defopaque Barrier :ptr<void> :linear)
+;;; barrier/autolink-hint -- hoist the TurBarrier layout to file scope.
+;;;
+;;; Declared ONCE here rather than repeated in each inline-C body below: a
+;;; struct redeclared per-block is how the HttpdConn layouts drifted into seven
+;;; incompatible versions (docs/archive/history/httpd-conn-struct-consolidation-plan.md).
+(defn barrier/autolink-hint [] : int
+  ```c
+  /* __tur_autolink__: -pthread */
+  /* __tur_include__: #include <stdint.h> */
+  /* __tur_include__: #include <pthread.h> */
+  /* __tur_include__: typedef struct { pthread_mutex_t lock; pthread_cond_t cv; int64_t count; int64_t threshold; int64_t generation; } TurBarrier; */
+  return 0;
+  ```)
+;;; barrier-new -- create a barrier that releases every n-th waiter.
+;;;
+;;; Parameters:
+;;;   n -- number of threads that must rendezvous; must be >= 1
+;;;
+;;; Returns:
+;;;   A Barrier handle. Free it with barrier-free.
+;;;
+;;; Example:
+;;;   (let [b (barrier-new 3)] (barrier-free b))
+;;;
+;;; Since: 2026-08-20
+(defn barrier-new [n : int] : Barrier
+  ```c
+  if (n < 1) { fprintf(stderr, "barrier-new: n must be >= 1\n"); abort(); }
+  TurBarrier *b = (TurBarrier *)malloc(sizeof(TurBarrier));
+  if (!b) { fprintf(stderr, "barrier-new: out of memory\n"); abort(); }
+  pthread_mutex_init(&b->lock, NULL);
+  pthread_cond_init(&b->cv, NULL);
+  b->count = 0;
+  b->threshold = (int64_t)n;
+  b->generation = 0;
+  return (int64_t)(intptr_t)b;
+  ```)
+;;; barrier-wait -- block until n threads have arrived, then release them all.
+;;;
+;;; Parameters:
+;;;   b -- the Barrier to wait on (borrowed)
+;;;
+;;; Returns:
+;;;   true for exactly ONE of the n threads released -- the one whose arrival
+;;;   tripped the barrier -- and false for the rest. Mirrors
+;;;   PTHREAD_BARRIER_SERIAL_THREAD, and is what lets a single thread run the
+;;;   between-phases work (swap buffers, print a summary) with no extra lock.
+;;;
+;;; Example:
+;;;   (if (barrier-wait b) (println "phase done") 0)
+;;;
+;;; Since: 2026-08-20
+(defn barrier-wait [^borrow b : Barrier] : bool
+  ```c
+  TurBarrier *bb = (TurBarrier *)(intptr_t)b;
+  pthread_mutex_lock(&bb->lock);
+  int64_t gen = bb->generation;
+  bb->count++;
+  if (bb->count >= bb->threshold) {
+      /* Last arrival: open the gate for this generation and start the next. */
+      bb->generation++;
+      bb->count = 0;
+      pthread_cond_broadcast(&bb->cv);
+      pthread_mutex_unlock(&bb->lock);
+      return true;
+  }
+  /* Wait for OUR generation to end -- not merely for a broadcast. A plain
+     `pthread_cond_wait` without this predicate would also wake on a spurious
+     signal, and a thread that looped back around could be released by its own
+     next round. */
+  while (gen == bb->generation)
+      pthread_cond_wait(&bb->cv, &bb->lock);
+  pthread_mutex_unlock(&bb->lock);
+  return false;
+  ```)
+;;; barrier-free -- destroy the barrier and release its memory.
+;;;
+;;; Every waiter must have been released first: freeing a barrier threads are
+;;; still parked on destroys the condvar out from under them.
+;;;
+;;; Parameters:
+;;;   b -- the Barrier to destroy (consumed)
+;;;
+;;; Example:
+;;;   (barrier-free b)
+;;;
+;;; Since: 2026-08-20
+(defn barrier-free [b : Barrier] : nil
+  ```c
+  TurBarrier *bb = (TurBarrier *)(intptr_t)b;
+  pthread_cond_destroy(&bb->cv);
+  pthread_mutex_destroy(&bb->lock);
+  free((void *)(intptr_t)bb);
+  ```)

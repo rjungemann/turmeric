@@ -1,0 +1,7 @@
+;; A parenthesised suffix with the wrong arity is still an error: one type is
+;; not a (key value) pair.  Caught in the reader rather than reaching the
+;; elaborator as a mis-arity `(Map int)` application, whose error would point
+;; at a form the user never wrote.
+(defn main [] : int
+  (let [m #map{}:(int)]
+    0))

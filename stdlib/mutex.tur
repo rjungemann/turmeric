@@ -106,3 +106,41 @@
   pthread_mutex_destroy((pthread_mutex_t *)m);
   free((void*)(intptr_t)m);
   ```)
+;;; with-lock -- run body with the mutex held, releasing it afterwards.
+;;;
+;;; The scoped counterpart to the raw `mutex-lock` / `mutex-unlock` pair: the
+;;; body's value is the form's value, and the unlock cannot be forgotten on the
+;;; way out. Replaces the hand-written
+;;; `(mutex-lock m) ... (mutex-unlock m)` sandwich, where the release drifts
+;;; away from the acquire as the body grows and an early return skips it.
+;;;
+;;; Parameters:
+;;;   m    -- a Mutex handle (borrowed; with-lock does not consume or free it)
+;;;   body -- one or more forms; the last one's value is returned
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (let [m (mutex-new)]
+;;;     (println (with-lock m (+ 1 41)))   ; => 42
+;;;     (mutex-free m))
+;;;
+;;; Two caveats worth knowing:
+;;;
+;;; `m` is evaluated twice -- once to lock, once to unlock -- so pass a
+;;; VARIABLE, not a call. `(with-lock (get-mutex) ...)` would lock one mutex
+;;; and unlock whatever the second call returns. A macro cannot bind it once
+;;; instead, because `Mutex` is `:linear`: a `let` binding moves the handle,
+;;; and the checker then rejects the scope for dropping it unconsumed
+;;; (TUR-E0100).
+;;;
+;;; The unlock is not panic-safe. If the body panics, the mutex stays locked.
+;;; Guarding against that needs the unlock on an unwind path, which
+;;; `catch-unwind` can express at the call site when it matters.
+;;;
+;;; Since: 2026-08-20
+(defmacro with-lock [m & body]
+  (do
+    (mutex-lock m)
+    (let [__wl-result (do ~@body)] (mutex-unlock m) __wl-result)))

@@ -763,6 +763,11 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
         } else if (strcmp(kw, "build-dir") == 0) {
             /* build-output-directory-plan: relative path for build artifacts. */
             out->build_dir = form_str_dup(vf);
+        } else if (strcmp(kw, "entry") == 0) {
+            /* Entry-point module for project-mode `tur run`, relative to the
+             * manifest dir. Existence is checked by the caller (main.c), which
+             * is the only place that knows the resolved project root. */
+            out->entry = form_str_dup(vf);
         } else if (strcmp(kw, "engine") == 0) {
             /* engine-selection-plan E1: default execution engine for
              * `tur run`.  An unknown VALUE is a hard error -- `:engine
@@ -1115,6 +1120,8 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
 
     if (m->build_dir)
         fprintf(f, "  :build-dir   \"%s\"\n", m->build_dir);
+    if (m->entry && *m->entry)
+        fprintf(f, "  :entry       \"%s\"\n", m->entry);
     if (m->engine && *m->engine)
         fprintf(f, "  :engine      \"%s\"\n", m->engine);
 
@@ -1213,6 +1220,7 @@ void pkg_manifest_free(PkgManifest *m) {
     for (int i = 0; i < m->n_experiments; i++) free(m->experiments[i]);
     free(m->experiments);
     free(m->build_dir);
+    free(m->entry);
     free(m->engine);
     memset(m, 0, sizeof(*m));
 }
@@ -4473,9 +4481,14 @@ int cmd_pkg_add(int argc, char **argv) {
     /* Check for duplicate */
     for (int i = 0; i < m.n_spices; i++) {
         if (strcmp(m.spices[i].name, name_buf) == 0) {
+            /* There is no `tur update` subcommand -- CANONICAL_COMMANDS has
+             * no "update" row (`tur upgrade` is the installed-tool pipeline,
+             * a different thing). Point at the flow that actually exists:
+             * edit the manifest, then re-resolve. */
             fprintf(stderr,
                 "'%s' is already a dependency. "
-                "Use `tur update %s` to change the ref.\n",
+                "To change its ref, edit the `:spices` entry for '%s' in "
+                "build.tur, then run `tur fetch --update`.\n",
                 name_buf, name_buf);
             pkg_manifest_free(&m);
             return 1;
@@ -4652,7 +4665,10 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
     printf("Added cmake dep '%s' -> %s", name_buf, url);
     if (ref) printf(" @ %s", ref);
     printf("\n");
-    printf("Run `tur fetch` to generate cmake/SpiceDeps.cmake.\n");
+    /* The generated file is cmake/CMakeLists.txt; `SpiceDeps` is the name of
+     * the cmake project declared inside it, which is what this message used
+     * to report as the filename. */
+    printf("Run `tur fetch` to generate cmake/CMakeLists.txt.\n");
 
     pkg_manifest_free(&m);
     return 0;
@@ -4965,6 +4981,127 @@ static bool write_file_atomic(const char *path, const char *content) {
         return false;
     }
     return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* CLI: tur audit                                                       */
+/* ------------------------------------------------------------------ */
+
+/* Look up a dep by name in tur.lock.  Returns NULL when the lock has no
+ * entry -- which is normal for :path and workspace deps (they resolve from
+ * local source and never produce a lock row) and a finding for a :url dep
+ * (it means the tree has never been fetched, so nothing is pinned). */
+static const PkgLockEntry *audit_lock_entry(const PkgLockFile *lock,
+                                            const char *name, bool cmake) {
+    if (!lock) return NULL;
+    for (int i = 0; i < lock->n_entries; i++) {
+        if (lock->entries[i].is_cmake != cmake) continue;
+        if (lock->entries[i].name && strcmp(lock->entries[i].name, name) == 0)
+            return &lock->entries[i];
+    }
+    return NULL;
+}
+
+/* Print one origin row plus, when it exists, the pin from tur.lock. */
+static void audit_print_origin(const char *kind, const char *name,
+                               const char *url, const char *ref,
+                               const char *path, const char *subdir,
+                               const PkgLockEntry *le, bool *any_unpinned) {
+    if (path) {
+        /* Local source: no download, no hash, and nothing to pin. The trust
+         * boundary is the filesystem, which the user already controls. */
+        printf("  %-6s %-22s local path  %s\n", kind, name, path);
+        return;
+    }
+    printf("  %-6s %-22s %s", kind, name, url ? url : "(no url)");
+    if (subdir) printf("  subdir=%s", subdir);
+    printf("\n");
+    printf("         %-22s ref %s\n", "", ref ? ref : "(unpinned)");
+    if (le) {
+        if (le->resolved)
+            printf("         %-22s commit %s\n", "", le->resolved);
+        if (le->sha256)
+            printf("         %-22s sha256 %s\n", "", le->sha256);
+        if (le->resolved_via && strcmp(le->resolved_via, "system") == 0)
+            printf("         %-22s via system package%s%s\n", "",
+                   le->system_version ? " " : "",
+                   le->system_version ? le->system_version : "");
+    } else {
+        printf("         %-22s NOT IN tur.lock -- run `tur fetch` to pin it\n", "");
+        if (any_unpinned) *any_unpinned = true;
+    }
+}
+
+/* `tur audit` -- list every origin this project will fetch code from.
+ *
+ * The security section of consuming-spices-guide.md promised this. Its point
+ * is stated there: a :cmake-deps entry is a trust decision equivalent to
+ * executing build scripts from that repository. This command answers "what am
+ * I trusting?" in one place, rather than making the reader reconstruct it from
+ * build.tur and tur.lock by hand.
+ *
+ * It deliberately does NOT verify anything. The guide's original wording also
+ * promised maintainer GPG keys; there is no key infrastructure in the tree to
+ * check against, and printing an unverified key would be worse than printing
+ * none. What this reports is exactly what the manifest and lock say. */
+int cmd_pkg_audit(int argc, char **argv) {
+    (void)argc; (void)argv;
+
+    char manifest_path[64];
+    if (!pkg_resolve_manifest_cwd(manifest_path, sizeof(manifest_path))) {
+        fprintf(stderr, "tur audit: no build.tur found in current directory\n");
+        return 1;
+    }
+
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read(manifest_path, &m)) return 1;
+
+    PkgLockFile lock;
+    memset(&lock, 0, sizeof(lock));
+    bool have_lock = pkg_lock_read("tur.lock", &lock);
+
+    printf("audit: %s\n", m.name ? m.name : "(unnamed package)");
+    if (!have_lock)
+        printf("  (no tur.lock -- nothing is pinned yet; run `tur fetch`)\n");
+
+    bool any_unpinned = false;
+
+    printf("\nTurmeric spices (%d):\n", m.n_spices);
+    if (m.n_spices == 0) printf("  (none)\n");
+    for (int i = 0; i < m.n_spices; i++) {
+        const PkgSpice *sp = &m.spices[i];
+        audit_print_origin("spice", sp->name, sp->url, sp->ref, sp->path,
+                           sp->subdir,
+                           audit_lock_entry(have_lock ? &lock : NULL,
+                                            sp->name, false),
+                           &any_unpinned);
+    }
+
+    printf("\nCMake dependencies (%d) -- each executes build scripts from its "
+           "repository:\n", m.n_cmake_deps);
+    if (m.n_cmake_deps == 0) printf("  (none)\n");
+    for (int i = 0; i < m.n_cmake_deps; i++) {
+        const PkgCmakeDep *cd = &m.cmake_deps[i];
+        audit_print_origin("cmake", cd->name, cd->url, cd->ref, cd->path, NULL,
+                           audit_lock_entry(have_lock ? &lock : NULL,
+                                            cd->name, true),
+                           &any_unpinned);
+        if (cd->prefer_system)
+            printf("         %-22s prefer-system: a system copy is used when "
+                   "found, bypassing the pin above\n", "");
+    }
+
+    if (any_unpinned)
+        printf("\nSome origins are not pinned in tur.lock. Run `tur fetch` so "
+               "each resolves to a recorded commit and hash.\n");
+
+    printf("\nThis lists origins; it verifies nothing. No signature or key "
+           "checking exists yet.\n");
+
+    pkg_lock_free(&lock);
+    pkg_manifest_free(&m);
+    return 0;
 }
 
 int cmd_pkg_emit_cmake(int argc, char **argv) {

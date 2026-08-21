@@ -127,6 +127,53 @@
 
 (defn rwlock-free [rw : RwLock] : nil
   ```c
-  pthread_rwlock_destroy((pthread_rwlock_t *)rw);
-  free(rw);
+  /* RwLock is a defopaque over :ptr<void>, which lowers to int64_t, so both
+     the destroy and the free need the cast -- `free(rw)` alone is an
+     int-to-pointer conversion warning under the cc-warning ratchet. */
+  pthread_rwlock_destroy((pthread_rwlock_t *)(intptr_t)rw);
+  free((void *)(intptr_t)rw);
   ```)
+;;; with-read-lock -- run body holding the rwlock for reading.
+;;;
+;;; Parameters:
+;;;   rw   -- an RwLock handle (borrowed; not consumed or freed)
+;;;   body -- one or more forms; the last one's value is returned
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (let [rw (rwlock-new)]
+;;;     (println (with-read-lock rw 42))   ; => 42
+;;;     (rwlock-free rw))
+;;;
+;;; Carries the same two caveats as `with-lock` in stdlib/mutex.tur: `rw` is
+;;; evaluated twice (pass a variable, not a call), and a panic inside the body
+;;; leaves the lock held.
+;;;
+;;; Since: 2026-08-20
+(defmacro with-read-lock [rw & body]
+  (do
+    (rwlock-rdlock rw)
+    (let [__wrl-result (do ~@body)] (rwlock-unlock rw) __wrl-result)))
+;;; with-write-lock -- run body holding the rwlock for writing.
+;;;
+;;; Parameters:
+;;;   rw   -- an RwLock handle (borrowed; not consumed or freed)
+;;;   body -- one or more forms; the last one's value is returned
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (let [rw (rwlock-new)]
+;;;     (println (with-write-lock rw 7))   ; => 7
+;;;     (rwlock-free rw))
+;;;
+;;; Same caveats as `with-read-lock`.
+;;;
+;;; Since: 2026-08-20
+(defmacro with-write-lock [rw & body]
+  (do
+    (rwlock-wrlock rw)
+    (let [__wwl-result (do ~@body)] (rwlock-unlock rw) __wwl-result)))

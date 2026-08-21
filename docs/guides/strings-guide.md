@@ -18,7 +18,12 @@ how long they stay valid.
 of every `"..."` literal and the right type at an FFI boundary. `Eq[cstr]` is a
 content `strcmp` (and `Show[cstr]` copies the bytes into a fresh owned
 `String`), so at the scalar level a `cstr` already behaves like a value -- but
-it **borrows**. The moment you store a
+it **borrows**.
+
+Note that the `=` **operator** has no `cstr` overload: `(= a b)` on two `cstr`
+values is a `TUR-E0006` operator-lookup error, not a pointer compare. Content
+equality is `(eq? a b)` through the auto-loaded `Eq[cstr]` instance, or
+`(cstr-eq? a b)` from `stdlib/cstr.tur` for the direct call. The moment you store a
 `cstr` somewhere that outlives its buffer, or use a *computed* `cstr` as a
 Map/Set key, you have a latent dangling pointer.
 

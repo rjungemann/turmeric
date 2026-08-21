@@ -93,17 +93,54 @@ initializer, etc.).
 **Arc** (atomic reference counting) is the thread-safe counterpart to
 `rc<T>`: where `rc<T>` uses plain counts (single-threaded), the Arc control
 block uses atomic counts so multiple OS threads can safely clone and drop a
-shared value. The runtime lives in `src/runtime/arc.{c,h}`; there is no
-auto-loaded stdlib wrapper yet, so today Arc is reached through inline C
-over the control block (see `tests/fixtures/arc-basic` and
-`tests/fixtures/arc-clone` for the canonical shapes: an `arc-new` /
-`arc-clone` / `arc-drop` trio over an atomic `{strong, weak, value}` block).
+shared value. The runtime lives in `src/runtime/arc.{c,h}`; the language
+surface is `stdlib/arc.tur`, which is not auto-loaded:
+
+```turmeric no-check
+(defmodule app
+  (import arc :refer [arc-new arc-clone arc-get arc-strong-count arc-drop])
+  (defn main [] : int
+    (let [a (arc-new 42)
+          b (arc-clone a)]
+      (println (arc-get b))            ; 42
+      (println (arc-strong-count a))   ; 2
+      (arc-drop b)
+      (arc-drop a))
+    0))
+```
+
+`Arc` and `ArcWeak` are distinct opaque handles, so passing one where the
+other belongs is a type error rather than a runtime abort.
 
 ### Properties
 
 - **Atomic:** Reference count increments/decrements are atomic (thread-safe).
 - **Clone/drop:** cloning increments the strong count; dropping decrements it atomically and frees at zero.
 - **Shared but not mutable:** an Arc gives shared read-only access. Guard mutable shared state with a mutex or use an atomic cell.
+- **No cycle collector.** This is the one place Arc is *weaker* than `rc<T>`,
+  which has a Bacon-Rajan collector. A cycle of strong Arcs leaks; break it
+  by hand with `arc-downgrade` / `arc-upgrade`.
+
+### Weak references
+
+`arc-downgrade` yields an `ArcWeak` that does not keep the value alive.
+`arc-upgrade` returns `(Option Arc)` -- not a nullable handle, because "the
+value may already be gone" is the entire point of a weak reference, so the
+caller has to say what happens in that case:
+
+```turmeric no-check
+(let [a (arc-new 42)
+      w (arc-downgrade a)]
+  (arc-drop a)                     ; last strong reference gone
+  (let [u (arc-upgrade w)]
+    (println (if (some? u) 1 -1))) ; -1
+  (arc-weak-drop w))
+```
+
+`arc-weak-count` reports the weak handles a caller actually holds: the
+runtime keeps a +1 sentinel while any strong reference lives, so the control
+block is not freed under a live weak handle, and that sentinel is subtracted
+out.
 
 ### When to Use Arc
 
@@ -116,6 +153,28 @@ over the control block (see `tests/fixtures/arc-basic` and
 **Mutex** (`stdlib/mutex.tur`) protects mutable shared state. A `Mutex` is a
 linear opaque handle; lock and unlock borrow it, and `mutex-free` is the one
 legal consumption:
+
+The scoped form is `with-lock`, which makes the body's value the form's value
+and puts the release where it cannot be forgotten:
+
+```turmeric no-check
+(let [m (mutex-new)]
+  (println (with-lock m (+ 1 41)))   ; => 42
+  (mutex-free m))
+```
+
+`stdlib/rwlock.tur` has the matching `with-read-lock` / `with-write-lock`.
+
+Two things to know about all three. The lock expression is evaluated **twice**
+-- once to acquire, once to release -- so pass a variable, never a call. That
+is forced rather than sloppy: `Mutex` is `:linear`, so a `let` binding *moves*
+the handle and the checker then rejects the enclosing scope for dropping it
+unconsumed (TUR-E0100), which rules out binding it once inside the macro. And
+the release is not panic-safe: if the body panics the lock stays held, so put
+the unlock on an unwind path with `catch-unwind` where that matters.
+
+The raw pair is still there when you need the acquire and release in different
+scopes:
 
 ```turmeric
 (def lock (mutex-new))
@@ -1023,9 +1082,44 @@ for-each range(10)
 println(atomic-load(counter))  ; => 10
 ```
 
-For a barrier (N threads rendezvous), build one from a TVar plus `check` --
-see the barrier sketch in the [STM Tutorial](stm-tutorial.md#barrier) -- or
-from a mutex + condvar + counter.
+### Barrier
+
+`stdlib/barrier.tur` is a counting barrier: `barrier-wait` blocks until the
+Nth caller arrives, then releases all N together and resets for the next
+round. That reuse is the point -- a barrier is for **phased** work, where
+every worker must finish phase 1 before any starts phase 2, which is what
+separates it from a one-shot latch.
+
+```turmeric no-check
+(load "stdlib/barrier.tur")
+
+(let [b (barrier-new 3)]
+  ;; ... each of three threads calls (barrier-wait b) between phases ...
+  (barrier-free b))
+```
+
+`barrier-wait` returns `true` for exactly **one** of the N threads released
+per round -- the arrival that tripped it, mirroring
+`PTHREAD_BARRIER_SERIAL_THREAD`. That lets a single thread do the
+between-phases work (swap buffers, print a summary) without a second lock:
+
+```turmeric no-check
+(if (barrier-wait b) (println "phase complete") 0)
+```
+
+It is built from mutex + condvar rather than `pthread_barrier_t`, which is an
+optional POSIX feature macOS does not ship -- the same reason
+`stdlib/sync.tur` hand-rolls its semaphore instead of using `sem_t`.
+Internally it is sense-reversing: each round bumps a generation counter and a
+waiter sleeps until *its* generation ends, so a thread that loops back around
+cannot be released by its own next round.
+
+Free the barrier only after every waiter has been released; destroying it
+while threads are parked on it destroys the condvar out from under them.
+
+The STM alternative -- a TVar plus `check` -- is sketched in the
+[STM Tutorial](stm-tutorial.md#barrier), and is the right choice when the
+rendezvous needs to compose with other transactional state.
 
 ### Structured Concurrency with TaskGroup
 

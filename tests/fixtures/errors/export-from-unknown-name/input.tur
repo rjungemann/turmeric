@@ -1,0 +1,8 @@
+;; A name the source module neither defines nor exports -- the typo case,
+;; which must read differently from the defined-but-private case above.
+(defmodule mid
+  (import m/low :refer [low-add])
+  (export mid-own)
+  (export-from m/low no-such-name)
+  (defn mid-own [] : int 7)
+  (defn main [] : int 0))

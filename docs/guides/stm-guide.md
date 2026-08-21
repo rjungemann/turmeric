@@ -208,6 +208,21 @@ Up to 32 defers per transaction; exceeding this panics.
 
 ### TMVar (single-slot mailbox)
 
+> `stdlib/stm-sync.tur` ships this, plus a TChan --
+> `tmvar-new` / `tmvar-new-empty` / `tmvar-take` / `tmvar-put` / `tmvar-read` /
+> `tmvar-full?` and `tchan-new` / `tchan-write` / `tchan-read` / `tchan-len` /
+> `tchan-empty?`. Each also has a `-stm` variant (`tmvar-take-stm`, ...) that
+> is the transaction **body** only, so several operations compose into ONE
+> transaction that retries as a unit -- two standalone calls are two
+> transactions with a window between them.
+>
+> They are macros rather than functions, and that is forced: `atomically`
+> requires a **syntactic** `stm` block, so `(atomically (f x))` where `f`
+> returns a transaction is a hard error. An STM action cannot be a value.
+>
+> The sketch below is kept because it shows the mechanism -- `check` is what
+> turns a read into a blocking wait.
+
 ```turmeric
 ;; An empty slot is represented as null (sketch)
 (defn tmvar/new [] : ptr  (tvar/new (ptr/null)))

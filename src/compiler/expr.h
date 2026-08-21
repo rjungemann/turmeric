@@ -1099,6 +1099,13 @@ typedef struct DefModule {
     uint32_t       n_exports_mut;
     const Symbol **exported_effects;  /* PR5-3-B: effect names in (export (effect Name)) */
     uint32_t       n_exported_effects;
+    /* (export-from <mod> name ...) -- names this module re-exports from
+     * another. Parallel arrays: reexport_srcs[i] is the module that DEFINES
+     * reexports[i]. The consumer sees the defining module's Binding directly
+     * (same mangled symbol), so no forwarding wrapper is emitted. */
+    const Symbol **reexports;
+    const Symbol **reexport_srcs;
+    uint32_t       n_reexports;
     ImportSpec *imports;         /* import specs */
     uint32_t n_imports;
     Expr **body;                 /* elaborated body expressions */

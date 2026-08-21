@@ -19,6 +19,15 @@ esac
 
 WORK="$(mktemp -d -t tur-rp4.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
+# The REPL's spice-binding installer allocates one FfiBindingUd plus one
+# qualified-name key per export and deliberately never frees either --
+# src/turi/ffi_thunk.c:533 ("Leaked at process exit") and :551 ("qkey is
+# referenced by the env binding's name field; do not free here").  Those are
+# process-lifetime by design, like the rest of the tree-walking interpreter,
+# so LeakSanitizer's report is noise here and pollutes the output these
+# assertions diff against.  Same opt-out repl-spice-jit.sh already carries;
+# the compiler/codegen path stays leak-checked (see CLAUDE.md).
+export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0"
 
 PROJ="$WORK/proj"
 mkdir -p "$PROJ/src"

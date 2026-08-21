@@ -46,8 +46,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [quickstart-tutorial-fictional-option-api](quickstart-tutorial-fictional-option-api.md) | high | the shipped quickstart tutorial stack (repl-tutorial, quickstart.md, tutorials/quickstart.yaml) teaches `option-some`/counted-`for`/`Point-x` -- none exist |
-| [async-send-check-skips-predefined-fns](async-send-check-skips-predefined-fns.md) | medium | TUR-E0022 Send-across-await check runs only in inline async closures; `(async my-fn)` is never checked |
 | [async-panic-task-boundary](async-panic-task-boundary.md) | medium | panic in a plain `(async ...)` body unwinds the caller instead of rejecting the future |
 | [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
 | [args-api-int-erased-handles](args-api-int-erased-handles.md) | medium | stdlib/args.tur types spec/result handles and the option default as bare `:int` (no-lazy-int violation) |
@@ -56,28 +54,17 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [performance-guide-fictional-stdlib-api](performance-guide-fictional-stdlib-api.md) | medium | performance-guide's middle sections document nonexistent stdlib modules/functions |
 | [logic-guide-documents-unimplemented-backtracking-api](logic-guide-documents-unimplemented-backtracking-api.md) | medium | logic-programming-guide's API summary (`choice-point`/`run`/`do-backtrack`) does not exist |
 | [match-nested-constructor-patterns](match-nested-constructor-patterns.md) | medium | match arms cannot nest constructor patterns; everything flattens with inner match |
+| [datalog-examples-do-not-compile](datalog-examples-do-not-compile.md) | medium | 4 of 5 examples/datalog/*.tur fail `tur check`; the tutorial series quotes them |
+| [tur-run-test-blocked-by-doctest-failures](tur-run-test-blocked-by-doctest-failures.md) | medium | `tur run test` exits in ~24s: the doctest dep fails, so the ctest line never runs |
+| [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [type-of-cast-kind-granularity](type-of-cast-kind-granularity.md) | low-medium | `cast` between two different struct types via `any` succeeds -- tag is TypeKind, not type id |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
-| [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | low | mw-recover (panic -> 500) unwritten; its catch-unwind blocker is fixed |
-| [module-reexport-shorthand-missing](module-reexport-shorthand-missing.md) | low | no `(export-from ...)`; forwarding a name needs a wrapper defn |
+| [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | medium | mw-recover blocked by closure/fat-handle codegen defects: lifted thunk references an unthreaded name, plus a drop-glue use-after-free -- 4 repros inside |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
-| [stdlib-arc-surface-missing](stdlib-arc-surface-missing.md) | low | Arc runtime exists, no stdlib surface -- fixtures hand-roll it in inline C |
-| [value-carrying-lock-wrappers](value-carrying-lock-wrappers.md) | low | no `with-lock` / value-carrying Mutex<T>; only raw mutex-*/rwlock-* handles |
-| [stm-tmvar-tchan-stdlib](stm-tmvar-tchan-stdlib.md) | low | no TMVar/TChan; STM docs hand-sketch them from tvar/* + check |
-| [barrier-primitive-missing](barrier-primitive-missing.md) | low | no barrier-new/barrier-wait anywhere |
-| [schan-recv-pair-signature-migration](schan-recv-pair-signature-migration.md) | low | schan-recv still uses the caller-cell workaround; its miscompile blocker is fixed |
-| [tur-update-subcommand-missing](tur-update-subcommand-missing.md) | low | `tur add` tells users to run nonexistent `tur update`; also the SpiceDeps.cmake message misnomer |
-| [build-tur-entry-key-unimplemented](build-tur-entry-key-unimplemented.md) | low | `:entry` in build.tur documented but not parsed into PkgManifest |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | `#json-str?<T>` / `#json-file<T>` readers unimplemented (RD2) |
-| [readme-structural-equality-op-missing](readme-structural-equality-op-missing.md) | low | README advertises `=struct=`, which has never existed |
-| [repl-doc-table-lists-removed-try-catch-throw](repl-doc-table-lists-removed-try-catch-throw.md) | low | REPL `:doc` still documents try/catch/throw, deleted in v0.25.0 |
-| [stdlib-cstr-content-equality](stdlib-cstr-content-equality.md) | low | no cstr-eq?; `=` compares pointers, callers hand-roll strcmp |
-| [typed-empty-map-literal-suffix](typed-empty-map-literal-suffix.md) | low | `[]:T` and `#set{}:T` exist; `#map{}` has no typed-empty suffix |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
-| [tur-audit-not-implemented](tur-audit-not-implemented.md) | low | security docs promise `tur audit`; only audit-spans exists |
-| [justfile-test-recipe-lost-ctest-j](justfile-test-recipe-lost-ctest-j.md) | low | Justfile test recipe dropped ctest -j, the documented soft regression |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
 
 ## Value representation (the consolidation campaign)

@@ -208,7 +208,7 @@ etc.) dedupe by value:
 ; => empty Vec  (expression position)
 ```
 
-### Typed empty literals -- `[]:T` / `#set{}:T`
+### Typed empty literals -- `[]:T` / `#set{}:T` / `#map{}:(K V)`
 
 An empty literal has no element to infer a type from, so a later typed
 operation (`.eq?`, `.push!`) can't recover its element type. Pin it with a
@@ -218,6 +218,7 @@ fused `:T` element-type suffix immediately after the closer:
 []:int             ; empty Vec[int]
 #set{}:cstr        ; empty Set[cstr]
 []:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
+#map{}:(cstr int)  ; empty Map[cstr, int]  (a pair -- Map takes two parameters)
 ```
 ```sweet-exp
 []:int
@@ -226,7 +227,17 @@ fused `:T` element-type suffix immediately after the closer:
 ; empty Set[cstr]
 []:(Vec int)
 ; empty Vec[Vec[int]]  (parenthesize a compound element type)
+#map{}:(cstr int)
+; empty Map[cstr, int]  (a pair -- Map takes two parameters)
 ```
+
+`#map{}` is the one two-parameter case, so its suffix is a parenthesised
+**pair** of types rather than a single one: `#map{}:(cstr int)` is
+`Map[cstr, int]`. The parentheses are required -- the arity has to come from
+somewhere, and a bare `#map{}:cstr int` would swallow whatever token followed
+the literal. This does not clash with the compound-element reading above
+(`[]:(Vec int)` is one element type that happens to be parenthesised): which
+reading applies is fixed by the literal kind, not by the shape of the suffix.
 
 The `#set{}:cstr` above pins the element type, but note the element *type* you
 pick still matters for lifetimes: a `Set[cstr]` of **computed** keys borrows
@@ -235,8 +246,10 @@ stored (not static literals), use `#set{}:String` -- a `Set[String]` copies each
 key into a box the set owns. See [strings-guide.md](strings-guide.md).
 
 The suffix desugars to an ascription on the literal, so `[]:int` is exactly
-`(:: (vec-of) (Vec int))` and `#set{}:T` is `(:: (set-of) (Set T))` -- the
-generated code is identical. It replaces the verbose
+`(:: (vec-of) (Vec int))`, `#set{}:T` is `(:: (set-of) (Set T))`, and
+`#map{}:(K V)` is `(:: #map{} (Map K V))` -- the generated code is identical,
+and the suffix is neither stronger nor weaker than the ascription it stands
+for. It replaces the verbose
 `(:: (vec-new) (Vec int))` scaffolding that empty containers previously
 needed:
 
@@ -271,8 +284,10 @@ Rules:
   merely a redundant re-statement of the inferred type.
 - Missing type after the `:` is a read error: *"expected an element type
   after the ':' container-literal suffix"*.
-- `#map{}` has two type parameters (key and value); a typed-empty suffix for
-  maps is not yet supported -- ascribe the full `(Map K V)` type instead.
+- On `#map{}` the suffix must be a parenthesised pair. `#map{}:int`,
+  `#map{}:(int)`, and `#map{}:(a b c)` are all read errors naming the
+  expected `#map{}:(<key> <value>)` shape, rather than reaching the
+  elaborator as a mis-arity type application.
 
 ## Numeric literals: `#rat{...}` and `#cx{...}`
 

@@ -993,6 +993,81 @@ char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
     return name;
 }
 
+/* let-bound-noncapturing-lambda-segfaults-as-fn-arg: adapter for a `:fn` value
+ * that is a BARE C function pointer rather than a closure box.
+ *
+ * A `tur_poly_fn_t` consumer always calls `f.fn(f.env, args...)`, and every
+ * other lowering of a `:fn` value satisfies that: a capturing closure boxes
+ * its env with the code pointer in slot 0, and an inline lambda gets a
+ * `__poly_` wrapper with the env parameter spliced in.  A let-bound
+ * NON-capturing lambda is the third lowering -- it binds the raw
+ * `int64_t (*)(int64_t)` with no box at all, so reading "slot 0" read the
+ * first eight bytes of the function's own machine code and jumped to them.
+ *
+ * The fix keeps one consumer contract instead of teaching the consumer a
+ * second one: stash the bare pointer in the `env` slot, where it fits (it is
+ * pointer-sized), and pair it with this shim, which casts `env` back to the
+ * env-less signature and calls it with the arguments only.  The shim is keyed
+ * by signature and references no local, so it lives at file scope like the
+ * spill shims above. */
+char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
+                                  Type *param_types, uint8_t n_params) {
+    const char *rc = type_c_name(result_type);
+    if (!rc) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_barefn_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc) { buf_free(&nb); return NULL; }
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc);
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static %s %s(void *__e", rc, name);
+    for (uint32_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+    buf_puts(target, ") {\n    ");
+    buf_printf(target, "%s (*__f)(", rc);
+    if (n_params == 0) buf_puts(target, "void");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        buf_puts(target, type_c_name(param_types[i]));
+    }
+    buf_printf(target, ") = (%s (*)(", rc);
+    if (n_params == 0) buf_puts(target, "void");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        buf_puts(target, type_c_name(param_types[i]));
+    }
+    buf_puts(target, "))(intptr_t)__e;\n    return __f(");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        buf_printf(target, "a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n}\n");
+    return name;
+}
+
 static char *typed_poly_to_fat_name(Type result_type, const Type *arg_types,
                                     uint32_t n_args) {
     Buf name;

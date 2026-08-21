@@ -372,7 +372,7 @@ defpackage my-app
 | Condition | Message |
 |---|---|
 | Not in a project directory | `No build.tur found. Run tur new <name> to create a project.` |
-| Spice already present | `'geom' is already a dependency. Use tur update geom to change the ref.` |
+| Spice already present | `'geom' is already a dependency. To change its ref, edit the :spices entry for 'geom' in build.tur, then run tur fetch --update.` |
 | Clone or ref failure | `spice: git failed for 'geom' ref 'v99.0.0' in 'spices'` |
 | SHA mismatch on re-fetch | `spice: SHA mismatch detected -- run tur fetch --update to re-fetch` |
 
@@ -470,6 +470,31 @@ binary's exit code.
 | `src/main.tur` exists | `src/main.tur` |
 | Single `*.tur` file in `src/` | that file |
 | None of the above | error with suggestion |
+
+`:entry` is a path relative to the manifest directory (an absolute path is
+honored as written):
+
+```turmeric no-check
+(defpackage app
+  :name    "app"
+  :version "0.1.0"
+  :entry   "src/cli.tur")
+```
+
+The rungs are tried in order, so `:entry` wins even when `src/main.tur` also
+exists. It is authoritative rather than a hint: a `:entry` that does not name
+an existing file is a hard error, never a quiet fall-through to `src/main.tur`
+-- running a different program than the manifest asked for is the failure mode
+worth being loud about.
+
+```
+tur run: :entry "src/nope.tur" in build.tur does not name a file
+  Looked for /home/alice/app/src/nope.tur
+```
+
+`:entry` applies to project-mode `tur run` (a bare `tur run` inside the
+project). `tur run <file>` names its entry directly, and `tur build <dir>`
+compiles every module under `src/` rather than picking one.
 
 ### Compile without running
 
@@ -623,6 +648,7 @@ tur add <path> --path      # add a local path dependency
 tur add-cmake <url>        # add a C/CMake dependency
 tur fetch                  # download all spices from tur.lock
 tur fetch --update         # update to latest allowed versions
+tur audit                  # list every origin the build fetches code from
 
 # Build and run
 tur build <dir>            # compile a project directory

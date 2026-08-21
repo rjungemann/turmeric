@@ -674,7 +674,7 @@ in the manifest.
 > [tur-fetch-system-first-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-fetch-system-first-plan.md) for the
 > design rationale and open questions.
 
-For the full `:cmake-deps` field reference, the generated `SpiceDeps.cmake`
+For the full `:cmake-deps` field reference, the generated `cmake/CMakeLists.txt`
 format, the `spice-deps-manifest.json` schema, and hash locking, see the
 [CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 

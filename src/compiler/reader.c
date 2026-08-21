@@ -1141,19 +1141,29 @@ static Form *read_refine_literal(Reader *r) {
 }
 
 /* TCE (typed-container-elements / test-suite-idioms Phase E): a `:`-prefixed
- * element type fused to the closer of a vec or set literal pins the
- * collection's element type.  `[]:int` lowers to `(:: [] (Vec int))` and
+ * element type fused to the closer of a vec, set, or map literal pins the
+ * collection's type parameters.  `[]:int` lowers to `(:: [] (Vec int))` and
  * `#set{}:int` to `(:: #set{} (Set int))`, so an empty literal recovers its
  * element type without the verbose `(:: (vec-new) (Vec int))` ascription.
  * The element type form may itself be compound -- `#set{}:(Vec int)` pins
- * `Set[Vec[int]]`.  `ctor` is the type-constructor name ("Vec" or "Set").
+ * `Set[Vec[int]]`.
+ *
+ * `ctor` is the type-constructor name ("Vec", "Set", or "Map") and
+ * `n_type_args` how many parameters it takes.  A two-parameter constructor
+ * spells its suffix as a parenthesised pair -- `#map{}:(int cstr)` lowers to
+ * `(:: #map{} (Map int cstr))` -- because the arity has to come from
+ * somewhere and a bare `#map{}:int cstr` would swallow whatever token
+ * followed the literal.  There is no ambiguity with the compound-element
+ * reading above: which one applies is fixed by the literal kind, not by the
+ * shape of the suffix.
  *
  * The suffix is recognized only when a single ':' is immediately adjacent to
  * the closer (no intervening whitespace) and is not the '::' ascription
  * operator; otherwise `lit` is returned unchanged so binding vectors
  * (`[x :int]`, where ']' is followed by space) and bare literals are
  * unaffected. */
-static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor) {
+static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor,
+                                         int n_type_args) {
     if (!lit || r->error) return lit;
     if (peek(r) != ':' || peek2(r) == ':') return lit;
 
@@ -1163,22 +1173,46 @@ static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor)
     if (peek(r) == -1) {
         Span s = span_from_to(r, s_line, s_col, s_off, r->pos);
         diag_emit(DIAG_ERROR, s,
-                  "expected an element type after the ':' container-literal "
-                  "suffix (e.g. []:int)");
+                  n_type_args == 2
+                      ? "expected a (key value) type pair after the ':' "
+                        "container-literal suffix (e.g. #map{}:(int cstr))"
+                      : "expected an element type after the ':' "
+                        "container-literal suffix (e.g. []:int)");
         r->error = true;
         return NULL;
     }
     Form *elem = read_form(r);
     if (!elem || r->error) return NULL;
 
+    /* A two-parameter constructor takes its arguments as one parenthesised
+     * list.  Reject anything else here rather than letting a mis-shaped
+     * suffix reach the elaborator as a bogus type application, where the
+     * error would point at a form the user never wrote. */
+    if (n_type_args == 2 &&
+        (elem->tag != F_LIST || elem->as.list.len != 2)) {
+        Span s = span_from_to(r, s_line, s_col, s_off, r->pos);
+        diag_emit(DIAG_ERROR, s,
+                  "the ':' suffix on a #map{} literal takes exactly two type "
+                  "arguments as a parenthesised pair -- write "
+                  "#map{}:(<key> <value>), e.g. #map{}:(int cstr)");
+        r->error = true;
+        return NULL;
+    }
+
     Span sp = lit->span;
-    /* (Ctor elem) -- the full container type. */
+    /* (Ctor arg...) -- the full container type. */
     const Symbol *ctor_sym =
         symtab_intern(r->st, strslice(ctor, (uint32_t)strlen(ctor)));
-    Form **ctor_items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    size_t n_items = 1 + (size_t)n_type_args;
+    Form **ctor_items = (Form **)arena_alloc(r->arena, n_items * sizeof(Form *));
     ctor_items[0] = form_sym(r->arena, sp, ctor_sym);
-    ctor_items[1] = elem;
-    Form *ctype = form_list(r->arena, sp, ctor_items, 2);
+    if (n_type_args == 2) {
+        ctor_items[1] = elem->as.list.items[0];
+        ctor_items[2] = elem->as.list.items[1];
+    } else {
+        ctor_items[1] = elem;
+    }
+    Form *ctype = form_list(r->arena, sp, ctor_items, (uint32_t)n_items);
     /* (:: lit (Ctor elem)) -- erased at codegen; pins the static type. */
     const Symbol *asc_sym = symtab_intern(r->st, strslice("::", 2));
     Form **asc_items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
@@ -1370,11 +1404,11 @@ static Form *try_read_data_literal(Reader *r) {
     /* peek(r) == '#' guaranteed by caller. */
     if (peek_at(r, 1) == 'm' && peek_at(r, 2) == 'a' &&
         peek_at(r, 3) == 'p' && peek_at(r, 4) == '{') {
-        return read_map_literal(r);
+        return maybe_container_type_suffix(r, read_map_literal(r), "Map", 2);
     }
     if (peek_at(r, 1) == 's' && peek_at(r, 2) == 'e' &&
         peek_at(r, 3) == 't' && peek_at(r, 4) == '{') {
-        return maybe_container_type_suffix(r, read_set_literal(r), "Set");
+        return maybe_container_type_suffix(r, read_set_literal(r), "Set", 1);
     }
     if (peek_at(r, 1) == 'r' && peek_at(r, 2) == 'o' &&
         peek_at(r, 3) == 'w' && peek_at(r, 4) == '{') {
@@ -3296,7 +3330,7 @@ static Form *read_form(Reader *r) {
         /* TCE: a fused `:T` element-type suffix (`[]:int`) pins the vec's
          * element type.  Binding vectors are unaffected because their ']' is
          * never immediately followed by ':'. */
-        return maybe_container_type_suffix(r, v, "Vec");
+        return maybe_container_type_suffix(r, v, "Vec", 1);
     }
     if (c == ')' || c == ']' || c == '}') {
         Span s = span_point(r);

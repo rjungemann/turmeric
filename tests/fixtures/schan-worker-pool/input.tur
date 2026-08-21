@@ -17,8 +17,7 @@
 
 (defmodule app
   (import schan :refer [SChan SSend SRecv SClose
-                        schan-new schan-send schan-recv schan-close
-                        schan-cell-new schan-cell-get schan-cell-free])
+                        schan-new schan-send schan-recv schan-close])
 
   ;; ---- thread + arg plumbing ----------------------------------------------
   (defn wp-null [] : ptr<void> ```c return (void *)0; ```)
@@ -41,14 +40,13 @@
 
   ;; ---- worker: recv one request, square it, send the response -------------
   (defn worker [arg : ptr<void>] : ptr<void>
-    (let [cell (schan-cell-new)
-          rq   (:: (wp-arg-rq arg) (SChan (SRecv int SClose)))
+    (let [rq   (:: (wp-arg-rq arg) (SChan (SRecv int SClose)))
           rs   (:: (wp-arg-rs arg) (SChan (SSend int SClose)))
-          rq2  (schan-recv rq cell)
-          req  (schan-cell-get cell)
+          p    (schan-recv rq)
+          req  (pair-fst p)
+          rq2  (pair-snd p)
           rs2  (schan-send rs (* req req))]
       (schan-close rq2)            ;; this side owns + frees the request channel
-      (schan-cell-free cell)
       ;; The worker's terminal SClose handle on the response channel is
       ;; non-owning -- the client side frees rs.  Discard the linear handle via
       ;; a reinterpret: this consumes the must-use obligation (satisfying
@@ -66,22 +64,21 @@
     ;; side's own linear handle from it; the worker thread receives the same raw
     ;; pointer through `arg`.  The raw ptr<void> is non-linear, so handing it to
     ;; both the worker and our own reinterpret is allowed.
-    (let [cell   (schan-cell-new)
-          rq-raw (:: (:: (schan-new 1) (SChan (SSend int SClose))) :ptr<void>)
+    (let [rq-raw (:: (:: (schan-new 1) (SChan (SSend int SClose))) :ptr<void>)
           rs-raw (:: (:: (schan-new 1) (SChan (SRecv int SClose))) :ptr<void>)
           rq     (:: rq-raw (SChan (SSend int SClose)))
           rs     (:: rs-raw (SChan (SRecv int SClose)))
           arg    (wp-arg-new rq-raw rs-raw)
           t      (wp-spawn worker arg)
           rq2    (schan-send rq req)         ;; rq2 (SClose) non-owning; worker frees rq
-          rs2    (schan-recv rs cell)
-          resp   (schan-cell-get cell)]
+          rp     (schan-recv rs)
+          resp   (pair-fst rp)
+          rs2    (pair-snd rp)]
       (wp-join t)
       (schan-close rs2)            ;; this side owns + frees the response channel
       ;; Discard the non-owning request-side SClose handle without freeing.
       (:: rq2 :int)
       (wp-arg-free arg)
-      (schan-cell-free cell)
       resp))
 
   (defn main [] : int

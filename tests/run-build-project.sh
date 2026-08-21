@@ -964,7 +964,13 @@ EOF
 EOF
     slot_out=$(cd "$WORK" && "$TUR" build "$SLOTDIR" -o "$WORK/fxslotbin" 2>&1)
     slot_rc=$?
-    if [ $slot_rc -ne 0 ] && echo "$slot_out" | grep -q "TUR-E0620"; then
+    # Substring-match rather than `echo | grep -q`: under `set -o pipefail`
+    # grep -q exits at the first match and SIGPIPEs echo, so the pipeline
+    # reports 141 precisely when the text IS present. The cmake-deps
+    # diagnostic is the longest of these (a ~58-char caret run), and it is the
+    # one that intermittently failed CI with rc=1 and TUR-E0620 both visibly
+    # correct in the failure message.
+    if [ $slot_rc -ne 0 ] && [[ "$slot_out" == *"TUR-E0620"* ]]; then
         pass "build-project-manifest-fx-row-rejected-$slot_name"
     else
         fail "build-project-manifest-fx-row-rejected-$slot_name" \

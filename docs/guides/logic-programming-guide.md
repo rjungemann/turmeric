@@ -8,6 +8,23 @@ description: Backtracking, logic programming, constraint solving with cloneable 
 
 Implementing miniKanren-style logic programming and constraint solving using cloneable continuations.
 
+> **Status: design sketch, except where noted.** The narrative sections below
+> (`choice-point`, `run` / `run*`, `do-backtrack`, `constraint`, and the bare
+> `return` / `bind` spellings) describe a surface that **does not ship**. They
+> are a design for a macro layer that has never been built; calling them will
+> not elaborate.
+>
+> What *does* ship is the miniKanren engine in **`stdlib/logic.tur`** --
+> `lequal`, `fresh`, `conjoined`, `disjoined`, `run-logic`, and the
+> `mzero`/`mreturn`/`mplus`/`mbind` stream interface. The
+> [API Summary](#api-summary) at the bottom of this page is written against
+> that real module and every form in it is exercised by a fixture under
+> `tests/fixtures/logic-*`. Start there, and see
+> [tur-logic-guide.md](tur-logic-guide.md).
+>
+> The continuation primitives the sketch is built on -- `cloneable-reset` and
+> `cloneable-shift` -- are real.
+
 ## Overview
 
 Turmeric supports **multi-shot (cloneable) continuations**, enabling backtracking computation. This guide covers the design, use cases, and integration with Turmeric's ownership model.
@@ -478,74 +495,174 @@ This is safe but can be expensive. Prefer immutable snapshots where possible.
 
 ## API Summary
 
-### Core Operators
+This section is the real, shipping surface: everything below is from
+`stdlib/logic.tur` and is covered by a fixture under `tests/fixtures/logic-*`.
+Load it with `(load "stdlib/logic.tur")`.
+
+### Terms
 
 ```turmeric
-;; Delimit a cloneable computation
-(cloneable-reset body)
+(term-int 42)          ; an integer term
+(term-var 0)           ; a logic variable, addressed by id
+(term-pair a b)        ; a cons pair of two terms
+(term-nil)             ; the empty term
 
-;; Capture continuation for backtracking
-(cloneable-shift [k] body)
-
-;; Choice point: try multiple values
-(choice-point [v1 v2 ...])
-
-;; Run a backtracking computation, collect N solutions
-(run n [vars] body)
-
-;; Run all solutions
-(run* [vars] body)
-
-;; Constraint: succeed if predicate holds
-(constraint pred)
+(term-int-val t)       ; int payload of a TInt   (0 otherwise)
+(term-var-id t)        ; id of a TVar            (0 otherwise)
+(term-pair-fst t)      ; first  of a TPair       (TNil otherwise)
+(term-pair-snd t)      ; second of a TPair       (TNil otherwise)
 ```
 
 ```sweet-exp
-;; Delimit a cloneable computation
-cloneable-reset body
+term-int(42)           ; an integer term
+term-var(0)            ; a logic variable, addressed by id
+term-pair(a b)         ; a cons pair of two terms
+term-nil()             ; the empty term
 
-;; Capture continuation for backtracking
-cloneable-shift [k] body
-
-;; Choice point: try multiple values
-choice-point([v1 v2 ...])
-
-;; Run a backtracking computation, collect N solutions
-run n [vars] body
-
-;; Run all solutions
-run* [vars] body
-
-;; Constraint: succeed if predicate holds
-constraint pred
+term-int-val(t)        ; int payload of a TInt   (0 otherwise)
+term-var-id(t)         ; id of a TVar            (0 otherwise)
+term-pair-fst(t)       ; first  of a TPair       (TNil otherwise)
+term-pair-snd(t)       ; second of a TPair       (TNil otherwise)
 ```
 
-### Monadic Interface
+### Goals
+
+A goal is a `(Goal a)` -- a function from a substitution to a stream of
+substitutions. `lequal` is miniKanren's `==`.
 
 ```turmeric
-(return x)           ; succeed with one value
-(mzero)              ; fail (zero solutions)
-(mplus fs gs)        ; choice between fs and gs
-(bind f xs)          ; flatMap: sequence computations
-
-;; Syntactic sugar
-(do-backtrack
-  (def x (goal1))
-  (def y (goal2 x))
-  (return (list x y)))
+(lequal t1 t2)         ; unify two terms
+(succeed)              ; always succeeds, one solution
+(fail)                 ; always fails, zero solutions
+(conjoined g1 g2)      ; both goals must hold
+(disjoined g1 g2)      ; either goal may hold
+(fresh (fn [x] goal))  ; introduce a new logic variable
 ```
 
 ```sweet-exp
-return(x)           ; succeed with one value
-mzero()             ; fail (zero solutions)
-mplus(fs gs)        ; choice between fs and gs
-bind(f xs)          ; flatMap: sequence computations
+lequal(t1 t2)          ; unify two terms
+succeed()              ; always succeeds, one solution
+fail()                 ; always fails, zero solutions
+conjoined(g1 g2)       ; both goals must hold
+disjoined(g1 g2)       ; either goal may hold
+fresh(fn([x] goal))    ; introduce a new logic variable
+```
 
-;; Syntactic sugar
-do-backtrack
-  def x goal1()
-  def y goal2(x)
-  return(list(x y))
+### Running a query
+
+```turmeric
+(run-logic n goal)     ; run goal, collecting at most n solutions -> Stream
+(bt-length results)    ; how many solutions came back
+(stream-empty? xs)     ; true when the stream has no solutions
+(first-state results)  ; the first solution's Subst
+(logic-walk t subs)    ; reify a term under a substitution
+```
+
+```sweet-exp
+run-logic(n goal)      ; run goal, collecting at most n solutions -> Stream
+bt-length(results)     ; how many solutions came back
+stream-empty?(xs)      ; true when the stream has no solutions
+first-state(results)   ; the first solution's Subst
+logic-walk(t subs)     ; reify a term under a substitution
+```
+
+A complete query, from `tests/fixtures/logic-query`:
+
+```turmeric
+(load "stdlib/logic.tur")
+
+(defn main [] : int
+  (let [results (run-logic 5 (disjoined (lequal (term-var 0) (term-int 1))
+                                        (disjoined (lequal (term-var 0) (term-int 2))
+                                                   (lequal (term-var 0) (term-int 3)))))]
+    (println (bt-length results))   ; => 3
+    0))
+```
+
+```sweet-exp
+load("stdlib/logic.tur")
+
+defn main [] : int
+  let [results run-logic(5 disjoined(lequal(term-var(0) term-int(1))
+                                     disjoined(lequal(term-var(0) term-int(2))
+                                               lequal(term-var(0) term-int(3)))))]
+    println $ bt-length results     ; => 3
+    0
+```
+
+And reifying the answers, from `tests/fixtures/logic-reify`:
+
+```turmeric
+(defn inner-goal [x : Term y : Term] : (Goal int)
+  (conjoined (lequal x (term-int 10)) (lequal y (term-int 20))))
+
+(defn main [] : int
+  (let [goal    (fresh (fn [x] (fresh (fn [y] (inner-goal x y)))))
+        results (run-logic 1 goal)
+        subs    (first-state results)]
+    (println (term-int-val (logic-walk (term-var 0) subs)))   ; => 10
+    (println (term-int-val (logic-walk (term-var 1) subs)))   ; => 20
+    0))
+```
+
+```sweet-exp
+defn inner-goal [x : Term y : Term] : (Goal int)
+  conjoined(lequal(x term-int(10)) lequal(y term-int(20)))
+
+defn main [] : int
+  let [goal    fresh(fn([x] fresh(fn([y] inner-goal(x y)))))
+       results run-logic(1 goal)
+       subs    first-state(results)]
+    println $ term-int-val $ logic-walk term-var(0) subs      ; => 10
+    println $ term-int-val $ logic-walk term-var(1) subs      ; => 20
+    0
+```
+
+### Stream (monadic) interface
+
+The names are `mreturn` and `mbind`, not bare `return` and `bind`.
+
+```turmeric
+(mzero)                ; no solutions
+(mreturn subs)         ; exactly one solution
+(mplus xs ys)          ; append two solution streams
+(mbind ma f)           ; flat-map a stream of substitutions
+```
+
+```sweet-exp
+mzero()                ; no solutions
+mreturn(subs)          ; exactly one solution
+mplus(xs ys)           ; append two solution streams
+mbind(ma f)            ; flat-map a stream of substitutions
+```
+
+### Substitutions
+
+```turmeric
+(subs-empty)                 ; the empty substitution
+(logic-unify t1 t2 subs)     ; unify, yielding a UnifyResult
+(subst-lookup vid subs)      ; look up a variable binding
+```
+
+```sweet-exp
+subs-empty()                 ; the empty substitution
+logic-unify(t1 t2 subs)      ; unify, yielding a UnifyResult
+subst-lookup(vid subs)       ; look up a variable binding
+```
+
+### Typeclass instances
+
+Instances are declared with `definstance`, not `instance`:
+
+```turmeric
+(definstance Clone [SearchState]
+  (clone [self] ...))
+```
+
+```sweet-exp
+definstance Clone [SearchState]
+  clone [self]
+    ...
 ```
 
 ## Performance Considerations

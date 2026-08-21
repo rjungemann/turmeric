@@ -572,6 +572,9 @@ typedef struct Elab {
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
+    /* (export-from <mod> name ...) -- re-export names another module already
+     * exports, without a forwarding wrapper. */
+    const Symbol *sym_export_from;
     const Symbol *sym_effect;     /* effect — used to parse (effect Name) in export/refer lists */
     const Symbol *sym_import;     /* import */
     const Symbol *sym_load;       /* load */
@@ -809,9 +812,6 @@ typedef struct Elab {
     const Symbol     *sym_gen_done;     /* "gen-done?" */
     /* CF5 (control-flow-completeness-plan): set true while elaborating a match arm body. */
     bool              in_match_arm;
-    /* CF6 (control-flow-completeness-plan): set true while elaborating an inline async closure body.
-     * Used by elab_await to check that bindings in scope are Send. */
-    bool              in_async_body;
     /* bare-fat-result-monomorphization-plan (Phase B): per-call-site
      * specialization of a bare-^fat callee over the incoming closure's result
      * kind.  See elab_specialize_bare_fat (elab_call.c) and elab_defn. */

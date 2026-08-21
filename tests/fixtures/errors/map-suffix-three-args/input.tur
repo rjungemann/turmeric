@@ -1,0 +1,4 @@
+;; Too many is rejected the same way as too few.
+(defn main [] : int
+  (let [m #map{}:(int cstr bool)]
+    0))

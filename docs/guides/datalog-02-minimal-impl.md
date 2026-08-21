@@ -254,6 +254,15 @@ defn cstr-eq? [a :int b :int] :bool
 the program) into an opaque integer for storage. `cstr-eq?` compares two such
 stored strings using `strcmp`.
 
+> **This local `cstr-eq?` is not the stdlib one.** `stdlib/cstr.tur` exports a
+> `cstr-eq? [a : cstr b : cstr] : bool` -- byte-wise content equality on real
+> `cstr` values, available via `(import cstr :refer [cstr-eq?])`. The helper
+> above takes the *erased* `:int` storage handles this tutorial stores in its
+> datums, so the two are not interchangeable and importing `cstr` into this
+> file would collide. Reach for the stdlib one in ordinary code: `=` has no
+> `cstr` overload at all, so `(= a b)` on two `cstr` values is a `TUR-E0006`
+> operator-lookup error rather than a comparison.
+
 ---
 
 ## Query Combinators

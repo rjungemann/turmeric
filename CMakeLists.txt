@@ -185,6 +185,15 @@ add_test(
   COMMAND bash tests/run-fmt.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `tur check` sweep over examples/, ratcheted against
+# examples/examples-check-baseline.txt. Nothing referenced examples/ before
+# this, so nothing compiled them and they rotted -- 9 of 17 were failing when
+# the sweep was added. See docs/archive/datalog-examples-do-not-compile.md.
+add_test(
+  NAME tur_examples_check
+  COMMAND bash tests/check-examples.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
 # the backing check for tools/check-guide-pairs.py.
 add_test(
@@ -294,6 +303,15 @@ add_test(
   COMMAND bash tests/check-httpd-conn-single-def.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# (export-from ...) costs nothing at runtime: re-exporting a name must resolve
+# to the defining module's mangled symbol, not emit a forwarding wrapper per
+# hop. The behaviour fixture (module-export-from) passes either way, so the
+# invariant needs its own codegen guard.
+add_test(
+  NAME tur_export_from_no_wrapper
+  COMMAND bash tests/check-export-from-no-wrapper.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # SF let-bind regression: a let-bound two-level closure (signal-function) whose
 # inner closure captures and calls the outer ^fat param must keep its declared
 # outer arg type (tur check guard; see
@@ -356,6 +374,23 @@ add_test(
 add_test(
   NAME tur_engine_select
   COMMAND bash tests/run-engine-select.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Tutorial content must actually run: tutorials/*.yaml is data, so no compiler
+# ever reads it, which is how quickstart.yaml came to teach an Option/for/struct
+# API that never existed. Replays each tutorial's own steps through one REPL
+# session.
+add_test(
+  NAME tur_tutorial_steps
+  COMMAND bash tests/run-tutorial-quickstart.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# `:entry "<path>"` in build.tur -- the first rung of `tur run`'s project-mode
+# entry-point ladder (:entry > src/main.tur > the single .tur under src/),
+# plus the dangling-:entry hard error.
+add_test(
+  NAME tur_manifest_entry
+  COMMAND bash tests/run-manifest-entry.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Off-tree (load "stdlib/<file>") resolution: a freestanding script run from

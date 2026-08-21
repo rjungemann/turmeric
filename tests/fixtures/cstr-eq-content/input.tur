@@ -1,0 +1,41 @@
+;; cstr-eq-content -- stdlib/cstr.tur's cstr-eq? compares BYTES, not pointers.
+;;
+;; Every "equal" row below pairs a literal against a freshly malloc'd cstr-sub
+;; result, so the two operands are always distinct pointers.  A pointer compare
+;; would report every row false; a prefix compare would report abc/abcd true.
+;;
+;; Background: `=` has no cstr overload at all -- (= a b) on two cstr values is
+;; a TUR-E0006 operator-lookup error, not a silent pointer compare -- so byte
+;; comparison needs a named function.  See docs/archive/stdlib-cstr-content-equality.md.
+;;
+;; The cstr-free calls are load-bearing: run.sh runs this binary under LSan, so
+;; a cstr-sub result left unfreed fails the fixture.  Before cstr-free existed
+;; there was no way to honor cstr-sub's documented "caller frees" contract from
+;; Turmeric at all.
+
+(defmodule app
+  (import cstr :refer [cstr-sub cstr-eq? cstr-free])
+
+  ;; Compare `lit` against a heap copy of `src[start,end)`, print the verdict,
+  ;; and release the copy.  Keeping the alloc/free paired in one place is what
+  ;; lets every row below allocate without leaking.
+  (defn cmp-sub [lit : cstr src : cstr start : int end : int] : void
+    (let [t (cstr-sub src start end)]
+      (println (if (cstr-eq? lit t) "true" "false"))
+      (cstr-free t)))
+
+  (defn main [] : int
+    ;; same bytes, distinct pointers
+    (cmp-sub "hello" "hello world" 0 5)
+    ;; same length, one byte apart
+    (cmp-sub "hello" "hellX world" 0 5)
+    ;; empty vs empty
+    (cmp-sub "" "abc" 0 0)
+    ;; empty vs non-empty
+    (cmp-sub "" "abc" 0 3)
+    ;; proper prefix, both orders -- neither is equality
+    (cmp-sub "abc" "abcd" 0 4)
+    (cmp-sub "abcd" "abc" 0 3)
+    ;; two literals: the pointer-equal case still works
+    (println (if (cstr-eq? "hello" "hello") "true" "false"))
+    0))

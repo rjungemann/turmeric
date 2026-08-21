@@ -1,0 +1,12 @@
+;; module-export-from: (export-from <mod> name ...) re-exports names another
+;; module already exports, with no forwarding wrapper.
+;;
+;; The chain is low -> mid -> hi -> here, and `low-add` / `twice` reach this
+;; file having been re-exported twice. See docs/archive/module-reexport-shorthand-missing.md.
+(defmodule app
+  (import chain/hi :refer [hi-own low-add twice])
+  (defn main [] : int
+    (println (hi-own))          ; 8   -- hi's own export, unaffected
+    (println (low-add 20 22))   ; 42  -- defn, re-exported twice
+    (println (twice 21))        ; 42  -- macro, re-exported twice
+    0))

@@ -250,9 +250,15 @@ If the first branch retries, the second branch is tried. Both branches see the s
 
 ## Transactional Synchronization Primitives
 
-There are no built-in TMVar/TChan types -- both are small patterns you build
-from a `TVar` plus `check`. The [STM Guide](stm-guide.md#building-higher-level-primitives)
-carries complete sketches; the shapes are:
+TMVar and TChan are not compiler built-ins -- both are small patterns over a
+`TVar` plus `check` -- but you do not have to write them: `stdlib/stm-sync.tur`
+ships both, with a `-stm` variant of every operation so several can compose
+into one transaction. See the
+[STM Guide](stm-guide.md#building-higher-level-primitives) for the API.
+
+The sketches below are worth reading anyway, because they show the mechanism:
+`check` is what turns an ordinary read into a blocking wait, by making the
+whole transaction retry until the condition holds. The shapes are:
 
 ### TMVar: Single-Slot Mailbox
 
@@ -389,6 +395,14 @@ defn release-write [] :nil
 ```
 
 ### Barrier
+
+> If you just want a barrier, `stdlib/barrier.tur` ships one -- `barrier-new`
+> / `barrier-wait` / `barrier-free` over mutex + condvar, reusable across
+> rounds, with `barrier-wait` returning `true` for the one thread that tripped
+> it. See the [Threading Guide](threading-guide.md#barrier). The sketch below
+> is for when the rendezvous has to compose with other transactional state, and
+> is deliberately minimal: it counts arrivals but never resets, so it is a
+> one-shot latch rather than the reusable barrier the stdlib one is.
 
 ```turmeric
 ;; Synchronize N threads: count arrivals, then block until all arrive

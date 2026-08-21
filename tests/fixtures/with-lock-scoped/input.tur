@@ -1,0 +1,36 @@
+;; with-lock-scoped -- the scoped lock forms in stdlib/mutex.tur and
+;; stdlib/rwlock.tur.
+;;
+;; stdlib shipped only the raw mutex-lock / mutex-unlock pair, so every caller
+;; hand-wrote the sandwich and the release drifted away from the acquire as the
+;; body grew. `with-lock` makes the body's value the form's value and puts the
+;; unlock where it cannot be forgotten.
+;;
+;; The macro references its lock expression TWICE (once to lock, once to
+;; unlock) rather than binding it once. That is forced, not sloppy: Mutex is
+;; :linear, so a `let` binding MOVES the handle and the checker then rejects
+;; the enclosing scope for dropping it unconsumed (TUR-E0100). Pass a variable,
+;; never a call.
+;;
+;; See docs/archive/value-carrying-lock-wrappers.md.
+
+(load "stdlib/mutex.tur")
+(load "stdlib/rwlock.tur")
+
+(defn main [] : int
+  (let [m (mutex-new)]
+    ;; single-form body -- its value is the form's value
+    (println (with-lock m (+ 1 41)))          ; 42
+    ;; multi-form body -- earlier forms run, the LAST one's value is returned
+    (println (with-lock m (println 7) (* 2 3)))  ; 7 then 6
+    ;; nesting the same mutex would deadlock, but re-locking after release is
+    ;; fine -- proves the unlock really happened
+    (println (with-lock m 100))               ; 100
+    (mutex-free m))
+  (let [rw (rwlock-new)]
+    (println (with-read-lock rw 42))          ; 42
+    (println (with-write-lock rw (* 3 3)))    ; 9
+    ;; read after write proves with-write-lock released
+    (println (with-read-lock rw (+ 20 22)))   ; 42
+    (rwlock-free rw))
+  0)

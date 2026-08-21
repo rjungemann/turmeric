@@ -2095,6 +2095,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase M0: Module system */
     e->sym_defmodule = intern_cstr(st, "defmodule");
     e->sym_export = intern_cstr(st, "export");
+    e->sym_export_from = intern_cstr(st, "export-from");
     e->sym_effect = intern_cstr(st, "effect");
     e->sym_export_mut = intern_cstr(st, "mut");   /* G3: (export (mut g)) */
     e->sym_import = intern_cstr(st, "import");

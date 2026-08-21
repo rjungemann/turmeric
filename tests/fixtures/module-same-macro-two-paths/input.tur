@@ -1,0 +1,21 @@
+;; module-same-macro-two-paths: ONE macro reaching a file by TWO import paths
+;; is not a conflict.
+;;
+;; Macro registration is global, so the diamond below -- this file refers
+;; dia/low's `twice`, and dia/mid refers it too -- used to report dia/low's
+;; macro as conflicting with itself:
+;;   error: macro 'twice' from module 'dia/low' conflicts with an existing macro
+;; A macro is identified by (defining module, name), and a module cannot define
+;; two macros with one name, so matching both means one definition reached
+;; twice. Two DIFFERENT modules exporting the same macro name is still an
+;; error -- caught at defmacro time, since registration is global.
+;;
+;; Found while implementing (export-from ...), which hits the identical shape:
+;; see docs/archive/module-reexport-shorthand-missing.md.
+(defmodule app
+  (import dia/low :refer [twice])
+  (import dia/mid :refer [mid-six])
+  (defn main [] : int
+    (println (mid-six))     ; 6  -- expanded inside dia/mid
+    (println (twice 21))    ; 42 -- expanded here
+    0))

@@ -4557,11 +4557,34 @@ static int cmd_run(int argc, char **argv) {
     pkg_lock_free(&lock);
 
     /* Entry point resolution (from the plan):
-     *   1. :entry key in build.tur  (not yet in PkgManifest -- future)
+     *   1. :entry key in build.tur
      *   2. src/main.tur
      *   3. single .tur file in src/ */
     char entry[4096];
     struct stat _st;
+    if (m.entry && *m.entry) {
+        /* A manifest-declared entry is authoritative: if it does not resolve
+         * we report THAT rather than silently falling through to src/main.tur,
+         * which would run a different program than the manifest asked for. */
+        if (m.entry[0] == '/')
+            snprintf(entry, sizeof(entry), "%s", m.entry);
+        else
+            snprintf(entry, sizeof(entry), "%s/%s", root, m.entry);
+        if (stat(entry, &_st) != 0) {
+            fprintf(stderr,
+                "tur run: :entry \"%s\" in build.tur does not name a file\n"
+                "  Looked for %s\n",
+                m.entry, entry);
+            pkg_manifest_free(&m);
+            free(root);
+            for (int _i = 0; _i < n_spice_inc_dirs; _i++)
+                free((char *)spice_inc_dirs[_i]);
+            free(spice_inc_dirs);
+            free(user_inc);
+            return 1;
+        }
+        goto entry_resolved;
+    }
     snprintf(entry, sizeof(entry), "%s/src/main.tur", root);
     if (stat(entry, &_st) != 0) {
         char src_dir[4096];
@@ -4575,16 +4598,22 @@ static int cmd_run(int argc, char **argv) {
             fprintf(stderr,
                 "tur run: cannot determine entry point\n"
                 "  Expected %s/src/main.tur, "
-                "or exactly one .tur file in %s/src/\n",
+                "or exactly one .tur file in %s/src/,\n"
+                "  or an :entry \"<path>\" key in build.tur\n",
                 root, root);
             free_tur_files(files, n_files);
             pkg_manifest_free(&m);
             free(root);
+            for (int _i = 0; _i < n_spice_inc_dirs; _i++)
+                free((char *)spice_inc_dirs[_i]);
+            free(spice_inc_dirs);
+            free(user_inc);
             return 1;
         }
         free_tur_files(files, n_files);
     }
 
+entry_resolved:
     pkg_manifest_free(&m);
     free(root);
 
@@ -8083,7 +8112,7 @@ static void list_external_subcommands(void) {
         "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "expand", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
-        "init", "add", "add-cmake", "fetch",
+        "init", "add", "add-cmake", "fetch", "audit",
         "install", "uninstall", "list", "upgrade",
         NULL,
     };
@@ -8175,7 +8204,7 @@ static const char *const CANONICAL_COMMANDS[] = {
     "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
     "eval", "doc", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test",
-    "new", "init", "add", "add-cmake", "fetch",
+    "new", "init", "add", "add-cmake", "fetch", "audit",
     "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
     NULL,
 };
@@ -8242,6 +8271,7 @@ static int usage(void) {
         "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n"
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
         "  tur fetch [--update|--dry-run|--refetch]  download/update spices (--refetch bypasses system pkgs)\n"
+        "  tur audit                         list every origin the build fetches code from\n"
         "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
         "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
         "  tur install <path> --path         install a local spice binary globally\n"
@@ -10288,6 +10318,8 @@ int main(int argc, char **argv) {
         return cmd_pkg_add_cmake(argc, argv);
     if (strcmp(cmd, "fetch") == 0)
         return cmd_pkg_fetch(argc, argv);
+    if (strcmp(cmd, "audit") == 0)
+        return cmd_pkg_audit(argc, argv);
     if (strcmp(cmd, "emit-cmake") == 0)
         return cmd_pkg_emit_cmake(argc, argv);
     /* GS-M2: global spice install commands */
