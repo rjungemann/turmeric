@@ -56,7 +56,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
-| [global-spice-library-consumption](global-spice-library-consumption.md) | low | `:global true` manifest dep shape for `tur install`ed spices unimplemented |
 | [httpd-mw-recover-unblocked-but-unwritten](httpd-mw-recover-unblocked-but-unwritten.md) | medium | mw-recover blocked by closure/fat-handle codegen defects: lifted thunk references an unthreaded name, plus a drop-glue use-after-free -- 4 repros inside |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
@@ -158,6 +157,19 @@ runtime compiles the preamble standalone), so it is installed through a
 function pointer from `__tur_static_init`; and the interpreter, whose
 `type-of` comment said it was deliberately matching the old kind granularity,
 was updated in step.
+
+`global-spice-library-consumption` was resolved 2026-08-21 and moved to
+[docs/archive](../archive/global-spice-library-consumption.md). `#{:global
+true}` resolves a dep through the `tur install` registry (`state.tur`), is
+never fetched, and errors clearly when the spice is not installed. Two things
+the filing did not anticipate: **four** resolution ladders had to learn the new
+shape, not one (pkg.c's plus three in main.c, each carrying its own copy of the
+workspace-sibling -> `:path` -> `spices/<name>-<ref>` chain), and the
+`:global`+`:url` conflict has to be reported with `diag_emit` -- a bare
+`fprintf` leaves the manifest ACCEPTED, since `pkg_manifest_read` judges the
+read by `diag_had_error()`. Deliberately not done: `:global-policy`, version
+validation / the `tur.lock` SHA (no range syntax to validate against yet), and
+library-only installs (`tur install` still requires a `:bin`).
 
 ## Value representation (the consolidation campaign)
 

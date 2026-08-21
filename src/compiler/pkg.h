@@ -81,6 +81,11 @@ typedef struct PkgSpice {
     char *path;     /* relative local path; NULL for git deps */
     char *subdir;   /* subdirectory within repo (monorepo sub-packages); NULL = root */
     bool  optional;
+    /* global-spice-library-consumption: `#{:global true}` -- consume a spice
+     * installed with `tur install` as a library.  Resolves through state.tur
+     * (tur_installed_spice_dir), not through <root>/spices, and is never
+     * fetched: `tur install` owns the checkout. */
+    bool  is_global;
 } PkgSpice;
 
 /* ------------------------------------------------------------------ */

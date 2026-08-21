@@ -1093,18 +1093,16 @@ library supports Emscripten. To make your spice Emscripten-compatible:
 
 ---
 
-## Global Spices as Libraries (v2)
+## Global Spices as Libraries
 
-A spice installed globally with `tur install` is currently usable as a
-**command-line tool only**: its `:bin` entries are symlinked into
-`~/.local/bin/` and become available as `tur-<cmd>` (or via the
-`tur <cmd>` fallthrough). The same install is **not** automatically
-visible as a library to other projects -- the global `spices/` root is
-left out of the default module-resolution path to preserve build
-reproducibility.
+A spice installed with `tur install` is a command-line tool by default: its
+`:bin` entries are symlinked into `~/.local/bin/` and become available as
+`tur-<cmd>` (or via the `tur <cmd>` fallthrough). The global `spices/` root is
+deliberately **not** on the default module-resolution path -- that would make
+every build depend on what happens to be installed on the machine.
 
-A future v2 will let a project opt in to consuming a globally-installed
-spice as a library by naming it in its `build.tur`:
+A project opts in per dependency, by declaring it `:global` in its
+`build.tur`:
 
 ```turmeric
 :spices #map{
@@ -1112,10 +1110,29 @@ spice as a library by naming it in its `build.tur`:
 }
 ```
 
-`tur fetch` would then validate the global install exists at a matching
-version and record its resolved SHA in `tur.lock`. A project-level
-`:global-policy` knob would decide whether a missing global install gets
-auto-installed or errors out.
+That entry resolves through the install registry (`state.tur`), so the spice's
+`src/` joins the project's module-resolution path and `(import notebook/core)`
+works. Four things follow from where it resolves:
+
+- **It is never fetched.** `tur install` owns the checkout, so `tur fetch`
+  has nothing to do for a `:global` dep and writes no `tur.lock` row for it --
+  the same treatment a `:path` dep gets.
+- **A missing install is a hard error**, not a silent skip:
+  `spice: 'notebook' declares :global true but no such spice is installed --
+  run \`tur install <source>\` first`. Failing here is the point; the
+  alternative surfaces a hundred lines later as `module 'notebook/core' not
+  found` with no hint that a spice was never installed.
+- **`:global` takes no `:url` and no `:path`.** They name a different
+  resolution source, so declaring both is a manifest error rather than a
+  silent precedence rule.
+- **The spice must be installable**, which today means it declares at least
+  one `:bin` entry -- `tur install` is a binary installer. A library-only
+  spice cannot be registered yet, so it cannot be a `:global` dep either.
+
+Not built: the `:global-policy` knob that would decide whether a missing
+global install is auto-installed rather than reported, and version-range
+validation against the installed version (the registry records a `:version`,
+but nothing checks it against a requested range yet).
 
 This is **deferred**; until it ships, a spice that wants to be reused as
 a library should be added the normal way with `tur add`. See the

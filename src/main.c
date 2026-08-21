@@ -88,6 +88,7 @@
 #include "turi/repl.h"
 /* Phase PKG-1: Spice package manager */
 #include "pkg.h"
+#include "global.h"   /* tur_installed_spice_dir: :global spice deps */
 /* RN0-RN7: Justfile-compatible task runner */
 #include "justrun.h"
 /* Global configuration variables — defined in globals.c */
@@ -2788,7 +2789,15 @@ static int auto_append_spice_includes(const char *input,
             for (int i = 0; i < m.n_spices; i++) {
                 const PkgSpice *s = &m.spices[i];
                 char dep_dir[4096];
-                if (s->path) {
+                /* global-spice-library-consumption: `#{:global true}` resolves
+                 * from the `tur install` registry, not from <root>/spices. */
+                bool from_global = false;
+                if (s->is_global) {
+                    if (!tur_installed_spice_dir(s->name, dep_dir,
+                                                 sizeof(dep_dir), NULL, NULL))
+                        continue;
+                    from_global = true;
+                } else if (s->path) {
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
                 } else if (s->ref) {
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
@@ -2797,7 +2806,7 @@ static int auto_append_spice_includes(const char *input,
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
                              spices_dir, s->name);
                 }
-                if (s->subdir) {
+                if (s->subdir && !from_global) {
                     char joined[4096];
                     snprintf(joined, sizeof(joined), "%s/%s", dep_dir, s->subdir);
                     strncpy(dep_dir, joined, sizeof(dep_dir) - 1);
@@ -3227,12 +3236,26 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
     for (int i = 0; i < m->n_spices; i++) {
         const PkgSpice *s = &m->spices[i];
         char dep_dir[4096];
+        /* global-spice-library-consumption: a `:global` dep resolves from the
+         * `tur install` registry and nowhere else -- a project-local fallback
+         * would silently use a different spice than the manifest asked for.
+         * Not installed: skipped, like any other dep whose dir is absent. */
+        bool from_global = false;
+        if (s->is_global) {
+            if (!tur_installed_spice_dir(s->name, dep_dir, sizeof(dep_dir),
+                                         NULL, NULL))
+                continue;
+            from_global = true;
+        }
         /* LS4: a :spices entry that is a workspace sibling resolves to the
          * sibling's on-disk dir, ignoring any :url/:ref declared for
          * external publication. */
-        char *ws_path = s->path ? NULL
-                                : pkg_workspace_member_path(root, s->name);
-        if (ws_path) {
+        char *ws_path = (s->path || from_global)
+                            ? NULL
+                            : pkg_workspace_member_path(root, s->name);
+        if (from_global) {
+            /* dep_dir is already the installed package root. */
+        } else if (ws_path) {
             strncpy(dep_dir, ws_path, sizeof(dep_dir) - 1);
             dep_dir[sizeof(dep_dir) - 1] = '\0';
             free(ws_path);
@@ -3244,7 +3267,7 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
         } else {
             snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
         }
-        if (s->subdir) {
+        if (s->subdir && !from_global) {
             char tmp[4096];
             snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
             strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
@@ -3356,6 +3379,15 @@ static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
     for (int i = 0; i < m.n_spices; i++) {
         const PkgSpice *s = &m.spices[i];
         char dep_dir[4096];
+        if (s->is_global) {
+            /* global-spice-library-consumption: resolved from the install
+             * registry; skipped silently when not installed, exactly like a
+             * missing fetched dep here. */
+            if (!tur_installed_spice_dir(s->name, dep_dir, sizeof(dep_dir),
+                                         NULL, NULL))
+                continue;
+            goto have_dep_dir;
+        }
         char *ws_path = s->path ? NULL
                                 : pkg_workspace_member_path(root, s->name);
         if (ws_path) {
@@ -3374,6 +3406,7 @@ static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
             snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
             snprintf(dep_dir, sizeof(dep_dir), "%s", tmp);
         }
+have_dep_dir:;
         char dmp[4096];
         if (!pkg_resolve_manifest_path(dep_dir, dmp, sizeof(dmp))) continue;
         PkgManifest dm; memset(&dm, 0, sizeof(dm));
