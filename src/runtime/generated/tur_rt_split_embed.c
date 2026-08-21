@@ -275,7 +275,7 @@ const char tur_rt_split_decls[] =
   "    (void *)__tur_poly_to_fat0, (void *)__tur_poly_to_fat1,\n"
   "    (void *)__tur_poly_to_fat2, (void *)__tur_poly_to_fat3,\n"
   "    (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };\n"
-  "const char *(*g_tur_any_name_ext)(int64_t) = 0;\n"
+  "extern const char *(*g_tur_any_name_ext)(int64_t);\n"
   "const char *__tur_any_type_name(int64_t tag);\n"
   "void tur_panic(const char *msg);\n"
   "void __tur_any_cast_check(int64_t have, int64_t want);\n"

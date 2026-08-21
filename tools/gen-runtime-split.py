@@ -166,8 +166,36 @@ def split(src):
         if m and not stripped.startswith('static void') and ('=' in l or l.rstrip().endswith(';')):
             rest = m.group(2)
             nm = re.search(r'([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*\])?\s*(=|;)', rest)
-            if nm and '(' not in rest.split('=')[0]:
-                name = nm.group(1)
+            # A FUNCTION-POINTER object is a variable, but its declarator
+            # contains parens -- `static const char *(*g_x)(int64_t) = 0;` --
+            # so the `'(' not in ...` test below reads it as a prototype and
+            # drops it through to the verbatim path.  That is not cosmetic:
+            # the decls half then carries the DEFINITION rather than an
+            # `extern`, so the program half gets its own zero-initialized copy
+            # and any value it stores is invisible to the runtime TU that
+            # reads it.  `g_tur_any_name_ext` (the `any` box's per-type name
+            # table) hit exactly that -- installed by the program, read by the
+            # host, answered "unknown" under the JIT while the cc path, where
+            # both halves are one TU, was correct.
+            #
+            # The test is anchored at the FIRST paren of the declarator, not
+            # searched anywhere in the line.  A free search also matches a
+            # function-pointer PARAMETER inside an ordinary prototype --
+            # `int64_t tur_timer_wheel_insert(..., void (*cb)(void *), ...)`
+            # -- and turns that prototype into a bogus `extern ...;;`.  At the
+            # first paren, a real prototype presents its parameter list
+            # (`(TurTimerWheel *w, ...`), which cannot match; only a genuine
+            # fn-pointer object presents `(*name)`.  A function RETURNING a
+            # fn-pointer puts a `(` right after the name, so it does not match
+            # either.  An ARRAY of function pointers (`(*tbl[2])(...)`) still
+            # falls through to verbatim -- add it here if one is ever needed.
+            head = rest.split('=')[0]
+            first_paren = head.find('(')
+            fnptr = (re.match(r'\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\(',
+                              head[first_paren:])
+                     if first_paren >= 0 else None)
+            if fnptr or (nm and '(' not in rest.split('=')[0]):
+                name = fnptr.group(1) if fnptr else nm.group(1)
                 j = i
                 while not code_part(lines[j]).endswith(';'):
                     j += 1

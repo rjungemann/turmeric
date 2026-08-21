@@ -271,7 +271,7 @@ static void *__tur_fatshim_keep[] __attribute__((unused)) = {
     (void *)__tur_poly_to_fat0, (void *)__tur_poly_to_fat1,
     (void *)__tur_poly_to_fat2, (void *)__tur_poly_to_fat3,
     (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };
-const char *(*g_tur_any_name_ext)(int64_t) = 0;
+extern const char *(*g_tur_any_name_ext)(int64_t);
 const char *__tur_any_type_name(int64_t tag);
 void tur_panic(const char *msg);
 void __tur_any_cast_check(int64_t have, int64_t want);
