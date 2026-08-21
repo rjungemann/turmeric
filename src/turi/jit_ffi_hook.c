@@ -21,13 +21,29 @@ const TurJitFfiProvider *tur_jit_ffi_provider(void) {
 char tur_jit_ffi_class_for_kind(TypeKind k, int is_return) {
     switch (k) {
         case TY_NIL:      return is_return ? 'v' : '?';
-        case TY_BOOL:
         case TY_INT:
         case TY_CSTR:
         case TY_PTR_VOID:
-        case TY_INT8:  case TY_INT16:  case TY_INT32:  case TY_INT64:
-        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_INT64: case TY_UINT64:
             return 'i';
+        /* Exact-width integer classes (scalar-width-fidelity).  The
+         * argument direction never needed these -- a narrow int rides the
+         * same register and the callee reads the low bits -- but the RETURN
+         * direction does: a C callee returning `int` leaves the upper 32
+         * bits of the register unspecified, so a thunk reading a 64-bit
+         * result out of it hands back garbage for any negative (or
+         * high-bit) value.  The thunk's C declaration carries the exact
+         * type instead, and the C cast to long long does the correct sign-
+         * or zero-extension.  Case matters only for that extension, which
+         * is why unsigned gets its own letters here while the aggregate
+         * MEMBER codes (layout-only) never needed them. */
+        case TY_BOOL:
+        case TY_INT8:   return 'b';
+        case TY_UINT8:  return 'B';
+        case TY_INT16:  return 'h';
+        case TY_UINT16: return 'H';
+        case TY_INT32:  return 'w';
+        case TY_UINT32: return 'W';
         case TY_FLOAT:
         case TY_FLOAT64:
             return 'f';
@@ -41,6 +57,11 @@ char tur_jit_ffi_class_for_kind(TypeKind k, int is_return) {
         default:
             return '?';
     }
+}
+
+bool tur_jit_ffi_class_is_int(char c) {
+    return c == 'i' || c == 'b' || c == 'B' || c == 'h' || c == 'H' ||
+           c == 'w' || c == 'W';
 }
 
 char tur_jit_ffi_member_code_for_kind(TypeKind k) {

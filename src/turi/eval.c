@@ -406,6 +406,279 @@ static bool register_extern_c_known(TuriEnv *env, const char *fname) {
     return false;
 }
 
+/* Forward decls: the aggregate marshalling engine lives with eval_call_ptr
+ * below; extern-c registration (the F4 follow-on) reuses it wholesale. */
+static size_t agg_sig_len(const AdtDef *def);
+static size_t agg_sig_render(const AdtDef *def, char *buf);
+static bool   agg_collect_leaves(const AdtDef *def, TuriValue v,
+                                 TuriValue *out, int max, int *n);
+static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
+                                 const void *base, const size_t *offs,
+                                 const char *codes, int nleaf, int *cur);
+static void agg_store_member(void *base, size_t off, char code, TuriValue v);
+
+/* The by-value record def an extern-c slot names, or NULL for a scalar
+ * slot.  A full TY_ADT type only reaches ec->param_types / return_type via
+ * elaboration's extern_c_aggregate_ok, so the def is already validated. */
+static const AdtDef *extern_slot_agg_def(Type t) {
+    if (t.kind != TY_ADT || !t.as.adt_.def) return NULL;
+    return t.as.adt_.def;
+}
+
+/* jit-ffi F4 follow-on: a thunk-backed extern-c native whose signature has
+ * at least one by-value aggregate slot.  The sig (with inline `{...}`
+ * layouts) is precomputed at registration; each call packs record args
+ * into C bytes and rebuilds a record from an aggregate return, exactly as
+ * eval_call_ptr does. */
+typedef struct ExternAggUd {
+    void          *fn;
+    const char    *name;   /* borrowed (interned symbol) */
+    const ExternC *ec;     /* elaboration arena; process-lifetime under turi */
+    char          *sig;
+    size_t        *arg_at; /* sig offset of each parameter's slot */
+} ExternAggUd;
+
+/* Env-lifetime teardown for the payload above (turi_env_register_native_ex).
+ * The ExternC itself belongs to the elaboration arena and is not ours. */
+static void extern_agg_ud_free(void *p) {
+    ExternAggUd *ud = (ExternAggUd *)p;
+    if (!ud) return;
+    free(ud->sig);
+    free(ud->arg_at);
+    free(ud);
+}
+
+static TuriValue extern_agg_thunk_native(TuriEnv *env, TuriValue *args,
+                                         uint32_t n, void *ud) {
+    const ExternAggUd *x = (const ExternAggUd *)ud;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_errorf(
+            "ffi: extern-c '%s' is not allowed in a sandboxed environment",
+            x->name);
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp)
+        return turi_errorf(
+            "ffi: calling extern-c '%s' under --interpret requires a "
+            "JIT-enabled build (-DTUR_JIT=ON)", x->name);
+    if (n != x->ec->n_params)
+        return turi_errorf("ffi: '%s' expects %u arg%s, got %u", x->name,
+                           (unsigned)x->ec->n_params,
+                           x->ec->n_params == 1 ? "" : "s", (unsigned)n);
+
+    TuriValue result;
+    int64_t *i_vals   = (int64_t *)calloc(n ? n : 1, sizeof(int64_t));
+    double  *f_vals   = (double  *)calloc(n ? n : 1, sizeof(double));
+    void   **s_vals   = (void   **)calloc(n ? n : 1, sizeof(void *));
+    void   **agg_bufs = (void   **)calloc(n ? n : 1, sizeof(void *));
+    void    *out_s_buf = NULL;
+    if (!i_vals || !f_vals || !s_vals || !agg_bufs) {
+        result = turi_error("ffi: out of memory marshalling call");
+        goto cleanup;
+    }
+
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *pd = extern_slot_agg_def(x->ec->param_types[k]);
+        if (pd) {
+            size_t size = 0, align = 1, offs[64];
+            char   codes[64];
+            int    nleaf = 0;
+            if (!tur_jit_ffi_struct_layout(x->sig + x->arg_at[k], &size,
+                                           &align, offs, codes, 64, &nleaf)) {
+                result = turi_errorf("ffi: '%s' arg %u has an "
+                                     "unrepresentable aggregate layout",
+                                     x->name, (unsigned)k);
+                goto cleanup;
+            }
+            TuriValue leaves[64];
+            int       nl = 0;
+            if (!agg_collect_leaves(pd, args[k], leaves, 64, &nl) ||
+                nl != nleaf) {
+                result = turi_errorf("ffi: '%s' arg %u does not match the "
+                                     "shape '%s' declares", x->name,
+                                     (unsigned)k,
+                                     pd->name ? pd->name : "?");
+                goto cleanup;
+            }
+            void *bytes = calloc(1, size ? size : 1);
+            if (!bytes) {
+                result = turi_error("ffi: out of memory");
+                goto cleanup;
+            }
+            agg_bufs[k] = bytes;
+            s_vals[k]   = bytes;
+            for (int i = 0; i < nleaf; i++)
+                agg_store_member(bytes, offs[i], codes[i], leaves[i]);
+            continue;
+        }
+        char cls = tur_jit_ffi_class_for_kind(x->ec->param_types[k].kind, 0);
+        if (tur_jit_ffi_class_is_int(cls)) {
+            switch (args[k].tag) {
+                case TURI_INT:  i_vals[k] = args[k].as_int; break;
+                case TURI_BOOL: i_vals[k] = args[k].as_bool ? 1 : 0; break;
+                case TURI_CSTR:
+                    i_vals[k] = (int64_t)(intptr_t)args[k].as_cstr; break;
+                case TURI_NIL:  i_vals[k] = 0; break;
+                default:
+                    result = turi_errorf(
+                        "ffi: '%s' arg %u is not an int-class value",
+                        x->name, (unsigned)k);
+                    goto cleanup;
+            }
+        } else {   /* 'f' / 'F' */
+            if (args[k].tag == TURI_FLOAT)    f_vals[k] = args[k].as_float;
+            else if (args[k].tag == TURI_INT) f_vals[k] = (double)args[k].as_int;
+            else {
+                result = turi_errorf(
+                    "ffi: '%s' arg %u is not a float-class value",
+                    x->name, (unsigned)k);
+                goto cleanup;
+            }
+        }
+    }
+
+    {
+        char errbuf[256];
+        TurJitFfiThunkFn jt = jp->thunk_for(x->sig, errbuf, sizeof errbuf);
+        if (!jt) {
+            result = turi_errorf("ffi: '%s': %s", x->name, errbuf);
+            goto cleanup;
+        }
+        int64_t out_i = 0;
+        double  out_f = 0.0;
+
+        const AdtDef *rd = extern_slot_agg_def(x->ec->return_type);
+        size_t roffs[64];
+        char   rcodes[64];
+        int    rleaf = 0;
+        if (rd) {
+            size_t rsize = 0, ralign = 1;
+            if (!tur_jit_ffi_struct_layout(x->sig, &rsize, &ralign, roffs,
+                                           rcodes, 64, &rleaf)) {
+                result = turi_errorf("ffi: '%s' return has an "
+                                     "unrepresentable aggregate layout",
+                                     x->name);
+                goto cleanup;
+            }
+            out_s_buf = calloc(1, rsize ? rsize : 1);
+            if (!out_s_buf) {
+                result = turi_error("ffi: out of memory");
+                goto cleanup;
+            }
+        }
+
+        jt(x->fn, i_vals, f_vals, s_vals, &out_i, &out_f, out_s_buf);
+
+        if (rd) {
+            int cur = 0;
+            result = agg_build_value(env, rd, out_s_buf, roffs, rcodes,
+                                     rleaf, &cur);
+            if (!turi_is_error(result) && cur != rleaf)
+                result = turi_errorf("ffi: '%s' return layout is longer "
+                                     "than its record declares", x->name);
+            goto cleanup;
+        }
+        switch (x->ec->return_type.kind) {
+            case TY_NIL:     result = turi_nil(); break;
+            case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                result = turi_float(out_f); break;
+            case TY_BOOL:    result = turi_bool(out_i != 0); break;
+            case TY_CSTR:
+                result = out_i ? turi_cstr((const char *)(intptr_t)out_i)
+                               : turi_nil();
+                break;
+            default:         result = turi_int(out_i); break;
+        }
+    }
+
+cleanup:
+    if (agg_bufs)
+        for (uint32_t k = 0; k < n; k++) free(agg_bufs[k]);
+    free(agg_bufs);
+    free(out_s_buf);
+    free(s_vals);
+    free(i_vals);
+    free(f_vals);
+    return result;
+}
+
+/* Build a full sig string (with inline `{...}` layouts) for a return type
+ * and parameter list, recording each parameter slot's sig offset in
+ * `arg_at` (n entries, may be NULL).  Returns a malloc'd sig, or NULL when
+ * any slot has no representation. */
+static char *agg_sig_build(Type ret, const Type *params, uint32_t n,
+                           size_t *arg_at) {
+    const AdtDef *rd = extern_slot_agg_def(ret);
+    size_t cap = 3;
+    cap += rd ? agg_sig_len(rd) : 1;
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *pd = extern_slot_agg_def(params[k]);
+        cap += pd ? agg_sig_len(pd) : 1;
+    }
+    char *sig = (char *)malloc(cap);
+    if (!sig) return NULL;
+
+    size_t sp = 0;
+    if (rd) {
+        size_t w = agg_sig_render(rd, sig);
+        if (!w) { free(sig); return NULL; }
+        sp = w;
+    } else {
+        char c = tur_jit_ffi_class_for_kind(ret.kind, 1);
+        if (c == '?') { free(sig); return NULL; }
+        sig[sp++] = c;
+    }
+    sig[sp++] = ':';
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *pd = extern_slot_agg_def(params[k]);
+        if (arg_at) arg_at[k] = sp;
+        if (pd) {
+            size_t w = agg_sig_render(pd, sig + sp);
+            if (!w) { free(sig); return NULL; }
+            sp += w;
+        } else {
+            char c = tur_jit_ffi_class_for_kind(params[k].kind, 0);
+            if (c == '?' || c == 'v') { free(sig); return NULL; }
+            sig[sp++] = c;
+        }
+    }
+    sig[sp] = '\0';
+    return sig;
+}
+
+/* Register an aggregate-signature extern-c as a thunk-backed native.
+ * Returns 0 on success; nonzero falls back to the nil stub (an
+ * unrepresentable layout or an unresolvable symbol). */
+static int register_extern_c_agg(TuriEnv *env, const ExternC *ec,
+                                 const char *fname) {
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    uint32_t n = ec->n_params;
+    size_t *arg_at = (size_t *)calloc(n ? n : 1, sizeof(size_t));
+    char   *sig    = arg_at ? agg_sig_build(ec->return_type, ec->param_types,
+                                            n, arg_at)
+                            : NULL;
+    if (!sig) goto fail;
+
+    {
+        void *fn = jp->resolve(ec->c_name ? ec->c_name->name : fname);
+        if (!fn) goto fail;
+        ExternAggUd *ud = (ExternAggUd *)calloc(1, sizeof(*ud));
+        if (!ud) goto fail;
+        ud->fn = fn; ud->name = fname; ud->ec = ec;
+        ud->sig = sig; ud->arg_at = arg_at;
+        /* Env-lifetime, not process-lifetime: a procedural macro's turi env
+         * is torn down per compile, and the compile path is leak-checked. */
+        turi_env_register_native_ex(env, fname, extern_agg_thunk_native, ud,
+                                    extern_agg_ud_free);
+        return 0;
+    }
+
+fail:
+    free(sig);
+    free(arg_at);
+    return -1;
+}
+
 /* jit-ffi-c2mir-plan F2: give an extern-c declaration a real
  * implementation.  Precedence: the known-override table above; then, in a
  * JIT build, a thunk-backed native calling the dlsym-resolved symbol for
@@ -418,9 +691,19 @@ static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
 
     const TurJitFfiProvider *jp = tur_jit_ffi_provider();
     if (jp && ec && !ec->is_variadic) {
-        /* Classify the declared signature.  A '?' anywhere (struct-by-value,
-         * ADT, carrier) means the thunk vocabulary cannot express it yet
-         * (F4); fall back to the stub rather than mis-calling. */
+        /* F4 follow-on: a signature with a by-value aggregate slot takes
+         * the aggregate-aware registration; failure falls to the stub. */
+        bool any_agg = extern_slot_agg_def(ec->return_type) != NULL;
+        for (uint32_t i = 0; !any_agg && i < ec->n_params; i++)
+            if (extern_slot_agg_def(ec->param_types[i])) any_agg = true;
+        if (any_agg) {
+            if (register_extern_c_agg(env, ec, fname) == 0) return;
+            turi_env_register_native(env, fname, native_nil_stub, NULL);
+            return;
+        }
+        /* Classify the declared signature.  A '?' anywhere (ADT, carrier)
+         * means the thunk vocabulary cannot express it; fall back to the
+         * stub rather than mis-calling. */
         char ret = tur_jit_ffi_class_for_kind(ec->return_type.kind, 1);
         bool ok = (ret != '?');
         uint32_t n = ec->n_params;
@@ -1114,6 +1397,44 @@ static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
     return r;
 }
 
+/* Bridge for tur_ffi_cb_dispatch (ffi_thunk.c): rebuild a record TuriValue
+ * of type `def` from the C bytes of the aggregate whose sig text begins at
+ * `sig` (points at '{').  An inbound callback argument arrives as raw
+ * struct bytes; this is the unpacking direction of the F4 marshaller. */
+TuriValue tur_eval_agg_from_bytes(TuriEnv *env, const AdtDef *def,
+                                  const char *sig, const void *bytes) {
+    size_t offs[64];
+    char   codes[64];
+    int    nleaf = 0;
+    if (!tur_jit_ffi_struct_layout(sig, NULL, NULL, offs, codes, 64, &nleaf))
+        return turi_error("callback: unrepresentable aggregate layout");
+    int cur = 0;
+    TuriValue r = agg_build_value(env, def, bytes, offs, codes, nleaf, &cur);
+    if (!turi_is_error(r) && cur != nleaf)
+        return turi_error("callback: aggregate layout is longer than its "
+                          "record declares");
+    return r;
+}
+
+/* Bridge for tur_ffi_cb_dispatch: pack a record TuriValue into the byte
+ * buffer a callback's aggregate return is stored through.  Returns false
+ * on a shape mismatch (the buffer is left zeroed by the caller). */
+bool tur_eval_agg_to_bytes(const AdtDef *def, const char *sig, TuriValue v,
+                           void *bytes) {
+    size_t offs[64];
+    char   codes[64];
+    int    nleaf = 0;
+    if (!tur_jit_ffi_struct_layout(sig, NULL, NULL, offs, codes, 64, &nleaf))
+        return false;
+    TuriValue leaves[64];
+    int       nl = 0;
+    if (!agg_collect_leaves(def, v, leaves, 64, &nl) || nl != nleaf)
+        return false;
+    for (int i = 0; i < nleaf; i++)
+        agg_store_member(bytes, offs[i], codes[i], leaves[i]);
+    return true;
+}
+
 /* jit-ffi-c2mir-plan F5: `(callback-ptr f [sig])` under the interpreter.
  * Builds a process-lifetime context pinning the Turmeric function and asks
  * the provider for a C function pointer whose generated body calls
@@ -1137,28 +1458,62 @@ static TuriValue eval_callback_ptr(TuriEnv *env, EvalFrame *frame,
     if (turi_is_error(fv)) return fv;
 
     uint32_t n = ps->n_params;
-    char  sig_inl[64];
-    char *sig = sig_inl, *sig_heap = NULL;
-    if ((size_t)n + 3 > sizeof sig_inl) {
-        sig_heap = (char *)malloc((size_t)n + 3);
-        if (!sig_heap) return turi_error("callback-ptr: out of memory");
-        sig = sig_heap;
+    size_t *arg_at = (size_t *)calloc(n ? n : 1, sizeof(size_t));
+    char   *sig    = arg_at ? agg_sig_build(ps->return_type, ps->param_types,
+                                            n, arg_at)
+                            : NULL;
+    if (!sig) {
+        free(arg_at);
+        return turi_error("callback-ptr: signature is not representable");
     }
-    sig[0] = tur_jit_ffi_class_for_kind(ps->return_type.kind, 1);
-    sig[1] = ':';
-    for (uint32_t k = 0; k < n; k++)
-        sig[2 + k] = tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
-    sig[n + 2] = '\0';
+
+    /* Per-arg classes for the dispatch: '{' marks an aggregate slot, whose
+     * bytes arrive through the sv channel and are rebuilt into a record via
+     * the sig text at arg_at[k]. */
+    char inl_cls[64];
+    char *classes = (n <= sizeof inl_cls) ? inl_cls : (char *)malloc(n);
+    const AdtDef *inl_defs[64];
+    const AdtDef **arg_defs =
+        (n <= 64) ? inl_defs
+                  : (const AdtDef **)malloc(n * sizeof(const AdtDef *));
+    if (!classes || !arg_defs) {
+        free(sig); free(arg_at);
+        if (classes != inl_cls) free(classes);
+        if (arg_defs != inl_defs) free((void *)arg_defs);
+        return turi_error("callback-ptr: out of memory");
+    }
+    bool any_agg = false;
+    for (uint32_t k = 0; k < n; k++) {
+        arg_defs[k] = extern_slot_agg_def(ps->param_types[k]);
+        classes[k]  = arg_defs[k]
+                          ? '{'
+                          : tur_jit_ffi_class_for_kind(ps->param_types[k].kind,
+                                                       0);
+        if (arg_defs[k]) any_agg = true;
+    }
+    const AdtDef *ret_def = extern_slot_agg_def(ps->return_type);
+    char ret_class = ret_def ? '{'
+                             : tur_jit_ffi_class_for_kind(ps->return_type.kind,
+                                                          1);
+    if (ret_def) any_agg = true;
 
     /* The context is never freed: its ADDRESS is compiled into the callback
      * body, and a C library holding that pointer has no way to tell us it is
      * done.  Same policy as turi's closures. */
-    TurFfiCbCtx *ctx = tur_ffi_cb_ctx_new(env, fv, sig[0], sig + 2, n);
-    if (!ctx) { free(sig_heap); return turi_error("callback-ptr: out of memory"); }
+    TurFfiCbCtx *ctx = tur_ffi_cb_ctx_new(env, fv, ret_class, classes, n);
+    if (ctx && any_agg &&
+        tur_ffi_cb_ctx_set_agg(ctx, sig, arg_at, arg_defs, ret_def) != 0)
+        ctx = NULL;
+    if (classes != inl_cls) free(classes);
+    if (arg_defs != inl_defs) free((void *)arg_defs);
+    if (!ctx) {
+        free(sig); free(arg_at);
+        return turi_error("callback-ptr: out of memory");
+    }
 
     char errbuf[256];
     void *fn = jp->callback_for(sig, ctx, errbuf, sizeof errbuf);
-    free(sig_heap);
+    if (!any_agg) { free(sig); free(arg_at); }  /* set_agg took ownership */
     if (!fn) return turi_errorf("callback-ptr: %s", errbuf);
     return turi_int((int64_t)(intptr_t)fn);
 }
@@ -1300,7 +1655,7 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
             s_vals[k]   = bytes;
             for (int i = 0; i < nleaf; i++)
                 agg_store_member(bytes, offs[i], codes[i], leaves[i]);
-        } else if (cls == 'i') {
+        } else if (tur_jit_ffi_class_is_int(cls)) {
             switch (av.tag) {
                 case TURI_INT:  i_vals[k] = av.as_int; break;
                 case TURI_BOOL: i_vals[k] = av.as_bool ? 1 : 0; break;

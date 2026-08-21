@@ -1,7 +1,13 @@
 # JIT-scoped dynamic FFI via c2mir (no new dependency)
 
-> **Status:** F1-F5 implemented (F1-F3 2026-08-17; F4 + F5 2026-08-18), each
-> with a stated boundary -- see "F4/F5 as built" below.  Proposed 2026-08-17.
+> **Status:** F1-F5 implemented (F1-F3 2026-08-17; F4 + F5 2026-08-18), and
+> the follow-on batch of 2026-08-21 closed four of the five items F5 left
+> open -- x86-64 verification (which found a nested-aggregate miscall),
+> inbound callback aggregates, extern-c aggregate slots, and scalar width
+> fidelity (which turned out to be a live wrong-answer bug in the return
+> direction, not a cosmetic inconsistency).  The aarch64 HFA gap in MIR is
+> the one substantive item still open.  See "Open after F5" below.
+> Proposed 2026-08-17.
 > **Track:** post-v1. Requires `-DTUR_JIT=ON` builds; non-JIT builds keep
 > today's behavior unchanged.
 > **Type:** interpreter/JIT (`src/turi/`, `src/jit_engine.c`) + one small
@@ -72,6 +78,10 @@
 >   sitting where the target address sat -- so F3's "no walker had to learn a
 >   new kind" property still holds, and both forms share one `[T1 T2 -> R]`
 >   parser.
+> - **Two F4/F5 boundaries below were retired on 2026-08-21** -- callbacks
+>   now take and return aggregates, and the scalar vocabulary is
+>   exact-width.  The notes are kept as written because they explain why
+>   each was drawn where it was; "Open after F5" records what changed.
 > - **A callback must lower to a plain C function** (top-level defn, or an
 >   inline lambda with no captures).  A C callback slot has no room for a
 >   captured environment, and the `:fn` runtime representation is not uniform
@@ -353,7 +363,64 @@ can trail indefinitely.
 
 ### Open after F5
 
-Not blockers on anything, in rough priority order:
+Resolved 2026-08-21 (the F4/F5 follow-on batch):
+
+- **x86-64 verification: DONE, and it found a real bug.** Measured on an
+  x86-64 host against cc-compiled callees for every SysV class -- packed
+  float pair (one SSE eightbyte), two-SSE, INTEGER+SSE both orders,
+  single-GP, MEMORY-class (>16 bytes), and aggregate returns of each. The
+  *flat* path was already correct. The *nested* path was not, on every
+  architecture: a nested by-value record field's `CtorField.kind` is the
+  int64 carrier, so the interpreter's sig renderer classed it `'q'` and
+  built a thunk for a struct shape the callee does not have (`{{ww}w}`
+  passed as `{qw}` -- silent wrong answers, the aarch64 failure mode
+  without the aarch64). Fixed: the sig renderer now recurses into nested
+  by-value record fields, mirroring codegen's `adt_field_is_inline_byval`;
+  the marshaller flattens/rebuilds nested records leaf-by-leaf. A TY_APP
+  monomorph field (also inlined by codegen, but needing per-application
+  substitution) is refused cleanly. Regression: run-flags
+  `jit-ffi-call-ptr-struct-nested-interp` (hermetic native .so).
+- **Aggregates inbound to a callback: DONE.** `tur_ffi_cb_dispatch` grew
+  the sv/out_s channels; the generated callback takes the record by value
+  and hands its address through (aggregate return: dispatch packs into the
+  callback's zero-initialized return slot). Elaboration now admits record
+  slots (kind-checked against the function; identity where the fn type
+  carries it), and the compiled per-site adapter passes aggregates through
+  uncast (C has no struct casts). The provider refuses an HFA on aarch64
+  inbound exactly as outbound -- the native caller writes v0..v7, the
+  c2mir callee would read x0..x7. Regression: run-flags
+  `jit-ffi-callback-struct-{interp,compiled}`.
+- **extern-c with aggregate parameters (and returns): DONE.** It needed
+  more than the plan guessed: `ExternC` carried only TypeKinds, so
+  elaboration now keeps the full record type for a `[v : SomeRecord]`
+  annotation (validated: single-constructor, non-`:heap`, non-parametric),
+  sets `result_full_type` so call sites type an aggregate return correctly,
+  and the prototype emitter spells the record's C type. In turi, an
+  aggregate-signature extern-c registers a thunk-backed native that packs
+  record args / rebuilds a record return through the F4 layout engine.
+  Regression: run-flags `jit-ffi-extern-c-struct-{interp,compiled,rejects-heap}`.
+- **Scalar width fidelity: DONE, and it was a live wrong-answer bug, not
+  the cosmetic inconsistency this list described.** Collapsing every
+  integer width onto `'i'` was indeed benign for *arguments* -- but the
+  *return* direction was not: a C callee returning `int` leaves the upper
+  half of the return register unspecified, so a thunk declared to return
+  `long long` read whatever was there. `neg_int(1234)` came back as
+  `4294966062` instead of `-1234`, for any negative or high-bit result.
+  The vocabulary now carries exact-width codes (`b`/`h`/`w`, capitalized
+  for unsigned) so the thunk declares the callee's true C type and the
+  cast extends by signedness. Argument compatibility is unchanged (any
+  int-class value into any int-class slot); only the emitted C declaration
+  got precise. Regression: run-flags `jit-ffi-narrow-return`.
+- **A leak in `tur_ffi_register_extern_thunk` (found by this work).** The
+  per-registration payload was `calloc`'d and never freed, so a procedural
+  macro -- which runs turi *inside* `tur build` -- leaked one per extern-c
+  declaration and LeakSanitizer failed the compile. Eight fixtures were
+  red under a JIT build; the default non-JIT suite never saw it because no
+  provider is installed there, so the thunk path is unreachable. Both
+  extern-c registrations now use `turi_env_register_native_ex` with a
+  finalizer, which is exactly what that API is for.
+
+Still open, not blockers on anything:
 
 - **The aarch64 HFA gap in MIR** (the F4 boundary). Fixing it is vendored
   backend work in `rjungemann/mir`: an HFA classifier in
@@ -362,25 +429,11 @@ Not blockers on anything, in rough priority order:
   (the hand-encoded interface thunks, where `gen_ld_pat` currently only
   encodes GP loads). Landing it means pushing to the fork and bumping the
   pin in `cmake/mir.cmake` -- mind the CACHE-VARIABLE trap at lines 67-76.
-  Until then the interpreter refuses the case.
-- **x86-64 verification.** c2mir implements full SysV eightbyte
-  classification there, so struct-by-value through a thunk is *believed*
-  correct on x86-64 -- but it has never been measured, because no x86-64
-  host was available when F4 landed. The refusal above is `#if
-  defined(__aarch64__)`, so x86-64 takes the unverified path today.
-- **Scalar width fidelity.** The scalar vocabulary collapses every integer
-  width onto `'i'` (`long long` in the thunk), so an `:int32` parameter is
-  passed as a 64-bit value. Benign on both supported ABIs -- same register,
-  callee reads the low half -- but now inconsistent with F4's aggregate
-  members, which are exact-width because layout demanded it. Widening the
-  scalar codes to match would make the whole vocabulary exact. Pre-existing
-  since F1, not introduced by F4.
-- **Aggregates inbound to a callback.** F4's marshaller packs outward only;
-  a callback taking or returning a record by value needs the unpacking
-  direction. Rejected explicitly today, in elaboration and in the provider.
-- **extern-c with aggregate parameters.** `register_extern_c_binding` still
-  classifies an aggregate as `'?'` and falls back to the nil stub. The
-  layout machinery F4 added would carry it; nothing else is missing.
+  Until then the interpreter refuses the case, in both directions.
+- **TY_APP monomorph fields in interpreter aggregates.** Codegen inlines a
+  concrete parametric monomorph field (`(Pair2 int cstr)`) by value, but
+  rendering its layout interpreter-side needs per-application type
+  substitution; refused cleanly today rather than mis-described.
 
 ## 4. Risks / open questions
 

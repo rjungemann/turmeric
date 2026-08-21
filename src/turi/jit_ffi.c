@@ -37,11 +37,28 @@
 static const char *class_c_type(char c) {
     switch (c) {
         case 'i': return "long long";
+        /* Exact-width scalar classes (scalar-width-fidelity): the RETURN
+         * width must be the callee's true C type or the register's upper
+         * bits read back as garbage; the C cast to long long then extends
+         * by the signedness the case carries. */
+        case 'b': return "signed char";
+        case 'B': return "unsigned char";
+        case 'h': return "short";
+        case 'H': return "unsigned short";
+        case 'w': return "int";
+        case 'W': return "unsigned int";
         case 'f': return "double";
         case 'F': return "float";
         case 'v': return "void";
         default:  return NULL;
     }
+}
+
+/* Integer-register scalar classes (everything class_c_type knows that is
+ * neither float nor void nor aggregate). */
+static int class_is_int(char c) {
+    return c == 'i' || c == 'b' || c == 'B' || c == 'h' || c == 'H' ||
+           c == 'w' || c == 'W';
 }
 
 /* F4: the exact-width member vocabulary (see jit_ffi.h).  Only the widths
@@ -129,7 +146,8 @@ static int slot_parse(const char **pp, SigSlot *out, int is_return) {
         *pp = after;
         return 0;
     }
-    if (*p != 'i' && *p != 'f' && *p != 'F' && !(is_return && *p == 'v'))
+    if (!class_is_int(*p) && *p != 'f' && *p != 'F' &&
+        !(is_return && *p == 'v'))
         return -1;
     out->cls  = *p;
     out->sbeg = NULL;
@@ -229,9 +247,13 @@ static char *render_thunk_source(ParsedSig *ps) {
         "{\n"
         "  (void)sv; (void)out_s; (void)iv; (void)fv;\n"
         "  (void)out_i; (void)out_f;\n  ");
-    /* Store expression prefix by return class.  An aggregate return is
-     * stored through out_s, which the caller sized from the same layout. */
-    if (ps->ret.cls == 'i')      sb_puts(&b, "*out_i = (long long)");
+    /* Store expression prefix by return class.  A narrow integer return
+     * extends through the C cast chain: the call expression has the exact
+     * declared type, so (long long) sign- or zero-extends correctly.  An
+     * aggregate return is stored through out_s, which the caller sized
+     * from the same layout. */
+    if (class_is_int(ps->ret.cls))
+                                 sb_puts(&b, "*out_i = (long long)");
     else if (ps->ret.cls == 'f' || ps->ret.cls == 'F')
                                  sb_puts(&b, "*out_f = (double)");
     else if (ps->ret.cls == '{') sb_printf(&b, "*(T%d *)out_s = ", ps->ret.tid);
@@ -254,11 +276,13 @@ static char *render_thunk_source(ParsedSig *ps) {
          * emitted __ffi shims already share. */
         if (i) sb_puts(&b, ", ");
         switch (ps->args[i].cls) {
-            case 'i': sb_printf(&b, "iv[%d]", i); break;
             case 'f': sb_printf(&b, "fv[%d]", i); break;
             case 'F': sb_printf(&b, "(float)fv[%d]", i); break;
-            default:  sb_printf(&b, "*(T%d *)(((void *const *)sv)[%d])",
+            case '{': sb_printf(&b, "*(T%d *)(((void *const *)sv)[%d])",
                                 ps->args[i].tid, i); break;
+            default:  /* integer classes: cast down to the declared width */
+                      sb_printf(&b, "(%s)iv[%d]",
+                                class_c_type(ps->args[i].cls), i); break;
         }
     }
     sb_puts(&b, ");\n}\n");
@@ -397,45 +421,63 @@ typedef struct CbEntry {
 static CbEntry *g_cb_head = NULL;   /* few enough per program for a list */
 
 /* Render the callback TU for `sig` with `ctx` baked in as an address
- * literal.  Caller frees. */
+ * literal.  An aggregate parameter is taken by value and its address handed
+ * through the sv channel (the by-value copy lives on the callback's own
+ * frame for the duration of the dispatch); an aggregate return is stored
+ * into a local through out_s and returned by value.  Caller frees. */
 static char *render_callback_source(ParsedSig *ps, void *ctx) {
     SrcBuf b = { NULL, 0, 0, 0 };
     int n = ps->n;
 
+    render_struct_typedefs(&b, ps);
+
     sb_puts(&b,
         "extern void tur_ffi_cb_dispatch(void *, const long long *,\n"
-        "                                const double *, long long *,\n"
-        "                                double *);\n");
-    sb_puts(&b, class_c_type(ps->ret.cls));
+        "                                const double *,\n"
+        "                                const void *const *, long long *,\n"
+        "                                double *, void *);\n");
+    render_slot_c_type(&b, &ps->ret);
     sb_puts(&b, " __tur_ffi_cb(");
     if (n == 0) {
         sb_puts(&b, "void");
     } else {
-        for (int i = 0; i < n; i++)
-            sb_printf(&b, "%s%s a%d", i ? ", " : "",
-                      class_c_type(ps->args[i].cls), i);
+        for (int i = 0; i < n; i++) {
+            if (i) sb_puts(&b, ", ");
+            render_slot_c_type(&b, &ps->args[i]);
+            sb_printf(&b, " a%d", i);
+        }
     }
     sb_puts(&b, ") {\n");
     /* Sized for n or 1: a zero-length array is not C. */
-    sb_printf(&b, "  long long iv[%d]; double fv[%d];\n",
-              n ? n : 1, n ? n : 1);
+    sb_printf(&b, "  long long iv[%d]; double fv[%d]; const void *sv[%d];\n",
+              n ? n : 1, n ? n : 1, n ? n : 1);
     sb_puts(&b, "  long long oi = 0; double of = 0;\n");
-    sb_puts(&b, "  (void)iv; (void)fv;\n");
+    sb_puts(&b, "  (void)iv; (void)fv; (void)sv;\n");
     for (int i = 0; i < n; i++) {
-        if (ps->args[i].cls == 'i')
+        if (ps->args[i].cls == '{')
+            sb_printf(&b, "  sv[%d] = &a%d;\n", i, i);
+        else if (class_is_int(ps->args[i].cls))
             sb_printf(&b, "  iv[%d] = (long long)a%d;\n", i, i);
         else
             sb_printf(&b, "  fv[%d] = (double)a%d;\n", i, i);
     }
+    /* Zero-initialized so a dispatch-side mismatch returns zeros, matching
+     * the scalar error path. */
+    if (ps->ret.cls == '{')
+        sb_printf(&b, "  T%d outs = {0};\n", ps->ret.tid);
     /* The context rides as an unsigned literal -- c2mir sees a constant, so
      * there is no relocation and no symbol to resolve. */
     sb_printf(&b,
               "  tur_ffi_cb_dispatch((void *)(unsigned long long)%lluULL,\n"
-              "                      iv, fv, &oi, &of);\n",
-              (unsigned long long)(uintptr_t)ctx);
-    if (ps->ret.cls == 'i')      sb_puts(&b, "  return (long long)oi;\n");
-    else if (ps->ret.cls == 'f') sb_puts(&b, "  return of;\n");
+              "                      iv, fv, (const void *const *)sv,\n"
+              "                      &oi, &of, %s);\n",
+              (unsigned long long)(uintptr_t)ctx,
+              ps->ret.cls == '{' ? "(void *)&outs" : "(void *)0");
+    if (ps->ret.cls == 'f')      sb_puts(&b, "  return of;\n");
     else if (ps->ret.cls == 'F') sb_puts(&b, "  return (float)of;\n");
+    else if (ps->ret.cls == '{') sb_puts(&b, "  return outs;\n");
+    else if (class_is_int(ps->ret.cls))
+        sb_printf(&b, "  return (%s)oi;\n", class_c_type(ps->ret.cls));
     sb_puts(&b, "}\n");
 
     if (b.bad) { free(b.p); return NULL; }
@@ -452,21 +494,24 @@ static void *callback_for(const char *sig, void *ctx, char *errbuf,
                      sig ? sig : "(null)");
         return NULL;
     }
-    /* F5 is scalars only: an aggregate crossing INTO a Turmeric function
-     * needs an unpacking marshaller F4 did not build (that one packs
-     * outward).  Elaboration rejects it too; this is the backstop. */
-    if (ps.ret.cls == '{') {
-        if (errbuf && errcap)
-            snprintf(errbuf, errcap,
-                     "a callback cannot return a by-value aggregate yet");
-        return NULL;
-    }
-    for (int i = 0; i < n; i++) {
-        if (ps.args[i].cls == '{') {
+    /* An aggregate the host's provider cannot pass correctly (an HFA on
+     * aarch64) is just as wrong inbound as outbound: the native CALLER puts
+     * it in v0..v7 and the c2mir-generated callback reads x0..x7.  Refuse,
+     * mirroring thunk_for. */
+    {
+        const SigSlot *bad = NULL;
+        const char *why = NULL;
+        if (ps.ret.cls == '{' &&
+            !tur_jit_ffi_struct_supported(ps.ret.sbeg, &why))
+            bad = &ps.ret;
+        for (int i = 0; !bad && i < n; i++)
+            if (ps.args[i].cls == '{' &&
+                !tur_jit_ffi_struct_supported(ps.args[i].sbeg, &why))
+                bad = &ps.args[i];
+        if (bad) {
             if (errbuf && errcap)
-                snprintf(errbuf, errcap,
-                         "a callback cannot take a by-value aggregate yet "
-                         "(parameter %d)", i);
+                snprintf(errbuf, errcap, "%s",
+                         why ? why : "unsupported aggregate signature");
             return NULL;
         }
     }

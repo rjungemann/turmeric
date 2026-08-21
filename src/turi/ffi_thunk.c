@@ -360,8 +360,9 @@ static TuriValue extern_thunk_native(TuriEnv *env, TuriValue *args,
     TuriValue result;
     for (uint32_t k = 0; k < n; k++) {
         char cls = x->classes[k];
-        int rc = (cls == 'i') ? marshal_arg_i(&args[k], &i_vals[k])
-                              : marshal_arg_f(&args[k], &f_vals[k]);
+        int rc = tur_jit_ffi_class_is_int(cls)
+                     ? marshal_arg_i(&args[k], &i_vals[k])
+                     : marshal_arg_f(&args[k], &f_vals[k]);
         if (rc != 0) {
             result = turi_errorf("ffi: '%s' arg %u: expected %s, got %s",
                                  x->name, k, class_name(cls),
@@ -398,11 +399,16 @@ static TuriValue extern_thunk_native(TuriEnv *env, TuriValue *args,
         double  out_f = 0.0;
         jt(x->fn, i_vals, f_vals, NULL, &out_i, &out_f, NULL);
         switch (x->ret_class) {
-            case 'i': result = turi_int(out_i);   break;
             case 'f':
             case 'F': result = turi_float(out_f); break;
             case 'v': result = turi_nil();        break;
-            default:  result = turi_error("ffi: internal: bad ret class"); break;
+            default:
+                /* Every integer class: the thunk already extended the
+                 * callee's exact-width result into out_i. */
+                result = tur_jit_ffi_class_is_int(x->ret_class)
+                             ? turi_int(out_i)
+                             : turi_error("ffi: internal: bad ret class");
+                break;
         }
     }
 
@@ -424,7 +430,13 @@ int tur_ffi_register_extern_thunk(TuriEnv *env, const char *name, void *fn,
     ud->ret_class = ret_class;
     ud->n_args    = n;
     if (n && arg_classes) memcpy(ud->classes, arg_classes, n);
-    turi_env_register_native(env, name, extern_thunk_native, ud);
+    /* The ud belongs to THIS env, not the process: a procedural macro runs
+     * turi inside `tur build`, and that env is torn down per compile.  With
+     * a plain register_native the payload outlived it and LeakSanitizer
+     * failed the compile -- the compiler/codegen path is leak-clean by
+     * policy (CLAUDE.md), and only a JIT build reaches this path at all,
+     * which is why the default suite never saw it. */
+    turi_env_register_native_ex(env, name, extern_thunk_native, ud, free);
     return 0;
 }
 
@@ -579,8 +591,26 @@ TurFfiCbCtx *tur_ffi_cb_ctx_new(TuriEnv *env, TuriValue fn, char ret_class,
     return c;
 }
 
+int tur_ffi_cb_ctx_set_agg(TurFfiCbCtx *ctx, char *sig, size_t *arg_at,
+                           const struct AdtDef **arg_defs,
+                           const struct AdtDef *ret_def) {
+    if (!ctx || !sig) return -1;
+    const struct AdtDef **defs = NULL;
+    if (ctx->n_args) {
+        defs = (const struct AdtDef **)malloc(ctx->n_args * sizeof(*defs));
+        if (!defs) return -1;
+        memcpy(defs, arg_defs, ctx->n_args * sizeof(*defs));
+    }
+    ctx->sig      = sig;      /* ownership taken */
+    ctx->arg_at   = arg_at;   /* ownership taken */
+    ctx->arg_defs = defs;
+    ctx->ret_def  = ret_def;
+    return 0;
+}
+
 void tur_ffi_cb_dispatch(void *ctxp, const long long *iv, const double *fv,
-                         long long *out_i, double *out_f) {
+                         const void *const *sv, long long *out_i,
+                         double *out_f, void *out_s) {
     TurFfiCbCtx *c = (TurFfiCbCtx *)ctxp;
     if (out_i) *out_i = 0;
     if (out_f) *out_f = 0.0;
@@ -603,6 +633,20 @@ void tur_ffi_cb_dispatch(void *ctxp, const long long *iv, const double *fv,
     for (uint32_t i = 0; i < n; i++) {
         switch (c->arg_classes[i]) {
             case 'f': case 'F': args[i] = turi_float(fv[i]); break;
+            case '{':
+                /* F4 follow-on: an aggregate argument's bytes arrive through
+                 * the sv channel; rebuild the record from the sig's layout. */
+                args[i] = tur_eval_agg_from_bytes(c->env, c->arg_defs[i],
+                                                  c->sig + c->arg_at[i],
+                                                  sv[i]);
+                if (turi_is_error(args[i])) {
+                    fprintf(stderr,
+                            "tur: error unpacking FFI callback arg %u: %s\n",
+                            (unsigned)i, turi_error_message(args[i]));
+                    free(heap);
+                    return;
+                }
+                break;
             default:            args[i] = turi_int((int64_t)iv[i]); break;
         }
     }
@@ -624,6 +668,15 @@ void tur_ffi_cb_dispatch(void *ctxp, const long long *iv, const double *fv,
             if (out_f)
                 *out_f = (r.tag == TURI_FLOAT) ? r.as_float
                        : (r.tag == TURI_INT)   ? (double)r.as_int : 0.0;
+            break;
+        case '{':
+            /* F4 follow-on: pack the record result into the callback's own
+             * return slot (out_s, zero-initialized by the generated body so
+             * a mismatch yields zeros, matching the scalar error path). */
+            if (out_s && c->ret_def &&
+                !tur_eval_agg_to_bytes(c->ret_def, c->sig, r, out_s))
+                fprintf(stderr, "tur: FFI callback result does not match "
+                                "the declared record shape\n");
             break;
         default:
             if (out_i) {

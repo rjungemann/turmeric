@@ -9613,6 +9613,25 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
 }
 
+/* jit-ffi F4 follow-on: validate a record named in an extern-c slot as a
+ * by-value C aggregate.  Same admission rule as call-ptr's signature vector
+ * (elab_unsafe.c call_ptr_aggregate_type): only a single-constructor,
+ * non-:heap, non-parametric record has the C struct layout the declaration
+ * claims.  Returns false with a diagnostic emitted. */
+static bool extern_c_aggregate_ok(const Type *t, Span span) {
+    const AdtDef *def = t->as.adt_.def;
+    if (def && def->n_ctors == 1 && def->ctors[0]->is_record &&
+        !def->is_heap && def->n_type_params == 0 &&
+        def->ctors[0]->n_fields > 0 && adt_is_byvalue_product(def))
+        return true;
+    diag_emit(DIAG_ERROR, span,
+              "extern-c: '%s' cannot cross the C boundary by value -- only "
+              "a single-constructor, non-:heap, non-parametric record with "
+              "at least one field has a by-value C struct layout",
+              (def && def->name) ? def->name : "this type");
+    return false;
+}
+
 /* Phase 2: extern-c — (extern-c name [param1 param2 ...] : return-type)
  * Declares an external C function. For phase 2, we don't support capture.
  * Example: (extern-c printf [^cstr fmt] : int)
@@ -9660,6 +9679,14 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     Binding **params = NULL;
     uint32_t n_params = 0;
     TypeKind *param_kinds = (TypeKind *)arena_alloc(e->arena, pcap * sizeof(TypeKind));
+    /* jit-ffi F4 follow-on: a `[v : SomeRecord]` annotation names a by-value
+     * aggregate, whose AdtDef must survive into ec->param_types for the
+     * prototype emitter and the interpreter's thunk marshaller.  Slots stay
+     * TY_UNKNOWN here and are back-filled from param_kinds after the loop,
+     * so only a validated record annotation carries a full type. */
+    Type *param_full = (Type *)arena_alloc(e->arena, pcap * sizeof(Type));
+    for (uint32_t pi = 0; pi < pcap; pi++)
+        param_full[pi] = type_from_kind(TY_UNKNOWN);
     /* A#1: ^fat marks the next extern-c parameter as a fat-closure consumer. */
     bool next_param_fat = false;
 
@@ -9685,6 +9712,14 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
                     : NULL;
                 if (!ann) return NULL;
                 pk = ann->kind;
+                /* jit-ffi F4 follow-on: a record annotation is a by-value
+                 * aggregate parameter -- keep the full type (the AdtDef is
+                 * what the prototype emitter and the interpreter's layout
+                 * engine read).  Anything else keeps the kind-only path. */
+                if (pk == TY_ADT) {
+                    if (!extern_c_aggregate_ok(ann, p->span)) return NULL;
+                    param_full[n_params - 1] = *ann;
+                }
             } else {
                 const Symbol *kw = p->as.sym;
                 pk = typekind_from_symbol(kw->name);
@@ -9701,7 +9736,9 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
                 }
             }
             param_kinds[n_params - 1] = pk;
-            params[n_params - 1]->type = type_from_kind(pk);
+            params[n_params - 1]->type = (param_full[n_params - 1].kind == TY_ADT)
+                                             ? param_full[n_params - 1]
+                                             : type_from_kind(pk);
             continue;
         }
         if (p->tag != F_SYM) {
@@ -9787,12 +9824,20 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     }
 
     TypeKind return_kind;
+    Type return_full = type_from_kind(TY_UNKNOWN);
     if (ret_f->tag == F_TYPE_ANN) {
         Type *ann = (ret_f->as.list.len > 0)
             ? type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0)
             : NULL;
         if (!ann) return NULL;
         return_kind = ann->kind;
+        /* jit-ffi F4 follow-on: an aggregate return keeps its full type, so
+         * call sites type the result as the record (result_full_type below)
+         * and the interpreter can rebuild it from the returned bytes. */
+        if (return_kind == TY_ADT) {
+            if (!extern_c_aggregate_ok(ann, ret_f->span)) return NULL;
+            return_full = *ann;
+        }
     } else {
         return_kind = typekind_from_symbol(ret_f->as.sym->name);
         if (return_kind == TY_UNKNOWN) {
@@ -9814,6 +9859,14 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     /* A#1: propagate ^fat parameter flags into the fn type for call-site shimming. */
     for (uint32_t i = 0; i < n_params; i++) {
         if (params[i]->is_fat) FN_ARG_SET(fn_type.as.fn, i, FA_FAT, true);
+    }
+    /* jit-ffi F4 follow-on: an aggregate return needs the full record type on
+     * the fn type -- elab_call types the call result from result_full_type,
+     * which is what makes `(.field (my-extern ...))` resolve. */
+    if (return_full.kind == TY_ADT) {
+        Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *rft = return_full;
+        fn_type.as.fn.result_full_type = rft;
     }
 
     /* Create a binding for the extern-c function so it can be looked up and called */
@@ -9847,10 +9900,16 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     ExternC *ec = (ExternC *)arena_alloc(e->arena, sizeof(ExternC));
     ec->c_name = name_f->as.sym;
     ec->binding = b;
-    ec->return_type = type_from_kind(return_kind);
+    ec->return_type = (return_full.kind == TY_ADT)
+                          ? return_full
+                          : type_from_kind(return_kind);
     ec->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint32_t i = 0; i < n_params; i++) {
-        ec->param_types[i] = type_from_kind(param_kinds[i]);
+        /* jit-ffi F4 follow-on: a validated record annotation carries its
+         * full type (AdtDef and all); every other slot stays kind-only. */
+        ec->param_types[i] = (param_full[i].kind == TY_ADT)
+                                 ? param_full[i]
+                                 : type_from_kind(param_kinds[i]);
     }
     ec->n_params = n_params;
     ec->is_variadic = false;

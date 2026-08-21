@@ -4249,10 +4249,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    i);
                 }
                 buf_puts(out, ") {\n    ");
-                if (!ret_void && trk != TY_NIL) buf_printf(out, "return (%s)", rc);
+                if (!ret_void && trk != TY_NIL) {
+                    /* F4 follow-on: C has no cast to a struct type -- an
+                     * aggregate result returns uncast (the callee already
+                     * produces the exact record type the slot declares). */
+                    if (ps->return_type.kind == TY_ADT)
+                        buf_puts(out, "return ");
+                    else
+                        buf_printf(out, "return (%s)", rc);
+                }
                 buf_printf(out, "%s(", callee);
                 for (uint32_t i = 0; i < ps->n_params; i++) {
                     TypeKind ak = (TypeKind)fx->type.as.fn.arg_kinds[i];
+                    /* F4 follow-on: an aggregate parameter passes through
+                     * uncast -- the adapter's parameter and the callee's
+                     * are the same C struct type, and C forbids struct
+                     * casts anyway. */
+                    if (ps->param_types[i].kind == TY_ADT) {
+                        buf_printf(out, "%sa%u", i ? ", " : "", i);
+                        continue;
+                    }
                     const char *ac =
                         emit_type_c_name(ctx, emit_type_from_kind(ak));
                     /* Pointer-carrying scalars round-trip through intptr_t,
