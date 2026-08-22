@@ -175,6 +175,38 @@ static void test_commit(void) {
     tur_trail_reset();
 }
 
+/* The bug the first draft shipped: commit left the cell stamped at a level that
+ * had been popped.  A later mark REUSES that index, the stamp already equals
+ * the new level, so the write is not trailed -- and its undo silently does
+ * nothing, which is the worst shape a backtracking bug can have (no crash, no
+ * error, just a value that quietly failed to come back).
+ *
+ * The original test_commit did NOT catch this: it undid to the OUTER mark,
+ * whose entry restored the right value regardless, so the missing inner entry
+ * never showed. Verified by mutation -- reverting the fix must fail this. */
+static void test_commit_then_reused_level(void) {
+    tur_trail_reset();
+    TurBtCell c;
+    tur_bt_cell_init(&c, 1, NULL, NULL);
+
+    TurTrailMark m1 = tur_trail_mark();
+    tur_bt_set(&c, 2);
+    TurTrailMark m2 = tur_trail_mark();
+    tur_bt_set(&c, 3);
+    tur_trail_commit_to(m2);                 /* keep 3, pop to level 1 */
+
+    TurTrailMark m3 = tur_trail_mark();      /* reuses the popped index */
+    check_u32(m3.level, m2.level, "the new mark really does reuse the index");
+    tur_bt_set(&c, 4);
+    check(tur_trail_undo_to(m3), "undo to the reused level succeeds");
+    check(tur_bt_get(&c) == 3,
+          "a write at a level that reuses a committed index is still trailed");
+
+    tur_trail_undo_to(m1);
+    check(tur_bt_get(&c) == 1, "and the outer level still restores the original");
+    tur_trail_reset();
+}
+
 static void test_gcell_never_trailed(void) {
     /* The per-cell opt-out is not a flag on this API -- it is the absence of a
      * trailed cell.  A plain word written directly is the C-level GCell, and
@@ -339,6 +371,7 @@ int main(void) {
     test_write_once();
     test_pause();
     test_commit();
+    test_commit_then_reused_level();
     test_gcell_never_trailed();
     test_owning_undo();
     test_owning_repeated_writes();

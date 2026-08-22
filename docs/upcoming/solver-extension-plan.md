@@ -761,10 +761,25 @@ a nice-to-have; the asymmetry is the reason.
    ends, which leaks exactly one payload per undone write -- invisible until
    something real is on the other end of the drop hook. The unit test checks a
    fake refcount to zero rather than leaving it to LeakSanitizer.
-2. **The stamp comparison must be `<`, not `!=`.** A committed level leaves cells
-   stamped ABOVE the current level. With `!=` the next outer write re-trails
-   them, and its undo then reverts a write the caller explicitly asked to keep.
-   The fixture pins this case.
+2. **Commit must roll the stamp back, and the first version did not.** This was
+   filed as "the comparison must be `<` not `!=`" and that was wrong -- `<` was
+   a band-aid over a real bug that shipped. A commit left the cell stamped at a
+   level that had been popped; a later mark reuses that index, the stamp already
+   equals the new level, so the write is not trailed and its undo **silently
+   does nothing**. The worst shape a backtracking bug can have: no crash, no
+   error, just a value that quietly fails to come back.
+
+   It surfaced from mutation testing -- flipping `<` to `!=` did not fail the
+   suite, which meant the invariant was not actually pinned, which meant looking
+   at why. The fix is one line in `tur_trail_commit_to` (restore each entry's
+   `old_stamp`), and with stamps kept in range `<` and `!=` become equivalent.
+   `test_commit_then_reused_level` pins it, and is itself mutation-verified to
+   fail without the fix.
+
+   **Method note for SX3/SX4:** the original `test_commit` passed either way,
+   because it undid to the OUTER mark, whose entry restored the right value
+   regardless. A test that exercises a mechanism is not the same as a test that
+   would notice the mechanism breaking.
 3. **`g-set!` is the trail paused, not a second cell representation.** One struct,
    one set of semantics; the opt-out is the TYPE that reaches it.
 4. **A mark is packed into an int64 at the language boundary**, because

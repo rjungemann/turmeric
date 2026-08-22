@@ -129,13 +129,21 @@ bool tur_trail_commit_to(TurTrailMark m) {
          * again -- release it rather than the payload.  Getting this backwards
          * would free the live value and leak the dead one. */
         if (e->cell->drop && e->old) e->cell->drop(e->old);
+        /* Roll the stamp back to what it was before this entry.
+         *
+         * The write is KEPT, but the cell must stop claiming to have been
+         * trailed at a level that no longer exists.  Leaving the stamp high
+         * was a real bug: a later mark reuses the popped index, the stamp
+         * already equals that level, so the next write is not trailed -- and
+         * the undo that follows silently does nothing.
+         *
+         * Entries pop innermost-first, so for a cell with several entries in
+         * the committed range the LAST assignment is the outermost entry's
+         * old_stamp: exactly "the level at which this cell was last trailed
+         * below the committed range", which is what it must read as now. */
+        e->cell->stamp = e->old_stamp;
     }
     g_levels_n = m.level - 1;
-    /* The cells keep their current payloads, but their stamps now name a level
-     * that no longer exists.  Left as-is deliberately: a stamp is only ever
-     * compared against the CURRENT level, and any stamp from a popped level is
-     * necessarily >= it, so the next write at an outer level trails correctly.
-     * See the comment in tur_bt_set. */
     return true;
 }
 
@@ -189,10 +197,11 @@ bool tur_bt_set(TurBtCell *c, intptr_t v) {
     uint32_t level = tur_trail_level();
     /* Trail on the first write per level, and only then (decision 2).
      *
-     * `<` rather than `!=` is load-bearing after a commit: a committed level
-     * leaves cells stamped above the current level, and `!=` would trail them
-     * again on the next outer write -- recording an entry whose undo would
-     * revert a write the caller explicitly asked to keep. */
+     * A stamp can never exceed the current level -- undo restores the stamp it
+     * saved, and commit rolls it back to the entry's old_stamp -- so `<` and
+     * `!=` are equivalent here and `<` is simply the clearer statement of the
+     * invariant.  Keeping stamps in range is what makes that true, and it is
+     * the commit path that has to work for it: see tur_trail_commit_to. */
     if (level > 0 && !g_pause_depth && c->stamp < level) {
         if (!record(c)) return false;
         c->stamp = level;
