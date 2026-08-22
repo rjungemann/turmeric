@@ -1,9 +1,11 @@
 # Multi-variant ADTs always heap-allocate, and are never freed
 
-**Severity:** medium, and language-wide. Not a correctness bug -- it is a
-constant factor on every sum type in the tree, including `Option`, `Result`, and
-every `defdata` with more than one variant. Measured at **~85% of executed
+**Severity:** medium. Not a correctness bug -- it is a constant factor on every
+`defdata` with more than one variant. Measured at **~85% of executed
 instructions** on a representative stdlib workload.
+
+(An earlier revision said "every sum type in the tree, including `Option` and
+`Result`". `Option` and `Result` are not sums -- see **Scope** below.)
 
 **Status:** OPEN. Diagnosed and priced, not fixed.
 
@@ -115,8 +117,73 @@ Three things follow, and the first corrects this report's original advice:
    `tests/run-leak-check.sh`, so a bad free is catchable. It stays behind
    `TUR_ADT_SLAB=1` as a measurement seam.
 3. **The transformative number needs both** (18x). That is the case for doing
-   the by-value ABI work -- but only *after* the allocator, and knowing it buys
-   1.8x on its own.
+   the by-value ABI work -- but only *after* the allocator, knowing it buys
+   1.8x on its own, and knowing (see **Scope**) that the 1.8x requires the
+   field-level-boxing variant for recursive sums. The easier two thirds of the
+   population -- non-recursive sums -- buys nothing on this workload.
+
+## Scope -- who actually pays this, and what "by value" has to mean
+
+Scoped before starting the ABI work, because the answer moved the estimate.
+
+**`Option` and `Result` are not affected.** They are `defstruct`, not `defdata`:
+
+```turmeric
+(defstruct Option [A] (is-some :bool) (value A))
+(defstruct Result [A B] (is-ok :bool) (ok-val A) (err-val B))
+```
+
+They lower to single-variant record ADTs, so they are already flat products and
+their concrete monomorphs **already go by value today**:
+
+```c
+static tur_adt_Option__int ctor_Option__int(bool _0, int64_t _1) {
+    tur_adt_Option__int __r;
+    __r.is_some = _0;
+    __r.value   = _1;
+    return __r;                                 /* no allocation */
+}
+```
+
+Two Option/Result forms do still malloc, and they are separate, smaller bugs
+rather than this one: the un-monomorphised base `ctor_Option` / `ctor_Result`
+(no concrete type argument to key a layout on), and monomorphs whose type
+argument fails `type_has_concrete_codegen_layout` -- e.g.
+`ctor_Option__Zipper__struct`, where the argument is a struct-app. Widening
+that predicate is a much smaller job than lowering sums.
+
+**The population is 87 types, and a quarter of them are the hard kind.** Across
+`stdlib/` and `tests/fixtures/`, 87 multi-variant non-parametric `defdata`
+exist; **21 are self-recursive** (`Term`, `Subst`, `Stream`, `Regex`, `RxCls`,
+`RxPos`, `RxStrs`, plus fixture trees and lists). In stdlib alone the sums are
+10: `re.tur` (4), `logic.tur` (5), `rational.tur` (1) -- `ArithError` being the
+only one of those that is not recursive or does not hold a recursive type.
+
+That split matters because it is two different changes:
+
+- **Non-recursive sums (66 of 87)** are the generalisation the report describes:
+  tag + union, fixed size, returned in registers. The existing flat-product
+  machinery mostly transfers.
+- **Recursive sums (21 of 87)** cannot go by value as a whole -- `(TPair :Term
+  :Term)` is infinitely sized inline. They need *field-level* boxing: the value
+  travels by value, and only the self-referential field stays a pointer.
+
+And the workload this report measured is entirely in the second group. `Term`,
+`Subst`, and `Stream` are all recursive, so the easy two thirds of the
+population buys **nothing** on the numbers in the table above. Row C's 1.8x
+already assumes field-level boxing -- `benchmarks/adt-alloc/ceiling.c`'s
+`VSubst` keeps `next` as a pointer, which is exactly that -- so the 1.8x is the
+price of the *harder* change, not the easier one. (The model does simplify
+`Term` to its `TInt`/`TVar` leaves and omits `TPair`; field-level boxing is what
+would make the real `Term` behave like the model's `VTerm`.)
+
+**A workaround exists today with no compiler change.** A 2-variant sum with no
+recursion can be re-encoded as a discriminated `defstruct` in the Option/Result
+style and gets by-value lowering immediately. `Lookup` (`LMissing` / `LFound
+:Term`), `UnifyResult` (`UFail` / `UOk :Subst`) and `ArithError` are all
+candidates. It costs pattern-matching ergonomics, so it is worth doing only
+where a profile says so -- but it means "small sums box" is not a hard blocker
+for any specific hot path.
 
 ## Withdrawn: an earlier claim that this degrades 8x with heap size
 
