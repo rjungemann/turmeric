@@ -1062,7 +1062,7 @@ fi
 # the portable half is covered by tests/fixtures/jit-ffi-call-ptr.
 if [ "$HAS_JIT" = "1" ] && [ "$(uname)" = "Linux" ]; then
     printf '(defn main [] : int\n  (unsafe\n    (let [h (dlopen "libm.so.6")\n          p (dlsym h "cbrt")]\n      (println (call-ptr p [:float -> :float] 27.0))))\n  0)\n' > "$TMP_FFI"
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
     if ! grep -q "^3$" <<< "$out"; then
         fail "jit-ffi-call-ptr-interp" "expected cbrt(27) = 3 via call-ptr under --interpret, got: $out"
     else
@@ -1078,7 +1078,7 @@ fi
 # side of the fork is asserted here.)
 if [ "$HAS_JIT" = "0" ]; then
     printf '(defn main [] : int\n  (unsafe (println (call-ptr 1 [-> :int])))\n  0)\n' > "$TMP_FFI"
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
     if ! grep -q "requires a JIT-enabled build" <<< "$out"; then
         fail "jit-ffi-call-ptr-nonjit-diag" "expected the clean non-JIT diagnostic, got: $out"
     else
@@ -1092,7 +1092,7 @@ if [ "$HAS_JIT" = "0" ]; then
   (unsafe (println (call-ptr 1 [:ptr -> :int] (callback-ptr cb [:int -> :int]))))
   0)
 TURFFI
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
     if ! grep -q "requires a JIT-enabled build" <<< "$out"; then
         fail "jit-ffi-callback-nonjit-diag" "expected the clean non-JIT diagnostic, got: $out"
     else
@@ -1142,7 +1142,7 @@ if [ "$HAS_JIT" = "1" ] && [ -n "$LIBC_SO" ]; then
         (println (:: (.b r) :int)))))
   0)
 TURFFI
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
     if [ "$(echo "$out" | tr '\n' ' ')" != "4 7 " ]; then
         fail "jit-ffi-call-ptr-struct-interp" "expected div(47,10) = {4,7} unpacked from an aggregate return, got: $out"
     else
@@ -1189,7 +1189,7 @@ EOF
         (println (.c r)))))
   0)
 TURFFI
-        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
         if [ "$(echo "$out" | tr '\n' ' ')" != "30226.5 3 2.25 1.5 " ]; then
             fail "jit-ffi-call-ptr-struct-nested-interp" "expected nested aggregate to marshal as 30226.5 / 3 / 2.25 / 1.5, got: $out"
         else
@@ -1315,7 +1315,7 @@ if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ]; then
   (unsafe (println (call-ptr 1 [Vec2 -> :float] (Vec2 3.0 4.0))))
   0)
 TURFFI
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>&1)
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
     if ! grep -q "AAPCS64 HFA" <<< "$out"; then
         fail "jit-ffi-call-ptr-hfa-refused" "expected the aarch64 HFA refusal, got: $out"
     else
@@ -1348,7 +1348,7 @@ if [ "$HAS_JIT" = "1" ] && [ -n "$LIBC_SO" ]; then
       (println (ptr-deref (ptr-add buf 16)))))
   0)
 TURFFI
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
     if [ "$(echo "$out" | tr '\n' ' ')" != "10 20 30 " ]; then
         fail "jit-ffi-callback-interp" "expected qsort driven by a Turmeric comparator to sort 30,10,20, got: $out"
     else
@@ -1381,7 +1381,7 @@ EOF
       (println (:: (call-ptr (dlsym h "big_uint")  [-> :uint32]) :int))))
   0)
 TURFFI
-        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
         if [ "$(echo "$out" | tr '\n' ' ')" != "-1234 -77 4294967295 " ]; then
             fail "jit-ffi-narrow-return" "expected exact-width returns -1234 / -77 / 4294967295, got: $out"
         else
@@ -1436,7 +1436,7 @@ EOF
   0)
 TURFFI
         if [ "$HAS_JIT" = "1" ]; then
-            out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --enable=jit-ffi --interpret "$TMP_FFI" 2>/dev/null)
+            out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null)
             if [ "$(echo "$out" | tr '\n' ' ')" != "42 6.125 42 6.125 " ]; then
                 fail "jit-ffi-callback-struct-interp" "expected inbound/outbound callback aggregates to print 42 / 6.125 / 42 / 6.125, got: $out"
             else
@@ -1447,7 +1447,7 @@ TURFFI
         fi
         # stderr CAPTURED -- see the note on jit-ffi-extern-c-struct-compiled.
         _cb_err="$_cbagg_dir/stderr.txt"
-        out=$("$TUR" --enable=jit-ffi run "$TMP_FFI" 2>"$_cb_err")
+        out=$("$TUR" run "$TMP_FFI" 2>"$_cb_err")
         if [ "$(echo "$out" | tr '\n' ' ')" != "42 6.125 42 6.125 " ]; then
             fail "jit-ffi-callback-struct-compiled" "expected inbound/outbound callback aggregates to print 42 / 6.125 / 42 / 6.125, got: $out; stderr: $(tr '\n' ' ' < "$_cb_err" | tail -c 600)"
         else
@@ -1476,7 +1476,7 @@ cat > "$TMP_FFI" <<'TURFFI'
       (println (call-ptr 1 [:ptr -> :int] cb))))
   0)
 TURFFI
-out=$("$TUR" --enable=jit-ffi emit-c "$TMP_FFI" 2>&1); rc=$?
+out=$("$TUR" emit-c "$TMP_FFI" 2>&1); rc=$?
 if [ $rc -eq 0 ]; then
     fail "jit-ffi-callback-needs-toplevel" "a lambda was accepted as a C callback"
 elif ! grep -q "captured environment" <<< "$out"; then
@@ -1485,16 +1485,29 @@ else
     pass "jit-ffi-callback-needs-toplevel"
 fi
 
-# jit-ffi-gate: without --enable=jit-ffi the form is a hard error pointing
-# at the experiment, on every build.
+# jit-ffi-graduated: the experiment graduated 2026-08-21, so the form needs no
+# --enable on any build.  This replaces the old jit-ffi-gate case, which
+# asserted the opposite.
 printf '(defn main [] : int\n  (unsafe (println (call-ptr 1 [-> :int])))\n  0)\n' > "$TMP_FFI"
 out=$("$TUR" emit-c "$TMP_FFI" 2>&1); rc=$?
-if [ $rc -eq 0 ]; then
-    fail "jit-ffi-gate" "call-ptr compiled without --enable=jit-ffi"
-elif ! grep -q "enable=jit-ffi" <<< "$out"; then
-    fail "jit-ffi-gate" "gate diagnostic did not point at --enable=jit-ffi"
+if [ $rc -ne 0 ]; then
+    fail "jit-ffi-graduated" "call-ptr did not compile without a flag: $out"
+elif grep -q "enable=jit-ffi" <<< "$out"; then
+    fail "jit-ffi-graduated" "still pointing at the retired --enable=jit-ffi: $out"
 else
-    pass "jit-ffi-gate"
+    pass "jit-ffi-graduated"
+fi
+
+# jit-ffi-enable-noop: a downstream build.tur / command line that still says
+# --enable=jit-ffi keeps compiling, as an accept-and-warn TUR-W0063 no-op
+# rather than the hard TUR-E0310 an unknown experiment name gets.
+out=$("$TUR" --enable=jit-ffi emit-c "$TMP_FFI" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "jit-ffi-enable-noop" "a lingering --enable=jit-ffi failed the build: $out"
+elif ! grep -q "TUR-W0063" <<< "$out"; then
+    fail "jit-ffi-enable-noop" "expected the TUR-W0063 graduated no-op, got: $out"
+else
+    pass "jit-ffi-enable-noop"
 fi
 
 # ---------------------------------------------------------------------------

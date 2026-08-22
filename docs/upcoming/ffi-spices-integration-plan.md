@@ -29,7 +29,7 @@
 > - S4: the constants convention is documented in
 >   developing-spices-guide.md ("Constants: #defines do not survive
 >   linking").
-> **Builds on:** [jit-ffi-c2mir-plan.md](jit-ffi-c2mir-plan.md) (F1-F3
+> **Builds on:** [jit-ffi-c2mir-plan.md](../archive/jit-ffi-c2mir-plan.md) (F1-F3
 > implemented; F4/F5 trailing),
 > [docs/guides/developing-spices-guide.md](../guides/developing-spices-guide.md),
 > [docs/guides/ffi-guide.md](../guides/ffi-guide.md).

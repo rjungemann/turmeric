@@ -7,7 +7,7 @@ programs are unaffected because both sides are c2mir and agree with each
 other.
 
 Found while scoping F4 (struct-by-value) of
-[jit-ffi-c2mir-plan](../upcoming/jit-ffi-c2mir-plan.md). This is the blocker
+[jit-ffi-c2mir-plan](../archive/jit-ffi-c2mir-plan.md). This is the blocker
 that keeps F4's *interpreter* half from covering FP aggregates.
 
 ## Summary
