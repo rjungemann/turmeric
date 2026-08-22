@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.37.0` -- the `#writes` and `#reads` frame checkers graduate out of `--enable`: a declared write frame is verified, and a `#reads` frame that omits mutable state its body reads no longer buys a congruence proof; plus `tur audit`, `(export-from ...)`, and an Arc/barrier/STM-sync concurrency stdlib.
+**Latest release:** `v0.38.0` -- `jit-ffi` graduates: `call-ptr` and `callback-ptr` need no `--enable`, and dynamic FFI now carries by-value records in every direction; plus a fixed `any` cast that reinterpreted unrelated structs, nested `match` patterns, and a panic boundary around every async task.
 
 ## What
 

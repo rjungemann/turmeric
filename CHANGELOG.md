@@ -2,6 +2,64 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.38.0] -- 2026-08-21
+
+### Added
+
+- **Dynamic FFI carries by-value records in every direction.** `call-ptr` and
+  `callback-ptr` take and return records (including nested ones), a callback can
+  receive and return aggregates, and `extern-c` gained by-value record
+  parameters and returns. Under `--interpret` this routes through the c2mir
+  thunk provider and needs a `-DTUR_JIT=ON` build; compiled code needs nothing.
+- **Nested constructor patterns in `match` arms**, and `#json-str?<T>` -- a
+  `Result`-returning typed JSON decode.
+- **`:global` spice dependencies** -- consume a globally installed spice as a
+  library.
+- **`mw-recover` in httpd**, and a panic boundary around every task: a panic
+  inside an `(async ...)` body no longer unwinds the spawner and aborts the
+  process; `await` re-raises it instead.
+
+### Changed
+
+- **`jit-ffi` graduated: `call-ptr` and `callback-ptr` need no `--enable`.**
+  They are ordinary `unsafe` forms (a lingering `--enable=jit-ffi` is a
+  `TUR-W0063` no-op). The gate existed only so the signature vocabulary could
+  move; that vocabulary is now settled and measured. The `-DTUR_JIT=ON` build
+  gate on the interpreter path is unchanged, and `unsafe` is still required.
+  `EXPERIMENTS[]` is now empty.
+- **`stdlib/args` names real handle types.** `ArgSpec` / `ArgResult` are
+  `defopaque` instead of bare `:int` across all 18 entry points, and an option
+  default is `(Option cstr)` rather than a `cstr` smuggled through `:int`.
+- **Float division no longer emits the integer divide-by-zero guard**, so IEEE
+  inf/NaN semantics survive instead of trapping.
+
+### Fixed
+
+- **`(cast a OtherStruct)` on an `any` succeeded and reinterpreted the
+  payload.** Every struct boxed as `TY_STRUCT` and every ADT as `TY_ADT`, so the
+  tag check compared equal between unrelated types, and `type-of` answered
+  "struct" / "adt" for all of them. A struct/ADT payload now interns its own
+  type.
+- **A narrow C return value was read as garbage.** A callee returning `int`
+  leaves the upper half of the return register unspecified, so a thunk declared
+  `long long` read whatever was there -- `neg_int(1234)` came back as
+  `4294966062`. The FFI signature vocabulary is exact-width now.
+- **Nested by-value record fields were marshalled to the wrong shape under
+  `--interpret`**, on every architecture -- `{{ww}w}` passed as `{qw}`, silently
+  wrong answers. Found by the x86-64 verification that had never been run.
+- **`match` binds the variable of an ADT catch-all arm.**
+- **`catch` keeps the payload's representation on both engines**, including an
+  aggregate-returning thunk and a float payload read from the erased `Result`
+  carrier.
+- Codegen: a divergent-tail function's trailing `return`, inline C naming a
+  local, forward-declared globals a lifted lambda reads, and the fn-typed
+  if-merge temp.
+
+### Docs
+
+- Every example that compiles is now also run in CI, and the ECS benchmark
+  landed.
+
 ## [0.37.0] -- 2026-08-20
 
 ### Added
