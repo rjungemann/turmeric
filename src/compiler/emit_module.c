@@ -8064,15 +8064,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * UNVERIFIED, and the reason this is off by default.  The argument that
      * nothing else frees an ADT box rests on two things that are not proven:
      *
-     *  - `rc/of` does not free its ADT payload -- it boxes the carrier int64
-     *    separately and frees that wrapper instead.  That is a BUG
-     *    (docs/reported/rc-of-adt-leaks-the-payload.md), and fixing it while
-     *    this is on would hand slab memory to free().  The two are coupled and
-     *    must move together.
-     *  - The intended check -- "run the fixture suite, ASan aborts on a bad
-     *    free" -- does not work: compiled fixtures are not ASan-instrumented
-     *    (docs/reported/compiled-fixtures-are-not-leak-checked.md).  There is
-     *    at present no automated check that would catch a mistake here.
+     *  - `rc/of` NOW FREES ITS ADT PAYLOAD (it used to leak it -- see
+     *    docs/archive/rc-of-adt-leaks-the-payload.md).  So a slab-allocated box
+     *    handed to `rc/of` reaches free(), and ASan says so:
+     *    "attempting free on address which was not malloc()-ed".  This was
+     *    predicted as a coupling and then confirmed.  A ctor cannot know
+     *    whether its result ends up in an rc, so no LOCAL predicate fixes it:
+     *    the slab needs a whole-program pass marking every ADT def used as an
+     *    `rc/of` payload and excluding those.  Until that exists, this is
+     *    unsafe whenever an `rc/of` of a boxed sum is anywhere in the program.
+     *  - Verification now exists where it did not: tests/run-leak-check.sh
+     *    runs opted-in fixtures under ASan, so a bad free is catchable.  That
+     *    half of the objection is resolved.
      *
      * So this is a MEASUREMENT SEAM, not a shipping default, and it stays off
      * until those two are resolved.  Slabs are never released; that is the

@@ -100,13 +100,20 @@ Three things follow, and the first corrects this report's original advice:
    drop glue is freed by `drop_glue_*`'s trailing `free(ptr)` and slab memory
    must never reach libc `free()`.
 
-   Two things then block turning it on, both filed separately:
-   [`rc/of` leaks its ADT payload](rc-of-adt-leaks-the-payload.md) -- fixing
-   that bug while the slab is on would hand slab memory to `free()` -- and
-   [compiled fixtures are not leak-checked](compiled-fixtures-are-not-leak-checked.md),
-   so the intended "the suite will catch a bad free" verification does not
-   exist. It sits behind `TUR_ADT_SLAB=1` as a measurement seam until both are
-   resolved.
+   **It is now blocked harder than when this was written.** The `rc/of` leak it
+   was coupled to has been
+   [fixed](../archive/rc-of-adt-leaks-the-payload.md), which means `rc/of` now
+   FREES its ADT payload -- so a slab-allocated box handed to an `rc` reaches
+   `free()`. Confirmed, not theorised: ASan reports `attempting free on address
+   which was not malloc()-ed`.
+
+   A `ctor_*` cannot know whether its result ends up in an `rc`, so no local
+   predicate fixes this. The slab would need a whole-program pass marking every
+   ADT def used as an `rc/of` payload and excluding those. The other half of the
+   objection did resolve --
+   [leak checking now exists](compiled-fixtures-are-not-leak-checked.md) via
+   `tests/run-leak-check.sh`, so a bad free is catchable. It stays behind
+   `TUR_ADT_SLAB=1` as a measurement seam.
 3. **The transformative number needs both** (18x). That is the case for doing
    the by-value ABI work -- but only *after* the allocator, and knowing it buys
    1.8x on its own.

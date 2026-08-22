@@ -1,10 +1,13 @@
 # `rc/of` does not release a multi-variant ADT payload
 
 **Severity:** medium. `rc<T>` means "shared ownership, released when the last
-reference goes". For a multi-variant ADT payload it does not release the
-payload, so code doing exactly the documented thing leaks.
+reference goes". For a multi-variant ADT payload it did not release the
+payload, so code doing exactly the documented thing leaked.
 
-**Status:** OPEN. Not fixed.
+**Status:** RESOLVED 2026-08-22. One condition removed in `emit_expr.c`; both
+defects (the leak and the redundant allocation) went with it. Verified under
+LeakSanitizer by `tests/fixtures/rc-of-adt-payload-released`, which carries
+`requires.leak-check`.
 
 ## Repro
 
@@ -65,6 +68,37 @@ carrier inline (no free of the box at all), which leaves the slab's argument
 intact. The second is both cheaper and the better design.
 
 Any slab work must state this dependency in the code, not just here.
+
+## The fix
+
+The sibling path for sums WITH an owning field already did the right thing --
+`payload_is_boxed_adt` in `emit_expr.c` adopts the ctor's pointer directly
+instead of wrapping it, and its comment (`rc-of-sum-type-drops-no-glue`)
+explains exactly why. It was gated on `def->needs_drop_glue`, so it applied only
+to sums carrying an owning field.
+
+A sum without one has the identical shape. Drop glue is not what makes the
+pointer adoptable; being a boxed record is. Removing that one condition makes
+`cb->value` the record itself, `rc_set_value` re-derives `default_rc_drop_fn`,
+and that frees exactly the record. The wrapper allocation disappears with it.
+
+Note this is an ownership change for the affected types: `rc/of` now MOVES the
+box into shared ownership rather than copying the carrier word and leaking the
+original. That matches the semantics the `:heap` and drop-glue paths already
+had, so it is a consistency fix rather than a new convention.
+
+## Confirmed coupling to the ADT slab allocator
+
+The report predicted that fixing this while `TUR_ADT_SLAB=1` was on would hand
+slab memory to `free()`. Checked after the fix, and it does, exactly:
+
+```
+==31286==ERROR: AddressSanitizer: attempting free on address which was not
+malloc()-ed
+```
+
+The slab therefore stays off, and its blocker is now WORSE rather than resolved
+-- see [multi-variant-adts-always-heap-allocate.md](multi-variant-adts-always-heap-allocate.md).
 
 ## Scope not established
 

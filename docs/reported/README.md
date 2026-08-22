@@ -926,11 +926,18 @@ found.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: slab 2.1x (measured in-compiler), by-value 1.8x, both 18x |
-| [rc-of-adt-leaks-the-payload](rc-of-adt-leaks-the-payload.md) | medium | `rc/of` boxes the carrier word separately and frees THAT, orphaning the ADT payload -- `rc<T>` does not release what you put in it. Coupled to the slab allocator: fixing this while that is on hands slab memory to `free()` |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan (O(n^2) in term count, free fix when SX3 rewrites that state); the congruence-closure fixpoint is a naive O(n^2) sweep |
 | [compiled-fixtures-are-not-leak-checked](compiled-fixtures-are-not-leak-checked.md) | low-medium | ADDRESSED. The default suite does not leak-check EMITTED programs -- only `tur` itself. `tests/run-leak-check.sh` now generalizes the three bespoke harnesses that did; coverage map in the test-suite portability guide |
 
-Two of these were filed with claims that later measurement overturned, and both
+`rc-of-adt-leaks-the-payload` was resolved 2026-08-22 and moved to
+[docs/archive](../archive/rc-of-adt-leaks-the-payload.md): one over-narrow
+condition in `emit_expr.c` (the pointer-adoption path was gated on
+`needs_drop_glue`), and both the leak and the redundant allocation went with it.
+Its predicted coupling to the slab allocator was then confirmed -- with the leak
+fixed and the slab on, ASan reports `attempting free on address which was not
+malloc()-ed`, so that blocker got worse, not better.
+
+Two of the remaining three were filed with claims that later measurement overturned, and both
 say so in place rather than having been quietly edited: an "8x degradation with
 heap size" that was an artifact of measuring cumulative passes in one process,
 and a "by-value lowering is highest leverage by a wide margin" that pricing

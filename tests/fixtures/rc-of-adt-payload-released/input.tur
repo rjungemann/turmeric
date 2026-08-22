@@ -3,8 +3,12 @@
 ;;
 ;; It did not: rc/of allocated a SECOND box to hold the carrier word and
 ;; registered THAT with the control block, so dropping the last reference freed
-;; the wrapper and orphaned the ADT box.
-;; See docs/reported/rc-of-adt-leaks-the-payload.md.
+;; the wrapper and orphaned the ADT box -- 16 bytes per construction.
+;;
+;; Fixed by adopting the ctor's pointer directly, which the sibling path for
+;; sums WITH an owning field already did. Carries requires.leak-check, so this
+;; is verified under LeakSanitizer rather than by reading the output.
+;; See docs/archive/rc-of-adt-leaks-the-payload.md.
 (defdata Plain :copy (PA :int) (PB :int))
 
 (defn main [] : int

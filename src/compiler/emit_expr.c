@@ -8165,13 +8165,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * rather than at the record.  The drop glue then casts the cell,
              * reads the pointer bits as `s->tag`, and matches no case -- so the
              * owning fields were never released even once the glue existed.
-             * Adopt the ctor's pointer directly, exactly as the heap case does. */
+             * Adopt the ctor's pointer directly, exactly as the heap case does.
+             *
+             * rc-of-adt-leaks-the-payload: this used to also require
+             * `needs_drop_glue`, which made the fix above apply only to sums
+             * carrying an owning field.  A sum WITHOUT one has the identical
+             * shape -- its ctor mallocs the record and hands back a pointer as
+             * an int64 carrier -- so it kept the wrapper path: cb->value
+             * pointed at an 8-byte cell holding the pointer, the default drop
+             * glue freed that cell, and the record itself was orphaned.
+             * `(rc/of (PA 7))` leaked 16 bytes on every construction.
+             *
+             * Drop glue is not what makes the pointer adoptable; being a boxed
+             * record is.  With the pointer adopted and no explicit glue,
+             * rc_set_value re-derives default_rc_drop_fn, which frees exactly
+             * the record -- and the wrapper allocation disappears with it. */
             bool payload_is_boxed_adt =
                 e->as.rc_of_.expr->type.kind == TY_ADT &&
                 e->as.rc_of_.expr->type.as.adt_.def &&
                 !e->as.rc_of_.expr->type.as.adt_.def->is_heap &&
-                !adt_is_byvalue_product(e->as.rc_of_.expr->type.as.adt_.def) &&
-                e->as.rc_of_.expr->type.as.adt_.def->needs_drop_glue;
+                !adt_is_byvalue_product(e->as.rc_of_.expr->type.as.adt_.def);
 
             char *val_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
