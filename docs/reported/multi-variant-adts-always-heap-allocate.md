@@ -145,12 +145,18 @@ static tur_adt_Option__int ctor_Option__int(bool _0, int64_t _1) {
 }
 ```
 
-Two Option/Result forms do still malloc, and they are separate, smaller bugs
-rather than this one: the un-monomorphised base `ctor_Option` / `ctor_Result`
-(no concrete type argument to key a layout on), and monomorphs whose type
-argument fails `type_has_concrete_codegen_layout` -- e.g.
-`ctor_Option__Zipper__struct`, where the argument is a struct-app. Widening
-that predicate is a much smaller job than lowering sums.
+Two Option/Result forms do still malloc, and neither is this bug:
+
+- The un-monomorphised base `ctor_Option` / `ctor_Result`. Reached only when a
+  type argument genuinely cannot be inferred -- `(let [r (ok 7)] ...)` with
+  nothing constraining the error type. Annotating the enclosing function moves
+  the call to `ctor_Result__int__cstr`, which returns by value. Working as
+  intended.
+- Monomorphs whose type argument is itself a monomorph -- `option<list<int>>`,
+  `result<vec<T>, cstr>`. These *are* a live bug, filed separately as
+  [byvalue-adt-app-rejects-nested-monomorphs](byvalue-adt-app-rejects-nested-monomorphs.md).
+  It is a much smaller job than lowering sums and touches shapes that are far
+  more common.
 
 **The population is 87 types, and a quarter of them are the hard kind.** Across
 `stdlib/` and `tests/fixtures/`, 87 multi-variant non-parametric `defdata`
