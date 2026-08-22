@@ -1,0 +1,55 @@
+;; WF2/WF3 graduation compatibility promise (2026-08-20): `write-frames`
+;; graduated, so its EXPERIMENTS[] row is gone -- but a downstream `build.tur`,
+;; `~/.config/turmeric/experiments.tur`, or CLI invocation that still names it
+;; must keep compiling.  `GRADUATED[]` in src/runtime/experiments.c is what
+;; makes `--enable=write-frames` a TUR-W0063 no-op instead of the hard
+;; TUR-E0310 an unknown experiment name gets.
+;;
+;; Without this fixture graduation is a breaking change for exactly the people
+;; who adopted the feature deliberately, which is the wrong population to
+;; break.
+;;
+;; This shim matters more than the flag's short gated life suggests.  A frame
+;; is an annotation someone writes INTO THEIR SOURCE and then has to enable to
+;; get any value from, so every adopter necessarily carried the flag somewhere
+;; -- and for a project the natural somewhere is `build.tur`, which is the
+;; config nobody edits when they upgrade a compiler.
+;;
+;; The flag is in `flags`.  Scoped like its sibling shims (cycle-gc, jit,
+;; sealed-opaque): it pins only that a lingering enable is tolerated and that
+;; the annotation needs no flag to compile.  What WF2 actually VERIFIES is
+;; pinned by wf1-writes-frame-honored and g2-writes-global-frame, and what a
+;; VIOLATED frame costs by the errors/wf2-writes-exceeds-* fixtures.
+;;
+;; Asserting the `--dump-write-frames` verdict here was tried and abandoned on
+;; purpose.  The dump is emitted at COMPILE time, while the harness captures
+;; the compiled program's RUN-phase stdout, so a fixture that asserts dump
+;; lines has to carry `requires.interp` to put both on one stream -- which
+;; would move the one shim fixture for this row off the compiled path the other
+;; three shims cover.  Pinning the shim on the default path is worth more than
+;; re-pinning a verdict two other fixtures already assert.
+;;
+;; Neither body READS a field of a parameter its frame names, and that is
+;; deliberate rather than incidental: a field read of a frame-named parameter
+;; currently downgrades the whole body to UNVERIFIED, because `wf_walk` sees
+;; `(.n a)` as a call it cannot resolve
+;; (docs/reported/writes-frame-declined-by-field-read.md).  A shim fixture must
+;; not depend on that -- it would be asserting a bug as the expected verdict,
+;; and would then have to be edited when the bug is fixed.  Both bodies below
+;; answer VERIFIED before and after that fix.
+(defstruct Ctr [n : int])
+
+;; A frame the body honors: the write lands inside it.
+(defn bump! [^mut a : Ctr] #writes [a] : int
+  (set! (.n a) 1)
+  0)
+
+;; The empty frame -- a positive claim that the body writes nothing.
+(defn ignores [a : Ctr] #writes [] : int
+  7)
+
+(defn main [] : int
+  (let [^mut c (Ctr 0)]
+    (bump! c))
+  (println (ignores (Ctr 0)))
+  0)

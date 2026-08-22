@@ -1,0 +1,47 @@
+;; G5b graduation compatibility promise (2026-08-18): `global-state` graduated,
+;; so its EXPERIMENTS[] row is gone -- but a downstream `build.tur`,
+;; `~/.config/turmeric/experiments.tur`, or CLI invocation that still names it
+;; must keep compiling.  `GRADUATED[]` in src/runtime/experiments.c is what
+;; makes `--enable=global-state` a TUR-W0063 no-op instead of the hard
+;; TUR-E0310 an unknown experiment name gets.
+;;
+;; Without this fixture graduation is a breaking change for exactly the people
+;; who adopted the feature deliberately, which is the wrong population to
+;; break.  Thirteen in-tree `flags` files carried this name at graduation
+;; (mutable-globals-plan section 21.5) -- an in-tree count that size is a fair
+;; proxy for how many downstream manifests carry it too.
+;;
+;; The flag is in `flags`; the program exercises the two annotations that
+;; needed it, so one run asserts both halves: the lingering enable is tolerated
+;; (stderr), and the features work with no enable needed at all (stdout).
+;;
+;; G2's third piece -- a `#writes` frame naming a global -- is deliberately NOT
+;; here.  It is checked under `write-frames`, a DIFFERENT row that graduated
+;; two days later and has its own shim fixture; folding both into one program
+;; would make a failure ambiguous about which shim broke.  G3's cross-module
+;; read-only rule needs a second module, so it stays with
+;; g3-export-mut-permits-write.  What each feature DOES is pinned by
+;; g4-atomic-global and g4b-thread-local-global; this fixture only pins that
+;; asking no longer needs an experiment flag.
+;;
+;; The float probe is 7.25, never 7.0: a double crosses the integer-typed
+;; atomics layer through its bit pattern, so a truncation there would be
+;; invisible with a whole number.
+(def ^atomic ^mut hits  0)
+(def ^atomic ^mut ratio 7.25)
+(def ^thread-local ^mut local-depth 100)
+
+(defn bump! [] : void
+  (set! hits (+ hits 1)))
+
+(defn descend! [] : int
+  (set! local-depth (+ local-depth 1))
+  local-depth)
+
+(defn main [] : int
+  (bump!)
+  (bump!)
+  (println hits)
+  (println ratio)
+  (println (descend!))
+  0)

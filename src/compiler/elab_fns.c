@@ -959,8 +959,8 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
 
     /* C2 / #reads: publish the read-frame param so the encoder can grant
      * congruence when that argument is frozen at the call site.  R2: the
-     * broken-promise evidence rides along so `--enable=checked-reads` can
-     * refuse the grant. */
+     * broken-promise evidence rides along so the encoder can refuse the grant
+     * -- unconditional since checked-reads graduated (2026-08-20). */
     out->reads_params_mask      = b->reads_params_mask;
     out->reads_frame_omits_state = b->reads_frame_omits_state;
 
@@ -1127,9 +1127,9 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f) {
     return false;
 }
 
-/* R2 (`--enable=checked-reads`): same walk, narrowed to a `#reads` measure
- * carrying broken-frame evidence (reads_frame_omits_state) -- i.e. one whose
- * congruence grant the encoder will refuse under the gate.  Feeds only the
+/* R2 (checked-reads, GRADUATED 2026-08-20): same walk, narrowed to a `#reads`
+ * measure carrying broken-frame evidence (reads_frame_omits_state) -- i.e. one
+ * whose congruence grant the encoder refuses.  Feeds only the
  * W0372 wording at the crossing, so the "guard it inside a `frozen` region"
  * advice is not given for a crossing where the region is present and the
  * FRAME is what failed. */
