@@ -916,6 +916,27 @@ clean corpus -- which is how two passes of the original sweep produced a false
 zero. Per-platform wording is deliberately still open; the self-test is what
 will report it on a clang or Windows leg.
 
+## Allocation and memory-checking (filed 2026-08-22)
+
+Four reports from one thread of work: measuring the refinement solver's cost
+led into how the compiler allocates, which led into what the test suite can
+actually see. They are best read in that order -- each one is why the next was
+found.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: slab 2.1x (measured in-compiler), by-value 1.8x, both 18x |
+| [rc-of-adt-leaks-the-payload](rc-of-adt-leaks-the-payload.md) | medium | `rc/of` boxes the carrier word separately and frees THAT, orphaning the ADT payload -- `rc<T>` does not release what you put in it. Coupled to the slab allocator: fixing this while that is on hands slab memory to `free()` |
+| [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan (O(n^2) in term count, free fix when SX3 rewrites that state); the congruence-closure fixpoint is a naive O(n^2) sweep |
+| [compiled-fixtures-are-not-leak-checked](compiled-fixtures-are-not-leak-checked.md) | low-medium | ADDRESSED. The default suite does not leak-check EMITTED programs -- only `tur` itself. `tests/run-leak-check.sh` now generalizes the three bespoke harnesses that did; coverage map in the test-suite portability guide |
+
+Two of these were filed with claims that later measurement overturned, and both
+say so in place rather than having been quietly edited: an "8x degradation with
+heap size" that was an artifact of measuring cumulative passes in one process,
+and a "by-value lowering is highest leverage by a wide margin" that pricing
+reduced to 1.8x. Read the "Withdrawn" and "corrects this report's original
+advice" notes before acting on either.
+
 ## Windows port
 
 Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in

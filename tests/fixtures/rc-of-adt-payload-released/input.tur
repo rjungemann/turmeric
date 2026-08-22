@@ -1,0 +1,14 @@
+;; rc<T> means "shared ownership, released when the last reference goes".
+;; This pins that the promise holds for a multi-variant ADT payload.
+;;
+;; It did not: rc/of allocated a SECOND box to hold the carrier word and
+;; registered THAT with the control block, so dropping the last reference freed
+;; the wrapper and orphaned the ADT box.
+;; See docs/reported/rc-of-adt-leaks-the-payload.md.
+(defdata Plain :copy (PA :int) (PB :int))
+
+(defn main [] : int
+  (let [r (rc/of (PA 7))]
+    (println (rc/strong-count r))
+    (rc/drop r)
+    0))

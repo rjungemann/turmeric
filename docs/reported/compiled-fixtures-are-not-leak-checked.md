@@ -1,48 +1,69 @@
-# Compiled fixture programs are not ASan/leak-checked
+# Emitted-program leak checking was not generalized
 
-**Severity:** medium, and it is a coverage gap rather than a defect -- which
-makes it the kind that stays hidden. Any memory bug in EMITTED code (leaks,
-double frees, frees of non-malloc'd pointers) passes the fixture suite silently.
+**Severity:** low-medium coverage gap. **Status:** ADDRESSED -- see below. Kept
+in `reported/` rather than archived because one open leak is still marked known.
 
-**Status:** OPEN. Not fixed.
+## The finding, stated correctly
 
-## What is actually true
+An earlier revision of this report said compiled fixtures "are not
+ASan/leak-checked", implying no mechanism existed. **That overstated it.** Three
+harnesses already run emitted programs under AddressSanitizer, and one of them
+documents the gap in almost these words:
 
-`CLAUDE.md` describes the Debug build as ASan/UBSan-instrumented and says
-`tests/run.sh` runs "with leak detection ON". That is accurate **for the
-compiler process** -- `tur build` / `emit-c` is the instrumented binary, and a
-leak there does fail the suite. It is not true of the programs the compiler
-produces:
+- `tests/run-closure-env-leak.sh` and `tests/run-fat-shim-leak.sh` emit C, then
+  compile it by hand with `-fsanitize=address,undefined` and run it with
+  `detect_leaks=1`.
+- `tests/run-gc-leak-gate.sh` builds fixtures through `tur build` with
+  `TUR_CC_FLAGS="... -fsanitize=address -g"`.
+- `tests/run-leak-gate.sh` covers the COMPILER's own error path, not emitted
+  code, and its header already says: "tests/run.sh compiles the *generated
+  program* without ASan and only the `tur` binary itself is sanitized."
 
-- `tests/run.sh:169` builds fixtures with
-  `-O2 -std=c99 -Wall -fno-strict-aliasing` -- no `-fsanitize=address`. Only
-  `TUR_TSAN=1` adds a sanitizer, and that is ThreadSanitizer.
-- Fixture links prefer the lean, non-ASan `libturt_runtime.a` by default
-  (`TUR_RT_AUTO`), so no instrumented runtime is pulled in either.
-- Runs set `ASAN_OPTIONS=...detect_leaks=0` regardless.
+What was actually true, and is the real gap:
 
-Confirmed by experiment, not by reading: a fixture built the normal way has zero
-`__asan_init` symbols, and a program with a deliberate `malloc(1234)` that is
-never freed exits clean. The same program under `valgrind --leak-check=full`
-reports `1,234 bytes in 1 blocks are definitely lost`.
+1. The default suite does not leak-check emitted programs. `tests/run.sh:169`
+   builds fixtures with `-O2 -std=c99 -Wall -fno-strict-aliasing` -- no
+   sanitizer -- links the lean non-ASan runtime by default, and runs with
+   `detect_leaks=0`. Confirmed by experiment: a fixture built the normal way has
+   zero `__asan_init` symbols, and a deliberate `malloc(1234)` that is never
+   freed exits clean.
+2. Each existing harness is bespoke to one regression. There was no way to say
+   "this fixture should be leak-clean" without writing a fourth script.
+3. `requires.no-leak-check` is therefore a no-op in the default configuration.
 
-## Consequences
+## What was done
 
-1. `requires.no-leak-check` is a no-op in the default configuration. It only
-   matters in a build where fixtures do link an instrumented runtime.
-2. Emitted-code memory bugs are invisible to the suite. The two open reports on
-   ADT allocation were both found by hand, not by a failing test.
-3. **Any change to how emitted code allocates cannot be validated by "run the
-   suite".** This was found while trying to verify exactly that for the ADT slab
-   allocator -- the plan was "ASan will abort loudly on a bad free", and ASan is
-   not there to abort.
+`tests/run-leak-check.sh` generalizes the existing mechanism rather than adding
+another one-off: any fixture opts in with a `requires.leak-check` marker, and is
+built with ASan and run with `detect_leaks=1`. It must still print its
+`expected.stdout` and must report no leak.
 
-## What would close it
+A fixture may also carry `known-leak`, naming an open report. The leak then
+shows as `KNOWN` instead of failing -- a permanently red gate is one nobody
+reads -- and the gate fails if such a fixture ever runs CLEAN, so a stale marker
+cannot outlive the bug it describes.
 
-Cheapest useful step: a small opt-in harness that rebuilds a chosen subset of
-fixtures with `-fsanitize=address` and runs them with leak detection on, or runs
-them under `valgrind --leak-check=full --error-exitcode=N`. Valgrind needs no
-rebuild and no instrumented runtime, which makes it the easy first version.
+Proven to fail before being trusted: against the open `rc/of` leak it reports
+the 16 bytes with a stack trace to `ctor_PA`.
 
-It does not need to be the whole suite to be worth having -- the allocation-heavy
-fixtures would have caught both open ADT reports.
+The coverage map is written up for maintainers in
+[../guides/test-suite-portability-guide.md](../guides/test-suite-portability-guide.md),
+section "Leak checking -- what is covered and what is not", and `CLAUDE.md`'s
+leak-detection policy now states the complement (emitted programs are NOT
+checked by the default suite) rather than leaving it to be inferred.
+
+## What it cannot see
+
+LSan reports memory unreachable from roots. Anything held in a global registry
+is reachable by construction and will be called live however dead it is --
+`run-gc-leak-gate.sh` documents this at length for rc blocks in `gc_all_blocks`,
+and is why that gate counts collector work instead. A clean run here means
+"nothing was orphaned", not "nothing was retained".
+
+## Still open
+
+- Only two fixtures opt in so far (`leak-check-clean-baseline`, and the
+  `rc/of` case marked known). Widening the set is the obvious next step; the
+  allocation-heavy fixtures would be the useful ones.
+- Not wired into ctest. A sanitized compile per fixture is slow, and this is a
+  diagnostic gate rather than a correctness gate for everyday work.

@@ -292,6 +292,62 @@ Two rules fall out:
 
 ---
 
+## 7a. Leak checking -- what is covered and what is not
+
+The single most misread thing about this suite. `CLAUDE.md` says
+`bash tests/run.sh` runs "with leak detection ON", and that is true -- **of the
+compiler process**. It is not true of the programs the compiler produces, and
+the complement is what catches people out:
+
+| what runs | sanitized? | leak-checked? |
+|---|---|---|
+| `tur` itself (`build`, `emit-c`, `check`) in a Debug build | yes, ASan+UBSan | **yes** -- a leak in the compiler fails the suite |
+| the fixture PROGRAM `tur` produced | **no** | **no** |
+| turi/eval interpreter harnesses (`run-turi.sh`, `run-flags.sh`) | yes | no -- `detect_leaks=0` by design (process-lifetime closures) |
+
+Emitted programs are built at `tests/run.sh:169` with
+`-O2 -std=c99 -Wall -fno-strict-aliasing` -- no `-fsanitize` -- link the lean
+non-ASan runtime by default, and run with `detect_leaks=0` regardless. A fixture
+built the normal way has **zero `__asan_init` symbols**. A program that leaks a
+megabyte passes the suite silently, because the suite only compares printed
+output.
+
+So `requires.no-leak-check` is a no-op in the default configuration. It only
+means anything in a build where fixtures do link an instrumented runtime.
+
+### If you are chasing a leak in emitted code
+
+Do not reach for `bash tests/run.sh` -- it cannot see one. Four harnesses can:
+
+- **`tests/run-leak-check.sh`** -- the general one. Drop a `requires.leak-check`
+  marker in any fixture directory and it is rebuilt with ASan and run with
+  `detect_leaks=1`, asserting both its `expected.stdout` and no leak. Start
+  here.
+- `tests/run-gc-leak-gate.sh` -- cycle-collector fixtures, ASan, with a
+  collector-off control run.
+- `tests/run-closure-env-leak.sh`, `tests/run-fat-shim-leak.sh` -- one
+  regression each; they emit C and compile it by hand with ASan.
+- `tests/run-leak-gate.sh` -- despite the name, this is the COMPILER's error
+  path, not emitted code.
+
+A fixture with a real but not-yet-fixed leak carries a `known-leak` file naming
+its open report: `run-leak-check.sh` then reports it as `KNOWN` rather than
+failing, and fails if it ever runs *clean*, so the marker cannot outlive the
+bug.
+
+### Two traps, both of which have produced wrong answers here
+
+1. **Confirm the instrument before believing a clean result.** ASan silently
+   reports nothing when it is not linked -- which is the default for fixtures.
+   Plant a deliberate `malloc(1234)` that is never freed and check the tool
+   reports it before concluding that anything is leak-free.
+2. **LSan reports what is UNREACHABLE, not what is dead.** Anything held in a
+   global registry is reachable by construction and will be called live however
+   dead it is; section 7's rc-block case is exactly this. A clean run means
+   "nothing was orphaned", not "nothing was retained". For retention, count it.
+
+---
+
 ## 8. Harness environment parity
 
 `tests/run.sh` exports `TUR_BIND_LOOPBACK=1`; `stdlib/httpd.tur` and

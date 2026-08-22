@@ -179,7 +179,15 @@ The Debug build compiles `tur` with `-fsanitize=address,undefined`; on Linux
 ASan ships LeakSanitizer enabled. The compiler/codegen path is leak-clean, so
 `bash tests/run.sh` runs **with leak detection ON** -- a genuine leak in the
 `tur build`/`emit-c` path will fail the suite (this is intended; do not
-suppress it). The tree-walking turi/eval **interpreter** intentionally never
+suppress it).
+
+**That covers `tur` itself, NOT the programs it emits.** Fixture programs are
+compiled without any sanitizer and run with `detect_leaks=0`, so a leak in
+EMITTED code passes `run.sh` silently -- the suite only compares printed
+output. Use `tests/run-leak-check.sh` (opt in per fixture with a
+`requires.leak-check` marker) when that is what you are chasing. The full
+coverage map, and two traps that have produced wrong answers here, are in
+[docs/guides/test-suite-portability-guide.md](docs/guides/test-suite-portability-guide.md#7a-leak-checking----what-is-covered-and-what-is-not). The tree-walking turi/eval **interpreter** intentionally never
 frees its closures/registered natives (process-lifetime), so the harnesses
 that exercise it (`run-turi.sh`, `run-flags.sh`) and their ctest targets
 default to `ASAN_OPTIONS=detect_leaks=0`. Override with
