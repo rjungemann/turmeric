@@ -3719,7 +3719,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * element type instead of staying on the lossy int64 carrier base. */
             ((recovered.kind == TY_APP ||
               recovered.kind == TY_ADT) &&
-             type_has_concrete_codegen_layout(&recovered) &&
+             /* type_has_concrete_codegen_layout answers false for EVERY TY_APP
+              * (its TY_APP arm is an unconditional `return false`), so the
+              * ADT-app half of the comment above never actually fired -- it was
+              * masked because a nested-monomorph app was not by-value either,
+              * leaving accessor and field agreeing on the int64 carrier.  Now
+              * that `(Result (Option int) cstr)` lowers by value, its `ok_val`
+              * field IS `tur_adt_Option__int` and the accessor must recover
+              * with it.  type_is_byvalue_adt_product is the app-aware
+              * predicate that gives a TY_APP a real answer. */
+             (type_has_concrete_codegen_layout(&recovered) ||
+              type_is_byvalue_adt_product(recovered)) &&
              !type_is_heap_struct(recovered) && !type_is_heap_adt(recovered) &&
              rec_c && strcmp(rec_c, "int64_t") != 0);
         if (recovered_byvalue) {

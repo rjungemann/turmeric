@@ -837,6 +837,44 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     return false;
 }
 
+/* The matched-spec result of a call argument, when that result is a concrete
+ * by-value ADT-app (`(Option int)` -> `tur_adt_Option__int`).
+ *
+ * type_uses_carrier_abi answers FALSE for such a type (emit_core.c:431 -- it is
+ * a concrete aggregate, not a carrier), and BOTH the shared reporters gate on
+ * that predicate: expr_emits_byvalue_carrier_abi's EX_CALL arm and
+ * fn_body_tail_byvalue_carrier_type_inner's.  So a spec-matched by-value-app
+ * argument is invisible to the heap-container-insert bridge below, in the guard
+ * and in the bridge type alike.
+ *
+ * Before nested-monomorph apps lowered by value this was unreachable: a
+ * `(Result (Option int) cstr)` rode the int64 carrier, so `ok-val`'s spec
+ * returned int64 and matched vec-push!'s int64 `val : A` slot with no bridge at
+ * all.  Now the accessor returns the aggregate and the bridge is mandatory.
+ *
+ * Deliberately local rather than folded into either shared predicate: teaching
+ * expr_emits_byvalue_carrier_abi to report these fires the escaping bridge at
+ * every other carrier sink too, which breaks 7 fixtures (list/vec by-value
+ * aggregate elements) by heap-promoting values that were already correct. */
+static bool call_spec_result_byvalue_app(EmitCtx *ctx, const Expr *e, Type *out) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_CALL) return false;
+    /* Only the RETURN-ONLY-POLY shape, whose elab type was collapsed to the
+     * int64 scalar.  An argument whose own type is already the by-value app
+     * (a direct `(some 42)`) reaches the carrier slot through the CONV-S1
+     * boxing block further down and must keep doing so -- routing it through
+     * the escaping bridge instead breaks 7 list/vec element fixtures. */
+    if (e->type.kind != TY_INT) return false;
+    const EmitAbiSpecialization *spec =
+        find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
+    if (!spec) return false;
+    Type sr = emit_resolve_type(ctx, spec->result_type);
+    if (sr.kind != TY_APP || type_is_heap_adt(sr) ||
+        !adt_app_is_byvalue_product(sr)) return false;
+    if (out) *out = sr;
+    return true;
+}
+
 /* CONV-S1/B3: true when `t` resolves to a by-value ADT (a flat aggregate, not the
  * int64 carrier).  Such a value crossing into an int64 carrier field slot (a
  * carrier ADT/GADT constructor field) must be boxed (malloc + copy) on the way in
@@ -6711,8 +6749,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * -Wint-conversion cc error.  A matched concrete spec resolves A
                  * to the element's real C type and keeps its own
                  * (carrier->concrete) bridges, so it is excluded here. */
+                Type spec_byval_ty = type_simple(TY_UNKNOWN, CK_COPY);
+                bool spec_byval =
+                    call_spec_result_byvalue_app(ctx, emit_arg, &spec_byval_ty);
                 if (!needs_fn_cast && fn_binding->type.kind == TY_FN && emit_arg &&
-                    expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
+                    (expr_emits_byvalue_carrier_abi(ctx, emit_arg) || spec_byval)) {
                     uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i
                         : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
@@ -6736,6 +6777,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * temp and copy an `Option__int` into it.  The matched
                          * spec's resolved result is the source of truth. */
                         Type bridge_ty = fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                        if (bridge_ty.kind == TY_UNKNOWN && spec_byval)
+                            bridge_ty = spec_byval_ty;
                         if (bridge_ty.kind == TY_UNKNOWN) bridge_ty = emit_arg->type;
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,

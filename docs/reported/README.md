@@ -926,9 +926,13 @@ found.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: slab 2.1x (measured in-compiler), by-value 1.8x, both 18x |
-| [byvalue-adt-app-rejects-nested-monomorphs](byvalue-adt-app-rejects-nested-monomorphs.md) | low-medium | `option<list<int>>` / `result<vec<T>,cstr>` fall back to the heap carrier because a type argument is itself a monomorph; the emitted ctor takes the aggregate BY VALUE and then mallocs a box for it |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan (O(n^2) in term count, free fix when SX3 rewrites that state); the congruence-closure fixpoint is a naive O(n^2) sweep |
 | [compiled-fixtures-are-not-leak-checked](compiled-fixtures-are-not-leak-checked.md) | low-medium | ADDRESSED. The default suite does not leak-check EMITTED programs -- only `tur` itself. `tests/run-leak-check.sh` now generalizes the three bespoke harnesses that did; coverage map in the test-suite portability guide |
+
+`byvalue-adt-app-rejects-nested-monomorphs` was filed and resolved on
+2026-08-22 and moved to
+[docs/archive/](../archive/byvalue-adt-app-rejects-nested-monomorphs.md);
+`option<list<int>>` and `result<vec<T>,cstr>` now lower by value.
 
 `rc-of-adt-leaks-the-payload` was resolved 2026-08-22 and moved to
 [docs/archive](../archive/rc-of-adt-leaks-the-payload.md): one over-narrow

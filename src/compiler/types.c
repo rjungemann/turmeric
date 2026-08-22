@@ -638,11 +638,16 @@ bool type_app_is_concrete_adt(const Type *t) {
      * ADT -- so it must not be registered/monomorphized. */
     if (def->is_opaque) return false;
     for (uint32_t i = 0; i < n_args; i++) {
-        /* Nested by-value-product element accepted only for a :heap outer (see
-         * adt_app_is_byvalue_product) so the ctor selection picks the monomorph
-         * ctor matching the field-read consumer's layout. */
+        /* A nested by-value-product element is accepted for ANY outer, not just
+         * a :heap one.  This must stay in lockstep with the identical loop in
+         * adt_app_is_byvalue_product: that predicate decides the monomorph's
+         * REPRESENTATION and this one decides whether a ctor CALL SITE names
+         * the monomorph.  Widening one alone makes `some__spec__..._Vec__int`
+         * return the by-value aggregate while its body still calls the
+         * carrier `ctor_Option` -- eight fixtures fail to compile with
+         * "incompatible types when returning type 'int64_t'". */
         if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
+            !adt_app_is_byvalue_product(args[i])) return false;
     }
     return true;
 }
@@ -3198,7 +3203,7 @@ bool adt_app_is_byvalue_product(Type t) {
      * it untouched avoids perturbing the constrained-instance-body specs. */
     for (uint32_t i = 0; i < n_args; i++)
         if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
+            !adt_app_is_byvalue_product(args[i])) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --
      * no residual tyvar / HKT / non-concrete application (those are M7's job). */
     const CtorDef *c = def->ctors[0];
@@ -3208,7 +3213,7 @@ bool adt_app_is_byvalue_product(Type t) {
         TypeKind k = rf.kind;
         bool bad = (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) ||
                    (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
-                    !(def->is_heap && adt_app_is_byvalue_product(rf)));
+                    !adt_app_is_byvalue_product(rf));
         free_struct_app_type(rf);
         if (bad) return false;
     }

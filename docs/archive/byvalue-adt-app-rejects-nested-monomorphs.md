@@ -5,7 +5,18 @@ downgrade that reintroduces a `malloc` per construction on some of the most
 common shapes in the language: `option<list<int>>`, `result<vec<T>, cstr>`,
 `option<(Pair a b)>`.
 
-**Status:** OPEN. Root-caused, minimal repro below, not fixed.
+**Status:** RESOLVED 2026-08-22. Fixed in the same session it was filed; the
+fix and what it cost are in
+[history/byvalue-adt-app-rejects-nested-monomorphs](history/byvalue-adt-app-rejects-nested-monomorphs.md).
+Regression fixture: `tests/fixtures/byvalue-option-over-parametric-monomorph`
+(mutation-verified -- reverting the predicate widening makes it, and only it,
+fail out of 2696).
+
+The `ctor_Option__Zipper__struct` instance named below is NOT covered and is not
+a bug: `Zipper__struct` is an argument whose own element erased to a
+non-concrete type, so it is the same genuinely-unresolved category as the base
+`ctor_Option`, and it is dead code in every program that does not instantiate
+it.
 
 Found while scoping
 [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md).
