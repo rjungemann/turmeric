@@ -586,12 +586,19 @@ suite 2687 passed, 0 failed.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
+| [jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md) | low | `call-ptr` under `--interpret` refuses a record with a parametric-monomorph field (`(BoxW int32)`) that the compiled path inlines by value: a compiled/interpreted divergence, refused cleanly. Its diagnostic ("no by-value C member type") is inaccurate in every case it can fire |
 
-Indexed 2026-08-21. It had **no row at all** since it was filed -- the only
-open report in the tree that this index never listed, and the
-highest-severity one. Found by sweeping `docs/reported/*.md` against the rows
-here; that sweep is worth repeating whenever you touch this file, in both
+The `mir-aarch64` row was indexed 2026-08-21. It had **no row at all** since it
+was filed -- the only open report in the tree that this index never listed, and
+the highest-severity one. Found by sweeping `docs/reported/*.md` against the
+rows here; that sweep is worth repeating whenever you touch this file, in both
 directions (a row with no file, a file with no row).
+
+The `jit-ffi-interp-*` row was filed 2026-08-21, the same day `jit-ffi`
+graduated. These two are the entirety of the archived
+[jit-ffi-c2mir-plan](../archive/jit-ffi-c2mir-plan.md)'s "Still open" section;
+filing the second one is what keeps that section reachable now that graduation
+has moved the plan into `docs/archive/`.
 
 `reads-grant-survives-callee-global-write` was filed and resolved 2026-08-18,
 and moved to
