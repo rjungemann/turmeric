@@ -11,13 +11,24 @@ unstarted. Nothing here is on the critical path to v1; the whole of SX is
 *additive* to a solver that already ships and is already sound. Read section 5
 for what to do first if only one phase gets built.
 
-**What the first measurement changed.** SX0(b) exists to gate the two most
-expensive phases, and it gates them both **shut**: neither the arithmetic cap
-(SX4) nor the cube caps (SX6) fire on any of the 411 units swept, and no cap
-hit anywhere cost a real proof. That removes roughly the plan's whole
-right-hand side from consideration for now and leaves SX0(a), SX8a, and
-SX1/SX2 -- the instruments and the trail -- as the live work. Details and the
-table are under SX0(b); reproduce with `benchmarks/run-cap-sweep.sh`.
+**What the measurements changed.** Both SX0 instruments have now run.
+
+SX0(b) exists to gate the two most expensive phases, and it gates them both
+**shut**: neither the arithmetic cap (SX4) nor the cube caps (SX6) fire on any
+of the 411 units swept, and no cap hit anywhere cost a real proof. That removes
+roughly the plan's whole right-hand side from consideration for now.
+
+SX0(a) answers the review's second question and moves a number the design was
+assuming: the DK chain and a ucontext fiber cross at **F ~ 20 frames on
+restore**, not at the hundreds the "small constant beats a real slope" framing
+implied -- and there is no one-shot fast path to fall into, so a search layer
+resuming over more than a shallow slice is on the wrong side of that line
+today. It also found the plan's own `a + b*F + c*E` cost model mis-specified
+for a chain (the env term is per-frame, `c*F*E`).
+
+What is left live: **SX8a**, and **SX1/SX2** -- the trail and the honest test
+of whether it pays for itself. Details under SX0(a) and SX0(b); reproduce with
+`benchmarks/run-capture-curve.sh` and `benchmarks/run-cap-sweep.sh`.
 
 ## 0. Provenance
 
@@ -538,6 +549,12 @@ unmeasured number, and it is the number that decides 3.5(b) -- and, per 3.5,
 whether a one-shot fast path needs to exist before any search layer uses
 capture at all.
 
+**Measured (SX0(a)):** the answer is neither 100 nor 10 000 -- it is **about
+20**. Restore costs roughly `36 + 22*F` ns against a fiber's flat 429 ns, so
+the slope starts mattering almost immediately, and the per-resume slope at
+R = 8 is within 1% of R = 1, meaning there is no one-shot fast path today.
+See `benchmarks/capture-curve-results.md`.
+
 ### 4.3 The benchmark, specified
 
 **Independent variables** (sweep each, hold the others fixed):
@@ -592,12 +609,72 @@ you're building it".
 
 Two instruments, no language or runtime change:
 
-- **(a) The capture/restore curve** -- section 4.3, with `T = 0`.
-  Files: `benchmarks/bench-capture-restore.tur`,
-  `benchmarks/run-capture-curve.sh`, `benchmarks/benchmark-results.md`.
-  Accept: the three paths of 4.2 each produce a fitted slope and intercept
-  over `F` and `E`; the table is checked in; a rerun on an idle box reproduces
-  within noise.
+- **(a) The capture/restore curve** -- **LANDED.**
+  `benchmarks/bench-capture-restore.tur` sweeps `F`, `E`, `R` (and carries the
+  `T` column at 0) across all three paths of 4.2;
+  `benchmarks/run-capture-curve.sh` fits each and writes
+  `benchmarks/capture-curve-results.md` plus the raw CSV.
+
+  **Result -- the three paths are the three shapes the literature predicts, and
+  the crossover is much lower than the design assumed.** Measured on a Release
+  build (a sanitized one measures ASan, and the script refuses to publish from
+  one), best of three timed rounds after an untimed warm-up:
+
+  | path | capture | restore |
+  |---|---|---|
+  | DK chain slice | `~23 + 17*F` ns | `~36 + 22*F` ns |
+  | fiber (ucontext) | `~2060` ns, flat | `~429` ns, flat |
+  | cloneable snapshot | `~8 + 0.15*E` ns | `~2` ns |
+
+  Figures are rounded and the results file is the source of truth; across
+  reruns the DK slope moves within about +/-15% and the fiber restore constant
+  within about 1%. The restore crossover below is stable to the frame; the
+  capture crossover is not, because fiber creation is the noisiest thing here.
+
+  1. **The restore crossover is F ~ 20 frames.** A fiber switch costs a flat
+     432 ns; the DK chain costs 41 + 17.2 per frame, so past about twenty
+     frames under the prompt the fiber is cheaper *per resume* -- and the DK
+     path pays that slope on **every** resume, because `dk_invoke` re-copies
+     the chain (`tur_rt_split.c:1461`). The capture crossover is much further
+     out -- F ~ 140-155, and it wanders across reruns -- because a fiber pays
+     for a stack up front. Twenty frames is not a deep stack. Any search layer
+     that resumes repeatedly over more than a shallow slice is on the wrong
+     side of this line today.
+  2. **`R` shows no one-shot optimization exists.** The per-resume *slope* is
+     the same whether a capture is resumed once or eight times -- 22.36 versus
+     22.56 ns/frame on the DK path in the checked-in run, under 1% apart, and
+     the fiber constant likewise (428.8 against 425.2 ns). That is the
+     measurement behind 3.5(b): there is
+     no one-shot fast path to fall into, so if a search layer wants one it has
+     to be built, and the curve says what it would be worth.
+  3. **The plan's own cost model was mis-specified.** Section 4.3 asks for a fit
+     of `a + b*F + c*E`. On a chain that is wrong: `dk_copy_node` fires
+     `env_clone` once per *owning frame*, so the env term is `c*F*E`. Fitting
+     the literal `c*E` produced an intercept of **-1876 ns** -- a constant no
+     mechanism can have -- because the fit had to absorb 4096 frames' worth of
+     64-byte copies into `b`. The results file fits `a + b*F + c*(F*E)` for the
+     chain and `a + c*E` for the (chainless) cloneable path, which is the same
+     formula wherever the two agree.
+  4. **Per-frame cost is flat from F=32 to F=2048 and then steps up ~65% at
+     F=4096** -- a chain that size stops fitting in cache. The fitted `b` is
+     the flat band; past ~2048 frames the real cost is worse than the model.
+
+  Two method notes worth carrying into SX1's `bench-trail-undo`, both of which
+  produced wrong numbers before they were caught: the first pass through any of
+  these paths pays page-fault and allocator-warmup costs that no later pass
+  repeats (an untimed warm-up round moved the first fiber row from 425,346 ns
+  to 3,172 ns), and a baseline whose result is unused is deleted outright -- the
+  closure baseline read 0.33 ns per invocation, *below an empty loop iteration*,
+  until the callee was made opaque to devirtualization.
+
+  **The interpreter row the phase asks for is not obtainable from this
+  benchmark**, and that is a real answer rather than a gap: every timed region
+  is inline C by design, so `tur --interpret` declines the file outright
+  ("inline-C not supported in interpreter mode"). The 3.6 question the
+  interpreter row was meant to settle -- is the tree-walker adequate for a
+  thousands-per-second search layer? -- needs a *Turmeric-level* search
+  benchmark, which is exactly what SX2's `bench-logic-query` and
+  `bench-backtrack-n-queens` are. That row belongs there, not here.
 - **(b) Cap-hit telemetry** -- **LANDED.** `TUR_REFINE_STATS=1` now reports
   *which* cap bit and how often, plus the high-water mark of the quantity each
   cap bounds, so a cap that never fires still reports its headroom.
@@ -914,10 +991,10 @@ one dishonest failure mode a query surface can have.
 This mirrors the review's own next-steps list, with the interrogation
 surface slotted where it is cheapest:
 
-1. ~~**SX0**, both instruments~~ -- **(b) done**, and it reshaped items 4 and 5
-   below. **(a), the capture/restore curve, is now the front of the queue**:
-   it is the only remaining SX0 instrument, and SX1 is specified to land after
-   it.
+1. ~~**SX0**, both instruments~~ -- **both done.** (b) reshaped items 4 and 5
+   below; (a) supplied the crossover SX1's design turns on, and its two method
+   traps (untimed warm-up, and a baseline the optimizer deletes) carry straight
+   into SX1's `bench-trail-undo`.
 2. **SX8a alongside or immediately after SX0** -- it shares SX0(b)'s
    emitter, costs little (the SMT-LIB reader already exists in
    `tests/unit/refine_corpus.c`), and every phase after it gets a public
