@@ -425,6 +425,7 @@
   return (int64_t)sizeof(tur_cloneable_cont) + env_bytes;
   ```)
 
+
 ;; ---------------------------------------------------------------------------
 ;; Baselines -- the floor, and the alternative the trail competes with
 ;; ---------------------------------------------------------------------------
@@ -752,6 +753,98 @@
     (emit-check keep n)
     0))
 
+;; ---------------------------------------------------------------------------
+;; The T axis: trailed writes live under the prompt (SX1)
+;;
+;; Reserved in the CSV schema from SX0 so this could land without reshaping the
+;; file, and now filled. The trail is the alternative to capturing state at all:
+;; instead of copying a continuation so a second entry does not see the first
+;; one's mutations, record the mutations and put them back. So the number that
+;; matters is `bt-mark` + T writes + `bt-undo-to!` against a capture/restore of
+;; comparable live state -- which is what puts these rows in the same table
+;; rather than a file of their own.
+;;
+;; Called through the C shims rather than stdlib/trail.tur on purpose: the
+;; language surface is behind the `backtrackable-state` experiment, and a
+;; benchmark that needed the gate flipped to run would measure how the gate is
+;; configured as much as what the mechanism costs. What is being measured here
+;; is the runtime, which the gate does not touch.
+;; ---------------------------------------------------------------------------
+
+;;; trail-autolink-hint -- pull src/runtime/trail.c into this program.
+(defn trail-autolink-hint [] : int
+  ```c
+  /* __tur_autolink__: src/runtime/trail.c -Isrc/runtime */
+  return 0;
+  ```)
+
+;;; trail-undo-ns -- total nanoseconds for `iters` mark/T-writes/undo cycles.
+;;;
+;;; One cell per write, because the stamp means a single cell written T times
+;;; costs ONE trail entry -- which is the right answer for a search loop and
+;;; exactly the wrong shape for measuring what T entries cost.
+(defn trail-undo-ns [writes : int iters : int] : int
+  ```c
+  extern int64_t tur_trail_mark_packed(void);
+  extern _Bool   tur_trail_undo_to_packed(int64_t);
+  extern void   *tur_bt_cell_new(int64_t);
+  extern void    tur_bt_cell_free(void *);
+  extern _Bool   tur_bt_cell_set(void *, int64_t);
+  extern void    tur_trail_reset(void);
+
+  void **cells = (void **)malloc((size_t)writes * sizeof(void *));
+  if (!cells) return -1;
+  for (int64_t i = 0; i < writes; i++) cells[i] = tur_bt_cell_new(i);
+
+  int64_t best = INT64_MAX;
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t k = 0; k < iters; k++) {
+          int64_t m = tur_trail_mark_packed();
+          for (int64_t i = 0; i < writes; i++) tur_bt_cell_set(cells[i], i + 1);
+          tur_trail_undo_to_packed(m);
+      }
+      int64_t t1 = tur_monotonic_ns();
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  for (int64_t i = 0; i < writes; i++) tur_bt_cell_free(cells[i]);
+  free(cells);
+  tur_trail_reset();
+  return best;
+  ```)
+
+;;; trail-bytes -- bytes one mark/undo cycle keeps live at T writes.
+(defn trail-bytes [writes : int] : int
+  ```c
+  /* Two words per entry plus the stamp/flags word, which is what the trail
+     itself costs; the cells are the caller's and are not counted. */
+  return writes * 32;
+  ```)
+
+;;; trail-iters -- cycles to time at this T.
+(defn trail-iters [writes : int] : int
+  ```c
+  int64_t n = 2000000 / (writes + 2);
+  if (n > 50000) n = 50000;
+  if (n < 32) n = 32;
+  return n;
+  ```)
+
+;;; trail-measure -- one point on the T axis.
+(defn trail-measure [writes : int] : int
+  (let [it (trail-iters writes)
+        ns (trail-undo-ns writes it)]
+    (emit-row (Row "trail" 0 0 1 writes it it ns 0 (trail-bytes writes)))
+    0))
+
+;;; trail-sweep -- the log sweep over T.
+(defn trail-sweep [t : int] : int
+  (if (> t 4096)
+    0
+    (do
+      (trail-measure t)
+      (trail-sweep (* t 2)))))
+
 (defn main [] : int
   (cloneable-warmup)
   (emit-header)
@@ -761,6 +854,7 @@
   (fiber-sweep-f 1 8)
   (clone-sweep 1)
   (clone-sweep 8)
+  (trail-sweep 1)
   (baselines)
   (emit-rss (peak-rss-kb))
   0)

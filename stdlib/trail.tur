@@ -1,0 +1,389 @@
+;;; tur/trail -- backtrackable state: mutable cells whose writes undo on demand.
+;;;
+;;; A trail records the previous value of every trailed write, so undoing to a
+;;; mark restores all of them at once. This is the WAM / CLP shape, and it is
+;;; what a search loop wants instead of threading a persistent structure through
+;;; every step: a union-find substitution, a bound stack, a domain bitmap.
+;;;
+;;; The design turns on being able to OPT A CELL OUT, at three granularities,
+;;; because backtracking in a search is asymmetric -- a solver discards the
+;;; trail above a backjump point but keeps what it learned:
+;;;
+;;;   per cell, forever   `g-cell-new`      never trailed at all
+;;;   per write           `with-untrailed`  a write that must survive the undo
+;;;   per level           `bt-commit-to!`   keep this level's writes
+;;;
+;;; `BtCell` and `GCell` are DISTINCT TYPES, so opting out is visible in the
+;;; signature of anything that touches the cell rather than a flag someone
+;;; forgets to pass.
+;;;
+;;; EXPERIMENTAL -- behind `--enable=backtrackable-state`. The open question is
+;;; multi-shot re-entry: a captured continuation restores control, not state, so
+;;; re-entering one lands in a computation whose trail levels are already gone.
+;;; Today that is a detected error (marks carry a generation); whether
+;;; `call/cc*` should instead snapshot the live trail segment is unmeasured.
+;;; See docs/upcoming/solver-extension-plan.md sections 3.2-3.5.
+;;;
+;;; Since: SX1
+;; Backtrackable state (solver-extension-plan SX1).
+
+;;; Mark -- an opaque handle to a trail level.
+;;;
+;;; Carries a generation as well as a level, so undoing to a mark that was
+;;; already undone or committed is refused rather than unwinding whichever
+;;; level happens to sit at that index now.
+(extern-c tur_trail_mark_packed [] :int)
+(extern-c tur_trail_undo_to_packed [p :int] :bool)
+(extern-c tur_trail_commit_to_packed [p :int] :bool)
+(extern-c tur_trail_level [] :int)
+(extern-c tur_trail_depth [] :int)
+(extern-c tur_trail_pause [] :void)
+(extern-c tur_trail_resume [] :void)
+(extern-c tur_trail_reset [] :void)
+(extern-c tur_bt_cell_new [init :int] :ptr)
+(extern-c tur_bt_lvar_new [unbound :int] :ptr)
+(extern-c tur_bt_cell_free [c :ptr] :void)
+(extern-c tur_bt_cell_get [c :ptr] :int)
+(extern-c tur_bt_cell_bound [c :ptr] :bool)
+(extern-c tur_bt_cell_set [c :ptr v :int] :bool)
+
+;;; Mark -- an opaque handle to a trail level.
+;;;
+;;; Carries a generation as well as a level, so undoing to a mark that was
+;;; already undone or committed is refused rather than unwinding whichever
+;;; level happens to sit at that index now.
+(defopaque Mark :int)
+
+;;; BtCell -- a mutable cell whose writes are trailed and undo on backtrack.
+(defopaque BtCell :ptr)
+
+;;; GCell -- a mutable cell that is NEVER trailed.
+;;;
+;;; The per-cell opt-out: activity scores, a learned-clause database, a simplex
+;;; basis. Its writes are not undoable effects, which is exactly the property
+;;; those want. A distinct type from BtCell on purpose -- opting out is then
+;;; visible in the signature of anything that touches the cell, rather than a
+;;; flag someone forgets to pass.
+(defopaque GCell :ptr)
+
+;;; bt-cell-new -- allocate a trailed cell holding `init`.
+;;;
+;;; Parameters:
+;;;   init -- the cell's starting value
+;;;
+;;; Returns:
+;;;   A BtCell. Release with bt-cell-free.
+;;;
+;;; Example:
+;;;   (bt-get (bt-cell-new 0))  ; => 0
+;;;
+;;; Since: SX1
+(defn bt-cell-new [init : int] : BtCell
+  ```c
+  return (int64_t)(intptr_t)tur_bt_cell_new(init);
+  ```)
+
+;;; bt-lvar-new -- allocate a WRITE-ONCE trailed cell, initially unbound.
+;;;
+;;; The logic-variable shape: it goes from unbound to bound once per level, and
+;;; undo returns it to unbound. `bt-set!` refuses a second binding rather than
+;;; overwriting.
+;;;
+;;; Parameters:
+;;;   unbound -- the value `bt-get` reads while the cell is unbound
+;;;
+;;; Returns:
+;;;   A BtCell in the unbound state.
+;;;
+;;; Example:
+;;;   (bt-bound? (bt-lvar-new 0))  ; => false
+;;;
+;;; Since: SX1
+(defn bt-lvar-new [unbound : int] : BtCell
+  ```c
+  return (int64_t)(intptr_t)tur_bt_lvar_new(unbound);
+  ```)
+
+;;; bt-cell-free -- release a cell.
+;;;
+;;; Free cells OUTSIDE the scope whose writes touched them: a trail entry still
+;;; pointing at a freed cell dangles until the next undo, and the failure then
+;;; surfaces inside undo rather than here.
+;;;
+;;; Parameters:
+;;;   c -- the cell
+;;;
+;;; Example:
+;;;   (bt-cell-free c)
+;;;
+;;; Since: SX1
+(defn bt-cell-free [c : BtCell] : void
+  ```c
+  tur_bt_cell_free((void *)(intptr_t)c);
+  ```)
+
+;;; bt-get -- read a trailed cell.
+;;;
+;;; Parameters:
+;;;   c -- the cell
+;;;
+;;; Returns:
+;;;   Its current value.
+;;;
+;;; Example:
+;;;   (bt-get c)  ; => 0
+;;;
+;;; Since: SX1
+(defn bt-get [c : BtCell] : int
+  ```c
+  return tur_bt_cell_get((void *)(intptr_t)c);
+  ```)
+
+;;; bt-bound? -- has this write-once cell been bound?
+;;;
+;;; Parameters:
+;;;   c -- the cell
+;;;
+;;; Returns:
+;;;   true once bound. Always true for a value cell.
+;;;
+;;; Example:
+;;;   (bt-bound? v)  ; => false
+;;;
+;;; Since: SX1
+(defn bt-bound? [c : BtCell] : bool
+  ```c
+  return tur_bt_cell_bound((void *)(intptr_t)c);
+  ```)
+
+;;; bt-set! -- write a trailed cell.
+;;;
+;;; Records the previous value only on the FIRST write per level, so a cell
+;;; written a thousand times inside one level costs one trail entry.
+;;;
+;;; Parameters:
+;;;   c -- the cell
+;;;   v -- the new value
+;;;
+;;; Returns:
+;;;   true on success; false when `c` is a write-once cell that is already
+;;;   bound -- binding twice is a caller bug, not a silent overwrite.
+;;;
+;;; Example:
+;;;   (bt-set! c 42)  ; => true
+;;;
+;;; Since: SX1
+(defn bt-set! [c : BtCell v : int] : bool
+  ```c
+  return tur_bt_cell_set((void *)(intptr_t)c, v);
+  ```)
+
+;;; g-cell-new -- allocate a cell that is never trailed.
+;;;
+;;; Parameters:
+;;;   init -- the starting value
+;;;
+;;; Returns:
+;;;   A GCell. Release with g-cell-free.
+;;;
+;;; Example:
+;;;   (g-get (g-cell-new 7))  ; => 7
+;;;
+;;; Since: SX1
+(defn g-cell-new [init : int] : GCell
+  ```c
+  return (int64_t)(intptr_t)tur_bt_cell_new(init);
+  ```)
+
+;;; g-cell-free -- release a never-trailed cell.
+;;;
+;;; Parameters:
+;;;   g -- the cell
+;;;
+;;; Example:
+;;;   (g-cell-free g)
+;;;
+;;; Since: SX1
+(defn g-cell-free [g : GCell] : void
+  ```c
+  tur_bt_cell_free((void *)(intptr_t)g);
+  ```)
+
+;;; g-get -- read a never-trailed cell.
+;;;
+;;; Parameters:
+;;;   g -- the cell
+;;;
+;;; Returns:
+;;;   Its current value.
+;;;
+;;; Example:
+;;;   (g-get g)  ; => 7
+;;;
+;;; Since: SX1
+(defn g-get [g : GCell] : int
+  ```c
+  return tur_bt_cell_get((void *)(intptr_t)g);
+  ```)
+
+;;; g-set! -- write a never-trailed cell. The write survives every undo.
+;;;
+;;; Implemented by pausing the trail across the write rather than by a second
+;;; cell representation: one cell struct, one set of semantics, and the opt-out
+;;; is the type that reaches it.
+;;;
+;;; Parameters:
+;;;   g -- the cell
+;;;   v -- the new value
+;;;
+;;; Example:
+;;;   (g-set! g 7)
+;;;
+;;; Since: SX1
+(defn g-set! [g : GCell v : int] : void
+  ```c
+  /* Pause across the write: one cell representation, one set of
+     semantics, and the opt-out is the TYPE that reaches it. */
+  tur_trail_pause();
+  tur_bt_cell_set((void *)(intptr_t)g, v);
+  tur_trail_resume();
+  ```)
+
+;;; bt-mark -- push a trail level and return a handle to it.
+;;;
+;;; Returns:
+;;;   A Mark. Pass it to bt-undo-to! to restore, or bt-commit-to! to keep.
+;;;
+;;; Example:
+;;;   (let [m (bt-mark)] (bt-set! c 1) (bt-undo-to! m))
+;;;
+;;; Since: SX1
+(defn bt-mark [] : Mark
+  ```c
+  return tur_trail_mark_packed();
+  ```)
+
+;;; bt-undo-to! -- restore every trailed write made since `m`.
+;;;
+;;; Parameters:
+;;;   m -- a mark from bt-mark
+;;;
+;;; Returns:
+;;;   true on success; false when `m` is STALE -- already undone, already
+;;;   committed, or from a level index that has since been reused. A stale undo
+;;;   is refused rather than performed: it is what a re-entered continuation
+;;;   produces, and quietly "succeeding" would restore words belonging to some
+;;;   other level's cells.
+;;;
+;;; Example:
+;;;   (bt-undo-to! m)  ; => true
+;;;
+;;; Since: SX1
+(defn bt-undo-to! [m : Mark] : bool
+  ```c
+  return tur_trail_undo_to_packed(m);
+  ```)
+
+;;; bt-commit-to! -- drop the level but KEEP its writes.
+;;;
+;;; The per-level opt-out: Prolog's `assert`, ASP's "global", promoting a
+;;; learned fact out of the level that found it.
+;;;
+;;; Parameters:
+;;;   m -- a mark from bt-mark
+;;;
+;;; Returns:
+;;;   true on success; false when `m` is stale.
+;;;
+;;; Example:
+;;;   (bt-commit-to! m)  ; => true
+;;;
+;;; Since: SX1
+(defn bt-commit-to! [m : Mark] : bool
+  ```c
+  return tur_trail_commit_to_packed(m);
+  ```)
+
+;;; bt-level -- the current trail level, 0 when no mark is outstanding.
+;;;
+;;; Returns:
+;;;   The level depth.
+;;;
+;;; Example:
+;;;   (bt-level)  ; => 0
+;;;
+;;; Since: SX1
+(defn bt-level [] : int
+  ```c
+  return tur_trail_level();
+  ```)
+
+;;; bt-depth -- how many entries are on the trail right now.
+;;;
+;;; The stamp discipline is only observable as a count, so this is what a test
+;;; asserting "a thousand writes cost one entry" reads.
+;;;
+;;; Returns:
+;;;   The entry count.
+;;;
+;;; Example:
+;;;   (bt-depth)  ; => 1
+;;;
+;;; Since: SX1
+(defn bt-depth [] : int
+  ```c
+  return tur_trail_depth();
+  ```)
+
+;;; untrailed-begin -- suspend trailing until the matching untrailed-end.
+;;;
+;;; The per-write opt-out. Writes in between are permanent -- a node counter or
+;;; statistic that must outlive the search that produced it. Nests.
+;;;
+;;; Example:
+;;;   (untrailed-begin) (bt-set! counter 1) (untrailed-end)
+;;;
+;;; Since: SX1
+(defn untrailed-begin [] : void
+  ```c
+  tur_trail_pause();
+  ```)
+
+;;; untrailed-end -- resume trailing.
+;;;
+;;; Example:
+;;;   (untrailed-end)
+;;;
+;;; Since: SX1
+(defn untrailed-end [] : void
+  ```c
+  tur_trail_resume();
+  ```)
+
+;;; trail-reset! -- drop every level and entry WITHOUT running undo.
+;;;
+;;; Teardown and tests only; not part of the search protocol.
+;;;
+;;; Example:
+;;;   (trail-reset!)
+;;;
+;;; Since: SX1
+(defn trail-reset! [] : void
+  ```c
+  tur_trail_reset();
+  ```)
+
+;; ============================================================================
+;; Autolink hint -- consumed by `tur build`/`tur run` (src/main.c).
+;; The __tur_autolink__ comment causes src/runtime/trail.c to be compiled
+;; alongside the generated code and -Isrc/runtime to be added so that trail.h
+;; can be found.
+;; ============================================================================
+;;; trail/autolink-hint -- internal marker that triggers trail.c compilation in tur build/run.
+(defn trail/autolink-hint []
+  #fx{Unsafe}
+  : int
+  ```c
+  /* __tur_autolink__: src/runtime/trail.c -Isrc/runtime */
+  return 0;
+  ```)

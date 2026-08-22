@@ -6,8 +6,9 @@ description: Extending the refinement solver into an incremental, backtracking d
 
 # Solver Extension (SX)
 
-**Status:** proposal. SX0 (both instruments) and SX8a (the interrogation
-surface) have landed; everything else is unstarted. Nothing here is on the critical path to v1; the whole of SX is
+**Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface)
+and SX1 (the trail primitive, minus its effect row) have landed; everything else
+is unstarted. Nothing here is on the critical path to v1; the whole of SX is
 *additive* to a solver that already ships and is already sound. Read section 5
 for what to do first if only one phase gets built.
 
@@ -730,6 +731,76 @@ features).
 
 ### SX1 -- the trail primitive
 
+**LANDED (partially -- see "what is not here" below).**
+
+`src/runtime/trail.{c,h}` implements all four decisions of 3.2; `stdlib/trail.tur`
+is the surface, behind the `backtrackable-state` experiment; `tests/unit/trail.c`
+is 58 checks at the C level and `tests/fixtures/sx1-trail-basics` is the same
+acceptance list through the language.
+
+**The measurement, which is the phase's real output.** `bench-capture-restore.tur`
+grew the T axis it had been reserving since SX0, so the trail now sits in the
+same table as the three capture paths:
+
+| mechanism | cost per unit of live state |
+|---|---|
+| trail: `bt-mark` + write + `bt-undo-to!` | **~5 ns per write** (flat, T = 8..4096) |
+| DK chain slice: restore | ~23 ns per frame |
+| fiber: restore | 486 ns flat, any depth |
+
+Undoing recorded state is roughly **5x cheaper per unit of live state** than
+replaying captured control -- and unlike a continuation it can be *asymmetric*,
+which is the whole argument of 3.5. A continuation restores everything; a search
+needs to discard what it assumed while keeping what it learned. The constant is
+a nice-to-have; the asymmetry is the reason.
+
+**Design notes worth carrying into SX3/SX4**, all of which cost a bug first:
+
+1. **Ownership is a TRANSFER, not a copy.** Recording moves the cell's reference
+   into the trail entry; undoing moves it back. The first draft cloned at both
+   ends, which leaks exactly one payload per undone write -- invisible until
+   something real is on the other end of the drop hook. The unit test checks a
+   fake refcount to zero rather than leaving it to LeakSanitizer.
+2. **The stamp comparison must be `<`, not `!=`.** A committed level leaves cells
+   stamped ABOVE the current level. With `!=` the next outer write re-trails
+   them, and its undo then reverts a write the caller explicitly asked to keep.
+   The fixture pins this case.
+3. **`g-set!` is the trail paused, not a second cell representation.** One struct,
+   one set of semantics; the opt-out is the TYPE that reaches it.
+4. **A mark is packed into an int64 at the language boundary**, because
+   `extern-c` can express pointers, ints and bools but not a two-word struct
+   returned by value. The C API keeps the struct.
+
+**What is NOT here, and why:**
+
+- **The `#fx{Bt}` effect row.** Not added. The reason it matters is real and
+  unchanged -- the refinement solver's purity whitelist decides whether two
+  occurrences of a call may be congruence-collapsed, and a function that mutates
+  a trailed cell must not be -- but nothing in-tree calls the trail from a
+  context the solver reasons about yet, so the hole is not reachable today. It
+  has to land before SX2 puts `stdlib/logic.tur` on the trail, and that is the
+  right pairing: the row and its first real caller in one change.
+- **The serialization refusal of 3.5.** Not added. Same reasoning: no serializable
+  continuation currently spans a `bt-scope`, because nothing spans one yet.
+- **`bt-scope` / `with-untrailed` as higher-order forms.** The surface ships the
+  bracket halves (`bt-mark` / `bt-undo-to!`, `untrailed-begin` / `untrailed-end`)
+  rather than combinators taking a thunk. The combinators want the effect row to
+  type honestly, so they land with it.
+
+The gate is `EXPERIMENTS[]` row `backtrackable-state`, prototype lifecycle,
+introduced 0.39.0, expires 0.42.0, `opt_global` `g_opt_backtrackable_state`. It
+gates the AUTOLOAD of `stdlib/trail.tur`: with the experiment off the module is
+simply not there and `bt-set!` is an unknown function, which is a more honest
+report than names that exist and refuse to work. `experiment_warn_if_used` fires
+once per compile from the same place.
+
+One bug fixed on the way: `tur_stdlib_prepend_forms` iterated the raw autoload
+array while project mode went through the accessor, so a gated entry was honoured
+in one build mode and silently ignored in the other -- the same program compiling
+two different ways. Both now go through the accessor.
+
+Original specification follows.
+
 - **Do:** `src/runtime/trail.{c,h}` per 3.2, `stdlib/trail.tur` per the surface
   in 3.2, the `#fx{Bt}` effect row, the generational stale-mark error, the
   serialization refusal of 3.5.
@@ -1065,10 +1136,14 @@ surface slotted where it is cheapest:
    verdicts" criteria can be checked through `tur smt` rather than only through
    the ctest harness, and SX6's gate can read per-obligation cap attribution
    out of the JSON dump.
-3. **SX1, then SX2** -- answers the opt-out question with a shipped design
-   instead of a promise, and immediately tests whether the primitive pays for
-   itself on the stdlib search paths. With 4 and 5 parked, this is the whole
-   of the live plan after SX0(a) and SX8a.
+3. ~~**SX1**~~, **then SX2** -- SX1 answered the opt-out question with a shipped
+   design instead of a promise: three granularities, and a measurement showing
+   record-and-undo is ~5x cheaper per unit of state than capture-and-restore.
+   **SX2 is now the live phase**, and it is the honest test -- if a trailed
+   union-find does not beat a persistent assoc list on `bench-logic-query`, the
+   primitive is not paying for itself. SX2 is also what should carry the
+   `#fx{Bt}` effect row, since it brings the first caller the solver's purity
+   whitelist can actually see.
 4. ~~**If SX0(b) says the cube caps bite: SX6a**~~ -- **it says they do not.**
    Parked; revisit only if a later sweep moves the cube peaks off the floor.
 5. ~~**SX3-SX5**~~ -- SX4 is **parked** on its own gate (the LA cap does not

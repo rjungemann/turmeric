@@ -237,6 +237,10 @@ for R in ("1", "8"):
         if not f: continue
         L.append("| cloneable | %s | %s | %.1f | %.4f | %.4f |" % (R, label, f[0], f[1], f[3]))
 
+def fit_e0(path, R, fn):
+    sel = [r for r in rd if r["path"]==path and r["R"]==R and r["E"]=="0" and float(r["F"])>0]
+    return ols([(fn(r), float(r["F"]), 0.0) for r in sel]) if len(sel) >= 3 else None
+
 L.append("\n## Per-frame cost across the sweep (dk, E=0, R=1)\n")
 L.append("A single slope assumes the per-frame cost is constant. This column is how far")
 L.append("that assumption holds -- and where it stops. The cost settles into a flat")
@@ -262,6 +266,38 @@ for path in paths:
         L.append("| %s | %s | %s | %.1f | %.2f | %s |"
                  % (r["F"], e, r["R"], cap_ns(r), res_ns(r), r["bytes_per_capture"]))
 
+# The T axis (SX1).  Reported as its own section rather than folded into the
+# fitted table above: the regressors there are F and E, and a trail has neither.
+trail = [r for r in rd if r["path"] == "trail"]
+if trail:
+    L.append("\n## The T axis -- trailed writes (SX1)\n")
+    L.append("`bt-mark`, T trailed writes, `bt-undo-to!`. This is the alternative to")
+    L.append("capturing state at all: instead of copying a continuation so a second entry")
+    L.append("does not see the first one's mutations, record the mutations and put them")
+    L.append("back.\n")
+    L.append("| T | cycle ns | ns per write | bytes on the trail |")
+    L.append("|---:|---:|---:|---:|")
+    for r in trail:
+        T = float(r["T"]) or 1.0
+        cyc = float(r["cap_ns_total"]) / float(r["cap_iters"])
+        L.append("| %s | %.1f | %.2f | %s |" % (r["T"], cyc, cyc / T, r["bytes_per_capture"]))
+    # The comparison that matters, stated rather than left to the reader.
+    per = [float(r["cap_ns_total"]) / float(r["cap_iters"]) / (float(r["T"]) or 1.0)
+           for r in trail if float(r["T"]) >= 8]
+    if per:
+        avg = sum(per) / len(per)
+        dkf = fit_e0("dk", "1", res_ns)
+        if dkf:
+            L.append("\nA trailed write and its undo cost **%.1f ns** (mean over T >= 8), against"
+                     % avg)
+            L.append("**%.1f ns per frame** to replay a DK chain slice. Undoing recorded state is"
+                     % dkf[1])
+            L.append("roughly %.0fx cheaper per unit of live state than restoring captured control --"
+                     % (dkf[1] / avg))
+            L.append("and it is the mechanism that can be asymmetric, keeping what the search")
+            L.append("learned while discarding what it assumed. That asymmetry, not the constant,")
+            L.append("is why the plan routes solver backtracking through state rather than control.")
+
 L.append("\n## Baselines\n")
 L.append("| baseline | ns/op |")
 L.append("|---|---:|")
@@ -272,9 +308,6 @@ for r in rd:
 L.append("\n## The crossover\n")
 L.append("Fitted on the `E = 0` rows only -- no owning envs on either side, so this is")
 L.append("the two mechanisms compared and nothing else.\n")
-def fit_e0(path, R, fn):
-    sel = [r for r in rd if r["path"]==path and r["R"]==R and r["E"]=="0" and float(r["F"])>0]
-    return ols([(fn(r), float(r["F"]), 0.0) for r in sel]) if len(sel) >= 3 else None
 lines = []
 for label, fn in (("capture", cap_ns), ("restore", res_ns)):
     d, f = fit_e0("dk","1",fn), fit_e0("fiber","1",fn)

@@ -259,6 +259,11 @@ extern bool g_dump_cps_mono;
  * and `handle-shallow` is now unconditionally accepted (see experiments.c). */
 
 /* E7: trampolined tail-resume (cps-tramp-resume experiment). See globals.c. */
+/* SX1 (solver-extension-plan): the `backtrackable-state` experiment.  Gates
+ * `(import trail)` -- the trail primitive's semantics are in flux on
+ * purpose (the multi-shot re-entry question in plan 3.5 is open), which is
+ * exactly the case the experiment gate exists for. */
+extern bool g_opt_backtrackable_state;
 extern bool g_opt_cps_tramp_resume;
 /* E3a: admit an OWNING value captured into a genuinely multi-shot (cloneable /
  * serializable) continuation, giving each captured frame's env clone/drop glue
