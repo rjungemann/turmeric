@@ -55,29 +55,21 @@ over `n` bindings is O(n^2) and `logic-walk` is O(n) per variable. This is
 exactly what SX2 of the solver-extension plan exists to measure a replacement
 for -- see that phase rather than treating it as a separate finding.
 
-## 4. The persistent-structure per-operation constant (~200 ns)
+## 4. The persistent-structure per-operation constant (~200 ns) -- DIAGNOSED
 
-SX2's head-to-head (`benchmarks/logic-subst-results.md`) measured
-`stdlib/logic.tur`'s real `Subst` at **~190-230 ns per bind+walk**, and that
-figure is roughly FLAT from n=1 to n=16 -- it only starts climbing past n=128.
-A flat cost is not the O(n) scan of finding #0 below; it is a large constant
-paid per operation regardless of size, and at every size a real query reaches it
-is the constant, not the asymptotics, that dominates.
+SX2's head-to-head measured `stdlib/logic.tur`'s real `Subst` at ~175-230 ns per
+bind+walk, flat in n up to n=16, which said a per-operation constant rather than
+the linear scan of #1 dominates at every size a real query reaches.
 
-Each such operation is one `SBind` construction, one `TInt` construction, a
-`subst-lookup` match and a `term-int-val` match. 200 ns is a lot for that, and
-where it goes is NOT established here. An attempt to isolate it with a
-microbenchmark was optimized away entirely -- a tail-recursive loop whose result
-went unused folded to nothing, the same trap SX0(a)'s closure baseline hit -- and
-a number from a folded loop is worse than no number.
+**That constant is the allocator, and the finding is language-wide rather than
+solver-specific**, so it moved to its own report:
+[multi-variant-adts-always-heap-allocate.md](multi-variant-adts-always-heap-allocate.md).
 
-**What would answer it:** a microbenchmark whose result is genuinely consumed
-(SX0(a)'s `sink` pattern, plus a callee the optimizer cannot devirtualize),
-comparing bare loop / one ADT construction / construction plus match. If the
-cost is in allocation, it is shared by every persistent structure in the stdlib
-and is the single highest-leverage perf item in the tree; if it is in the match
-or the tail-call lowering, it is a different fix entirely. Worth doing before
-anyone optimizes on a guess.
+In short: ~85% of executed instructions on that workload are inside `malloc`;
+a multi-variant ADT heap-allocates on every construction however small it is
+(single-variant ones already lower by value), and nothing ever frees them, so
+the cost degrades 8x as the heap grows. It is not the `O(n)` scan, and fixing
+the scan would not have helped.
 
 ## Context
 
