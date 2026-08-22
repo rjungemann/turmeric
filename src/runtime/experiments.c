@@ -291,12 +291,32 @@ static const char *const GRADUATED[] = {
      * --enable/build.tur/experiments.tur reference to it is accepted as a no-op
      * (TUR-W0063) for one minor line, rather than the hard TUR-E0310 an unknown
      * name gets.  cps-backend graduated 2026-07-11 and its shim was retired once
-     * no config referenced it. */
-    "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
-    "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
-    "cps-async",     /* graduated 2026-07-19; heap-continuation async/await is the unconditional CPS-path lowering */
-    "owning-cloneable-capture", /* graduated 2026-07-20; owning capture into a multi-shot cloneable continuation is always-on */
-    "closure-drop-glue", /* graduated 2026-07-22; Model R drop-glue header ABI is unconditional */
+     * no config referenced it.
+     *
+     * AGED OUT 2026-08-22, at 0.37.0 -- the five CPS/closure backend names,
+     * every one of them at least seven minor lines past its graduation:
+     * cps-effects (0.28 line), cps-tramp-resume (0.29.0), cps-async (0.29.1),
+     * owning-cloneable-capture (0.29 line), closure-drop-glue (0.30.2).
+     *
+     * These five aged out together and ahead of the user-facing names that are
+     * equally eligible by the calendar, because the population that could have
+     * named them is different in kind.  Each gated a BACKEND LOWERING STRATEGY
+     * -- which continuation representation the emitter picks, whether an owning
+     * capture is admitted, whether a drop-glue header rides on a closure env --
+     * with no source syntax to adopt and no behaviour to opt into.  There was
+     * never a reason to write one in a build.tur, and a corpus-wide grep at
+     * removal found no `flags` file, manifest, or experiments.tur naming any of
+     * them (only prose in comments).  A name nobody had reason to enable needs
+     * no migration window.
+     *
+     * The names below are the opposite case and stay: `refined`, `cycle-gc`,
+     * `jit`, `sealed-opaque`, and `global-state` all gated SOURCE SYNTAX
+     * someone had to write into a file and then enable to use, so a lingering
+     * enable is exactly what a real adopter's config looks like.  Retiring one
+     * turns their build red, which is a release decision and belongs with a
+     * version bump rather than a cleanup.  All five are past the one-minor-line
+     * window and each has a *-graduated-enable-noop fixture that goes with it
+     * when it goes. */
     "refined",       /* graduated 2026-08-01; static discharge of #refine{...} is unconditional */
     "cycle-gc",      /* graduated 2026-08-17; (gc-auto!) is an ordinary call form -- GC_AUTO is still opt-in, never a default */
     "jit",           /* graduated 2026-08-17; `tur jit` needs only the -DTUR_JIT=ON build gate */
