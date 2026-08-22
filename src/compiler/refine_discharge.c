@@ -37,6 +37,7 @@ const RefineStats *refine_stats(void) { return &g_stats; }
 void refine_memo_reset(void);
 void refine_discharge_reset(void) {
     memset(&g_stats, 0, sizeof(g_stats));
+    refine_caps_reset();
     refine_memo_reset();
 }
 
@@ -641,6 +642,44 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
     }
 }
 
+/* Cap telemetry.  Prints one line per cap, with the peak the run actually
+ * reached against the limit, and marks the caps that fired.  Every cap here
+ * degrades to RT_UNKNOWN, so a hit is not an error -- it is the difference
+ * between an obligation the solver declined and one it ran out of room on,
+ * which is otherwise invisible from the outside.
+ *
+ * The peaks print even when nothing fired: headroom is the point.  "cubes
+ * peaked at 3 of 64" and "cubes peaked at 61 of 64" are the same zero-hit
+ * summary and completely different signals about whether S4 needs building.
+ * See docs/upcoming/solver-extension-plan.md (SX0(b)). */
+static void refine_report_caps(void) {
+    const RefineCapStats *c = refine_caps();
+    struct { const char *name; uint32_t hits, peak, limit; } rows[] = {
+        { "cubes",         c->cubes_hits,        c->cubes_peak,        REFINE_MAX_CUBES        },
+        { "cube literals", c->cube_lits_hits,    c->cube_lits_peak,    REFINE_MAX_CUBE_LITS    },
+        { "expand depth",  c->expand_depth_hits, c->expand_depth_peak, REFINE_MAX_EXPAND_DEPTH },
+        { "LA vars",       c->la_vars_hits,      c->la_vars_peak,      REFINE_MAX_LA_VARS      },
+        { "LA constraints",c->la_constr_hits,    c->la_constr_peak,    REFINE_MAX_LA_CONSTR    },
+        { "NO shared",     c->no_shared_hits,    c->no_shared_peak,    NO_MAX_SHARED           },
+        { "EUF terms",     c->euf_terms_hits,    c->euf_terms_peak,    REFINE_MAX_EUF_TERMS    },
+    };
+    fprintf(stderr, "refine: caps %s\n",
+            refine_caps_any() ? "(one or more BIT -- those obligations answered "
+                                "unknown and kept their runtime check)"
+                              : "(none hit)");
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+        fprintf(stderr, "refine:   %-15s peak %6u / %-6u %s\n",
+                rows[i].name, rows[i].peak, rows[i].limit,
+                rows[i].hits ? "** HIT" : "");
+    /* Two counters with no meaningful peak of their own: FM growth is bounded
+     * by the LA-constraint limit it shares, and the round budget is a count of
+     * exchange passes, not of a sized structure. */
+    fprintf(stderr, "refine:   %-15s %u\n",
+            "FM blow-ups", c->la_fm_hits);
+    fprintf(stderr, "refine:   %-15s %u (of %u rounds)\n",
+            "NO rounds out", c->no_rounds_hits, (unsigned)NO_MAX_ROUNDS);
+}
+
 void refine_discharge_all(RefineObligationVec *v, Arena *a) {
     if (!v) return;
     for (uint32_t i = 0; i < v->n; i++) refine_discharge_one(v->obs[i], a);
@@ -659,5 +698,6 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
                     "refine: %u result refinement(s) inferred from %u template "
                     "probe(s)\n",
                     g_stats.inferred, g_stats.templates_tried);
+        refine_report_caps();
     }
 }

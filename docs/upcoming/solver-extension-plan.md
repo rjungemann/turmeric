@@ -6,9 +6,18 @@ description: Extending the refinement solver into an incremental, backtracking d
 
 # Solver Extension (SX)
 
-**Status:** proposal, not started. Nothing here is on the critical path to v1;
-the whole of SX is *additive* to a solver that already ships and is already
-sound. Read section 5 for what to do first if only one phase gets built.
+**Status:** proposal. SX0(b) (cap-hit telemetry) has landed; everything else is
+unstarted. Nothing here is on the critical path to v1; the whole of SX is
+*additive* to a solver that already ships and is already sound. Read section 5
+for what to do first if only one phase gets built.
+
+**What the first measurement changed.** SX0(b) exists to gate the two most
+expensive phases, and it gates them both **shut**: neither the arithmetic cap
+(SX4) nor the cube caps (SX6) fire on any of the 411 units swept, and no cap
+hit anywhere cost a real proof. That removes roughly the plan's whole
+right-hand side from consideration for now and leaves SX0(a), SX8a, and
+SX1/SX2 -- the instruments and the trail -- as the live work. Details and the
+table are under SX0(b); reproduce with `benchmarks/run-cap-sweep.sh`.
 
 ## 0. Provenance
 
@@ -589,13 +598,50 @@ Two instruments, no language or runtime change:
   Accept: the three paths of 4.2 each produce a fitted slope and intercept
   over `F` and `E`; the table is checked in; a rerun on an idle box reproduces
   within noise.
-- **(b) Cap-hit telemetry** -- extend `TUR_REFINE_STATS=1` to report *which*
-  cap bit and how often (cubes, cube literals, LA vars, LA constraints, EUF
-  terms, NO shared/rounds), then sweep the corpus, the fuzzer seeds, and the
-  largest in-tree refinement users. This answers 2.1's question -- do
-  path-sensitive VCs with real propositional structure exist yet? -- and gates
-  SX4 and SX6: if `REFINE_MAX_LA_CONSTR` never bites, SX4 waits; if the cube
-  caps never bite, SX6 waits.
+- **(b) Cap-hit telemetry** -- **LANDED.** `TUR_REFINE_STATS=1` now reports
+  *which* cap bit and how often, plus the high-water mark of the quantity each
+  cap bounds, so a cap that never fires still reports its headroom.
+  `benchmarks/run-cap-sweep.sh` sweeps all three populations the phase asks for
+  and writes `benchmarks/cap-sweep-results.md`.
+
+  **Result -- both gates come back NO.** Across 411 units (124 corpus
+  benchmarks, 87 in-tree refinement fixtures, 200 fuzzer-generated VCs):
+
+  | cap | corpus peak | in-tree peak | fuzzer peak | hits |
+  |---|---:|---:|---:|---|
+  | `REFINE_MAX_LA_CONSTR` (512) | 42 | 12 | 9 | none, anywhere |
+  | FM blow-up (same 512) | -- | -- | -- | none, anywhere |
+  | `REFINE_MAX_CUBES` (64) | 40 | 4 | 8 | none, anywhere |
+  | `REFINE_MAX_CUBE_LITS` (64) | 13 | 10 | 5 | none, anywhere |
+  | `REFINE_MAX_EXPAND_DEPTH` (256) | 8 | 5 | 6 | none, anywhere |
+  | `REFINE_MAX_LA_VARS` (32) | 9 | 9 | 7 | none, anywhere |
+  | `REFINE_MAX_EUF_TERMS` (512) | 512 | 25 | 23 | 982, all on one unit |
+  | `NO_MAX_SHARED` (8) | 9 | 9 | 7 | 4 units, always by exactly 1 |
+  | `NO_MAX_ROUNDS` (4) | -- | -- | -- | none, anywhere |
+
+  Three readings, in descending order of consequence:
+
+  1. **SX4 does not start.** `REFINE_MAX_LA_CONSTR` peaks at 42 of 512 -- 92%
+     headroom on the widest thing in the corpus, 98% on real code -- and the FM
+     elimination never once backed off. The archived plan reserved simplex for
+     "if the cap ever bites"; measured, it does not come close.
+  2. **SX6 does not start.** The cube caps never fire either. The corpus's
+     40-of-64 peak is `gen_mixed_sat_00003`, a generated benchmark; in-tree
+     refinement code peaks at 4 cubes of 64. This is 2.1's question answered
+     directly: path-sensitive VCs with real propositional structure **do not
+     exist in this codebase yet**.
+  3. **Not one cap hit cost a proof.** Every capped unit was one that must
+     answer `UNKNOWN` regardless -- four corpus benchmarks labelled `sat`, and
+     `refine-match-field-wrong`, a soundness fixture whose obligation is a
+     genuine violation. The EUF column's 982 hits are all
+     `qf_lra_deep_arith_chain_sat`, a 1000-deep `(+ 1 (+ 1 ...))` nesting that
+     exists to regress a stack overflow -- an artifact of the regression, not a
+     shape real code produces.
+
+  The one cap with a live signal is `NO_MAX_SHARED`, and it is a small one: it
+  turned away exactly one eligible term on each of four units, and the fuzzer's
+  own peak sits at 7 of 8. That is SX5's "raise on evidence rather than
+  caution" note becoming actionable -- see SX5.
 
 **Size:** small. **Gate:** none (benchmarks and stats are not compiler
 features).
@@ -677,6 +723,12 @@ features).
   deliberately, with simplex reserved for "if the cap ever bites". If the
   telemetry says it does not bite, SX4 is a performance project with no
   user-visible payoff and waits behind SX6a.
+  **Measured: it does not bite.** `REFINE_MAX_LA_CONSTR` peaked at 42 of 512
+  across all three populations and fired zero times; the FM blow-up path never
+  triggered. SX4 is **parked** on this evidence. Re-run
+  `benchmarks/run-cap-sweep.sh` before reconsidering -- the number to watch is
+  the `la_constr` peak, and the thing that would move it is wider arithmetic
+  obligations than anything in the tree today.
 
 ### SX5 -- incremental Nelson-Oppen (S3i)
 
@@ -684,6 +736,18 @@ features).
   instead of rebuilding both per cube. The exchange loop itself is unchanged.
 - **Accept:** as SX3 -- identical verdicts, lower cost. `NO_MAX_SHARED` and
   `NO_MAX_ROUNDS` can then be raised on evidence rather than caution.
+- **The evidence for `NO_MAX_SHARED` already exists**, and it does not need
+  SX5 to act on. SX0(b) found it turning away eligible terms on four units,
+  every time by exactly one (9 eligible against a cap of 8), while
+  `NO_MAX_ROUNDS` never ran out anywhere. None of those four lost a proof, so
+  this is not urgent -- but it is the only cap in the solver with a live
+  signal, and raising it is a one-constant change rather than a phase.
+  What makes it not-quite-free: the exchange is quadratic in the shared set
+  and each `la_entails_eq` runs Fourier-Motzkin twice, so 8 -> 16 is 4x the
+  pair work on every S3 cube, paid by every obligation that reaches S3 rather
+  than only by the ones near the cap. Take it with a compile-time measurement
+  on the widest fixtures and a verdict diff over the corpus, not as a
+  drive-by.
 
 ### SX6 -- boolean structure beyond small DNF (S4)
 
@@ -718,6 +782,11 @@ stepping stone may be where it permanently stops:
 - **Gate:** `EXPERIMENTS[]` row `solver-lazy-smt` while in flux; graduation
   deletes the row per the project rule. Gate on *starting*: SX0(b) shows the
   cube caps biting on real obligations.
+  **Measured: they do not.** Zero cube-cap hits across all three populations;
+  in-tree refinement code peaks at 4 cubes of 64. SX6 is **parked**, and SX6b
+  is parked behind it. The step-zero item above (streaming cubes off an
+  explicit stack) is still a fine cleanup on its own merits, but it is now a
+  cleanup rather than a cap-driven necessity.
 
 **SX6b -- CDCL(T) proper.** Only if SX6a's blocking-clause loop measurably
 thrashes (many iterations rediscovering the same theory conflict) on real
@@ -845,8 +914,10 @@ one dishonest failure mode a query surface can have.
 This mirrors the review's own next-steps list, with the interrogation
 surface slotted where it is cheapest:
 
-1. **SX0**, both instruments -- the telemetry and the curve are the decision
-   data for everything below, and cost days.
+1. ~~**SX0**, both instruments~~ -- **(b) done**, and it reshaped items 4 and 5
+   below. **(a), the capture/restore curve, is now the front of the queue**:
+   it is the only remaining SX0 instrument, and SX1 is specified to land after
+   it.
 2. **SX8a alongside or immediately after SX0** -- it shares SX0(b)'s
    emitter, costs little (the SMT-LIB reader already exists in
    `tests/unit/refine_corpus.c`), and every phase after it gets a public
@@ -854,14 +925,20 @@ surface slotted where it is cheapest:
    against external solvers.
 3. **SX1, then SX2** -- answers the opt-out question with a shipped design
    instead of a promise, and immediately tests whether the primitive pays for
-   itself on the stdlib search paths.
-4. **If SX0(b) says the cube caps bite: SX6a** -- offline lazy SMT needs no
-   incremental theories, so it can leapfrog SX3-SX5 entirely.
-5. **SX3-SX5** when SX6b or measured compile-time cost justifies them; SX4
-   only if its own cap bites. SX8b rides whichever of SX3/SX4 lands first.
+   itself on the stdlib search paths. With 4 and 5 parked, this is the whole
+   of the live plan after SX0(a) and SX8a.
+4. ~~**If SX0(b) says the cube caps bite: SX6a**~~ -- **it says they do not.**
+   Parked; revisit only if a later sweep moves the cube peaks off the floor.
+5. ~~**SX3-SX5**~~ -- SX4 is **parked** on its own gate (the LA cap does not
+   bite). SX3/SX5 were never cap-gated -- they trade cost, not answers -- so
+   they stay available, but with SX6b parked behind SX4 there is no longer a
+   consumer pulling them forward; take them only if measured compile time asks.
+   The one exception worth doing on its own is the `NO_MAX_SHARED` raise SX0(b)
+   turned up; see SX5.
 6. **SX7 prototype in Turmeric early**, via the SX8c seam (it needs only
    SX4's seam or even today's S2 for a first cut against the corpus), C port
-   last or never. **SX6b** last of all, and only if SX6a thrashes.
+   last or never. **SX6b** last of all, and only if SX6a thrashes -- which now
+   requires SX6a to exist first, which requires its own gate to reopen.
 
 ## 6. Explicitly not doing
 

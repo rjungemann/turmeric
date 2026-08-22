@@ -21,20 +21,23 @@
 
 #include <string.h>
 
-#define NO_MAX_ROUNDS 4
-#define NO_MAX_SHARED 8
-
 /* Collect the terms both theories can see: the opaque terms LA purified out
  * (variables and uninterpreted applications), which EUF also has as nodes. */
 static uint32_t collect_shared(EufState *euf, VCTerm **out, uint32_t cap) {
-    uint32_t n = 0;
+    uint32_t n = 0, eligible = 0;
     uint32_t total = euf_term_count(euf);
-    for (uint32_t i = 0; i < total && n < cap; i++) {
+    /* Scan every term even after the array is full: the count we discard is
+     * the telemetry -- it is the difference between "8 shared terms, exactly
+     * at the cap" and "40 shared terms, 32 of them dropped". */
+    for (uint32_t i = 0; i < total; i++) {
         VCTerm *t = euf_term_at(euf, i);
         if (!t || t->sort == VS_BOOL) continue;
         if (!la_is_shared_term(t)) continue;
-        out[n++] = t;
+        eligible++;
+        if (n < cap) out[n++] = t;
     }
+    refine_cap_peak(&refine_caps()->no_shared_peak, eligible);
+    if (eligible > cap) refine_caps()->no_shared_hits++;
     return n;
 }
 
@@ -56,8 +59,9 @@ static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c) {
     uint32_t n_shared = collect_shared(euf, shared, NO_MAX_SHARED);
     if (n_shared < 2) return false;
 
+    bool progress = false;
     for (uint32_t round = 0; round < NO_MAX_ROUNDS; round++) {
-        bool progress = false;
+        progress = false;
 
         /* EUF -> LA: every congruence the equality solver established becomes
          * a linear equation. */
@@ -90,6 +94,11 @@ static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c) {
         }
         if (!progress) break;
     }
+    /* Falling out of the loop with `progress` still set means the exchange was
+     * STILL learning equalities when the round budget ran out -- a real cap
+     * hit.  Reaching a fixpoint inside the budget is not, even though both
+     * paths leave the loop the same way. */
+    if (progress) refine_caps()->no_rounds_hits++;
     return false;
 }
 

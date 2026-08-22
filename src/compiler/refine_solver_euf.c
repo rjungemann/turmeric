@@ -37,7 +37,11 @@ struct EufState {
 static uint32_t euf_index(EufState *st, VCTerm *t);
 
 static void euf_add(EufState *st, VCTerm *t) {
-    if (st->n >= REFINE_MAX_EUF_TERMS) { st->unsat = false; return; }
+    if (st->n >= REFINE_MAX_EUF_TERMS) {
+        refine_caps()->euf_terms_hits++;
+        refine_cap_peak(&refine_caps()->euf_terms_peak, REFINE_MAX_EUF_TERMS);
+        st->unsat = false; return;
+    }
     if (st->n == st->cap) {
         uint32_t ncap = st->cap ? st->cap * 2 : 32;
         VCTerm **nt = (VCTerm **)arena_alloc(st->a, ncap * sizeof(VCTerm *));
@@ -51,6 +55,7 @@ static void euf_add(EufState *st, VCTerm *t) {
     st->terms[st->n]  = t;
     st->parent[st->n] = st->n;
     st->n++;
+    refine_cap_peak(&refine_caps()->euf_terms_peak, st->n);
 }
 
 /* Register `t` and every subterm; returns t's index (UINT32_MAX if capped). */
@@ -58,7 +63,11 @@ static uint32_t euf_index(EufState *st, VCTerm *t) {
     if (!t) return UINT32_MAX;
     for (uint32_t i = 0; i < st->n; i++) if (st->terms[i] == t) return i;
     for (uint32_t i = 0; i < t->n; i++) euf_index(st, t->kids[i]);
-    if (st->n >= REFINE_MAX_EUF_TERMS) return UINT32_MAX;
+    if (st->n >= REFINE_MAX_EUF_TERMS) {
+        refine_caps()->euf_terms_hits++;
+        refine_cap_peak(&refine_caps()->euf_terms_peak, REFINE_MAX_EUF_TERMS);
+        return UINT32_MAX;
+    }
     euf_add(st, t);
     return st->n - 1;
 }

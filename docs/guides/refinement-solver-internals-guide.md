@@ -473,17 +473,27 @@ Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
 | `REFINE_MAX_LA_VARS` | 32 | linear-arithmetic variables |
 | `REFINE_MAX_LA_CONSTR` | 512 | linear-arithmetic constraints |
 | `REFINE_MAX_EUF_TERMS` | 512 | congruence-closure terms |
+| `NO_MAX_SHARED` | 8 | terms in the S3 equality exchange |
+| `NO_MAX_ROUNDS` | 4 | S3 exchange rounds before giving up |
 | `MODEL_MAX_VARS` | 3 | counterexample-search variables |
 | `MODEL_MAX_CANDS` | 16 | counterexample candidate values |
+
+Every cap except the two `MODEL_MAX_*` ones is counted at runtime under
+`TUR_REFINE_STATS=1` -- see "Reading the cap lines" below.
 
 ---
 
 ## Debugging
 
 ```sh
-# Per-unit stats: how many obligations were proven / refuted / unknown.
+# Per-unit stats: how many obligations were proven / refuted / unknown, then
+# one line per cap with the run's high-water mark against the limit.
 TUR_REFINE_STATS=1 tur build main.tur
 # refine: 3 obligation(s): 2 proven, 0 refuted, 1 unknown (7 backend call(s))
+# refine: caps (none hit)
+# refine:   cubes           peak      4 / 64
+# refine:   cube literals   peak      7 / 64
+# ...
 
 # Dump each VC as SMT-LIB2 (the refutation form shown earlier).
 TUR_REFINE_DUMP=1 tur emit-c main.tur
@@ -492,6 +502,42 @@ TUR_REFINE_DUMP=1 tur emit-c main.tur
 # elided and every refinement keeps its runtime check.
 TUR_REFINE_NO_DISCHARGE=1 tur build main.tur
 ```
+
+### Reading the cap lines
+
+Every cap in the table above degrades to `RT_UNKNOWN` when it bites, which is
+sound but **silent**: from the outside, an obligation the solver capped out on
+and one that was simply never in its competence produce the identical
+"unknown" tally. The cap lines separate the two. A cap that fired is marked
+`** HIT`, and the summary line says whether anything fired at all.
+
+The `peak` is recorded on **every** query, not only on the ones that overflow,
+so a cap that never fires still reports how much headroom was left --
+`cubes peak 3 / 64` and `cubes peak 61 / 64` are the same zero-hit summary and
+completely different signals about whether the next slightly wider function
+falls off the cliff.
+
+Two counters have no peak of their own: `FM blow-ups` counts the times
+Fourier-Motzkin elimination backed off before growing past
+`REFINE_MAX_LA_CONSTR` (distinct from the constraint adder hitting the same
+limit -- different causes, different fixes), and `NO rounds out` counts the
+times the Nelson-Oppen exchange was still learning equalities when its round
+budget ran out.
+
+A hit is not an error. It is lost completeness, and only lost completeness that
+costs a real proof is worth acting on -- a cap that fires on an obligation
+which had to answer `UNKNOWN` anyway cost nothing.
+
+To sweep this across the corpus, the in-tree refinement fixtures and the
+fuzzer's own generated VCs in one go, run
+[`benchmarks/run-cap-sweep.sh`](../../benchmarks/run-cap-sweep.sh); it writes a
+per-population table to `benchmarks/cap-sweep-results.md`. The corpus harness
+emits its own machine-readable per-benchmark line under `TUR_CORPUS_CAPS=1`
+(aggregation lives in the sweep script because each benchmark is decided in a
+forked child). The current numbers, and what they say about which solver
+extensions are worth building, are in
+[../upcoming/solver-extension-plan.md](../upcoming/solver-extension-plan.md)
+under SX0(b).
 
 `TUR_REFINE_NO_DISCHARGE` is a **test seam, not a feature gate** -- env-only,
 with no `--enable`, no `EXPERIMENTS[]` row and no CLI flag. It exists because

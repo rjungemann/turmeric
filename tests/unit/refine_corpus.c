@@ -864,6 +864,35 @@ static char *slurp(const char *path, size_t *len_out) {
     return buf;
 }
 
+/* Per-benchmark cap telemetry, one machine-readable line, under
+ * TUR_CORPUS_CAPS=1.  Aggregation lives in the sweep script rather than here
+ * because each benchmark is decided in a forked CHILD -- the parent tallies
+ * through exit codes, which carry a classification and nothing else, so
+ * summing counters in-process would mean adding shared memory to a harness
+ * whose whole isolation story is that the child owns its own crash.
+ *
+ * Emitted for every benchmark, not only the capped ones: the peaks of the
+ * benchmarks that did NOT cap out are what say how much headroom the corpus
+ * actually leaves.  See docs/upcoming/solver-extension-plan.md (SX0(b)). */
+static void report_caps(const char *path) {
+    const char *e = getenv("TUR_CORPUS_CAPS");
+    if (!e || e[0] != '1') return;
+    const RefineCapStats *c = refine_caps();
+    printf("  caps    %s cubes=%u:%u cube_lits=%u:%u expand_depth=%u:%u "
+           "la_vars=%u:%u la_constr=%u:%u la_fm=%u euf_terms=%u:%u "
+           "no_shared=%u:%u no_rounds=%u\n",
+           path,
+           c->cubes_hits, c->cubes_peak,
+           c->cube_lits_hits, c->cube_lits_peak,
+           c->expand_depth_hits, c->expand_depth_peak,
+           c->la_vars_hits, c->la_vars_peak,
+           c->la_constr_hits, c->la_constr_peak,
+           c->la_fm_hits,
+           c->euf_terms_hits, c->euf_terms_peak,
+           c->no_shared_hits, c->no_shared_peak,
+           c->no_rounds_hits);
+}
+
 /* Decide one benchmark and print its line.  Runs in a CHILD process so a
  * pathological input costs one benchmark rather than the whole run. */
 static int decide_one(const char *path) {
@@ -885,7 +914,9 @@ static int decide_one(const char *path) {
         printf("  unlab   %s (no :status claim)\n", path);
         outcome = OUT_UNLABELLED;
     } else {
+        refine_caps_reset();
         RefineVerdict v = run_chain(b.vc, a);
+        report_caps(path);
         if (b.label == LBL_SAT) {
             /* The invariant: a satisfiable assertion set must never be proved
              * contradictory.  RT_UNKNOWN and RT_INVALID are both correct. */
