@@ -9214,6 +9214,15 @@ static int try_external_subcommand(int argc, char **argv) {
 
 
 int main(int argc, char **argv) {
+    /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
+     * Env-only measurement seam (see
+     * docs/reported/multi-variant-adts-always-heap-allocate.md), deliberately
+     * not a CLI flag -- it is not a shipping feature yet. */
+    {
+        const char *__slab = getenv("TUR_ADT_SLAB");
+        if (__slab && __slab[0] == '1') g_adt_slab = true;
+    }
+
 #ifdef _WIN32
     /*
      * Put stdout/stderr in binary mode so a newline stays one byte.

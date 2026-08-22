@@ -6849,8 +6849,13 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             }
             buf_printf(out, "    return __r;\n");
         } else {
-            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                       adt_c_name, adt_c_name, adt_c_name);
+            /* Slab only when nothing will ever free this box: a def with drop
+             * glue is released by drop_glue_*'s trailing free(ptr), and slab
+             * memory must never reach libc free(). */
+            const char *__alloc = (g_adt_slab && !def->needs_drop_glue)
+                                    ? "tur_adt_alloc" : "malloc";
+            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                       adt_c_name, adt_c_name, __alloc, adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
@@ -8043,6 +8048,54 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
     buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
+     *
+     * A multi-variant ADT box is malloc'd on every construction and, when the
+     * type has no drop glue, never freed -- so ~85%% of executed instructions
+     * on an allocation-heavy workload land inside _int_malloc.  For exactly
+     * those never-freed boxes a bump allocator is sound and much cheaper: no
+     * ownership analysis, no drop glue, no ABI change.
+     *
+     * SAFETY, and why this is keyed on drop glue rather than applied blanket:
+     * slab memory must never reach libc free().  A type WITH drop glue has a
+     * drop_glue_* ending in free(ptr), so those keep malloc.  A type without it
+     * has no such function emitted.
+     *
+     * UNVERIFIED, and the reason this is off by default.  The argument that
+     * nothing else frees an ADT box rests on two things that are not proven:
+     *
+     *  - `rc/of` does not free its ADT payload -- it boxes the carrier int64
+     *    separately and frees that wrapper instead.  That is a BUG
+     *    (docs/reported/rc-of-adt-leaks-the-payload.md), and fixing it while
+     *    this is on would hand slab memory to free().  The two are coupled and
+     *    must move together.
+     *  - The intended check -- "run the fixture suite, ASan aborts on a bad
+     *    free" -- does not work: compiled fixtures are not ASan-instrumented
+     *    (docs/reported/compiled-fixtures-are-not-leak-checked.md).  There is
+     *    at present no automated check that would catch a mistake here.
+     *
+     * So this is a MEASUREMENT SEAM, not a shipping default, and it stays off
+     * until those two are resolved.  Slabs are never released; that is the
+     * point.  Measured at 2.1x on an allocation-heavy workload.
+     */
+    if (g_adt_slab) {
+    buf_puts(out, "typedef struct TurAdtSlab { struct TurAdtSlab *next; size_t off; char buf[262144]; } TurAdtSlab;\n");
+    buf_puts(out, "static TurAdtSlab *g_tur_adt_slab = NULL;\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) __attribute__((unused));\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) {\n");
+    buf_puts(out, "    __n = (__n + 15u) & ~(size_t)15u;\n");
+    buf_puts(out, "    if (__n > sizeof(((TurAdtSlab *)0)->buf)) return malloc(__n);\n");
+    buf_puts(out, "    if (!g_tur_adt_slab || g_tur_adt_slab->off + __n > sizeof(g_tur_adt_slab->buf)) {\n");
+    buf_puts(out, "        TurAdtSlab *__s = (TurAdtSlab *)malloc(sizeof(TurAdtSlab));\n");
+    buf_puts(out, "        if (!__s) return malloc(__n);\n");
+    buf_puts(out, "        __s->next = g_tur_adt_slab; __s->off = 0; g_tur_adt_slab = __s;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    void *__p = g_tur_adt_slab->buf + g_tur_adt_slab->off;\n");
+    buf_puts(out, "    g_tur_adt_slab->off += __n;\n");
+    buf_puts(out, "    return __p;\n");
+    buf_puts(out, "}\n");
+    }
+
     /* G4a (mutable-globals-plan §4.4): a double crosses the integer-typed
      * atomics layer through its bit pattern, so one code path serves both front
      * ends instead of a double-typed shim only the GNU branch could provide.
@@ -12404,8 +12457,12 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                     buf_printf(&early_file, "    return __r;\n");
                 } else {
-                    buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                               adt_c_name, adt_c_name, adt_c_name);
+                    /* Mirror of the emit_adt_typedef_and_ctors site: slab only
+                     * when nothing will ever free this box. */
+                    const char *__alloc2 = (g_adt_slab && !def->needs_drop_glue)
+                                             ? "tur_adt_alloc" : "malloc";
+                    buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                               adt_c_name, adt_c_name, __alloc2, adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
@@ -13960,6 +14017,43 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
+     *
+     * A multi-variant ADT box is malloc'd on every construction and, when the
+     * type has no drop glue, never freed -- so ~85%% of executed instructions
+     * on an allocation-heavy workload land inside _int_malloc.  For exactly
+     * those never-freed boxes a bump allocator is sound and much cheaper: no
+     * ownership analysis, no drop glue, no ABI change.
+     *
+     * SAFETY, and why this is keyed on drop glue rather than applied blanket:
+     * slab memory must never reach libc free().  A type WITH drop glue has a
+     * drop_glue_* that ends in free(ptr), so those keep malloc.  A type without
+     * it has no such function emitted, and the generic free paths do not reach
+     * an ADT box -- rc/of boxes the carrier int64 separately and frees that
+     * wrapper, not the box.  The remaining assurance is empirical and loud:
+     * under ASan, a free() of slab memory aborts, so the fixture suite is the
+     * check.
+     *
+     * Off unless TUR_ADT_SLAB=1 was set at COMPILE time -- a measurement seam,
+     * not a shipping default.  Slabs are never released; that is the point.
+     */
+    if (g_adt_slab) {
+    buf_puts(out, "typedef struct TurAdtSlab { struct TurAdtSlab *next; size_t off; char buf[262144]; } TurAdtSlab;\n");
+    buf_puts(out, "static TurAdtSlab *g_tur_adt_slab = NULL;\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) __attribute__((unused));\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) {\n");
+    buf_puts(out, "    __n = (__n + 15u) & ~(size_t)15u;\n");
+    buf_puts(out, "    if (__n > sizeof(((TurAdtSlab *)0)->buf)) return malloc(__n);\n");
+    buf_puts(out, "    if (!g_tur_adt_slab || g_tur_adt_slab->off + __n > sizeof(g_tur_adt_slab->buf)) {\n");
+    buf_puts(out, "        TurAdtSlab *__s = (TurAdtSlab *)malloc(sizeof(TurAdtSlab));\n");
+    buf_puts(out, "        if (!__s) return malloc(__n);\n");
+    buf_puts(out, "        __s->next = g_tur_adt_slab; __s->off = 0; g_tur_adt_slab = __s;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    void *__p = g_tur_adt_slab->buf + g_tur_adt_slab->off;\n");
+    buf_puts(out, "    g_tur_adt_slab->off += __n;\n");
+    buf_puts(out, "    return __p;\n");
+    buf_puts(out, "}\n");
+    }
     /* inline-c-function-scope-include-guards fix: lift inline-C `#include`s
      * to file scope in the .h so every importer's .c (and this module's
      * own .c) sees the typedefs, instead of having the second/third user

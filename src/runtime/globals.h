@@ -263,6 +263,10 @@ extern bool g_dump_cps_mono;
  * `(import trail)` -- the trail primitive's semantics are in flux on
  * purpose (the multi-shot re-entry question in plan 3.5 is open), which is
  * exactly the case the experiment gate exists for. */
+/* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
+ * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
+ * not a shipping default. */
+extern bool g_adt_slab;
 extern bool g_opt_backtrackable_state;
 extern bool g_opt_cps_tramp_resume;
 /* E3a: admit an OWNING value captured into a genuinely multi-shot (cloneable /

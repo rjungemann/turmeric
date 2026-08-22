@@ -92,10 +92,21 @@ Three things follow, and the first corrects this report's original advice:
    `Subst` is a list, so one node per binding is inherent to the persistent
    structure. By-value removes the *Term* riding inside each node -- one of the
    two allocations, not both.
-2. **Row E is the cheap one.** A slab/pool allocator for ADT boxes gets 2.4x --
-   nearly all of what reclamation gets -- and needs **no ownership analysis, no
-   drop glue, and no ABI change**. It is a runtime allocator plus a one-line
-   change at the `ctor_*` emit site. If one thing gets done, this is it.
+2. **Row E is the cheap one, with a caveat found while building it.** A slab
+   allocator for ADT boxes measures **2.1x in the real compiler** (192 -> 89
+   ns/op, checksums identical), close to the 2.4x this model predicted. It needs
+   no ownership analysis and no ABI change -- but it is NOT the one-line change
+   billed here. It has to be keyed on `needs_drop_glue`, because a type with
+   drop glue is freed by `drop_glue_*`'s trailing `free(ptr)` and slab memory
+   must never reach libc `free()`.
+
+   Two things then block turning it on, both filed separately:
+   [`rc/of` leaks its ADT payload](rc-of-adt-leaks-the-payload.md) -- fixing
+   that bug while the slab is on would hand slab memory to `free()` -- and
+   [compiled fixtures are not leak-checked](compiled-fixtures-are-not-leak-checked.md),
+   so the intended "the suite will catch a bad free" verification does not
+   exist. It sits behind `TUR_ADT_SLAB=1` as a measurement seam until both are
+   resolved.
 3. **The transformative number needs both** (18x). That is the case for doing
    the by-value ABI work -- but only *after* the allocator, and knowing it buys
    1.8x on its own.
