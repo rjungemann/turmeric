@@ -122,4 +122,4 @@ Beyond the 69 sites, three things the report did not anticipate:
    `cps_ir.c` removed the only writer of `g_wbd_handled`, which leaves the P5
    whole-body handle-delegation subsystem inert. That is a bigger deletion than
    a flag fold and wants its own analysis, so it is filed separately as
-   `docs/reported/wbd-handle-delegation-subsystem-inert.md`.
+   `docs/archive/wbd-handle-delegation-subsystem-inert.md`.
