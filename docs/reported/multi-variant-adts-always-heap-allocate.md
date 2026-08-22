@@ -7,7 +7,11 @@ instructions** on a representative stdlib workload.
 (An earlier revision said "every sum type in the tree, including `Option` and
 `Result`". `Option` and `Result` are not sums -- see **Scope** below.)
 
-**Status:** OPEN. Diagnosed and priced, not fixed.
+**Status:** OPEN. Diagnosed and priced, not fixed. The fix is planned in
+[docs/upcoming/sum-representation-plan.md](../upcoming/sum-representation-plan.md)
+(SR), which also records the interaction this report understates: by-value
+lowering removes the LEAK as well as the malloc for the types it covers, since
+a value that is never boxed has nothing to free.
 
 ## What was measured
 
