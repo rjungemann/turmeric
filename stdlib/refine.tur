@@ -2,15 +2,14 @@
 ;;;
 ;;; Each alias below is a `deftype` bound to a contract type
 ;;; `#refine{ x : T | p }`.  A parameter declared with one takes the BASE
-;;; type at the C level, gets `p` as a runtime contract check on entry, and --
-;;; under the `refined` experiment (`--enable=refined`, or `#lang turmeric
-;;; refined` for a single file) -- contributes `p` as a HYPOTHESIS the static
-;;; discharger may use to prove the function's return refinement, in which
-;;; case no runtime check is emitted for that return at all.
+;;; type at the C level, gets `p` as a runtime contract check on entry, and
+;;; contributes `p` as a HYPOTHESIS the static discharger may use to prove the
+;;; function's return refinement, in which case no runtime check is emitted for
+;;; that return at all.
 ;;;
-;;; With `refined` off these behave exactly as contract types always have:
-;;; the predicates parse and stay runtime-only.  Nothing here requires the
-;;; experiment.
+;;; Static discharge is unconditional (the `refined` experiment graduated in
+;;; v0.33.0; its `--enable=refined` / `#lang turmeric refined` shims were
+;;; retired in v0.38.0 and are errors now).  Nothing here takes a flag.
 ;;;
 ;;; Example:
 ;;;   (import refine)

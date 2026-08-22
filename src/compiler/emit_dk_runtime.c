@@ -264,9 +264,8 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 
 /* ---- runtime prelude: a faithful C port of src/runtime/cps_prompt.c ----- */
 
-void emit_cps_runtime_prelude(Buf *out) { emit_cps_runtime_prelude_ex(out, false); }
 
-void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
+void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.\n"
 " * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices\n"
@@ -315,7 +314,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
  * that double delivery.  The flag is a property of the case FN's protocol, so
  * dk_copy_node carries it (a marker copy's case still delivers for itself). */
 "    bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n"
 "    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);\n"
 "                        * distinguishes this handle's cases from an enclosing\n"
@@ -384,7 +383,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 " * the dk_handler ctors: dk_case_delivers(dk_handler(...)). */\n"
 "__attribute__((unused))\n"
 "static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry\n"
 " * driver instead of resuming inline, keeping deep effectful recursion flat. */\n"
 "static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
@@ -435,7 +434,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    c->env_clone = n->env_clone; c->env_drop = n->env_drop;\n"
 "    c->body = n->body; c->body_env = n->body_env;\n"
 "    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "    c->tail_resume = n->tail_resume;\n"
 "    c->hgroup = n->hgroup;\n");
     buf_puts(out,
@@ -480,14 +479,12 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    const DK *ge = H;\n"
 "    if (H->shallow) ge = H->next;\n");
     /* Deep skip: a flattening re-install can make an enclosing handle's handlers
-     * ADJACENT to H, so "consecutive DKK_HANDLER" over-skips them.  Under the
-     * re-opening-capable path (tramp), skip only H's own sibling GROUP (same
-     * hgroup); the default path keeps the historical consecutive-HANDLER walk
-     * (no re-install ever makes distinct handles adjacent there). */
-    if (tramp) buf_puts(out,
+     * ADJACENT to H, so "consecutive DKK_HANDLER" over-skips them.  Skip only H's
+     * own sibling GROUP (same hgroup).  Unconditional since cps-tramp-resume
+     * graduated (2026-07-19); the historical consecutive-HANDLER walk it used to
+     * fall back to is gone. */
+    buf_puts(out,
 "    else while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;\n");
-    else buf_puts(out,
-"    else while (ge && ge->kind == DKK_HANDLER) ge = ge->next;\n");
     buf_puts(out,
 "    return (DK *)ge;\n"
 "}\n"
@@ -517,7 +514,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 " * (dk_free would walk into that continuation and risk a double free).  See\n"
 " * docs/archive/cps-delimited-dk-node-leak.md. */\n"
 "__attribute__((unused)) static void dk_free_node(DK *k) { if (k && k->env_drop) k->env_drop(k->env); free(k); }\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
 "typedef intptr_t (*__tur_cps_fn)();\n"
 "static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];\n"
@@ -619,7 +616,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "}\n"
 "static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false); }\n"
 "static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "/* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke\n"
 " * consults it to know whether running the invoked chain might tail-resume out. */\n"
 "static jmp_buf *g_dk_driver;\n"
@@ -653,12 +650,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    intptr_t r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
 "}\n");
-    else buf_puts(out,
-"static intptr_t dk_invoke(DK *sub, intptr_t w) {\n"
-"    DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);\n"
-"    dk_free(c); return r;\n"
-"}\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "/* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *\n"
 " * A tail-resume handler does not resume inline (which nests ~160 B of C stack\n"
 " * per resumed perform -> O(N)); instead dk_perform yields the resumed chain to\n"
@@ -695,7 +687,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    return 0; /* unreachable */\n"
 "}\n"
 "");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "/* Run `first` to completion, absorbing any tail-resume yields it makes, and\n"
 " * return its value.  Same trampoline as __dk_drive_after but SCOPED: it drains\n"
 " * the meta-stack only down to `floor` (the depth at entry), and restores the\n"
@@ -785,13 +777,11 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "         * resumed sub-continuation.  A single-case handle copies just H (identical\n"
 "         * to the old dk_handler(tag,...) re-install). */\n"
 "        const DK *ge = H;\n");
-    /* Same sibling-group boundary fix as dk_case_enclosing_real: under the re-opening
-     * path skip only H's own hgroup, so a prior re-install that flattened an
-     * enclosing handle adjacent to H does not fold it into H's re-installed group. */
-    if (tramp) buf_puts(out,
+    /* Same sibling-group boundary fix as dk_case_enclosing_real: skip only H's
+     * own hgroup, so a prior re-install that flattened an enclosing handle
+     * adjacent to H does not fold it into H's re-installed group. */
+    buf_puts(out,
 "        while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;\n");
-    else buf_puts(out,
-"        while (ge && ge->kind == DKK_HANDLER) ge = ge->next;\n");
     buf_puts(out,
 "        /* Terminate the re-installed group with the ENCLOSING handler markers, not\n"
 "         * dk_done(): a deep handler leaves the outer handlers in place, so an\n"
@@ -804,7 +794,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "        tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));\n"
 "    }\n"
 "    sub = dk_append(sub, tail);\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "    /* E7: a tail-resume handler under an active driver yields the resumed chain\n"
 "     * rather than resuming inline; queue its H->next delivery (unless a no-op) so\n"
 "     * it runs after the resumed chain settles, in nesting order. */\n"
@@ -816,7 +806,7 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    }\n");
     buf_puts(out,
 "    g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */\n");
-    if (tramp) buf_puts(out,
+    buf_puts(out,
 "    /* A non-tail deep case that RE-OPENS an outer effect ends its body in that\n"
 "     * interior perform; if the outer effect is tail-resumed, dk_tail_resume\n"
 "     * longjmps to the entry driver and this dk_perform frame is unwound -- so the\n"
@@ -838,13 +828,9 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
  * cps-case-reopen-marker-kont-truncates-capture).  Return it verbatim. */
 "    return H->case_delivers ? r : dk_run_impl(H->next, r, false);\n"
 "}\n");
-    else buf_puts(out,
-"    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
-"    dk_free(sub);\n"
-"    return H->case_delivers ? r : dk_run_impl(H->next, r, false);\n"
-"}\n"
-"/* Abortive shift body: deliver the precomputed receiver result f(v),\n"
-" * ignoring the captured sub-continuation (Turmeric shift never resumes it). */\n"
-"static intptr_t __dk_abort_body(intptr_t env, DK *subk) { (void)subk; return env; }\n"
-"\n");
+    /* NOTE: the retired `tramp == false` arm also emitted an `__dk_abort_body`
+     * helper here.  It went with the arm rather than being hoisted: nothing in
+     * the emitter references it, and it appears in zero expected.c snapshots --
+     * i.e. it has not been emitted since cps-tramp-resume graduated.  The
+     * arm's trailing blank line went with it for the same reason. */
 }

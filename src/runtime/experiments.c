@@ -97,7 +97,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * the elab_handle gate and g_opt_cps_effects are removed.  handle-shallow
      * lowers to dk_handler_shallow on the CPS path and to the shallow_consumed
      * bubble-up on the fiber path, with compiled == interp on all shapes.  A
-     * lingering --enable=cps-effects is an accept-and-warn no-op via GRADUATED[]. */
+     * The name aged out of GRADUATED[] 2026-08-22; a lingering
+     * --enable=cps-effects is now TUR-E0310. */
     /* cps-async GRADUATED 2026-07-19 -- the heap-continuation representation for
      * `async`/`await` is now the unconditional CPS-path lowering: a function
      * containing `await` is always CPS-colored, and each `await` lowers to a
@@ -128,12 +129,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
      * (rc handle, :heap carrier handle, by-value aggregate) captured into a
      * multi-shot cloneable continuation, with the per-frame env clone/drop
-     * teardown, is now unconditional (g_opt_owning_cloneable_capture defaults
-     * true; the admission predicates in elab_effects.c / cps_ir.c / emit_cps_ir.c
-     * read it always-on).  Every capture channel and owning shape that is
-     * leak-clean in the base language is covered; the remaining rejections are
-     * bounded by the base drop's shallowness, not this gate.  The name moves to
-     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * teardown, is unconditional -- the admission predicates in elab_effects.c /
+     * cps_ir.c / emit_cps_ir.c no longer test a bit at all (the
+     * g_opt_owning_cloneable_capture enable bit was retired 2026-08-22; see
+     * globals.h).  Every capture channel and owning shape that is leak-clean in
+     * the base language is covered; the remaining rejections are bounded by the
+     * base drop's shallowness, not this gate.  The name aged out of GRADUATED[]
+     * 2026-08-22 (a lingering --enable is now TUR-E0310).  See
      * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
     /* closure-drop-glue GRADUATED 2026-07-22 -- Model R (runtime drop-glue header
      * on every heap fat-closure env, walked on release via TUR_CLOSURE_DROP) is
@@ -318,19 +320,44 @@ static const char *const GRADUATED[] = {
      * --enable/build.tur/experiments.tur reference to it is accepted as a no-op
      * (TUR-W0063) for one minor line, rather than the hard TUR-E0310 an unknown
      * name gets.  cps-backend graduated 2026-07-11 and its shim was retired once
-     * no config referenced it. */
-    "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
-    "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
-    "cps-async",     /* graduated 2026-07-19; heap-continuation async/await is the unconditional CPS-path lowering */
-    "owning-cloneable-capture", /* graduated 2026-07-20; owning capture into a multi-shot cloneable continuation is always-on */
-    "closure-drop-glue", /* graduated 2026-07-22; Model R drop-glue header ABI is unconditional */
-    "refined",       /* graduated 2026-08-01; static discharge of #refine{...} is unconditional */
-    "cycle-gc",      /* graduated 2026-08-17; (gc-auto!) is an ordinary call form -- GC_AUTO is still opt-in, never a default */
-    "jit",           /* graduated 2026-08-17; `tur jit` needs only the -DTUR_JIT=ON build gate */
-    "sealed-opaque", /* graduated 2026-08-17; `:sealed` enforcement is unconditional */
-    "global-state",  /* graduated 2026-08-18; globals in write frames, read-only exported globals, ^atomic / ^thread-local */
-    "write-frames",  /* graduated 2026-08-20; `#writes` frames are checked unconditionally (WF2/WF3) */
-    "checked-reads", /* graduated 2026-08-20; broken-`#reads`-frame evidence refuses the congruence grant */
+     * no config referenced it.
+     *
+     * AGED OUT 2026-08-22, at 0.37.0 -- the five CPS/closure backend names,
+     * every one of them at least seven minor lines past its graduation:
+     * cps-effects (0.28 line), cps-tramp-resume (0.29.0), cps-async (0.29.1),
+     * owning-cloneable-capture (0.29 line), closure-drop-glue (0.30.2).
+     *
+     * These five aged out together and ahead of the user-facing names that are
+     * equally eligible by the calendar, because the population that could have
+     * named them is different in kind.  Each gated a BACKEND LOWERING STRATEGY
+     * -- which continuation representation the emitter picks, whether an owning
+     * capture is admitted, whether a drop-glue header rides on a closure env --
+     * with no source syntax to adopt and no behaviour to opt into.  There was
+     * never a reason to write one in a build.tur, and a corpus-wide grep at
+     * removal found no `flags` file, manifest, or experiments.tur naming any of
+     * them (only prose in comments).  A name nobody had reason to enable needs
+     * no migration window.
+     *
+     * AGED OUT 2026-08-22, at 0.38.0 -- the seven user-facing names, in a
+     * second round taken as a deliberate decision rather than a cleanup:
+     * refined (0.33.0), cycle-gc / jit / sealed-opaque (0.34.0), global-state
+     * (0.35.0), write-frames / checked-reads (0.37.0).
+     *
+     * These are the opposite case from the backend five above.  Each gated
+     * SOURCE SYNTAX someone had to write into a file and then enable to use, so
+     * a lingering enable is exactly what a real adopter's config looks like and
+     * retiring it turns their build red.  That is the point of the window, not
+     * an argument against closing it: the shim is a migration window, not a
+     * permanent alias, and every one of these is at least a full minor line
+     * past its graduation.  `--enable=<any of them>` is now the hard TUR-E0310
+     * an unknown name gets, pinned by errors/experiment-retired-name.
+     *
+     * `refined` also aged out of GRADUATED_LAYERS[] (lang_layers.c) in the same
+     * change, so `#lang turmeric refined` is now TUR-E0330; the two shims were
+     * always a pair and had to go together.
+     *
+     * Only `jit-ffi` stays.  It graduated in 0.38.0 -- this line -- so its
+     * window has not opened yet; it becomes eligible at 0.39.0. */
     "jit-ffi",       /* graduated 2026-08-21; call-ptr / callback-ptr are ordinary `unsafe` forms (-DTUR_JIT=ON still gates the interpreter path) */
     NULL,
 };

@@ -30,7 +30,7 @@ static bool owning_byvalue_agg(const Type *t) {
     return def->needs_drop_glue && !def->is_heap && def->n_ctors == 1;
 }
 static bool owning_multishot_admissible(const Type *t) {
-    if (!g_opt_owning_cloneable_capture || !t) return false;
+    if (!t) return false;
     return t->kind == TY_RC
         || type_is_heap_adt(*(Type *)t)
         || type_is_heap_struct(*(Type *)t)

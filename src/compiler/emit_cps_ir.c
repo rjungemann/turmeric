@@ -184,7 +184,7 @@ static bool type_is_session(TypeKind k) {
 
 static bool carrier_handle_ok(const Type *t) {
     if (!t) return false;
-    if (g_opt_cps_tramp_resume && type_is_session(t->kind)) return true;
+    if (type_is_session(t->kind)) return true;
     return (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t));
 }
 
@@ -252,7 +252,7 @@ static bool type_has_unresolved_tyvar(const Type *t) {
  * the Tier-C box path (`slot_box_ty`) instead.  Gated: flag-off keeps the
  * historical (is_heap-only) admission byte-identical. */
 static bool adt_int64_carrier(const Type *t) {
-    if (!g_opt_cps_tramp_resume || !t) return false;
+    if (!t) return false;
     TypeKind k = t->kind;
     if (k != TY_ADT && k != TY_APP) return false;
     return strcmp(type_c_name(*(Type *)t), "int64_t") == 0;
@@ -373,7 +373,7 @@ static const Type *fn_ret_type(const FnDef *fd) {
          * effectful `:nil`-returning method would fail the sig gate on an
          * unresolved return.  Defer to the inferred body type (here TY_NIL), which
          * is what the direct emitter already uses to spell the `void` entry. */
-        if (g_opt_cps_tramp_resume && fd->binding && fd->binding->is_instance_method
+        if (fd->binding && fd->binding->is_instance_method
             && fd->return_type.kind == TY_UNKNOWN && bk != TY_UNKNOWN)
             return &fd->body->type;
     }
@@ -433,11 +433,11 @@ static bool atom_ok(const CAtom *a) {
              * int64 fn-ptr -- a scalar that rides the slot -- so admit it as an atom
              * (e.g. passing a lambda into a HOF-call inside a DK handler's delim).
              * Gated: flag-off keeps the historical rejection byte-identical. */
-            if (g_opt_cps_tramp_resume && a->ty == TY_FN && !(a->var && a->var->is_poly_fn))
+            if (a->ty == TY_FN && !(a->var && a->var->is_poly_fn))
                 return true;
             return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
         case CA_CVAR:
-            if (g_opt_cps_tramp_resume && a->ty == TY_FN) return true;
+            if (a->ty == TY_FN) return true;
             return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
         default:      return false;  /* CA_OTHER */
     }
@@ -1316,7 +1316,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * continuation store (B7) and any other write a lifted body makes to
              * an enclosing mutable (B7b).  A NON-promoted target is a mutable
              * local to this body -- no capture, it is an ordinary local. */
-            const Binding *bref = g_opt_cps_tramp_resume ? set_mut_target(le) : NULL;
+            const Binding *bref = set_mut_target(le);
             if (bref && !is_byref_mut(bref)) bref = NULL;
             if (bref && !bref->is_global && !binding_excluded(bref)) {
                 uint32_t _id = bref->id; bool _f = (_id != exclude);
@@ -1709,11 +1709,10 @@ static bool perform_body_ok(const CTerm *t) {
              * lands in the LH_PERFORM_CONT frame.  A multi-shot resume re-runs the
              * frame and prints again -- the correct semantics (the continuation
              * genuinely runs more than once), exactly as a re-run handler case does.
-             * Gated on --enable=cps-tramp-resume so the default (shipping) config's
-             * perform-continuation admission stays byte-identical; the historical
-             * exclusion was conservative from before the case-body println path. */
-            if (!shape_supported(t->as.letprim.spec)
-                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
+             * Unconditional since cps-tramp-resume graduated (2026-07-19); the
+             * historical exclusion it used to preserve was conservative from
+             * before the case-body println path, and is gone. */
+            if (!shape_supported(t->as.letprim.spec))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -1752,7 +1751,7 @@ static bool perform_cont_reset_ok(const CTerm *t) {
             /* E7/C1 (cps-tramp-resume): a jump to a join (KK_VAR) bound by an
              * enclosing CT_LETCONT in this same continuation -- admitted so a branch
              * whose merged result feeds a subsequent perform lifts into the frame. */
-            if (t->as.appcont.kont.kind == KK_VAR && g_opt_cps_tramp_resume)
+            if (t->as.appcont.kont.kind == KK_VAR)
                 return atom_ok(&t->as.appcont.v);
             return (t->as.appcont.kont.kind == KK_RET || t->as.appcont.kont.kind == KK_PROMPT)
                 && atom_ok(&t->as.appcont.v);
@@ -1761,7 +1760,6 @@ static bool perform_cont_reset_ok(const CTerm *t) {
              * body`, where body branches and jumps to j, and jbody (the merged
              * continuation) may itself perform.  Admit when both sides are reset-ok;
              * emit_lifted lowers the join as local control flow inside the frame. */
-            if (!g_opt_cps_tramp_resume) return false;
             return perform_cont_reset_ok(t->as.letcont.jbody)
                 && perform_cont_reset_ok(t->as.letcont.body);
         case CT_LETVAL:
@@ -1769,12 +1767,10 @@ static bool perform_cont_reset_ok(const CTerm *t) {
         case CT_LETPRIM:
             /* E7/C1: println/print in a Track-A resume-frame continuation -- same
              * emit_term path as a handler case (handle_case_ok), so the print lands
-             * in the LH_RESUME_CONT frame body.  Already flag-gated (this predicate
-             * only fires under --enable=cps-tramp-resume), so no extra gate needed --
-             * but keep the historical exclusion for the flag-off path by mirroring
-             * the perform_body_ok guard. */
-            if (!shape_supported(t->as.letprim.spec)
-                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
+             * in the LH_RESUME_CONT frame body.  Unconditional since
+             * cps-tramp-resume graduated (2026-07-19); the historical
+             * flag-off exclusion this mirrored is gone. */
+            if (!shape_supported(t->as.letprim.spec))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -1803,8 +1799,8 @@ static bool perform_cont_reset_ok(const CTerm *t) {
              * reinstalled-handler tail) as the callee's continuation, and the
              * trampolined tail-resume runtime keeps the recursion flat instead of
              * the O(N) dk_invoke stack this predicate otherwise (correctly) rejects.
-             * Gated: default keeps the eviction. Args must be slot atoms. */
-            if (!g_opt_cps_tramp_resume) return false;
+             * Unconditional since cps-tramp-resume graduated.  Args must be
+             * slot atoms. */
             for (uint32_t i = 0; i < t->as.tailcall.n; i++)
                 if (!call_arg_ok(&t->as.tailcall.args[i], true)) return false;
             return true;
@@ -1816,7 +1812,6 @@ static bool perform_cont_reset_ok(const CTerm *t) {
              * must ride an LH_RESUME_CONT resume-frame (which has __kont) -- guaranteed
              * because perform_body_ok has no CT_CONTINUE case, so emit_perform takes
              * the resume-frame branch.  Args must be slot atoms. */
-            if (!g_opt_cps_tramp_resume) return false;
             for (uint32_t i = 0; i < t->as.cont_.n; i++)
                 if (!call_arg_ok(&t->as.cont_.args[i], true)) return false;
             return true;
@@ -2118,10 +2113,9 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
                  * the auto-inserted scope-exit drop is an EX_DEFER, still
                  * unsupported on the CPS path (it evicts), so an owning capture
                  * without an explicit end-of-scope drop does not compile here.
-                 * Gated on the experiment; off-gate a cloneable owning capture
-                 * never reaches this walk (it evicts at the grammar). */
-                if (g_opt_owning_cloneable_capture) return true;
-                return false;
+                 * Unconditional since owning-cloneable-capture graduated
+                 * (2026-07-20). */
+                return true;
             default: return false;   /* shift (abortive) / unexpected: conservative */
         }
     }
@@ -2172,9 +2166,9 @@ static bool ref_dropped_before_control(const CTerm *t, uint32_t bid) {
                  * continuation pass RC already has (owning_dropped_before_control) --
                  * captured into the single-shot continuation's env, freed there.
                  * Whether the capture+free substrate exists for a ref is verified by
-                 * ASan on effect-ref; flag-gated so flag-off is unchanged. */
-                if (g_opt_cps_tramp_resume) return true;
-                return false;
+                 * ASan on effect-ref.  Unconditional since cps-tramp-resume
+                 * graduated (2026-07-19). */
+                return true;
             default: return false;   /* control op / delivery / end: not before */
         }
     }
@@ -2734,10 +2728,10 @@ static bool fn_single_concrete_sig(const FnDef *fd) {
 
 /* E1, by-value-aggregate PARAM: admit an owning-free by-value aggregate param
  * (`slot_box_ty` -- a flat product with no rc/ref/weak field), matching the direct
- * emitter's by-value spelling (`static int64_t run(tur_adt_Cfg c)`).  Gated on
- * `--enable=cps-tramp-resume` + a single concrete signature -- the `__cps` entry,
- * its forward decl, and the direct wrapper all spell it identically through
- * emit_params. */
+ * emitter's by-value spelling (`static int64_t run(tur_adt_Cfg c)`).  Requires a
+ * single concrete signature -- the `__cps` entry, its forward decl, and the
+ * direct wrapper all spell it identically through emit_params.  (This also used
+ * to require --enable=cps-tramp-resume, which graduated 2026-07-19.) */
 static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
     /* The direct emitter passes SOME aggregates BY POINTER (`const tur_adt_H *` --
      * a defdata record ADT, a large by-value product; type_struct_pass_by_ptr),
@@ -2747,7 +2741,7 @@ static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
      * (conv-adt-record-typed-fn-field-call).  Restrict this admission to an
      * aggregate the direct emitter ALSO passes by value (a defstruct-lowered
      * `tur_adt_Cfg`), so all three spellings match through emit_params. */
-    return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+    return fn_single_concrete_sig(fd)
         && slot_box_ty(&p->type) && !type_struct_pass_by_ptr(p->type);
 }
 
@@ -2777,7 +2771,7 @@ static bool fatparam_only_called(const FnDef *fd, const Binding *p) {
  * carrier handles), so a fn that captures such a handle still evicts on the capture;
  * admitting the RETURN move-out is safe. */
 static bool fn_carrier_ret_ok(const FnDef *fd, const Type *rt) {
-    return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+    return fn_single_concrete_sig(fd)
         && !type_has_unresolved_tyvar(rt)
         && carrier_handle_ok(rt);
 }
@@ -2793,7 +2787,7 @@ static bool fn_carrier_ret_ok(const FnDef *fd, const Type *rt) {
  * handler (cps-backend-effect-under-match) -- keep the whole call chain on the
  * DK.  Same single-concrete-signature + flag guard as the other admissions. */
 static bool fn_carrier_param_ok(const FnDef *fd, const Binding *p) {
-    if (!(g_opt_cps_tramp_resume && fn_single_concrete_sig(fd))) return false;
+    if (!fn_single_concrete_sig(fd)) return false;
     TypeKind k = p->type.kind;
     /* B8: an opaque session-channel param is a void* carrier -- emit_params spells
      * it `void*` (matching the direct emitter), so the __cps ABI is consistent. */
@@ -2902,7 +2896,7 @@ static bool fn_sig_ok(const FnDef *fd) {
          * call_arg_ok / atom_ok) still EVICT a fn that threads the fat closure
          * through a DK/call-arg slot. */
         if (p->is_poly_fn
-            && !(g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+            && !(fn_single_concrete_sig(fd)
                  && fatparam_only_called(fd, p))) return false;
         bool fn_param_ok = p->type.kind == TY_FN || p->is_poly_fn;
         if (!p->is_borrow && !fn_param_ok
@@ -3013,7 +3007,7 @@ static bool fn_is_d2b_main(const FnDef *fd) {
      * gate is thus the fixpoint (the "taint-completeness guard" the note asked for),
      * unlocked now that E2a threads the effectful fn-values a handle-main performs. */
     return cps_expr_contains_shift(fd->body)
-        || (g_opt_cps_tramp_resume && expr_has_handle(fd->body));
+        || expr_has_handle(fd->body);
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */
@@ -3505,7 +3499,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                  * cps-tramp-resume so the shipping classifier stays byte-identical
                  * (flag-off keeps the unconditional overflow). */
                 const struct CtorDef *fac = NULL; uint32_t ffidx = 0;
-                if (g_opt_cps_tramp_resume && e->as.call_.fn_expr->kind == EX_GET_FIELD) {
+                if (e->as.call_.fn_expr->kind == EX_GET_FIELD) {
                     fac   = e->as.call_.fn_expr->as.get_field_.adt_ctor;
                     ffidx = e->as.call_.fn_expr->as.get_field_.field_idx;
                 }
@@ -3528,19 +3522,17 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
              * effects as performs (whether the callee is a fn-typed param binding or
              * an fn_expr) so an effect reached ONLY through a fn-value taints -- a
              * fn evicted for that call then seeds it and its handler co-evicts.
-             * Gated: flag-off keeps the accumulation byte-identical. */
-            if (g_opt_cps_tramp_resume) {
-                const Type *ft = NULL;
-                const Binding *fb = e->as.call_.fn_binding;
-                if (fb && !fb->is_global && fb->type.kind == TY_FN) ft = &fb->type;
-                else if (!fb && e->as.call_.fn_expr && e->as.call_.fn_expr->type.kind == TY_FN)
-                    ft = &e->as.call_.fn_expr->type;
-                const struct EffectRow *row = ft ? ft->as.fn.effect_row : NULL;
-                if (row && row->kind == ERK_CONCRETE)
-                    for (uint8_t i = 0; i < row->as.concrete.n_effects; i++)
-                        if (row->as.concrete.effects[i])
-                            mark_effect(row->as.concrete.effects[i]->name, acc->plo, acc->phi);
-            }
+             * Unconditional since cps-tramp-resume graduated (2026-07-19). */
+            const Type *ft = NULL;
+            const Binding *fb = e->as.call_.fn_binding;
+            if (fb && !fb->is_global && fb->type.kind == TY_FN) ft = &fb->type;
+            else if (!fb && e->as.call_.fn_expr && e->as.call_.fn_expr->type.kind == TY_FN)
+                ft = &e->as.call_.fn_expr->type;
+            const struct EffectRow *row = ft ? ft->as.fn.effect_row : NULL;
+            if (row && row->kind == ERK_CONCRETE)
+                for (uint8_t i = 0; i < row->as.concrete.n_effects; i++)
+                    if (row->as.concrete.effects[i])
+                        mark_effect(row->as.concrete.effects[i]->name, acc->plo, acc->phi);
             /* E2 threadability probe: is count_target passed here as arg[i] to a
              * THREADING param of a resolvable global callee?  Counted alongside the
              * total-use walk below, so the caller can test total == threadable. */
@@ -3928,7 +3920,7 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
                      * not disqualify `p` as a thread-param (effect-poly-map).  Every
                      * other value-use (stored, passed elsewhere, bare ref) still
                      * counts. */
-                    if (g_opt_cps_tramp_resume && g_ptc_self_bind
+                    if (g_ptc_self_bind
                         && e->as.call_.fn_binding == g_ptc_self_bind
                         && i == g_ptc_self_pi)
                         continue;
@@ -4033,10 +4025,6 @@ static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
      * (colored_call_wbd_delegatable), so admit row-variable params under
      * cps-tramp-resume.  Flag-off keeps the concrete-row requirement (codegen
      * unchanged). */
-    if (!g_opt_cps_tramp_resume && p->type.kind == TY_FN) {
-        const struct EffectRow *pr = p->type.as.fn.effect_row;
-        if (!pr || pr->kind != ERK_CONCRETE) return PT_E1;
-    }
     if (ntc > 0) {
         /* E2c: a non-tail fn-value call inside a HOF that ALSO installs a `handle`
          * sits in the handle's LIFTED continuation frame.  That frame now CAPTURES
@@ -4248,7 +4236,7 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
                  * thread-safe (effect-poly-map).  Any OTHER arg must be a registered
                  * threadable fn-value.  A let / `^borrow`-hoist temp of a
                  * capturing closure resolves through closure_fn_binding. */
-                if (!(g_opt_cps_tramp_resume && fd->params
+                if (!(fd->params
                       && a->as.var.binding == fd->params[pi])
                     && !threadable_has(a->as.var.binding)
                     && !threadable_has(a->as.var.binding->closure_fn_binding)
@@ -4438,19 +4426,17 @@ static void ensure_S(const Expr *program) {
      * the classification loop -- a forward reference (a fn passed as a value later
      * in the file) would otherwise be missed. */
     g_addr_taken_n = 0;
-    if (g_opt_cps_tramp_resume) {
-        g_addr_collecting = true;
-        for (uint32_t i = 0; i < np; i++) {
-            Expr *it = (Expr *)items[i];
-            if (!it) continue;
-            uint64_t dlo = 0, dhi = 0;   /* throwaway effect sink */
-            if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->body)
-                expr_collect_effects(it->as.fn_def_.fn->body, &dlo, &dhi);
-            else
-                expr_collect_effects(it, &dlo, &dhi);
-        }
-        g_addr_collecting = false;
+    g_addr_collecting = true;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = (Expr *)items[i];
+        if (!it) continue;
+        uint64_t dlo = 0, dhi = 0;   /* throwaway effect sink */
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->body)
+            expr_collect_effects(it->as.fn_def_.fn->body, &dlo, &dhi);
+        else
+            expr_collect_effects(it, &dlo, &dhi);
     }
+    g_addr_collecting = false;
 
     /* E2 threadability measurement (cps-tramp-resume): decide, for each EFFECTFUL
      * fn-value that today evicts to the fiber (an address-taken named fn or a
@@ -4461,73 +4447,71 @@ static void ensure_S(const Expr *program) {
      * classification. */
     g_threadable_fn_n = 0;
     cps_ir_thread_param_reset();
-    if (g_opt_cps_tramp_resume) {
-        bool trace = getenv("TUR_TRACE_EVICT") != NULL;
-        for (uint32_t i = 0; i < np; i++) {
-            Expr *it = (Expr *)items[i];
-            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
-            FnDef *fd = it->as.fn_def_.fn;
-            if (!fd->binding || !fd->body) continue;
-            bool is_fnval = fd->binding->is_lifted_lambda || addr_taken_has(fd->binding);
-            if (!is_fnval) continue;
-            uint64_t lo = 0, hi = 0;
-            expr_collect_effects(fd->body, &lo, &hi);
-            /* An effectful fn-value keeps the fiber alive.  A PURE fn-value
-             * normally does not -- EXCEPT one the coloring pass force-colored
-             * because it flows into an EFFECTFUL fn-value param (effect-subtype
-             * cluster): the HOF threads that param via the registry, which needs
-             * even a pure callback to be `threadable_add`ed with a `__cps` entry,
-             * else `param_is_thread_safe` fails and the HOF sig_perms "E2 pending".
-             * So a colored pure lambda proceeds to the threadability check. */
-            if (!(lo || hi) && !fd->cps_colored) continue;
-            int total = 0, ok = 0, tier = 0;
-            bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
-            /* E2a: a concrete captureless fn-value is threaded onto the DK -- tier
-             * `now` (tail call) OR tier `nontail` (a non-tail call, reified as a
-             * heap-join frame threaded to its __cps).  Covers BOTH a lifted lambda
-             * (`(fn [] (perform E))`) AND an address-taken NAMED fn (`my-eff`
-             * passed by name): both are carried as a direct-entry function pointer
-             * word, register (that addr -> `<name>__cps`) at startup so a threaded
-             * call site (`__tur_cps_lookup((intptr_t)f)`) recovers the CPS variant
-             * and the fn-value's perform reaches the caller's handler.  The named
-             * case backs the handle-body threading (`run-with(my-eff)`). */
-            if (thr && (tier == (int)PT_NOW || tier == (int)PT_NONTAIL)
-                && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding)))
-                threadable_add(fd->binding);
-            /* E2c: an EFFECTFUL fn-value (lambda or named) stored in a struct
-             * field is called via `(.field obj)` and threaded via the registry;
-             * register it so `__tur_cps_lookup(obj.field)` resolves and its perform
-             * reaches the caller's handler.  The struct-field store is not a
-             * threadable-ARG use, so this is a separate admission from the E2a
-             * param path above. */
-            /* E2c: register a fn-value stored in an EFFECTFUL struct field
-             * (fnval_stored_in_struct already checks the field row is effectful),
-             * so `(.field obj)` threads to its __cps.  Includes a PURE fn stored in
-             * an effectful field (effect subtyping) once the coloring pass has
-             * force-colored it (so it reaches here with a __cps entry). */
-            if (fnval_stored_in_struct(program, fd->binding)
-                && (lo || hi || fd->cps_colored))
-                threadable_add(fd->binding);
-            if (trace) {
-                const char *nm = fd->binding->name ? fd->binding->name->name : "?";
-                const char *tiers[] = { "-", "now", "nontail", "e1" };
-                fprintf(stderr, "[E2-COLOR] %-24s thr=%c tier=%-7s uses=%d ok=%d %s\n",
-                        nm, thr ? 'Y' : 'N',
-                        thr ? tiers[tier >= 0 && tier <= 3 ? tier : 0] : "-",
-                        total, ok, fd->binding->is_lifted_lambda ? "lambda" : "named");
-            }
+    bool trace = getenv("TUR_TRACE_EVICT") != NULL;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = (Expr *)items[i];
+        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+        FnDef *fd = it->as.fn_def_.fn;
+        if (!fd->binding || !fd->body) continue;
+        bool is_fnval = fd->binding->is_lifted_lambda || addr_taken_has(fd->binding);
+        if (!is_fnval) continue;
+        uint64_t lo = 0, hi = 0;
+        expr_collect_effects(fd->body, &lo, &hi);
+        /* An effectful fn-value keeps the fiber alive.  A PURE fn-value
+         * normally does not -- EXCEPT one the coloring pass force-colored
+         * because it flows into an EFFECTFUL fn-value param (effect-subtype
+         * cluster): the HOF threads that param via the registry, which needs
+         * even a pure callback to be `threadable_add`ed with a `__cps` entry,
+         * else `param_is_thread_safe` fails and the HOF sig_perms "E2 pending".
+         * So a colored pure lambda proceeds to the threadability check. */
+        if (!(lo || hi) && !fd->cps_colored) continue;
+        int total = 0, ok = 0, tier = 0;
+        bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
+        /* E2a: a concrete captureless fn-value is threaded onto the DK -- tier
+         * `now` (tail call) OR tier `nontail` (a non-tail call, reified as a
+         * heap-join frame threaded to its __cps).  Covers BOTH a lifted lambda
+         * (`(fn [] (perform E))`) AND an address-taken NAMED fn (`my-eff`
+         * passed by name): both are carried as a direct-entry function pointer
+         * word, register (that addr -> `<name>__cps`) at startup so a threaded
+         * call site (`__tur_cps_lookup((intptr_t)f)`) recovers the CPS variant
+         * and the fn-value's perform reaches the caller's handler.  The named
+         * case backs the handle-body threading (`run-with(my-eff)`). */
+        if (thr && (tier == (int)PT_NOW || tier == (int)PT_NONTAIL)
+            && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding)))
+            threadable_add(fd->binding);
+        /* E2c: an EFFECTFUL fn-value (lambda or named) stored in a struct
+         * field is called via `(.field obj)` and threaded via the registry;
+         * register it so `__tur_cps_lookup(obj.field)` resolves and its perform
+         * reaches the caller's handler.  The struct-field store is not a
+         * threadable-ARG use, so this is a separate admission from the E2a
+         * param path above. */
+        /* E2c: register a fn-value stored in an EFFECTFUL struct field
+         * (fnval_stored_in_struct already checks the field row is effectful),
+         * so `(.field obj)` threads to its __cps.  Includes a PURE fn stored in
+         * an effectful field (effect subtyping) once the coloring pass has
+         * force-colored it (so it reaches here with a __cps entry). */
+        if (fnval_stored_in_struct(program, fd->binding)
+            && (lo || hi || fd->cps_colored))
+            threadable_add(fd->binding);
+        if (trace) {
+            const char *nm = fd->binding->name ? fd->binding->name->name : "?";
+            const char *tiers[] = { "-", "now", "nontail", "e1" };
+            fprintf(stderr, "[E2-COLOR] %-24s thr=%c tier=%-7s uses=%d ok=%d %s\n",
+                    nm, thr ? 'Y' : 'N',
+                    thr ? tiers[tier >= 0 && tier <= 3 ? tier : 0] : "-",
+                    total, ok, fd->binding->is_lifted_lambda ? "lambda" : "named");
         }
-        /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
-        for (uint32_t i = 0; i < np; i++) {
-            Expr *it = (Expr *)items[i];
-            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
-            FnDef *fd = it->as.fn_def_.fn;
-            for (uint32_t pi = 0; pi < fd->n_params; pi++) {
-                PtClass pc = param_thread_class(fd, pi);
-                if ((pc == PT_NOW || pc == PT_NONTAIL)
-                    && param_is_thread_safe(program, fd, pi))
-                    cps_ir_thread_param_add(fd->params[pi]);
-            }
+    }
+    /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = (Expr *)items[i];
+        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+        FnDef *fd = it->as.fn_def_.fn;
+        for (uint32_t pi = 0; pi < fd->n_params; pi++) {
+            PtClass pc = param_thread_class(fd, pi);
+            if ((pc == PT_NOW || pc == PT_NONTAIL)
+                && param_is_thread_safe(program, fd, pi))
+                cps_ir_thread_param_add(fd->params[pi]);
         }
     }
 
@@ -4555,7 +4539,7 @@ static void ensure_S(const Expr *program) {
                  * own it (emit its exported direct entry AND a `__cps` variant).
                  * A genuine `^:export-as` export still perm-routes. */
                 if (fd->binding->c_export_name
-                    && !(g_opt_cps_tramp_resume && fd->binding->is_instance_method))
+                    && !fd->binding->is_instance_method)
                     { candidate = false; sig_perm = true; }
                 if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
                 if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
@@ -4568,7 +4552,7 @@ static void ensure_S(const Expr *program) {
                  * permanent fiber source so its effect taints and any DK handler-
                  * installer co-classifies to fiber.  Cleared once E2 gives fn-values
                  * a DK-threading (__fn_cps) entry. */
-                if (candidate && g_opt_cps_tramp_resume
+                if (candidate
                     && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
                     && !threadable_has(fd->binding)) {
                     /* B5: perm-taint only on the NET ESCAPING effect -- a perform
@@ -4994,7 +4978,7 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
  * is the set of such bindings for the function currently being emitted; the
  * mutable's C name binds the CELL POINTER (`int64_t *`), reads/writes deref it,
  * and the pointer (a scalar) rides the existing scalar-capture machinery.  Whole
- * feature gated on g_opt_cps_tramp_resume. */
+ * feature that was gated on cps-tramp-resume (graduated 2026-07-19). */
 static const Binding *g_byref_muts[64];
 static int            g_byref_muts_n;
 
@@ -6319,7 +6303,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * also covers a `set!` nested inside a delegated composite that never
      * reaches this lowering.  Only the CONTINUATION store is special, for its
      * value side. */
-    const Binding *bref = g_opt_cps_tramp_resume ? byref_set_target(t->as.letraw.e) : NULL;
+    const Binding *bref = byref_set_target(t->as.letraw.e);
     if (bref && is_byref_mut(bref)) {
         const Expr *se = t->as.letraw.e;
         while (se && se->kind == EX_ASCRIBE) se = se->as.ascribe_.inner;
@@ -6877,7 +6861,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     CapSet cs;
     bool caps_ok = collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &cs);
     const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
-    bool needs_kont = (g_opt_cps_tramp_resume && jbody_has_delim(t->as.letcont.jbody))
+    bool needs_kont = jbody_has_delim(t->as.letcont.jbody)
                    || jbody_has_cps_tailcall(t->as.letcont.jbody)
                    || jbody_has_perform(t->as.letcont.jbody);
 
@@ -8019,7 +8003,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
          * dk_invoke (its dk_perform never queues an H->next delivery to trampoline).
          * Must agree with the per-case ctor decision below. */
         bool save_ctr = ce->case_tail_resume;
-        ce->case_tail_resume = g_opt_cps_tramp_resume && !t->as.handle.shallow
+        ce->case_tail_resume = !t->as.handle.shallow
             && case_body_tail_resumes(t->as.handle.cases[ci].case_body);
         emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
                     t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], ccaps);
@@ -8055,7 +8039,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
          * dk_handler_tail so dk_perform yields it to the entry driver (flat).
          * emit_resume for that case emits the matching dk_tail_resume. */
         const char *ctor = hctor;
-        if (g_opt_cps_tramp_resume && !t->as.handle.shallow
+        if (!t->as.handle.shallow
             && case_body_tail_resumes(t->as.handle.cases[ci].case_body))
             ctor = "dk_handler_tail";
         /* A RE-OPENING case delivers its own value through the real enclosing
@@ -8082,10 +8066,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * so dk_case_enclosing_real / dk_perform can tell them apart from an enclosing
      * handle's handlers once a re-install flattens the chain (else a re-opened
      * outer effect in a multi-suspension continuation escapes). */
-    if (g_opt_cps_tramp_resume)
-        ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup(%s));", hchain, chain.data);
-    else
-        ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
+    ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup(%s));", hchain, chain.data);
     buf_free(&chain);
     free(hkenv);
     for (uint32_t ci = 0; ci < nc; ci++) { free(cnames[ci]); free(cenvs[ci]); }
@@ -8334,11 +8315,9 @@ static void emit_resume(CE *ce, const CTerm *t) {
      * delivery and this yield hands off the resumed chain; the value is delivered
      * by the driver, so nothing follows here. */
     /* (cont? k) support: mark k consumed at the user resume site so a later
-     * `cont?` on the same k reads false (matches the fiber path).  Flag-gated --
-     * the DK `consumed` field only exists under cps-tramp-resume. */
-    if (g_opt_cps_tramp_resume)
-        ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
-    if (g_opt_cps_tramp_resume && ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
+     * `cont?` on the same k reads false (matches the fiber path). */
+    ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
+    if (ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
         ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);
         free(sv); free(kk); free(vv);
@@ -8688,12 +8667,17 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
          * (readiness measurement) rides the same categorization. */
         if (fd->cps_colored && fd->binding) {
             const char *nm = fd->binding->name ? fd->binding->name->name : "?";
-            const char *cat; const char *why = ""; bool sig_perm_route = false;
+            /* `cat` is the permanent-vs-fixable classification: the SIG-* cases
+             * are permanent routing (no BODY-* fix could admit them), the BODY-*
+             * cases are fixable roots.  It fed a `sig_perm_route` flag read only
+             * by the N6.5 hard error below; that error is unreachable (see
+             * there), so the flag is gone and `cat` now feeds only the trace --
+             * and would be what a restored diagnostic keys on. */
+            const char *cat; const char *why = "";
             if (fd->binding->c_export_name
-                && !(g_opt_cps_tramp_resume && fd->binding->is_instance_method))
-                                                           { cat = "SIG-EXPORT"; sig_perm_route = true; }
-            else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { cat = "SIG-MAIN";   sig_perm_route = true; }
-            else if (!fn_sig_ok(fd))                        { cat = "SIG-REJECT"; sig_perm_route = true; }
+                && !fd->binding->is_instance_method)         { cat = "SIG-EXPORT"; }
+            else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { cat = "SIG-MAIN";   }
+            else if (!fn_sig_ok(fd))                        { cat = "SIG-REJECT"; }
             else {
                 const CTerm *u = se ? first_unsupported(se->term) : NULL;
                 /* SIG-TAINT: evicted ONLY because it shares an effect with a
@@ -8705,9 +8689,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
                 bool perm_tainted = se && ((se->eff_lo & g_perm_lo) || (se->eff_hi & g_perm_hi));
                 bool inline_c = u && u->as.unsupported.why
                              && strstr(u->as.unsupported.why, "EX_INLINE_C");
-                if (inline_c)          { cat = "SIG-INLINE-C"; sig_perm_route = true; }  /* permanent: inline-C can't thread a DK cont */
+                if (inline_c)          { cat = "SIG-INLINE-C"; }  /* permanent: inline-C can't thread a DK cont */
                 else if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
-                else if (perm_tainted) { cat = "SIG-TAINT"; sig_perm_route = true; }
+                else if (perm_tainted) { cat = "SIG-TAINT"; }
                 else   cat = "BODY-STRUCT-OR-TAINT";
             }
             if (getenv("TUR_TRACE_EVICT")) {
@@ -8727,19 +8711,22 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
              * rather than recurse through dk_invoke on the heap path.  (An `await`
              * inside a handler case instead delegates a fiber region without
              * evicting the whole function -- see b->in_handler_case in cps_ir.c.)
-             * Exempt this surface from the hard error.  g_opt_cps_tramp_resume
-             * defaults on, so this is unconditionally true in the shipping build;
-             * the guard is retained for the diagnostic path. */
-            bool experimental_surface = g_opt_cps_tramp_resume;
-            if (!sig_perm_route && !experimental_surface)
-                diag_emit(DIAG_ERROR, fd->binding->span,
-                          "cps-backend: colored function '%s' fell back to the direct "
-                          "emitter for a non-signature reason (%s%s%s) -- the CPS/DK "
-                          "backend must own it, but its body left the admissible subset. "
-                          "The direct/fiber whole-function fallback for colored code has "
-                          "been retired (N6.5); admit the form natively in the CT-IR/DK "
-                          "backend or route the function through a permanent SIG-* case.",
-                          nm, cat, why[0] ? ": " : "", why);
+             * Exempt this surface from the hard error.
+             *
+             * THE N6.5 HARD ERROR IS CURRENTLY UNREACHABLE, and was already so
+             * before this code said as much out loud.  The exemption read
+             * `experimental_surface = g_opt_cps_tramp_resume`, and that bit has
+             * been unwritable since cps-tramp-resume graduated (2026-07-19) --
+             * always true, so `!sig_perm_route && !experimental_surface` never
+             * held and the diagnostic could not fire.  It is deleted rather than
+             * frozen as `if (... && false)`: a guard spelled with a literal is
+             * the same dead branch with a worse disguise.
+             *
+             * To restore it, narrow the exemption to the shapes that actually
+             * need it -- a recursive `await` (SIG-AWAIT-RECURSE) rather than the
+             * whole CPS surface -- and re-emit the error for everything else.
+             * The eviction is still visible meanwhile: TUR_TRACE_EVICT prints
+             * every one, with its category and reason, from the block above. */
         }
         return false;   /* fall back (SIG-* colored, or uncolored) */
     }
@@ -8836,12 +8823,10 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * emit as by-reference heap cells (see g_byref_muts). */
     g_byref_muts_n = 0;
     g_loop_carried_n = 0;
-    if (g_opt_cps_tramp_resume) {
-        /* Loop-carried params first: the promotion scan must know them before it
-         * decides, since a loop can enclose the handle whose clause reads one. */
-        loop_carried_scan(se->term);
-        byref_scan(se->term);
-    }
+    /* Loop-carried params first: the promotion scan must know them before it
+     * decides, since a loop can enclose the handle whose clause reads one. */
+    loop_carried_scan(se->term);
+    byref_scan(se->term);
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
     if (cps_env_var) {
@@ -8902,18 +8887,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    }\n");
         buf_puts(file, "    __dk_entry_depth++;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-        if (g_opt_cps_tramp_resume) {
-            /* E7: install the trampoline driver.  A tail-resume longjmps here; the
-             * else-branch runs the meta-stack trampoline to completion. */
-            if (!mvoid) buf_puts(file, "    int64_t __r;\n");
-            buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-            buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(__root); }\n",
-                       mvoid ? "(void)" : "__r = ", cn);
-            buf_printf(file, "    else { %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
-            buf_puts(file, "    g_dk_driver = __dksave;\n");
-        } else {
-            buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
-        }
+        /* E7: install the trampoline driver.  A tail-resume longjmps here; the
+         * else-branch runs the meta-stack trampoline to completion. */
+        if (!mvoid) buf_puts(file, "    int64_t __r;\n");
+        buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+        buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(__root); }\n",
+                   mvoid ? "(void)" : "__r = ", cn);
+        buf_printf(file, "    else { %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
+        buf_puts(file, "    g_dk_driver = __dksave;\n");
         /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
          * heap box owned by the reap list (consume=false, never freed at a load),
          * so the reap frees it -- copy the value into a local first, then reap. */
@@ -9006,20 +8987,15 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (fd->n_params) buf_puts(&__args, ", ");
     buf_puts(&__args, "__root");
     buf_putc(&__args, '\0');
-    if (g_opt_cps_tramp_resume) {
-        /* E7: install the trampoline driver at this direct->cps entry too (not only
-         * the d2b main), so a colored body reached from a non-d2b caller (`run`
-         * called by a plain main) still trampolines a deep tail-resume flat. */
-        if (!void_ret) buf_puts(file, "    int64_t __r;\n");
-        buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-        buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(%s); }\n",
-                   void_ret ? "(void)" : "__r = ", cn, __args.data);
-        buf_printf(file, "    else { %s__dk_drive_after(); }\n", void_ret ? "(void)" : "__r = ");
-        buf_puts(file, "    g_dk_driver = __dksave;\n");
-    } else {
-        buf_printf(file, "    %s%s__cps(%s);\n",
-                   void_ret ? "(void)" : "int64_t __r = ", cn, __args.data);
-    }
+    /* E7: install the trampoline driver at this direct->cps entry too (not only
+     * the d2b main), so a colored body reached from a non-d2b caller (`run`
+     * called by a plain main) still trampolines a deep tail-resume flat. */
+    if (!void_ret) buf_puts(file, "    int64_t __r;\n");
+    buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+    buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(%s); }\n",
+               void_ret ? "(void)" : "__r = ", cn, __args.data);
+    buf_printf(file, "    else { %s__dk_drive_after(); }\n", void_ret ? "(void)" : "__r = ");
+    buf_puts(file, "    g_dk_driver = __dksave;\n");
     buf_free(&__args);
     /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
      * box owned by the reap list (consume=false, never freed at a load), so the
@@ -9047,7 +9023,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
-    if (g_opt_cps_tramp_resume && threadable_has(fd->binding)) {
+    if (threadable_has(fd->binding)) {
         buf_printf(file,
             "static void __tur_e2reg_%s(void) {\n"
             "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s__cps);\n"

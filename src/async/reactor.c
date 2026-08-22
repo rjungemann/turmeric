@@ -63,8 +63,8 @@
 
 #define REACTOR_INITIAL_CAP 16
 
-/* closure-drop-glue (async/reactor blocker): under `--enable=closure-drop-glue`
- * every heap fat-closure env the emitted program builds carries an 8-byte
+/* closure-drop-glue (async/reactor blocker): since closure-drop-glue graduated
+ * (2026-07-22) every heap fat-closure env the emitted program builds carries an 8-byte
  * drop-glue header at env[-1] and the fat pointer is handed back PAST it.  The
  * reactor and fiber group own such callback boxes and free them at teardown,
  * but this precompiled libturi C cannot name the per-program `tur_closure_drop`.

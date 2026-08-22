@@ -12,7 +12,7 @@
  * emit_module.c -- see emit-effects-extraction-plan.md §EE4 for rationale.
  */
 #include "emit_internal.h"
-#include "globals.h"   /* B3 part 2: g_opt_cps_tramp_resume */
+#include "globals.h"
 
 /* =========================================================================
  * Region C -- algebraic effects
@@ -1010,9 +1010,8 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
      * dynamic with-handler over this value can install it on the DK. */
     char dkfn_name[64];
     snprintf(dkfn_name, sizeof(dkfn_name), "__dk_hcase_%d", id);
-    bool dk_emitted = g_opt_cps_tramp_resume
-        && emit_dk_handler_case_fn(ctx, hbuf, dkfn_name, c, env_type, env_var,
-                                   has_caps, caps, n_caps);
+    bool dk_emitted = emit_dk_handler_case_fn(ctx, hbuf, dkfn_name, c, env_type,
+                                              env_var, has_caps, caps, n_caps);
     /* Fiber case fn is DEAD once the DK case is emitted -- append it only as the
      * non-DK fallback, so `tur_effect_cont_resume` leaves the DK-lowered output. */
     if (!dk_emitted && fiberfn.len > 0) buf_write(hbuf, fiberfn.data, fiberfn.len);

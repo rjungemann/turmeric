@@ -31,13 +31,15 @@
 
 /* Emit the self-contained DK multi-prompt machine (a faithful C port of
  * src/runtime/cps_prompt.c) into the generated program's preamble. Call once,
- * gated on preamble_uses_base_delimited(). */
+ * gated on preamble_uses_base_delimited().
+ *
+ * Always includes E7's trampolined tail-resume machinery (struct DK tail_resume
+ * field, dk_handler_tail, the meta-stack + dk_tail_resume + __dk_drive_after,
+ * and dk_perform's yield branch).  This used to be a `tramp` parameter with an
+ * `_ex` spelling, defaulting off; cps-tramp-resume graduated 2026-07-19, the
+ * only caller passed the always-true g_opt_cps_tramp_resume, and the
+ * tramp-off wrapper had no callers at all. */
 void emit_cps_runtime_prelude(Buf *out);
-/* E7 (cps-tramp-resume): when `tramp` is true, also emit the trampolined
- * tail-resume machinery (struct DK tail_resume field, dk_handler_tail, the
- * meta-stack + dk_tail_resume + __dk_drive_after, and dk_perform's yield branch).
- * When false the output is byte-identical to emit_cps_runtime_prelude. */
-void emit_cps_runtime_prelude_ex(Buf *out, bool tramp);
 
 /* Emit the undelimited escape-continuation runtime (tur_escape_cont +
  * tur_escape_resume) into the generated preamble. Call once, gated on

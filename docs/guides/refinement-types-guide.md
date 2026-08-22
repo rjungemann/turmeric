@@ -33,14 +33,19 @@ Nothing to turn on -- static discharge runs on every compile. Write a
 `#refine{...}` and the compiler tries to prove it.
 
 It graduated from the `refined` experiment in v0.33.0. If you opted in
-earlier, the old spellings still work and are now no-ops you can delete:
+earlier, the old spellings must now be **deleted** -- their compatibility shims
+were retired in 0.38.0, one minor line after graduation, and each is a hard
+error again:
 
-| Old spelling | What it does now |
-|---|---|
-| `--enable=refined` | accepted, `TUR-W0063`, no effect |
-| `:experiments [:refined]` in `build.tur` | accepted, `TUR-W0063`, no effect |
-| `~/.config/turmeric/experiments.tur` `:enable [:refined]` | accepted, `TUR-W0063`, no effect |
-| `#lang turmeric refined` (first line of a file) | accepted, `TUR-W0064`, no effect |
+| Old spelling | Through 0.37.0 | From 0.38.0 |
+|---|---|---|
+| `--enable=refined` | accepted, `TUR-W0063`, no effect | `TUR-E0310` |
+| `:experiments [:refined]` in `build.tur` | accepted, `TUR-W0063`, no effect | `TUR-E0310` |
+| `~/.config/turmeric/experiments.tur` `:enable [:refined]` | accepted, `TUR-W0063`, no effect | `TUR-E0310` |
+| `#lang turmeric refined` (first line of a file) | accepted, `TUR-W0064`, no effect | `TUR-E0330` |
+
+Refinement checking itself is unaffected: `#refine{...}` has been unconditional
+since 0.33.0 and needs no flag or layer.
 
 These compatibility shims age out one minor line after graduation, so drop the
 flag when convenient rather than relying on it.
@@ -723,7 +728,7 @@ note: the predicate (not= x 0) is false for the value given here
 | `TUR-E0371` | the predicate genuinely does not hold: a function's own claim is falsifiable, or an argument is definitely wrong at its call site |
 | `TUR-W0372` | nothing decided it; the runtime check is kept |
 | `TUR-W0373` | a nonlinear subterm was abstracted; arithmetic reasoning is incomplete for it |
-| `TUR-W0063` / `TUR-W0064` | a lingering `--enable=refined` / `#lang turmeric refined`; accepted, no effect |
+| `TUR-E0310` / `TUR-E0330` | a lingering `--enable=refined` / `#lang turmeric refined`; both shims retired in 0.38.0, so both are errors -- delete them |
 
 `TUR-E0371` and `TUR-W0372` both leave the program safe -- the runtime check
 survives in each case. Under `--strict-refine` both become hard errors.
