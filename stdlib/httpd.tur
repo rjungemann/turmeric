@@ -991,7 +991,7 @@
    * box) and nothing else frees it, so this is the sole free -- no double free.
    * For a bare handler this reclaims the whole thing; for a compose-middleware
    * onion, TUR_CLOSURE_DROP releases the outermost layer AND (under
-   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * closure-drop-glue, graduated 2026-07-22) walks the inner captured `next` boxes via the
    * env's drop-glue header, so the whole onion is freed.  Flag-off,
    * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
    * before). */
@@ -1818,7 +1818,7 @@
 ;;; BY BORROW dangles if the caller passed a computed/freed buffer (see
 ;;; string-adoption-stdlib-plan.md, items 2/3).  This returns an OWNED String
 ;;; (a refcounted copy) the closure keeps for its lifetime.  Under
-;;; --enable=closure-drop-glue the String is a Drop-typeclass capture, so the
+;;; With closure-drop-glue (graduated 2026-07-22) the String is a Drop-typeclass capture, so the
 ;;; closure's drop-glue releases it when the middleware is torn down (Model R);
 ;;; flag-off it lives to process exit, as before.
 
@@ -2969,7 +2969,7 @@
    * distinct from body_closure). Sole free -- no double free. For a bare handler
    * this reclaims the whole thing; for a compose-middleware onion,
    * TUR_CLOSURE_DROP releases the outermost layer AND (under
-   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * closure-drop-glue, graduated 2026-07-22) walks the inner captured `next` boxes via the
    * env's drop-glue header, so the whole onion is freed. Flag-off,
    * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
    * before). */
@@ -3144,7 +3144,7 @@
       Route *nx = cur->next;
       /* Each route handler is passed ^fat (heap fat-closure box) and freed
        * nowhere else. TUR_CLOSURE_DROP releases the outer box AND (under
-       * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+       * closure-drop-glue, graduated 2026-07-22) walks the inner captured `next` boxes via the
        * env's drop-glue header, so a compose-middleware onion is fully freed.
        * Flag-off, TUR_CLOSURE_DROP is a plain free of the outer box (inner layers
        * leak, as before). */

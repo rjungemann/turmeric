@@ -683,8 +683,7 @@ typedef struct Type {
              * passed as a rest argument does NOT escape and the CALLER may free it
              * at scope exit (per-binding-once, so the duplicate-argument aliasing
              * hazard of a callee-side per-apply free does not arise).  Set only
-             * under `--enable=closure-drop-glue`; default false keeps flag-off
-             * codegen byte-identical. */
+             * unconditionally since closure-drop-glue graduated (2026-07-22). */
             bool rest_borrow;
             /* LS4: index of the parameter whose lifetime the borrow return is
              * tied to (the returned &'a T aliases this argument's storage), or

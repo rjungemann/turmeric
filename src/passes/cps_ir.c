@@ -6,7 +6,7 @@
 
 #include "cps.h"
 #include "builtins.h"
-#include "globals.h"   /* g_opt_cps_tramp_resume */
+#include "globals.h"
 
 /* =========================================================================
  * CPS2 (cps-transform-plan): ANF/CPS translation for colored functions.
@@ -751,21 +751,15 @@ static bool colored_call_wbd_delegatable(CpsB *b, const Expr *e) {
      * DK-effect caller of such an escaping-effect fn would itself have to handle
      * the effect, but a handle over a fn-value-reached effect cannot be DK
      * (handle_delim_ok rejects it), so the taint model keeps the effect fiber. */
-    /* E2 (cps-tramp-resume): under the flag an effectful concrete fn-value arg
-     * THREADS the DK (the row-variable param gate is relaxed), so this cross-HOF
-     * leaf-fiber delegation's premise -- that the callback stays fiber -- no
-     * longer holds.  Delegating the HOF here while the callback threads splits the
-     * performer/handler across the two runtimes (effect-poly-infer aborted).
-     * Skip the delegation: the caller then threads the HOF's __cps, or evicts and
-     * the taint model co-classifies the callback to the fiber consistently. */
-    if (!g_opt_cps_tramp_resume
-        && cfd->body && expr_has_indirect_fnvalue_call(cfd->body, 0)) {
-        for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-            EffectRow *ar = expr_fn_effect_row(b, e->as.call_.args[i]);
-            if (ar && ar->kind == ERK_CONCRETE && ar->as.concrete.n_effects > 0)
-                return true;
-        }
-    }
+    /* E2 (cps-tramp-resume): an effectful concrete fn-value arg THREADS the DK
+     * (the row-variable param gate is relaxed), so the cross-HOF leaf-fiber
+     * delegation this paragraph used to describe -- premised on the callback
+     * staying fiber -- no longer holds and its block is gone.  Delegating the
+     * HOF while the callback threads would split the performer/handler across
+     * the two runtimes (effect-poly-infer aborted).  Unconditional since
+     * cps-tramp-resume graduated (2026-07-19): the caller threads the HOF's
+     * __cps, or evicts and the taint model co-classifies the callback to the
+     * fiber consistently. */
     if (g_wbd_n_handled == 0) return false;
     /* The DECLARED row (type annotation) carries the row VARIABLE of a
      * effect-polymorphic callee (`map-list : #fx{e}`); the INFERRED row collapses
@@ -1093,7 +1087,7 @@ static bool cloneable_owning_agg(const Type *t) {
     return def->needs_drop_glue && !def->is_heap && def->n_ctors == 1;
 }
 static bool cloneable_owning_env_ok(const Type *t) {
-    if (!g_opt_owning_cloneable_capture || !t) return false;
+    if (!t) return false;
     return t->kind == TY_RC
         || type_is_heap_adt(*(Type *)t)
         || type_is_heap_struct(*(Type *)t)
@@ -1164,7 +1158,7 @@ static bool agg_consume_cloneable(const Type *t) {
     return cloneable_owning_agg(t) && adt_fields_incref_cloneable(adt_def_of(t));
 }
 static bool cloneable_consume_env_ok(const Type *t) {
-    if (!g_opt_owning_cloneable_capture || !t) return false;
+    if (!t) return false;
     if (t->kind == TY_RC) return true;
     return heap_consume_cloneable(t) || agg_consume_cloneable(t);
 }
@@ -1529,19 +1523,17 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
      * a captured local, so a conservatively-marked live capture on a Shape 1 shift
      * is emit-time dead and safe to admit.  The gate is cloneable-only: serial's
      * prelude is presence-gated so it needs no such check. */
-    /* Live-capture Shape-2 gate: native Shape 2 carries captured locals only via
-     * frame operands, so a live capture that is NOT a frame operand would be
-     * lost -- hence a conservative reject.  But reaching here means the frame
-     * loop parsed the ENTIRE continuation into validated frames, so every local
-     * the continuation references IS a carried frame operand (a scalar, or -- under
-     * the E3a gate -- a ^borrow rc whose shallow-shared env is read-only-correct
-     * across resumes); the remaining counted locals are receiver-body captures
-     * (single-shot: the receiver runs once) or bound after the reset (dead at the
-     * shift).  Under the owning-cloneable-capture experiment, trust the frame
-     * validation and drop the blunt count gate. */
-    if (!serial && nf != 0 && cur->as.cloneable_shift_.n_live_captures != 0
-        && !g_opt_owning_cloneable_capture)
-        return NULL;
+    /* Live-capture Shape-2: there used to be a blunt count gate here rejecting a
+     * Shape 2 with any live capture, on the grounds that native Shape 2 carries
+     * captured locals only via frame operands, so a live capture that is NOT a
+     * frame operand would be lost.  Reaching here means the frame loop parsed
+     * the ENTIRE continuation into validated frames, so every local the
+     * continuation references IS a carried frame operand (a scalar, or a
+     * ^borrow rc whose shallow-shared env is read-only-correct across resumes);
+     * the remaining counted locals are receiver-body captures (single-shot: the
+     * receiver runs once) or bound after the reset (dead at the shift).  The
+     * frame validation is what is trusted instead, unconditionally since
+     * owning-cloneable-capture graduated (2026-07-20). */
     const Binding *recv = marshal_named_receiver(b, cur, serial);    const Expr *recv_expr = NULL;
     if (!recv) {
         /* U7: a CLOSURE receiver (capturing or not).  Shape 1 calls it directly at
@@ -1640,21 +1632,17 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * Shallow handlers (F2) do NOT re-install on resume, so an interior
              * re-perform is handled DIFFERENTLY -- keep them off this path. */
             if (!g_whole_body_delegate || h->shallow) return false;
-            /* E7/E1 (cps-tramp-resume): under the flag a deep handle must DK-lower
-             * (build_handle -> CT_HANDLE), not whole-body-delegate to fiber -- that
-             * is what dissolves the handler-installer's base taint (ensure_S:2814)
-             * and lets its effects leave the fiber runtime.  Default (flag off)
-             * keeps the delegation, so codegen is unchanged. */
-            if (g_opt_cps_tramp_resume) return false;
-            if (g_wbd_n_handled + (int)h->n_cases > WBD_MAX_HANDLED) return false;
-            int base = g_wbd_n_handled;
-            for (uint8_t i = 0; i < h->n_cases; i++)
-                g_wbd_handled[g_wbd_n_handled++] = h->cases[i].effect_name;
-            bool ok = safe_to_delegate(b, h->body);
-            for (uint8_t i = 0; ok && i < h->n_cases; i++)
-                ok = safe_to_delegate(b, h->cases[i].body);
-            g_wbd_n_handled = base;
-            return ok;
+            /* E7/E1 (cps-tramp-resume): a deep handle must DK-lower (build_handle
+             * -> CT_HANDLE), not whole-body-delegate to fiber -- that is what
+             * dissolves the handler-installer's base taint (ensure_S:2814) and
+             * lets its effects leave the fiber runtime.  Unconditional since
+             * cps-tramp-resume graduated (2026-07-19), so the delegation branch
+             * that pushed this handle's cases onto g_wbd_handled is unreachable
+             * and gone with it.  NOTE: this was the only writer of
+             * g_wbd_handled, which leaves the P5 whole-body handle-delegation
+             * subsystem inert -- see
+             * docs/reported/wbd-handle-delegation-subsystem-inert.md. */
+            return false;
         }
         /* P5: a `perform` is delegatable only when its effect is discharged by an
          * enclosing delegated handle (self-contained); a `resume` only inside one.
@@ -1742,7 +1730,7 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
             const Binding *fn = e->as.call_.fn_binding;
             /* E2a: a thread-param call takes the per-node path (cps_tail) so it
              * threads the DK via the registry -- never whole-body-delegate to fiber. */
-            if (g_opt_cps_tramp_resume && fn && cps_ir_thread_param_has(fn))
+            if (fn && cps_ir_thread_param_has(fn))
                 return false;
             if (!fn) {
                 /* An indirect callee with no binding -- e.g. a capability CALL
@@ -1915,9 +1903,9 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * direct-emitted value op (EX_RC_OF, EX_MAKE_STRUCT): it runs to
          * completion and never threads a DK continuation, so a body that
          * interleaves `perform` with inline-C session ops CPS-lowers with the
-         * inline-C as a CT_LETRAW.  Gated on the flag (flag-off the CPS subset is
-         * narrower and delegating inline-C could reshuffle evictions). */
-        case EX_INLINE_C:  return g_opt_cps_tramp_resume;
+         * inline-C as a CT_LETRAW.  Unconditional since cps-tramp-resume
+         * graduated (2026-07-19). */
+        case EX_INLINE_C:  return true;
         default:
             return false;   /* conservative: unrecognized form -> not delegatable */
     }
@@ -3257,10 +3245,9 @@ static CTerm *build_cont_pred(CpsB *b, Expr *e, CVar x, CTerm *body) {
 /* B4: is a `match` DK-lowerable to CT_MATCH?  Restricted to the tractable shape:
  * a HEAP-ADT (int64-carrier, tagged) scrutinee, arms that are constructor
  * patterns (an optional trailing wildcard catch-all), no guards, no literal /
- * union / by-value-product arms.  Anything else evicts (CT_UNSUPPORTED).  Gated:
- * flag-off a colored fn's match is fiber-lowered as before. */
+ * union / by-value-product arms.  Anything else evicts (CT_UNSUPPORTED).
+ * Unconditional since cps-tramp-resume graduated (2026-07-19). */
 static bool match_dk_ok(const Expr *e) {
-    if (!g_opt_cps_tramp_resume) return false;
     const Expr *scrut = e->as.match_.scrutinee;
     if (!scrut) return false;
     Type st = scrut->type;
@@ -3361,15 +3348,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
         return build_letraw(b, e, x, ac);
     }
-    /* (cont? k) in tail position (flag-on): deliver the unconsumed-check to kont. */
-    if (g_opt_cps_tramp_resume && e->kind == EX_CONT_PRED) {
+    /* (cont? k) in tail position: deliver the unconsumed-check to kont. */
+    if (e->kind == EX_CONT_PRED) {
         CVar x = fresh_cvar(b, &e->type);
         CTerm *ac = new_term(b, CT_APPCONT);
         ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
         return build_cont_pred(b, e, x, ac);
     }
-    /* (with-handler <literal> body) in tail position (flag-on): a handle over body. */
-    if (g_opt_cps_tramp_resume && e->kind == EX_WITH_HANDLER) {
+    /* (with-handler <literal> body) in tail position: a handle over body. */
+    if (e->kind == EX_WITH_HANDLER) {
         CVar x = fresh_cvar(b, &e->type);
         CTerm *ac = new_term(b, CT_APPCONT);
         ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
@@ -3396,7 +3383,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * DK yet; delegating it to fiber under a DK handle escapes the effect.
              * Evict so the whole fn stays fiber (its effect taints -> the DK
              * handler-installer co-classifies to fiber). */
-            if (g_opt_cps_tramp_resume && call_is_effectful_fnvalue(e)) {
+            if (call_is_effectful_fnvalue(e)) {
                 /* E2a: a tier-`now` thread-param call THREADS the DK via the registry. */
                 const Binding *pf = e->as.call_.fn_binding;
                 if (pf && cps_ir_thread_param_has(pf) && call_args_atomic(e)) {
@@ -3468,7 +3455,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * emitter picks `fn_cps` when populated (an effectful fn-value) and
              * the direct `f.fn` path otherwise, so a pure fn-value is unchanged.
              * Restricted to the single-int-arg `tur_poly_fn_t.fn_cps` ABI. */
-            if (g_opt_cps_tramp_resume && fncps_param_call_ok(fn, e)) {
+            if (fncps_param_call_ok(fn, e)) {
                 Pending pp = {0};
                 CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
                 CAtom *args = arena_alloc(b->a, sizeof(CAtom));
@@ -3637,18 +3624,16 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                  * auto-inserted scope-exit drop `(defer (rc/drop r))` AFTER the
                  * real body, so the value item is not the last item -- trailing
                  * defer(s) follow it.  The original P5b threading bailed on a
-                 * defer tail (`tail_idx != n-1`); under the experiment gate, allow
-                 * it, using the last non-defer item as the value and threading the
+                 * defer tail (`tail_idx != n-1`); it is allowed now, using the
+                 * last non-defer item as the value and threading the
                  * trailing defer into the continuation (fires after the value is
                  * produced -- through the reset -- before delivery), exactly the
                  * straight-line drop the explicit-drop channel already emits.  This
                  * is what lets an owning `rc` the CPS-colored fn OWNS ride a
-                 * cloneable capture without a hand-written drop.  Off-gate a defer
-                 * tail still bails (behavior + snapshots unchanged). */
-                bool tail_is_defer = (tail_idx != (int)n - 1);
-                bool allow_tail_defer = g_opt_owning_cloneable_capture;
-                if (has_defer && defer_ok && tail_idx >= 0
-                    && (!tail_is_defer || allow_tail_defer)) {
+                 * cloneable capture without a hand-written drop.  Unconditional
+                 * since owning-cloneable-capture graduated (2026-07-20); a defer
+                 * tail no longer bails. */
+                if (has_defer && defer_ok && tail_idx >= 0) {
                     CVar x = fresh_cvar(b, &items[tail_idx]->type);
                     CTerm *deliver = new_term(b, CT_APPCONT);
                     deliver->as.appcont.kont = kont;
@@ -3845,11 +3830,11 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
     if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e))
         return build_letraw(b, e, x, rest);
-    /* (cont? k) in bind position (flag-on): bind the unconsumed-check to x. */
-    if (g_opt_cps_tramp_resume && e->kind == EX_CONT_PRED)
+    /* (cont? k) in bind position: bind the unconsumed-check to x. */
+    if (e->kind == EX_CONT_PRED)
         return build_cont_pred(b, e, x, rest);
-    /* (with-handler <literal> body) in bind position (flag-on). */
-    if (g_opt_cps_tramp_resume && e->kind == EX_WITH_HANDLER)
+    /* (with-handler <literal> body) in bind position. */
+    if (e->kind == EX_WITH_HANDLER)
         return build_with_handler(b, e, x, rest);
     switch (e->kind) {
         case EX_BUILTIN: {
@@ -3866,7 +3851,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         }
         case EX_CALL: {
             /* E2/taint-completeness: evict an effectful fn-value call (see cps_tail). */
-            if (g_opt_cps_tramp_resume && call_is_effectful_fnvalue(e)) {
+            if (call_is_effectful_fnvalue(e)) {
                 /* E2a tier-`nontail`: a thread-param call in BIND position threads the
                  * DK by reifying the continuation `rest` as a heap join `j(x)` and
                  * threading it to the fn-value's __cps (via the registry).  Same shape
@@ -3939,7 +3924,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * as a heap join `j(x)` and threads it to the closure's `fn_cps` slot
              * (or the direct `f.fn` path when NULL).  Mirrors the E2a via_registry
              * non-tail shape (single int-register-class arg). */
-            if (g_opt_cps_tramp_resume && fncps_param_call_ok(fn, e)) {
+            if (fncps_param_call_ok(fn, e)) {
                 Pending pp = {0};
                 CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
                 CAtom *fargs = arena_alloc(b->a, sizeof(CAtom));
@@ -4145,14 +4130,15 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_WHILE: {
             /* cps-while-native: a control-op-bearing while (a control-free while is
              * already delegated by safe_to_delegate) lowers to a synthesized
-             * recursive __cps loop.  Gated on the flag; NULL -> evict as before. */
-            if (g_opt_cps_tramp_resume) {
+             * recursive __cps loop.  Unconditional since cps-tramp-resume
+             * graduated (2026-07-19); NULL -> evict as before. */
+            {
                 CTerm *loop = build_loop(b, e, x, rest);
                 if (loop) return loop;
             }
-            /* Not lowered natively (flag off, or outside the guarded subset):
-             * preserve the prior default -- delegate a control-free while to the
-             * direct emitter, else evict. */
+            /* Not lowered natively (outside the guarded subset): preserve the
+             * prior default -- delegate a control-free while to the direct
+             * emitter, else evict. */
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
             return unsupported_form(b, e);
         }
@@ -4175,7 +4161,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_CLOSURE: {
             /* B8 slice-3 (probe): delegate a capturing closure with reap_env. */
             const struct Closure *cl = e->as.closure_.closure;
-            if (g_opt_cps_tramp_resume && cl && cl->n_captures > 0
+            if (cl && cl->n_captures > 0
                 && !cl->is_shift_receiver && !cl->is_effect_payload) {
                 CTerm *t = build_letraw(b, e, x, rest);
                 t->as.letraw.reap_env = true;

@@ -97,7 +97,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * the elab_handle gate and g_opt_cps_effects are removed.  handle-shallow
      * lowers to dk_handler_shallow on the CPS path and to the shallow_consumed
      * bubble-up on the fiber path, with compiled == interp on all shapes.  A
-     * lingering --enable=cps-effects is an accept-and-warn no-op via GRADUATED[]. */
+     * The name aged out of GRADUATED[] 2026-08-22; a lingering
+     * --enable=cps-effects is now TUR-E0310. */
     /* cps-async GRADUATED 2026-07-19 -- the heap-continuation representation for
      * `async`/`await` is now the unconditional CPS-path lowering: a function
      * containing `await` is always CPS-colored, and each `await` lowers to a
@@ -128,12 +129,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
      * (rc handle, :heap carrier handle, by-value aggregate) captured into a
      * multi-shot cloneable continuation, with the per-frame env clone/drop
-     * teardown, is now unconditional (g_opt_owning_cloneable_capture defaults
-     * true; the admission predicates in elab_effects.c / cps_ir.c / emit_cps_ir.c
-     * read it always-on).  Every capture channel and owning shape that is
-     * leak-clean in the base language is covered; the remaining rejections are
-     * bounded by the base drop's shallowness, not this gate.  The name moves to
-     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * teardown, is unconditional -- the admission predicates in elab_effects.c /
+     * cps_ir.c / emit_cps_ir.c no longer test a bit at all (the
+     * g_opt_owning_cloneable_capture enable bit was retired 2026-08-22; see
+     * globals.h).  Every capture channel and owning shape that is leak-clean in
+     * the base language is covered; the remaining rejections are bounded by the
+     * base drop's shallowness, not this gate.  The name aged out of GRADUATED[]
+     * 2026-08-22 (a lingering --enable is now TUR-E0310).  See
      * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
     /* closure-drop-glue GRADUATED 2026-07-22 -- Model R (runtime drop-glue header
      * on every heap fat-closure env, walked on release via TUR_CLOSURE_DROP) is

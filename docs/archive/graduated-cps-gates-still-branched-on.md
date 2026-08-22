@@ -1,5 +1,11 @@
 # Two graduated experiments left their `g_opt_*` gate bits and ~70 dead branches behind
 
+> **RESOLVED 2026-08-22.** Both bits are deleted and all 69 reads folded to
+> `true` with their unreachable arms removed, across the eight files below plus
+> `emit_dk_runtime.c` (see "What the fix actually touched"). `tests/run.sh`
+> 2693 passed, 0 failed, and no `expected.c` snapshot moved -- the folds are
+> emission-identical, which is the check the plan below asked for.
+
 **Severity: medium (no runtime defect; carrying cost + a misleading invariant).**
 Found 2026-08-22 while aging out the `GRADUATED[]` shims.
 
@@ -80,3 +86,40 @@ so the suite is a strong check on the mechanics. Two cautions:
 
 Best done as its own change, not as a rider -- it touches the two hairiest files
 in the backend and wants the suite green on its own diff.
+
+
+## What the fix actually touched (2026-08-22)
+
+Beyond the 69 sites, three things the report did not anticipate:
+
+1. **`emit_cps_runtime_prelude_ex(Buf *, bool tramp)`.** The only caller passed
+   the always-true bit, and the `tramp == false` wrapper
+   (`emit_cps_runtime_prelude`) had no callers at all -- so the parameter was
+   dead by the same argument as the bit. Collapsed into a single
+   `emit_cps_runtime_prelude(Buf *out)` with the trampoline machinery
+   unconditional, 11 `if (tramp)` sites unwrapped and 4 `else` arms deleted.
+
+   One of those `else` arms is worth recording, because hoisting it out was a
+   real regression caught only by the snapshots: the `tramp == false` arm also
+   emitted an `__dk_abort_body` helper that the `tramp == true` arm did not.
+   Lifting it unconditionally added a new function to every preamble and moved
+   146 fixtures. It is referenced nowhere in the emitter and appears in zero
+   `expected.c` files -- i.e. it has not been emitted since the graduation --
+   so it was deleted with its arm. **A dead-arm deletion is not always a
+   subset: check whether the arm you are dropping emits anything the surviving
+   arm does not.**
+
+2. **`emit_cps_ir.c:8733`'s `experimental_surface`,** flagged in the report as
+   needing eyes. Folding it proves the N6.5 hard error is unreachable: the
+   exemption was `= g_opt_cps_tramp_resume`, always true, so
+   `!sig_perm_route && !experimental_surface` never held. The diagnostic and
+   the now-unread `sig_perm_route` flag are deleted, with a comment recording
+   how to restore it (narrow the exemption to SIG-AWAIT-RECURSE rather than the
+   whole CPS surface). `TUR_TRACE_EVICT` still prints every eviction with its
+   category, so nothing became invisible.
+
+3. **A second-order cascade, left open.** Folding the `EX_HANDLE` arm in
+   `cps_ir.c` removed the only writer of `g_wbd_handled`, which leaves the P5
+   whole-body handle-delegation subsystem inert. That is a bigger deletion than
+   a flag fold and wants its own analysis, so it is filed separately as
+   `docs/reported/wbd-handle-delegation-subsystem-inert.md`.

@@ -2,7 +2,7 @@
 #include "elab_internal.h"
 #include "platform_fs.h"  /* realpath() on Windows */
 #include "globals.h"
-#include "mangle.h"   /* tur_cname_name_len */      /* g_opt_cps_tramp_resume (top-level-main synthesis gate) */
+#include "mangle.h"   /* tur_cname_name_len */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
@@ -1732,13 +1732,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * the fold and preserves the historical behaviour exactly.  Only the entry
      * unit is transformed (never a separately-compiled module).
      *
-     * GATED on --enable=cps-tramp-resume: flag-off, the base CPS admissible
-     * subset is narrower and the N6.5 direct/fiber fallback is retired, so a
-     * synthesized d2b `main` whose handle subtree leaves the subset would HARD-
-     * ERROR instead of gracefully fibering.  The historical synthesized-`int
-     * main()` path (never subject to the CPS classifier) stays the flag-off
-     * behaviour; the fold only fires under the experiment, keeping flag-off
-     * codegen byte-identical. */
+     * This used to be GATED on --enable=cps-tramp-resume, because flag-off the
+     * base CPS admissible subset was narrower and the N6.5 direct/fiber fallback
+     * is retired, so a synthesized d2b `main` whose handle subtree left the
+     * subset would HARD-ERROR instead of gracefully fibering.  cps-tramp-resume
+     * graduated 2026-07-19, so the fold is unconditional and the historical
+     * synthesized-`int main()` path it fell back to is gone. */
     /* Interpreter parity (tur-eval-prints-fn-main): the tree-walking interpreter
      * never reaches the CPS/DK backend this fold exists to feed, and folding a
      * bare top-level expression into `(defn main [] : int (do <expr> 0))` makes
@@ -1748,10 +1747,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * at all.  Under the interpreter every top-level form is evaluated directly
      * in turi_eval_impl's loop, so leaving statements top-level both runs their
      * side effects and surfaces the last expression's value.  The fold graduated
-     * to default-on with `cps-tramp-resume` (2026-07-19), which is what regressed
-     * the interpreter eval/REPL value display; suppress it under g_interpret_mode
-     * to restore correct value semantics while keeping the compiled-path fold. */
-    if (g_opt_cps_tramp_resume && !g_interpret_mode
+     * to default-on with `cps-tramp-resume` (2026-07-19, unconditional since it
+     * graduated), which is what regressed the interpreter eval/REPL value
+     * display; suppress it under g_interpret_mode to restore correct value
+     * semantics while keeping the compiled-path fold. */
+    if (!g_interpret_mode
         && !separate_compilation && stdlib_prefix <= nforms) {
         /* Collect every defmacro name (user + stdlib) so a macro-headed
          * top-level statement can be detected.  Also record each macro's

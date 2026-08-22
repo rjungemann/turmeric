@@ -9773,7 +9773,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * single `int`/`int64` arg + result (the twin's fixed int64 ABI); an
              * aggregate-result carrier (spill) is excluded. */
             char *fn_cps_name = NULL;
-            if (g_opt_cps_tramp_resume && !spill) {
+            if (!spill) {
                 const Expr *inner = e->as.poly_wrap_.inner;
                 while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
                 const Binding *ib = (inner && inner->kind == EX_VAR)
