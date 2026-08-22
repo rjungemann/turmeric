@@ -271,3 +271,50 @@ void     tur_bt_cell_free(void *c)              { free(c); }
 int64_t  tur_bt_cell_get(void *c)               { return (int64_t)tur_bt_get((TurBtCell *)c); }
 bool     tur_bt_cell_bound(void *c)             { return tur_bt_bound((TurBtCell *)c); }
 bool     tur_bt_cell_set(void *c, int64_t v)    { return tur_bt_set((TurBtCell *)c, (intptr_t)v); }
+
+/* ------------------------------------------------------------------------- *
+ * A trailed substitution (see trail.h)
+ * ------------------------------------------------------------------------- */
+
+typedef struct TurUf { int64_t n; TurBtCell cells[1]; } TurUf;
+
+void *tur_uf_new(int64_t n_vars) {
+    if (n_vars <= 0) n_vars = 1;
+    TurUf *u = (TurUf *)malloc(sizeof(TurUf) + (size_t)(n_vars - 1) * sizeof(TurBtCell));
+    if (!u) return NULL;
+    u->n = n_vars;
+    /* Write-once cells: a logic variable binds once per level and undo returns
+     * it to unbound, which is the WAM shape and what makes the trail entry a
+     * single "reset to unbound" rather than a saved payload. */
+    for (int64_t i = 0; i < n_vars; i++)
+        tur_bt_lvar_init(&u->cells[i], TUR_UF_UNBOUND, NULL, NULL);
+    return u;
+}
+
+void tur_uf_free(void *uf) { free(uf); }
+
+bool tur_uf_bind(void *uf, int64_t var, int64_t val) {
+    TurUf *u = (TurUf *)uf;
+    if (!u || var < 0 || var >= u->n) return false;
+    return tur_bt_set(&u->cells[var], (intptr_t)val);
+}
+
+int64_t tur_uf_walk(void *uf, int64_t var) {
+    TurUf *u = (TurUf *)uf;
+    if (!u) return TUR_UF_UNBOUND;
+    /* No path compression, deliberately: compressing is itself a trailed write,
+     * so on a chain that is about to be undone it costs an entry to save a
+     * traversal that is about to be discarded.  Whether it pays is a real
+     * question and a separate measurement -- what is being compared here is
+     * indexed lookup against a linear scan, and adding compression to one side
+     * would blur that. */
+    int64_t cur = var;
+    for (;;) {
+        if (cur < 0 || cur >= u->n) return TUR_UF_UNBOUND;
+        if (!tur_bt_bound(&u->cells[cur])) return cur * 2 + 1;   /* unbound var */
+        int64_t v = (int64_t)tur_bt_get(&u->cells[cur]);
+        if (v == TUR_UF_UNBOUND) return cur * 2 + 1;
+        if ((v & 1) == 0) return v;                              /* ground */
+        cur = v >> 1;                                            /* chase */
+    }
+}

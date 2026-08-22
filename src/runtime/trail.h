@@ -174,6 +174,31 @@ int64_t  tur_trail_mark_packed(void);
 bool     tur_trail_undo_to_packed(int64_t packed);
 bool     tur_trail_commit_to_packed(int64_t packed);
 
+/* ------------------------------------------------------------------------- *
+ * A trailed substitution (SX2)
+ *
+ * The first real consumer of the trail, and the thing SX2 exists to measure:
+ * an INDEXED variable->term map, against stdlib/logic.tur's persistent
+ * association list.  The two differ where it counts -- the assoc list is O(1)
+ * to extend and free to backtrack but O(n) to look up, while this is O(1) to
+ * look up and O(1) to bind but pays O(writes) to undo.
+ *
+ * Terms are encoded in one word so the structure stays the subject of the
+ * measurement rather than an allocator: `2k` is the ground value k, `2k+1` is
+ * variable k.  `walk` chases the odd ones, which is exactly what
+ * `logic-walk` does with TVar.
+ * ------------------------------------------------------------------------- */
+
+#define TUR_UF_UNBOUND (-1)
+
+void    *tur_uf_new(int64_t n_vars);
+void     tur_uf_free(void *uf);
+/* Bind variable `var` to encoded term `val`.  Trailed, so it undoes with the
+ * enclosing level.  False if already bound at this level (write-once). */
+bool     tur_uf_bind(void *uf, int64_t var, int64_t val);
+/* Follow `var`'s bindings to a ground term or an unbound variable, encoded. */
+int64_t  tur_uf_walk(void *uf, int64_t var);
+
 void    *tur_bt_cell_new(int64_t init);      /* value cell   */
 void    *tur_bt_lvar_new(int64_t unbound);   /* write-once   */
 void     tur_bt_cell_free(void *c);

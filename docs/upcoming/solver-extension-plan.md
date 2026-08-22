@@ -6,9 +6,11 @@ description: Extending the refinement solver into an incremental, backtracking d
 
 # Solver Extension (SX)
 
-**Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface)
-and SX1 (the trail primitive, minus its effect row) have landed; everything else
-is unstarted. Nothing here is on the critical path to v1; the whole of SX is
+**Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface),
+SX1 (the trail primitive, minus its effect row) and SX2's measurement have
+landed; everything else is unstarted. SX4 and SX6 are parked on SX0(b)'s
+evidence; SX2's gate came back the other way -- the trail pays for itself, so
+SX3/SX4 should build on it. Nothing here is on the critical path to v1; the whole of SX is
 *additive* to a solver that already ships and is already sound. Read section 5
 for what to do first if only one phase gets built.
 
@@ -835,6 +837,57 @@ Original specification follows.
   ownership glue are where the work is.
 
 ### SX2 -- make the stdlib search paths use it
+
+**The gate is answered: the trail pays for itself, decisively.** The measurement
+is `benchmarks/bench-logic-subst.tur`, results in
+`benchmarks/logic-subst-results.md`.
+
+| bindings | persistent ns/op | trailed ns/op | speedup |
+|---:|---:|---:|---:|
+| 1 | 209.5 | 18.7 | 11.2x |
+| 8 | 194.1 | 11.5 | 16.8x |
+| 64 | 369.9 | 20.7 | 17.9x |
+| 512 | 782.2 | 22.7 | 34.4x |
+
+**There is no crossover.** The expectation going in was that a persistent list
+would win at small n -- it is O(1) to extend and free to backtrack -- and lose
+only once its O(n) lookup dominated. It never wins. So the conditional in "why
+it is in this plan at all" resolves the other way: SX3/SX4 **should** build on
+the shared trail rather than proceeding as plain C.
+
+The shape carries a second finding. The persistent path's cost is roughly FLAT
+at ~190-230 ns/op from n=1 to n=16 and only climbs past n=128, so what dominates
+at every size a real query reaches is a large per-operation CONSTANT, not the
+linear scan. That constant is the thing worth attacking in the persistent path,
+and it is not diagnosed here: a microbenchmark that tried to isolate it was
+optimized away entirely -- the same trap as SX0(a)'s closure baseline -- and a
+number from a folded loop is worse than no number. Filed under
+[../reported/solver-hot-structures-linear-scans.md](../reported/solver-hot-structures-linear-scans.md).
+
+**The two benchmarks this phase names do not measure what it needs.** Both
+`bench-logic-query.tur` and `bench-backtrack-n-queens.tur` are self-contained
+inline-C simulations of a backtracking monad; neither loads `stdlib/logic.tur`
+or `stdlib/backtrack.tur`, so "run both paths" on them would have measured a
+hand-written C list against a trail and answered a much kinder question than the
+one asked. `bench-logic-subst.tur` measures `logic.tur`'s REAL `Subst` --
+`SBind`, `logic-walk`, `subst-lookup` -- which is what would actually change.
+
+**What landed:** `tur_uf_*` in `src/runtime/trail.c` -- an indexed, trailed
+variable->term map built on write-once cells, which is also the shape SX3's EUF
+union-find wants -- plus the head-to-head benchmark and its results.
+
+**What did NOT land:** the engine swap itself. Putting the trailed substitution
+behind `logic.tur`'s `Goal`/`Subst` API is not a drop-in: `Subst` is a persistent
+value threaded through a `Stream` monad that FORKS it, and a trail is a stack
+discipline that cannot be forked. That is exactly why the phase also calls for a
+`bt-scope`-bracketed depth-first driver in `stdlib/backtrack.tur` -- the driver
+has to change with the representation. Sequencing it after the measurement was
+deliberate: the plan says not to build it if the trail loses, and until now
+nobody knew. It does not lose, so the driver is the next increment, and it is
+where the `#fx{Bt}` effect row belongs too (see SX1) -- that is the first caller
+the refinement solver's purity whitelist can actually see.
+
+Original specification follows.
 
 - **Do:** a trailed union-find substitution behind `stdlib/logic.tur`'s existing
   `Goal`/`Subst` API (the persistent path stays as the default until the
