@@ -33,8 +33,9 @@
 ;; deliberate rather than incidental: a field read of a frame-named parameter
 ;; currently downgrades the whole body to UNVERIFIED, because `wf_walk` sees
 ;; `(.n a)` as a call it cannot resolve
-;; (docs/reported/writes-frame-declined-by-field-read.md).  A shim fixture must
-;; not depend on that -- it would be asserting a bug as the expected verdict,
+;; (docs/reported/writes-frame-walk-treats-every-head-as-a-callee.md -- the
+;; same walk also declines on `if`, `do`, and plain arithmetic).  A shim fixture
+;; must not depend on that -- it would be asserting a bug as the expected verdict,
 ;; and would then have to be edited when the bug is fixed.  Both bodies below
 ;; answer VERIFIED before and after that fix.
 (defstruct Ctr [n : int])
