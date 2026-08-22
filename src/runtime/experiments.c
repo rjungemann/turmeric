@@ -255,28 +255,55 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * is what bounds the graduation's reach to frames the checker can read.
      * The name moves to GRADUATED[] below (a lingering --enable is a
      * TUR-W0063 no-op). */
-    /* jit-ffi: the `(unsafe (call-ptr p [T1 T2 -> R] args...))` form of
-     * docs/upcoming/jit-ffi-c2mir-plan.md -- invoke an arbitrary function
-     * pointer (typically a dlsym result) with a signature stated at the
-     * call site.  AOT codegen is a pure cast-and-call; under --interpret it
-     * routes through the c2mir thunk provider, so it works only in
-     * -DTUR_JIT=ON builds there (a clean diagnostic otherwise).  Gated
-     * because the signature vocabulary is young (scalars plus the F4
-     * struct-by-value "{...}" slots, including nested records and F5
-     * callback aggregates) and should be able to move without breaking
-     * early adopters.  The plan's F1/F2
-     * plumbing -- runtime spice-export thunks and thunk-backed extern-c
-     * under --interpret -- is a behavior-preserving upgrade and is NOT
-     * behind this flag. */
-    { "jit-ffi",
-      "`(unsafe (call-ptr p [T1 T2 -> R] args...))` -- call an arbitrary "
-      "function pointer with a signature stated at the call site",
-      "docs/upcoming/jit-ffi-c2mir-plan.md",
-      "0.34.0",                  /* introduced */
-      "0.38.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_jit_ffi },
+    /* jit-ffi GRADUATED 2026-08-21 -- `(unsafe (call-ptr p [T1 T2 -> R]
+     * args...))` and `(unsafe (callback-ptr f [sig]))` are now ordinary
+     * `unsafe` forms, accepted without `--enable=jit-ffi`.  Graduated at its
+     * own `expires_at` (0.38.0), which is the review the row asked for.
+     *
+     * The gate had exactly one stated job: hold the signature vocabulary
+     * still enough that it "should be able to move without breaking early
+     * adopters."  That vocabulary is now settled, and settled in the
+     * direction that dissolves the question rather than merely answering it:
+     * F4 (2026-08-18) encodes a layout INLINE in the sig string -- exact-width
+     * member codes, nesting allowed -- so a sig is self-describing and the
+     * struct registry section 4 flagged as the piece most likely to grow was
+     * never built.  F5 landed callbacks the same day on F3's node.
+     *
+     * The 2026-08-21 follow-on batch then closed four of the five items F5
+     * left open, and two of them were live wrong-answer bugs rather than the
+     * cosmetic gaps the plan had described: the x86-64 verification that had
+     * never been run (which found a nested-aggregate miscall present on every
+     * architecture), inbound callback aggregates, extern-c aggregate slots,
+     * and scalar width fidelity (a C callee returning `int` left the upper
+     * half of the return register unspecified, so `neg_int(1234)` read back
+     * as 4294966062).  A gate is worth keeping when the surface underneath it
+     * is still moving; this one is now more measured than most of what ships
+     * ungated, so it is withholding a form for a reason that no longer has a
+     * subject.
+     *
+     * What graduation does NOT touch, because none of it was ever this row:
+     *
+     *   - The BUILD-TIME gate stays.  Under `--interpret` these forms route
+     *     through the c2mir thunk provider, so they need `-DTUR_JIT=ON`; a
+     *     default build still reports the clean non-JIT diagnostic rather than
+     *     miscompiling.  The AOT path is a pure cast-and-call and needs no JIT.
+     *   - `unsafe` stays required, exactly like `c-call`.  This is a raw
+     *     function pointer invoked against a signature the CALLER asserts;
+     *     graduating the flag does not make that checkable, and the whole
+     *     surface remains behind the block that says so.
+     *   - The plan's F1/F2 plumbing (runtime spice-export thunks,
+     *     thunk-backed extern-c under --interpret) was never behind this flag.
+     *
+     * One substantive boundary survives graduation, and it is a diagnostic
+     * rather than silence: under `--interpret` on aarch64, an aggregate whose
+     * fields are all the same float type (an AAPCS64 HFA) is REFUSED in both
+     * directions, because MIR has no HFA class and would pass it in x0..x7
+     * where a natively compiled callee reads v0..v7.  Compiled code is
+     * unaffected and correct on every target.  Fixing it is vendored MIR
+     * backend work, tracked in docs/reported/mir-aarch64-fp-aggregate-abi.md
+     * (which stays OPEN).  The name moves to GRADUATED[] below (a lingering
+     * --enable is a TUR-W0063 no-op).  See
+     * docs/archive/jit-ffi-c2mir-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -326,6 +353,7 @@ static const char *const GRADUATED[] = {
     "global-state",  /* graduated 2026-08-18; globals in write frames, read-only exported globals, ^atomic / ^thread-local */
     "write-frames",  /* graduated 2026-08-20; `#writes` frames are checked unconditionally (WF2/WF3) */
     "checked-reads", /* graduated 2026-08-20; broken-`#reads`-frame evidence refuses the congruence grant */
+    "jit-ffi",       /* graduated 2026-08-21; call-ptr / callback-ptr are ordinary `unsafe` forms (-DTUR_JIT=ON still gates the interpreter path) */
     NULL,
 };
 

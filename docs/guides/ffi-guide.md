@@ -14,7 +14,7 @@ covers the **dynamic** way: loading a shared library at runtime with
 pointer with `call-ptr` -- plus what happens to all of this under
 `--interpret` and the REPL, where a JIT-enabled build synthesizes call
 thunks at runtime with c2mir
-([docs/upcoming/jit-ffi-c2mir-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/jit-ffi-c2mir-plan.md)).
+([docs/archive/jit-ffi-c2mir-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-ffi-c2mir-plan.md)).
 
 Quick orientation:
 
@@ -26,10 +26,10 @@ Quick orientation:
 | Call C from the REPL / `--interpret` | either; both route through JIT thunks | a `-DTUR_JIT=ON` build |
 | Wrap a C library as a reusable package | a spice with `:cmake-deps` | see [Developing Spices](developing-spices-guide.md) |
 
-`call-ptr` and `callback-ptr` are **experimental** (`--enable=jit-ffi`,
-TUR-W0060); the other forms are stable. Everything on this page that touches raw pointers lives
-inside `(unsafe ...)` blocks and behind the `TURI_CAP_FFI` capability in
-sandboxed interpreter environments.
+Every form on this page is stable -- `call-ptr` and `callback-ptr` graduated
+from `--enable=jit-ffi` in 0.38.0 and need no flag. Everything here that
+touches raw pointers still lives inside `(unsafe ...)` blocks and behind the
+`TURI_CAP_FFI` capability in sandboxed interpreter environments.
 
 ---
 
@@ -57,9 +57,11 @@ sandboxed interpreter environments.
   the stated signature. The signature vector is positional parameter
   types, `->`, one return type.
 
-All four require an enclosing `(unsafe ...)` block; `call-ptr` (and
-`callback-ptr`) additionally require `--enable=jit-ffi` (or `:experiments [:jit-ffi]` in
-`build.tur`).
+All four require an enclosing `(unsafe ...)` block. Under `--interpret` and in
+the REPL, `call-ptr` and `callback-ptr` additionally need a `-DTUR_JIT=ON`
+build, because that is where the c2mir thunk provider lives; a build without
+the engine says so rather than misbehaving. The compiled path needs nothing --
+it lowers to a plain cast-and-call.
 
 ### Signature vocabulary
 
@@ -207,7 +209,7 @@ No headers, no link flags -- the library, and even the receive buffer's
 `tur jit`, and under `--interpret` in a JIT build:
 
 ```turmeric no-check
-;; Run with: tur --enable=jit-ffi run zmq-dyn.tur
+;; Run with: tur run zmq-dyn.tur
 (defn main [] : int
   (unsafe
     (let [z        (dlopen "libzmq.so.5")

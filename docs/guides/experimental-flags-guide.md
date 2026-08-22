@@ -16,8 +16,9 @@ Unlike `-X`, which conflated "in development", "stable but opt-in", and
 every flag carries a hard expiry by which it must graduate or be removed.
 
 > **The registry is small by design.** Run `tur experiments` for the
-> authoritative current set (at the time of writing: `jit-ffi`); this guide
-> describes how the mechanism behaves for whatever rows are present.
+> authoritative current set (at the time of writing it is empty -- `jit-ffi`,
+> the last row, graduated in 0.38.0); this guide describes how the mechanism
+> behaves for whatever rows are present.
 
 ## Opting in
 

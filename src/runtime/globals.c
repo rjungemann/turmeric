@@ -269,8 +269,11 @@ bool g_dump_cps_mono = false;
  * refused on positive broken-promise evidence, unconditionally.  The enable bit
  * and its gates are gone.  See docs/upcoming/trusted-refinement-claims-plan.md
  * (R2). */
-/* jit-ffi (docs/upcoming/jit-ffi-c2mir-plan.md): gates the call-ptr form. */
-bool g_opt_jit_ffi = false;
+
+/* jit-ffi GRADUATED 2026-08-21 -- call-ptr / callback-ptr are ordinary
+ * `unsafe` forms.  The enable bit and its two elaboration gates are gone; the
+ * `-DTUR_JIT=ON` build gate on the interpreter path is untouched.  See
+ * docs/archive/jit-ffi-c2mir-plan.md. */
 
 /* --strict-refine: hard-fail on any obligation the chain could not prove. */
 bool g_strict_refine = false;

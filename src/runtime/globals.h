@@ -307,13 +307,12 @@ extern bool g_dump_cps_mono;
  * yields no evidence and keeps the trusted grant.  See
  * docs/upcoming/trusted-refinement-claims-plan.md (R2). */
 
-/* `jit-ffi` experiment (docs/upcoming/jit-ffi-c2mir-plan.md, F3): the
- * `(unsafe (call-ptr p [T1 T2 -> R] args...))` form -- call an arbitrary
- * function pointer with a signature stated at the site.  Gated because the
- * surface is young and the turi routing depends on a JIT build; the F1/F2
- * plumbing (spice-export thunks, thunk-backed extern-c) is behavior-neutral
- * upgrade and is NOT behind this flag. */
-extern bool g_opt_jit_ffi;
+/* jit-ffi GRADUATED 2026-08-21 -- `(unsafe (call-ptr p [T1 T2 -> R] args...))`
+ * (F3) and `(unsafe (callback-ptr f [sig]))` (F5) are ordinary `unsafe` forms;
+ * the g_opt_jit_ffi enable bit and its two elaboration gates are gone.  The
+ * BUILD-TIME gate is unaffected: the turi routing still needs `-DTUR_JIT=ON`
+ * and reports a clean diagnostic without it, and `unsafe` is still required.
+ * See docs/archive/jit-ffi-c2mir-plan.md. */
 
 /* lang-layers L4: true once a project manifest declared an `:experiments`
  * key (even the empty list), i.e. the project owner scoped the experiment set.

@@ -1,6 +1,17 @@
 # JIT-scoped dynamic FFI via c2mir (no new dependency)
 
-> **Status:** F1-F5 implemented (F1-F3 2026-08-17; F4 + F5 2026-08-18), and
+> **Status:** GRADUATED 2026-08-21 in 0.38.0 -- `call-ptr` and `callback-ptr`
+> are ordinary `unsafe` forms and no longer need `--enable=jit-ffi` (a
+> lingering enable is a TUR-W0063 no-op).  The `-DTUR_JIT=ON` build gate on the
+> interpreter path is unchanged, and `unsafe` is still required.  The row
+> graduated at its own `expires_at`, which is the review it asked for: the gate
+> existed only so the signature vocabulary could move, F4 settled that by
+> encoding layout inline in the sig string rather than in a registry, and the
+> follow-on batch below then measured the surface rather than merely holding
+> it still.  The one substantive item still open -- the aarch64 HFA gap -- is
+> a refusal with a diagnostic, not silence.
+>
+> F1-F5 implemented (F1-F3 2026-08-17; F4 + F5 2026-08-18), and
 > the follow-on batch of 2026-08-21 closed four of the five items F5 left
 > open -- x86-64 verification (which found a nested-aggregate miscall),
 > inbound callback aggregates, extern-c aggregate slots, and scalar width
@@ -332,10 +343,13 @@ cleanup once JIT builds are the default REPL configuration.
 - **Interpreter capability gate:** thunk calls sit behind the existing
   `TURI_CAP_FFI` bit (`src/turi/env.h:138-145`), same as
   dlopen/dlsym.
-- **Experiment gating:** per the strict rule, this ships as an
+- **Experiment gating:** ~~per the strict rule, this ships as an
   `EXPERIMENTS[]` row (`--enable=jit-ffi`, full descriptor, plan_path
   pointing here, `experiment_warn_if_used` in the `call-ptr`
-  elaboration).
+  elaboration).~~ **Discharged 2026-08-21:** the row shipped as described
+  in 0.34.0 and graduated in 0.38.0 at its own `expires_at`. The name is in
+  `GRADUATED[]`, so a downstream `build.tur` that still says
+  `:experiments [:jit-ffi]` keeps compiling as a TUR-W0063 no-op.
 
 ## 3. Phases
 

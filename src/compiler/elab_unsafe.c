@@ -1,8 +1,7 @@
 /* elab_unsafe.c -- unsafe pointer ops, casts, raw memory, and C FFI primitives. */
 #include "elab_internal.h"
 
-#include "experiments.h"        /* jit-ffi: experiment gate + lifecycle warn */
-#include "globals.h"            /* g_opt_jit_ffi */
+#include "globals.h"            /* g_needs_dlfcn */
 #include "turi/jit_ffi.h"       /* signature vocabulary (class_for_kind) */
 
 /* Phase U3: Unsafe primitives implementations */
@@ -877,15 +876,10 @@ static bool elab_c_sig_vector(Elab *e, const Form *sig_f, const char *what,
  * pointer typically comes from dlsym, which until this form existed had no
  * way to be invoked at all.  AOT codegen is a pure cast-and-call; turi
  * routes through the JIT FFI thunk provider.  Requires an `unsafe` block
- * (exactly like c-call) and the `jit-ffi` experiment. */
+ * (exactly like c-call); the `jit-ffi` experiment graduated 2026-08-21, so
+ * there is no longer an enable gate.  The turi path still needs a
+ * `-DTUR_JIT=ON` build and says so cleanly when it does not have one. */
 Expr *elab_call_ptr(Elab *e, const Form *call) {
-    if (!g_opt_jit_ffi) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "call-ptr is experimental; enable it with --enable=jit-ffi "
-                  "(or :experiments [:jit-ffi] in build.tur)");
-        return NULL;
-    }
-    experiment_warn_if_used("jit-ffi");
     g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
     if (e->unsafe_depth == 0) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1001,13 +995,6 @@ Expr *elab_call_ptr(Elab *e, const Form *call) {
  * compiled path (where the trampoline is a static function, not an
  * allocation), and a use-after-free primitive on the other. */
 Expr *elab_callback_ptr(Elab *e, const Form *call) {
-    if (!g_opt_jit_ffi) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "callback-ptr is experimental; enable it with "
-                  "--enable=jit-ffi (or :experiments [:jit-ffi] in build.tur)");
-        return NULL;
-    }
-    experiment_warn_if_used("jit-ffi");
     if (e->unsafe_depth == 0) {
         diag_emit(DIAG_ERROR, call->span,
                   "callback-ptr requires an enclosing (unsafe ...) block");
