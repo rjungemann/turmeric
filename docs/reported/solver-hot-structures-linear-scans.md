@@ -65,11 +65,11 @@ the linear scan of #1 dominates at every size a real query reaches.
 solver-specific**, so it moved to its own report:
 [multi-variant-adts-always-heap-allocate.md](multi-variant-adts-always-heap-allocate.md).
 
-In short: ~85% of executed instructions on that workload are inside `malloc`;
-a multi-variant ADT heap-allocates on every construction however small it is
-(single-variant ones already lower by value), and nothing ever frees them, so
-the cost degrades 8x as the heap grows. It is not the `O(n)` scan, and fixing
-the scan would not have helped.
+In short: ~85% of executed instructions on that workload are inside `malloc`,
+because a multi-variant ADT heap-allocates on every construction however small
+it is (single-variant ones already lower by value). It is not the `O(n)` scan,
+and fixing the scan would not have helped. The cheapest fix -- a slab allocator
+for ADT boxes, needing no ownership analysis -- prices at 2.4x there.
 
 ## Context
 

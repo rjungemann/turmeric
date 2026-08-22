@@ -1,11 +1,11 @@
 # Multi-variant ADTs always heap-allocate, and are never freed
 
 **Severity:** medium, and language-wide. Not a correctness bug -- it is a
-constant factor on every sum type in the tree, including `Option`, `Result`,
-and every `defdata` with more than one variant. Measured at **~85% of executed
+constant factor on every sum type in the tree, including `Option`, `Result`, and
+every `defdata` with more than one variant. Measured at **~85% of executed
 instructions** on a representative stdlib workload.
 
-**Status:** OPEN. Diagnosed, not fixed.
+**Status:** OPEN. Diagnosed and priced, not fixed.
 
 ## What was measured
 
@@ -21,8 +21,8 @@ instructions** on a representative stdlib workload.
 ```
 
 The actual logic is under 8% of the program. Everything else is the allocator.
-That `_int_malloc` (glibc's slow path) dominates rather than the tcache fast path
-is the signature of an allocator that can never reuse a block.
+Wall clock agrees: **~183 ns per bind+walk**, and flat -- 179.7 / 189.9 / 183.7 /
+183.6 / 183.5 ns/op at 250 / 1k / 4k / 16k / 64k passes, each in its own process.
 
 ## Cause 1 -- a multi-variant ADT is always boxed, however small
 
@@ -48,53 +48,84 @@ static int64_t ctor_A(int64_t _0) {   /* (defdata Many :copy (A :int) (B :int) (
 ```
 
 `tur_adt_Many` is 16 bytes -- a tag and one `int64_t`. `Term` (4 variants) is 24.
-Both are trivially register- or stack-passable, and both are malloc'd on every
-construction. The by-value ABI already exists and is proven by the single-variant
-path (the B4 by-value-carrier work); it simply stops at sums.
+Both are trivially register- or stack-passable, and both malloc on every
+construction. The gate is `adt_is_byvalue_product_d` (`types.c:2918`), whose
+first test is `adt_is_flat_product` -- single variant. The by-value ABI exists
+and is proven; it simply stops at sums.
 
-Note `:copy` is not the relevant knob: it controls linearity (may this value be
-used twice), not representation. `Term` is already `:copy` and still boxes.
+`:copy` is not the relevant knob: it controls linearity (may this value be used
+twice), not representation. `Term` is already `:copy` and still boxes.
 
 ## Cause 2 -- nothing ever frees them
 
-No `free` reachable from the hot path releases a `Term` or a `Subst`, and these
-ADTs carry no refcount header, so the rc/GC subsystem does not collect them
-either. Every construction leaks.
+No `free` reachable from the hot path releases a `Term` or a `Subst`.
+`needs_drop_glue` (`elab_structs.c:1349`) is set only for `TY_RC` / `TY_REF` /
+`TY_WEAK` / boxed-fn fields -- it frees a box's *contents*, never the box -- and
+`elab_effects.c:30` gates it to `n_ctors == 1` regardless. `:heap` on a sum
+yields a typed pointer instead of an `int64_t` carrier but still mallocs and
+still never frees. So every multi-variant ADT construction leaks, `:copy` or
+not.
 
-That is what turns a fixed per-op cost into a growing one. Holding the
-substitution size at n=8 and varying only how many are built:
+**This is a memory-footprint problem, not (at these scales) a time problem** --
+see the withdrawn claim below.
 
-| passes | ns/op |
-|---:|---:|
-| 250 | 180.4 |
-| 1,000 | 168.4 |
-| 4,000 | 179.6 |
-| 16,000 | 830.5 |
-| 64,000 | 1395.9 |
+## What each fix is worth
 
-Flat at ~175 ns while the heap is small, then degrading 8x as it grows. Nothing
-about the work changed across those rows.
+Five representations of the same workload (n=8 bindings, build / walk all /
+discard), each timed in **its own process**, best of three:
 
-## Fix directions, in order of leverage
+| representation | 1k passes | 16k | 64k | vs today |
+|---|---:|---:|---:|---:|
+| A -- boxed, leaked (**today**) | 92.4 | 98.3 | 95.4 | 1.0x |
+| B -- boxed, freed | 34.6 | 36.9 | 36.7 | 2.6x |
+| C -- Term by value, spine boxed, leaked | 49.0 | 56.9 | 52.3 | 1.8x |
+| D -- by value **and** reclaimed | 5.1 | 5.3 | 5.2 | **18x** |
+| E -- boxed, leaked, slab-bump-allocated | 33.5 | 40.7 | 40.6 | 2.4x |
 
-1. **Lower a multi-variant ADT by value when the whole value fits a small word
-   budget** (2-3 words covers `Option`, `Result`, `Term`, and most stdlib sums).
-   This removes the allocation rather than making it cheaper, and the ABI work is
-   already done for single-variant types. Highest leverage by a wide margin.
-2. **Free or arena-allocate what still boxes.** Even where boxing is unavoidable
-   (wide payloads, recursive spines), a per-query arena or a drop at scope exit
-   keeps the allocator on its fast path and removes the degradation above.
+Absolute numbers are from a simplified C model of the same shapes, so they run
+faster than the real compiler's 183 ns/op; the **ratios** are what transfer.
 
-Either fix alone would help; (1) makes (2) matter much less.
+Three things follow, and the first corrects this report's original advice:
+
+1. **By-value is not the standalone win it was billed as.** It is 1.8x, not
+   "highest leverage by a wide margin". It cannot remove the spine allocation:
+   `Subst` is a list, so one node per binding is inherent to the persistent
+   structure. By-value removes the *Term* riding inside each node -- one of the
+   two allocations, not both.
+2. **Row E is the cheap one.** A slab/pool allocator for ADT boxes gets 2.4x --
+   nearly all of what reclamation gets -- and needs **no ownership analysis, no
+   drop glue, and no ABI change**. It is a runtime allocator plus a one-line
+   change at the `ctor_*` emit site. If one thing gets done, this is it.
+3. **The transformative number needs both** (18x). That is the case for doing
+   the by-value ABI work -- but only *after* the allocator, and knowing it buys
+   1.8x on its own.
+
+## Withdrawn: an earlier claim that this degrades 8x with heap size
+
+An earlier revision of this report said the cost climbed from 180 to 1396 ns/op
+as the heap grew. **That was a measurement artifact and is wrong.** Both the
+Turmeric scaling run and the first C harness measured every pass count *in one
+process, cumulatively*, so each row inherited the leaked heap of every row
+before it. Re-measured with each point in its own process, the cost is flat over
+a 256x range (183.5-189.9 ns/op).
+
+The tell was there and was nearly missed: the reclaiming variants were stable
+across runs while the leaking ones swung 85 to 633 ns/op for the *same*
+configuration. That is not a property of leaking, it is a property of sharing a
+heap with whatever ran first.
+
+Recorded rather than quietly deleted because the flaw is easy to repeat: **a
+sweep over "how much work" is not measuring scaling if the work accumulates in
+one process.**
 
 ## Method note
 
 Instruction counts come from callgrind, which counts under valgrind rather than
-cycles on real hardware, so the wall-clock scaling table above is included as an
-independent confirmation -- the two agree.
+cycles on real hardware, so the wall-clock figures are given alongside; the two
+agree on where the time goes.
 
-An earlier attempt to isolate this with a microbenchmark measured nothing: a
-tail-recursive loop whose result went unused folded away entirely, reporting
-0 ns for 200,000 ADT constructions. That is the same trap SX0(a)'s closure
-baseline hit. The measurements here avoid it by consuming every result and by
-profiling a program whose output is checked.
+An even earlier attempt measured nothing at all: a tail-recursive loop whose
+result went unused folded away entirely, reporting 0 ns for 200,000 ADT
+constructions -- the same trap SX0(a)'s closure baseline hit. Every measurement
+here consumes and prints its result, and the five representations cross-check
+each other's checksums.
