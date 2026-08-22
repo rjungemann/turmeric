@@ -1,5 +1,11 @@
 # WF2 treats every non-global head as an opaque callee, so most real bodies are UNVERIFIED
 
+> **RESOLVED 2026-08-22** by the preferred fix below: the frame check now walks
+> the elaborated `Expr` body (`wf_scan`, elab_fns.c) instead of the source
+> `Form` tree. All four repro shapes verify, the soundness anchor holds, and
+> both suites are green -- `tests/run.sh` 2694 passed / 0 failed,
+> `tests/run-turi.sh` 1857 passed / 0 failed. See "Outcome" at the end.
+
 **Severity: medium.** Sound (it declines, never miscompiles), but it declines so
 much that a `#writes` frame is unusable as a *fact* for almost any realistic
 body -- which silently disables every consumer that requires `writes_checked`,
@@ -137,3 +143,54 @@ Widening also feeds WF3: more frames become `writes_checked`, so more borrow
 widening is admitted and more refinement crossings may prove. That is the
 intended effect, but it means refinement fixtures are in the blast radius too,
 not just write-frame ones.
+
+
+## Outcome (2026-08-22)
+
+`wf_walk` and `wf_place_root_param` are deleted; `wf_scan` walks `fd->body`,
+mirroring `rf_scan` down to the budget and the fixed-point pass. The three write
+channels are unchanged -- direct `set!` through a parameter place, an argument
+handed to a `^mut` callee slot, and a callee's declared+CHECKED frame mapped
+back through the argument list.
+
+What the node kinds bought:
+
+| Shape | Form tree | Expr tree |
+|---|---|---|
+| `(.n a)` field read | opaque callee -> UNVERIFIED | `EX_GET_FIELD` -> a read |
+| `(.peek-it a)` method call | opaque callee -> UNVERIFIED | `EX_CALL` -> channels 2/3 |
+| `(if ...)`, `(do ...)` | opaque callee -> UNVERIFIED | own node kinds -> recurse |
+| `(+ p 1)` | "hands `p` onward" -> UNVERIFIED | pure `EX_BUILTIN` -> fresh value |
+
+The root chase is tri-state on purpose (`WR_NOT_OURS` / `WR_PARAM` /
+`WR_UNKNOWN`). Collapsing "not one of ours" into "cannot tell" is what made the
+old walk useless; collapsing it the other way would have made it unsound. A
+pure builtin computes a fresh value and so answers NOT_OURS, which is what
+makes `(+ p 1)` harmless; a call result answers UNKNOWN, because it may be an
+interior pointer derived from a parameter.
+
+**Soundness was checked by probe, not by assumption.** Still refused, all
+verified against the built compiler: a direct write to an unframed parameter
+(TUR-E0382), an unframed parameter handed to a `^mut` callee slot (TUR-E0382),
+an inline-C body, a callee with an unchecked (trusted) frame, a plain by-value
+callee slot, an indirect call through a fn-typed parameter, and -- the one this
+report exists to warn about -- a dotted head that dispatches a method.
+
+Corpus effect: 21 declared frames, VERIFIED 18 -> 19, and the two that remain
+UNVERIFIED are `wf1-writes-inline-c-trusted`'s, which is the trust boundary
+working as designed. No `expected.c` snapshot moved and no fixture changed
+expectations, which is a weaker signal than it looks -- see below.
+
+## The coverage gap this exposed, now closed
+
+No fixture asserted a WF2 verdict, so the whole defect was invisible to the
+suite: `wf1-writes-frame-honored`'s `peek` was silently UNVERIFIED while the
+fixture's own header said WF2 verified the frame, and the fix moved it to
+VERIFIED with nothing going red either way. A green suite across a change this
+size means the suite was not watching.
+
+`tests/fixtures/wf2-verdicts-reads-and-control-flow` now pins the verdicts
+(`--dump-write-frames` plus `requires.interp`, so the compile-time dump and the
+program output share one stream). Its `via-method` line is the anchor: it must
+stay UNVERIFIED, and it is what would catch someone re-introducing the unsound
+"every dotted head is a field read" shortcut.

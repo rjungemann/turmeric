@@ -1472,180 +1472,11 @@ static int wf_param_index(const Form *f, Binding *const *params, uint32_t n_para
     return -1;
 }
 
-/* The parameter a PLACE expression is rooted at, or -1.
- *
- * `(.n w)` roots at `w`; `(.n (.inner w))` roots at `w` too.  A place whose
- * root is not a bare symbol (a call result, an index into a computed value)
- * returns -1 and is reported by the caller as unverifiable rather than safe --
- * it may well reach a parameter by a route this scan cannot follow. */
-static int wf_place_root_param(const Form *f, Binding *const *params,
-                               uint32_t n_params, uint32_t depth, bool *opaque) {
-    if (!f) { *opaque = true; return -1; }
-    if (depth >= WF_SCAN_MAX_DEPTH) { *opaque = true; return -1; }
-    if (f->tag == F_SYM) {
-        int pi = wf_param_index(f, params, n_params);
-        if (pi < 0) return -1;      /* a local: not in the frame vocabulary */
-        return pi;
-    }
-    if (f->tag != F_LIST || f->as.list.len < 2) { *opaque = true; return -1; }
-    /* An accessor form `(<place-op> <subject> ...)`: recurse on the subject.
-     * Which head it is does not matter -- field access, index, deref all put
-     * the thing being written into slot 1. */
-    return wf_place_root_param(f->as.list.items[1], params, n_params,
-                               depth + 1, opaque);
-}
-
+/* The Form-era `wf_walk` / `wf_place_root_param` lived here.  They are gone:
+ * the frame check now walks the elaborated Expr body (`wf_scan`, below), for
+ * the reasons recorded in its header comment.  `wf_param_index` above stays --
+ * the WF3 scanners still ask its question about a Form. */
 static WfVerdict wf_worse(WfVerdict a, WfVerdict b) { return a > b ? a : b; }
-
-/* Walk `f`, accumulating the verdict for a frame of `mask` over `params`. */
-static WfVerdict wf_walk(Elab *e, const Form *f, Binding *const *params,
-                         uint32_t n_params, uint32_t mask, uint32_t depth,
-                         const Form **witness) {
-    if (!f) return WF_VERIFIED;
-    if (depth >= WF_SCAN_MAX_DEPTH) return WF_UNVERIFIED;
-    /* An inline-C body is opaque by construction.  This is the trust boundary
-     * `#reads` already draws and the plan keeps: checked-when-checkable, never
-     * checked-by-pretending. */
-    if (f->tag == F_CBLOCK) return WF_UNVERIFIED;
-    if (f->tag == F_SYM && f->as.sym) {
-        /* A bare assignment symbol that is not the head of a form recognized
-         * below: it may be aliased or applied, and its target is not readable
-         * from here. */
-        const char *n = f->as.sym->name;
-        if (strcmp(n, "set!") == 0 || strcmp(n, "swap!") == 0 ||
-            strcmp(n, "reset!") == 0)
-            return WF_UNVERIFIED;
-        return WF_VERIFIED;
-    }
-    if (f->tag != F_LIST && f->tag != F_VEC) return WF_VERIFIED;
-    /* A macro call walks as its EXPANSION, exactly as the WF3 scanners do: the
-     * source spelling may show no write at all, but the code that runs is the
-     * expansion, and a frame that ignored a write hidden in a template would be
-     * a frame the body exceeds without anyone hearing about it.  The hop does
-     * not consume depth (a lateral move to fresh nodes, not nesting). */
-    {
-        const Form *mx = rt_macro_expansion(e, f);
-        if (mx) return wf_walk(e, mx, params, n_params, mask, depth, witness);
-    }
-    if (f->as.list.len == 0) return WF_VERIFIED;
-
-    WfVerdict v = WF_VERIFIED;
-
-    /* --- channel 1: a direct assignment ---------------------------------- */
-    if (f->as.list.len >= 2 &&
-        (rt_sym_is(f->as.list.items[0], "set!") ||
-         rt_sym_is(f->as.list.items[0], "swap!") ||
-         rt_sym_is(f->as.list.items[0], "reset!"))) {
-        const Form *target = f->as.list.items[1];
-        if (target && target->tag == F_SYM) {
-            /* Bare symbol: a local rebind, in-frame by the by-value argument
-             * above -- whether or not it happens to spell a parameter. */
-        } else {
-            bool opaque = false;
-            int pi = wf_place_root_param(target, params, n_params, 0, &opaque);
-            if (opaque) {
-                v = wf_worse(v, WF_UNVERIFIED);
-            } else if (pi >= 0 && !(mask & ((uint32_t)1u << pi))) {
-                if (witness && !*witness) *witness = f;
-                v = wf_worse(v, WF_EXCEEDED);
-            }
-        }
-        for (uint32_t i = 2; i < f->as.list.len; i++)
-            v = wf_worse(v, wf_walk(e, f->as.list.items[i], params, n_params,
-                                    mask, depth + 1, witness));
-        return v;
-    }
-
-    /* --- channels 2 and 3: a call ---------------------------------------- */
-    if (f->tag == F_LIST && f->as.list.items[0] &&
-        f->as.list.items[0]->tag == F_SYM && f->as.list.items[0]->as.sym) {
-        const Symbol *head = f->as.list.items[0]->as.sym;
-        /* Only a call that hands this function's own parameters onward can
-         * write this frame at all, so a call with no parameter-rooted argument
-         * needs no callee knowledge -- which is what keeps the common case
-         * (calling an unannotated helper on locals) verifiable. */
-        bool passes_param = false;
-        for (uint32_t i = 1; i < f->as.list.len; i++) {
-            bool opaque = false;
-            if (wf_place_root_param(f->as.list.items[i], params, n_params, 0,
-                                    &opaque) >= 0)
-                passes_param = true;
-        }
-        if (passes_param) {
-            Binding *callee = scope_lookup(&e->global, head);
-            if (!callee) {
-                /* Not resolvable here (a local fn value, a typeclass method, a
-                 * builtin): no frame to consult, so no vouching. */
-                v = wf_worse(v, WF_UNVERIFIED);
-            } else {
-                /* `source_fn_def` is the defn's own parameter list, which is
-                 * where the `^mut`/`^borrow` modes live -- the binding's TY_FN
-                 * carries only kinds. */
-                const FnDef *fd = callee->source_fn_def;
-                uint32_t cn = fd ? fd->n_params : 0;
-                for (uint32_t i = 1; i < f->as.list.len; i++) {
-                    uint32_t slot = i - 1;   /* 0-based callee parameter */
-                    bool opaque = false;
-                    int pi = wf_place_root_param(f->as.list.items[i], params,
-                                                 n_params, 0, &opaque);
-                    if (opaque) { v = wf_worse(v, WF_UNVERIFIED); continue; }
-                    if (pi < 0) continue;    /* a local: not in this vocabulary */
-                    bool callee_writes_slot;
-                    if (callee->writes_declared) {
-                        /* Channel 3: the callee said what it writes.  Only a
-                         * CHECKED frame may narrow us -- a trusted one is a
-                         * promise, and a chain of promises is what the checked
-                         * tier exists to replace. */
-                        if (!callee->writes_checked) {
-                            v = wf_worse(v, WF_UNVERIFIED);
-                            continue;
-                        }
-                        callee_writes_slot =
-                            slot < WF_MAX_FRAME_PARAMS &&
-                            (callee->writes_param_mask & ((uint32_t)1u << slot)) != 0;
-                    } else if (fd && slot < cn && fd->params[slot]) {
-                        /* Channel 2: no declared frame, so fall back to the
-                         * parameter MODE, which is itself a declaration.
-                         *
-                         *   ^borrow -- safe, and not merely assumed safe: the
-                         *     borrow checker already forbids writing through
-                         *     it, so this is a fact the frame may rely on.
-                         *   ^mut    -- a DEFINITE write channel.  The callee
-                         *     asked for mutable access and the language grants
-                         *     it, so handing a parameter here writes it,
-                         *     whether or not the callee happens to use it.
-                         *     Treating it as merely-possible would let a frame
-                         *     be silently exceeded through the one channel the
-                         *     language spells out.
-                         *   anything else -- UNVERIFIED.  A plain by-value slot
-                         *     may still be an opaque handle the callee writes
-                         *     through, which is exactly what this scan cannot
-                         *     see.  Not a definite write, so not E0382; just
-                         *     not vouchable. */
-                        if (fd->params[slot]->is_borrow) continue;
-                        if (!fd->params[slot]->is_mut) {
-                            v = wf_worse(v, WF_UNVERIFIED);
-                            continue;
-                        }
-                        callee_writes_slot = true;
-                    } else {
-                        v = wf_worse(v, WF_UNVERIFIED);
-                        continue;
-                    }
-                    if (callee_writes_slot && !(mask & ((uint32_t)1u << pi))) {
-                        if (witness && !*witness) *witness = f;
-                        v = wf_worse(v, WF_EXCEEDED);
-                    }
-                }
-            }
-        }
-    }
-
-    for (uint32_t i = 0; i < f->as.list.len; i++)
-        v = wf_worse(v, wf_walk(e, f->as.list.items[i], params, n_params, mask,
-                                depth + 1, witness));
-    return v;
-}
 
 /* G4b/§13.7: does this initializer form mention a `^thread-local` global?
  * Returns the offending symbol, or NULL.  Form-level and resolved through the
@@ -1696,7 +1527,7 @@ bool type_is_atomic_scalar(TypeKind k) {
  *
  * Orthogonal to the frame walk above, and deliberately so.  `#writes` speaks
  * about PARAMETERS; a global is written by name rather than passed, so it is
- * not a thing a frame can name or exclude.  Rather than teach wf_walk a second
+ * not a thing a frame can name or exclude.  Rather than teach wf_scan a second
  * vocabulary, this answers its own question over the same body and the verdict
  * is combined once, in wf_resolve_write_frames.
  *
@@ -1768,7 +1599,7 @@ static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn, WgSet *out);
 /* True when `sym` names a mutable global -- i.e. a `set!` through it is
  * observable outside the assigning function.  A parameter of the enclosing
  * function shadows: turmeric passes by value, so `(set! p 5)` rebinds this
- * function's own slot, which is the same by-value argument wf_walk rests on. */
+ature -- function's own slot, which is the same by-value argument wf_scan rests on. */
 static bool wg_target_is_global(Elab *e, const Form *target,
                                 Binding *const *params, uint32_t n_params) {
     if (!target || target->tag != F_SYM || !target->as.sym) return false;
@@ -1833,7 +1664,7 @@ static WgVerdict wg_walk(Elab *e, const Form *f, Binding *const *params,
 
     /* A call: consult the callee, whatever its arguments -- a call that
      * receives none of this function's parameters can still write a global,
-     * which is exactly the gap that makes this a separate walk from wf_walk's
+     * which is exactly the gap that makes this a separate walk from wf_scan's
      * `passes_param` fast path. */
     if (f->tag == F_LIST && f->as.list.items[0]) {
         const Form *head_f = f->as.list.items[0];
@@ -1934,7 +1765,7 @@ static enum WritesGlobal wf_fn_writes_global(Elab *e, Binding *fn, WgSet *out) {
     return fn->writes_global;
 }
 
-/* The global half of a frame verdict, kept separate from wf_walk's parameter
+/* The global half of a frame verdict, kept separate from wf_scan's parameter
  * half because they speak different vocabularies (mutable-globals-plan §4.2).
  *
  * G2: the frame can NAME globals, so the question is coverage, exactly as for
@@ -1964,6 +1795,325 @@ static WfVerdict wf_global_verdict(Elab *e, Binding *fn, const Symbol **uncovere
         }
     }
     return WF_VERIFIED;
+}
+
+/* =========================================================================
+ * WF2, the checked half: verify a declared `#writes` frame against its body.
+ *
+ * This walks the ELABORATED `Expr` body, not the source `Form` tree, and that
+ * is the whole point.  The frame question -- "can this form write a parameter
+ * my frame does not name?" -- is semantic, and on a Form tree it is not
+ * answerable: a head symbol is just a name, so the walk had to resolve every
+ * head through the global scope and treat everything else as an opaque callee.
+ * `(.n a)` (a field READ), `(if ...)`, `(do ...)` and `(+ p 1)` are none of
+ * them global bindings, so all four declined, and a frame over any body doing
+ * ordinary work was silently UNVERIFIED
+ * (docs/reported/writes-frame-walk-treats-every-head-as-a-callee.md).
+ *
+ * On `Expr` each of those is a distinct node kind and the guessing stops.  The
+ * decisive case is the dotted head: `(.f x)` is EX_GET_FIELD when `f` is a
+ * field (a read, no write channel) and EX_CALL when it dispatches a method
+ * (analyzed like any other call).  A Form-level walk cannot tell the two apart
+ * without the receiver's type, which is exactly why admitting all dotted heads
+ * there would have been unsound.
+ *
+ * The `#reads` side of this file already works this way -- see rf_scan -- and
+ * this mirrors it deliberately, down to the budget and the fixed-point pass.
+ *
+ * Three write channels are checked, unchanged from the Form-era walk:
+ *   1. a direct `set!` through a parameter place (EX_SET_FIELD / EX_SET_DEREF);
+ *   2. an argument passed to a `^mut` parameter of a callee;
+ *   3. a callee's own declared+CHECKED `#writes` frame, mapped back through the
+ *      argument list to this function's parameters.
+ *
+ * A bare-symbol `(set! p v)` (EX_SET, whose target is a Binding) is NOT a
+ * write: Turmeric passes by value, so it rebinds this function's own slot and
+ * the caller cannot observe it.  WF3's "a plain symbol target cannot alias"
+ * rule rests on the same argument, so the two must agree.
+ * ========================================================================= */
+
+/* Where does this expression's storage live?  Tri-state on purpose: "not one
+ * of ours" and "cannot tell" are different answers, and collapsing them is how
+ * a checker becomes either useless or unsound. */
+typedef enum {
+    WR_NOT_OURS = 0,   /* a literal, a local, a global: not in this frame's vocabulary */
+    WR_PARAM,          /* definitely rooted at frame parameter *out_pi */
+    WR_UNKNOWN,        /* could not tell -- may or may not alias a parameter */
+} WfRootKind;
+
+static WfRootKind wf_expr_root(const Expr *x, Binding *const *params,
+                               uint32_t n_params, uint32_t depth, int *out_pi) {
+    if (!x) return WR_UNKNOWN;
+    if (depth >= WF_SCAN_MAX_DEPTH) return WR_UNKNOWN;
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return WR_NOT_OURS;              /* a value, not a place */
+    case EX_VAR: {
+        const Binding *b = x->as.var.binding;
+        if (!b) return WR_UNKNOWN;
+        if (b->is_param)
+            for (uint32_t i = 0; i < n_params && i < 32; i++)
+                if (params[i] == b) { *out_pi = (int)i; return WR_PARAM; }
+        /* A local, a global, or an enclosing fn's parameter reached through a
+         * closure: none of them is a slot in THIS frame. */
+        return b->is_param ? WR_UNKNOWN : WR_NOT_OURS;
+    }
+    /* Value-shaping wrappers: the storage is the inner expression's. */
+    case EX_ASCRIBE:     return wf_expr_root(x->as.ascribe_.inner, params, n_params, depth + 1, out_pi);
+    case EX_CAST:        return wf_expr_root(x->as.cast_.expr, params, n_params, depth + 1, out_pi);
+    case EX_REINTERPRET: return wf_expr_root(x->as.reinterpret_.expr, params, n_params, depth + 1, out_pi);
+    /* An interior place: `(.f x)`'s storage is inside x's. */
+    case EX_GET_FIELD:   return wf_expr_root(x->as.get_field_.struct_expr, params, n_params, depth + 1, out_pi);
+    case EX_DO:
+        if (x->as.do_.n == 0) return WR_UNKNOWN;
+        return wf_expr_root(x->as.do_.items[x->as.do_.n - 1], params, n_params, depth + 1, out_pi);
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return WR_UNKNOWN;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        /* Address math and raw loads carry their pointer's provenance. */
+        if ((sh == BS_PTR_ARITH || sh == BS_PTR_DEREF || sh == BS_ARRAY_GET_UNCHECKED)
+            && x->as.builtin.n >= 1)
+            return wf_expr_root(x->as.builtin.args[0], params, n_params, depth + 1, out_pi);
+        /* A pure builtin computes a fresh value; it cannot alias its operands.
+         * This is what makes `(+ p 1)` harmless, where the Form-era walk read
+         * it as handing `p` onward. */
+        if (rt_builtin_shape_pure(sh)) return WR_NOT_OURS;
+        return WR_UNKNOWN;
+    }
+    default:
+        /* A call result, a constructor, a match: it may be an interior pointer
+         * derived from a parameter, and nothing here can rule that out. */
+        return WR_UNKNOWN;
+    }
+}
+
+/* Does this builtin write through one of its arguments?  Allowlist-shaped like
+ * rf_builtin_reads_nothing: a shape in neither list is UNKNOWN, never assumed
+ * harmless. */
+static bool wf_builtin_writes_arg(BuiltinShape s) {
+    switch (s) {
+    case BS_PTR_WRITE: case BS_ARRAY_SET_UNCHECKED:
+    case BS_RAW_MEMSET: case BS_RAW_MEMCPY:
+    case BS_RAW_FREE:   case BS_RAW_REALLOC:
+        return true;
+    default:
+        return false;
+    }
+}
+static bool wf_builtin_writes_nothing(BuiltinShape s) {
+    if (rt_builtin_shape_pure(s)) return true;
+    switch (s) {
+    /* Effects that are real but reach no argument's storage. */
+    case BS_PRINTLN_INT:  case BS_PRINTLN_FLOAT: case BS_PRINTLN_BOOL:
+    case BS_PRINTLN_CSTR: case BS_PRINTLN_UINT:  case BS_PRINTLN_FLOAT32:
+    case BS_PTR_ARITH:    case BS_PTR_DEREF:     case BS_ARRAY_GET_UNCHECKED:
+    case BS_RAW_MALLOC:   case BS_DLOPEN:        case BS_DLSYM:
+    case BS_DLCLOSE:      case BS_UNSAFE_CAST:   case BS_REINTERPRET:
+    case BS_TRANSMUTE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* The verdict for writing through `x`, whose storage the caller has determined
+ * is written. */
+static WfVerdict wf_write_through(const Expr *x, Binding *const *params,
+                                  uint32_t n_params, uint32_t mask,
+                                  const Expr **witness) {
+    int pi = -1;
+    switch (wf_expr_root(x, params, n_params, 0, &pi)) {
+    case WR_NOT_OURS: return WF_VERIFIED;
+    case WR_UNKNOWN:  return WF_UNVERIFIED;
+    case WR_PARAM:
+        if (pi >= 0 && (mask & ((uint32_t)1u << pi))) return WF_VERIFIED;
+        if (witness && !*witness) *witness = x;
+        return WF_EXCEEDED;
+    }
+    return WF_UNVERIFIED;
+}
+
+static WfVerdict wf_scan(const Expr *x, Binding *const *params,
+                         uint32_t n_params, uint32_t mask, uint32_t *budget,
+                         const Expr **witness) {
+#define WFS(sub) wf_scan((sub), params, n_params, mask, budget, witness)
+    if (!x) return WF_VERIFIED;
+    if (*budget == 0) return WF_UNVERIFIED;
+    (*budget)--;
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+    case EX_VAR:
+        return WF_VERIFIED;              /* a read is not a write */
+
+    /* An inline-C body is opaque by construction.  This is the trust boundary
+     * `#reads` already draws and the plan keeps: checked-when-checkable, never
+     * checked-by-pretending. */
+    case EX_INLINE_C:
+        return WF_UNVERIFIED;
+
+    /* --- channel 1: a direct assignment ------------------------------- */
+    case EX_SET:
+        /* Target is a BINDING, i.e. the bare-symbol form: a local rebind,
+         * in-frame by the by-value argument above, whether or not it happens
+         * to spell a parameter. */
+        return WFS(x->as.set_.value);
+    case EX_SET_FIELD:
+        return wf_worse(wf_write_through(x->as.set_field_.receiver, params,
+                                         n_params, mask, witness),
+                        wf_worse(WFS(x->as.set_field_.receiver),
+                                 WFS(x->as.set_field_.value)));
+    case EX_SET_DEREF:
+        return wf_worse(wf_write_through(x->as.set_deref_.ref, params,
+                                         n_params, mask, witness),
+                        wf_worse(WFS(x->as.set_deref_.ref),
+                                 WFS(x->as.set_deref_.value)));
+
+    case EX_GET_FIELD:
+        /* A READ.  The whole reason this walk moved to the Expr tree. */
+        return WFS(x->as.get_field_.struct_expr);
+
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return WF_UNVERIFIED;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        WfVerdict v = WF_VERIFIED;
+        if (wf_builtin_writes_arg(sh)) {
+            v = (x->as.builtin.n >= 1)
+                    ? wf_write_through(x->as.builtin.args[0], params, n_params,
+                                       mask, witness)
+                    : WF_UNVERIFIED;
+        } else if (!wf_builtin_writes_nothing(sh)) {
+            v = WF_UNVERIFIED;           /* unclassified shape: cannot vouch */
+        }
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            v = wf_worse(v, WFS(x->as.builtin.args[i]));
+        return v;
+    }
+
+    /* --- channels 2 and 3: a call ------------------------------------- */
+    case EX_CALL: {
+        WfVerdict v = WF_VERIFIED;
+        Binding *callee = x->as.call_.fn_binding;
+        if (x->as.call_.fn_expr || x->as.call_.is_poly_call || !callee) {
+            /* Dispatch this walk cannot name: assume it may write every slot
+             * it is handed, so any argument that could be one of ours (or that
+             * cannot be ruled out) leaves the body unvouchable. */
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+                int pi = -1;
+                WfRootKind k = wf_expr_root(x->as.call_.args[i], params,
+                                            n_params, 0, &pi);
+                if (k != WR_NOT_OURS) { v = WF_UNVERIFIED; break; }
+            }
+        } else {
+            /* `source_fn_def` is the defn's own parameter list, which is where
+             * the `^mut`/`^borrow` modes live -- the binding's TY_FN carries
+             * only kinds. */
+            const FnDef *fd = callee->source_fn_def;
+            uint32_t cn = fd ? fd->n_params : 0;
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+                int pi = -1;
+                WfRootKind k = wf_expr_root(x->as.call_.args[i], params,
+                                            n_params, 0, &pi);
+                if (k == WR_NOT_OURS) continue;   /* cannot reach this frame */
+                bool callee_writes_slot;
+                if (callee->writes_declared) {
+                    /* Channel 3: the callee said what it writes.  Only a
+                     * CHECKED frame may narrow us -- a trusted one is a
+                     * promise, and a chain of promises is what the checked
+                     * tier exists to replace. */
+                    if (!callee->writes_checked) { v = wf_worse(v, WF_UNVERIFIED); continue; }
+                    callee_writes_slot =
+                        i < WF_MAX_FRAME_PARAMS &&
+                        (callee->writes_param_mask & ((uint32_t)1u << i)) != 0;
+                } else if (fd && i < cn && fd->params[i]) {
+                    /* Channel 2: no declared frame, so fall back to the
+                     * parameter MODE, which is itself a declaration.
+                     *
+                     *   ^borrow -- safe, and not merely assumed safe: the
+                     *     borrow checker already forbids writing through it.
+                     *   ^mut    -- a DEFINITE write channel.
+                     *   anything else -- UNVERIFIED.  A plain by-value slot
+                     *     may still be an opaque handle the callee writes
+                     *     through, which is what this scan cannot see. */
+                    if (fd->params[i]->is_borrow) continue;
+                    if (!fd->params[i]->is_mut) { v = wf_worse(v, WF_UNVERIFIED); continue; }
+                    callee_writes_slot = true;
+                } else {
+                    v = wf_worse(v, WF_UNVERIFIED);
+                    continue;
+                }
+                if (!callee_writes_slot) continue;
+                if (k == WR_UNKNOWN) { v = wf_worse(v, WF_UNVERIFIED); continue; }
+                if (pi >= 0 && !(mask & ((uint32_t)1u << pi))) {
+                    if (witness && !*witness) *witness = x;
+                    v = wf_worse(v, WF_EXCEEDED);
+                }
+            }
+        }
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+            v = wf_worse(v, WFS(x->as.call_.args[i]));
+        return v;
+    }
+
+    /* --- control flow: the writes are in the subexpressions ------------ */
+    case EX_IF:
+        return wf_worse(WFS(x->as.if_.cond),
+                        wf_worse(WFS(x->as.if_.then_), WFS(x->as.if_.else_or_null)));
+    case EX_DO: {
+        WfVerdict v = WF_VERIFIED;
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            v = wf_worse(v, WFS(x->as.do_.items[i]));
+        return v;
+    }
+    case EX_LET: case EX_LETREC: {
+        WfVerdict v = WFS(x->as.let_.body);
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            v = wf_worse(v, WFS(x->as.let_.bindings[i].init));
+        return v;
+    }
+    case EX_WHILE:
+        return wf_worse(WFS(x->as.while_.cond), WFS(x->as.while_.body));
+    case EX_MATCH: {
+        WfVerdict v = WFS(x->as.match_.scrutinee);
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            v = wf_worse(v, WFS(x->as.match_.arms[i].guard));
+            v = wf_worse(v, WFS(x->as.match_.arms[i].body));
+        }
+        return v;
+    }
+    case EX_ASCRIBE:     return WFS(x->as.ascribe_.inner);
+    case EX_CAST:        return WFS(x->as.cast_.expr);
+    case EX_REINTERPRET: return WFS(x->as.reinterpret_.expr);
+    case EX_RETURN:      return WFS(x->as.return_.value);
+    case EX_DEFER:       return WFS(x->as.defer_.body);
+    case EX_HANDLE: {
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return WF_UNVERIFIED;
+        WfVerdict v = WFS(h->body);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            v = wf_worse(v, WFS(h->cases[i].body));
+        return v;
+    }
+    case EX_RESUME: {
+        const ResumeExpr *r = x->as.resume_.resume;
+        if (!r) return WF_UNVERIFIED;
+        return wf_worse(WFS(r->k), WFS(r->value));
+    }
+    default:
+        return WF_UNVERIFIED;   /* unmodeled: "could not see", never clean */
+    }
+#undef WFS
+}
+
+/* The frame-only verdict for one site: the elaborated body, or UNVERIFIED when
+ * there is none to read (an inline-C-only defn, an extern declaration). */
+static WfVerdict wf_site_verdict(const WriteFrameSite *s, const Expr **witness) {
+    const FnDef *fd = s->fn ? s->fn->source_fn_def : NULL;
+    if (!fd || !fd->body) return WF_UNVERIFIED;
+    uint32_t budget = 65536;   /* same bound rf_scan uses */
+    return wf_scan(fd->body, s->params, s->n_params,
+                   s->fn->writes_param_mask, &budget, witness);
 }
 
 void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
@@ -2006,13 +2156,8 @@ void wf_resolve_write_frames(Elab *e) {
             /* G1: every defn is registered so the global walk can reach any
              * callee's body, but only a DECLARED frame has anything to check. */
             if (!s->fn || !s->fn->writes_declared || s->fn->writes_checked) continue;
-            const Form *witness = NULL;
-            WfVerdict v = WF_VERIFIED;
-            const Form *d = s->defn_form;
-            for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
-                v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
-                                        s->n_params, s->fn->writes_param_mask,
-                                        0, &witness));
+            const Expr *witness = NULL;
+            WfVerdict v = wf_site_verdict(s, &witness);
             if (v == WF_VERIFIED)
                 v = wf_worse(v, wf_global_verdict(e, s->fn, NULL));
             if (v == WF_VERIFIED) { s->fn->writes_checked = true; progress = true; }
@@ -2023,13 +2168,9 @@ void wf_resolve_write_frames(Elab *e) {
     for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
         WriteFrameSite *s = &e->wf_frame_sites[i];
         if (!s->fn || !s->fn->writes_declared || s->fn->writes_checked) continue;
-        const Form *witness = NULL;
-        WfVerdict v = WF_VERIFIED;
+        const Expr *witness = NULL;
+        WfVerdict v = wf_site_verdict(s, &witness);
         const Form *d = s->defn_form;
-        for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
-            v = wf_worse(v, wf_walk(e, d->as.list.items[bi], s->params,
-                                    s->n_params, s->fn->writes_param_mask, 0,
-                                    &witness));
         /* G1 does NOT suppress an EXCEEDED report: writing a global is not an
          * excuse for also writing outside a declared frame. */
         const Symbol *uncovered = NULL;
@@ -2074,13 +2215,8 @@ void wf_resolve_write_frames(Elab *e) {
             /* Recompute the FRAME-ONLY verdict so the two questions stay
              * separable in the output: a fixture needs to tell "the frame did
              * not hold" from "the frame held but the body writes a global". */
-            const Form *w = NULL;
-            WfVerdict fv = WF_VERIFIED;
-            const Form *d = s->defn_form;
-            for (uint32_t bi = s->body_start; d && bi < d->as.list.len; bi++)
-                fv = wf_worse(fv, wf_walk(e, d->as.list.items[bi], s->params,
-                                          s->n_params, s->fn->writes_param_mask,
-                                          0, &w));
+            const Expr *w = NULL;
+            WfVerdict fv = wf_site_verdict(s, &w);
             enum WritesGlobal g = wf_fn_writes_global(e, s->fn, NULL);
             printf("write-frame %s: %s mask=0x%x frame=%s global=%s",
                    s->fn->name ? s->fn->name->name : "<fn>",

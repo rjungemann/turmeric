@@ -29,15 +29,15 @@
 ;; three shims cover.  Pinning the shim on the default path is worth more than
 ;; re-pinning a verdict two other fixtures already assert.
 ;;
-;; Neither body READS a field of a parameter its frame names, and that is
-;; deliberate rather than incidental: a field read of a frame-named parameter
-;; currently downgrades the whole body to UNVERIFIED, because `wf_walk` sees
-;; `(.n a)` as a call it cannot resolve
-;; (docs/reported/writes-frame-walk-treats-every-head-as-a-callee.md -- the
-;; same walk also declines on `if`, `do`, and plain arithmetic).  A shim fixture
-;; must not depend on that -- it would be asserting a bug as the expected verdict,
-;; and would then have to be edited when the bug is fixed.  Both bodies below
-;; answer VERIFIED before and after that fix.
+;; Neither body READS a field of a parameter its frame names.  That was
+;; deliberate when this fixture was written: a field read then downgraded the
+;; whole body to UNVERIFIED, because the Form-era walk saw `(.n a)` as a call
+;; it could not resolve, and a shim fixture must not assert a bug as its
+;; expected verdict.  That defect is fixed (the check walks the elaborated Expr
+;; body now -- docs/archive/writes-frame-walk-treats-every-head-as-a-callee.md),
+;; so the constraint no longer binds; the bodies are left as they are because
+;; they answer VERIFIED either way, which is the property a shim fixture wants.
+;; Verdicts themselves are pinned by wf2-verdicts-reads-and-control-flow.
 (defstruct Ctr [n : int])
 
 ;; A frame the body honors: the write lands inside it.

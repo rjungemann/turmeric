@@ -1,0 +1,68 @@
+;; WF2 verdicts for the shapes the Expr-tree port fixed, and the one it must
+;; still refuse.
+;;
+;; The check used to walk the source `Form` tree, where a head symbol is only a
+;; name.  Anything that was not a resolvable global binding and received a
+;; parameter-rooted argument was treated as a call to an unknowable callee, so
+;; a field READ, a plain `if`, a `do`, and even `(+ p 1)` all answered
+;; UNVERIFIED -- silently, because UNVERIFIED carries no diagnostic.  A frame
+;; over any body doing ordinary work therefore documented intent and nothing
+;; more (docs/archive/writes-frame-walk-treats-every-head-as-a-callee.md).
+;;
+;; This fixture exists because nothing caught that for weeks:
+;; wf1-writes-frame-honored's `peek` was silently UNVERIFIED while its header
+;; said WF2 verified the frame, and no fixture asserted a verdict, so there was
+;; nothing to go red.  The `--dump-write-frames` line IS the assertion here.
+;;
+;; `requires.interp` is what puts the dump and the program output on one
+;; stream: the dump is emitted at COMPILE time and the harness captures the
+;; compiled program's RUN-phase stdout, so a verdict assertion has to route
+;; through the interpreter (same reason g2-writes-global-frame carries it).
+;;
+;; THE SOUNDNESS ANCHOR IS `via-method`, and it must stay UNVERIFIED.  A dotted
+;; head is not always a field read: `(.peek-it a)` dispatches a METHOD, and a
+;; method can take a `^mut` receiver and write through it.  Telling the two
+;; apart is exactly what the Form tree could not do and the Expr tree can --
+;; `(.n a)` is EX_GET_FIELD, `(.peek-it a)` is EX_CALL -- so a "treat every
+;; dotted head as a field read" fix would have been unsound, and this line is
+;; what would catch someone re-introducing it.
+;;
+;; Paired negatives live in errors/wf2-writes-exceeds-*: this file is the
+;; positive side and asserts no diagnostic at all.
+(defstruct Ctr [n : int])
+
+(defclass Peekable [a] (peek-it [x] : int))
+(definstance Peekable [Ctr]
+  (peek-it [x : Ctr] : int (.n x)))
+
+;; A field READ of a frame-named parameter.  The reported symptom.
+(defn reads-field [^mut a : Ctr] #writes [a] : int
+  (set! (.n a) 1)
+  (.n a))
+
+;; Pure control flow over a parameter.
+(defn uses-if [p : int] #writes [] : int
+  (if (= p 0) 1 2))
+
+(defn uses-do [p : int] #writes [] : int
+  (do p 5))
+
+;; Arithmetic on a parameter.  A pure builtin computes a FRESH value, so it
+;; cannot hand `p`'s storage to anyone -- where the Form walk read `(+ p 1)` as
+;; passing `p` onward to an unknown callee.
+(defn uses-plus [p : int] #writes [] : int
+  (+ p 1))
+
+;; A METHOD call through a dotted head: a real call, so it is analyzed as one
+;; and cannot be vouched for (a plain by-value slot may still be an opaque
+;; handle the callee writes through).  UNVERIFIED is the correct answer.
+(defn via-method [^mut a : Ctr] #writes [] : int
+  (.peek-it a))
+
+(defn main [] : int
+  (let [^mut c (Ctr 0)]
+    (reads-field c))
+  (println (uses-if 0))
+  (println (uses-do 3))
+  (println (uses-plus 6))
+  0)

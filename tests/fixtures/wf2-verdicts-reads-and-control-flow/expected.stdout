@@ -1,0 +1,8 @@
+write-frame reads-field: VERIFIED mask=0x1 frame=VERIFIED global=NO
+write-frame uses-if: VERIFIED mask=0x0 frame=VERIFIED global=NO
+write-frame uses-do: VERIFIED mask=0x0 frame=VERIFIED global=NO
+write-frame uses-plus: VERIFIED mask=0x0 frame=VERIFIED global=NO
+write-frame via-method: UNVERIFIED mask=0x0 frame=UNVERIFIED global=NO
+1
+5
+7
