@@ -148,8 +148,9 @@ Conventions worth following:
 ## Sealing an opaque: `:sealed`
 
 > `:sealed` enforces unconditionally. `--enable=sealed-opaque` (the retired
-> experiment gate) is a no-op that warns (`TUR-W0063`), so a `build.tur` still
-> naming it keeps working. See
+> experiment gate) was a warning-only no-op through 0.37.0 and is a hard
+> `TUR-E0310` from 0.38.0 -- a `build.tur` still naming it needs the flag
+> removed. See
 > [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/sealed-opaque-plan.md).
 
 `::` is a **coercing** cast, not a checked one. That means a plain

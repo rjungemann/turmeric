@@ -75,6 +75,15 @@ on) is accepted as a no-op with a `TUR-W0063` warning rather than the hard
 error, so a downstream `build.tur` or `experiments.tur` that opted in keeps
 compiling across the graduation boundary.
 
+That shim is a **migration window, not a permanent alias**. One minor line
+after graduation the name ages out of `GRADUATED[]` and goes back to being a
+hard `TUR-E0310` -- so treat `TUR-W0063` as a deprecation notice with a
+deadline and delete the flag when you see it. Twelve names aged out this way at
+0.37.0 and 0.38.0; `jit-ffi`, which graduated in 0.38.0, is the only shim
+currently live and becomes eligible at 0.39.0. The same rule and the same
+one-line window apply to a graduated `#lang` layer token (`TUR-W0064`, then
+`TUR-E0330`).
+
 Unknown *keys* in the user file (anything other than `:enable`) are a
 `TUR-W0062` warning and otherwise ignored -- forward-compatible with future
 additions.

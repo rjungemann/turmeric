@@ -25,9 +25,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON   # build time (fetche
 tur jit hello.tur                                           # no run-time flag
 ```
 
-There is no run-time gate: the `jit` experiment name is graduated, so a
-command line or `build.tur` that still says `--enable=jit` gets a `TUR-W0063`
-no-op rather than an error. The build-time gate exists because the engine
+There is no run-time gate. The `jit` experiment graduated in 0.34.0 and its
+compatibility shim was retired in 0.38.0, so a command line or `build.tur` that
+still says `--enable=jit` is now a hard `TUR-E0310` -- drop the flag. The build-time gate exists because the engine
 vendors MIR at configure time and a default build carries neither the fetch
 nor the dependency. On a binary built without it, `tur jit` says so and
 exits 2.

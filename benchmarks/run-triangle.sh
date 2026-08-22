@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build-turjit/tur}"
 [ -x "$TUR" ] || { echo "run-triangle: no tur at $TUR (need a TUR_JIT=ON build)" >&2; exit 2; }
-probe=$("$TUR" --enable=jit jit 2>&1 || true)
+probe=$("$TUR" jit 2>&1 || true)
 case "$probe" in
   *"usage: tur jit"*) ;;
   *) echo "run-triangle: $TUR carries no JIT engine (configure -DTUR_JIT=ON)"; exit 2 ;;
@@ -63,7 +63,7 @@ for f in benchmarks/triangle/*.tur; do
 
     # Outputs must agree across engines before any number means anything.
     o_interp=$("$TUR" --interpret "$f" 2>/dev/null | tail -1)
-    o_jit=$("$TUR" --enable=jit jit "$f" 2>/dev/null | tail -1)
+    o_jit=$("$TUR" jit "$f" 2>/dev/null | tail -1)
     "$TUR" build "$f" -o "$exe" >/dev/null 2>&1
     o_cc=$("$exe" 2>/dev/null | tail -1)
     if [ "$o_interp" != "$o_cc" ] || [ "$o_jit" != "$o_cc" ]; then
@@ -72,7 +72,7 @@ for f in benchmarks/triangle/*.tur; do
     fi
 
     t_interp=$(best "$TUR" --interpret "$f")
-    t_jit=$(best "$TUR" --enable=jit jit "$f")
+    t_jit=$(best "$TUR" jit "$f")
     t_build=$(best "$TUR" build "$f" -o "$exe")
     t_run=$(best "$exe")
     echo "| $name | ${t_interp}ms | ${t_jit}ms | ${t_build}ms | ${t_run}ms | $((t_build + t_run))ms |"

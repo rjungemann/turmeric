@@ -643,7 +643,7 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   <div>
     <p class="section-label">11 -- Refinement Types</p>
     <h2 class="section-title">The check that<br><em>never runs.</em></h2>
-    <p class="section-desc">The same <code>#refine{...}</code> predicate, one step further: with <code>--enable=refined</code> the compiler tries to <em>prove</em> it, and emits a runtime check only where the proof fails. A parameter's predicate becomes a hypothesis; a return type becomes a goal.</p>
+    <p class="section-desc">The same <code>#refine{...}</code> predicate, one step further: the compiler tries to <em>prove</em> it, and emits a runtime check only where the proof fails. A parameter's predicate becomes a hypothesis; a return type becomes a goal.</p>
     <p class="section-desc">Because every refinement already has a runtime meaning, the prover is free to give up on any obligation and stay sound -- it just falls back to the check the value would have had anyway. Turning it on can never make a correct program wrong. There is no Z3 to install: the solver is a small staged decision procedure built into the compiler, so it works in the browser playground too.</p>
   </div>
   <div class="code-card">
@@ -653,9 +653,7 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
       <div class="win-dot wd-g"></div>
       <span class="code-card-filename">refined.tur</span>
     </div>
-    <div class="code-card-body"><span class="cmt">;; Requires: --enable=refined (or #lang turmeric refined)</span>
-
-<span class="cmt">;; Proved: x &gt; 0 entails 2x &gt; 0.</span>
+    <div class="code-card-body"><span class="cmt">;; Proved: x &gt; 0 entails 2x &gt; 0.</span>
 <span class="cmt">;; No runtime check is emitted for the return.</span>
 <span class="pnc">(</span><span class="kw">defn</span> <span class="fn">double-pos</span> <span class="pnc">[</span>x <span class="tp">: #refine{ v : int | (&gt; v 0) }</span><span class="pnc">]</span>
                 <span class="tp">: #refine{ r : int | (&gt; r 0) }</span>

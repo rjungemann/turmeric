@@ -338,21 +338,26 @@ static const char *const GRADUATED[] = {
      * them (only prose in comments).  A name nobody had reason to enable needs
      * no migration window.
      *
-     * The names below are the opposite case and stay: `refined`, `cycle-gc`,
-     * `jit`, `sealed-opaque`, and `global-state` all gated SOURCE SYNTAX
-     * someone had to write into a file and then enable to use, so a lingering
-     * enable is exactly what a real adopter's config looks like.  Retiring one
-     * turns their build red, which is a release decision and belongs with a
-     * version bump rather than a cleanup.  All five are past the one-minor-line
-     * window and each has a *-graduated-enable-noop fixture that goes with it
-     * when it goes. */
-    "refined",       /* graduated 2026-08-01; static discharge of #refine{...} is unconditional */
-    "cycle-gc",      /* graduated 2026-08-17; (gc-auto!) is an ordinary call form -- GC_AUTO is still opt-in, never a default */
-    "jit",           /* graduated 2026-08-17; `tur jit` needs only the -DTUR_JIT=ON build gate */
-    "sealed-opaque", /* graduated 2026-08-17; `:sealed` enforcement is unconditional */
-    "global-state",  /* graduated 2026-08-18; globals in write frames, read-only exported globals, ^atomic / ^thread-local */
-    "write-frames",  /* graduated 2026-08-20; `#writes` frames are checked unconditionally (WF2/WF3) */
-    "checked-reads", /* graduated 2026-08-20; broken-`#reads`-frame evidence refuses the congruence grant */
+     * AGED OUT 2026-08-22, at 0.38.0 -- the seven user-facing names, in a
+     * second round taken as a deliberate decision rather than a cleanup:
+     * refined (0.33.0), cycle-gc / jit / sealed-opaque (0.34.0), global-state
+     * (0.35.0), write-frames / checked-reads (0.37.0).
+     *
+     * These are the opposite case from the backend five above.  Each gated
+     * SOURCE SYNTAX someone had to write into a file and then enable to use, so
+     * a lingering enable is exactly what a real adopter's config looks like and
+     * retiring it turns their build red.  That is the point of the window, not
+     * an argument against closing it: the shim is a migration window, not a
+     * permanent alias, and every one of these is at least a full minor line
+     * past its graduation.  `--enable=<any of them>` is now the hard TUR-E0310
+     * an unknown name gets, pinned by errors/experiment-retired-name.
+     *
+     * `refined` also aged out of GRADUATED_LAYERS[] (lang_layers.c) in the same
+     * change, so `#lang turmeric refined` is now TUR-E0330; the two shims were
+     * always a pair and had to go together.
+     *
+     * Only `jit-ffi` stays.  It graduated in 0.38.0 -- this line -- so its
+     * window has not opened yet; it becomes eligible at 0.39.0. */
     "jit-ffi",       /* graduated 2026-08-21; call-ptr / callback-ptr are ordinary `unsafe` forms (-DTUR_JIT=ON still gates the interpreter path) */
     NULL,
 };
