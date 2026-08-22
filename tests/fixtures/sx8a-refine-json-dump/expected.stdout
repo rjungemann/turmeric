@@ -1,0 +1,7 @@
+schema: 0
+proved: verdict=proven decided_by=S2 (arithmetic) caps={}
+proved: predicate=(= r x)
+proved: located=True
+capped: verdict=unknown cube_hits_positive=True
+replay: answer=unsat exit=0
+replay: decided_by=S2 (arithmetic)

@@ -61,6 +61,11 @@ static const RefineBackend CHAIN[] = {
     refine_s2_decide,   /* linear arithmetic            */
     refine_s3_decide,   /* Nelson-Oppen combination     */
 };
+/* Parallel to CHAIN, for the SX8a dump and `tur smt`: "which stage decided
+ * this" is the first thing anyone asks of an unexpected verdict. */
+static const char *const CHAIN_NAMES[] = {
+    "S0 (trivial)", "S1 (EUF)", "S2 (arithmetic)", "S3 (Nelson-Oppen)",
+};
 #define CHAIN_LEN (sizeof(CHAIN) / sizeof(CHAIN[0]))
 
 /* ------------------------------------------------------------------------- *
@@ -548,7 +553,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         buf_free(&b);
     }
 
+    /* Per-obligation cap accounting: snapshot, run, subtract.  The counters
+     * are global (they are a per-compile summary), so the only way to say
+     * which obligation hit a cap is to diff around its own decision. */
+    const RefineCapStats caps_before = *refine_caps();
+
     RefineDecision d = refine_unknown();
+    ob->memo_hit = memo_hit;
     if (memo_hit) {
         /* The chain is the expensive part and its answer depends only on the
          * VC, so a confirmed hit skips it.  Only PROVED is carried across:
@@ -560,7 +571,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
             d = CHAIN[i](vc, a);
-            if (d.verdict != RT_UNKNOWN) break;
+            if (d.verdict != RT_UNKNOWN) { ob->decided_by = CHAIN_NAMES[i]; break; }
         }
         memo_insert(vc, memo_fp, d.verdict == RT_VALID);
     }
@@ -571,7 +582,30 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
      * model.  Finding none leaves the verdict exactly where it was. */
     if (d.verdict == RT_UNKNOWN) {
         RefineModel *m = refine_model_search(vc, a);
-        if (m) d = refine_invalid(m);
+        if (m) { d = refine_invalid(m); ob->decided_by = "bounded model search"; }
+    }
+
+    {   /* Subtract per field: a saturating "did anything move" bool would lose
+         * the count, and the peaks are maxima rather than sums, so the
+         * obligation records the peak it SAW, not a difference. */
+        const RefineCapStats *now = refine_caps();
+        RefineCapStats *o = &ob->caps;
+        o->cubes_hits        = now->cubes_hits        - caps_before.cubes_hits;
+        o->cube_lits_hits    = now->cube_lits_hits    - caps_before.cube_lits_hits;
+        o->expand_depth_hits = now->expand_depth_hits - caps_before.expand_depth_hits;
+        o->la_vars_hits      = now->la_vars_hits      - caps_before.la_vars_hits;
+        o->la_constr_hits    = now->la_constr_hits    - caps_before.la_constr_hits;
+        o->la_fm_hits        = now->la_fm_hits        - caps_before.la_fm_hits;
+        o->euf_terms_hits    = now->euf_terms_hits    - caps_before.euf_terms_hits;
+        o->no_shared_hits    = now->no_shared_hits    - caps_before.no_shared_hits;
+        o->no_rounds_hits    = now->no_rounds_hits    - caps_before.no_rounds_hits;
+        o->cubes_peak        = now->cubes_peak;
+        o->cube_lits_peak    = now->cube_lits_peak;
+        o->expand_depth_peak = now->expand_depth_peak;
+        o->la_vars_peak      = now->la_vars_peak;
+        o->la_constr_peak    = now->la_constr_peak;
+        o->euf_terms_peak    = now->euf_terms_peak;
+        o->no_shared_peak    = now->no_shared_peak;
     }
 
     switch (d.verdict) {

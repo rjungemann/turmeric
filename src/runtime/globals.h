@@ -87,6 +87,10 @@ extern bool g_sized_types_enabled;
 /* Phase SZ8: --dump-sizes flag — print inferred size index per sized-GADT
  * constructor application during elaboration (requires -Xsized-types) */
 extern bool g_dump_sizes;
+/* SX8a: --dump-refine=json -- one JSON record per refinement obligation.
+ * A diagnostic/dump surface, so explicitly outside the EXPERIMENTS[]
+ * regime per the experimental-features rule. */
+extern bool g_dump_refine_json;
 
 /* ER1: --strict-effects flag — warn/check unannotated effectful functions */
 extern bool g_strict_effects;

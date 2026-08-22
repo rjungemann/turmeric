@@ -116,6 +116,7 @@ bool g_sized_types_enabled = true;
 
 /* Phase SZ8: --dump-sizes flag */
 bool g_dump_sizes = false;
+bool g_dump_refine_json = false;
 
 /* ER1: --strict-effects flag */
 bool g_strict_effects = false;

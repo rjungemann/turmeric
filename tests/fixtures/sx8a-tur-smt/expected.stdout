@@ -1,0 +1,6 @@
+unsat: answer=unsat exit=0
+sat: answer=sat exit=1
+unknown: answer=unknown exit=2
+outside: answer=unknown exit=3
+sat model binds x: 1
+outside the accepted fragment

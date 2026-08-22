@@ -196,6 +196,7 @@ set(TUR_CORE_SOURCES
     compiler/refine_collect.c
     compiler/refine_smtlib.c
     compiler/refine_discharge.c
+    compiler/refine_report.c
     compiler/refine_solver.c
     compiler/refine_solver_s0.c
     compiler/refine_solver_euf.c

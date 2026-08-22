@@ -62,6 +62,8 @@
 #include "effect_check.h" /* Phase P19-2: effect-row inference */
 #include "effect.h"       /* built-in effect registration */
 #include "kind_check.h"   /* Phase HKT H0: kind inference pass */
+#include "compiler/refine_smtlib.h" /* SX8a: `tur smt` -- the SMT-LIB2 seam */
+#include "compiler/refine_solver.h" /* SX8a: the S0..S3 chain `tur smt` runs */
 #include "elab.h"
 #include "emit.h"
 #include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
@@ -7517,6 +7519,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--dump-mono-specs")   == 0) g_dump_mono_specs          = true;
         else if (strcmp(tok, "--dump-cps-mono")     == 0) g_dump_cps_mono            = true;
         else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
+        else if (strcmp(tok, "--dump-refine=json") == 0) g_dump_refine_json         = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
         else if (strcmp(tok, "--lint-unsafe")       == 0) { g_lint_unsafe_enabled = true; g_unsafe_warn_nested = true; }
@@ -8146,7 +8149,7 @@ static void list_external_subcommands(void) {
         "eval", "doc", "explain", "test", "check", "expand", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
         "init", "add", "add-cmake", "fetch", "audit",
-        "install", "uninstall", "list", "upgrade",
+        "install", "uninstall", "list", "upgrade", "smt",
         NULL,
     };
 
@@ -8239,6 +8242,7 @@ static const char *const CANONICAL_COMMANDS[] = {
     "format", "fmt", "parse-check", "test",
     "new", "init", "add", "add-cmake", "fetch", "audit",
     "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
+    "smt",
     NULL,
 };
 
@@ -8293,6 +8297,8 @@ static int usage(void) {
         "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
         "  tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking\n"
         "  tur parse-check <a> <b>           exit 0 if both files read to the same AST\n"
+        "  tur smt <file.smt2>               run an SMT-LIB2 script through the refinement solver\n"
+        "  tur check --dump-refine=json <f>  print one JSON record per refinement obligation\n"
         "  tur experiments                   list experimental features (--enable=<name>)\n"
         "  tur lang-layers                   list the `#lang` layers a file may request\n"
         "  tur completion <zsh|bash>         print a shell completion script\n"
@@ -8810,6 +8816,151 @@ static void xf_json_puts(FILE *f, const char *s) {
     fputc('"', f);
 }
 
+/* ------------------------------------------------------------------------- *
+ * SX8a: `tur smt` -- run an SMT-LIB2 script through the standard chain.
+ *
+ * The solver `tur` already contains, answerable from outside the compile
+ * pipeline.  Its point is interrogation, not competition: the reader accepts
+ * the corpus subset of SMT-LIB2 over QF_UFLIA / QF_UFLRA, `unknown` is a
+ * first-class answer, and parity with a production SMT solver is a non-goal.
+ * What it buys is a public door -- an external harness can now differentially
+ * test any solver against `tur` in BOTH directions (`TUR_REFINE_DUMP=1` writes
+ * SMT-LIB out; this reads it back in) without `tur` ever linking one.
+ *
+ * See docs/upcoming/solver-extension-plan.md (SX8a).
+ * ------------------------------------------------------------------------- */
+
+/* Exit codes mirror the answer so a shell harness can branch on `$?` without
+ * parsing stdout.  They are NOT the usual 0-is-success convention: `unsat` is
+ * an answer, not a success, and `sat` is not a failure. */
+enum { SMT_EXIT_UNSAT = 0, SMT_EXIT_SAT = 1, SMT_EXIT_UNKNOWN = 2,
+       SMT_EXIT_ERROR = 3 };
+
+static int usage_smt(void) {
+    fprintf(stderr,
+        "usage: tur smt <file.smt2>\n"
+        "\n"
+        "Run an SMT-LIB2 script through tur's in-house staged decision\n"
+        "procedure (S0 trivial -> S1 EUF -> S2 linear arithmetic -> S3\n"
+        "Nelson-Oppen) and print the answer.\n"
+        "\n"
+        "Scope: the corpus subset of SMT-LIB2 over QF_UFLIA / QF_UFLRA.\n"
+        "A script using anything outside that fragment is refused whole,\n"
+        "never partially parsed -- a partially parsed assertion set has\n"
+        "weaker hypotheses than the script wrote, and `unsat` from it would\n"
+        "be a claim about work not done.\n"
+        "\n"
+        "`unknown` is a first-class answer, not a failure. Parity with a\n"
+        "production SMT solver is a non-goal.\n"
+        "\n"
+        "exit codes:\n"
+        "  0  unsat      the assertion set is contradictory (proved)\n"
+        "  1  sat        a model was found\n"
+        "  2  unknown    no stage decided it\n"
+        "  3  error      unreadable, or outside the accepted fragment\n");
+    return SMT_EXIT_ERROR;
+}
+
+static int cmd_smt(int argc, char **argv) {
+    const char *input = NULL;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+            return usage_smt();
+        if (argv[i][0] == '-' && argv[i][1]) return usage_smt();
+        if (input) return usage_smt();
+        input = argv[i];
+    }
+    if (!input) return usage_smt();
+
+    FILE *f = fopen(input, "rb");
+    if (!f) {
+        fprintf(stderr, "tur smt: cannot open %s: %s\n", input, strerror(errno));
+        return SMT_EXIT_ERROR;
+    }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n < 0) { fclose(f); fprintf(stderr, "tur smt: cannot size %s\n", input); return SMT_EXIT_ERROR; }
+    char *text = (char *)malloc((size_t)n + 1);
+    if (!text) { fclose(f); fprintf(stderr, "tur smt: out of memory\n"); return SMT_EXIT_ERROR; }
+    size_t got = fread(text, 1, (size_t)n, f);
+    text[got] = '\0';
+    fclose(f);
+
+    Arena arena;
+    arena_init(&arena, 1 << 20);
+
+    SmtlibQuery q;
+    refine_smtlib_read(&q, text, got, &arena);
+    if (q.skipped || !q.vc) {
+        printf("unknown\n");
+        fprintf(stderr, "tur smt: outside the accepted fragment: %s\n",
+                q.skip_reason ? q.skip_reason : "unsupported script");
+        arena_free(&arena); free(text);
+        return SMT_EXIT_ERROR;
+    }
+
+    /* The same chain, in the same order, as the compile path -- running a
+     * different one here would make this window show something other than the
+     * solver it is a window onto. */
+    static const struct { const char *name; RefineBackend fn; } CHAIN[] = {
+        { "S0 (trivial)",       refine_s0_decide },
+        { "S1 (EUF)",           refine_s1_decide },
+        { "S2 (arithmetic)",    refine_s2_decide },
+        { "S3 (Nelson-Oppen)",  refine_s3_decide },
+    };
+    const char *decided_by = NULL;
+    RefineVerdict v = RT_UNKNOWN;
+    for (size_t i = 0; i < sizeof(CHAIN)/sizeof(CHAIN[0]); i++) {
+        RefineDecision d = CHAIN[i].fn(q.vc, &arena);
+        if (d.verdict != RT_UNKNOWN) { v = d.verdict; decided_by = CHAIN[i].name; break; }
+    }
+
+    /* The goal is `false`, so `hyps |- false` VALID means the assertion set is
+     * UNSAT.  The stages only ever prove; a model has to come from the bounded
+     * counterexample search, which is the only thing in the solver allowed to
+     * answer INVALID -- and it does so with a witness, never a guess. */
+    int rc;
+    if (v == RT_VALID) {
+        printf("unsat\n");
+        rc = SMT_EXIT_UNSAT;
+    } else {
+        RefineModel *m = refine_model_search(q.vc, &arena);
+        if (m) {
+            printf("sat\n");
+            decided_by = "bounded model search";
+            if (m->n) {
+                printf("(model\n");
+                for (uint32_t i = 0; i < m->n; i++) {
+                    const RefineModelBinding *b = &m->bindings[i];
+                    if (b->is_real)
+                        printf("  (define-fun %s () Real %g)\n", b->name, b->rval);
+                    else
+                        printf("  (define-fun %s () Int %lld)\n", b->name,
+                               (long long)b->ival);
+                }
+                printf(")\n");
+            }
+            rc = SMT_EXIT_SAT;
+        } else {
+            printf("unknown\n");
+            rc = SMT_EXIT_UNKNOWN;
+        }
+    }
+    if (decided_by) fprintf(stderr, "tur smt: decided by %s\n", decided_by);
+
+    /* What the script CLAIMED, when it claimed anything.  Reported, never
+     * enforced: this command answers queries, it does not grade them, and a
+     * disagreement here is for the caller to interpret. */
+    if (q.status == SMT_STATUS_SAT || q.status == SMT_STATUS_UNSAT)
+        fprintf(stderr, "tur smt: script claims :status %s\n",
+                q.status == SMT_STATUS_SAT ? "sat" : "unsat");
+
+    arena_free(&arena);
+    free(text);
+    return rc;
+}
+
 static int cmd_experiments(int argc, char **argv) {
     /* `--json` is consumed by the global flag pass before dispatch (it sets
      * use_json_output); honour both that and a local --json for robustness. */
@@ -9316,6 +9467,18 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-effects") == 0) {
             /* ER6: print inferred effect row for each defn after inference */
             g_dump_effects = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-refine=json") == 0) {
+            /* SX8a: one JSON record per refinement obligation, on stdout.
+             * Stripped here rather than in a per-command loop so it works
+             * with `check` and `emit-c` alike -- the records come from the
+             * elaboration both share, and forcing a codegen run just to read
+             * a report would be the wrong shape. */
+            g_dump_refine_json = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -10365,6 +10528,9 @@ int main(int argc, char **argv) {
         return cmd_pkg_list(argc, argv);
     if (strcmp(cmd, "upgrade") == 0)
         return cmd_pkg_upgrade(argc, argv);
+    /* SX8a: run an SMT-LIB2 script through the refinement solver */
+    if (strcmp(cmd, "smt") == 0)
+        return cmd_smt(argc, argv);
     /* XF3: experimental-feature registry listing */
     if (strcmp(cmd, "experiments") == 0)
         return cmd_experiments(argc, argv);

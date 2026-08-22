@@ -26,6 +26,7 @@
 #include <stdint.h>
 
 #include "forms.h"
+#include "refine_solver.h"   /* RefineCapStats, for the per-obligation caps */
 #include "refine_vc.h"
 #include "runtime/arena.h"
 
@@ -210,6 +211,14 @@ typedef struct RefineObligation {
     bool         discharged;     /* RT3: a verdict was reached */
     bool         proven;         /* RT3: a backend returned RT_VALID */
     RefineModel *counterex;      /* RT3: model when a backend said RT_INVALID */
+
+    /* SX8a: provenance for the JSON obligation dump.  Recorded always rather
+     * than under the flag -- the cost is three stores per obligation, and a
+     * dump that can only be produced by re-running the compile with a
+     * different flag is not much of an interrogation surface. */
+    const char    *decided_by;   /* which stage answered ("S2 (arithmetic)"), or NULL */
+    bool           memo_hit;     /* RT7: the chain was skipped, answer remembered */
+    RefineCapStats caps;         /* caps this obligation alone hit (SX0(b) deltas) */
 } RefineObligation;
 
 typedef struct RefineObligationVec {

@@ -539,6 +539,60 @@ extensions are worth building, are in
 [../upcoming/solver-extension-plan.md](../upcoming/solver-extension-plan.md)
 under SX0(b).
 
+### Asking the solver directly -- `tur smt` and `--dump-refine=json`
+
+Both of these exist so the solver can be interrogated from *outside* a compile.
+
+```sh
+# Run an SMT-LIB2 script through the standard S0-S3 chain.
+tur smt query.smt2
+# unsat
+# (stderr) tur smt: decided by S2 (arithmetic)
+
+# One JSON record per refinement obligation in a unit.
+tur check --dump-refine=json main.tur
+```
+
+`tur smt` accepts the **corpus subset** of SMT-LIB2 over `QF_UFLIA` /
+`QF_UFLRA`. A script using anything outside that fragment is refused **whole**,
+never partially parsed -- a partly-read assertion set has weaker hypotheses
+than the script wrote, so answering `unsat` from it would be a claim about work
+that was not done. `unknown` is a first-class answer, and parity with a
+production SMT solver is a non-goal.
+
+Its exit codes mirror the answer so a shell harness can branch on `$?` without
+parsing stdout. They are deliberately **not** the 0-is-success convention --
+`unsat` is an answer, not a success, and `sat` is not a failure:
+
+| code | meaning |
+|---:|---|
+| 0 | `unsat` -- the assertion set is contradictory (proved) |
+| 1 | `sat` -- a model was found |
+| 2 | `unknown` -- no stage decided it |
+| 3 | error -- unreadable, or outside the accepted fragment |
+
+The JSON dump carries, per obligation: source location, the predicate as
+written, the verdict, which stage decided it, whether the RT7 memo answered it,
+the counterexample when there was one, which caps bit **for that obligation**,
+and `vc_smtlib` -- the VC in the refutation form the stages actually decide.
+
+That last field is the point. It is replayable:
+
+```sh
+tur check --dump-refine=json main.tur   | python3 -c 'import json,sys; print(json.load(sys.stdin)["obligations"][0]["vc_smtlib"], end="")'   > vc.smt2
+tur smt vc.smt2        # same verdict, same deciding stage
+```
+
+`unsat` on the recorded VC is the same answer as `proven` on the obligation --
+the VC is the refutation form, so refuting it *is* the proof. Because the
+writer and reader are now the same file
+([`refine_smtlib.c`](../../src/compiler/refine_smtlib.c)), this closes a loop
+in both directions: an external harness can differentially test any solver
+against `tur` without `tur` ever linking one.
+
+The JSON schema is **explicitly unstable** and says so in every record
+(`"schema": 0`). Branch on it; do not assume it.
+
 `TUR_REFINE_NO_DISCHARGE` is a **test seam, not a feature gate** -- env-only,
 with no `--enable`, no `EXPERIMENTS[]` row and no CLI flag. It exists because
 the source-level fuzzer needs a reference build in which every refinement keeps

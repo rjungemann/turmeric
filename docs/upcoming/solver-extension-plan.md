@@ -6,8 +6,8 @@ description: Extending the refinement solver into an incremental, backtracking d
 
 # Solver Extension (SX)
 
-**Status:** proposal. SX0(b) (cap-hit telemetry) has landed; everything else is
-unstarted. Nothing here is on the critical path to v1; the whole of SX is
+**Status:** proposal. SX0 (both instruments) and SX8a (the interrogation
+surface) have landed; everything else is unstarted. Nothing here is on the critical path to v1; the whole of SX is
 *additive* to a solver that already ships and is already sound. Read section 5
 for what to do first if only one phase gets built.
 
@@ -26,9 +26,14 @@ resuming over more than a shallow slice is on the wrong side of that line
 today. It also found the plan's own `a + b*F + c*E` cost model mis-specified
 for a chain (the env term is per-frame, `c*F*E`).
 
-What is left live: **SX8a**, and **SX1/SX2** -- the trail and the honest test
-of whether it pays for itself. Details under SX0(a) and SX0(b); reproduce with
-`benchmarks/run-capture-curve.sh` and `benchmarks/run-cap-sweep.sh`.
+SX8a has since landed too, so the solver is now answerable from outside the
+compile pipeline (`tur smt`, `--dump-refine=json`) -- which is what every later
+phase's acceptance tests were going to want a door for.
+
+What is left live: **SX1/SX2** -- the trail, and the honest test of whether it
+pays for itself. Details under SX0(a), SX0(b) and SX8a; reproduce the two
+measurements with `benchmarks/run-capture-curve.sh` and
+`benchmarks/run-cap-sweep.sh`.
 
 ## 0. Provenance
 
@@ -908,8 +913,67 @@ complete SMT-LIB2 reader *in* (s-expr parser, term builder onto `RefineVC`,
 `:status` handling) that today only the ctest harness can invoke. SX8 is
 mostly relocation and plumbing, in three tiers that ride the other phases:
 
-**SX8a -- `tur smt` (batch CLI) and the JSON obligation dump.** Independent of
-everything else; can land right after SX0.
+**SX8a -- `tur smt` (batch CLI) and the JSON obligation dump. LANDED.**
+
+Both halves shipped, and the loop between them closes: a compile emits each
+obligation's VC as SMT-LIB2 text, and that text feeds straight back into
+`tur smt` and reaches the same verdict via the same stage. That round trip is
+pinned by a fixture, and it is the two-way differential-testing door the tier
+existed for -- an external harness can now drive any solver against `tur` in
+both directions without `tur` linking one.
+
+What landed:
+
+- **The reader moved.** The s-expr parser, term builder and `:status` handling
+  are out of `tests/unit/refine_corpus.c` and into
+  `src/compiler/refine_smtlib.c`, which is now the whole SMT-LIB2 seam in both
+  directions (`refine_smtlib_read` / `refine_smtlib_emit`). The corpus harness
+  shrank to what it always was underneath -- fork-per-benchmark isolation, the
+  label check, the time budget, the tally -- and replays bit-identically: 125
+  benchmarks, 68 proved, 56 sat-correct, 1 skipped, 0 soundness failures.
+- **`tur smt <file.smt2>`** runs the standard S0-S3 chain and prints
+  `sat` / `unsat` / `unknown`, the deciding stage, and the model when the
+  bounded search finds one. Exit codes mirror the answer (0 unsat, 1 sat,
+  2 unknown, 3 error) so a shell harness branches on `$?` without parsing
+  stdout -- deliberately not the 0-is-success convention, because `unsat` is an
+  answer rather than a success.
+- **`--dump-refine=json`** emits one record per obligation: location,
+  predicate as written, verdict, deciding stage, memo hit, counterexample,
+  the replayable `vc_smtlib`, and the caps that bit *for that obligation*.
+  It is stripped in the global argv pre-pass, so it works on `check` as well
+  as `emit-c` -- the records come from the elaboration both share, and forcing
+  a codegen run to read a report would be the wrong shape.
+
+**Acceptance, checked:** the corpus replay expressed as 125 `tur smt`
+invocations agrees with the ctest harness -- 124 agree, 1 refused as outside
+the fragment (the same one the harness skips), 0 soundness failures, 0
+disagreements. The JSON round-trips through `python3 -m json.tool`. Both are
+exercised by fixtures (`sx8a-tur-smt`, `sx8a-refine-json-dump`).
+
+**Two things the tier turned up that the plan should carry forward:**
+
+1. **The per-obligation cap deltas are new machinery, not a re-read.** SX0(b)'s
+   counters are a per-compile summary, so "which obligation hit the cube cap"
+   is not recoverable from them -- each obligation now snapshots and subtracts
+   around its own decision. That is what lets a record say `caps_hit: {cubes: 4}`
+   next to `verdict: unknown`, which is the single most useful pairing in the
+   dump and exactly what SX6's gate would want per-site evidence from.
+2. **`decided_by` had to be recorded, not derived.** Nothing on the obligation
+   said which stage answered; the chain loop now names it. `tur smt` reports
+   the same string, which is why a replayed VC can be checked for reaching the
+   same verdict *the same way* rather than merely the same answer.
+
+**Deferred within the tier, deliberately:** the record carries the predicate as
+written and the VC as SMT-LIB2, but not a separate rendering of the hypotheses
+-- the SMT-LIB text already states them precisely and a second, prettier copy
+would be a second thing to keep true. `help:` hints are likewise not in the
+record: they are generated during diagnostic emission for obligations that
+report, and plumbing them into every record is SX8b-shaped work with no
+consumer yet.
+
+Original specification follows.
+
+Independent of everything else; can land right after SX0.
 
 - `tur smt <file.smt2>`: lift the corpus harness's reader out of `tests/unit/`
   into `src/compiler/refine_smtlib.c` (making that file the reader *and*
@@ -995,11 +1059,12 @@ surface slotted where it is cheapest:
    below; (a) supplied the crossover SX1's design turns on, and its two method
    traps (untimed warm-up, and a baseline the optimizer deletes) carry straight
    into SX1's `bench-trail-undo`.
-2. **SX8a alongside or immediately after SX0** -- it shares SX0(b)'s
-   emitter, costs little (the SMT-LIB reader already exists in
-   `tests/unit/refine_corpus.c`), and every phase after it gets a public
-   query door for its acceptance tests plus two-way differential testing
-   against external solvers.
+2. ~~**SX8a alongside or immediately after SX0**~~ -- **done.** Every phase
+   after it now has a public query door for its acceptance tests, plus two-way
+   differential testing against external solvers. SX3/SX4's "identical
+   verdicts" criteria can be checked through `tur smt` rather than only through
+   the ctest harness, and SX6's gate can read per-obligation cap attribution
+   out of the JSON dump.
 3. **SX1, then SX2** -- answers the opt-out question with a shipped design
    instead of a promise, and immediately tests whether the primitive pays for
    itself on the stdlib search paths. With 4 and 5 parked, this is the whole
