@@ -6,9 +6,19 @@ description: Lowering multi-variant ADTs by value, converting Option and Result 
 
 # Sum Representation (SR)
 
-**Status:** proposal. Nothing here has been built. The population scoping (SR0's
-first half) is done and is what motivated the plan; every phase below is
-unstarted.
+**Status:** proposal. **SR0 has run -- both halves -- and it argues against
+starting SR1 for performance.** Results and method:
+[benchmarks/sum-census/RESULTS.md](../../benchmarks/sum-census/RESULTS.md).
+SR1-SR4 are unstarted.
+
+**What SR0 changed.** SR0(b) removes the risk the plan was most worried about:
+the whole `.value`-on-a-`none` migration surface is 47 sites, and **zero** of
+them rely on reading a zero from the dead arm. SR0(a) went the other way -- real
+library code barely uses sums (20 `defdata` in 727 spice files, against 244
+`defopaque` and 122 `defstruct`), and the recursive hot path that motivated the
+allocation report has no example program exercising it at all. So the
+performance case for SR1 is weak and the remaining case for the sum work is
+expressiveness, which SR0(b) says is cheap to collect.
 
 **Not on the critical path to v1.** Every phase is a representation change to
 code that already compiles and runs correctly. Read section 4 for what to do
@@ -115,16 +125,50 @@ is currently no measurement of SR1's win, which is what SR0(a) is for.
 The SX plan's SR0 analogue gated two of its most expensive phases shut on
 evidence. Do the same here. Half of this is already done.
 
-**SR0(a) -- the construction census. NOT STARTED.**
-Nothing yet measures how often `Option`/`Result`/small sums are actually
-constructed in a real workload, and 8 bytes only matter at volume. Instrument
-the emitted ctors (or count statically at emit time and dynamically with a
-counter build) across the fixture corpus and the spices checkout. **Gate:** if
-small-sum construction is rare outside the recursive types SR4 covers, SR1 and
-SR2 are cosmetic and should be shelved.
+**SR0(a) -- the construction census. DONE.** Harness in
+`benchmarks/sum-census/`; full results and method in its `RESULTS.md`.
 
-**SR0(b) -- the migration surface. PARTLY DONE.**
-Counted, unambiguous:
+Per-constructor counters injected into emitted C (not a codegen flag -- the
+measurement must not perturb what it measures). 2148 fixtures attempted, 92%
+built and ran; plus `examples/` and a declaration profile of the spices
+checkout, which the dynamic census cannot reach because spice tests need
+vendored C headers only `tur build` resolves.
+
+**Gate verdict: do not start SR1 for performance.** Breadth across the 527
+fixtures that construct anything: 76 construct a non-recursive sum (SR1), 16 a
+recursive one (SR4). Across 727 spice files there are **20** `defdata` against
+244 `defopaque` and 122 `defstruct`, and several of those 20 are single-variant
+`Roll` carriers. `datalog` is the one real program that is sum-heavy;
+`minikanren` constructs nothing at all and does not use `stdlib/logic.tur`
+despite its name -- so the recursive hot path behind the allocation report has
+no example program exercising it.
+
+Two things this census cannot do, both load-bearing:
+
+- **Depth is unusable.** The median fixture constructs 2 values and 98% of the
+  246,080 total comes from two GC stress fixtures looping deliberately. Any
+  share taken over that total describes those two fixtures. The first
+  "Option/Result are 0.2% of constructions" reading was exactly that artifact
+  and is withdrawn.
+- **It measures the ecosystem under today's costs.** A language whose sums
+  malloc and never free trains its users toward `defopaque` and `defstruct` --
+  which is the distribution observed. Low sum usage is weak evidence that sums
+  are unwanted and reasonable evidence that they are currently expensive.
+
+**SR0(b) -- the migration surface. DONE, and it is not a blocker.**
+
+Resolved with the type checker as the oracle rather than grep: rename `Option`'s
+field, make stdlib self-consistent, and sweep -- every `no typeclass method
+found for 'value'` is an Option site and nothing else is (`.value` on a `Ref`
+still resolves). Same for `Result`'s two payload fields.
+
+**39 Option `.value` sites across 33 files, 8 Result payload sites across 6, and
+zero of the 47 rely on reading a zero from the dead arm.** Every one is guarded
+or provably live; the four that are not locally obvious are still provably live.
+The migration is mechanical. Outside `option.tur` itself (13 internal sites), no
+stdlib file reads an Option field directly.
+
+The original unambiguous accessor counts, for reference:
 
 | accessor | stdlib | fixtures |
 |---|---:|---:|
@@ -205,14 +249,21 @@ allocator.
 
 ## 4. If only one phase gets built
 
-**SR0(a).** It is cheap, and it is the only thing that can tell you whether any
-of the rest is worth doing. The plan's whole case rests on small-sum
-construction being common enough that 8 bytes and a malloc matter, and that
-has not been measured.
+SR0 has run, so this section is now a recommendation rather than a plan.
 
-If two: **SR0(a) then SR1.** SR1 is the enabler for SR2 and SR3, and it is the
-only phase that closes both halves of the allocation report for a majority of
-the affected types.
+**Build none of SR1-SR4 for performance on current evidence.** SR0(a) found
+that real code barely constructs sums, and the one workload that made the
+allocation report look urgent (`logic.tur`) is exercised by nothing but a
+synthetic benchmark.
+
+If the sum work is taken up, take it up **for expressiveness** -- the dead-arm
+default that forces every `E` in a `(Result A E)` to have a zero value, which
+rules out affine types and types carrying drop glue in the unused slot. That
+argument does not depend on any of the volume numbers, and SR0(b) shows the
+migration it implies is 47 mechanical sites.
+
+In that case the order is unchanged and still mandatory: **SR1 then SR2**, never
+the reverse (see section 5).
 
 ## 5. The trap in the obvious ordering
 
