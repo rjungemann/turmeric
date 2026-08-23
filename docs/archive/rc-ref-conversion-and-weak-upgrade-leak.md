@@ -3,10 +3,14 @@
 **Severity:** medium. Two unrelated call sites, one shape: a heap allocation is
 handed across an ownership boundary to something that never frees it.
 
-**Status:** PARTIALLY RESOLVED 2026-08-23. **Bug 1 (`ref/from-rc`) is fixed** --
-see [history entry](../archive/history/ref-from-rc-orphans-the-payload.md).
-**Bug 2 (`upgrade`) is still open**, and the section below now records why the
-obvious fix is wrong.
+**Status:** RESOLVED 2026-08-23. Both bugs fixed; history entries
+[bug 1](history/ref-from-rc-orphans-the-payload.md) and
+[bug 2](history/upgrade-option-box-has-no-owner.md).
+
+Fixing bug 2 left `stdlib/weak.tur`'s `weak/upgrade` FUNCTION still leaking --
+a different bug with a wider blast radius, filed separately as
+[inline-c-option-carrier-box-leaks](../reported/inline-c-option-carrier-box-leaks.md).
+This report covers the `(upgrade w)` builtin only.
 
 Found by widening `requires.leak-check` coverage from 2 fixtures to 54 (thread
 #3 of the leak-checking work). Four fixtures failed the gate; they reduce to
@@ -60,7 +64,7 @@ reachable. Add any trailing statement and it is reported. The leak is present
 either way -- the emitted C for the leaking block is byte-identical between the
 two -- so a clean LSan run on a small program is not evidence of no leak.
 
-## Bug 2 -- `upgrade` orphans its boxed `option<rc<T>>` -- OPEN
+## Bug 2 -- `upgrade` orphans its boxed `option<rc<T>>` -- FIXED
 
 ```turmeric
 (defn opt-some? [o : ptr<void>] : bool
@@ -116,16 +120,24 @@ binding owns it and nothing can be attached to it.
 - **Free it right after the call.** The emit site cannot know the use site;
   the box is bound and read later in the enclosing body.
 
-### The two real options
+### The fix
 
-1. **Return the option by value** (`option<rc<T>>` rather than `ptr<void>`).
-   Principled, and cheaper now that Option monomorphs already lower by value.
-   Only five files in the tree call `(upgrade ...)`, but it is a change to a
-   documented surface -- `weak-upgrade-option` reads the box through inline C
-   as `struct { bool is_some; int64_t value; } *`, so that shape breaks.
-2. **Give the box an owner**, by lowering `upgrade` in elaboration (where a
-   binding exists to hang a scope-exit drop on) rather than in emit. Larger,
-   but it keeps the surface and fixes the class rather than the instance.
+Option 2, in its narrowest form. Two further designs were tried and rejected
+first, which is worth recording:
+
+- **Return the option by value** (`option<rc<T>>` rather than `ptr<void>`):
+  rejected. All five in-tree callers read the box through inline C as
+  `struct { bool is_some; int64_t value; } *`, so the surface breaks.
+- **Type the result `ref<...>`** so it picks up the ref auto-drop, since both
+  lower to `void *`: rejected. `ref<ptr<void>>` does not coerce to a
+  `ptr<void>` parameter -- every caller gets `TUR-E0001`.
+
+What landed keeps the `ptr<void>` type and keys the scope-exit drop on the
+INIT instead: a `let` binding whose init is `EX_WEAK_UPGRADE` gets the same
+auto-drop a `ref` binding gets. The disposal is the existing `drop!` builtin,
+which is `BS_PREFIX_UNARY_FREE` and emits a plain `free` -- exactly right for
+this malloc. (`drop!`'s "requires ref<T>" check lives in `elab_drop`, the
+surface form; the injection builds the builtin directly and bypasses it.)
 
 ## Same family as an already-fixed bug
 

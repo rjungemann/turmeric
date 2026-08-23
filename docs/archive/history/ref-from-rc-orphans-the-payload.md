@@ -1,7 +1,7 @@
 # Fix: `ref/from-rc` results are owning refs, so they auto-drop
 
 Resolves bug 1 of
-[rc-ref-conversion-and-weak-upgrade-leak](../../reported/rc-ref-conversion-and-weak-upgrade-leak.md).
+[rc-ref-conversion-and-weak-upgrade-leak](../rc-ref-conversion-and-weak-upgrade-leak.md).
 Bug 2 (`upgrade`) is still open there.
 
 Found by the widened `requires.leak-check` gate (2 -> 54 fixtures), which is

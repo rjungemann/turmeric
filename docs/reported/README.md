@@ -928,9 +928,14 @@ found.
 | [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: slab 2.1x (measured in-compiler), by-value 1.8x, both 18x |
 | [dash-main-entry-point-never-invoked](dash-main-entry-point-never-invoked.md) | medium | `-main` is documented as the entry point in the snake tutorial and used by both shipped examples, but nothing calls it -- minikanren and snake build, link, run, exit 0 and do nothing; no examples are exercised by any suite |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
-| [rc-ref-conversion-and-weak-upgrade-leak](rc-ref-conversion-and-weak-upgrade-leak.md) | medium | PARTIALLY FIXED. `ref/from-rc` no longer orphans the payload (it is an owning ref and auto-drops). Still open: `upgrade` mints its `option<rc<T>>` box during EMIT, so no binding owns it -- stack-local, static and free-after-call fixes are all checked and wrong; needs a by-value return or elaboration-time lowering |
+| [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan (O(n^2) in term count, free fix when SX3 rewrites that state); the congruence-closure fixpoint is a naive O(n^2) sweep |
 | [compiled-fixtures-are-not-leak-checked](compiled-fixtures-are-not-leak-checked.md) | low-medium | ADDRESSED. The default suite does not leak-check EMITTED programs -- only `tur` itself. `tests/run-leak-check.sh` now generalizes the three bespoke harnesses that did; coverage map in the test-suite portability guide |
+
+`rc-ref-conversion-and-weak-upgrade-leak` was resolved 2026-08-23 and moved to
+[docs/archive/](../archive/rc-ref-conversion-and-weak-upgrade-leak.md). Its
+residue -- an Option built inside inline C -- is open as
+`inline-c-option-carrier-box-leaks` above.
 
 `byvalue-adt-app-rejects-nested-monomorphs` was filed and resolved on
 2026-08-22 and moved to
