@@ -11268,8 +11268,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ctx->indent += 4;
 
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
-                           adt_c_name, adt_c_name, scrut_val);
+                if (adt_byval) {
+                    /* SR1: a by-value multi-variant sum still needs the tag
+                     * test, but the value is an aggregate, not a carrier
+                     * pointer -- casting it trips "aggregate value used where
+                     * an integer was expected".  Bind a pointer to a local
+                     * copy rather than rewriting this arm's ten `__scrut->`
+                     * field reads: the copy has exactly the match's lifetime,
+                     * and every reader below keeps working unchanged.  (The
+                     * if-chain path above already had its own by-value arm;
+                     * only the switch path was carrier-only, because a
+                     * by-value ADT could not previously carry a tag.) */
+                    buf_printf(body, "%s __scrut_v = (%s);\n",
+                               adt_c_name, scrut_val);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s *__scrut = &__scrut_v;\n", adt_c_name);
+                } else {
+                    buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
+                               adt_c_name, adt_c_name, scrut_val);
+                }
                 free(scrut_val);
 
                 indent_buf(body, ctx->indent);
@@ -11307,6 +11324,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         const char *vct = type_c_name(pat->var_binding->type);
                         char *vname = name_for_binding(ctx, pat->var_binding);
                         indent_buf(body, ctx->indent);
+                        if (adt_byval)
+                            /* Copy, never `&__scrut_v`: the binding can outlive
+                             * this arm, and handing out a stack address is the
+                             * dangling-element bug the heap-container inserts
+                             * already have to defend against. */
+                            buf_printf(body, "%s %s = *__scrut;\n", vct, vname);
+                        else
                         buf_printf(body, "%s %s = (%s)(intptr_t)__scrut;\n",
                                    vct, vname, vct);
                         indent_buf(body, ctx->indent);

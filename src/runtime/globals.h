@@ -267,6 +267,13 @@ extern bool g_dump_cps_mono;
  * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
  * not a shipping default. */
 extern bool g_adt_slab;
+/* TUR_SR1_SUM_BYVALUE=1: flow a non-recursive, non-parametric, non-heap
+ * MULTI-VARIANT sum by value (tag + union aggregate) instead of the int64
+ * heap carrier.  The SR1 prototype gate in
+ * docs/upcoming/sum-representation-plan.md -- a measurement seam for how far
+ * the by-value ABI generalises past single-variant products, not a shipping
+ * feature.  Default off; flipping it changes no codegen until set. */
+extern bool g_sr1_sum_byvalue;
 extern bool g_opt_backtrackable_state;
 extern bool g_opt_cps_tramp_resume;
 /* E3a: admit an OWNING value captured into a genuinely multi-shot (cloneable /

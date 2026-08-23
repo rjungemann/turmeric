@@ -9221,6 +9221,8 @@ int main(int argc, char **argv) {
     {
         const char *__slab = getenv("TUR_ADT_SLAB");
         if (__slab && __slab[0] == '1') g_adt_slab = true;
+        const char *__sr1 = getenv("TUR_SR1_SUM_BYVALUE");
+        if (__sr1 && __sr1[0] == '1') g_sr1_sum_byvalue = true;
     }
 
 #ifdef _WIN32

@@ -6849,9 +6849,16 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             }
             buf_printf(out, "    return __r;\n");
         } else if (byval) {
-            /* CONV-S1: build and return the flat aggregate by value -- no heap
-             * box, no tag (byval implies single-variant flat product). */
-            buf_printf(out, "    %s __r;\n", adt_c_name);
+            /* CONV-S1: build and return the aggregate by value -- no heap box.
+             * SR1: `byval` no longer implies single-variant, so the tag store
+             * is conditional here exactly as in the two boxed branches.  A
+             * nullary variant of a by-value sum has no field writes at all, so
+             * without this the ctor returned an UNINITIALISED struct and every
+             * match read a garbage tag -- silently wrong answers, not a build
+             * error.  Zero-init for the same reason: the padding and the
+             * unused union arms must not be indeterminate. */
+            buf_printf(out, "    %s __r%s;\n", adt_c_name, flat ? "" : " = {0}");
+            if (!flat) buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
                 buf_printf(out, "    __r.%s = _%u;\n", mp, fi);
@@ -12461,8 +12468,11 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                     buf_printf(&early_file, "    return __r;\n");
                 } else if (byval) {
-                    /* CONV-S1: return the flat aggregate by value -- no heap box. */
-                    buf_printf(&early_file, "    %s __r;\n", adt_c_name);
+                    /* CONV-S1 / SR1: mirror of the emit_adt_typedef_and_ctors
+                     * site -- conditional tag store, zero-init for sums. */
+                    buf_printf(&early_file, "    %s __r%s;\n",
+                               adt_c_name, flat ? "" : " = {0}");
+                    if (!flat) buf_printf(&early_file, "    __r.tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
                         buf_printf(&early_file, "    __r.%s = _%u;\n", mp, fi);
