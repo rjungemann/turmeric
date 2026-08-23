@@ -94,7 +94,14 @@ for marker in "${marked[@]}"; do
     # exitcode=23 so a leak is distinguishable from the program's own nonzero
     # exit -- otherwise a fixture that legitimately exits 1 and one that leaks
     # look identical.
-    out=$(ASAN_OPTIONS="detect_leaks=1:exitcode=23" "$exe" 2>"$WORK/$name.err")
+    # Capture to a FILE, not a $(...) substitution.  Command substitution strips
+    # trailing newlines, so reconstructing the output with `printf '%s\n'` turns
+    # a program that printed NOTHING into a single newline -- which differs from
+    # a 0-byte expected.stdout and failed every such fixture as a bogus "stdout
+    # mismatch".  Three of the first batch of opt-ins (rc-cycle-leak,
+    # affine-drop, rc-elision-negative-conditional-drop) are exactly that shape.
+    ASAN_OPTIONS="detect_leaks=1:exitcode=23" "$exe" \
+        > "$WORK/$name.out" 2>"$WORK/$name.err"
     rc=$?
 
     if [ "$rc" -eq 23 ]; then
@@ -122,7 +129,7 @@ for marker in "${marked[@]}"; do
     fi
 
     if [ -f "$dir/expected.stdout" ]; then
-        if ! printf '%s\n' "$out" | diff -q - "$dir/expected.stdout" > /dev/null 2>&1; then
+        if ! diff -q "$WORK/$name.out" "$dir/expected.stdout" > /dev/null 2>&1; then
             fail "$name" "stdout mismatch under ASan"
             continue
         fi

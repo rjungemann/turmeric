@@ -319,10 +319,13 @@ means anything in a build where fixtures do link an instrumented runtime.
 
 Do not reach for `bash tests/run.sh` -- it cannot see one. Four harnesses can:
 
-- **`tests/run-leak-check.sh`** -- the general one. Drop a `requires.leak-check`
-  marker in any fixture directory and it is rebuilt with ASan and run with
-  `detect_leaks=1`, asserting both its `expected.stdout` and no leak. Start
-  here.
+- **`tests/run-leak-check.sh`** -- the general one, and the one ctest runs
+  (`ctest -R tur_leak_check`, `RUN_SERIAL` because it fans out across `nproc`
+  itself). Drop a `requires.leak-check` marker in any fixture directory and it
+  is rebuilt with ASan and run with `detect_leaks=1`, asserting both its
+  `expected.stdout` and no leak. Start here. 54 fixtures currently opt in --
+  the `rc-*`, `affine-*`, `weak-*` and `defer-*` families, where reclamation is
+  the point of the test.
 - `tests/run-gc-leak-gate.sh` -- cycle-collector fixtures, ASan, with a
   collector-off control run.
 - `tests/run-closure-env-leak.sh`, `tests/run-fat-shim-leak.sh` -- one
@@ -345,6 +348,16 @@ bug.
    global registry is reachable by construction and will be called live however
    dead it is; section 7's rc-block case is exactly this. A clean run means
    "nothing was orphaned", not "nothing was retained". For retention, count it.
+3. **A live LOCAL hides a leak just as well as a global does, so a small
+   program is the worst place to test one.** This is the same rule as trap 2
+   but it bites differently: in a `main` that ends right after the allocation,
+   the binding still holds the pointer at exit, LSan calls the block reachable,
+   and the run is CLEAN. Add one trailing statement and the same program
+   reports the leak -- with byte-identical emitted C for the leaking block.
+   `ref/from-rc` in
+   [rc-ref-conversion-and-weak-upgrade-leak](../reported/rc-ref-conversion-and-weak-upgrade-leak.md)
+   behaves exactly this way. When probing a suspected leak, always put work
+   after it.
 
 ---
 
