@@ -4343,7 +4343,14 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__();
 
+struct __defer_env_172 {void * r; };
+
 struct __defer_env_164 {RcControlBlock * x; };
+
+static void __defer_173(void *__env) {
+    struct __defer_env_172 *__e = (struct __defer_env_172 *)__env;
+    free(__e->r);
+}
 
 static void __defer_165(void *__env) {
     struct __defer_env_164 *__e = (struct __defer_env_164 *)__env;
@@ -7853,13 +7860,18 @@ int main(int argc, char **argv) {
                 void *__t169 = tur_ref_from_rc(x_1331);
                 void * r_1332 = __t169;
                 (void)r_1332;
-                int64_t __t170 = *((int64_t *)r_1332);
-                printf("%lld\n", (long long)(__t170));
+                tur_frame __frame_170;
+                tur_frame_init(&__frame_170, NULL);
+                int64_t __t171 = *((int64_t *)r_1332);
+                printf("%lld\n", (long long)(__t171));
+                struct __defer_env_172 __t174 = {.r = r_1332};
+                tur_frame_push_defer(&__frame_170, __defer_173, &__t174);
+                tur_frame_fire_lifo(&__frame_170);
             }
         }
-        int64_t __t171;
-        __t171 = INT64_C(0);
-        return (int)__t171;
+        int64_t __t175;
+        __t175 = INT64_C(0);
+        return (int)__t175;
 }
 
 static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int o) {
@@ -7867,15 +7879,15 @@ static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_i
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_172 = (ctor_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_176 = (ctor_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_172;
+        return __ps_176;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_173 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_177 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_173;
+        return __ps_177;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
