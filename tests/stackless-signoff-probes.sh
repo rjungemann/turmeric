@@ -71,13 +71,21 @@ declare -A expect=(
     [async-rec]=1000000
 )
 
-# Per-probe extra build flags (on top of $ENABLE).  async-rec is built with
-# --enable=cps-async so the flag is exercised end-to-end; recursive await evicts
-# to the direct emitter today (F3.5 finding), so the flag is currently a no-op
-# for this shape, but the probe is a forward guard for when it colors.
-declare -A pflags=(
-    [async-rec]=--enable=cps-async
-)
+# Per-probe extra build flags (on top of $ENABLE).  Empty since 2026-08-22.
+#
+# async-rec used to be built with --enable=cps-async, "so the flag is exercised
+# end-to-end".  That stopped being true in two steps: cps-async GRADUATED
+# 2026-07-19, making the flag a TUR-W0063 no-op, and its GRADUATED[] shim was
+# then retired at 0.37.0, making it the hard TUR-E0310 an unknown experiment
+# name gets -- which failed this probe with `build error` rather than anything
+# about stacklessness.
+#
+# Dropping the flag loses nothing.  What the probe measures is the async shape
+# at 1,000,000 depth under a 256KB stack, and the lowering it measures is
+# unconditional now; recursive await still evicts to the direct emitter (F3.5),
+# exactly as it did with the flag on.  The table itself stays for the next probe
+# that needs a real per-probe flag -- `${pflags[$p]:-}` is empty-safe.
+declare -A pflags=()
 
 # Probes that expose a genuine, still-open runtime bug are listed here.  They
 # stay in the rotation as live regression guards but are EXPECTED to fail, so

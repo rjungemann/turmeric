@@ -219,7 +219,7 @@ jobs:
       # no coreutils `timeout`), matching the smoke check in the `test` job.
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur --enable=jit jit 2>&1) || true
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit 2>&1) || true
           echo "$out"
           case "$out" in
             *"usage: tur jit"*)

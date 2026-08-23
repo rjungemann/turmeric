@@ -474,7 +474,7 @@ Until then this file is the record, and "no measured demand" is the answer.
   them worth anything) and the `ret_sort` plumbing RF3 rides.
 - [refine-float-measure-missort.md](../../archive/history/refine-float-measure-missort.md)
   -- the soundness bug that mandates RF3's `3.25` fixture discipline.
-- [checked-write-frames-plan.md](../checked-write-frames-plan.md) -- WF2's
+- [checked-write-frames-plan.md](../../archive/checked-write-frames-plan.md) -- WF2's
   `WriteFrameSite` + deferred resolver is the structural template for RF0/RF1,
   and its sabotage-run convention is the acceptance style RF1/RF3 adopt.
 - [loop-invariants-plan.md](loop-invariants-plan.md) -- the sibling plan;

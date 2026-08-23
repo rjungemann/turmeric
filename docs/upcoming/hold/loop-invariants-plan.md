@@ -453,7 +453,7 @@ bet and elaboration confirmed it.
   -- pipeline, staged solver, caps.
 - [../v1/ecs-refinement-typed-apis-plan.md](../v1/ecs-refinement-typed-apis-plan.md)
   -- the demand signal (C3) and the RE2 consumer.
-- [../checked-write-frames-plan.md](../checked-write-frames-plan.md) -- WF3's
+- [checked-write-frames-plan.md](../../archive/checked-write-frames-plan.md) -- WF3's
   `rt_collect_set_targets` is the assignment model this plan reuses; a landed
   `#writes` frame would later let a call in the loop body stop declining.
 - Hoare (1969) -- the while rule; Floyd-Hoare initiation/preservation/use is

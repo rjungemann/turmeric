@@ -10,7 +10,7 @@
 #include "expr.h"
 #include "typeclass.h"
 #include "effect.h"   /* effect_row_is_empty */
-#include "globals.h"   /* g_opt_cps_tramp_resume */
+#include "globals.h"
 
 /* Phase 18: CPS transformation for delimited continuations
  * 
@@ -386,21 +386,19 @@ static bool cps_directly_uses_control(const Expr *e) {
          * so a `main`/fn whose only control op is a first-class handler value is
          * colored and its inner `perform` is not hidden.  build_with_handler
          * DK-lowers a literal (or compose-of-literals) handler value; a dynamic
-         * handler value evicts and falls back gracefully under the experiment.
-         * Flag-off the with-handler path is fiber-lowered and was never colored
-         * here (default: false), so preserve that exactly. */
+         * handler value evicts and falls back gracefully.  Unconditional since
+         * cps-tramp-resume graduated (2026-07-19); the fiber-lowered
+         * with-handler path it used to preserve is gone. */
         case EX_WITH_HANDLER:
         case EX_COMPOSE_HANDLERS:
-            return g_opt_cps_tramp_resume;
+            return true;
         /* A control op (perform / shift / handle / ...) inside a `match` arm colors
          * its function just like one in an `if` branch -- without this recursion a
          * `(defn pick [b] (match b (Full v) (+ v (perform (Choose))) ...))` reads as
          * uncolored and fiber-performs the effect, tainting it for the enclosing
-         * DK handler (cps-backend-effect-under-match).  Flag-gated: flag-off such a
-         * fn is uncolored and fiber-lowered today, and coloring it there perturbs
-         * the shipping path -- so seed only under the experiment. */
+         * DK handler (cps-backend-effect-under-match).  Unconditional since
+         * cps-tramp-resume graduated (2026-07-19). */
         case EX_MATCH:
-            if (!g_opt_cps_tramp_resume) return false;
             if (cps_directly_uses_control(e->as.match_.scrutinee)) return true;
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
                 if (cps_directly_uses_control(e->as.match_.arms[i].body)) return true;
@@ -817,10 +815,9 @@ void cps_color_program(Arena *a, Expr *program) {
         if (!item) continue;
         if (item->kind == EX_FN_DEF && item->as.fn_def_.fn) {
             CPS_ADD_FN_NODE(item);
-        } else if (g_opt_cps_tramp_resume
-                   && item->kind == EX_DEFMODULE && item->as.defmodule_.mod) {
-            /* Flag-gated: descending into module members changes which fns are
-             * colored, so it must not perturb the shipping (flag-off) path. */
+        } else if (item->kind == EX_DEFMODULE && item->as.defmodule_.mod) {
+            /* Descending into module members colors fns a top-level-only walk
+             * would miss.  Unconditional since cps-tramp-resume graduated. */
             DefModule *m = item->as.defmodule_.mod;
             for (uint32_t j = 0; j < m->n_body; j++) {
                 Expr *mb = m->body[j];
@@ -840,7 +837,7 @@ void cps_color_program(Arena *a, Expr *program) {
          * (fh-discharge-row's do-work).  Narrow: only fires for a genuine-leftover
          * fn, so a with-handler main / helper that discharges EVERYTHING (empty
          * row) is untouched and keeps its existing lowering. */
-        if (!nodes[i].colored && g_opt_cps_tramp_resume
+        if (!nodes[i].colored
             && cps_fn_has_leftover_effect(nodes[i].fd)
             && cps_body_has_with_handler(nodes[i].fd->body))
             nodes[i].colored = true;
@@ -865,21 +862,21 @@ void cps_color_program(Arena *a, Expr *program) {
         }
     }
 
-    if (g_opt_cps_tramp_resume) {
-        bool fc = true;
-        while (fc) {
-            fc = false;
-            for (uint32_t i = 0; i < n; i++)
-                if (cps_force_color_eff_fnval_args(nodes[i].fd->body, nodes, n)) fc = true;
-        }
-        changed = true;
-        while (changed) {
-            changed = false;
-            for (uint32_t i = 0; i < n; i++) {
-                if (nodes[i].colored) continue;
-                for (uint32_t e = 0; e < nodes[i].n_edges; e++)
-                    if (nodes[nodes[i].edges[e]].colored) { nodes[i].colored = true; changed = true; break; }
-            }
+    /* Force-color effectful fn-value arguments, then re-propagate to a fixed
+     * point.  Unconditional since cps-tramp-resume graduated (2026-07-19). */
+    bool fc = true;
+    while (fc) {
+        fc = false;
+        for (uint32_t i = 0; i < n; i++)
+            if (cps_force_color_eff_fnval_args(nodes[i].fd->body, nodes, n)) fc = true;
+    }
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (nodes[i].colored) continue;
+            for (uint32_t e = 0; e < nodes[i].n_edges; e++)
+                if (nodes[nodes[i].edges[e]].colored) { nodes[i].colored = true; changed = true; break; }
         }
     }
 

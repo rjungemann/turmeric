@@ -99,10 +99,13 @@ out=$(cd "$tmp/bad" && "$TUR_ABS" run 2>&1; echo "rc=$?")
 chk "unknown-manifest-value-errors" "TUR-E0311" "$out"
 
 # 9. :engine jit -- outcome depends on the build, both are asserted.
-#    The `:experiments [jit]` key is deliberately still here: `jit` graduated
-#    2026-08-17, so this manifest is the shape a downstream project that opted
-#    in BEFORE graduation still has on disk, and it must keep working.
-mk_project "$tmp/mj" ':engine  "jit"' ':experiments [jit]'
+#    The manifest carries ONLY `:engine "jit"`.  It used to also carry
+#    `:experiments [jit]`, to pin that a project which opted in before the
+#    2026-08-17 graduation kept working; that shim was retired at 0.38.0, one
+#    minor line later, so the key is now a hard error and case 10 below pins
+#    that instead.  Engine selection never depended on it.
+mk_project "$tmp/mj" ':engine  "jit"' ""
+mk_project "$tmp/mx" ':engine  "jit"' ':experiments [jit]'
 if [ "$have_jit" = "1" ]; then
     out=$(cd "$tmp/mj" && "$TUR_ABS" run 2>&1)
     chk "manifest-jit-runs" "compiled" "$out"
@@ -112,21 +115,23 @@ else
     chk "manifest-jit-no-engine-nonzero" "rc=2" "$out"
 fi
 
-# 10. `jit` GRADUATED 2026-08-17 -- there is no experiment gate left to open,
-#     so `tur jit` runs in a project with no :experiments key at all, and a
-#     manifest that still carries the old key is a TUR-W0063 no-op rather than
-#     the hard TUR-E0310 an unknown experiment name gets.  (The inverse of what
-#     this case asserted before graduation: it used to pin that the gate stayed
-#     CLOSED without the key.)  What still gates `tur jit` is the BUILD, which
-#     is why the no-engine arm asserts the -DTUR_JIT=ON message instead.
+# 10. `jit` GRADUATED 2026-08-17 and its compatibility shim was RETIRED at
+#     0.38.0.  Three states, and this case has now pinned each of them in turn:
+#     before graduation the gate stayed closed without the key; after it, the
+#     key was a TUR-W0063 no-op so a project that opted in early kept building;
+#     after retirement the key is the hard TUR-E0310 an unknown experiment name
+#     gets, because the migration window is a window and not an alias.
+#     What still gates `tur jit` is the BUILD, which is why the no-engine arm
+#     asserts the -DTUR_JIT=ON message instead.
 mk_project "$tmp/ng" "" ""
+out=$(cd "$tmp/mx" && "$TUR_ABS" jit src/main.tur 2>&1; echo "rc=$?")
+chk "retired-manifest-experiments-key-errors" "TUR-E0310" "$out"
 if [ "$have_jit" = "1" ]; then
     out=$(cd "$tmp/ng" && "$TUR_ABS" jit src/main.tur 2>&1)
     chk "jit-runs-without-experiments-key" "compiled" "$out"
 
     out=$(cd "$tmp/mj" && "$TUR_ABS" jit src/main.tur 2>&1)
-    chk "graduated-manifest-experiments-key-still-runs" "compiled" "$out"
-    chk "graduated-manifest-experiments-key-warns" "TUR-W0063" "$out"
+    chk "jit-runs-with-engine-key-only" "compiled" "$out"
 else
     out=$(cd "$tmp/ng" && "$TUR_ABS" jit src/main.tur 2>&1; echo "rc=$?")
     chk "jit-no-engine-hard-error" "-DTUR_JIT=ON" "$out"

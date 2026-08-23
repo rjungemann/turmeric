@@ -258,7 +258,6 @@ extern bool g_dump_cps_mono;
 /* g_opt_cps_effects RETIRED 2026-07-12 -- the `cps-effects` experiment graduated
  * and `handle-shallow` is now unconditionally accepted (see experiments.c). */
 
-/* E7: trampolined tail-resume (cps-tramp-resume experiment). See globals.c. */
 /* SX1 (solver-extension-plan): the `backtrackable-state` experiment.  Gates
  * `(import trail)` -- the trail primitive's semantics are in flux on
  * purpose (the multi-shot re-entry question in plan 3.5 is open), which is
@@ -275,13 +274,21 @@ extern bool g_adt_slab;
  * feature.  Default off; flipping it changes no codegen until set. */
 extern bool g_sr1_sum_byvalue;
 extern bool g_opt_backtrackable_state;
-extern bool g_opt_cps_tramp_resume;
-/* E3a: admit an OWNING value captured into a genuinely multi-shot (cloneable /
- * serializable) continuation, giving each captured frame's env clone/drop glue
- * so resumes are memory-safe (cps-backend-owning-env-teardown-e3-plan.md). Read
- * by the cloneable/serial capture checks (elab_effects.c) and the cloneable
- * codegen (emit_cps_ir.c). Gated by the `owning-cloneable-capture` experiment. */
-extern bool g_opt_owning_cloneable_capture;
+
+/* g_opt_cps_tramp_resume RETIRED 2026-08-22 -- the `cps-tramp-resume`
+ * experiment graduated 2026-07-19 and E7's trampolined tail-resume is the sole
+ * effect lowering.  The bit outlived the row by seven minor lines, unwritable
+ * the whole time (its EXPERIMENTS[] row was gone, so nothing could set it), so
+ * its 64 read sites were constant tests with an unreachable arm.  Folded to
+ * true and the dead arms deleted; the bit is gone.  See
+ * docs/archive/cps-dk-sole-effect-lowering-plan.md. */
+
+/* g_opt_owning_cloneable_capture RETIRED 2026-08-22 -- the
+ * `owning-cloneable-capture` experiment graduated 2026-07-20 and admitting an
+ * owning value captured into a multi-shot cloneable continuation (with the
+ * per-frame env clone/drop teardown) is unconditional.  Same story as the bit
+ * above: unwritable since graduation, five reads folded to true.  See
+ * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
 
 /* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is an ordinary call
  * form; the g_opt_cycle_gc enable bit and the elab_gc_auto gate are gone.

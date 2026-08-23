@@ -233,23 +233,13 @@ bool g_dump_mono_specs = false;
  * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
 bool g_dump_cps_mono = false;
 
-/* E7 (v2 cps-dk-sole-effect-lowering-plan): enables the trampolined tail-resume
- * lowering -- a perform-continuation ending in a tail call is admitted as a
- * DKK_RESUME_FRAME and its handler tail-resume unwinds to the entry driver
- * (meta-stack) instead of resuming inline, keeping deep effectful tail-recursion
- * flat. Flipped by the `cps-tramp-resume` experiment; read by the CPS-IR
- * classifier (emit_cps_ir.c) and gates the trampoline runtime emission. */
-bool g_opt_cps_tramp_resume = true;
-
-/* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
- * captured into a multi-shot cloneable continuation (with the per-frame env
- * clone/drop teardown) is now unconditional; the `owning-cloneable-capture`
- * experiment row is retired (moved to GRADUATED[] in experiments.c) and a
- * lingering --enable is a TUR-W0063 no-op.  The bit stays defined and true so
- * the admission predicates that read it stay always-on (mirrors g_gadt_enabled /
- * g_opt_cps_tramp_resume).  See
- * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
-bool g_opt_owning_cloneable_capture = true;
+/* g_opt_cps_tramp_resume and g_opt_owning_cloneable_capture RETIRED 2026-08-22.
+ * Both experiments graduated in July 2026 and both left their enable bit behind,
+ * defined and initialized true.  Neither had an EXPERIMENTS[] row any more, so
+ * no CLI, manifest, or user-config path could write either one -- the
+ * initializer was the only assignment in the tree, and every read (64 and 5
+ * respectively, across eight files) was a constant test with an unreachable
+ * arm.  Both are folded to true and the dead arms deleted.  See globals.h. */
 
 /* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is an ordinary call
  * form; the enable bit and the elab_gc_auto gate are gone.  What did NOT change

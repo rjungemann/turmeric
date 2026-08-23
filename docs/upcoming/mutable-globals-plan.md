@@ -23,9 +23,9 @@
 > rider on this one").
 > **Type:** Language / elaboration / effects
 > **Depends on:** `^mut` on a top-level `def`, landed 2026-08-05 (D4).
-> **Related:** [`checked-write-frames-plan.md`](checked-write-frames-plan.md)
+> **Related:** [`checked-write-frames-plan.md`](../archive/checked-write-frames-plan.md)
 > (this plan is scoped to the globals half of its step 3),
-> [`sealed-opaque-plan.md`](sealed-opaque-plan.md) (the same encapsulation
+> [`sealed-opaque-plan.md`](../archive/sealed-opaque-plan.md) (the same encapsulation
 > argument, applied to handles rather than globals).
 
 ## 0. Summary
@@ -1402,7 +1402,7 @@ running nothing. Four directories are in that state -- `sandbox/` (17 files),
 `stm/` (7, including atomicity and deadlock-freedom), `module-transitive-imports/`
 (4), `typeclass/` (2) -- and no other harness picks them up. 30 `.tur` files
 that the summary line counts as passing. Filed as
-[docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md](../reported/fixture-dirs-with-loose-tur-files-pass-without-running.md).
+[docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md](../archive/fixture-dirs-with-loose-tur-files-pass-without-running.md).
 Found because `module-transitive-imports` looked like the multi-module fixture
 precedent and turned out not to run; the shape G3's fixtures actually use is
 `errors/sealed-opaque-cross-module-fabricate`'s.

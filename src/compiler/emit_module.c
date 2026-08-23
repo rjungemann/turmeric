@@ -9220,7 +9220,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
         cps_uses_serial || cps_ir_emittable) {
-        emit_cps_runtime_prelude_ex(out, g_opt_cps_tramp_resume);
+        emit_cps_runtime_prelude(out);
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
      * direct emitter lowers a base (reset ...) whose body reaches a shift through
@@ -9499,16 +9499,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the fiber's (possibly freed) stack -> SIGSEGV / "longjmp causes uninitialized
      * stack frame".  Save the resumer's driver + meta depth across the swapcontext
      * and restore them when control returns, so the fiber's driver never leaks
-     * out.  Emitted only under the trampoline path (g_opt_cps_tramp_resume) that
-     * declares g_dk_driver / g_dk_meta_n; flag-off those globals do not exist and a
-     * fiber program stays byte-identical. */
-    if (g_opt_cps_tramp_resume) {
-        buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
-        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
-        buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
-    } else {
-        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
-    }
+     * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
+     * only path since cps-tramp-resume graduated (2026-07-19). */
+    buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+    buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
     buf_puts(out, "}\n\n");
@@ -11778,7 +11773,7 @@ void emit_shared_runtime_header(Buf *out) {
  *   (b) cmd_jit at JIT time, hashing this emission against the recorded
  *       hash to decide whether the committed artifacts still describe the
  *       compiler it is running in.  Any drift -- an emitter edit, a knob like
- *       --backtrack-depth or --enable=cps-tramp-resume, archive-mode state --
+ *       --backtrack-depth, archive-mode state --
  *       changes this text, fails the compare, and falls back to full-preamble
  *       emission.  Never wrong, just slower.
  *

@@ -1,0 +1,29 @@
+;; A graduated experiment's GRADUATED[] shim is a MIGRATION WINDOW, not a
+;; permanent alias, and this fixture pins what happens when the window closes.
+;;
+;; The lifecycle has three states for a name:
+;;   live      -- an EXPERIMENTS[] row; `--enable=<name>` turns the feature on
+;;   graduated -- the row is gone, the name is in GRADUATED[]; `--enable=<name>`
+;;                is accepted as a no-op with TUR-W0063, so a downstream
+;;                `build.tur` or `~/.config/turmeric/experiments.tur` that opted
+;;                in keeps compiling across the graduation boundary
+;;   retired   -- the name is out of GRADUATED[] too, one minor line later;
+;;                `--enable=<name>` is the hard TUR-E0310 an unknown name gets
+;;
+;; `sealed-opaque` graduated 2026-08-17 (v0.34.0) and was retired at 0.38.0,
+;; with refined, cycle-gc, jit, global-state, write-frames and checked-reads.
+;; It stands in for all seven here: what is being pinned is the REGISTRY's
+;; third state, not anything about `:sealed` -- so one fixture is the right
+;; number, and it would still be if the specific name in `flags` were swapped
+;; for another retired one.
+;;
+;; This replaces sealed-opaque-graduated-enable-noop, which pinned the SECOND
+;; state for the same name.  That promise expired on purpose; deleting its
+;; fixture without pinning the state that succeeded it would have left the
+;; retirement itself untested, which is how a shim quietly comes back.
+;;
+;; The program is deliberately trivial: `--enable` is rejected during argument
+;; handling, before anything here is read.
+(defn main [] : int
+  (println "unreachable -- the flag is refused first")
+  0)

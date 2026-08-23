@@ -441,8 +441,9 @@ built without `-DTUR_JIT=ON`, asking for the `jit` engine is a hard error
 rather than a silent fallback, because the two engines differ in semantics and
 guessing which one you got is worse than being told.
 
-> `tur --enable=jit repl` (the retired experiment spelling) is accepted as a
-> warning-only no-op; engine selection is the supported spelling.
+> `tur --enable=jit repl` (the retired experiment spelling) is a hard
+> `TUR-E0310` as of 0.38.0 -- drop the flag. Engine selection is the supported
+> spelling.
 
 ### (reload) -- pick up edits without restarting
 

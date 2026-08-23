@@ -422,12 +422,12 @@ help: (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) 
   [contract-types-guide.md](contract-types-guide.md)) would.
 - **No gate.** Static discharge is unconditional: every compile that sees a
   `#refine{...}` runs the pipeline described here. There is no `EXPERIMENTS[]`
-  row and no global to read. The old opt-in spellings survive only as
-  compatibility shims that age out one minor line after graduation --
+  row and no global to read. The old opt-in spellings survived as compatibility
+  shims for one minor line and were **retired in 0.38.0**, so
   `--enable=refined`, `:experiments [:refined]`, and the user experiments file
-  are accepted as no-ops (`TUR-W0063`, `GRADUATED[]` in
-  `src/runtime/experiments.c`), and `#lang turmeric refined` is accepted as a
-  no-op layer token (`TUR-W0064`, `GRADUATED_LAYERS[]` in
+  are once more `TUR-E0310` (`refined` is out of `GRADUATED[]` in
+  `src/runtime/experiments.c`), and `#lang turmeric refined` is once more
+  `TUR-E0330` (out of `GRADUATED_LAYERS[]` in
   `src/compiler/lang_layers.c`). Passing any of them changes nothing about
   what the solver does.
 - **`--strict-refine`.** A diagnostic-strictness knob (not an experiment) that
@@ -452,8 +452,9 @@ Registered in `diag.c` / `diag.h` (the `RT3` block, `diag.c:241`):
 | `TUR-W0377` | warn | instance-leniency note (paired with the class-method checks) |
 | `TUR-E0378` | error | refinement appears inside a function type |
 | `TUR-I0379` | internal | **RETIRED in 0.32.5**, never emitted: reported a Z3-oracle mismatch back when a dev build could link one. Code reserved, not reused |
-| `TUR-W0063` | warn | a lingering `--enable=refined` / `:experiments [:refined]`; accepted, no effect |
-| `TUR-W0064` | warn | a lingering `#lang turmeric refined` token; accepted, no effect |
+| `TUR-W0063` | warn | a lingering enable of a GRADUATED experiment; accepted, no effect. Not `refined` any more -- its shim was retired in 0.38.0 |
+| `TUR-W0064` | warn | a lingering GRADUATED `#lang` layer token; accepted, no effect. `GRADUATED_LAYERS[]` is empty since 0.38.0 |
+| `TUR-E0310` / `TUR-E0330` | error | a lingering `--enable=refined` / `#lang turmeric refined` from 0.38.0 on; delete them |
 
 `TUR-E0371` and `TUR-W0372` both leave the program safe -- the runtime check
 survives either way. `tur explain TUR-W0372` prints the long form of any code.

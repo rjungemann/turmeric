@@ -3,7 +3,8 @@
 > **Status: shipping, unconditional.** The `frozen` region form ships today in
 > the `tur-ecs` spice (`ecs/freeze`). The `#reads` annotation and the congruence
 > grant it enables are **on in every build** -- there is no flag to set. (A
-> lingering `--enable=refined` is accepted as a no-op, `TUR-W0063`.) The design
+> lingering `--enable=refined` was a no-op through 0.37.0 and is a hard
+> `TUR-E0310` from 0.38.0; delete it.) The design
 > of record is
 > [`docs/archive/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md).
 > A `#reads`-refined accessor proves its guarded crossings *and* codegens
