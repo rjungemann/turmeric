@@ -75,11 +75,18 @@ non-parametric `defdata`, of which **21 are self-recursive** (`Term`, `Subst`,
 `Stream`, `Regex`, `RxCls`, `RxPos`, `RxStrs`, plus fixture trees and lists) and
 **66 are not**.
 
-That split is the plan's spine, because the two halves are different changes.
-A non-recursive sum has a fixed size and generalises the existing flat-product
-machinery. `(TPair :Term :Term)` has no finite inline size and needs
-*field-level* boxing -- the value travels by value, only the self-referential
-field stays a pointer.
+That split was written as the plan's spine, on the reasoning that a
+non-recursive sum has a fixed size and generalises the existing flat-product
+machinery while `(TPair :Term :Term)` has no finite inline size and needs
+*field-level* boxing.
+
+**The SR1 gate disproved that second half** ([sr1-gate-results.md](sr1-gate-results.md)).
+A recursive ADT field already rides the int64 carrier, so such a type has a
+fixed inline size and lowers by value today -- a self-recursive two-variant
+`Tree` compiles and runs correctly under the seam. Field-level boxing is not a
+prerequisite; it is what the carrier already does. The SR1/SR4 split below, and
+the claim further down that row C's 1.8x prices "the harder variant", both need
+revisiting.
 
 **Sizes, measured:**
 
@@ -190,14 +197,29 @@ widest variant, returned in registers.
 
 Covers 66 of 87 types. Removes the malloc **and** the leak for all of them.
 
-**Prototype gate, and do this before writing any of it.** Take one 2-variant
-non-recursive sum (`ArithError` in `stdlib/rational.tur` is the cleanest -- two
-nullary variants, no payload) and force it by value behind a compile-time seam.
-The question the prototype answers is whether the four-predicate lockstep
-generalises to a type carrying a tag word, or whether the tag breaks crossings
-that a flat product never exercised. If the fixture damage is on the order of
-the nested-monomorph fix (8 fixtures, 4 predicates), SR1 is a week. If the tag
-word turns out to be load-bearing at the match and field-read seams, it is not.
+**Prototype gate: RUN.** Full results in
+[sr1-gate-results.md](sr1-gate-results.md). The seam is in the tree as
+`TUR_SR1_SUM_BYVALUE=1`, default off and provably inert (zero snapshot drift,
+suite at its 2696-green baseline).
+
+Three crossings fixed, **33 fixtures still red**, clustering into five error
+shapes dominated by one -- the byval-to-carrier bridge family, the same
+machinery the nested-monomorph fix had to teach about a new case. Only 14 sites
+consult `adt_is_flat_product` and most are legitimate tag/layout decisions, so
+this is not a long tail. Codegen half: about five predicate families, a week.
+
+One of the three was a **silent miscompile**, not a build error: the by-value
+ctor emitter never stored a tag (its comment said "byval implies single-variant
+flat product"), so a nullary variant returned an uninitialised struct and the
+probe printed `red`/`3` for `green`/`12`. This family of change fails quietly.
+
+**The gate also found the blocker that is not codegen at all.**
+`stdlib/logic.tur` ascribes carrier-erased polymorphic results back to sum
+types -- `(:: (f v) :Stream)` -- which is a no-op cast while `Stream` rides the
+carrier and a hard `TUR-E0295` once it does not. Library source depends on the
+carrier representation, and that must be rewritten or specialized around. That
+is the part to scope before committing, and it lands on the one module the
+allocation numbers came from.
 
 **Gating pattern:** follow `g_adt_app_byvalue` (`types.c:3182`) -- a
 compile-time seam, not an `EXPERIMENTS[]` row, since this is a representation
