@@ -1,6 +1,6 @@
 # Refinement solver cap sweep (SX0(b))
 
-Generated: 2026-08-22 15:05 at 2b5e3572 by `benchmarks/run-cap-sweep.sh`.
+Generated: 2026-08-25 16:50 at aeb87927 by `benchmarks/run-cap-sweep.sh`.
 
 Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives, so a
 hit is never unsound -- it is lost completeness, and only lost completeness that
@@ -9,7 +9,7 @@ cap bounds, recorded on every query rather than only on the ones that overflow,
 so a cap that never fires still reports its headroom.
 
 
-## SMT-LIB corpus -- 124 unit(s), 4 with a cap hit
+## SMT-LIB corpus -- 124 unit(s), 1 with a cap hit
 
 | cap | hits | peak | limit | headroom | worst unit |
 |---|---:|---:|---:|---:|---|
@@ -19,11 +19,11 @@ so a cap that never fires still reports its headroom.
 | la_vars | 0 | 9 | 32 | 72% | gen_mixed_sat_00013.smt2 |
 | la_constr | 0 | 42 | 512 | 92% | gen_real_unsat_00042.smt2 |
 | euf_terms | 982 | 512 | 512 | 0% | qf_lra_deep_arith_chain_sat.smt2 |
-| no_shared | 3 | 9 | 8 | OVER by 1 | gen_mixed_sat_00013.smt2 |
+| no_shared | 0 | 9 | 16 | 44% | gen_mixed_sat_00013.smt2 |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 
-## in-tree fixtures -- 87 unit(s), 1 with a cap hit
+## in-tree fixtures -- 85 unit(s), 0 with a cap hit
 
 | cap | hits | peak | limit | headroom | worst unit |
 |---|---:|---:|---:|---:|---|
@@ -33,7 +33,7 @@ so a cap that never fires still reports its headroom.
 | la_vars | 0 | 9 | 32 | 72% | refine-match-field-wrong |
 | la_constr | 0 | 12 | 512 | 98% | refine-match-field-wrong |
 | euf_terms | 0 | 25 | 512 | 95% | refine-ctor-axioms |
-| no_shared | 1 | 9 | 8 | OVER by 1 | refine-match-field-wrong |
+| no_shared | 0 | 9 | 16 | 44% | refine-match-field-wrong |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 
@@ -47,7 +47,7 @@ so a cap that never fires still reports its headroom.
 | la_vars | 0 | 7 | 32 | 78% | c000021.tur |
 | la_constr | 0 | 9 | 512 | 98% | c000199.tur |
 | euf_terms | 0 | 23 | 512 | 96% | c000106.tur |
-| no_shared | 0 | 7 | 8 | 12% | c000021.tur |
+| no_shared | 0 | 7 | 16 | 56% | c000021.tur |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 

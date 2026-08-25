@@ -3,7 +3,27 @@
 **Severity:** medium. Two shipped examples build cleanly, link cleanly, run,
 exit 0, and do nothing at all. A tutorial teaches the convention that causes it.
 
-**Status:** OPEN. Root-caused, minimal repro below, not fixed.
+**Status:** RESOLVED 2026-08-25 via fix direction 1 -- the docs now match the
+compiler. Both examples' entries are renamed `-main` -> `main`, and the snake
+tutorial's 24 code listings and its entry-point claim are corrected. The
+minikanren repro below now prints all four queries and exits 0.
+
+Fix directions 2 (teach the compiler `-main`) and 3 (diagnose a `-main` with no
+`main`) were NOT taken, and the report's "worth doing regardless" observation --
+that no suite exercises the examples at all -- still stands. Both are filed as
+[examples-have-no-suite-coverage](../reported/examples-have-no-suite-coverage.md).
+
+**One claim in this report was wrong and is corrected here rather than edited
+out.** The severity line says "two shipped examples build cleanly, link
+cleanly, run, exit 0, and do nothing at all". That is true of
+`examples/minikanren`, which is what the repro below exercises. It is **not**
+true of `examples/snake`: that one does not compile at all, at `-main` or
+`main` alike, failing on
+[perform-inside-loop-has-no-lowering](../reported/perform-inside-loop-has-no-lowering.md)
+-- a report that already names snake as the program it was found on. So snake
+was never a silent no-op; it was a loud build failure that nothing ran often
+enough to notice. The `-main` defect was real for both, but only minikanren
+demonstrated it.
 
 Found while censusing construction sites for
 [SR0](../upcoming/sum-representation-plan.md): `examples/minikanren` reported

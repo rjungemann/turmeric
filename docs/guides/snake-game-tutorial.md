@@ -140,7 +140,7 @@ Create your first Turmeric file that opens a window.
 (extern-c window-should-close [] : int)
 (extern-c set-fps [^int fps] : void)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 1")
   (set-fps 60)
   (while (not (window-should-close))
@@ -157,7 +157,7 @@ extern-c close-window [] : void
 extern-c window-should-close [] : int
 extern-c set-fps [^int fps] : void
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 1")
   set-fps(60)
   while not(window-should-close())
@@ -167,7 +167,7 @@ defn -main []
 
 **What's happening:**
 - `extern-c` declares C functions for FFI
-- `-main` is the entry point
+- `main` is the entry point -- the compiler emits a call to it; a function named `-main` is NOT an entry point and is never invoked
 - Window opens and stays open until you close it
 
 **Test:** Run `./examples/snake/snake` -- you should see a black window.
@@ -184,7 +184,7 @@ Add screen clearing to prevent flickering.
 (extern-c end-drawing [] : void)
 (extern-c clear-background [^int r ^int g ^int b] : void)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 2")
   (set-fps 60)
   (while (not (window-should-close))
@@ -200,7 +200,7 @@ extern-c begin-drawing [] : void
 extern-c end-drawing [] : void
 extern-c clear-background [^int r ^int g ^int b] : void
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 2")
   set-fps(60)
   while not(window-should-close())
@@ -222,7 +222,7 @@ Draw a white rectangle in the middle of the screen.
 ;; Add to main.tur
 (extern-c draw-rect [^int x ^int y ^int w ^int h ^int r ^int g ^int b] : void)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 3")
   (set-fps 60)
   (while (not (window-should-close))
@@ -237,7 +237,7 @@ Draw a white rectangle in the middle of the screen.
 ;; Add to main.tur
 extern-c draw-rect [^int x ^int y ^int w ^int h ^int r ^int g ^int b] : void
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 3")
   set-fps(60)
   while not(window-should-close())
@@ -298,7 +298,7 @@ defn init-state [] : GameState
 (defn draw-state [^state/GameState s]
   (draw-rect s.snake-x s.snake-y s.snake-w s.snake-h 255 255 255))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 4")
   (set-fps 60)
   (let [state (state/init-state)]
@@ -326,7 +326,7 @@ extern-c draw-rect [^int x ^int y ^int w ^int h ^int r ^int g ^int b] : void
 defn draw-state [^state/GameState s]
   draw-rect(s.snake-x s.snake-y s.snake-w s.snake-h 255 255 255)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 4")
   set-fps(60)
   let [state state/init-state()]
@@ -369,7 +369,7 @@ Make the rectangle move with arrow keys.
                        s.snake-y))]
     (state/GameState new-x new-y s.snake-w s.snake-h)))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 5")
   (set-fps 60)
   (let [state (state/init-state)]
@@ -406,7 +406,7 @@ defn update-state [^state/GameState s] : state/GameState
                  s.snake-y))]
     state/GameState(new-x new-y s.snake-w s.snake-h)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 5")
   set-fps(60)
   let [state state/init-state()]
@@ -496,7 +496,7 @@ defn init-state [] : GameState
       s))))
   (state/GameState (update-snake s.snake)))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 6")
   (set-fps 10)  ;; Slower for now
   (let [state (state/init-state)]
@@ -547,7 +547,7 @@ defn update-state [^state/GameState s] : state/GameState
           s
   state/GameState(update-snake(s.snake))
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 6")
   set-fps(10)
   let [state state/init-state()]
@@ -778,7 +778,7 @@ defn init-state [] : GameState
       (handle-render obj)
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 8")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -809,7 +809,7 @@ defn game-loop [^state/GameState state]
       handle-render(obj)
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 8")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -957,7 +957,7 @@ defn check-collisions [^GameState state] : bool
       (println (concat "Game Over! Score: " (itoa score)))
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 9")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -1003,7 +1003,7 @@ defn game-loop [^state/GameState state]
       println(concat("Game Over! Score: " itoa(score)))
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 9")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -1184,7 +1184,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
       (println (concat "Game Over! Score: " (itoa score)))
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 10")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -1227,7 +1227,7 @@ defn game-loop [^state/GameState state]
       println(concat("Game Over! Score: " itoa(score)))
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 10")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -1283,7 +1283,7 @@ Properly handle game over with a clean exit and final score display.
       ;; Wait a bit before exiting
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 11")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -1326,7 +1326,7 @@ defn game-loop [^state/GameState state]
       ;; Wait a bit before exiting
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 11")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -1349,7 +1349,7 @@ Use `defer` to ensure the window is always closed, even if an error occurs.
 (import state)
 (import effects)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 12")
   (defer (close-window))  ;; Automatically called on scope exit
   (set-fps 10)
@@ -1370,7 +1370,7 @@ Use `defer` to ensure the window is always closed, even if an error occurs.
 import state
 import effects
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 12")
   defer(close-window())
   set-fps(10)
@@ -1709,7 +1709,7 @@ Here's the final, polished game loop:
       (while (not (is-key-down KEY_ESCAPE)))
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake")
   (defer (close-window))
   (set-fps 60)
@@ -1792,7 +1792,7 @@ defn game-loop [^state/GameState state]
       while not(is-key-down(KEY_ESCAPE))
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake")
   defer(close-window())
   set-fps(60)

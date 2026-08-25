@@ -42,7 +42,18 @@
 /* S3's two caps live here rather than in refine_solver_no.c so the telemetry
  * below can report a peak against the limit it is a peak of. */
 #define NO_MAX_ROUNDS           4
-#define NO_MAX_SHARED           8
+/* Raised 8 -> 16 on SX0(b)'s evidence (solver-extension-plan SX5).  It was the
+ * ONLY cap in the solver with a live signal: it turned away eligible terms on
+ * four units across the three swept populations, every time by exactly one
+ * (9 eligible against a cap of 8), while every other cap sat on 72-98%
+ * headroom.  Not free -- the exchange is quadratic in the shared set and each
+ * `la_entails_eq` runs Fourier-Motzkin twice, so the pair work per S3 cube is
+ * 4x at the new cap and is paid by every obligation reaching S3, not only the
+ * ones near the cap.  Measured before landing: no verdict moved on the 125
+ * corpus benchmarks or the 89 in-tree refinement fixtures, and the corpus
+ * replay did not slow measurably.  Numbers and method in
+ * docs/archive/history/no-max-shared-raise.md. */
+#define NO_MAX_SHARED           16
 
 /* ------------------------------------------------------------------------- *
  * Cap telemetry

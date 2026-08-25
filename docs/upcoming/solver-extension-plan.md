@@ -726,7 +726,9 @@ Two instruments, no language or runtime change:
   The one cap with a live signal is `NO_MAX_SHARED`, and it is a small one: it
   turned away exactly one eligible term on each of four units, and the fuzzer's
   own peak sits at 7 of 8. That is SX5's "raise on evidence rather than
-  caution" note becoming actionable -- see SX5.
+  caution" note becoming actionable -- see SX5. **Acted on: raised to 16 on
+  2026-08-25**, so the table above is the pre-raise record; the current
+  telemetry is whatever `benchmarks/run-cap-sweep.sh` last wrote.
 
 **Size:** small. **Gate:** none (benchmarks and stats are not compiler
 features).
@@ -957,18 +959,35 @@ Original specification follows.
   instead of rebuilding both per cube. The exchange loop itself is unchanged.
 - **Accept:** as SX3 -- identical verdicts, lower cost. `NO_MAX_SHARED` and
   `NO_MAX_ROUNDS` can then be raised on evidence rather than caution.
-- **The evidence for `NO_MAX_SHARED` already exists**, and it does not need
-  SX5 to act on. SX0(b) found it turning away eligible terms on four units,
-  every time by exactly one (9 eligible against a cap of 8), while
-  `NO_MAX_ROUNDS` never ran out anywhere. None of those four lost a proof, so
-  this is not urgent -- but it is the only cap in the solver with a live
-  signal, and raising it is a one-constant change rather than a phase.
-  What makes it not-quite-free: the exchange is quadratic in the shared set
-  and each `la_entails_eq` runs Fourier-Motzkin twice, so 8 -> 16 is 4x the
+- **The `NO_MAX_SHARED` raise is DONE** -- 8 -> 16, landed 2026-08-25, ahead of
+  the rest of SX5 and independent of it. SX0(b) found it turning away eligible
+  terms on four units, every time by exactly one (9 eligible against a cap of
+  8), while `NO_MAX_ROUNDS` never ran out anywhere; it was the only cap in the
+  solver with a live signal.
+
+  It was taken with the measurement this bullet asked for rather than as a
+  drive-by, because the cost is real: the exchange is quadratic in the shared
+  set and each `la_entails_eq` runs Fourier-Motzkin twice, so 8 -> 16 is 4x the
   pair work on every S3 cube, paid by every obligation that reaches S3 rather
-  than only by the ones near the cap. Take it with a compile-time measurement
-  on the widest fixtures and a verdict diff over the corpus, not as a
-  drive-by.
+  than only by the ones near the cap.
+
+  **Measured, Release build, before landing:** verdicts identical on all 125
+  corpus benchmarks (per-benchmark diff, not just the totals) and all 89
+  in-tree refinement fixtures; `bash tests/run.sh` unchanged at 2694/0; corpus
+  replay 0.0926s -> 0.0923s and the fixture population 1.566s -> 1.552s, both
+  inside noise. The round budget was not traded into -- the unit that hit the
+  cap now reaches its fixpoint with `NO rounds out 0 (of 4)`. The regenerated
+  `benchmarks/cap-sweep-results.md` shows `no_shared` at **0 hits across all
+  three populations**, 44-56% headroom.
+
+  **It bought headroom, not capability:** all four capped units had to answer
+  `UNKNOWN` regardless, so no verdict moved. Full numbers and method in
+  [../archive/history/no-max-shared-raise.md](../archive/history/no-max-shared-raise.md).
+
+  This leaves S3 with **no cap carrying a live signal**, which removes the one
+  standalone reason to start SX5 early. The rest of SX5 (running the exchange
+  over marked/undoable S1i/S2b states) still trades cost for cost and still
+  waits on SX3/SX4.
 
 ### SX6 -- boolean structure beyond small DNF (S4)
 
@@ -1218,8 +1237,10 @@ surface slotted where it is cheapest:
    bite). SX3/SX5 were never cap-gated -- they trade cost, not answers -- so
    they stay available, but with SX6b parked behind SX4 there is no longer a
    consumer pulling them forward; take them only if measured compile time asks.
-   The one exception worth doing on its own is the `NO_MAX_SHARED` raise SX0(b)
-   turned up; see SX5.
+   The one exception worth doing on its own was the `NO_MAX_SHARED` raise
+   SX0(b) turned up, and it is now **done** (8 -> 16, no verdict moved, no
+   measurable cost; see SX5). No cap in the solver carries a live signal any
+   more.
 6. **SX7 prototype in Turmeric early**, via the SX8c seam (it needs only
    SX4's seam or even today's S2 for a first cut against the corpus), C port
    last or never. **SX6b** last of all, and only if SX6a thrashes -- which now

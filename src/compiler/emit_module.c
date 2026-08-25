@@ -14046,11 +14046,27 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
      * SAFETY, and why this is keyed on drop glue rather than applied blanket:
      * slab memory must never reach libc free().  A type WITH drop glue has a
      * drop_glue_* that ends in free(ptr), so those keep malloc.  A type without
-     * it has no such function emitted, and the generic free paths do not reach
-     * an ADT box -- rc/of boxes the carrier int64 separately and frees that
-     * wrapper, not the box.  The remaining assurance is empirical and loud:
-     * under ASan, a free() of slab memory aborts, so the fixture suite is the
-     * check.
+     * it has no such function emitted.
+     *
+     * KNOWN BROKEN, and why this seam stays off.  The paragraph above used to
+     * continue "and the generic free paths do not reach an ADT box -- rc/of
+     * boxes the carrier int64 separately and frees that wrapper, not the box".
+     * That was true of a bug, and the bug is fixed
+     * (docs/archive/rc-of-adt-leaks-the-payload.md): rc/of now MOVES the ADT
+     * box into shared ownership and releases it.  So a slab-allocated box
+     * handed to an rc does reach free().  Confirmed, not theorised -- ASan
+     * reports "attempting free on address which was not malloc()-ed".
+     *
+     * A ctor_* cannot know whether its result ends up in an rc, so no local
+     * predicate fixes this.  It needs a whole-program pass marking every ADT
+     * def used as an rc/of payload and excluding those from the slab.
+     *
+     * The other half of the old rationale is also gone: "the fixture suite is
+     * the check" was false, because tests/run.sh compiles emitted programs
+     * WITHOUT sanitizers.  Leak and bad-free checking of emitted code now
+     * exists, but it is opt-in per fixture --
+     * tests/run-leak-check.sh plus a requires.leak-check marker
+     * (docs/reported/compiled-fixtures-are-not-leak-checked.md).
      *
      * Off unless TUR_ADT_SLAB=1 was set at COMPILE time -- a measurement seam,
      * not a shipping default.  Slabs are never released; that is the point.

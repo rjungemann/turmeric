@@ -918,19 +918,30 @@ will report it on a clang or Windows leg.
 
 ## Allocation and memory-checking (filed 2026-08-22)
 
-Four reports from one thread of work: measuring the refinement solver's cost
-led into how the compiler allocates, which led into what the test suite can
+Reports from one thread of work: measuring the refinement solver's cost led
+into how the compiler allocates, which led into what the test suite can
 actually see. They are best read in that order -- each one is why the next was
-found.
+found. The last two arrived later, from the same thread continuing: the
+`-main` fix left a coverage hole behind it, and the `NO_MAX_SHARED` raise
+turned up a defect in the instrument that would have justified it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: slab 2.1x (measured in-compiler), by-value 1.8x, both 18x |
-| [dash-main-entry-point-never-invoked](dash-main-entry-point-never-invoked.md) | medium | `-main` is documented as the entry point in the snake tutorial and used by both shipped examples, but nothing calls it -- minikanren and snake build, link, run, exit 0 and do nothing; no examples are exercised by any suite |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan (O(n^2) in term count, free fix when SX3 rewrites that state); the congruence-closure fixpoint is a naive O(n^2) sweep |
+| [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
+| [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
 | [compiled-fixtures-are-not-leak-checked](compiled-fixtures-are-not-leak-checked.md) | low-medium | ADDRESSED. The default suite does not leak-check EMITTED programs -- only `tur` itself. `tests/run-leak-check.sh` now generalizes the three bespoke harnesses that did; coverage map in the test-suite portability guide |
+
+`dash-main-entry-point-never-invoked` was resolved 2026-08-25 and moved to
+[docs/archive/](../archive/dash-main-entry-point-never-invoked.md): both
+examples' entries renamed `-main` -> `main` and the snake tutorial corrected, so
+the documented entry point is now the one the compiler calls. Its residue is
+open as [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) --
+nothing exercises `examples/` and nothing diagnoses a build with no entry point,
+which is why it survived as long as it did.
 
 `rc-ref-conversion-and-weak-upgrade-leak` was resolved 2026-08-23 and moved to
 [docs/archive/](../archive/rc-ref-conversion-and-weak-upgrade-leak.md). Its

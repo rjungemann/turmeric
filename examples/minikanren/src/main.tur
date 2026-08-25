@@ -91,7 +91,7 @@
           (set! p (+ p 1)))))
     nil))
 
-(defn -main [] : int
+(defn main [] : int
   (do
     (println "miniKanren-style relational example")
     (println "----------------------------------")
