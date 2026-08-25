@@ -234,6 +234,26 @@ esac
 if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
 
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
+
+# Sanitizer findings from `tur` ITSELF (not from the programs it emits).
+#
+# The Debug build compiles the compiler -fsanitize=address,undefined WITHOUT
+# -fno-sanitize-recover, so a UBSan finding prints one line to stderr and
+# execution continues.  This suite compares stdout, so such a line has always
+# been invisible: `fat_captures_borrowed` was read uninitialized on 60 fixtures,
+# on every run, for as long as it existed, and nothing ever failed
+# (docs/archive/history/fat-captures-borrowed-read-uninitialized.md).
+#
+# Every phase below already redirects the compiler's stderr to actual.stderr, so
+# scanning it costs one grep per phase.  Findings are collected rather than
+# failed on: turning them into hard failures would have converted 60 silent
+# findings into 60 red fixtures at once, which is how a gate gets disabled
+# instead of fixed.  Set TUR_SANITIZER_GATE=1 to make a finding fail the run.
+# Workers append concurrently; each line is far under PIPE_BUF, and this suite
+# already relies on short appends being atomic for its progress output.
+SANITIZER_LOG="$RESULTS_DIR/sanitizer.log"
+: > "$SANITIZER_LOG"
+export SANITIZER_LOG
 trap 'rm -rf "$RESULTS_DIR" "$_TUR_EMPTY_XDG"' EXIT
 
 # A killed or interrupted run must NEVER print a success-looking summary.
@@ -324,6 +344,18 @@ matches_shard() {
         return 0
     fi
     [ $((ordinal % SHARD_TOTAL)) -eq "$SHARD_INDEX" ]
+}
+
+# Append any sanitizer findings in $1 (a phase's captured stderr) to the shared
+# log, tagged with the fixture and phase.  UBSan's format is
+# `<file>:<line>:<col>: runtime error: <what>`; `: runtime error:` is not
+# produced anywhere in src/ and no expected.diag contains it, so this does not
+# collide with a fixture's own diagnostics.
+note_sanitizer() {
+    local stderr_file="$1" name="$2" phase="$3"
+    [ -s "$stderr_file" ] || return 0
+    grep -- ": runtime error:" "$stderr_file" 2>/dev/null \
+        | sed "s|^|$name\t$phase\t|" >> "$SANITIZER_LOG" || true
 }
 
 write_result() {
@@ -606,6 +638,7 @@ run_happy() {
     if [ "$TUR_EMIT_C_MODE" = "always" ] || [ "$needs_codegen_check" -eq 1 ]; then
         _run_timed "$fixture_timeout" "$TUR" $fixture_flags emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
         _emit_rc=$?
+        note_sanitizer "$out_dir/actual.stderr" "$name" "emit-c"
         if [ $_emit_rc -ne 0 ]; then
             {
                 if [ $_emit_rc -eq 124 ]; then
@@ -631,6 +664,7 @@ run_happy() {
         # the suite indefinitely.  A timeout here is now a FAIL, not a hang.
         CC="$BUILD_CC" _run_timed "$fixture_timeout" "$TUR" $fixture_flags build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
         _build_rc=$?
+        note_sanitizer "$out_dir/actual.stderr" "$name" "build"
         if [ $_build_rc -ne 0 ]; then
             {
                 if [ $_build_rc -eq 124 ]; then
@@ -671,6 +705,7 @@ run_happy() {
                 > "$actual_stdout" 2> "$actual_stderr"
         fi
         rc=$?
+        note_sanitizer "$actual_stderr" "$name" "run"
     fi
 
     local expected_exit="0"
@@ -936,6 +971,7 @@ export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
 export TUR_TSAN _tur_timeout_bin TUR_MTIME
 export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
+export -f note_sanitizer
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors, PLUS the
@@ -1100,9 +1136,29 @@ if [ "$_INTERRUPTED" -ne 0 ] \
     exit 2
 fi
 
+# Sanitizer findings from the compiler itself.  Reported unconditionally so a
+# regression in this class is visible, but only fatal under TUR_SANITIZER_GATE=1
+# -- see the comment where SANITIZER_LOG is created.
+SAN_COUNT=0
+if [ -s "$SANITIZER_LOG" ]; then
+    SAN_COUNT=$(wc -l < "$SANITIZER_LOG" | tr -d ' ')
+    SAN_FIXTURES=$(cut -f1 "$SANITIZER_LOG" | sort -u | wc -l | tr -d ' ')
+    echo
+    echo "SANITIZER: $SAN_COUNT finding(s) from \`tur\` across $SAN_FIXTURES fixture(s)."
+    echo "  These are UBSan/ASan diagnostics from the COMPILER, not from emitted programs."
+    echo "  They do not fail the run (set TUR_SANITIZER_GATE=1 to make them fatal)."
+    cut -f2- "$SANITIZER_LOG" | sed 's/value [0-9][0-9]*/value N/' \
+        | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
+    echo "  full log: $SANITIZER_LOG"
+fi
+
 echo "summary: $PASS passed, $FAIL failed"
 if [ $FAIL -ne 0 ]; then
     for f in "${FAILED[@]}"; do echo "  - $f"; done
+    exit 1
+fi
+if [ "${TUR_SANITIZER_GATE:-0}" = "1" ] && [ "$SAN_COUNT" -ne 0 ]; then
+    echo "FAILED: $SAN_COUNT sanitizer finding(s) from the compiler (TUR_SANITIZER_GATE=1)."
     exit 1
 fi
 exit 0

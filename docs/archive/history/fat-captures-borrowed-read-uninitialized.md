@@ -85,9 +85,22 @@ this is filed as history rather than as a regression.
 
 ## Worth carrying forward
 
-**UBSan is non-aborting here, so the suite cannot see this class of bug.** A
+**UBSan is non-aborting here, so the suite could not see this class of bug.** A
 `_Bool` holding 190 is as loud as a diagnostic gets and it still cost nothing to
-ignore for as long as it existed. If a gate for this is ever wanted, the cheap
-version is grepping harness stderr for `runtime error:` rather than turning on
-`-fno-sanitize-recover`, which would turn 60 silent findings into 60 hard
-failures at once.
+ignore for as long as it existed.
+
+**That gap is now closed.** `tests/run.sh` scans each phase's captured stderr
+for `: runtime error:` and reports the findings after the summary; they do not
+fail the run unless `TUR_SANITIZER_GATE=1` is set. Non-fatal by default was
+deliberate -- arming it on discovery would have turned 60 silent findings into
+60 red fixtures at once, which is how a gate gets switched off rather than
+fixed. The tree is at zero findings, so CI can arm it whenever it wants.
+
+The gate was verified by putting this bug back: deleting the three initializers
+and re-running takes the count from 0 to 63 across 59 fixtures, and
+`TUR_SANITIZER_GATE=1` then exits 1. That check earned its keep -- the first
+version of the gate reported a clean tree *with the bug present*, because
+`note_sanitizer` was not in `run.sh`'s `export -f` list and so did not exist
+inside the xargs workers. A gate that has never been seen to fire is not a
+gate. Details in
+[test-suite-portability-guide.md](../../guides/test-suite-portability-guide.md#7b-ubsan-findings-in-the-compiler-are-collected-not-fatal).
