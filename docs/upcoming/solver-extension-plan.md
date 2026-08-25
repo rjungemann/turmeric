@@ -905,6 +905,17 @@ Original specification follows.
 
 ### SX3 -- incremental EUF (S1i)
 
+**A second reason to want this, measured 2026-08-25.** `no_cube_unsat` calls
+`euf_new` and `la_new` per cube, up to 64 cubes per obligation, all into the
+unit arena and never reclaimed -- ~267 KB of theory state per compile on a
+generated 400-obligation file, and ~613 KB on the heaviest in-tree refinement
+fixture. Replacing the rebuild with mark/undo over one state deletes most of
+that as a side effect. It is not a reason to start SX3 on its own (the number is
+a flat constant, not a growth curve), but it is a real second payoff once the
+phase is taken for its cost argument. A per-entry arena was measured as the
+alternative way to reclaim it and came back NO --
+[per-entry-arena-gate.md](../archive/history/per-entry-arena-gate.md).
+
 - **Do:** extend the `euf_*` seam with `euf_mark` / `euf_undo_to`, backed by
   `src/compiler/trail_c.h` (the C sibling of SX1, same stamp discipline).
   Replace the per-cube `euf_new` in `refine_s1_decide` and `no_cube_unsat` with

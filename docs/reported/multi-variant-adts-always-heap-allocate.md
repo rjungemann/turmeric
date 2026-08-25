@@ -139,6 +139,17 @@ a per-query arena is one reset at a call site that already exists, not an
 analysis. Generalising to arbitrary user `defdata` is a separate and much larger
 question that nothing here answers.
 
+**One arena idea has been measured and rejected**, so it does not get proposed
+again: a *compiler-internal* per-entry arena, resetting once per discharged
+refinement obligation. It would cap a constant rather than change a growth
+curve -- the only part of the solver's allocation that grows with obligation
+count is VC construction, which the compiler retains on purpose, while the
+resettable theory state is flat at ~267 KB whether a file has 25 obligations or
+400. Numbers and method in
+[../archive/history/per-entry-arena-gate.md](../archive/history/per-entry-arena-gate.md).
+That result is about the compiler's own arena and says nothing about row G,
+which is a different mechanism in the emitted program.
+
 Three things follow, and the first corrects this report's original advice:
 
 1. **By-value is not the standalone win it was billed as.** It is 1.8x, not
