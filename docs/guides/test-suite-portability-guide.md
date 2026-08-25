@@ -344,7 +344,11 @@ SANITIZER: 63 finding(s) from `tur` across 59 fixture(s).
 rather than timid: arming it on discovery would have turned 60 silent findings
 into 60 red fixtures in one step, which is how a gate gets switched off instead
 of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run, which is the
-setting to use in CI once the count is at zero -- as it is now.
+setting to use in CI once the count is at zero -- as it is on Linux now.
+
+**Nothing arms it yet, and it is not a pure flag flip**: the zero was measured
+on one platform, and UBSan findings vary by toolchain. Tracked in
+[sanitizer-gate-not-armed-in-ci](../reported/sanitizer-gate-not-armed-in-ci.md).
 
 Two things to know if you touch this:
 
