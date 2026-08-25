@@ -91,6 +91,54 @@ discard), each timed in **its own process**, best of three:
 Absolute numbers are from a simplified C model of the same shapes, so they run
 faster than the real compiler's 183 ns/op; the **ratios** are what transfer.
 
+> **Re-measured 2026-08-25, and two of these rows do not hold.** The harness
+> that produced the table above was never committed -- `.gitignore`'s blanket
+> `*.c` swallowed `benchmarks/adt-alloc/ceiling.c`, so the commit that published
+> these numbers landed with only its README and nobody could re-run them. It has
+> been reconstructed (and the `.gitignore` gap fixed). Full results in
+> [benchmarks/adt-alloc/RESULTS.md](../../benchmarks/adt-alloc/RESULTS.md).
+>
+> **B reproduces** at 2.49x, so the slab decision below stands -- and the slab
+> looks *worse* on re-measurement (E is 1.72x, not 2.4x), so it stands more
+> firmly. **D does not reproduce**: 4.50x, not 18x. And two new rows change what
+> the whole plan is for -- see the section immediately below.
+
+## The reclamation mechanism dominates, and the ABI change is secondary
+
+Two representations the original table did not have, measured 2026-08-25:
+
+| representation | vs today |
+|---|---:|
+| **G -- boxed, arena-reclaimed** (no ABI change at all) | **7.64x** |
+| **F -- by value AND arena-reclaimed** | **10.95x** |
+
+Row G is region reclamation over **today's boxed layout**. No by-value lowering,
+no `adt_is_flat_product` work, none of SR1 or SR4 -- and it reaches 7.64x, about
+**70% of the best number on the board**. Everything the sum-representation plan
+proposes is the increment from 7.64x to 10.95x.
+
+The same relationship shows up across the malloc rows: by-value is worth +81%
+when allocation is expensive (B 2.49x -> D 4.50x) and +43% when it is cheap
+(G 7.64x -> F 10.95x). By-value removes one of the two allocations per binding,
+so **the cheaper allocation gets, the less it is worth**. Fixing the allocator
+shrinks the prize the ABI change is competing for.
+
+This also explains the 18x that would not reproduce. 18x implies ~5 ns/op while
+still doing one `malloc` per binding, which is not reachable -- a malloc/free
+pair costs more than that on its own. The number the original was reaching for
+is row F, which reclaims by resetting a region rather than freeing per node. So
+**"18x needs both" is not supported**: what the transformative number needs is a
+region, and the ABI change is a multiplier on top of it.
+
+**The caveat that keeps this honest.** An arena needs a region whose end is
+known, and that -- not the bump pointer -- is the hard part; inferring one in
+general is region inference. So F and G are the ceiling *for workloads with a
+natural region*. The workload this report is about is exactly such a workload:
+the solver's `logic.tur` substitution is built per query and discarded whole, so
+a per-query arena is one reset at a call site that already exists, not an
+analysis. Generalising to arbitrary user `defdata` is a separate and much larger
+question that nothing here answers.
+
 Three things follow, and the first corrects this report's original advice:
 
 1. **By-value is not the standalone win it was billed as.** It is 1.8x, not

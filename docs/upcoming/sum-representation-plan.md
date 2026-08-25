@@ -121,11 +121,34 @@ be answered. The slab allocator is no longer one of the candidates -- it was
 **shelved** on 2026-08-25; see the
 [decision record](../reported/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25).
 
-The measured ratios from `benchmarks/adt-alloc/ceiling.c`, for calibration:
-by-value alone **1.8x**, reclamation alone **2.6x**, both **18x**, slab
-**2.1x** (measured in-compiler). Note those were all measured on `logic.tur`'s
-shapes, which are entirely recursive -- so they price SR4, **not** SR1. There
-is currently no measurement of SR1's win, which is what SR0(a) is for.
+The measured ratios from `benchmarks/adt-alloc/ceiling.c`, for calibration.
+**Re-measured 2026-08-25** after the harness was found missing from the tree and
+reconstructed ([RESULTS.md](../../benchmarks/adt-alloc/RESULTS.md)):
+
+| | vs today |
+|---|---:|
+| by-value alone (C) | 1.41x |
+| reclamation alone, per-node free (B) | 2.49x |
+| both, per-node free (D) | 4.50x |
+| **reclamation alone, arena (G) -- no ABI change** | **7.64x** |
+| **both, arena (F)** | **10.95x** |
+| slab (E) | 1.72x |
+
+Note those were all measured on `logic.tur`'s shapes, which are entirely
+recursive -- so they price SR4, **not** SR1. There is still no measurement of
+SR1's win, which is what SR0(a) is for.
+
+**The ordering rationale in this plan does not survive the two new rows.** Row G
+is region reclamation over today's boxed layout -- none of SR1, none of SR4, no
+ABI change -- and it reaches 7.64x, about 70% of the best number on the board.
+The whole of the sum-representation work is the increment from 7.64x to 10.95x.
+And by-value is worth proportionally *less* the cheaper allocation gets (+81%
+over per-node free, +43% over an arena), so doing reclamation first actively
+shrinks what SR1/SR4 are competing for.
+
+The previously published "18x needs both" is withdrawn: 18x implied ~5 ns/op
+with a malloc still in the loop, which is not reachable. What the transformative
+number needs is a *region*, not the ABI change.
 
 ## 3. Phases
 
@@ -264,20 +287,31 @@ volume is there.
 The remaining 21 types, `Term` / `Subst` / `Stream` among them. The value
 travels by value; only the self-referential field stays a pointer. This is what
 `benchmarks/adt-alloc/ceiling.c`'s row C models (`VSubst` keeps `next` as a
-pointer), so **1.8x is this phase's number, not SR1's**.
+pointer), so **1.41x is this phase's number, not SR1's** (re-measured
+2026-08-25; it was published as 1.8x).
 
-**Gate:** the existing report's ordering stands -- reclamation first, because
-1.8x alone is not worth an ABI change of this size and 18x needs both.
+**Gate:** reclamation first -- and on the re-measured numbers that is no longer
+a sequencing preference but the substance of the whole thing.
 
-**The reclamation half is no longer blocked.** It was described here as blocked
-on the `rc/of` coupling that parked the slab allocator; that framing assumed
-reclamation meant the slab. It does not. The slab is
+**The reclamation half is no longer blocked**, and it is worth far more than
+this phase. It was described here as blocked on the `rc/of` coupling that parked
+the slab allocator; that framing assumed reclamation meant the slab. It does
+not. The slab is
 [shelved](../reported/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
--- it never addressed the footprint half of the problem, and row B (real
-reclamation) measures 2.6x against its 2.4x while staying flat as the heap
-grows. So reclamation here means drop glue or an arena over the boxed spine,
-and it is the **unblocked** half of SR4: no correctness blocker sits in front
-of it, and it is worth more than the by-value half it is gated ahead of.
+-- it never addressed the footprint half of the problem, and it re-measures at
+1.72x against real reclamation's 2.49x (per-node) or 7.64x (arena), while being
+the only proposed fix that still climbs with heap size.
+
+So reclamation here means drop glue or an arena over the boxed spine, no
+correctness blocker sits in front of it, and **an arena over today's layout
+reaches 7.64x with none of SR1 or SR4 done at all** -- roughly 70% of the best
+number measured. SR4 on top of it is the increment from 7.64x to 10.95x.
+
+**Which makes the honest recommendation for this phase: do the arena first and
+then re-ask whether SR4 is worth starting.** By-value is worth +81% when
+allocation is expensive and +43% when it is cheap, so the reclamation work
+shrinks SR4's own payoff. SR4 should be justified against the post-arena
+baseline, not against today's.
 
 ## 4. If only one phase gets built
 
