@@ -927,7 +927,7 @@ turned up a defect in the instrument that would have justified it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: slab 2.1x (measured in-compiler), by-value 1.8x, both 18x |
+| [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: reclamation 2.6x, by-value 1.8x, both 18x. The slab allocator (2.1x measured in-compiler) is **shelved** -- it needs a whole-program escape pass to be safe at all, and reclamation measures better without one |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan (O(n^2) in term count, free fix when SX3 rewrites that state); the congruence-closure fixpoint is a naive O(n^2) sweep |
@@ -959,7 +959,11 @@ condition in `emit_expr.c` (the pointer-adoption path was gated on
 `needs_drop_glue`), and both the leak and the redundant allocation went with it.
 Its predicted coupling to the slab allocator was then confirmed -- with the leak
 fixed and the slab on, ASan reports `attempting free on address which was not
-malloc()-ed`, so that blocker got worse, not better.
+malloc()-ed`, so that blocker got worse, not better. That is what led to the
+slab being **shelved** on 2026-08-25: fixing it needs a whole-program escape
+pass, which removes the "no ownership analysis" advantage that was its entire
+case over plain reclamation -- and reclamation measures better anyway. Decision
+record in the allocation report.
 
 Two of the remaining three were filed with claims that later measurement overturned, and both
 say so in place rather than having been quietly edited: an "8x degradation with

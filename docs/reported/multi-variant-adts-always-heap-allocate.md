@@ -118,13 +118,101 @@ Three things follow, and the first corrects this report's original advice:
    ADT def used as an `rc/of` payload and excluding those. The other half of the
    objection did resolve --
    [leak checking now exists](compiled-fixtures-are-not-leak-checked.md) via
-   `tests/run-leak-check.sh`, so a bad free is catchable. It stays behind
-   `TUR_ADT_SLAB=1` as a measurement seam.
+   `tests/run-leak-check.sh`, so a bad free is catchable.
+
+   **The slab is now SHELVED** -- see the decision record below. Row E is no
+   longer "the cheap one", and row B is the better target.
 3. **The transformative number needs both** (18x). That is the case for doing
    the by-value ABI work -- but only *after* the allocator, knowing it buys
    1.8x on its own, and knowing (see **Scope**) that the 1.8x requires the
    field-level-boxing variant for recursive sums. The easier two thirds of the
    population -- non-recursive sums -- buys nothing on this workload.
+
+   With the slab shelved, "the allocator" in that ordering means **row B
+   (reclamation)**, not row E.
+
+## Decision -- the slab allocator is shelved (2026-08-25)
+
+The seam stays in the tree, default off, and **nobody should build the
+whole-program escape pass that would let it be turned on.** The decision is
+recorded here rather than left implicit, because "ASan aborts, so fix the
+abort" is the obvious next move and it is the wrong one.
+
+Four reasons, in descending order of weight.
+
+**1. It does not fix the problem this report identifies.** After the withdrawn
+claim was corrected, this report's own framing is that the cost is a
+*memory-footprint* problem, not a time problem at these scales. A slab makes
+allocation faster and frees nothing -- slabs are 256 KB chunks released never,
+which is the point of the design. It addresses the half that the measurement
+says is not the half that matters. Rows B and D fix footprint; row E does not.
+
+**2. Its one differentiator is gone.** The entire case for row E over row B was
+"2.4x with no ownership analysis, no drop glue, no ABI change". Since a
+`ctor_*` cannot know whether its result reaches `rc/of`, turning it on now
+needs a whole-program pass over which ADT defs flow into an `rc/of` payload.
+That is an escape analysis. Once it is on the table, "no ownership analysis" is
+false and row E is competing with row B on level ground.
+
+**3. On level ground it loses.** From the table above:
+
+   | representation | 1k | 16k | 64k | vs today |
+   |---|---:|---:|---:|---:|
+   | B -- boxed, **freed** | 34.6 | 36.9 | 36.7 | **2.6x** |
+   | E -- boxed, leaked, **slab** | 33.5 | 40.7 | 40.6 | 2.4x |
+
+   Reclamation is the faster of the two *and* is nearly flat as the heap grows
+   (+6% from 1k to 64k) where the slab degrades (+21%). The slab was always the
+   cheap approximation of reclamation; it is no longer cheap, and it was never
+   as good.
+
+**Re-confirmed first-hand on 2026-08-25**, so the decision does not rest on a
+secondhand note. `(rc/of (PA 7))` for a two-variant `:copy` ADT, built with
+`TUR_ADT_SLAB=1` and compiled `-fsanitize=address`:
+
+```
+ERROR: AddressSanitizer: attempting free on address which was not malloc()-ed
+0x... is located 16 bytes inside of 262160-byte region
+```
+
+The region size is the tell: 262160 = the slab's 262144-byte `buf` plus its
+16-byte `{next, off}` header, so the pointer handed to `free()` is provably
+slab memory rather than some unrelated bad free.
+
+**4. It is a bet against the direction of the codebase.** The slab is sound
+only over boxes that are never freed. Every ownership fix shrinks the
+population it is legal on -- the `rc/of` fix is exactly that, and it is what
+broke it. This is not a blocker that gets fixed once; it recurs on every
+future reclamation improvement, and each recurrence is another silent
+`free()`-of-slab-memory waiting for someone to notice.
+
+**And there is no constituency.** SR0(a)'s census found real code barely
+constructs sums at all -- 20 `defdata` across 727 spice files against 244
+`defopaque` and 122 `defstruct` -- and `stdlib/logic.tur`, the workload the
+2.1x was measured on, is exercised by nothing but a synthetic benchmark.
+`examples/minikanren`, the one program that ought to exercise it, constructs
+nothing and does not import the module
+([report](minikanren-example-implements-no-minikanren.md)).
+
+### What stays, and what to do instead
+
+- **The seam stays.** Three call sites plus a preamble, byte-identical codegen
+  when off, so the carrying cost is ~zero and it keeps the 2.1x measurement
+  reproducible. It is a museum piece, not a roadmap item.
+- **Do not build the escape pass.** It is the most expensive option, it
+  unlocks the weaker representation, and the analysis it requires is most of
+  what reclamation needs anyway -- so it pays for the hard part and spends it
+  on the smaller payoff.
+- **Reclamation (row B) is the unblocked half.** 2.6x, fixes footprint rather
+  than only speed, and has no correctness blocker in front of it. The ordering
+  in [the SR plan](../upcoming/sum-representation-plan.md) already says
+  reclamation first; this decision just removes the slab as a candidate for
+  what "reclamation" means.
+
+**What would reopen this.** A real workload -- not a benchmark -- that
+constructs multi-variant ADTs hot enough to care, *and* a reason the same
+workload cannot take row B instead. Both halves are required; the first alone
+is what the census went looking for and did not find.
 
 ## Scope -- who actually pays this, and what "by value" has to mean
 

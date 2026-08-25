@@ -264,7 +264,9 @@ extern bool g_dump_cps_mono;
  * exactly the case the experiment gate exists for. */
 /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
  * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
- * not a shipping default. */
+ * not a shipping default.  SHELVED 2026-08-25 -- kept reproducible, not
+ * headed anywhere; the decision record in that report says why, and why
+ * reclamation rather than a slab is the thing to build. */
 extern bool g_adt_slab;
 /* TUR_SR1_SUM_BYVALUE=1: flow a non-recursive, non-parametric, non-heap
  * MULTI-VARIANT sum by value (tag + union aggregate) instead of the int64

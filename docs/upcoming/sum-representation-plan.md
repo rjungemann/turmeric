@@ -116,8 +116,10 @@ therefore closes both halves of that report for 66 of 87 types without any
 ownership analysis, drop glue, or slab allocator.
 
 The 21 recursive types still box their spine and still leak. They need SR4,
-and SR4 is where the reclamation question (arena / drop glue / the parked slab
-allocator) actually has to be answered.
+and SR4 is where the reclamation question (arena / drop glue) actually has to
+be answered. The slab allocator is no longer one of the candidates -- it was
+**shelved** on 2026-08-25; see the
+[decision record](../reported/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25).
 
 The measured ratios from `benchmarks/adt-alloc/ceiling.c`, for calibration:
 by-value alone **1.8x**, reclamation alone **2.6x**, both **18x**, slab
@@ -265,9 +267,17 @@ travels by value; only the self-referential field stays a pointer. This is what
 pointer), so **1.8x is this phase's number, not SR1's**.
 
 **Gate:** the existing report's ordering stands -- reclamation first, because
-1.8x alone is not worth an ABI change of this size and 18x needs both. The
-reclamation half is still blocked on the `rc/of` coupling that parked the slab
-allocator.
+1.8x alone is not worth an ABI change of this size and 18x needs both.
+
+**The reclamation half is no longer blocked.** It was described here as blocked
+on the `rc/of` coupling that parked the slab allocator; that framing assumed
+reclamation meant the slab. It does not. The slab is
+[shelved](../reported/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
+-- it never addressed the footprint half of the problem, and row B (real
+reclamation) measures 2.6x against its 2.4x while staying flat as the heap
+grows. So reclamation here means drop glue or an arena over the boxed spine,
+and it is the **unblocked** half of SR4: no correctness blocker sits in front
+of it, and it is worth more than the by-value half it is gated ahead of.
 
 ## 4. If only one phase gets built
 

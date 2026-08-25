@@ -9217,7 +9217,8 @@ int main(int argc, char **argv) {
     /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
      * Env-only measurement seam (see
      * docs/reported/multi-variant-adts-always-heap-allocate.md), deliberately
-     * not a CLI flag -- it is not a shipping feature yet. */
+     * not a CLI flag -- and SHELVED 2026-08-25, so it is not a shipping
+     * feature and is not on its way to becoming one. */
     {
         const char *__slab = getenv("TUR_ADT_SLAB");
         if (__slab && __slab[0] == '1') g_adt_slab = true;

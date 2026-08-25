@@ -14068,6 +14068,19 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
      * tests/run-leak-check.sh plus a requires.leak-check marker
      * (docs/reported/compiled-fixtures-are-not-leak-checked.md).
      *
+     * SHELVED 2026-08-25, and the escape pass above should NOT be built.  The
+     * slab's whole case was "2.4x with no ownership analysis"; needing a
+     * whole-program pass removes that, and on level ground plain reclamation
+     * measures BETTER (2.6x, and flat as the heap grows where the slab
+     * degrades).  It also never addressed the footprint half of the problem --
+     * slabs are never released -- which is the half the report identifies as
+     * the real one.  Decision record and the numbers:
+     * docs/reported/multi-variant-adts-always-heap-allocate.md.
+     *
+     * The seam stays because it costs nothing when off (codegen is
+     * byte-identical) and keeps the 2.1x measurement reproducible.  It is a
+     * museum piece, not a roadmap item.
+     *
      * Off unless TUR_ADT_SLAB=1 was set at COMPILE time -- a measurement seam,
      * not a shipping default.  Slabs are never released; that is the point.
      */
