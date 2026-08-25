@@ -480,13 +480,29 @@ defn mplus-i [xs : Stream ys : Stream] : Stream
     StCons(v mplus-i(ys rest))
 ```
 
-Then define `disjoined-i` analogously and use it in place of `disjoined`
-when you need complete enumeration of infinite search spaces.
+Then define `disjoined-i` analogously and use it in place of `disjoined` when
+you want solutions from both branches to alternate.
+
+> **This does NOT give you infinite search spaces, and an earlier version of
+> this guide said it did.** `Stream` is a strict `defdata` with no immature /
+> thunk constructor, so `StCons`'s tail is evaluated before the cell exists and
+> `mplus-i` changes the ORDER of a finite enumeration and nothing else. No
+> infinite `Stream` value can be built, `run-logic 1` costs the whole search
+> rather than one solution, and a self-recursive relation SIGSEGVs while the
+> goal is being constructed (there is no `Zzz`/delay form). Interleaving is only
+> half of miniKanren's `mplus`; the missing half is the half that makes infinite
+> enumeration work. Tracked in
+> [docs/reported/logic-streams-are-strict.md](../reported/logic-streams-are-strict.md).
 
 ### Tabling / memoisation
 
-For recursive relations that diverge under depth-first search, add a memo
-table keyed on `(goal-id, substitution)`:
+For relations that revisit the same subgoal, add a memo table keyed on
+`(goal-id, substitution)`:
+
+> Note this section previously opened "for recursive relations that diverge
+> under depth-first search". Such relations do not reach the search at all
+> today -- they diverge while the goal is being built, and crash. See the note
+> under "Interleaving search" above.
 
 ```turmeric
 ;; memo-table: map from (goal-name x subs-hash) -> result-list

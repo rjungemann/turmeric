@@ -9634,6 +9634,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         /* Create Closure struct */
         struct Closure *closure = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
         closure->fn = fd;
+        closure->fat_captures_borrowed = false;   /* arena mem is not zeroed */
         /* Copy captures into arena memory so it shares the closure's lifetime. */
         Binding **arena_captures = (Binding **)arena_alloc(e->arena, n_captures * sizeof(Binding *));
         memcpy(arena_captures, captures, n_captures * sizeof(Binding *));

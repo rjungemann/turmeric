@@ -933,7 +933,14 @@ turned up a defect in the instrument that would have justified it.
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan (O(n^2) in term count, free fix when SX3 rewrites that state); the congruence-closure fixpoint is a naive O(n^2) sweep |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
 | [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
+| [logic-streams-are-strict](logic-streams-are-strict.md) | medium | `Stream` has no thunk constructor and there is no delay form, so `run-logic 1` costs the whole search (16x solutions -> 21x time), a self-recursive relation SIGSEGVs during goal construction, and the guide's claim that `mplus-i` enables "complete enumeration of infinite search spaces" is false. Also inflates the ADT-allocation numbers, which are partly eager enumeration |
 | [compiled-fixtures-are-not-leak-checked](compiled-fixtures-are-not-leak-checked.md) | low-medium | ADDRESSED. The default suite does not leak-check EMITTED programs -- only `tur` itself. `tests/run-leak-check.sh` now generalizes the three bespoke harnesses that did; coverage map in the test-suite portability guide |
+
+`fat_captures_borrowed` was found being read out of uninitialized arena memory
+and fixed the same day; 60 in-tree fixtures had been tripping UBSan on every
+suite run without anything failing, because UBSan here prints and continues.
+Paper trail:
+[docs/archive/history/](../archive/history/fat-captures-borrowed-read-uninitialized.md).
 
 `dash-main-entry-point-never-invoked` was resolved 2026-08-25 and moved to
 [docs/archive/](../archive/dash-main-entry-point-never-invoked.md): both
