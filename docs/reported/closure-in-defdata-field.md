@@ -65,7 +65,8 @@ Prints `7`. This is the route `stdlib/logic.tur` already takes for `Goal`
 (`(defopaque Goal [A] :ptr<void>)` -- carrier is the fat-closure pointer), and
 it is the only working way to put a closure in an ADT field today.
 
-It still emits the same int-conversion warning at the ctor call.
+It still emits the same int-conversion warning at the ctor call -- **and that
+warning is a hard blocker, not cosmetic.** See below.
 
 ## The warning is closure-specific
 
@@ -77,16 +78,39 @@ A plain pointer field with an ordinary pointer value is clean:
 ;; (PSome (mkptr) 3) -- no warnings, prints 3
 ```
 
-Zero warnings. So the ordinary pointer path does insert the cast that the
-closure path omits: `ctor_*` takes every field as `int64_t` (the ADT carrier
-convention), and a closure value reaches it without the conversion an ordinary
-pointer gets. Benign on LP64, not benign under `-Werror` or on a target where a
-function pointer does not fit an `int64_t`.
+Zero warnings -- and note `ctor_PSome(void * _0, int64_t _1)`: a raw pointer
+field gets a **pointer-typed parameter**, so no cast is needed at all.
+
+**Corrected root cause.** An earlier revision of this report said `ctor_*`
+takes every field as `int64_t` and the closure path is missing a cast. The
+second half is right, the first is not: field parameters are typed per field,
+and `int64_t` for an opaque field is *deliberate* -- an opaque "stays the int64
+carrier" by design (`types.h:353`). So the defect is only the missing
+conversion at the call, on the closure path.
+
+And it is more precise than "missing cast": `emit_expr.c:~6280` **already
+implements** it (`slot_is_i64 && arg_is_ptr` -> `(int64_t)(intptr_t)(...)`).
+It does not fire for a closure because it can only determine the argument's C
+type in three cases -- an already-cast string, a `(T *)(intptr_t)` string, or an
+`EX_VAR` whose spec type resolves. A closure argument is none of those; it
+emits as a compiler temp (`void *__t82 = __t80;`) whose type the logic cannot
+see. **The fix is to widen that type determination, not to add a new cast** --
+and the narrowness looks deliberate (a comment there warns that a blanket cast
+would paper over a mis-selected monomorph), so it wants a snapshot diff.
+
+**Corrected severity: this BLOCKS work, it is not cosmetic.** `tests/run.sh`
+gates on emitted-C pointer/integer warnings. The lazy-stream fix for
+[logic-streams-are-strict](logic-streams-are-strict.md) is written, works, and
+turns **9 shipped fixtures red** on this warning alone -- so it is reverted and
+parked in [../upcoming/lazy-streams-plan.md](../upcoming/lazy-streams-plan.md)
+until this is fixed. Any future ADT that wants to hold a callback hits the same
+wall.
 
 ## Fix directions
 
-1. **Emit the cast on the closure path**, matching what ordinary pointer values
-   already get. Fixes the warning in cases 2 and 3; does not fix case 1.
+1. **Widen the argument-type determination in `emit_expr.c`** so the existing
+   carrier-cast fires for closure-valued ctor arguments. Fixes the warning in
+   cases 2 and 3, and unblocks the lazy-stream work; does not fix case 1.
 2. **Make `:fn` fields work, or reject them.** The call-through in case 1 has to
    dispatch a fat closure rather than assume a bare function pointer -- the same
    dispatch `apply-goal` performs. If that is not wanted, a `:fn` field should be

@@ -6,8 +6,14 @@ here it cannot, because the stream type has no thunk and the goal combinators
 have no delay. Three shipped docs describe behaviour the implementation cannot
 have.
 
-**Status:** OPEN. Root-caused with repros below, not fixed -- the fix is a
-representation change to `Stream` plus a delay form, not a patch.
+**Status:** OPEN, but the fix is **written and verified** -- it is blocked on a
+compiler bug, not on design. See
+[../upcoming/lazy-streams-plan.md](../upcoming/lazy-streams-plan.md) and the
+patch beside it: `StInc` + `st-pull` + a swapping `st-append` + a `zzz` macro
+makes `run-logic 1` over an infinite relation return in 14 ms where it
+previously SIGSEGVed. It turns 9 shipped fixtures red on an emitted-C warning
+([closure-in-defdata-field](closure-in-defdata-field.md)), so it is reverted
+until that is fixed.
 
 Found while asking whether `logic.tur` has a region boundary an arena could
 reclaim at ([the arena thread](../archive/history/per-entry-arena-gate.md)).
