@@ -585,7 +585,7 @@ suite 2687 passed, 0 failed.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
+| [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree. PARTIALLY CONTAINED 2026-08-26: `extern-c` is now refused under `tur jit` on aarch64 (TUR-E0711), joining the interpreter's existing `call-ptr`/callback refusal; an HFA declared inside an inline-C fence is still silently miscalled, and the real fix (HFA support in MIR's aarch64 backend) is untouched |
 | [jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md) | low | `call-ptr` under `--interpret` refuses a record with a parametric-monomorph field (`(BoxW int32)`) that the compiled path inlines by value: a compiled/interpreted divergence, refused cleanly. Its diagnostic ("no by-value C member type") is inaccurate in every case it can fire |
 
 The `mir-aarch64` row was indexed 2026-08-21. It had **no row at all** since it

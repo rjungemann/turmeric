@@ -215,6 +215,17 @@ typedef enum DiagCode {
      * identity), so `(+ (compute) (cloneable-shift ...))` printed a wrong number.
      * Rejected at codegen instead, mirroring the serial TUR-E0706 fix. */
     TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+    /* mir-aarch64-fp-aggregate-abi: an `extern-c` slot names a record that
+     * AAPCS64 classifies as an HFA (all members the same FP type, 1-4 of
+     * them), and this compilation targets the c2mir JIT backend on aarch64.
+     * MIR's aarch64 backend has no HFA class: it passes every aggregate <= 16
+     * bytes in x0..x7, while a natively compiled callee reads v0..v7.  The
+     * value the callee sees is whatever was left in the SIMD registers, so
+     * the failure is data-dependent -- some call sites accidentally produce
+     * the right answer.  Refused rather than mis-called, mirroring the
+     * interpreter's thunk-side refusal (tur_jit_ffi_struct_supported).
+     * The native `tur run` / `tur build` path is correct and unaffected. */
+    TUR_E0711_JIT_FP_AGGREGATE_ABI,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

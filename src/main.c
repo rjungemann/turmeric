@@ -3676,6 +3676,12 @@ static int cmd_jit(int argc, char **argv) {
 
     refine_discharge_reset();
     g_emit_for_link = true;
+    /* mir-aarch64-fp-aggregate-abi: everything below this point is compiled by
+     * c2mir, not cc, so elaboration must refuse the shapes MIR cannot pass
+     * correctly across the native boundary instead of emitting a silent
+     * miscall.  Today that is exactly one shape, and only on aarch64: an HFA
+     * in an extern-c signature (TUR-E0711). */
+    g_target_c2mir = true;
     Buf csrc;
     buf_init(&csrc);
     struct timespec _tj0, _tj1;

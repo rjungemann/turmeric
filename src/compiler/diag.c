@@ -227,6 +227,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH:   return "TUR-E0708";
         case TUR_E0709_RETURN_TYPE_MISMATCH:             return "TUR-E0709";
         case TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE: return "TUR-E0710";
+        case TUR_E0711_JIT_FP_AGGREGATE_ABI:             return "TUR-E0711";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -392,6 +393,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0708") == 0) return TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH;
     if (strcmp(s, "TUR-E0709") == 0) return TUR_E0709_RETURN_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0710") == 0) return TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE;
+    if (strcmp(s, "TUR-E0711") == 0) return TUR_E0711_JIT_FP_AGGREGATE_ABI;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -2351,6 +2353,50 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: restructure the context into a supported shape, or move the\n"
       "non-capturable work outside the cloneable-reset boundary.\n",
+    },
+    /* mir-aarch64-fp-aggregate-abi */
+    { TUR_E0711_JIT_FP_AGGREGATE_ABI,
+      "TUR-E0711: floating-point aggregate cannot cross the JIT boundary on\n"
+      "aarch64\n"
+      "\n"
+      "AAPCS64 classifies a struct whose members are all the same\n"
+      "floating-point type, 1 to 4 of them, as an HFA (Homogeneous\n"
+      "Floating-point Aggregate) and passes it in the SIMD registers v0..v7,\n"
+      "one member per register.  MIR's aarch64 backend has no HFA concept: it\n"
+      "passes every aggregate of 16 bytes or less in the general-purpose\n"
+      "registers x0..x7.\n"
+      "\n"
+      "Within a single c2mir compilation that is self-consistent, so it is\n"
+      "invisible.  It goes wrong the moment c2mir-compiled code calls a\n"
+      "natively compiled function: the caller writes the members into x0,x1\n"
+      "and the callee reads them from v0,v1.  The callee sees whatever was\n"
+      "left in the SIMD registers, so the failure is DATA-DEPENDENT -- some\n"
+      "call sites accidentally produce the right answer, which is worse than a\n"
+      "consistent crash.\n"
+      "\n"
+      "Example triggering this error:\n"
+      "  (defstruct Vec2 [x : float y : float])   ; two doubles: an HFA\n"
+      "  (extern-c length [v : Vec2] : float)\n"
+      "  ;; tur jit  -> TUR-E0711\n"
+      "  ;; tur run  -> fine (cc compiles the caller; both sides agree)\n"
+      "\n"
+      "This is refused rather than mis-called.  The interpreter's thunk engine\n"
+      "already refuses the same shape for call-ptr and callbacks; this is the\n"
+      "compiled JIT path being made to agree.\n"
+      "\n"
+      "Fixes, in order of preference:\n"
+      "  - Build with the native backend: `tur run` / `tur build` use cc,\n"
+      "    which implements AAPCS64 correctly.  Nothing is wrong with your\n"
+      "    code -- only with running it through the JIT on this architecture.\n"
+      "  - Pass the aggregate by pointer instead of by value (`:ptr<Vec2>`),\n"
+      "    which rides a general-purpose register on both sides.\n"
+      "  - Mix the member types (e.g. one float and one int), which makes it\n"
+      "    an INTEGER-class aggregate rather than an HFA and passes correctly.\n"
+      "\n"
+      "x86-64 is unaffected: MIR's SysV path classifies eightbytes properly,\n"
+      "and was verified clean against cc-compiled callees for every class.\n"
+      "The real fix is HFA support in MIR's aarch64 backend; see\n"
+      "docs/reported/mir-aarch64-fp-aggregate-abi.md.\n",
     },
     /* float-register-class-returns */
     { TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,

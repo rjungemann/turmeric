@@ -1325,6 +1325,73 @@ else
     echo "SKIP jit-ffi-call-ptr-hfa-refused (needs a JIT build on aarch64)"
 fi
 
+# jit-ffi-extern-c-hfa-refused-compiled: the same refusal on the COMPILED side.
+# The test above covers the interpreter's thunk engine; this covers `tur jit`,
+# where the whole program goes through c2mir and an `extern-c` HFA silently
+# miscalled with no diagnostic at all -- `tur run` printed 152.25 and `tur jit`
+# printed 226.5 for the same source.  See TUR-E0711 and
+# docs/reported/mir-aarch64-fp-aggregate-abi.md.  No helper library is needed:
+# the refusal is at elaboration, before anything links.
+if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ]; then
+    cat > "$TMP_FFI" <<'TURFFI'
+(defstruct Vec2 [x : float y : float])
+(extern-c __sbv_vec2 [v : Vec2] : float)
+(defn main [] : int (println (__sbv_vec2 (Vec2 1.5 2.25))) 0)
+TURFFI
+    out=$("$TUR" jit "$TMP_FFI" 2>&1)
+    if ! grep -q "TUR-E0711" <<< "$out"; then
+        fail "jit-ffi-extern-c-hfa-refused-compiled" \
+             "expected TUR-E0711 for an HFA extern-c under \`tur jit\`, got: $out"
+    else
+        pass "jit-ffi-extern-c-hfa-refused-compiled"
+    fi
+else
+    echo "SKIP jit-ffi-extern-c-hfa-refused-compiled (needs a JIT build on aarch64)"
+fi
+
+# jit-ffi-extern-c-nonhfa-still-jits: the other half of the refusal -- proof it
+# is narrow.  A mixed-member aggregate is INTEGER-class under AAPCS64, not an
+# HFA, so MIR passes it in x0..x7 exactly as a natively compiled callee expects.
+# It must keep working end-to-end through `tur jit`.  Without this, tightening
+# the HFA predicate into "any aggregate containing a float" would still look
+# green, and would refuse a large amount of perfectly good code.
+if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _mix_dir="$(mktemp -d -t tur-ffi-mix-XXXXXX)"
+    cat > "$_mix_dir/helper.c" <<'EOF'
+typedef struct { double a; long long b; } MixT;
+double __sbv_mix(MixT v) { return v.a * 100.0 + (double)v.b; }
+EOF
+    if cc -shared -fPIC -Wl,-install_name,"$_mix_dir/libmix.$SOEXT" \
+          -o "$_mix_dir/libmix.$SOEXT" "$_mix_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct MixT [a : float b : int])
+(extern-c __sbv_mix [v : MixT] : float)
+(defn linkme [] : int
+  \`\`\`c
+  /* __tur_autolink__: -L$_mix_dir -lmix */
+  return 0;
+  \`\`\`)
+(defn main [] : int
+  (let [_ (linkme)
+        v (MixT 1.5 2)]
+    (println (__sbv_mix v))
+    0))
+TURFFI
+        out=$("$TUR" jit "$TMP_FFI" 2>/dev/null | tr -d '[:space:]')
+        if [ "$out" != "152" ]; then
+            fail "jit-ffi-extern-c-nonhfa-still-jits" \
+                 "expected 152 from an INTEGER-class aggregate under \`tur jit\`, got: $out"
+        else
+            pass "jit-ffi-extern-c-nonhfa-still-jits"
+        fi
+    else
+        echo "SKIP jit-ffi-extern-c-nonhfa-still-jits (helper library did not build)"
+    fi
+    rm -rf "$_mix_dir"
+else
+    echo "SKIP jit-ffi-extern-c-nonhfa-still-jits (needs a JIT build on aarch64 with cc)"
+fi
+
 # jit-ffi-callback-interp: F5 in the direction only the interpreter exercises
 # -- a c2mir-generated callback with the context address baked in as a
 # literal, calling back through tur_ffi_cb_dispatch into a Turmeric function.

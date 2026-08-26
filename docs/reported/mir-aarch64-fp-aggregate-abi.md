@@ -146,6 +146,58 @@ mirrored: for an inbound HFA the *natively compiled caller* writes
 provider refuses an HFA in a callback signature exactly as it does in a
 call signature.
 
+**The compiled `tur jit` path now refuses too, 2026-08-26 (TUR-E0711).**
+Everything above was about the *interpreter's* thunk engine. The whole-program
+`tur jit` path had no check at all, so the "not only a jit-ffi problem"
+paragraph below was live on the most ordinary spelling there is -- an
+`extern-c` with a record parameter. Measured on arm64 macOS before the fix:
+
+```turmeric
+(defstruct D2 [a : float b : float])
+(extern-c __sbv_d2 [v : D2] : float)     ;; double __sbv_d2(D2)
+```
+
+`tur run` printed `152.25`; `tur jit` printed `226.5`. No diagnostic, exit 0.
+
+`extern-c` is now refused at elaboration when the slot is an HFA, the host is
+aarch64, and c2mir is the backend (`g_target_c2mir`, set by `cmd_jit` -- so
+`--engine jit` and a manifest `:engine "jit"` are covered too, since both
+re-dispatch through it). The native `tur run` / `tur build` path is untouched
+and still correct: this narrows what the JIT accepts, not what the language
+means.
+
+The predicate is deliberately the *same* one the interpreter uses. The
+aggregate-signature renderer moved out of `eval.c` into `jit_ffi_hook.c`
+(`tur_jit_ffi_agg_sig_render` / `tur_jit_ffi_adt_is_hfa`) so both paths ask one
+classifier -- two copies of an ABI rule is two things to keep in step, and the
+point of a refusal is that the two paths agree on what they will not do.
+
+Covered by `jit-ffi-extern-c-hfa-refused-compiled` and, so the refusal cannot
+quietly widen, `jit-ffi-extern-c-nonhfa-still-jits` -- a mixed `{double,int}`
+aggregate is INTEGER-class, not an HFA, and must keep working end-to-end
+(verified: `152` through `tur jit`, matching native). Both are arch-gated in
+`tests/run-flags.sh` beside the existing interpreter test and SKIP off aarch64.
+
+### Still silent: an HFA declared inside an inline-C fence
+
+**This report stays OPEN, and not only because the MIR fix is outstanding.**
+The original repro at the top of this file -- a bare `extern double
+__sbv_f2(F2);` inside a ` ```c ` block -- still returns `225` under `tur jit`
+against `152.25` native, with no diagnostic. Re-verified 2026-08-26, after the
+`extern-c` refusal landed.
+
+That case is not fixable at the same seam, and the difference is not effort but
+information: an `extern-c` declares its types to the elaborator, whereas the
+body of an inline-C block is opaque text that only c2mir ever parses. Detecting
+an HFA there means classifying C types, which is a c2mir change -- the same
+vendored-fork work the real fix needs. So the coverage line is exactly:
+
+| how the native callee is declared | `tur jit` on aarch64 |
+| --- | --- |
+| `extern-c` with a record slot | refused, TUR-E0711 |
+| `call-ptr` / `callback-ptr` (interpreter) | refused, provider diagnostic |
+| `extern` inside an inline-C fence | **still silently miscalls** |
+
 ## Also worth knowing
 
 This is not only a jit-ffi problem. Any `tur jit` program that calls an

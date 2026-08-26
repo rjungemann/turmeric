@@ -408,8 +408,9 @@ static bool register_extern_c_known(TuriEnv *env, const char *fname) {
 
 /* Forward decls: the aggregate marshalling engine lives with eval_call_ptr
  * below; extern-c registration (the F4 follow-on) reuses it wholesale. */
-static size_t agg_sig_len(const AdtDef *def);
-static size_t agg_sig_render(const AdtDef *def, char *buf);
+/* mir-aarch64-fp-aggregate-abi: these now live in jit_ffi_hook.c (declared in
+ * jit_ffi.h) so the compiler shares one aggregate-signature renderer with the
+ * interpreter.  No forward declaration needed. */
 static bool   agg_collect_leaves(const AdtDef *def, TuriValue v,
                                  TuriValue *out, int max, int *n);
 static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
@@ -610,17 +611,17 @@ static char *agg_sig_build(Type ret, const Type *params, uint32_t n,
                            size_t *arg_at) {
     const AdtDef *rd = extern_slot_agg_def(ret);
     size_t cap = 3;
-    cap += rd ? agg_sig_len(rd) : 1;
+    cap += rd ? tur_jit_ffi_agg_sig_len(rd) : 1;
     for (uint32_t k = 0; k < n; k++) {
         const AdtDef *pd = extern_slot_agg_def(params[k]);
-        cap += pd ? agg_sig_len(pd) : 1;
+        cap += pd ? tur_jit_ffi_agg_sig_len(pd) : 1;
     }
     char *sig = (char *)malloc(cap);
     if (!sig) return NULL;
 
     size_t sp = 0;
     if (rd) {
-        size_t w = agg_sig_render(rd, sig);
+        size_t w = tur_jit_ffi_agg_sig_render(rd, sig);
         if (!w) { free(sig); return NULL; }
         sp = w;
     } else {
@@ -633,7 +634,7 @@ static char *agg_sig_build(Type ret, const Type *params, uint32_t n,
         const AdtDef *pd = extern_slot_agg_def(params[k]);
         if (arg_at) arg_at[k] = sp;
         if (pd) {
-            size_t w = agg_sig_render(pd, sig + sp);
+            size_t w = tur_jit_ffi_agg_sig_render(pd, sig + sp);
             if (!w) { free(sig); return NULL; }
             sp += w;
         } else {
@@ -1198,77 +1199,14 @@ static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, Tur
  * back as a boolean and a :cstr field as a string instead of both collapsing
  * to an integer. */
 
-/* How one record field sits in the emitted C aggregate.  Must agree with
- * codegen's adt_field_is_inline_byval -- that predicate is what decides the
- * emitted layout, and a sig that disagrees with it describes a struct the
- * callee does not have (the exact miscall F4 exists to prevent). */
-typedef enum {
-    AGGF_SCALAR,       /* a scalar member, or an int64 carrier (boxed /
-                        * :heap-pointer / drop-glue field) -- 8 bytes either
-                        * way, member_code_for_kind(kind) describes it */
-    AGGF_NESTED,       /* a by-value record inlined as a nested C struct */
-    AGGF_UNSUPPORTED,  /* inlined in the emitted C, but the interpreter
-                        * cannot render its layout (a TY_APP monomorph field
-                        * needs per-application substitution) -- refuse
-                        * rather than mis-describe */
-} AggFieldClass;
-
-static AggFieldClass agg_field_class(const CtorField *f,
-                                     const AdtDef **out_def) {
-    if (adt_field_is_inline_byval(f)) {
-        if (f->full_type->kind == TY_ADT) {
-            if (out_def) *out_def = f->full_type->as.adt_.def;
-            return AGGF_NESTED;
-        }
-        return AGGF_UNSUPPORTED;
-    }
-    return AGGF_SCALAR;
-}
-
-/* Number of sig bytes an aggregate for `def` needs, including braces. */
-static size_t agg_sig_len(const AdtDef *def) {
-    const CtorDef *ct = def->ctors[0];
-    size_t n = 2;
-    for (uint32_t i = 0; i < ct->n_fields; i++) {
-        const AdtDef *in = NULL;
-        n += (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED)
-                 ? agg_sig_len(in)
-                 : 1;
-    }
-    return n;
-}
-
-/* Render `{...}` for a record ADT into buf (which must hold agg_sig_len
- * bytes).  A nested by-value record field renders as its own inline
- * `{...}`, matching the layout codegen inlines.  Returns the number of
- * bytes written, or 0 if any field has no by-value member representation
- * the interpreter can describe. */
-static size_t agg_sig_render(const AdtDef *def, char *buf) {
-    const CtorDef *ct = def->ctors[0];
-    size_t pos = 0;
-    buf[pos++] = '{';
-    for (uint32_t i = 0; i < ct->n_fields; i++) {
-        const AdtDef *in = NULL;
-        switch (agg_field_class(&ct->fields[i], &in)) {
-            case AGGF_NESTED: {
-                size_t w = agg_sig_render(in, buf + pos);
-                if (!w) return 0;
-                pos += w;
-                break;
-            }
-            case AGGF_SCALAR: {
-                char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
-                if (!c) return 0;
-                buf[pos++] = c;
-                break;
-            }
-            default:
-                return 0;
-        }
-    }
-    buf[pos++] = '}';
-    return pos;
-}
+/* The aggregate sig renderer used to live here as three statics.  It moved to
+ * jit_ffi_hook.c (mir-aarch64-fp-aggregate-abi) so the COMPILER can ask the
+ * same questions -- `tur jit` refuses an HFA in an extern-c signature for the
+ * same reason the provider refuses one in a call-ptr signature, and the rule
+ * has to be one rule.  Semantics are unchanged, including the requirement to
+ * agree with codegen's adt_field_is_inline_byval: a sig that disagrees with it
+ * describes a struct the callee does not have, which is the exact miscall F4
+ * exists to prevent. */
 
 /* Store one TuriValue into `base + off` as member code `code`. */
 static void agg_store_member(void *base, size_t off, char code, TuriValue v) {
@@ -1352,7 +1290,7 @@ static bool agg_collect_leaves(const AdtDef *def, TuriValue v,
     if (v.as_struct->n_fields != ct->n_fields) return false;
     for (uint32_t i = 0; i < ct->n_fields; i++) {
         const AdtDef *in = NULL;
-        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
+        if (tur_jit_ffi_agg_field_class(&ct->fields[i], &in) == TUR_AGGF_NESTED) {
             if (!agg_collect_leaves(in, v.as_struct->fields[i], out, max, n))
                 return false;
         } else {
@@ -1376,7 +1314,7 @@ static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
         return turi_error("call-ptr: aggregate return has too many fields");
     for (uint32_t i = 0; i < ct->n_fields; i++) {
         const AdtDef *in = NULL;
-        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
+        if (tur_jit_ffi_agg_field_class(&ct->fields[i], &in) == TUR_AGGF_NESTED) {
             fields[i] = agg_build_value(env, in, base, offs, codes,
                                         nleaf, cur);
             if (turi_is_error(fields[i])) return fields[i];
@@ -1563,11 +1501,11 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
     /* Size the sig: one byte per scalar slot, `{fields}` per aggregate. */
     size_t sig_cap = 2 + 1;   /* ret + ':' + NUL, ret widened below */
     if (ps->return_type.kind == TY_ADT && ps->return_type.as.adt_.def)
-        sig_cap += agg_sig_len(ps->return_type.as.adt_.def) - 1;
+        sig_cap += tur_jit_ffi_agg_sig_len(ps->return_type.as.adt_.def) - 1;
     for (uint32_t k = 0; k < n; k++) {
         if (ps->param_types[k].kind == TY_ADT &&
             ps->param_types[k].as.adt_.def)
-            sig_cap += agg_sig_len(ps->param_types[k].as.adt_.def);
+            sig_cap += tur_jit_ffi_agg_sig_len(ps->param_types[k].as.adt_.def);
         else
             sig_cap += 1;
     }
@@ -1585,7 +1523,7 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
 
     size_t sp = 0;
     if (ps->return_type.kind == TY_ADT && ps->return_type.as.adt_.def) {
-        size_t w = agg_sig_render(ps->return_type.as.adt_.def, sig);
+        size_t w = tur_jit_ffi_agg_sig_render(ps->return_type.as.adt_.def, sig);
         if (!w) {
             result = turi_error("call-ptr: return record has a field with no "
                                 "by-value C member type");
@@ -1604,7 +1542,7 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
                         : tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
         agg_at[k] = sp;
         if (adef) {
-            size_t w = agg_sig_render(adef, sig + sp);
+            size_t w = tur_jit_ffi_agg_sig_render(adef, sig + sp);
             if (!w) {
                 result = turi_errorf("call-ptr: arg %u's record has a field "
                                      "with no by-value C member type",

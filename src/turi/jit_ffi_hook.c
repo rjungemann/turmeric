@@ -181,6 +181,83 @@ bool tur_jit_ffi_is_hfa(const char *s) {
     return true;
 }
 
+/* Aggregate rendering from a record ADT.  These moved here from eval.c so the
+ * COMPILER can ask the HFA question too: `tur jit` must refuse an HFA in an
+ * extern-c signature (TUR-E0711) for exactly the reason the interpreter's
+ * provider refuses one in a call-ptr signature, and two copies of the rule
+ * would be two things to keep in step.  jit_ffi_hook.c is already the shared,
+ * MIR-free signature-vocabulary home, and jit_ffi.h already includes
+ * compiler/types.h for TypeKind, so AdtDef costs nothing new here. */
+TurJitAggField tur_jit_ffi_agg_field_class(const CtorField *f,
+                                           const AdtDef **out_def) {
+    if (adt_field_is_inline_byval(f)) {
+        if (f->full_type && f->full_type->kind == TY_ADT) {
+            if (out_def) *out_def = f->full_type->as.adt_.def;
+            return TUR_AGGF_NESTED;
+        }
+        return TUR_AGGF_UNSUPPORTED;
+    }
+    return TUR_AGGF_SCALAR;
+}
+
+size_t tur_jit_ffi_agg_sig_len(const AdtDef *def) {
+    if (!def || def->n_ctors == 0 || !def->ctors[0]) return 0;
+    const CtorDef *ct = def->ctors[0];
+    size_t n = 2;
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        if (tur_jit_ffi_agg_field_class(&ct->fields[i], &in) == TUR_AGGF_NESTED) {
+            size_t w = tur_jit_ffi_agg_sig_len(in);
+            if (!w) return 0;
+            n += w;
+        } else {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+size_t tur_jit_ffi_agg_sig_render(const AdtDef *def, char *buf) {
+    if (!def || def->n_ctors == 0 || !def->ctors[0]) return 0;
+    const CtorDef *ct = def->ctors[0];
+    size_t pos = 0;
+    buf[pos++] = '{';
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        switch (tur_jit_ffi_agg_field_class(&ct->fields[i], &in)) {
+            case TUR_AGGF_NESTED: {
+                size_t w = tur_jit_ffi_agg_sig_render(in, buf + pos);
+                if (!w) return 0;
+                pos += w;
+                break;
+            }
+            case TUR_AGGF_SCALAR: {
+                char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
+                if (!c) return 0;
+                buf[pos++] = c;
+                break;
+            }
+            default:
+                return 0;
+        }
+    }
+    buf[pos++] = '}';
+    return pos;
+}
+
+bool tur_jit_ffi_adt_is_hfa(const AdtDef *def) {
+    /* An HFA has at most 4 leaves, so a 4-leaf aggregate needs at most 6 sig
+     * bytes.  Anything longer cannot be one; cap the buffer and let an
+     * oversized render fail the length check rather than the write. */
+    char   buf[64];
+    size_t need = tur_jit_ffi_agg_sig_len(def);
+    if (need == 0 || need >= sizeof buf) return false;
+    size_t w = tur_jit_ffi_agg_sig_render(def, buf);
+    if (w == 0 || w >= sizeof buf) return false;
+    buf[w] = '\0';
+    return tur_jit_ffi_is_hfa(buf);
+}
+
 bool tur_jit_ffi_struct_supported(const char *s, const char **why) {
 #if defined(__aarch64__) || defined(_M_ARM64)
     if (tur_jit_ffi_is_hfa(s)) {
