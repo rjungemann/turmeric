@@ -1053,7 +1053,24 @@ which is the evidence against the module-docstring claim.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fmt-drops-comments-inside-bracket-vectors](fmt-drops-comments-inside-bracket-vectors.md) | high | `tur fmt` silently deletes every `;`/`;;`/`;;;` comment inside a `defstruct` field, `defn` param, or `let` binding vector -- in place, exit 0, no diagnostic. `fmt_list`'s `span_has_comment` guard exists but is missing from both `F_VEC` paths, and the broken-vector printers never re-emit gap comments. Non-idempotence (`fmt` then `fmt --check` exits 1) is a downstream symptom |
+| [fmt-drops-comments-in-handle-and-binding-modifier-gaps](fmt-drops-comments-in-handle-and-binding-modifier-gaps.md) | medium | the residue of the row below, in the printers its fix did not reach: `handle`/`case` arm gaps and the other fixed-index header loops still drop comments, and `fmt_vec_let_bindings_broken` mis-pairs a `^mut` binding. 8 files in a 2997-file sweep, down from 70 |
+
+`fmt-drops-comments-inside-bracket-vectors` was resolved 2026-08-26 and moved
+to [docs/archive](../archive/fmt-drops-comments-inside-bracket-vectors.md). The
+guard went into the measure (`fmt_measure_src`), not the two call sites the
+report proposed, so no *enclosing* inline check can flatten a commented form
+either; gap re-emission was added to every collection printer plus `fmt_call`
+and `fmt_cond`. Three things the report did not have, all now in the archived
+write-up: the `F_VEC`/`F_MAP`/`F_SET` inline checks omitted the
+`w != UINT32_MAX` test, so uint32 wraparound would have made the new guard a
+no-op at any column > 0; re-emitting a *trailing* comment on its own line
+preserves the bytes but reattaches it to the following element, which is a
+different claim about the code, so same-line comments now stay on their line
+(this also fixes the `; third field` relocation in the repro); and a comment
+before a closing bracket puts the bracket *inside* the comment unless the
+printer breaks first, which turns silent loss into a syntax error. The
+before/after sweep is 70 -> 8 files losing comments and 9 -> 7 non-idempotent,
+with no new failures; the remaining 8 are the row above.
 
 ## Diagnostics (filed 2026-08-25)
 

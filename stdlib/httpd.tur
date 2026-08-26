@@ -1399,22 +1399,14 @@
 ;;; Since: Phase H8 (M2)
 
 (defstruct CookieOpts
-  [name
-   : cstr
-   value
-   : cstr
-   path
-   : cstr
-   domain
-   : cstr
-   max-age
-   : int
-   secure
-   : int
-   http-only
-   : int
-   same-site
-   : cstr])
+  [name : cstr
+   value : cstr
+   path : cstr
+   domain : cstr
+   max-age : int
+   secure : int
+   http-only : int
+   same-site : cstr])
 ;;; cookie -- construct a CookieOpts with sensible defaults.
 ;;;
 ;;; Defaults: Path=/, no Domain, no Max-Age (session cookie), not Secure
@@ -1699,18 +1691,12 @@
 ;;; Since: Phase H8 (M4)
 
 (defstruct CorsOpts
-  [allow-origin
-   : cstr
-   allow-methods
-   : cstr
-   allow-headers
-   : cstr
-   expose-headers
-   : cstr
-   allow-credentials
-   : int
-   max-age
-   : int])
+  [allow-origin : cstr
+   allow-methods : cstr
+   allow-headers : cstr
+   expose-headers : cstr
+   allow-credentials : int
+   max-age : int])
 ;;; default-cors-opts -- permissive defaults suitable for development.
 ;;;
 ;;; allow-origin = "*", standard set of methods, Content-Type allowed,

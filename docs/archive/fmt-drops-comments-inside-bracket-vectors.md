@@ -1,5 +1,13 @@
 # `tur fmt` silently deletes every comment inside a `[...]` vector (and is non-idempotent as a result)
 
+**RESOLVED 2026-08-26.** See "Resolution" at the bottom. The fix went wider
+than fix direction (1)+(2): the guard was hoisted into the measure (fix
+direction 3), gap re-emission was added to every collection printer plus
+`fmt_call` and `fmt_cond`, and trailing comments now keep their own line
+instead of being relocated. A **residue in other printers survives** and is
+filed as
+[fmt-drops-comments-in-handle-and-binding-modifier-gaps](../reported/fmt-drops-comments-in-handle-and-binding-modifier-gaps.md).
+
 **Severity: HIGH** -- silent, unrecoverable source data loss in a
 format-in-place tool. `tur fmt` deletes `;`, `;;`, and `;;;` comments that sit
 inside a `defstruct` field vector, a `defn`/`fn` parameter vector, or a
@@ -185,3 +193,125 @@ different thing: a doc comment inside `[...]`, not the module docstring.
 parse (`error: unexpected character '#' (0x23)` at 1:2) -- the formatter does
 not handle a `#lang` line in a `.tur.sweet` manifest. It was the one skip in the
 corpus sweep. Filed separately if it turns out not to be intentional.
+
+---
+
+## Resolution (2026-08-26)
+
+Fixed in `src/compiler/fmt.c`. The corpus sweep this report describes was
+re-run before and after, over 2997 files (`stdlib/`, `tests/fixtures/`,
+`examples/`, `tutorials/`), two-pass fmt each:
+
+| | files losing comments | files non-idempotent |
+| --- | --- | --- |
+| before | 70 | 9 |
+| after | 8 | 7 |
+
+Every file still failing after the fix was already failing before it -- the
+change introduced no new loss and no new non-idempotence. The eight survivors
+are a different defect in different printers, filed separately (link above).
+
+### What changed
+
+**1. The guard moved into the measure (fix direction 3, not 1).** A new
+`fmt_measure_src(s, f)` returns `UINT32_MAX` for any form whose source span
+carries a comment, and every inline-vs-break decision was switched to it:
+`fmt_list`, `fmt_param_vec`, the `fmt_let` bindings branch, `fmt_defpackage`'s
+map value, and the `F_VEC` / `F_MAP` / `F_SET` / `F_MAP_LITERAL` arms of
+`fmt_form`. Doing it in the measure rather than at each call site is what the
+report's option (3) predicted: the form is unmeasurable to *enclosing* inline
+checks too, so a comment inside a vector nested in a form that would itself fit
+cannot be flattened away one level up.
+
+Switching those arms surfaced a latent bug worth naming: they tested
+`s->col + w <= line_width` with no `w != UINT32_MAX` check. That is uint32
+arithmetic, so an unmeasurable form wraps to a tiny number at any column > 0
+and gets inlined anyway -- which would have made the new guard a no-op
+everywhere except column 0. Each of those sites now checks the sentinel first.
+
+**2. Gap re-emission in every collection printer** (fix direction 2), via three
+new helpers -- `collection_body_start` (offset one past the opening delimiter,
+so a comment between `[` and the first element is inside the scanned gap),
+`emit_gap_comments_before`, and `emit_trailing_gap_comments`. Applied to
+`fmt_vec_params_broken`, `fmt_vec_let_bindings_broken`, `fmt_vec_broken`,
+`fmt_map_broken`, and `fmt_set_broken`.
+
+**3. `fmt_call` and `fmt_cond`,** which the report did not cover but which lose
+comments by exactly the same mechanism -- a child loop that never consults the
+source gaps. `fmt_call`'s head/first-arg pair is where a `#;datum` comment on
+the first argument lived (`(println #;99 "ok")` reformatted to
+`(println "ok")`); `fmt_cond`'s arm loop is where an arm's trailing `;; note`
+lived. Together these two account for 50 of the 62 files the fix recovered.
+
+### Two things found while fixing it that the report did not have
+
+**A trailing comment must not be relocated.** The narrow fix (break instead of
+inline, re-emit each comment on its own line) preserves the bytes but moves
+`; first field` from the end of field `a`'s line to the line above field `b` --
+where it now reads as a comment about `b`. That is a different claim about the
+code than the author made, and it is the same criticism the report levels at
+`; third field`. `emit_comments_indented` now tracks whether the scan has
+crossed a newline yet: a `;` comment that shared a source line with the
+preceding element is re-emitted as a trailing comment on the current output
+line, and only comments that had their own line get their own line. The same
+rule was added to the top-level `emit_comments_in_gap`, which is what fixes
+the `; third field` relocation the report's repro shows.
+
+**A comment before a closing bracket can eat the bracket.** Re-emission ends
+output *inside* a `;` comment. A collection printer that writes `]` straight
+afterwards puts the bracket in the comment, so the reformatted file no longer
+parses -- upgrading silent data loss to a syntax error. `emit_trailing_gap_comments`
+breaks the line unconditionally when it emits anything, and there is a
+regression test (`fmt-comment-before-close-bracket`) asserting it.
+
+A related distinction the helper contract had to carry: a `;` or `#| |#`
+comment forces the caller to break, but a single-line `#;datum` is
+self-delimiting and stays inline. The gap helpers therefore return "you must
+start a new line", not "something was emitted" -- which is what keeps
+`(println #;99 "ok")` on one line instead of splitting it across three.
+
+### Layout change: `fmt_vec_broken` keeps `name : type` together
+
+The comment guard pushes a commented `defstruct` field vector onto the broken
+path, and that path split every `name` from its `: type`, one per line --
+violating the house rule against splitting a name/type pair, and doing so
+*already*, for any long defstruct, independent of comments:
+
+```turmeric
+(defstruct CookieOpts
+  [name
+   : cstr
+   value
+   : cstr
+   ...
+```
+
+`fmt_vec_broken` now keeps an `F_TYPE_ANN` element on the line of the element
+it annotates, the same rule `fmt_vec_params_broken` applies to parameter
+vectors. Deliberately narrower than `param_is_annotation`, which also treats
+`F_LIST` and `F_KEYWORD` as annotations: in a *generic* vector those are
+ordinary elements (`[(f x) (g y)]`, `[:a :b]`), and gluing them would produce
+an overlong line in exactly the case that broke.
+
+Blast radius was one file: `stdlib/httpd.tur` (`CookieOpts`, `CorsOpts`),
+reformatted here so FT7 (`fmt-bootstrap-stdlib`) stays green.
+
+### Coverage (fix direction 4)
+
+Three cases added to `tests/run-fmt.sh`:
+
+- `fmt-preserves-comments-in-vectors` -- the report's minimal repro, asserting
+  each of the four interior comments survives **and** that pass 2 == pass 1.
+  Both halves matter: the non-idempotence is downstream of the loss, so a fix
+  that stopped only the collapse would pass an idempotence-only check while
+  still deleting the comments.
+- `fmt-trailing-comment-stays-on-its-line` -- the relocation case above.
+- `fmt-comment-before-close-bracket` -- the bracket-swallowing case above.
+
+### Fix direction 5 (the guestbook files)
+
+Verified rather than re-formatted. `store.tur` and `conts.tur` now round-trip
+with byte-identical comment counts (48 and 63) and are idempotent; the only
+remaining diff on either is column alignment inside the field vectors, not
+content. They are left as-authored -- `examples/` is not under the FT7
+bootstrap rule, and reformatting them would only churn alignment.
