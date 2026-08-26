@@ -927,11 +927,25 @@ turned up a defect in the instrument that would have justified it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: reclamation 2.6x, by-value 1.8x, both 18x. The slab allocator (2.1x measured in-compiler) is **shelved** -- it needs a whole-program escape pass to be safe at all, and reclamation measures better without one |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
+`multi-variant-adts-always-heap-allocate` was resolved 2026-08-26 for the
+NON-RECURSIVE sum population and moved to
+[docs/archive](../archive/multi-variant-adts-always-heap-allocate.md). SR1
+shipped on by default: such a sum flows by value as a tag+union aggregate, so
+it neither mallocs nor leaks (1005 allocations / 24,112 leaked bytes -> zero on
+the guarding fixture; 62.6 MB -> 1.2 MB peak RSS on a 2e6-construction loop).
+Two things to carry forward. **Recursive sums are unchanged** -- `Term`,
+`Subst`, `Stream` and 18 others still box and still leak, which means the
+callgrind numbers that made this report look urgent are unimproved; they are
+SR4's, blocked on `stdlib/logic.tur` ascribing carrier-erased results back to a
+sum type, not on codegen. And **the "do not start SR1 for performance" verdict
+was wrong for the reason the SR plan's own section 5 warns about**: it was
+priced against `logic.tur`, a workload built entirely from recursive types and
+therefore structurally blind to the change being judged.
+
 `dump-refine-json-under-reports-caps` was resolved 2026-08-26 and moved to
 [docs/archive](../archive/dump-refine-json-under-reports-caps.md). Its root
 cause is right in substance and wrong in mechanism, in a way worth knowing

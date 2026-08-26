@@ -6,19 +6,40 @@ description: Lowering multi-variant ADTs by value, converting Option and Result 
 
 # Sum Representation (SR)
 
-**Status:** proposal. **SR0 has run -- both halves -- and it argues against
-starting SR1 for performance.** Results and method:
+**Status: SR1 is BUILT and ON by default (2026-08-26).** SR2-SR4 unstarted.
+
+**SR0's verdict -- "do not start SR1 for performance" -- was wrong, and section
+5 of this plan says why.** SR0(a) and the SR1 gate both priced SR1 against
+`stdlib/logic.tur`, a workload built entirely from *recursive* sums and
+therefore structurally blind to the phase being judged; section 5 records that
+exact trap and the recommendation fell into it anyway. Measured on a
+non-recursive sum -- which is what SR1 covers -- it does not shave a constant
+factor off allocation, it removes the allocation: 1005 allocations and 24,112
+leaked bytes go to zero, and a 2e6-construction loop drops from 62.6 MB peak
+RSS to 1.2 MB. Both halves of the allocation report close together, with no
+reclamation, drop glue, arena or ownership analysis.
+
+The lesson generalises past this plan: **a phase gate is only as good as the
+workload it is measured on, and "the workload we already have a harness for" is
+how you end up measuring the wrong one.**
+
+SR0's results and method remain valid as a census:
 [benchmarks/sum-census/RESULTS.md](../../benchmarks/sum-census/RESULTS.md).
-SR1-SR4 are unstarted.
 
 **What SR0 changed.** SR0(b) removes the risk the plan was most worried about:
 the whole `.value`-on-a-`none` migration surface is 47 sites, and **zero** of
 them rely on reading a zero from the dead arm. SR0(a) went the other way -- real
 library code barely uses sums (20 `defdata` in 727 spice files, against 244
 `defopaque` and 122 `defstruct`), and the recursive hot path that motivated the
-allocation report has no example program exercising it at all. So the
-performance case for SR1 is weak and the remaining case for the sum work is
-expressiveness, which SR0(b) says is cheap to collect.
+allocation report has no example program exercising it at all.
+
+That was read as "the performance case for SR1 is weak". It does not support
+that: it is a census of how much sum-constructing code exists, which SR0(a)
+itself flags as weak evidence ("a language whose sums malloc and never free
+trains its users toward `defopaque` and `defstruct` -- which is the
+distribution observed"). It says nothing about what the change is worth *per
+construction*, and per construction it removes the allocation outright. The
+expressiveness case SR0(b) collects still stands on its own for SR2.
 
 **Not on the critical path to v1.** Every phase is a representation change to
 code that already compiles and runs correctly. Read section 4 for what to do
@@ -30,7 +51,7 @@ ordering is wrong.
 Three findings from one thread of allocation work, in the order they were
 found:
 
-- [multi-variant-adts-always-heap-allocate](../reported/multi-variant-adts-always-heap-allocate.md)
+- [multi-variant-adts-always-heap-allocate](../archive/multi-variant-adts-always-heap-allocate.md)
   -- every `defdata` with more than one variant mallocs on construction however
   small, and nothing frees it. ~85% of executed instructions on an
   allocation-heavy stdlib workload are inside `malloc`.
@@ -88,6 +109,15 @@ prerequisite; it is what the carrier already does. The SR1/SR4 split below, and
 the claim further down that row C's 1.8x prices "the harder variant", both need
 revisiting.
 
+**What shipped keeps the 66/21 split anyway, for a different reason.** SR1 as
+built excludes recursive sums (`AdtDef.is_self_recursive`), not because they
+cannot be laid out by value -- the gate settled that -- but because the thing
+that actually blocks them is library source: `stdlib/logic.tur` ascribes
+carrier-erased polymorphic results back to a sum type (`(:: (f s) :Subst)`), a
+no-op cast while `Subst` rides the carrier and a hard `TUR-E0295` once it does
+not. So the phase boundary survives with its rationale replaced: SR1 is the
+population that needed no source changes, SR4 is the population that does.
+
 **Sizes, measured:**
 
 | | today | as a sum | |
@@ -119,7 +149,7 @@ The 21 recursive types still box their spine and still leak. They need SR4,
 and SR4 is where the reclamation question (arena / drop glue) actually has to
 be answered. The slab allocator is no longer one of the candidates -- it was
 **shelved** on 2026-08-25; see the
-[decision record](../reported/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25).
+[decision record](../archive/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25).
 
 The measured ratios from `benchmarks/adt-alloc/ceiling.c`, for calibration.
 **Re-measured 2026-08-25** after the harness was found missing from the tree and
@@ -135,8 +165,16 @@ reconstructed ([RESULTS.md](../../benchmarks/adt-alloc/RESULTS.md)):
 | slab (E) | 1.72x |
 
 Note those were all measured on `logic.tur`'s shapes, which are entirely
-recursive -- so they price SR4, **not** SR1. There is still no measurement of
-SR1's win, which is what SR0(a) is for.
+recursive -- so they price SR4, **not** SR1.
+
+**SR1's win has since been measured directly, and it is not on this scale at
+all.** These rows all price how much *cheaper* an allocation gets. SR1 does not
+make the allocation cheaper; on a non-recursive sum there is no allocation
+left: 1005 allocations and 24,112 leaked bytes go to zero on the guarding
+fixture, and a 2e6-construction loop drops from 62.6 MB peak RSS to 1.2 MB.
+Wall-clock is not quoted against these ratios and should not be: with the
+allocation gone the loop becomes foldable, so the two binaries stop measuring
+the same work.
 
 **The ordering rationale in this plan does not survive the two new rows.** Row G
 is region reclamation over today's boxed layout -- none of SR1, none of SR4, no
@@ -214,13 +252,43 @@ The original unambiguous accessor counts, for reference:
 bound dominated by unrelated types. Disambiguating it is the rest of SR0(b),
 and it matters because of the hazard in section 5.
 
-### SR1 -- by-value lowering for non-recursive sums
+### SR1 -- by-value lowering for non-recursive sums -- DONE (2026-08-26)
 
 Generalise the flat-product path to `n_ctors > 1` where the type is not
 self-recursive: emit `struct { tag; union { ... } as; }` by value, sized to the
 widest variant, returned in registers.
 
 Covers 66 of 87 types. Removes the malloc **and** the leak for all of them.
+
+**Shipped on by default.** `g_sr1_sum_byvalue` defaults true;
+`TUR_SR1_SUM_BYVALUE=0` restores the carrier for bisecting a suspected
+representation bug. `adt_is_flat_product` still reports false for these, so the
+tagged-union typedef, the tag store and the tag test in `match` are unchanged --
+only the ABI moved, which is what separating "flows by value" from "has no tag"
+buys. Guarded by `tests/fixtures/sr1-sum-byvalue` (a `requires.leak-check`
+fixture with real teeth: 24,112 bytes leaked under the seam-off carrier, zero
+with it on) plus its `expected.c` snapshot.
+
+The gate's failure list was the worklist and it held up: eight codegen
+crossings, one latent bug (`adt_field_c_type` handing every caller an interior
+pointer into one static buffer, which mistyped a `Result` monomorph's ok arm
+once both arms could be by-value ADTs), and one scope decision. Two findings
+worth carrying into SR4:
+
+- **Every crossing had to be narrowed to by-value SUMS, not by-value ADTs.**
+  Keyed on the broader predicate the new bridges also fired on single-variant
+  products, which have ridden the by-value ABI since B3 and already have a more
+  specific rule for each crossing -- often one that knows whether the value
+  escapes into a heap container. The blunter bridge on top double-boxed them,
+  breaking 27 vec/map/inline-C fixtures containing no sum at all.
+- **A cycle in the inline-by-value field graph is a silent miscompile.**
+  `adt_is_byvalue_product_d` walks that graph under a depth budget, so on a
+  cycle it answers the same question differently depending on where the walk
+  entered -- and the typedef emitter enters at a different point than a
+  field-store site. `adt_graph_reaches` now declines such a type outright.
+
+Full record: the **Resolution** section of
+[multi-variant-adts-always-heap-allocate](../archive/multi-variant-adts-always-heap-allocate.md).
 
 **Prototype gate: RUN.** Full results in
 [sr1-gate-results.md](sr1-gate-results.md). The seam is in the tree as
@@ -297,7 +365,7 @@ a sequencing preference but the substance of the whole thing.
 this phase. It was described here as blocked on the `rc/of` coupling that parked
 the slab allocator; that framing assumed reclamation meant the slab. It does
 not. The slab is
-[shelved](../reported/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
+[shelved](../archive/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
 -- it never addressed the footprint half of the problem, and it re-measures at
 1.72x against real reclamation's 2.49x (per-node) or 7.64x (arena), while being
 the only proposed fix that still climbs with heap size.
@@ -317,10 +385,17 @@ baseline, not against today's.
 
 SR0 has run, so this section is now a recommendation rather than a plan.
 
-**Build none of SR1-SR4 for performance on current evidence.** SR0(a) found
-that real code barely constructs sums, and the one workload that made the
-allocation report look urgent (`logic.tur`) is exercised by nothing but a
-synthetic benchmark.
+~~**Build none of SR1-SR4 for performance on current evidence.**~~
+**Withdrawn 2026-08-26.** SR1 was built and shipped on by default; see the
+status header. The reasoning below is preserved because the way it went wrong
+is worth keeping: SR0(a) found that real code barely constructs sums, and the
+one workload that made the allocation report look urgent (`logic.tur`) is
+exercised by nothing but a synthetic benchmark -- both true, and neither a
+measurement of the phase being judged. `logic.tur` is built entirely from
+recursive sums, which SR1 does not touch.
+
+The advice still holds for **SR4**, whose population `logic.tur` *is*, and
+whose gate (reclamation first) is unchanged.
 
 If the sum work is taken up, take it up **for expressiveness** -- the dead-arm
 default that forces every `E` in a `(Result A E)` to have a zero value, which
