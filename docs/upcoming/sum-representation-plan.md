@@ -350,7 +350,45 @@ Plausibly the largest of the three size wins, given how common those shapes are
 nested-monomorph fix touched. **Gate:** needs SR2, and needs SR0(a) to show the
 volume is there.
 
-### SR4 -- field-level boxing for recursive sums
+### SR4 -- recursive sums -- SCOPED 2026-08-26, one blocker
+
+**Measured, not estimated.** Admitting recursive sums to the by-value path
+(drop the `is_self_recursive` test in `adt_sr1_sum_candidate`) leaves the suite
+at **2705 passed, 2 failed**, and both failures are a single defect:
+[fat-dispatch-wide-byvalue-aggregate-argument](../reported/fat-dispatch-wide-byvalue-aggregate-argument.md).
+Every other recursive sum in the tree -- `Term`, `Regex`, `RxCls`, `RxPos`,
+`RxStrs`, the fixture trees and lists -- already lowers by value and runs
+correctly.
+
+**Three of this phase's premises are now wrong.**
+
+1. **"Field-level boxing" is not the work.** The gate said so and this confirms
+   it: the recursive field already rides the carrier, and no phase needs to be
+   built to make that happen.
+2. **The `logic.tur` rewrite is not the blocker either.** Of the two
+   carrier-ascription sites the gate found, one was simply badly typed --
+   `fmap-goal-raw` took its callback as a bare `:fn`, so its result was an
+   erased word that had to be cast back with `(:: (f s) :Subst)`. Giving it its
+   real `(fn [Subst] Subst)` type deleted the reinterpret, and that change is
+   landed and green on the default path. The other is not a source problem at
+   all -- it is the codegen bug above.
+3. **"Reclamation first" no longer gates it.** That ordering existed because
+   SR4 was believed to be expensive and worth little against a cheap allocator.
+   SR4 is now one codegen fix away, and like SR1 it does not make allocation
+   cheaper -- it removes the allocation, which is not a ratio the reclamation
+   rows can be compared against.
+
+**What SR4 actually is now:** fix the fat/poly dispatch disagreement, delete the
+`is_self_recursive` test, regenerate snapshots. The report has the diagnosis,
+a minimal repro for both manifestations, and two candidate fixes already tried
+and rejected with the reasons.
+
+Be careful with the second manifestation. Under the carrier the disagreement is
+a hard C error; by value it is a **silent wrong answer** (`logic-reify` prints
+`0` where `10` is correct, with no diagnostic and no sanitizer report). Any
+regression fixture must assert the VALUE, not merely that it builds.
+
+### SR4 (original plan text) -- field-level boxing for recursive sums
 
 The remaining 21 types, `Term` / `Subst` / `Stream` among them. The value
 travels by value; only the self-referential field stays a pointer. This is what
