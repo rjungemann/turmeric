@@ -1,4 +1,4 @@
-# Storing a closure in a `defdata` field: `:fn` segfaults, `:ptr<void>` works but warns
+# Storing a closure in a `defdata` or `defstruct` field: `:fn` segfaults, `:ptr<void>` works
 
 **Severity:** medium. A field type the compiler accepts and type-checks
 miscompiles into a crash for the only case anyone would use it for. The working
@@ -110,6 +110,54 @@ parked in [../upcoming/lazy-streams-plan.md](../upcoming/lazy-streams-plan.md)
 until this is fixed. Any future ADT that wants to hold a callback hits the same
 wall.
 
+## Root cause, and it is wider than `defdata`
+
+**A `defstruct` field is affected too.** The title says `defdata`; the probe
+below says otherwise:
+
+```turmeric
+(defstruct Box [run : fn])
+(defn mk [n : int] : Box (let [ln n] (Box (fn [] (let [_ ln] (* ln 2))))))
+;; calling (.run b) -> Segmentation fault
+```
+
+That matters because `[run : fn #fx{Effect}]` is the **capability-struct**
+pattern, which several fixtures use. They all pass -- and every one of them
+stores a *non-capturing* lambda (`(fn [s] (perform (Emit s)))`). The whole
+in-tree corpus sits on the working side of this, which is why it was never
+noticed.
+
+**The mechanism, from the emitted C.** Forcing a `:fn` field emits a bare
+function-pointer call:
+
+```c
+int64_t (*__call_head)() = (int64_t (*)())(intptr_t)(th);
+... (((int64_t (*)(void))(intptr_t)__call_head)());
+```
+
+while the opaque-carrier field emits the fat-closure dispatch -- load the thunk
+from slot 0, pass the env as the receiver:
+
+```c
+((*( tur_thunk_int64_t_t *)((void*)(intptr_t)(th)))((void*)(intptr_t)(th)));
+```
+
+So the *more precise* annotation selects the *less capable* calling convention.
+
+**Why.** `TY_FN` carries a `boxed` flag that means exactly "this is a closure
+value (fat box), not a bare function reference" (`types.h:693`). The ascription
+that forces the field -- `(:: th (fn [] S))` -- builds a **fresh** `TY_FN` from
+the source annotation, and a freshly constructed `TY_FN` has `boxed = false`
+(`types.c:1375`). Nothing re-boxes it, so the call goes bare. The neighbouring
+comment at `emit_expr.c` already records the underlying hole: the `boxed` flag
+"is absent from both the `TY_FN` mangle and `type_eq`".
+
+**Stale comment worth fixing while in there:** `types.h:701` still says of
+`boxed` that "B-0 only plumbs the bit; nothing sets it true yet". It is set in
+about ten places and read widely --
+[closure-first-class-type-plan](../archive/history/closure-first-class-type-plan.md)
+is marked COMPLETE (B-0..B-4 shipped) and the comment was never updated.
+
 ## Fix directions
 
 1. ~~**Widen the argument-type determination in `emit_expr.c`**~~ -- **DONE
@@ -130,12 +178,17 @@ wall.
    turns the `logic-*` fixtures red again on the cc-warning gate.
 
    Case 1 is untouched -- a `:fn` field still segfaults on a capturing closure.
-2. **Make `:fn` fields work, or reject them.** The call-through in case 1 has to
-   dispatch a fat closure rather than assume a bare function pointer -- the same
-   dispatch `apply-goal` performs. If that is not wanted, a `:fn` field should be
-   a compile error naming the `defopaque :ptr<void>` route, because silently
-   accepting it and crashing at runtime is the worst option and is what happens
-   today.
+2. **Make `:fn` fields work, or reject them.** Working means the ascription
+   that forces the field must preserve boxedness rather than rebuilding an
+   unboxed `TY_FN` -- which is the `boxed`-through-mangle-and-`type_eq` hole
+   above, so it is type-system work, not a codegen patch.
+
+   **The cheap interim is a diagnostic**, and it is worth taking on its own: a
+   `:fn` field is only safe for a captureless lambda, so accepting a capturing
+   one and crashing at runtime is the worst available behaviour. Rejecting the
+   *store* of a capturing closure into a `:fn` field, with a message naming the
+   `defopaque :ptr<void>` route, turns a segfault into an error and breaks
+   nothing in the tree (every in-tree `:fn` field stores a captureless lambda).
 3. **Document the working route.** Nothing says how to store a callback in an
    ADT; the answer is currently "read `Goal`'s declaration in `logic.tur`".
 

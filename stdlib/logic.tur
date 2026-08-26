@@ -105,6 +105,43 @@
       (StInc (:: (fn [] (let [_ lth] (st-append lys (st-force lth)))) :StThunk)))
     (StCons v rest)
     (StCons v (st-append rest ys))))
+;;; st-append-dfs -- concatenate two solution streams DEPTH-FIRST.
+;;;
+;;; Same as `st-append` but WITHOUT the swap, so the left branch is exhausted
+;;; before the right is touched. Still lazy -- it defers through an immature
+;;; stream rather than forcing it -- so `run-logic n` still costs n solutions.
+;;;
+;;; Use when a goal's left branch is known to terminate and you want the
+;;; leftmost solution cheaply. `st-append` reaches a solution at depth d
+;;; breadth-first, which is what makes it complete on infinite relations and
+;;; what makes it slower on a goal whose only solutions are deep.
+;;;
+;;; Prefer `st-append` unless you have measured. Depth-first is faster on the
+;;; goals it terminates on and diverges on the ones it does not, which is the
+;;; whole reason the default swaps.
+;;;
+;;; Parameters:
+;;;   xs -- first solution stream
+;;;   ys -- second solution stream
+;;;
+;;; Returns:
+;;;   xs's solutions, then ys's.
+;;;
+;;; Example:
+;;;   (st-length (st-append-dfs (mreturn s) (mreturn s)))  ; => 2
+;;;
+;;; Since: lazy-streams
+
+(defn st-append-dfs [xs : Stream ys : Stream] : Stream
+  (match xs
+    (StNil)
+    ys
+    (StInc th)
+    (let [lth th
+          lys ys]
+      (StInc (:: (fn [] (let [_ lth] (st-append-dfs (st-force lth) lys))) :StThunk)))
+    (StCons v rest)
+    (StCons v (st-append-dfs rest ys))))
 ;;; st-bind -- concatMap: apply f to each state and concatenate the streams.
 ;;; f is a `Subst -> Stream` callback (arrives as a first-class `:fn` value).
 
@@ -534,6 +571,37 @@
 (defmacro zzz [g]
   `(:: (fn [state : Subst]
          (StInc (:: (fn [] (apply-goal ~g state)) :StThunk)))
+    :Goal))
+;;; disjoined-dfs -- disjunction that searches DEPTH-FIRST.
+;;;
+;;; `disjoined` interleaves, which is what makes it complete on relations with
+;;; infinitely many solutions. That costs more to reach a solution that sits
+;;; deep in the left branch, because interleaving gets there breadth-first.
+;;; This variant keeps the old depth-first order.
+;;;
+;;; It is NOT complete: on a goal whose left branch has infinitely many
+;;; solutions it never reaches the right one. Reach for it only when the left
+;;; branch is known finite.
+;;;
+;;; Parameters:
+;;;   g1 -- first goal
+;;;   g2 -- second goal
+;;;
+;;; Returns:
+;;;   A goal yielding g1's solutions then g2's.
+;;;
+;;; Example:
+;;;   (run-logic 1 (disjoined-dfs (lequal x (term-int 1)) (lequal x (term-int 2))))
+;;;
+;;; Since: lazy-streams
+
+(defn disjoined-dfs-impl [lg1 : (Goal int) lg2 : (Goal int) state : Subst] : Stream
+  (st-append-dfs (apply-goal lg1 state) (apply-goal lg2 state)))
+
+(defn disjoined-dfs [A] [g1 : (Goal A) g2 : (Goal A)] : (Goal A)
+  (:: (let [l1 (:: g1 (Goal int))
+            l2 (:: g2 (Goal int))]
+        (fn [state : Subst] (let [_ l1] (disjoined-dfs-impl l1 l2 state))))
     :Goal))
 ;;; -- Runner ───────────────────────────────────────────────────────────────────
 ;;; run-logic -- run a goal with an empty state and return up to n solutions.

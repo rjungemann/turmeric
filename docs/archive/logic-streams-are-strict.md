@@ -20,13 +20,25 @@ Landing it required a compiler fix first --
 resolved -- because the emitted C tripped `tests/run.sh`'s cc-warning gate on 9
 shipped fixtures.
 
-**Carried forward:** fair interleaving makes some first solutions more
-expensive. A goal whose solutions all sit at depth *d* of a binary disjunction
-tree went from 0.464 s to 3.524 s at d=18 for `run-logic 1` -- depth-first found
-the leftmost leaf in O(d), interleaving reaches it breadth-first. That is the
-standard miniKanren trade and the right one (DFS is fast on the goals it
-terminates on and diverges on the rest), but it is a real regression for that
-shape.
+**The interleaving cost, and its answer.** Fair interleaving makes some first
+solutions more expensive: a goal whose solutions all sit at depth *d* of a
+binary disjunction tree went 0.464 s -> 3.524 s at d=18 for `run-logic 1`,
+because depth-first found the leftmost leaf in O(d) and interleaving reaches it
+breadth-first.
+
+`disjoined-dfs` / `st-append-dfs` recover it, and **more than recover it**:
+
+| d | old (strict, DFS) | `disjoined` (interleaved) | `disjoined-dfs` (lazy, DFS) |
+|---:|---:|---:|---:|
+| 14 | -- | 0.052 s | **0.013 s** |
+| 16 | -- | 0.866 s | **0.013 s** |
+| 18 | 0.464 s | 3.524 s | **0.012 s** |
+
+Flat, and 35x faster at d=18 than the strict version it replaces -- because it
+is depth-first *and* lazy, so `run-logic 1` costs one solution instead of the
+whole search. `disjoined` stays the default: it is the complete one, and
+`disjoined-dfs` never reaches the right branch of a goal whose left branch is
+infinite.
 
 Found while asking whether `logic.tur` has a region boundary an arena could
 reclaim at ([the arena thread](../archive/history/per-entry-arena-gate.md)).

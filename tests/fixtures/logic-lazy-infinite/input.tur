@@ -15,6 +15,12 @@
 (defn nats [] : (Goal int)
   (disjoined (succeed) (zzz (nats))))
 
+;; 2^n solutions, all at depth n.  Depth-first reaches the leftmost in O(n);
+;; interleaving reaches it breadth-first, which is the trade `disjoined` makes
+;; to be complete on relations like `nats` above.
+(defn deep [n : int] : (Goal int)
+  (if (<= n 0) (succeed) (disjoined-dfs (zzz (deep (- n 1))) (zzz (deep (- n 1))))))
+
 (defn main [] : int
   ;; Each of these must terminate, and must cost only the solutions asked for.
   (println (st-length (run-logic 1 (nats))))
@@ -23,4 +29,13 @@
   ;; A finite goal still behaves exactly as before.
   (println (st-length (run-logic 5 (disjoined (lequal (term-var 0) (term-int 1))
                                               (lequal (term-var 0) (term-int 2))))))
+  ;; disjoined-dfs keeps the old depth-first ORDER while staying lazy.  It is
+  ;; incomplete by construction -- it never reaches the right branch of a goal
+  ;; whose left branch is infinite -- so it is only used where the left branch
+  ;; is known finite.
+  (println (st-length (run-logic 5 (disjoined-dfs (lequal (term-var 0) (term-int 1))
+                                                  (lequal (term-var 0) (term-int 2))))))
+  ;; Laziness holds for the depth-first variant too: one solution off a goal
+  ;; with 2^14 of them costs one solution.
+  (println (st-length (run-logic 1 (deep 14))))
   0)
