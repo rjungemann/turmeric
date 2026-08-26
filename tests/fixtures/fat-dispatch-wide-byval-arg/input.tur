@@ -1,0 +1,36 @@
+;; fat-dispatch-wide-byvalue-aggregate-argument (archived): a WIDE (> 8 byte)
+;; by-value aggregate as the parameter of a closure crossing a fat boundary.
+;;
+;; Every fat boundary speaks the b4box convention now: the typed-thunk typedef
+;; spells a wide by-value param slot as int64_t (thunk_param_slot_c_name), the
+;; thunk bodies deref the box at entry (emit_fns.c needs_box_load, no longer
+;; suppressed for fn-field closures), the typed fatshims adapt bare fns (pbp
+;; pointer or deref by size), and every dispatch site boxes the argument
+;; (fat_dispatch_box_arg).  Before the unification the dispatch cast promised
+;; a by-value signature nothing implemented: a `^fat` sink was a hard cc error
+;; ("expected 'tur_adt_P' but argument is of type 'const tur_adt_P *'"), and
+;; the same disagreement through the untyped `:fn` carrier was a SILENT WRONG
+;; ANSWER -- which is why this fixture checks values, not just that it builds.
+;;
+;; Covers: capturing closure through a typed `^fat` sink (mk/apply-it) and a
+;; bare fn through the same sink (fatshim path).  The untyped `:fn` carrier
+;; crossing is covered by the logic-* fixtures under the SR4 seam; spelling it
+;; here as `((:: f (fn [P] int)) v)` trips an UNRELATED pre-existing bug
+;; (ascribed-fn-param-call-head-name-mismatch -- the call-head temp's
+;; declaration and use disagree on mangling), so this fixture stays off that
+;; spelling.
+
+(defdata P :copy (P [a : int b : int c : int]))
+
+(defn sum-p [p : P] : int (match p (P a b c) (+ a (+ b c))))
+
+(defn apply-it [^fat f : (fn [P] int) v : P] : int (f v))
+
+(defn mk [bump : int] : (fn [P] int)
+  (let [lb bump]
+    (fn [p : P] (+ lb (sum-p p)))))
+
+(defn main [] : int
+  (println (apply-it (mk 100) (P 1 2 3)))   ; 106  capturing, ^fat sink
+  (println (apply-it sum-p (P 4 5 6)))      ; 15   bare fn, fatshim
+  0)

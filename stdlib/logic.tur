@@ -678,8 +678,7 @@
   (let [lg g]
     (:: (fn [state : Subst]
           (let [_ lg]
-            (mbind (apply-goal lg state)
-              (fn [s : Subst] (mreturn (f s))))))
+            (mbind (apply-goal lg state) (fn [s : Subst] (mreturn (f s))))))
       :Goal)))
 ;;; Functor [Goal] -- map a function over each solution state.
 ;;;

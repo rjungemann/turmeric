@@ -406,6 +406,25 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
     buf_printf(out, "__lens_%016llx", lens_hash);
 }
 
+/* SR-fat-abi: the C spelling of one typed-thunk PARAMETER slot.
+ *
+ * A WIDE (> 8 byte) by-value aggregate crosses every fat-closure boundary as
+ * an int64 heap-box POINTER -- the b4box convention the closure emitter
+ * (emit_fns.c needs_box_load) already gives the thunk bodies.  Until now the
+ * typedef spelled the aggregate itself, so the dispatch cast promised a
+ * signature nothing implemented: b4box closures take int64, bare fns take
+ * `const T *` (pbp) or the aggregate, and the callee read a struct out of the
+ * register holding a pointer (fat-dispatch-wide-byvalue-aggregate-argument).
+ * Spelling the slot int64 HERE makes every consulting site -- the env struct
+ * `__fn` field, the store casts, both typed dispatch sites, and the typed
+ * fatshims -- agree with the thunks by construction.  Narrow aggregates
+ * (<= 8 bytes) and results are untouched: both have working by-value
+ * conventions. */
+static const char *thunk_param_slot_c_name(Type t) {
+    if (type_is_wide_byval_adt(t)) return "int64_t";
+    return type_c_name(t);
+}
+
 static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -413,7 +432,7 @@ static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8
     append_sanitized_c_token(&name, type_c_name(result_type));
     for (uint32_t i = 0; i < n_params; i++) {
         buf_putc(&name, '_');
-        append_sanitized_c_token(&name, type_c_name(param_types[i]));
+        append_sanitized_c_token(&name, thunk_param_slot_c_name(param_types[i]));
     }
     buf_puts(&name, "_t");
     buf_putc(&name, '\0');
@@ -450,7 +469,7 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : out;
     buf_printf(target, "typedef %s (*%s)(void *", type_c_name(result_type), name);
     for (uint32_t i = 0; i < n_params; i++) {
-        buf_printf(target, ", %s", type_c_name(param_types[i]));
+        buf_printf(target, ", %s", thunk_param_slot_c_name(param_types[i]));
     }
     buf_puts(target, ");\n");
     return name;
@@ -940,7 +959,8 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
     buf_printf(target, "static %s %s(void *__e", type_c_name(result_type), name);
     for (uint32_t i = 0; i < n_params; i++) {
-        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
+                   (unsigned)i);
     }
     buf_puts(target, ") {\n    ");
     if (has_ret) buf_puts(target, "return ");
@@ -950,13 +970,33 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     } else {
         for (uint32_t i = 0; i < n_params; i++) {
             if (i) buf_puts(target, ", ");
-            buf_puts(target, type_c_name(param_types[i]));
+            /* SR-fat-abi: the BARE fn behind the shim keeps its own ABI --
+             * `const T *` for a pbp aggregate, the aggregate by value below
+             * the pbp threshold.  The shim is where the box-pointer slot
+             * meets it. */
+            Type rp = param_types[i];
+            const AdtDef *pd = (rp.kind == TY_ADT) ? rp.as.adt_.def : NULL;
+            if (pd && type_is_wide_byval_adt(rp) && adt_byval_pass_by_ptr(pd))
+                buf_printf(target, "const %s *", type_c_name(rp));
+            else
+                buf_puts(target, type_c_name(rp));
         }
     }
     buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
     for (uint32_t i = 0; i < n_params; i++) {
         if (i) buf_puts(target, ", ");
-        buf_printf(target, "a%u", (unsigned)i);
+        Type rp = param_types[i];
+        const AdtDef *pd = (rp.kind == TY_ADT) ? rp.as.adt_.def : NULL;
+        if (pd && type_is_wide_byval_adt(rp) && adt_byval_pass_by_ptr(pd))
+            /* pbp callee: the box pointer IS the address it wants. */
+            buf_printf(target, "(const %s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else if (type_is_wide_byval_adt(rp))
+            /* by-value callee below the pbp threshold: deref the box. */
+            buf_printf(target, "*(%s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else
+            buf_printf(target, "a%u", (unsigned)i);
     }
     buf_puts(target, ");\n}\n");
     return name;
@@ -5886,7 +5926,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
          * already concrete, so type_is_wide_byval_adt reads them directly. */
         const char *pc;
-        if (spec->fn->closure && !spec->fn->byval_fn_field_closure &&
+        if (spec->fn->closure &&
             !spec->fn->params[i]->is_poly_fn &&
             spec->fn->param_types[i].kind != TY_FN &&
             type_is_wide_byval_adt(spec->arg_types[i])) {
@@ -6300,7 +6340,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              * box pointer -- mirror emit_fns.c's needs_box_load signature. */
             Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                 ? *e->type.as.fn.arg_full_types[j] : fd->param_types[j];
-            if (fd->closure && !fd->byval_fn_field_closure &&
+            if (fd->closure &&
                 !fd->params[j]->is_poly_fn &&
                 fd->param_types[j].kind != TY_FN &&
                 type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {

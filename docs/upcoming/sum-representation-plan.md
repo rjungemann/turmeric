@@ -350,7 +350,38 @@ Plausibly the largest of the three size wins, given how common those shapes are
 nested-monomorph fix touched. **Gate:** needs SR2, and needs SR0(a) to show the
 volume is there.
 
-### SR4 -- recursive sums -- SCOPED 2026-08-26, one blocker
+### SR4 -- recursive sums -- UNBLOCKED AND MEASURED 2026-08-27; default stays carrier
+
+**The blocker is fixed.** The fat-dispatch ABI disagreement is
+[resolved](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md) --
+every fat boundary speaks the b4box convention, spelled once in
+`thunk_param_slot_c_name` -- and with `TUR_SR4_RECURSIVE_BYVALUE=1` the FULL
+suite is **2708 passed / 0 failed** with recursive sums by value.
+
+**So the admission was measured before being defaulted, and the measurement
+says no** (or: not yet). On the two real recursive-sum workloads:
+
+| workload | carrier | by value | |
+|---|---:|---:|---|
+| logic.tur bind+walk, 400k passes | 0.41s | 0.57s | ~1.4x slower |
+| ... peak RSS | 116 MB | 51 MB | ~2.2x less memory |
+| re.tur compile+match, 5k passes | 14 ms | 19 ms | ~1.35x slower |
+
+By value halves the mallocs (the payload no longer boxes; the spine box per
+node remains), but each walk step then deref-COPIES a 24-48 byte aggregate
+out of the spine box where the carrier copied one word. Walk-heavy code --
+which is what a logic engine and a regex matcher are -- pays more in copies
+than it saves in allocation. This is the same lesson as rows B-vs-C above
+from the other side: the allocation was never the whole cost.
+
+**What this phase now is:** a one-line default flip
+(`is_self_recursive` in `adt_sr1_sum_candidate`, types.c, where the decision
+record lives) waiting on either a workload that wants memory over speed, or
+reclamation landing first -- an arena makes the carrier's mallocs cheap AND
+keeps one-word copies, at which point by-value recursive sums may have no
+constituency at all. Measure again then; the seam reproduces everything.
+
+### SR4 (superseded 2026-08-27) -- as scoped 2026-08-26, one blocker
 
 **Measured, not estimated.** Admitting recursive sums to the by-value path
 (drop the `is_self_recursive` test in `adt_sr1_sum_candidate`) leaves the suite

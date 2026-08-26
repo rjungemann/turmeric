@@ -56,6 +56,16 @@ the other 21 self-recursive sums still box on every construction and still
 leak. That is the workload this report measured, so **the callgrind numbers at
 the top of this report are unimproved.** They are SR4's population.
 
+> **Follow-up (2026-08-27):** SR4's codegen was subsequently unblocked (the
+> fat-dispatch ABI bug is
+> [fixed](fat-dispatch-wide-byvalue-aggregate-argument.md)), the full suite is
+> green with recursive sums by value behind `TUR_SR4_RECURSIVE_BYVALUE=1`, and
+> the flip was MEASURED and declined: on this report's own workload by-value
+> runs ~1.4x slower for ~2.2x less memory -- the copies cost more than the
+> mallocs saved. The default stays carrier pending reclamation; the decision
+> record is at the `is_self_recursive` test in types.c and the SR plan's SR4
+> section.
+
 The exclusion is not a layout limit. A recursive ADT field already rides the
 int64 carrier, so such a type has a finite inline size and lowers by value
 perfectly well -- the SR1 gate proved that, and every codegen crossing SR1

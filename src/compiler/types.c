@@ -3017,16 +3017,30 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
     if (!def || def->is_gadt || def->is_heap) return false;
     if (def->n_ctors < 2 || def->n_type_params != 0) return false;
     if (!def->ctors) return false;
-    /* SR1 covers NON-recursive sums; the recursive ones are SR4.  A recursive
-     * sum lowers by value perfectly well (its recursive field is a one-word
-     * carrier, so the layout is finite -- see AdtDef.is_self_recursive), and the
-     * codegen crossings are the same ones SR1 fixes.  What holds SR4 back is not
-     * codegen: `stdlib/logic.tur` ascribes carrier-erased polymorphic results
-     * back to `Subst` / `Stream` (`(:: (f s) :Subst)`), a no-op cast while those
-     * ride the carrier and a hard TUR-E0295 once they do not.  That is library
-     * source to rewrite, not a predicate to widen, so the recursive population
-     * stays where it is until SR4 does it deliberately. */
-    if (def->is_self_recursive) return false;
+    /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admits
+     * recursive sums to the by-value path.  The suite is GREEN with it on --
+     * every codegen blocker is fixed (the fat-dispatch ABI disagreement,
+     * resolved by unifying every fat boundary on the b4box convention via
+     * thunk_param_slot_c_name; see the archived
+     * fat-dispatch-wide-byvalue-aggregate-argument report) -- so this line is
+     * now a PERFORMANCE decision, not a correctness one, and it was measured
+     * before being made:
+     *
+     *   logic.tur bind+walk, 400k passes:  carrier 0.41s / by-value 0.57s
+     *                                      peak RSS 116 MB -> 51 MB
+     *   re.tur compile+match, 5k passes:   carrier 14 ms / by-value 19 ms
+     *
+     * By value halves the mallocs (the payload no longer boxes; the spine box
+     * per node remains) but each walk step then deref-COPIES a 24-48 byte
+     * aggregate out of the spine box where the carrier copied one word --
+     * ~1.4x slower on both walk-heavy workloads, for ~2.2x less memory.  The
+     * SR plan says to justify this phase against the post-reclamation
+     * baseline, where the memory argument only weakens.  So the default stays
+     * carrier until a workload wants that trade.  is_self_recursive is the
+     * boundary; adt_graph_reaches below is the separate SOUNDNESS gate over
+     * inline-field cycles and is never bypassed. */
+    if (def->is_self_recursive && !getenv("TUR_SR4_RECURSIVE_BYVALUE"))
+        return false;
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         const CtorDef *c = def->ctors[ci];
         /* The predicate is reached DURING elaboration of the very def it is

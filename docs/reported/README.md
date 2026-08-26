@@ -927,12 +927,22 @@ turned up a defect in the instrument that would have justified it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fat-dispatch-wide-byvalue-aggregate-argument](fat-dispatch-wide-byvalue-aggregate-argument.md) | medium | a lifted thunk takes a wide by-value aggregate parameter by value, while the fat/poly dispatch site casts slot 0 to `int64_t (*)(void *, int64_t)` and passes a heap box -- so the callee reads a struct out of the register holding a pointer. A hard cc error today; a SILENT WRONG ANSWER the moment a sum rides by value (logic-reify prints 0 for 10). The argument-position sibling of two already-fixed reports, and the only thing between SR4 and done (2705/2 with recursive sums admitted, both failures this bug) |
+| [ascribed-fn-param-call-head-name-mismatch](ascribed-fn-param-call-head-name-mismatch.md) | medium | `((:: f (fn [int] int)) v)` on a bare `:fn` param declares its hoisted call-head temp under the id-suffixed mangled name and calls it under the verbatim raw name -- `'__call_head_N' undeclared`, a clean build break on a documented spelling with no fixture. Scalar repro; unrelated to aggregates |
 | [c-name-accessors-share-static-buffers](c-name-accessors-share-static-buffers.md) | low | an accessor that spells a C type into a function-scoped `static` buffer is correct only while callers consume before asking again -- and emitters gather one name per field, then print. Two instances so far (`ret_ctype` interior pointer, `adt_field_c_type` mistyping a Result monomorph's ok arm as its err arm), both fixed; `ensure_static_fatbox` is still the shape, correct today only because it has exactly one caller. Fails as a silently wrong C type, not a crash |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
+`fat-dispatch-wide-byvalue-aggregate-argument` was resolved 2026-08-27 and
+moved to
+[docs/archive](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md):
+every fat boundary now speaks one convention (a wide by-value aggregate
+crosses as an int64 box pointer), spelled in one place and consulted by the
+typedef, the dispatches, the fatshims and the thunk emitters alike. Its
+resolution also records why SR4 (recursive sums by value) is green but OFF by
+default: measured 1.4x slower / 2.2x less memory on the logic and regex
+workloads -- a trade to make deliberately, behind TUR_SR4_RECURSIVE_BYVALUE=1.
+
 `multi-variant-adts-always-heap-allocate` was resolved 2026-08-26 for the
 NON-RECURSIVE sum population and moved to
 [docs/archive](../archive/multi-variant-adts-always-heap-allocate.md). SR1

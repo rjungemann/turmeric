@@ -2041,6 +2041,34 @@ static char *match_arm_pbp_deref(EmitCtx *ctx, const Expr *arm_body,
     return out;
 }
 
+/* SR-fat-abi: convert one fat-dispatch ARGUMENT into the int64 box-pointer
+ * slot the typed-thunk typedef now spells for a wide by-value aggregate param
+ * (thunk_param_slot_c_name).  A pass-by-pointer param is already a pointer to
+ * the aggregate -- retype it.  A by-value expression spills to a local and
+ * passes its address: the callee (a b4box thunk or a typed fatshim) copies at
+ * entry, and the call is synchronous, so the frame outlives the read.  Returns
+ * a replacement for `raw` (caller frees); a non-wide slot passes through. */
+static char *fat_dispatch_box_arg(EmitCtx *ctx, Buf *body, const Expr *arg,
+                                  Type slot_ty, char *raw) {
+    if (!type_is_wide_byval_adt(emit_resolve_type(ctx, slot_ty))) return raw;
+    Buf b; buf_init(&b);
+    if (arg && expr_is_pbp_param(ctx, arg)) {
+        buf_printf(&b, "(int64_t)(intptr_t)(%s)", raw);
+    } else {
+        const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, slot_ty));
+        char *tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = (%s);\n", cn, tmp, raw);
+        buf_printf(&b, "(int64_t)(intptr_t)(&%s)", tmp);
+        free(tmp);
+    }
+    buf_putc(&b, '\0');
+    free(raw);
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
+}
+
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
  * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
  * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
@@ -4758,13 +4786,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Collect the declared C arg types first: whether any of
                      * them is an aggregate decides how this call is spelled. */
                     const char *arg_ct[4] = {NULL, NULL, NULL, NULL};
+                    Type arg_slot_ty[4];
+                    bool slot_is_wide[4] = {false, false, false, false};
                     bool any_aggregate = false;
                     for (uint32_t i = 0; i < n && i < 4; i++) {
                         Type at = (gf->type.as.fn.arg_full_types &&
                                    gf->type.as.fn.arg_full_types[i])
                                       ? *gf->type.as.fn.arg_full_types[i]
                                       : emit_type_from_kind(gf->type.as.fn.arg_kinds[i]);
-                        arg_ct[i] = emit_type_c_name(ctx, at);
+                        arg_slot_ty[i] = emit_resolve_type(ctx, at);
+                        /* SR-fat-abi: a WIDE by-value aggregate slot is an int64
+                         * box pointer -- the same convention the typed-thunk
+                         * typedef, the b4box thunk bodies and the typed fatshims
+                         * all speak now.  Spelling the aggregate here called a
+                         * shim that derefs a0 with the aggregate VALUE in the
+                         * register -- a SIGSEGV, not a type error, because this
+                         * cast is exactly what hid the disagreement. */
+                        slot_is_wide[i] = type_is_wide_byval_adt(arg_slot_ty[i]);
+                        arg_ct[i] = slot_is_wide[i]
+                                        ? "int64_t"
+                                        : emit_type_c_name(ctx, arg_slot_ty[i]);
                         if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
                     }
                     Buf out; buf_init(&out);
@@ -4775,6 +4816,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(&out, ", %s", fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
                             char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            if (slot_is_wide[i])
+                                av = fat_dispatch_box_arg(ctx, body,
+                                    e->as.call_.args[i], arg_slot_ty[i], av);
                             buf_printf(&out, ", %s", av);
                             free(av);
                         }
@@ -4808,7 +4852,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    fn_ptr_val, fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
                             char *av = emit_value(ctx, body, e->as.call_.args[i]);
-                            if (emit_c_type_is_scalar(arg_ct[i]))
+                            if (slot_is_wide[i]) {
+                                av = fat_dispatch_box_arg(ctx, body,
+                                    e->as.call_.args[i], arg_slot_ty[i], av);
+                                buf_printf(&out, ", (int64_t)(%s)", av);
+                            } else if (emit_c_type_is_scalar(arg_ct[i]))
                                 buf_printf(&out, ", (%s)(%s)", arg_ct[i], av);
                             else
                                 buf_printf(&out, ", (%s)", av);
@@ -5100,8 +5148,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * NOT byvalue aggregates, so they pass through untouched. */
                     if (!phase_f_concrete &&
                         emit_type_is_byvalue_adt(ctx, e->as.call_.args[i]->type)) {
-                        char *boxed = emit_agg_box(ctx, e->as.call_.args[i]->type, raw);
-                        free(raw);
+                        /* A pass-by-pointer parameter is held as `const T *`, so
+                         * the box copy `*__tur_pbox = (v)` would assign a pointer
+                         * to a struct.  Copy through it.  Reachable since a wide
+                         * by-value aggregate can be both a pbp param and a poly
+                         * carrier arg (the fat-dispatch-wide-byvalue-aggregate-
+                         * argument fixture's apply-un leg). */
+                        char *src = raw;
+                        if (expr_is_pbp_param(ctx, e->as.call_.args[i])) {
+                            Buf d; buf_init(&d);
+                            buf_printf(&d, "*(%s)", raw);
+                            buf_putc(&d, '\0');
+                            src = strdup(d.data);
+                            buf_free(&d);
+                            free(raw);
+                        }
+                        char *boxed = emit_agg_box(ctx, e->as.call_.args[i]->type, src);
+                        free(src);
                         raw = boxed;
                     }
                     /* B4 (byvalue-recursive-carrier): a single-carrier recursive
@@ -5488,6 +5551,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) {
                         arg_types[i] = emit_resolve_type(ctx, e->as.call_.args[i]->type);
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                        /* SR-fat-abi: a wide by-value aggregate slot is int64
+                         * (box pointer) in the typedef now -- convert. */
+                        arg_strs[i] = fat_dispatch_box_arg(ctx, body,
+                            e->as.call_.args[i], arg_types[i], arg_strs[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         _disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
@@ -5499,7 +5566,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         /* Legacy fallback: polymorphic fat closures still store __fn as int64_t. */
                         buf_printf(&out, "((%s (*)(void*", ret_c);
                         for (uint32_t i = 0; i < n; i++) {
-                            buf_printf(&out, ", %s", type_c_name(arg_types[i]));
+                            /* SR-fat-abi: same slot convention as the typed
+                             * typedef -- a wide by-value aggregate crosses as
+                             * an int64 box pointer, and fat_dispatch_box_arg
+                             * above already converted the argument. */
+                            buf_printf(&out, ", %s",
+                                type_is_wide_byval_adt(arg_types[i])
+                                    ? "int64_t" : type_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -5658,6 +5731,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             arg_types[i] = e->as.call_.args[i]->type;
                         }
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                        /* SR-fat-abi: see the CY2 twin above. */
+                        arg_strs[i] = fat_dispatch_box_arg(ctx, body,
+                            e->as.call_.args[i], arg_types[i], arg_strs[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
@@ -5668,7 +5744,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else {
                         buf_printf(&out, "((%s (*)(void*", ret_c);
                         for (uint32_t i = 0; i < n; i++) {
-                            buf_printf(&out, ", %s", type_c_name(arg_types[i]));
+                            /* SR-fat-abi: see the CY2 twin above. */
+                            buf_printf(&out, ", %s",
+                                type_is_wide_byval_adt(emit_resolve_type(ctx, arg_types[i]))
+                                    ? "int64_t" : type_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -6035,6 +6114,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     arg_strs[i] = emit_c_zero_of(fc);
                                 }
                             }
+                        }
+                    }
+                    /* pbp-param-into-ctor: a pass-by-pointer PARAMETER
+                     * (`const T *`, any by-value aggregate whose def crossed the
+                     * adt_byval_pass_by_ptr threshold) consumed by a constructor
+                     * is consumed as a VALUE: an inline by-value field takes the
+                     * aggregate directly, and a carrier field's box spill copies
+                     * from it (`*tmp = (x)`).  Both received the raw pointer --
+                     * `ctor_H(tur_adt_Big)` fed a `const tur_adt_Big *` is a hard
+                     * cc error.  Deref once, up front, so every downstream
+                     * consumer in this loop sees the value.  Pre-existing for
+                     * wide products (pbp since long before SR1) but unreachable
+                     * in the suite until a fixture passed one straight to a
+                     * ctor; sums made it ordinary. */
+                    if (arg && expr_is_pbp_param(ctx, arg) &&
+                        emit_type_is_byvalue_adt(ctx, arg->type)) {
+                        Type prt = emit_resolve_type(ctx, arg->type);
+                        const AdtDef *prd = (prt.kind == TY_ADT)
+                                                ? prt.as.adt_.def : NULL;
+                        if (prd && adt_byval_pass_by_ptr(prd)) {
+                            Buf d; buf_init(&d);
+                            buf_printf(&d, "(*(%s))", arg_strs[i]);
+                            buf_putc(&d, '\0');
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(d.data);
+                            buf_free(&d);
                         }
                     }
                     /* hkt-cata-function-carrier: an EX_FN_TO_FAT shim (a thin fn

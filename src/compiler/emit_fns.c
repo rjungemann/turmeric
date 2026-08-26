@@ -3437,7 +3437,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * field's by-value typed thunk, so its wide by-value ADT params cross by
      * value -- suppress B4 b4box boxing (it would disagree with the typed thunk
      * + call site and corrupt the arg). */
-    if (fd->closure && !fd->byval_fn_field_closure) {
+    /* SR-fat-abi: the byval_fn_field_closure suppression is retired -- the
+     * typed-thunk typedef now spells a wide by-value param slot as int64_t
+     * (see thunk_param_slot_c_name), so a fn-field closure b4boxes exactly
+     * like every other closure and the field dispatch passes the box. */
+    if (fd->closure) {
         for (uint32_t i = 0; i < fd->n_params; i++) {
             if (fd->params[i]->is_poly_fn ||
                 fd->param_types[i].kind == TY_FN) continue;

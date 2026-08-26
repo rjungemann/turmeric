@@ -1692,6 +1692,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def = adt_binding->type.as.adt_.def;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
         def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
@@ -1727,6 +1734,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
         def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
@@ -2492,6 +2506,13 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def = adt_binding->type.as.adt_.def;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->needs_drop_glue = false;
         def->is_gadt = true;
@@ -2522,6 +2543,13 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_gadt = true;
         def->type_params = type_params;

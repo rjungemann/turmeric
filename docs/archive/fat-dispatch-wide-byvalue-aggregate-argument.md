@@ -6,20 +6,80 @@ is worth a report rather than a footnote is what it becomes the moment a sum
 rides by value: the same disagreement stops being a type error the C compiler
 can see, and turns into a **silent wrong answer**. Measured below.
 
-**Status:** OPEN. Filed 2026-08-26 while scoping SR4 (recursive sums by value),
-which this blocks. Diagnosed with a minimal repro and two candidate fixes tried
-and rejected; not fixed.
+**Status: RESOLVED 2026-08-27.** Both manifestations fixed by unifying every
+fat boundary on the b4box convention -- see **Resolution** at the bottom.
+Filed 2026-08-26 while scoping SR4 (recursive sums by value), which this
+blocked; SR4's codegen is now green behind its measurement seam.
 
 **It is the argument-position member of a family whose other two are fixed:**
 
-- [fat-closure-dispatch-does-not-handle-struct-return](../archive/history/fat-closure-dispatch-does-not-handle-struct-return.md)
+- [fat-closure-dispatch-does-not-handle-struct-return](history/fat-closure-dispatch-does-not-handle-struct-return.md)
   -- RESULT position, aggregate. Fixed.
-- [poly-wrapper-forces-int64-args-non-int-fat-sink](../archive/history/poly-wrapper-forces-int64-args-non-int-fat-sink.md)
+- [poly-wrapper-forces-int64-args-non-int-fat-sink](history/poly-wrapper-forces-int64-args-non-int-fat-sink.md)
   -- ARGUMENT position, `:float` (a register-class mismatch). Fixed.
 - **This one** -- ARGUMENT position, wide by-value aggregate.
 
 The pattern across all three is one sentence: **a lifted thunk is declared with
 the concrete C signature, and the dispatch site casts it to something else.**
+
+## Resolution (2026-08-27) -- one convention, spelled in one place
+
+The fix is what the failed experiments pointed at: the disagreement was
+per-call-site, so the cure is to make every site consult ONE source of truth.
+`thunk_param_slot_c_name` (emit_module.c) now spells a typed-thunk parameter
+slot: a WIDE (> 8 byte) by-value aggregate is an `int64_t` box pointer -- the
+b4box convention the thunk bodies already spoke -- and everything else keeps
+its C type. Every consumer follows automatically or was taught to:
+
+- the typed-thunk TYPEDEF (name and body) spells the slot int64, so the env
+  struct `__fn` field, the store casts, and both typed dispatch sites agree by
+  construction;
+- the two LEGACY dispatch casts (the typedef-declined fallback) spell the same
+  slot convention;
+- the fn-field call-through (the `TUR_APPLY*_T` expansion site) does too --
+  spelling the aggregate there was the SIGSEGV, because that cast is what hid
+  the disagreement from the C compiler;
+- `fat_dispatch_box_arg` converts each argument once at every dispatch: a
+  pass-by-pointer param is retyped (it already is a pointer to the aggregate),
+  a by-value expression spills and passes its address (the callee copies at
+  entry; the call is synchronous);
+- the typed FATSHIMS take the int64 slot and adapt to the bare fn's real ABI
+  (`const T *` for a pbp callee, deref-to-value below the pbp threshold);
+- the b4box suppression for fn-field closures (`byval_fn_field_closure`) is
+  retired -- it existed to keep those thunks in lockstep with the OLD
+  aggregate-by-value typedef spelling, and with the spelling gone the
+  suppression was the disagreement.
+
+**Both repros confirmed fixed.** Repro 1 (`^fat` sink, default path) prints
+106 and is pinned by `tests/fixtures/fat-dispatch-wide-byval-arg` (capturing
+closure and bare-fn/fatshim legs, values asserted). Repro 2: under
+`TUR_SR4_RECURSIVE_BYVALUE=1` the logic probe prints `2 2 10 20` (all four
+values correct) and the FULL suite is 2708 passed / 0 failed with recursive
+sums by value.
+
+**Two prerequisites landed with it**, both latent product bugs this report's
+sums made ordinary: the by-value size accounting read `ctors[0]` only (a sum
+sized by its narrow first variant classified carrier-slot-safe -- the exact
+mechanism behind repro 2's silent wrong answer -- and the pbp threshold
+depended on declaration order), and several pbp crossings had never seen a
+pbp value consumed as a value (ctor args, match-arm returns, the match switch
+path, the poly-carrier arg box).
+
+**What did NOT ship: SR4 by default.** With the blocker gone the admission is
+a one-line change and the suite is green with it -- so it was measured first,
+and the measurement says the trade is memory-for-time: logic bind+walk 400k
+passes runs 0.41s -> 0.57s (~1.4x slower) at 116 MB -> 51 MB peak RSS, regex
+compile+match 14 ms -> 19 ms. By value halves the mallocs but each walk step
+deref-copies a 24-48 byte aggregate where the carrier copied one word. Per
+the SR plan (justify SR4 against the post-reclamation baseline), the default
+stays carrier; `TUR_SR4_RECURSIVE_BYVALUE=1` is the seam that reproduces all
+of the above, and the decision record lives at the `is_self_recursive` test
+in `adt_sr1_sum_candidate` (types.c).
+
+One find along the way is filed separately:
+[ascribed-fn-param-call-head-name-mismatch](../reported/ascribed-fn-param-call-head-name-mismatch.md)
+-- the `((:: f (fn [P] int)) v)` spelling breaks on a decl/use naming
+divergence that predates all of this and hits scalars too.
 
 ## Repro 1 -- default path, hard error
 
