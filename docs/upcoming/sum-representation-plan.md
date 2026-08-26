@@ -381,6 +381,14 @@ reclamation landing first -- an arena makes the carrier's mallocs cheap AND
 keeps one-word copies, at which point by-value recursive sums may have no
 constituency at all. Measure again then; the seam reproduces everything.
 
+**The seam is CI-armed** (`tests/run-sr4-seam.sh`, ctest target
+`tur_sr4_seam`): the recursive-sum fixture population builds and runs under
+`TUR_SR4_RECURSIVE_BYVALUE=1` on every CI run, behind a canary that fails
+loudly if the seam ever stops biting. So the green state cannot rot silently
+-- the flip stays a one-line decision, not a re-excavation -- and the
+sanitizer-gate failure mode ("a gate nobody turns on decays to a gate nobody
+notices") is closed for this gate specifically.
+
 ### SR4 (superseded 2026-08-27) -- as scoped 2026-08-26, one blocker
 
 **Measured, not estimated.** Admitting recursive sums to the by-value path

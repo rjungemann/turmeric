@@ -215,6 +215,21 @@ add_test(
   COMMAND bash tests/run-fmt.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# SR4 seam-rot gate: recursive sums by value (TUR_SR4_RECURSIVE_BYVALUE=1) are
+# OFF by default -- a measured performance decision, not a correctness one --
+# so nothing else in CI ever compiles a recursive sum by value, and the seam's
+# 2708-green state (2026-08-27) would rot silently as the compiler moves.
+# This harness re-runs the recursive-sum fixture population under the seam
+# (build + run + stdout compare, ~22 fixtures) behind a canary that asserts
+# the seam actually bites (ctor_SBind returns the aggregate, not int64_t), so
+# an env-var rename can't quietly turn it into a re-test of the default path.
+# See the is_self_recursive decision record in src/compiler/types.c and the
+# SR plan's SR4 section for why the seam exists at all.
+add_test(
+  NAME tur_sr4_seam
+  COMMAND bash tests/run-sr4-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # `tur check` sweep over examples/, ratcheted against
 # examples/examples-check-baseline.txt. Nothing referenced examples/ before
 # this, so nothing compiled them and they rotted -- 9 of 17 were failing when
