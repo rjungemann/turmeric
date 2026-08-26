@@ -334,9 +334,17 @@ rebuild: clean configure build
 # index.json, resolves cross-links, and enforces the size budget. The body of
 # each page is rendered exactly once and wrapped twice, so the website and Try
 # Turmeric's in-app docs pane cannot drift. See docs/guides/offline-docs-guide.md.
+#
+# `--strict-links` is armed: a cross-link that resolves to nothing is a build
+# failure, not a note scrolled past. genguides rewrites any local `.md` href to
+# a sibling `.html` without checking the target exists, so a link to a guide
+# that was never written -- or into `docs/upcoming/`, `docs/archive/`, or
+# `docs/reported/`, none of which are rendered -- ships as a 404 on
+# turmeric-lang.com. Link an unrendered doc by its GitHub blob URL, the way the
+# guides already link CLAUDE.md.
 docs: guides spices
     python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json --extra-json docs/html/spices/doc-names-spices.json --emit-pack web/public/docs-pack/
-    python3 tools/genpack.py web/public/docs-pack/
+    python3 tools/genpack.py web/public/docs-pack/ --strict-links
 
 # Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:

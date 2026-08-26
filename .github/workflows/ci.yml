@@ -32,33 +32,6 @@ jobs:
       # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
       CCACHE_NOHASHDIR: "1"
       CCACHE_BASEDIR: ${{ github.workspace }}
-      # Arm the compiler sanitizer gate. tests/run.sh scans each phase's captured
-      # `tur` stderr for `: runtime error:` and reports UBSan/ASan findings from
-      # the COMPILER (not from emitted programs); this makes a finding fail the
-      # run instead of printing into a green log. That silent-report mode is how
-      # `fat_captures_borrowed` was read uninitialized on 60 fixtures for as long
-      # as it existed without anything ever going red
-      # (docs/archive/history/fat-captures-borrowed-read-uninitialized.md).
-      #
-      # Armed only after measuring zero findings on macOS as well as Linux,
-      # because UBSan findings vary with toolchain and the Linux zero did not
-      # speak for macOS: Linux/GCC 0, and macOS 27.0 / Apple clang 21 / arm64 0
-      # across 2703 fixtures. That macOS zero was confirmed to be a real zero
-      # rather than a broken detector by a positive control -- a planted signed
-      # overflow in main() is caught, attributed to its fixture and phase, and
-      # fails the run.
-      #
-      # Caveat worth knowing if this goes red on the macOS leg and not locally:
-      # that measurement was taken on a local Apple-silicon Mac, NOT on the
-      # `macos-latest` runner image, whose macOS and Xcode versions differ. It
-      # is the same libubsan lineage and the same architecture, so it is strong
-      # evidence and not a proof. A first finding here is more likely a genuine
-      # version-specific one than a broken gate -- read the uploaded
-      # sanitizer-findings artifact before assuming otherwise.
-      #
-      # Job-level rather than step-level so it covers the auxiliary ctest step
-      # too; no harness other than run.sh reads it, so the extra scope is inert.
-      TUR_SANITIZER_GATE: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -136,9 +109,38 @@ jobs:
 
       - name: Run fixture suite (single shard)
         # Sharding temporarily disabled -- run the whole fixture corpus in one
-        # shard. To re-enable, restore the shard matrix axis above and add back:
-        #   env:
-        #     TUR_TEST_SHARD: ${{ matrix.shard }}
+        # shard. To re-enable, restore the shard matrix axis above and add
+        # `TUR_TEST_SHARD: ${{ matrix.shard }}` to the env block below.
+        #
+        # TUR_SANITIZER_GATE makes a UBSan/ASan finding from `tur` ITSELF fail
+        # the run, rather than printing into a log nobody reads. That
+        # silent-report mode is how `fat_captures_borrowed` was read
+        # uninitialized on 60 fixtures, on every run, for as long as it existed,
+        # without anything ever going red
+        # (docs/archive/history/fat-captures-borrowed-read-uninitialized.md).
+        #
+        # Armed on BOTH legs. It was Linux-only for exactly one PR, because the
+        # zero-findings measurement behind arming it had only been taken on
+        # Linux/GCC and UBSan findings are precisely the class of thing that
+        # varies with toolchain -- different struct padding, different
+        # uninitialized bytes, different implementation-defined corners. The
+        # macOS half has since been measured: 0 findings across 2703 fixtures on
+        # macOS 27.0 / Apple clang 21 / arm64, and confirmed to be a REAL zero
+        # rather than a broken detector by a positive control (a planted signed
+        # overflow in main() is caught, attributed to its fixture and phase, and
+        # fails the run). A gate that reports nothing because its pattern does
+        # not match the local sanitizer looks exactly like a clean tree, and
+        # this gate has already had that failure once -- note_sanitizer was
+        # missing from run.sh's `export -f` list.
+        #
+        # Caveat if this reddens the macOS leg and not a local run: the
+        # measurement was taken on a local Apple-silicon Mac, NOT on the
+        # `macos-latest` runner image, whose macOS and Xcode versions differ.
+        # Same libubsan lineage and architecture, so strong evidence and not a
+        # proof. A first finding here is more likely a genuine version-specific
+        # one than a broken gate -- read the uploaded sanitizer-findings
+        # artifact before assuming otherwise.
+        # See docs/archive/sanitizer-gate-not-armed-in-ci.md.
         #
         # --output-junit: per-suite name/status/duration for the timing trend
         # (docs/upcoming/suite-timing-trends-plan.md).  It writes its OWN file
@@ -148,6 +150,8 @@ jobs:
         # The XML also embeds each test's stdout in <system-out>, even under
         # --output-on-failure, which is where the TUR_SKIP markers are read
         # from; no -V or tee plumbing is needed.
+        env:
+          TUR_SANITIZER_GATE: "1"
         run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml
 
       - name: Run auxiliary suites (once per OS)

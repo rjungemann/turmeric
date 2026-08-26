@@ -112,3 +112,89 @@ rule that Try Turmeric behavior is confirmed in the browser rather than inferred
 a reproduction on the deployed page is worth doing before and after any fix. If
 a fix appears not to land on the live site, check `sw.js` `CACHE_VERSION` before
 suspecting the code.
+
+---
+
+## Resolution (2026-08-26)
+
+Fixed in `web/main.js`, following the implementation notes. **Exercised in a
+browser**, not just read-verified -- the report's own verification-status
+section asks for that, and it turned out to matter (see "The trap" below).
+
+### What changed
+
+- `docsScrollByRef`, a `Map<ref, scrollTop>`, as note 1 specifies. Per-ref, so
+  returning to guide A does not restore guide B's offset.
+- Written from three places: `showDocsPage` banks the outgoing page's offset
+  before it replaces `innerHTML`; `closeDocsPane` banks before hiding the
+  overlay; and an rAF-coalesced `scroll` listener keeps the map current as a
+  backstop. The first two are the mechanism -- they cover both ways of leaving
+  a page -- and the listener only guards against a future exit path that
+  forgets to bank.
+- `showDocsPage`'s unconditional `article.scrollTop = 0` became: anchor wins,
+  else a remembered offset for this ref, else 0 (note 2), still after the
+  fragment is in the document (note 4).
+- Restores go through `scrollTo({ behavior: 'instant' })` with a `scrollTop`
+  fallback, per note 3. Under `.docs-article`'s `scroll-behavior: smooth` a
+  plain assignment glides down the page on every reopen, which reads as the
+  pane scrolling by itself rather than as returning you to your place.
+- Session-scoped in memory, per note 6. No `STORAGE_KEYS` entry: surviving a
+  reload is not worth it for something this cheap to re-establish.
+
+Note 5's stale-clamp case needs no handling, as the report says -- the browser
+clamps to `scrollHeight - clientHeight` and that is the right behaviour.
+
+### One hazard the notes did not have
+
+`rememberDocsScroll` refuses to record while the pane is closed. A hidden
+element reports `scrollTop` 0, so a `scroll` callback still queued when the
+overlay went `display: none` overwrites the offset `closeDocsPane` had *just*
+banked -- with exactly the value the restore exists to avoid. Scroll, then hit
+Escape inside the same frame, and the feature silently does nothing. The guard
+is one `docsPaneIsOpen()` call; finding it without one is a bad afternoon.
+
+### The trap: a scroll-restore test that passes against no restore at all
+
+Worth writing down, because the first version of these tests passed against the
+unfixed file and would have shipped as proof of a fix that was not there.
+
+`showDocsPage` re-fetches the fragment. Until that promise resolves, the article
+column is still showing -- and still scrolled to -- the previous render. A
+`waitForFunction` poll accepts the first sample that matches, so it latches onto
+that stale offset and reports success before the code under test has run. Two of
+the three new tests passed against the pre-fix `main.js` this way.
+
+The fix is to assert the *settled* state: wait for the fetch to clear
+`aria-busy`, let the frame in which `showDocsPage` assigns `scrollTop` go by,
+then take a single reading. That is what `settleArticle` / `expectArticleAt` in
+the spec do.
+
+The same shape hides a second confound: toggling `display: none`/`flex` on the
+overlay *preserves* `scrollTop` in the DOM, so a close/reopen appears to keep
+your place for a moment before the re-render homes it. Retention by accident of
+the DOM is not restoration, and only the settled reading tells them apart.
+
+### Coverage
+
+Three tests in `web/tests/docs-pane.spec.js`:
+
+- `reopening the pane restores where you were in the page` -- the report's
+  workflow. Fails against pre-fix `main.js`, passes after.
+- `each page remembers its own offset` -- two guides with different offsets,
+  plus the assertion that a page opened for the *first* time still starts at
+  the top. Fails against pre-fix, passes after.
+- `an explicit anchor wins over a remembered offset` -- a **guard**, not a
+  repro: it passes both ways. Restoring an offset is exactly the kind of change
+  that quietly outranks an anchor, and that failure would present as "deep
+  links stopped working" rather than as anything to do with scrolling.
+
+All 11 tests in the file pass; the 8 pre-existing ones were run before the
+change as a baseline and after, and the two repro tests were confirmed to fail
+against the pre-fix `main.js`.
+
+Scope of what was exercised: `docs-pane.spec.js` only. The rest of
+`web/tests/` waits on `#wasm-status-text` reaching Ready, which needs a WASM
+build this container does not have -- those tests cannot pass here whatever the
+change is. `docs-pane.spec.js` deliberately does not wait for the WASM boot
+(the pane must not depend on it), which is what makes it runnable, and it is
+also the only file this change can affect.

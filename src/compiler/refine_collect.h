@@ -219,6 +219,22 @@ typedef struct RefineObligation {
     const char    *decided_by;   /* which stage answered ("S2 (arithmetic)"), or NULL */
     bool           memo_hit;     /* RT7: the chain was skipped, answer remembered */
     RefineCapStats caps;         /* caps this obligation alone hit (SX0(b) deltas) */
+    /* Caps hit by the RT4 path-splitting probes run on this site's behalf,
+     * BEFORE this obligation existed.
+     *
+     * `caps` above is a delta around this obligation's own chain run, which is
+     * the right window for the question "what did deciding this cost" -- but
+     * it is not all the solver work the site paid for. Path splitting tries
+     * each path silently first; those probes are separate obligations,
+     * discharged earlier, and their cap hits used to land in the global
+     * counters and be attributed to nobody: the per-compile summary said a cap
+     * bit and every obligation's `caps_hit` read empty.
+     *
+     * Kept as a second field rather than folded into `caps` because a probe
+     * asks a different question (one path, not the whole body) -- a consumer
+     * deciding whether a cap is worth raising wants to know which. Summing
+     * them is one addition; separating them after the fact is impossible. */
+    RefineCapStats caps_probe;
 } RefineObligation;
 
 typedef struct RefineObligationVec {

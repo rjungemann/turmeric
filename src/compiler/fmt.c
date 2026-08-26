@@ -397,8 +397,25 @@ static bool form_contains_multipair_let(const Form *f) {
 static void fmt_form(FmtState *s, const Form *f);
 static void fmt_list(FmtState *s, const Form *f);
 static uint32_t emit_comments_indented(FmtState *s, uint32_t from_off,
-                                       uint32_t to_off, uint32_t col);
+                                       uint32_t to_off, uint32_t col,
+                                       bool *must_break);
 static bool span_has_comment(FmtState *s, const Form *f);
+
+/* fmt_measure, plus: a form whose source span carries a comment is reported as
+ * unmeasurable.  The flat printer has no way to re-emit a comment (the parsed
+ * AST carries no comment nodes), so any inline collapse of such a form deletes
+ * it from the rewritten file -- silently, since `tur fmt` writes in place.
+ *
+ * Reporting UINT32_MAX rather than checking `span_has_comment` at each call
+ * site is deliberate: it makes the form unmeasurable for *enclosing* inline
+ * checks too, so a comment inside a vector nested in a form that would itself
+ * fit cannot be flattened away one level up.  Every caller that decides
+ * "inline vs. break" must use this, not fmt_measure; fmt_measure stays raw for
+ * the column-alignment width computations, which never emit anything. */
+static uint32_t fmt_measure_src(FmtState *s, const Form *f) {
+    if (span_has_comment(s, f)) return UINT32_MAX;
+    return fmt_measure(f);
+}
 
 /* ---------------------------------------------------------------------------
  * Body-form emission with interior-comment preservation
@@ -418,10 +435,74 @@ static void fmt_body_forms(FmtState *s, const Form *f, uint32_t start,
     uint32_t prev_end = have_src ? f->as.list.items[start - 1]->span.off_end : 0;
     for (uint32_t i = start; i < n; i++) {
         const Form *child = f->as.list.items[i];
-        if (have_src) emit_comments_indented(s, prev_end, child->span.off_start, body_col);
+        if (have_src) emit_comments_indented(s, prev_end, child->span.off_start, body_col, NULL);
         fs_newline_indent(s, body_col);
         fmt_form(s, child);
         if (have_src) prev_end = child->span.off_end;
+    }
+}
+
+/* Offset one past a collection's opening delimiter (`[`, `#{`, `#map{`, `#s(`,
+ * `#fx{`, ...), so a comment sitting between the delimiter and the first
+ * element is inside the scanned gap.  Returns off_start when there is no
+ * source text or no delimiter is found, which makes the gap empty. */
+static uint32_t collection_body_start(FmtState *s, const Form *f) {
+    const char *src = s->opts.src;
+    if (!src) return 0;
+    uint32_t a = f->span.off_start;
+    uint32_t b = f->span.off_end;
+    if (b > (uint32_t)s->opts.src_len) b = (uint32_t)s->opts.src_len;
+    for (uint32_t i = a; i < b; i++) {
+        if (src[i] == '[' || src[i] == '{' || src[i] == '(') return i + 1;
+    }
+    return a;
+}
+
+/* Re-emit any source comments sitting in src[prev_end, to).
+ *
+ * This is what keeps comments that live *inside* a bracket vector, map, set,
+ * call, or cond arm from being dropped: the parsed AST has no comment nodes,
+ * so the only record of them is the source gap between two element spans.
+ *
+ * A ';' comment that sat on the *same source line* as the preceding element is
+ * re-emitted there rather than on a line of its own.  That placement is not
+ * cosmetic: a trailing `; first field` pushed down a line lands above the
+ * *next* field and now reads as a comment about that one instead, which is a
+ * different claim about the code than the author made.  Comments that had
+ * their own source line, and block comments, keep the own-line layout.
+ *
+ * Returns whether the caller MUST start a new line before whatever it emits
+ * next -- which is not the same as "did anything get emitted".  A ';' or block
+ * comment runs to end of line, so an element appended after one is swallowed
+ * by it; a single-line `#;datum` is self-delimiting and stays inline, leaving
+ * the caller free to write its normal separating space. */
+static bool emit_gap_comments_range(FmtState *s, uint32_t prev_end,
+                                    uint32_t to, uint32_t col) {
+    if (!s->opts.src) return false;
+    uint32_t len = (uint32_t)s->opts.src_len;
+    if (to > len) to = len;
+    bool must_break = false;
+    emit_comments_indented(s, prev_end, to, col, &must_break);
+    return must_break;
+}
+
+static bool emit_gap_comments_before(FmtState *s, uint32_t prev_end,
+                                     const Form *child, uint32_t col) {
+    return emit_gap_comments_range(s, prev_end, child->span.off_start, col);
+}
+
+/* Re-emit comments sitting between the last element and the closing delimiter.
+ * The scan stops at the first non-comment character, so passing the form's end
+ * offset is safe -- the ']' / '}' / ')' terminates it.
+ *
+ * The line break afterwards is mandatory, not cosmetic: output ends inside a
+ * ';' comment, so a closing bracket written straight after it would be *inside
+ * the comment* in the reformatted file -- turning silent comment loss into a
+ * syntax error. */
+static void emit_trailing_gap_comments(FmtState *s, uint32_t prev_end,
+                                       const Form *f, uint32_t col) {
+    if (emit_gap_comments_range(s, prev_end, f->span.off_end, col)) {
+        fs_newline_indent(s, col);
     }
 }
 
@@ -466,10 +547,15 @@ static bool param_is_leading_modifier(const Form *f) {
 static void fmt_vec_params_broken(FmtState *s, const Form *f) {
     uint32_t inner = s->col + 1; /* one past '[' */
     uint32_t n = f->as.list.len;
+    uint32_t prev_end = collection_body_start(s, f);
     fs_putc(s, '[');
     for (uint32_t i = 0; i < n; i++) {
         const Form *cur = f->as.list.items[i];
-        if (i == 0) {
+        bool had_comment = emit_gap_comments_before(s, prev_end, cur, inner);
+        if (had_comment) {
+            /* A comment ran to end of line; the parameter starts a fresh one. */
+            fs_newline_indent(s, inner);
+        } else if (i == 0) {
             /* first element sits right after '[' */
         } else if (param_is_annotation(cur)
                    || param_is_leading_modifier(f->as.list.items[i - 1])) {
@@ -478,14 +564,18 @@ static void fmt_vec_params_broken(FmtState *s, const Form *f) {
             fs_newline_indent(s, inner);
         }
         fmt_form(s, cur);
+        prev_end = cur->span.off_end;
     }
+    emit_trailing_gap_comments(s, prev_end, f, inner);
     fs_putc(s, ']');
 }
 
 /* Format a defn/fn parameter vector: inline if it fits, else one parameter
- * per line via fmt_vec_params_broken. */
+ * per line via fmt_vec_params_broken.  The measure is comment-aware, so a
+ * vector carrying an interior comment always takes the broken path (which
+ * re-emits it) rather than being flattened, which would delete it. */
 static void fmt_param_vec(FmtState *s, const Form *vec) {
-    uint32_t w = fmt_measure(vec);
+    uint32_t w = fmt_measure_src(s, vec);
     if (w != UINT32_MAX && s->col + w <= s->opts.line_width) {
         fmt_emit_inline(s, vec);
     } else {
@@ -614,18 +704,35 @@ static void fmt_vec_let_bindings_broken(FmtState *s, const Form *f) {
     }
     uint32_t value_col = inner + max_name + 1;
 
+    uint32_t prev_end = collection_body_start(s, f);
     fs_putc(s, '[');
     uint32_t i = 0;
     while (i < n) {
-        if (i) fs_newline_indent(s, inner);
-        fmt_form(s, f->as.list.items[i]); i++;
+        const Form *name = f->as.list.items[i];
+        if (emit_gap_comments_before(s, prev_end, name, inner) || i) {
+            fs_newline_indent(s, inner);
+        }
+        fmt_form(s, name); i++;
+        prev_end = name->span.off_end;
         if (i < n) {
-            /* Pad to the shared value column; at least one space. */
-            uint32_t pad = (value_col > s->col) ? (value_col - s->col) : 1;
-            for (uint32_t k = 0; k < pad; k++) fs_putc(s, ' ');
-            fmt_form(s, f->as.list.items[i]); i++;
+            const Form *val = f->as.list.items[i];
+            /* A comment between a binding's name and its value cannot stay in
+             * place without splitting the pair across lines, which the house
+             * style forbids.  Emit it above the pair's value column instead of
+             * dropping it -- the pair itself stays intact below. */
+            if (emit_gap_comments_before(s, prev_end, val, inner)) {
+                fs_newline_indent(s, inner);
+                for (uint32_t k = 0; k < max_name + 1; k++) fs_putc(s, ' ');
+            } else {
+                /* Pad to the shared value column; at least one space. */
+                uint32_t pad = (value_col > s->col) ? (value_col - s->col) : 1;
+                for (uint32_t k = 0; k < pad; k++) fs_putc(s, ' ');
+            }
+            fmt_form(s, val); i++;
+            prev_end = val->span.off_end;
         }
     }
+    emit_trailing_gap_comments(s, prev_end, f, inner);
     fs_putc(s, ']');
 }
 
@@ -649,7 +756,7 @@ static void fmt_let(FmtState *s, const Form *f) {
         fs_putc(s, ' ');
         const Form *bindings = f->as.list.items[1];
         if (bindings->tag == F_VEC) {
-            uint32_t w = fmt_measure(bindings);
+            uint32_t w = fmt_measure_src(s, bindings);
             bool single_pair = bindings->as.list.len <= 2;
             if (single_pair && w != UINT32_MAX &&
                 s->col + w <= s->opts.line_width) {
@@ -775,17 +882,33 @@ static void fmt_cond(FmtState *s, const Form *f) {
     }
     uint32_t value_col = test_col + max_test + 1;
 
+    /* A `cond` arm's trailing comment (`(= x 1) 1  ;; the base case`) sits in
+     * the gap before the NEXT arm's test, so it is re-emitted from there --
+     * same shape as the body-form and vector-element gaps. */
+    uint32_t prev_end = (n >= 1) ? f->as.list.items[0]->span.off_end : 0;
     uint32_t i = 1;
     while (i < n) {
-        if (i == 1) fs_putc(s, ' ');
-        else        fs_newline_indent(s, test_col);
-        fmt_form(s, f->as.list.items[i]); i++;             /* test */
+        const Form *test = f->as.list.items[i];
+        bool had_comment = emit_gap_comments_before(s, prev_end, test, test_col);
+        if (i == 1 && !had_comment) fs_putc(s, ' ');
+        else                        fs_newline_indent(s, test_col);
+        fmt_form(s, test); i++;
+        prev_end = test->span.off_end;
         if (i < n) {
-            uint32_t pad = (value_col > s->col) ? (value_col - s->col) : 1;
-            for (uint32_t k = 0; k < pad; k++) fs_putc(s, ' ');
-            fmt_form(s, f->as.list.items[i]); i++;         /* body */
+            const Form *body = f->as.list.items[i];
+            /* A comment between a test and its body would orphan the body; put
+             * it above the arm instead of dropping it. */
+            if (emit_gap_comments_before(s, prev_end, body, test_col)) {
+                fs_newline_indent(s, value_col);
+            } else {
+                uint32_t pad = (value_col > s->col) ? (value_col - s->col) : 1;
+                for (uint32_t k = 0; k < pad; k++) fs_putc(s, ' ');
+            }
+            fmt_form(s, body); i++;
+            prev_end = body->span.off_end;
         }
     }
+    emit_trailing_gap_comments(s, prev_end, f, test_col);
 
     fs_putc(s, ')');
 }
@@ -860,11 +983,23 @@ static void fmt_call(FmtState *s, const Form *f) {
 
     fs_putc(s, '(');
 
-    /* Head + first arg on the opening line */
+    /* Head + first arg on the opening line.  fmt_body_forms covers the gaps
+     * between the *remaining* args, but not the one between the head and the
+     * first arg -- which is where a `#;` datum comment on the first argument
+     * lives, and where it used to be deleted. */
     uint32_t on_first_line = (n > 2) ? 2 : n;
+    uint32_t prev_end = 0;
     for (uint32_t i = 0; i < on_first_line; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
+        const Form *cur = f->as.list.items[i];
+        if (i) {
+            if (emit_gap_comments_before(s, prev_end, cur, body_col)) {
+                fs_newline_indent(s, body_col);
+            } else {
+                fs_putc(s, ' ');
+            }
+        }
+        fmt_form(s, cur);
+        prev_end = cur->span.off_end;
     }
 
     /* Remaining args on indented lines */
@@ -878,14 +1013,35 @@ static void fmt_call(FmtState *s, const Form *f) {
  * ---------------------------------------------------------------------------
  */
 
-/* [a\n b\n c] — 1-space indent from '[' */
+/* [a\n b\n c] — 1-space indent from '['
+ *
+ * A spaced `: T` annotation (F_TYPE_ANN) stays on the line of the element it
+ * annotates.  This is the same rule fmt_vec_params_broken applies to parameter
+ * vectors, and it is what a `defstruct` field vector needs: without it a field
+ * list that overruns the line width is reprinted with every name and every
+ * type on its own line, which splits the `name : type` pair the house style
+ * says to keep together. */
 static void fmt_vec_broken(FmtState *s, const Form *f) {
     uint32_t inner = s->col + 1; /* one past '[' */
+    uint32_t n = f->as.list.len;
+    uint32_t prev_end = collection_body_start(s, f);
     fs_putc(s, '[');
-    for (uint32_t i = 0; i < f->as.list.len; i++) {
-        if (i) fs_newline_indent(s, inner);
-        fmt_form(s, f->as.list.items[i]);
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *cur = f->as.list.items[i];
+        bool had_comment = emit_gap_comments_before(s, prev_end, cur, inner);
+        if (had_comment) {
+            fs_newline_indent(s, inner);
+        } else if (i == 0) {
+            /* first element sits right after '[' */
+        } else if (cur->tag == F_TYPE_ANN) {
+            fs_putc(s, ' ');
+        } else {
+            fs_newline_indent(s, inner);
+        }
+        fmt_form(s, cur);
+        prev_end = cur->span.off_end;
     }
+    emit_trailing_gap_comments(s, prev_end, f, inner);
     fs_putc(s, ']');
 }
 
@@ -897,27 +1053,47 @@ static void fmt_map_broken(FmtState *s, const Form *f) {
     const char *open = (f->tag == F_MAP_LITERAL) ? "#map{" : fx_map_open(f);
     uint32_t inner = s->col + (uint32_t)strlen(open); /* past the '#{'/'#fx{' */
     uint32_t n = f->as.list.len;
+    uint32_t prev_end = collection_body_start(s, f);
     fs_puts(s, open);
     uint32_t i = 0;
     while (i < n) {
-        if (i) fs_newline_indent(s, inner);
-        fmt_form(s, f->as.list.items[i]); i++;
+        const Form *key = f->as.list.items[i];
+        if (emit_gap_comments_before(s, prev_end, key, inner) || i) {
+            fs_newline_indent(s, inner);
+        }
+        fmt_form(s, key); i++;
+        prev_end = key->span.off_end;
         if (i < n) {
-            fs_putc(s, ' ');
-            fmt_form(s, f->as.list.items[i]); i++;
+            const Form *val = f->as.list.items[i];
+            /* A comment between a key and its value goes above the pair rather
+             * than between them, which would leave the value orphaned. */
+            if (emit_gap_comments_before(s, prev_end, val, inner)) {
+                fs_newline_indent(s, inner);
+            } else {
+                fs_putc(s, ' ');
+            }
+            fmt_form(s, val); i++;
+            prev_end = val->span.off_end;
         }
     }
+    emit_trailing_gap_comments(s, prev_end, f, inner);
     fs_putc(s, '}');
 }
 
 /* #s(a\n   b) */
 static void fmt_set_broken(FmtState *s, const Form *f) {
     uint32_t inner = s->col + 3; /* three past '#s(' */
+    uint32_t prev_end = collection_body_start(s, f);
     fs_puts(s, "#s(");
     for (uint32_t i = 0; i < f->as.list.len; i++) {
-        if (i) fs_newline_indent(s, inner);
-        fmt_form(s, f->as.list.items[i]);
+        const Form *cur = f->as.list.items[i];
+        if (emit_gap_comments_before(s, prev_end, cur, inner) || i) {
+            fs_newline_indent(s, inner);
+        }
+        fmt_form(s, cur);
+        prev_end = cur->span.off_end;
     }
+    emit_trailing_gap_comments(s, prev_end, f, inner);
     fs_putc(s, ')');
 }
 
@@ -973,8 +1149,8 @@ static void fmt_defpackage(FmtState *s, const Form *f) {
             fs_putc(s, ' ');
             /* Non-empty map value: try inline, fall back to block */
             if (val->tag == F_MAP && val->as.list.len > 0) {
-                uint32_t w = fmt_measure(val);
-                if (s->col + w <= s->opts.line_width) {
+                uint32_t w = fmt_measure_src(s, val);
+                if (w != UINT32_MAX && s->col + w <= s->opts.line_width) {
                     fmt_emit_inline(s, val);
                 } else {
                     fmt_map_block(s, val,
@@ -999,10 +1175,10 @@ static void fmt_defpackage(FmtState *s, const Form *f) {
 static void fmt_list(FmtState *s, const Form *f) {
     /* Always try inline first -- but never collapse a form whose source span
      * contains a comment, since the flat printer has no way to re-emit it and
-     * the comment would be silently dropped. */
-    uint32_t w = fmt_measure(f);
-    if (w != UINT32_MAX && s->col + w <= s->opts.line_width
-        && !span_has_comment(s, f)) {
+     * the comment would be silently dropped.  fmt_measure_src reports such a
+     * form as unmeasurable, which is what makes the check below decline. */
+    uint32_t w = fmt_measure_src(s, f);
+    if (w != UINT32_MAX && s->col + w <= s->opts.line_width) {
         fmt_emit_inline(s, f);
         return;
     }
@@ -1106,21 +1282,25 @@ static void fmt_form(FmtState *s, const Form *f) {
             else fmt_emit_inline(s, f); /* always inline for now */
             break;
         }
+        /* The `w != UINT32_MAX` guard is load-bearing on all three: `s->col + w`
+         * is uint32 arithmetic, so an unmeasurable form (one with an interior
+         * newline, or -- since fmt_measure_src -- an interior comment) wraps
+         * around to a tiny number at any column > 0 and would be inlined. */
         case F_VEC: {
-            uint32_t w = fmt_measure(f);
-            if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
+            uint32_t w = fmt_measure_src(s, f);
+            if (w != UINT32_MAX && s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
             else fmt_vec_broken(s, f);
             break;
         }
         case F_MAP: {
-            uint32_t w = fmt_measure(f);
-            if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
+            uint32_t w = fmt_measure_src(s, f);
+            if (w != UINT32_MAX && s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
             else fmt_map_broken(s, f);
             break;
         }
         case F_SET: {
-            uint32_t w = fmt_measure(f);
-            if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
+            uint32_t w = fmt_measure_src(s, f);
+            if (w != UINT32_MAX && s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
             else fmt_set_broken(s, f);
             break;
         }
@@ -1141,8 +1321,8 @@ static void fmt_form(FmtState *s, const Form *f) {
          * #set{...} / #row{...} stay inline -- their elements are short and
          * their line-per-element layout has no established shape. */
         case F_MAP_LITERAL: {
-            uint32_t w = fmt_measure(f);
-            if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
+            uint32_t w = fmt_measure_src(s, f);
+            if (w != UINT32_MAX && s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
             else fmt_map_broken(s, f);
             break;
         }
@@ -1210,7 +1390,18 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
         if (*p == ';') {
             const char *line_end = p;
             while (line_end < end && *line_end != '\n') line_end++;
-            EMIT_GAP_BLANKS((uint32_t)(p - src));
+            /* A comment that trailed the preceding top-level form on its own
+             * line stays there.  Breaking it onto the next line drops it in
+             * front of the *following* form, where it reads as a comment about
+             * that one -- which is how a last struct field's `; unix timestamp`
+             * ends up parked outside the defstruct describing whatever comes
+             * next. Only the first comment in the gap can qualify, and only
+             * when there is a populated line to trail. */
+            bool same_line = !emitted && min_lead == 0 && s->col > 0
+                && memchr(src + from_off, '\n',
+                          (size_t)(p - (src + from_off))) == NULL;
+            if (same_line) fs_putc(s, ' ');
+            else           EMIT_GAP_BLANKS((uint32_t)(p - src));
             fs_write(s, p, (size_t)(line_end - p));
             emitted = true;
             p = line_end;
@@ -1290,20 +1481,35 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
 }
 
 /* Emit ';' line / '#| |#' block / '#;' datum comments found in
- * src[from_off .. to_off), each on its own line indented to `col`.  Used for
- * comments that live *inside* a form (between body sub-forms), which the
- * top-level emit_comments_in_gap never sees.  Returns the number emitted. */
+ * src[from_off .. to_off), indented to `col`.  Used for comments that live
+ * *inside* a form (between body sub-forms, or between the elements of a
+ * bracket vector / map / set), which the top-level emit_comments_in_gap never
+ * sees.  Returns the number emitted.
+ *
+ * A ';' comment that shared a source line with whatever precedes the gap is
+ * emitted as a trailing comment on the current output line; everything else
+ * gets a line of its own at `col`.  That distinction is not cosmetic: a
+ * trailing `; the sum` pushed onto the next line lands above the *following*
+ * form and now reads as a comment about that one, which is a different claim
+ * about the code than the author made. */
 static uint32_t emit_comments_indented(FmtState *s, uint32_t from_off,
-                                       uint32_t to_off, uint32_t col) {
+                                       uint32_t to_off, uint32_t col,
+                                       bool *must_break) {
     const char *src = s->opts.src;
+    if (must_break) *must_break = false;
     if (!src || from_off >= to_off) return 0;
 
     const char *p   = src + from_off;
     const char *end = src + to_off;
     uint32_t count = 0;
+    /* True until the scan crosses a newline: a comment found before then sat on
+     * the same source line as the preceding form.  Emitting one mid-line is
+     * only possible when there *is* a current line to trail (s->col > 0). */
+    bool same_line = (s->col > 0);
 
     while (p < end) {
-        if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') { p++; continue; }
+        if (*p == '\n') { same_line = false; p++; continue; }
+        if (*p == ' ' || *p == '\t' || *p == '\r') { p++; continue; }
 
         /* Line comment */
         if (*p == ';') {
@@ -1311,22 +1517,31 @@ static uint32_t emit_comments_indented(FmtState *s, uint32_t from_off,
             while (line_end < end && *line_end != '\n') line_end++;
             const char *trim_end = line_end;
             while (trim_end > p && trim_end[-1] == '\r') trim_end--;
-            fs_newline_indent(s, col);
+            if (same_line) {
+                fs_putc(s, ' ');
+                same_line = false;
+            } else {
+                fs_newline_indent(s, col);
+            }
             fs_write(s, p, (size_t)(trim_end - p));
             count++;
+            if (must_break) *must_break = true;
             p = line_end;
             continue;
         }
 
-        /* Block comment #| ... |# (written verbatim, including any newlines) */
+        /* Block comment #| ... |# (written verbatim, including any newlines).
+         * Always own-line: the body may span lines, so trailing it onto a
+         * populated line would reflow the code around it. */
         if (*p == '#' && p + 1 < end && p[1] == '|') {
             const char *blk = p;
             p += 2;
             while (p + 1 < end && !(p[0] == '|' && p[1] == '#')) p++;
             if (p + 1 < end) p += 2;
             fs_newline_indent(s, col);
-            fs_write(s, blk, (size_t)(p - blk));
+            same_line = false;
             count++;
+            fs_write(s, blk, (size_t)(p - blk));
             continue;
         }
 
@@ -1372,9 +1587,26 @@ static uint32_t emit_comments_indented(FmtState *s, uint32_t from_off,
                     }
                 }
             }
-            fs_newline_indent(s, col);
+            /* A single-line `#;datum` keeps its place in the argument list;
+             * one that spans lines goes on its own, since it is written
+             * verbatim and would otherwise carry its newlines into the middle
+             * of a line the printer is still tracking a column for. */
+            bool datum_multiline = (memchr(blk, '\n', (size_t)(p - blk)) != NULL);
+            if (same_line && !datum_multiline) {
+                fs_putc(s, ' ');
+                if (must_break) *must_break = false;
+            } else {
+                fs_newline_indent(s, col);
+                same_line = false;
+                if (must_break) *must_break = true;
+            }
             fs_write(s, blk, (size_t)(p - blk));
             count++;
+            /* A datum comment is self-delimiting, so unlike a ';' comment the
+             * caller does NOT have to break the line after one -- but it must
+             * still be told something was emitted, and the shared "did we
+             * emit" contract is a break.  Leaving same_line set lets a second
+             * datum comment on the same line follow this one inline. */
             continue;
         }
 

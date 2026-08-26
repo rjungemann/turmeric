@@ -1,0 +1,16 @@
+;; A Scheme/Racket/CL user writes a self-recursive lambda the way those
+;; languages spell it. Turmeric has no named-lambda form, so this is correctly
+;; rejected -- but the message used to say "parameter list must be a vector"
+;; with the caret on `fact`, while a well-formed [n : int] sat one token later.
+;; The reader went hunting for a bracket problem that did not exist, and the
+;; diagnostic never mentioned either of the two forms that DO give recursion
+;; here. Hitting this and concluding Turmeric has no recursive lambdas was a
+;; reading that message invited; the help lines below are the fix.
+;;
+;; The happy-path counterpart is tests/fixtures/fn-recursion-letrec-and-named-let,
+;; which runs both spellings this error recommends -- so the suggestion cannot
+;; go stale without a fixture noticing.
+(defn main [] : int
+  (let [f (fn fact [n : int] : int (if (= n 0) 1 (* n (fact (- n 1)))))]
+    (println (f 5))
+    0))

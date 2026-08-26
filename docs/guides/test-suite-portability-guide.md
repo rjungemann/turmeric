@@ -327,7 +327,7 @@ finding prints one line to stderr and execution continues. This suite compares
 stdout. So a UBSan line was, until 2026-08-25, completely invisible --
 `fat_captures_borrowed` was read out of uninitialized arena memory on 60
 fixtures, on every single run, and nothing ever failed
-([history](../archive/history/fat-captures-borrowed-read-uninitialized.md)).
+([history](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fat-captures-borrowed-read-uninitialized.md)).
 
 `tests/run.sh` now scans each phase's captured stderr for `: runtime error:`
 and reports what it finds after the summary:
@@ -345,11 +345,16 @@ rather than timid: arming it on discovery would have turned 60 silent findings
 into 60 red fixtures in one step, which is how a gate gets switched off instead
 of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run.
 
-**CI sets it.** `ci.yml`'s `test` job -- the only job that runs `tur_tests` --
-carries `TUR_SANITIZER_GATE: "1"` at job level, on both the Linux and macOS
-legs. Both measure zero findings, so a finding in CI is a regression, not
-backlog. Run the suite armed locally before pushing anything that touches the
-compiler's C if you want to find out first.
+**CI arms it on both legs.** `.github/workflows/ci.yml`'s "Run fixture suite"
+step -- the only step that runs `tur_tests` -- sets `TUR_SANITIZER_GATE: "1"`
+unconditionally. Linux and macOS both measure zero findings, so a finding in CI
+is a regression rather than backlog. Run the suite armed locally before pushing
+anything that touches the compiler's C if you would rather find out first.
+
+One asymmetry to keep in mind: the Linux zero was measured on the CI toolchain,
+while the macOS zero was measured on a local Apple-silicon box rather than the
+`macos-latest` runner image. Same libubsan lineage and architecture, so a first
+macOS finding is more likely a genuine version-specific one than a broken gate.
 
 **On a finding, read the log file, not the console.** The summary prints only
 the ten most common findings; the full per-fixture attribution is copied to
@@ -409,7 +414,7 @@ bug.
    and the run is CLEAN. Add one trailing statement and the same program
    reports the leak -- with byte-identical emitted C for the leaking block.
    `ref/from-rc` in
-   [rc-ref-conversion-and-weak-upgrade-leak](../reported/rc-ref-conversion-and-weak-upgrade-leak.md)
+   [rc-ref-conversion-and-weak-upgrade-leak](https://github.com/rjungemann/turmeric/blob/main/docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md)
    behaves exactly this way. When probing a suspected leak, always put work
    after it.
 

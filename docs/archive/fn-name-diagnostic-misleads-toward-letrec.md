@@ -118,3 +118,52 @@ both work, verified above -- and true only about the `(fn name ...)` spelling.
 This diagnostic is the entire residue: the reason someone could hit that wall
 and conclude recursion was unavailable is that the error message never mentions
 `letrec`.
+
+---
+
+## Resolution (2026-08-26)
+
+Fixed in `elab_fn` (`src/compiler/elab_fns.c`), exactly along the fix direction.
+
+```
+f1.tur:2:15: error: fn does not take a name; Turmeric has no named-lambda form -- remove 'fact'
+f1.tur:2:15: help: for a self-recursive anonymous function, use letrec: (letrec [fact (fn [...] ... (fact ...))] ...)
+f1.tur:2:15: help: for a recursive loop, use a named let: (let fact [n 5] ... (fact ...))
+```
+
+The detection is the shape the report names: the slot after `fn` is an `F_SYM`
+**and** the slot after that is an `F_VEC`. Anything else there really is a
+malformed parameter list and keeps the generic message -- verified with
+`(fn 42 : int 1)`, which still reports "fn: parameter list must be a vector".
+`λ` shares the path and gets it for free, as predicted; verified.
+
+The help lines interpolate the user's own name rather than a placeholder, so
+the `letrec` line can be pasted over the broken form.
+
+### Coverage
+
+Both fixtures the report asks for, and they are linked to each other in
+comments so the pair is maintained as a pair:
+
+- `tests/fixtures/errors/fn-named-lambda-points-at-letrec` -- the report's
+  repro, with an `expected.diag` pinning all three lines.
+- `tests/fixtures/fn-recursion-letrec-and-named-let` -- runs **both** spellings
+  the help text recommends, printing `120` twice. This is the "so the
+  suggestion stays true if `letrec` ever moves" half: without it the error
+  could go on recommending something that no longer compiles, and nothing would
+  notice.
+
+Writing that second fixture caught a real detail about the first spelling: the
+report's named-let example,
+
+```turmeric
+(let loop [n 5 acc 1]
+  (if (= n 0) (println acc) (loop (- n 1) (* acc n))))
+```
+
+does **not** compile as written -- `(println acc)` is `nil` and the recursive
+call is `int`, so it is a TUR mismatched-if-branches error, not a named-let
+problem. The fixture uses `(do (println acc) 0)`. The report's claim that both
+spellings print `120` holds; the snippet in it just does not.
+
+Full suite: 2706 passed, 0 failed.

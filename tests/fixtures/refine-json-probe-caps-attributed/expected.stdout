@@ -1,0 +1,4 @@
+summary: cap hit reported
+own:   cubes=4
+probe: cubes=4
+attributed: True

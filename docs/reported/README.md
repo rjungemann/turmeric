@@ -520,7 +520,6 @@ rejecting them would trade the bug for a restriction. Pinned by
 `tests/check-libc-collision-list.sh` (ctest `tur_libc_collision_list`), which
 guards the bsearch sort-order precondition.
 
-
 `reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
 and moved to
 [docs/archive](../archive/reads-frame-cannot-name-multiple-params.md).
@@ -931,28 +930,44 @@ turned up a defect in the instrument that would have justified it.
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
-| [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker), each with its blocker and how to prove the workaround is no longer needed |
+
+`dump-refine-json-under-reports-caps` was resolved 2026-08-26 and moved to
+[docs/archive](../archive/dump-refine-json-under-reports-caps.md). Its root
+cause is right in substance and wrong in mechanism, in a way worth knowing
+before trusting a similar diagnosis: the fix it proposes -- move the snapshot
+above the probe block in `refine_discharge_one` -- **would have changed
+nothing**, because the speculative branch returns before ever reaching that
+snapshot. The probe is not an earlier phase of the same discharge; it is a
+different `RefineObligation`, discharged in a different call during
+elaboration, so there is no window in that function to widen. Traced on the
+report's own repro. Fixed by the report's own alternative reading, a second
+field: `caps_hit_probe`, filled by bracketing `rt_prove_paths` in
+`rt_try_prove_return`, which is the only place "on whose behalf" is defined.
+One more thing the trace turned up, unfixed and minor: `g_stats.path_probes` is
+only printed when `proven_by_path` is non-zero, so a path probe that proves
+nothing is invisible in the `TUR_REFINE_STATS` summary too.
 
 `mir-aarch64-fp-aggregate-abi` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/mir-aarch64-fp-aggregate-abi.md). Fixed at the root
 rather than contained: MIR's aarch64 back end now implements the AAPCS64 HFA
 rule, so floating-point aggregates travel in `v0..v7` and c2mir agrees with a
 natively compiled callee. Pin bumped to `472fa4c6`. The interim refusals are
-gone with it -- including TUR-E0711, which existed for a matter of hours --
-so **reverting the MIR pin below that commit silently reinstates the miscall
+gone with it -- including TUR-E0711, which existed for a matter of hours -- so
+**reverting the MIR pin below that commit silently reinstates the miscall
 instead of diagnosing it**; that warning lives next to the pin in
 `cmake/mir.cmake`.
 
 `sanitizer-gate-not-armed-in-ci` was resolved 2026-08-26 and moved to
-[docs/archive/](../archive/sanitizer-gate-not-armed-in-ci.md). The blocking step
-was the one that could not be done from a Linux container: the macOS leg
-measures **0** findings across 2703 fixtures on Apple clang 21 / arm64, matching
-Linux, so `ci.yml`'s `test` job now carries `TUR_SANITIZER_GATE: "1"`. The zero
-was confirmed with a positive control rather than inferred from silence -- the
-failure mode this gate has already had once is reporting a clean tree because
-nothing was wired up (`note_sanitizer` missing from `export -f`). Also clears
-row 3 of [workarounds-to-remove](workarounds-to-remove.md).
+[docs/archive/](../archive/sanitizer-gate-not-armed-in-ci.md), finishing the
+half that landed the same day: Linux was armed, macOS was not and could not be
+measured from a Linux container. The macOS leg measures **0** findings across
+2703 fixtures on Apple clang 21 / arm64, matching Linux, so the fixture-suite
+step now sets `TUR_SANITIZER_GATE: "1"` unconditionally. The zero was confirmed
+with a positive control rather than inferred from silence -- the failure mode
+this gate has already had once is reporting a clean tree because nothing was
+wired up (`note_sanitizer` missing from `export -f`). Note the macOS number was
+taken on a local Apple-silicon box, not the `macos-latest` runner image.
 
 `compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/compiled-fixtures-are-not-leak-checked.md). Its two
@@ -1053,8 +1068,36 @@ the class of bug is closed, not just the one instance.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [two-stdlib-modules-render-to-one-api-page](two-stdlib-modules-render-to-one-api-page.md) | low | `stdlib/capability.tur` and `stdlib/test/capability.tur` have no `defmodule`, so both take the filename-derived name `tur/capability` and render to one page; the second silently wins |
-| [guide-cross-links-to-unrendered-docs](guide-cross-links-to-unrendered-docs.md) | low | four links in three published guides 404 -- one to a guide that was never written, three into `docs/upcoming/` and `docs/archive/`, which are not rendered |
+`guide-cross-links-to-unrendered-docs` was resolved 2026-08-26 and moved to
+[docs/archive](../archive/guide-cross-links-to-unrendered-docs.md). It was
+**eight** links in five pages, not four in three: the report's list came from
+the pack's link pass, which only sees pages that made it into the pack, and a
+grep plus arming the gate found four more of the same shape. The "missing"
+`memory-management-guide.md` was not missing -- `gc-guide.md` is that guide
+under a different name, and its description matches the linking paragraph
+point for point, so fix direction 1's "confirm with the author" was avoidable.
+The rest went to GitHub blob URLs, which three other guides were already using
+for the same kind of reference. `--strict-links` already existed in
+`tools/genpack.py` with nothing invoking it; the Justfile `docs` recipe (what
+CI runs) now passes it, so a new dead cross-link fails the docs build. One
+detail worth carrying: a `../reported/` link rots **twice** -- once because
+that directory is not rendered, and again when the report is archived and the
+blob URL moves too.
+
+`two-stdlib-modules-render-to-one-api-page` was resolved 2026-08-26 and moved
+to [docs/archive](../archive/two-stdlib-modules-render-to-one-api-page.md).
+Neither fix direction as written: option 1 would have been a semantic change
+(`defmodule` wraps and namespaces the body, and that file is pulled in by a
+`load`, not an `import`), so option 2 was taken **scoped to the fallback** --
+a filename-derived pseudo-name now carries its subdirectory, while a *declared*
+module name keeps its identity and URL. That confines the URL churn the report
+objected to: five `stdlib/seq/*` pages move, and `stdlib/seq/core.tur`
+publishing itself as `tur/core` was wrong anyway. The pass turned up a second,
+worse instance in the same function: the `defmodule` scan matched inside
+comments, so `stdlib/turi/eval.tur` was publishing as **`myplugin/core`** --
+a name from an example in its own docstring -- with no page for `turi/eval` at
+all. Both collision checks are now hard errors naming both files; `just docs`
+writes 148 pages for 148 modules, was 147.
 
 ## Formatter (filed 2026-08-25)
 
@@ -1071,19 +1114,59 @@ which is the evidence against the module-docstring claim.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fmt-drops-comments-inside-bracket-vectors](fmt-drops-comments-inside-bracket-vectors.md) | high | `tur fmt` silently deletes every `;`/`;;`/`;;;` comment inside a `defstruct` field, `defn` param, or `let` binding vector -- in place, exit 0, no diagnostic. `fmt_list`'s `span_has_comment` guard exists but is missing from both `F_VEC` paths, and the broken-vector printers never re-emit gap comments. Non-idempotence (`fmt` then `fmt --check` exits 1) is a downstream symptom |
+| [fmt-drops-comments-in-handle-and-binding-modifier-gaps](fmt-drops-comments-in-handle-and-binding-modifier-gaps.md) | medium | the residue of the row below, in the printers its fix did not reach: `handle`/`case` arm gaps and the other fixed-index header loops still drop comments, and `fmt_vec_let_bindings_broken` mis-pairs a `^mut` binding. 8 files in a 2997-file sweep, down from 70 |
+
+`fmt-drops-comments-inside-bracket-vectors` was resolved 2026-08-26 and moved
+to [docs/archive](../archive/fmt-drops-comments-inside-bracket-vectors.md). The
+guard went into the measure (`fmt_measure_src`), not the two call sites the
+report proposed, so no *enclosing* inline check can flatten a commented form
+either; gap re-emission was added to every collection printer plus `fmt_call`
+and `fmt_cond`. Three things the report did not have, all now in the archived
+write-up: the `F_VEC`/`F_MAP`/`F_SET` inline checks omitted the
+`w != UINT32_MAX` test, so uint32 wraparound would have made the new guard a
+no-op at any column > 0; re-emitting a *trailing* comment on its own line
+preserves the bytes but reattaches it to the following element, which is a
+different claim about the code, so same-line comments now stay on their line
+(this also fixes the `; third field` relocation in the repro); and a comment
+before a closing bracket puts the bracket *inside* the comment unless the
+printer breaks first, which turns silent loss into a syntax error. The
+before/after sweep is 70 -> 8 files losing comments and 9 -> 7 non-idempotent,
+with no new failures; the remaining 8 are the row above.
 
 ## Diagnostics (filed 2026-08-25)
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [fn-name-diagnostic-misleads-toward-letrec](fn-name-diagnostic-misleads-toward-letrec.md) | low | `(fn name [...] ...)` is correctly rejected but reports "parameter list must be a vector" with the caret on the name, so the reader hunts for a bracket error in a vector that is already well-formed. Never mentions `letrec`/named `let`, which is why hitting it can read as "Turmeric has no recursive lambdas" -- it has two, both verified |
+*(empty -- the one row here is resolved)*
+
+`fn-name-diagnostic-misleads-toward-letrec` was resolved 2026-08-26 and moved
+to [docs/archive](../archive/fn-name-diagnostic-misleads-toward-letrec.md),
+along its fix direction: `(fn <sym> <vec> ...)` is detected as a named-lambda
+attempt and reports that, with `letrec` and named-`let` help lines carrying the
+user's own name. `λ` shares the path and got it for free; a non-symbol in that
+slot still gets the generic message. Two fixtures, cross-referenced so the pair
+is maintained together -- the happy-path one runs *both* spellings the help
+text recommends, so the suggestion cannot go stale silently. Worth knowing:
+the report's own named-let snippet does not compile (its `if` branches are
+`nil` and `int`); the claim it illustrates is true, the snippet is not.
 
 ## Try Turmeric / web REPL (filed 2026-08-25)
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [try-docs-pane-forgets-scroll-position](try-docs-pane-forgets-scroll-position.md) | low | the docs pane remembers which page you were on across close/reopen (`docsCurrentRef` survives `closeDocsPane`) but resets the offset to the top -- `showDocsPage` ends in an unconditional `article.scrollTop = 0` and no per-ref offset is stored. Enhancement; read-verified in source, not exercised in a browser |
+*(empty -- the one row here is resolved)*
+
+`try-docs-pane-forgets-scroll-position` was resolved 2026-08-26 and moved to
+[docs/archive](../archive/try-docs-pane-forgets-scroll-position.md), along its
+implementation notes, and **exercised in a browser** as its verification-status
+section asks. Two things worth carrying to the next Try Turmeric change. First
+a hazard the notes did not have: `rememberDocsScroll` must refuse to record
+while the pane is closed, because a hidden element reports `scrollTop` 0 and a
+still-queued `scroll` callback then overwrites the offset `closeDocsPane` just
+banked -- scroll, hit Escape in the same frame, and the feature silently does
+nothing. Second, a testing trap that nearly shipped: `showDocsPage` re-fetches,
+so until that resolves the column still shows *and is still scrolled to* the
+previous render, and a `waitForFunction` poll latches onto that stale value.
+Two of three new tests passed against the unfixed file that way. Assert the
+settled state (wait out `aria-busy`, then take one reading) -- and note that
+toggling `display` preserves `scrollTop`, so a close/reopen appears to keep
+your place for a moment even with no restore code at all.
 
 ## Windows port
 

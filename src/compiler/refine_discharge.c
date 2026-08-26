@@ -457,17 +457,27 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         RefineVC *pvc = refine_vc_build(ob, a, &why);
         ob->vc = pvc;   /* so a caller can follow up (e.g. ask for a witness) */
         if (!pvc) return false;
+        /* A probe's caps are accounted exactly like a real obligation's.  They
+         * used to be counted globally and recorded nowhere, so a cap that bit
+         * during a probe made the per-compile summary say "** HIT" while every
+         * obligation's `caps_hit` read empty -- the wrong direction to be
+         * wrong in for a field that is start/do-not-start evidence for SX6.
+         * The caller rolls this up into the site's `caps_probe`. */
+        const RefineCapStats probe_before = *refine_caps();
+        bool proved = false;
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
             RefineDecision pd = CHAIN[i](pvc, a);
             if (pd.verdict == RT_VALID) {
                 ob->proven = true;
                 if (!ob->path_probe) g_stats.inferred++;
-                return true;
+                proved = true;
+                break;
             }
             if (pd.verdict != RT_UNKNOWN) break;
         }
-        return false;
+        refine_caps_delta(&ob->caps, refine_caps(), &probe_before);
+        return proved;
     }
     g_stats.collected++;
 
@@ -585,28 +595,11 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         if (m) { d = refine_invalid(m); ob->decided_by = "bounded model search"; }
     }
 
-    {   /* Subtract per field: a saturating "did anything move" bool would lose
-         * the count, and the peaks are maxima rather than sums, so the
-         * obligation records the peak it SAW, not a difference. */
-        const RefineCapStats *now = refine_caps();
-        RefineCapStats *o = &ob->caps;
-        o->cubes_hits        = now->cubes_hits        - caps_before.cubes_hits;
-        o->cube_lits_hits    = now->cube_lits_hits    - caps_before.cube_lits_hits;
-        o->expand_depth_hits = now->expand_depth_hits - caps_before.expand_depth_hits;
-        o->la_vars_hits      = now->la_vars_hits      - caps_before.la_vars_hits;
-        o->la_constr_hits    = now->la_constr_hits    - caps_before.la_constr_hits;
-        o->la_fm_hits        = now->la_fm_hits        - caps_before.la_fm_hits;
-        o->euf_terms_hits    = now->euf_terms_hits    - caps_before.euf_terms_hits;
-        o->no_shared_hits    = now->no_shared_hits    - caps_before.no_shared_hits;
-        o->no_rounds_hits    = now->no_rounds_hits    - caps_before.no_rounds_hits;
-        o->cubes_peak        = now->cubes_peak;
-        o->cube_lits_peak    = now->cube_lits_peak;
-        o->expand_depth_peak = now->expand_depth_peak;
-        o->la_vars_peak      = now->la_vars_peak;
-        o->la_constr_peak    = now->la_constr_peak;
-        o->euf_terms_peak    = now->euf_terms_peak;
-        o->no_shared_peak    = now->no_shared_peak;
-    }
+    /* Subtract per field: a saturating "did anything move" bool would lose the
+     * count.  This window covers this obligation's own chain run only; solver
+     * work done for it BEFORE it existed -- the RT4 path probes -- is
+     * attributed separately, in ob->caps_probe, by the caller that ran them. */
+    refine_caps_delta(&ob->caps, refine_caps(), &caps_before);
 
     switch (d.verdict) {
         case RT_VALID:
