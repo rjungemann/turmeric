@@ -222,8 +222,11 @@ git push origin "v<NEW>"
 ```
 
 The tag push triggers `.github/workflows/release.yml`, which builds
-the three platform binaries (linux-x86_64, linux-aarch64, macos-arm64)
-and publishes the GitHub Release.
+the three platform binaries (linux-x86_64, linux-aarch64, macos-arm64),
+packages the rendered documentation as `turmeric-docs-v<NEW>.tar.gz`
+(OD4 -- what `tur docs --open` reads once unpacked), and publishes the
+GitHub Release. The docs job runs from the generators in `tools/`; it
+does not rewrite `stdlib/docstrings.tur`, so it cannot dirty the tree.
 
 ## Step 9: Verify
 

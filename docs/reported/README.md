@@ -916,6 +916,26 @@ clean corpus -- which is how two passes of the original sweep produced a false
 zero. Per-platform wording is deliberately still open; the self-test is what
 will report it on a clang or Windows leg.
 
+## Documentation output (filed 2026-08-26)
+
+Two findings from building the docs pack (OD1,
+[docs/guides/offline-docs-guide.md](../guides/offline-docs-guide.md)). Neither
+is new -- both have been shipping on turmeric-lang.com -- but neither had
+anything watching for it until the pack's link and collision passes existed.
+Both repro with a plain `just docs`, and both are reported on every run.
+
+A third finding from the same pass was *fixed* rather than filed: a bare
+` ``` ` at column 0 inside a ```` ```turmeric ```` fence closes the enclosing
+block, so the rest of the guide rendered as prose.
+`docs/guides/thread-pool-guide.md` had been shipping five mangled code blocks
+that way. `genguides.py`'s `widen_nested_fences` re-fences such blocks now, so
+the class of bug is closed, not just the one instance.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [two-stdlib-modules-render-to-one-api-page](two-stdlib-modules-render-to-one-api-page.md) | low | `stdlib/capability.tur` and `stdlib/test/capability.tur` have no `defmodule`, so both take the filename-derived name `tur/capability` and render to one page; the second silently wins |
+| [guide-cross-links-to-unrendered-docs](guide-cross-links-to-unrendered-docs.md) | low | four links in three published guides 404 -- one to a guide that was never written, three into `docs/upcoming/` and `docs/archive/`, which are not rendered |
+
 ## Windows port
 
 Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in

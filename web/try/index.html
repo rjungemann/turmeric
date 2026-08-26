@@ -19,6 +19,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="stylesheet" href="/site.css">
     <link rel="stylesheet" href="/styles.css">
+    <!-- Guide typography for the in-app docs pane (OD2). Emitted into the docs
+         pack by tools/genguides.py from the same GUIDE_CSS the site's guide
+         pages inline, so a guide reads the same here as on turmeric-lang.com.
+         Precached with the rest of the pack, so it is present offline. -->
+    <link rel="stylesheet" href="/docs-pack/guide.css">
+    <script defer src="/docs-pack/guide.js"></script>
     <script type="module" src="/site.js"></script>
 </head>
 <body>
@@ -123,6 +129,15 @@
                                     <button class="more-item" role="menuitem" data-example="sweet">Sweet-exp Syntax</button>
                                 </div>
                             </div>
+                            <!-- Docs: opens the in-app docs browser over the REPL
+                                 (never navigates away). Also reachable as `:docs`
+                                 and via the #doc= URL hash. -->
+                            <button class="btn btn-icon" id="docs-btn"
+                                    title="Documentation (guides &amp; API)" aria-label="Documentation">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 18H6V4h6v7l2.5-1.5L17 11V4h1v16z"/>
+                                </svg>
+                            </button>
                             <!-- Mobile overflow: collapses Solve/Clear/Format/Share/Examples
                                  into a single popover so the tab bar has room. Run stays
                                  visible as the primary action. -->
@@ -140,6 +155,7 @@
                                     <button class="more-item" role="menuitem" data-cmd="format-btn">Format</button>
                                     <button class="more-item" role="menuitem" data-cmd="share-btn">Share</button>
                                     <button class="more-item" role="menuitem" data-action="language">Language...</button>
+                                    <button class="more-item" role="menuitem" data-cmd="docs-btn">Documentation</button>
                                     <button class="more-item" role="menuitem" data-cmd="download-btn">Download project</button>
                                     <button class="more-item" role="menuitem" data-cmd="open-btn">Open project...</button>
                                     <div class="more-sep" role="separator"></div>
@@ -271,8 +287,68 @@
                         <p class="doc-placeholder">Evaluate <code>(doc name)</code> or search above.</p>
                     </div>
                     <div class="doc-footer">
-                        <a id="doc-full-link" href="/docs/html/api/index.html" target="_blank" rel="noopener"
-                           class="doc-open-link">Open full docs &#x2197;</a>
+                        <!-- Opens the in-app docs pane (see #docs-overlay below)
+                             rather than navigating away from /try/ and losing
+                             REPL state. Kept as an <a> with a real href so it
+                             still works as a plain link if JS has not wired up
+                             yet, and so its target is visible on hover. -->
+                        <a id="doc-full-link" href="#doc=api/index"
+                           class="doc-open-link">Open full docs</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+                 In-app docs browser (OD2).
+
+                 Renders the docs pack -- chrome-free fragments emitted by the
+                 same generators that build turmeric-lang.com/docs/html/ -- so
+                 guides and API pages are readable without ever leaving the
+                 REPL, and (OD3) without a network. The nav tree, the search
+                 corpus, and the service worker's precache list all come from
+                 /docs-pack/index.json.
+                 ============================================================ -->
+            <div id="docs-overlay" class="overlay docs-overlay" style="display: none;"
+                 role="dialog" aria-modal="true" aria-label="Documentation">
+                <div class="docs-shell">
+                    <div class="docs-topbar">
+                        <button class="btn btn-icon btn-sm docs-nav-toggle" id="docs-nav-toggle"
+                                aria-label="Toggle documentation navigation" title="Contents">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/>
+                            </svg>
+                        </button>
+                        <span class="docs-brand">Docs</span>
+                        <div class="docs-search-wrap">
+                            <svg class="docs-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                            </svg>
+                            <input type="search" id="docs-search" class="docs-search-input"
+                                   placeholder="Search guides, modules, and symbols…"
+                                   autocomplete="off" spellcheck="false"
+                                   aria-label="Search documentation">
+                        </div>
+                        <!-- Offline readiness, from the pack-status the service
+                             worker records during install (OD3). Silent when the
+                             pack is complete. -->
+                        <span class="docs-status" id="docs-status"></span>
+                        <button class="btn-close" id="docs-close" aria-label="Close documentation">&times;</button>
+                    </div>
+                    <div class="docs-body">
+                        <!-- role=navigation on a div, not a <nav> element:
+                             site.css styles the bare `nav` selector as the
+                             fixed site header bar, which would yank any nested
+                             <nav> out of this layout and pin it to the top of
+                             the viewport. Same semantics for assistive tech,
+                             no inherited positioning. -->
+                        <div class="docs-nav" id="docs-nav" role="navigation"
+                             aria-label="Documentation contents"></div>
+                        <article class="docs-article guide-content" id="docs-article" tabindex="-1"></article>
+                    </div>
+                    <div class="docs-footer">
+                        <span id="docs-version" class="docs-version"></span>
+                        <a id="docs-site-link" class="docs-site-link" href="/docs/html/guides/"
+                           target="_blank" rel="noopener">Open on turmeric-lang.com &#x2197;</a>
                     </div>
                 </div>
             </div>
