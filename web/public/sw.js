@@ -23,8 +23,11 @@
 //
 // The version token below is rewritten to the real VERSION at build time by the
 // `injectSwVersion` plugin in vite.config.js (it regex-replaces the
-// `tur-try-v1-<x.y.z>` token in dist/sw.js). The literal here is the dev/no-build
-// fallback; keep it in sync with VERSION so an un-built serve is still correct.
+// `tur-try-v1-<x.y.z>` token in dist/client/sw.js). The literal here is the
+// dev/no-build fallback; keep it in sync with VERSION so an un-built serve is
+// still correct -- and note that until 2026-08-26 the plugin looked in
+// dist/sw.js, which the Cloudflare plugin does not write, so this literal was
+// the *only* thing keeping the version right.
 const CACHE_VERSION = 'tur-try-v1-0.38.0';
 const PRECACHE = `${CACHE_VERSION}-precache`;
 const RUNTIME  = `${CACHE_VERSION}-runtime`;

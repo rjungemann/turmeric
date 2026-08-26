@@ -95,7 +95,15 @@ docs, wasm, web-dev, ...) are runnable via `tur run <recipe>` -- no extra
 ./build/tur emit-c path/to/file.tur    # print generated C to stdout
 ./build/tur run path/to/file.tur       # compile and immediately execute
 ./build/tur repl                       # interactive REPL
+./build/tur doc vec-push!              # a symbol's docstring, no network needed
+./build/tur docs --open                # the rendered guides and API reference
 ```
+
+The documentation reads offline everywhere: `tur doc` and `tur docs` in a
+terminal, and the **Docs** browser inside
+[Try Turmeric](https://turmeric-lang.com/try), which precaches every guide and
+API page when you install it -- no toggle, no opt-in. See the
+[offline docs guide](docs/guides/offline-docs-guide.md).
 
 ## Package Management (Spice)
 

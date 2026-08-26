@@ -6,10 +6,20 @@ description: One rendered-docs artifact that serves three consumers -- the websi
 
 # Offline Docs + Try Turmeric Embedding (OD)
 
-**Status:** proposal, not started. Requested 2026-08-20: (1) an
-offline-available version of the guides and API docs; (2) guides and API docs
-easily accessible *from* Try Turmeric -- which, since Try has offline mode,
-suggests embedding them so both problems collapse into one.
+**Status: built, 2026-08-26.** OD1-OD5 all landed. The user-facing guide is
+[docs/guides/offline-docs-guide.md](../guides/offline-docs-guide.md); read that
+first if you want to *use* any of this. What follows is the design record --
+kept because the reasoning behind the settled decisions (unconditional
+precaching, one renderer, the size budget as its enforcement) is what a future
+change needs, not just the outcome.
+
+See "What was built" at the bottom for what each phase actually shipped, what
+was found on the way, and what deliberately did not change.
+
+Requested 2026-08-20: (1) an offline-available version of the guides and API
+docs; (2) guides and API docs easily accessible *from* Try Turmeric -- which,
+since Try has offline mode, suggests embedding them so both problems collapse
+into one.
 
 The short answer this plan builds out: **they do collapse into one.** Generate
 a chrome-free "docs pack" (nav index + per-page HTML fragments) from the same
@@ -293,13 +303,63 @@ OD5 folds into whichever of OD1/OD3 touches the neighboring lines first.
 | `genguides.py` markdown dependency missing on a build machine | Loud preflight check with install instructions, in the style of the existing `web-dev:` guards |
 | Symlink narrowing (OD5) breaks site URLs | Keep the public URL space fixed; only the filesystem mapping changes; prod smoke tests (`playwright.config.prod.js`) cover the doc routes |
 
-## 5. Open questions
+## 5. Open questions -- resolved
 
-1. Should spices docs be in the pack when `../turmeric-spices` is absent at
-   build time -- i.e., is the deploy machine guaranteed to have the sibling
-   checkout? (Today's `doc-names.json` merge has the same dependency, so
-   whatever it does, the pack should match.) Note this interacts with
-   precache-always: if spice pages can be missing from a given build, the
-   pane must not offer nav entries for them, or "installed means complete"
-   becomes false through the side door.
-2. Does the tour (`web/tour/`) want the same pane, or is Try enough for v1?
+**1. Spices when `../turmeric-spices` is absent.** Resolved by making the
+question not need an answer: the pack lists only pages this build actually
+produced, and the pane builds its nav from that list. A build without the
+sibling checkout emits `spices: []`, and the pane simply has no Spices section
+-- it never offers an entry the pack cannot serve. So the deploy machine does
+*not* have to be guaranteed to have the checkout, and "installed means
+complete" stays true for whatever the pack claims to contain, which is the only
+form of that promise anyone can keep. This matches `doc-names.json`, whose
+spice merge has always been conditional the same way, and symbol-level spice
+docs continue to work offline through it regardless.
+
+**2. The tour (`web/tour/`).** Not done, and Try is enough for v1. The tour is
+a linear narrative with its own navigation; dropping a 136-guide tree into it
+would compete with the thing it exists to do. The pack and the `#doc=` scheme
+are not Try-specific, so if the tour later wants a "read more" affordance the
+cheapest version is a link to `/try/#doc=guides/<slug>`, which already works
+today -- no second pane, no second precache.
+
+## 6. What was built
+
+| Phase | Landed | Notes |
+|---|---|---|
+| OD1 | `--emit-pack` in all three generators, `tools/packlib.py`, `tools/genpack.py`, wired into `just docs` | Pack is 4.8 MB against the 16 MB budget: 136 guides + 145 API modules |
+| OD2 | Docs pane in `/try/`, `:docs` meta-command, `#doc=` deep links, load-into-editor | `web/tests/docs-pane.spec.js` |
+| OD3 | Unconditional precache driven by `index.json`, cache-first pack, `pack-status`, offline `/docs/html/*` fallback | `web/tests/docs-offline.spec.js` |
+| OD4 | `tur doc <symbol>` over the stdlib table, `tur docs [--open\|--serve]`, docs tarball in `release.yml` and `just docs-tarball` | `tests/run-tur-docs.sh` |
+| OD5 | Symlink narrowed to `docs/html/`, `web-dev:` pack guard | Public URLs unchanged |
+
+### Found on the way
+
+Four defects the work surfaced, all pre-existing, all in the blast radius:
+
+- **Nested inline-C fences broke guide rendering.** A bare ` ``` ` at column 0
+  inside a ```` ```turmeric ```` block closes the enclosing fence, so the rest
+  of the guide rendered as prose. `docs/guides/thread-pool-guide.md` had been
+  shipping five mangled code blocks. Fixed in the renderer
+  (`widen_nested_fences`), not in the one guide, so the class is closed.
+- **`injectSwVersion` had been doing nothing.** It rewrote `dist/sw.js`, but
+  the Cloudflare plugin emits `dist/client/sw.js`. `CACHE_VERSION` was only
+  ever correct because the literal in `public/sw.js` happened to match
+  `VERSION` -- the exact stale-precache failure the plugin exists to prevent.
+- **The first visit never cached the app bundles.** A new worker does not
+  control the page that installed it, so `/assets/*` was only cached if the
+  reader happened to load the app twice. "Load once online, then go offline"
+  -- the scenario OD3's acceptance test describes -- could not work.
+- **Two docs-output findings filed rather than fixed**: a module-name collision
+  that loses an API page, and four dead cross-links in published guides. See
+  `docs/reported/`.
+
+### Deliberately unchanged
+
+- **The site's pages.** OD1 refactored *where* their bodies come from, not what
+  they contain; `/docs/html/*` URLs, chrome, and SEO are as they were.
+- **The existing doc panel.** Symbol lookup still routes there; the pane links
+  into it rather than reimplementing it.
+- **The tutorial system.** Untouched, per OD2.
+- **`stdlib/docstrings.tur`'s shape.** `tur doc` reads the generated table
+  as-is; the generator did not need a second output format.

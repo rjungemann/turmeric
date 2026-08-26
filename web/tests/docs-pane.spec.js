@@ -9,6 +9,19 @@
 // Offline behaviour is a separate concern and lives in docs-offline.spec.js.
 
 import { test, expect } from '@playwright/test';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const WEB_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+// The pack is a `just docs` output and is gitignored, so a fresh clone has
+// none. Without this the whole file fails on an empty nav, which reads as a
+// pane bug rather than a missing build step.
+test.beforeAll(() => {
+    test.skip(!existsSync(path.join(WEB_DIR, 'public', 'docs-pack', 'index.json')),
+              'no docs pack -- run `just docs` first');
+});
 
 /**
  * Open /try/ and wait for the editor.
