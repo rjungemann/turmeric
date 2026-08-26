@@ -1131,9 +1131,23 @@ the report's own named-let snippet does not compile (its `if` branches are
 
 ## Try Turmeric / web REPL (filed 2026-08-25)
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [try-docs-pane-forgets-scroll-position](try-docs-pane-forgets-scroll-position.md) | low | the docs pane remembers which page you were on across close/reopen (`docsCurrentRef` survives `closeDocsPane`) but resets the offset to the top -- `showDocsPage` ends in an unconditional `article.scrollTop = 0` and no per-ref offset is stored. Enhancement; read-verified in source, not exercised in a browser |
+*(empty -- the one row here is resolved)*
+
+`try-docs-pane-forgets-scroll-position` was resolved 2026-08-26 and moved to
+[docs/archive](../archive/try-docs-pane-forgets-scroll-position.md), along its
+implementation notes, and **exercised in a browser** as its verification-status
+section asks. Two things worth carrying to the next Try Turmeric change. First
+a hazard the notes did not have: `rememberDocsScroll` must refuse to record
+while the pane is closed, because a hidden element reports `scrollTop` 0 and a
+still-queued `scroll` callback then overwrites the offset `closeDocsPane` just
+banked -- scroll, hit Escape in the same frame, and the feature silently does
+nothing. Second, a testing trap that nearly shipped: `showDocsPage` re-fetches,
+so until that resolves the column still shows *and is still scrolled to* the
+previous render, and a `waitForFunction` poll latches onto that stale value.
+Two of three new tests passed against the unfixed file that way. Assert the
+settled state (wait out `aria-busy`, then take one reading) -- and note that
+toggling `display` preserves `scrollTop`, so a close/reopen appears to keep
+your place for a moment even with no restore code at all.
 
 ## Windows port
 
