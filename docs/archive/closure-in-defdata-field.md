@@ -123,7 +123,7 @@ would paper over a mis-selected monomorph), so it wants a snapshot diff.
 gates on emitted-C pointer/integer warnings. The lazy-stream fix for
 [logic-streams-are-strict](logic-streams-are-strict.md) is written, works, and
 turns **9 shipped fixtures red** on this warning alone -- so it is reverted and
-parked in [../upcoming/lazy-streams-plan.md](../upcoming/lazy-streams-plan.md)
+parked in [lazy-streams-plan.md](lazy-streams-plan.md)
 until this is fixed. Any future ADT that wants to hold a callback hits the same
 wall.
 
