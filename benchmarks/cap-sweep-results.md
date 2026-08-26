@@ -1,6 +1,6 @@
 # Refinement solver cap sweep (SX0(b))
 
-Generated: 2026-08-25 16:50 at aeb87927 by `benchmarks/run-cap-sweep.sh`.
+Generated: 2026-08-26 04:25 at 8a8c9433 by `benchmarks/run-cap-sweep.sh`.
 
 Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives, so a
 hit is never unsound -- it is lost completeness, and only lost completeness that

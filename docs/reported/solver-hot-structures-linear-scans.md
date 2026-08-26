@@ -5,8 +5,25 @@ of them can hang a compile -- they make the caps bite sooner than they need to,
 which costs completeness rather than time. Worth fixing when the surrounding
 phase touches the code anyway; not worth a standalone project.
 
-**Status:** OPEN. Not fixed -- filed while working through the solver-extension
-plan (SX0-SX2), which is where the natural fixes live.
+**Status:** OPEN, and reassessed 2026-08-27 with SX3 landed and measurements
+in hand. Two corrections to this report's own claims:
+
+- **The "free fix with SX3" prediction did not come true.** SX3 landed as
+  mark/undo over the SAME arrays (`trail_c.h` value-trails `parent[]`); it did
+  not rewrite the term index, so #1's linear scan survived the phase that was
+  supposed to absorb it. Fixing it is now a standalone change again.
+- **And the measurements say that standalone change buys nothing.** Real
+  obligations peak at **10 of 512** EUF terms (heaviest in-tree fixture, via
+  `TUR_REFINE_STATS`); across all 125 corpus benchmarks exactly one reaches
+  the 512 cap -- a deliberate 1000-deep stress regression -- and it decides in
+  **64 ms**. Solver-on vs solver-off (`TUR_REFINE_NO_DISCHARGE=1`) on the
+  heaviest fixture is 21 vs 22 ms/check: the whole solver is compile-time
+  noise. The post-SX3 cap-sweep re-run is byte-identical to the pre-SX3
+  baseline except the timestamp.
+
+So the scans stay filed (the scaling property is real), but nothing here
+justifies work until an obligation population with hundreds of terms exists --
+and SX0(b)'s telemetry will show it arriving before it hurts.
 
 ## 1. `euf_index` interns terms by linear scan -- O(n^2) in term count
 
@@ -27,9 +44,12 @@ The lookup is by POINTER identity on a hash-consed `VCTerm`, so a pointer-keyed
 hash table drops it to O(1) amortized with no change in semantics. `euf_equal`
 (line 96) has the same scan.
 
-**Where the fix belongs:** SX3 (incremental EUF) rewrites this state to carry
-mark/undo anyway. Doing the index there is nearly free; doing it now is a
-separate change to code that is about to be rewritten.
+**Where the fix belongs:** this section originally said SX3, which "rewrites
+this state to carry mark/undo anyway". SX3 landed WITHOUT rewriting the index
+(mark/undo trails the existing arrays in place), so that home is gone; see the
+status note above for why no new home is needed yet. If it is ever done, note
+the index must now also be trail-aware: undo truncates `n`, which a plain hash
+table over dead entries would not survive.
 
 ## 2. The congruence-closure fixpoint is a naive O(n^2) sweep
 
