@@ -937,7 +937,16 @@ turned up a defect in the instrument that would have justified it.
 | [closure-in-defdata-field](closure-in-defdata-field.md) | medium | PARTIALLY FIXED. The `defopaque :ptr<void>` route is clean now and the lazy-stream work it blocked has landed. Still open: a `:fn` field accepts a capturing closure, type-checks, and SIGSEGVs when forced, while a non-capturing one works -- so the shape you write first is fine and the shape you need crashes |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
 | [poly-call-in-statement-position-dropped](poly-call-in-statement-position-dropped.md) | **high** | a discarded call to a parametric function is DROPPED unless it instantiates at `int` -- the side effects are lost, silently, with no diagnostic. `(polyA true)` in statement position never runs; `(polyA 1)` does. Fixture `poly-statement-position-effect` is red on purpose and goes green when this is fixed |
-| [compiled-fixtures-are-not-leak-checked](compiled-fixtures-are-not-leak-checked.md) | low-medium | ADDRESSED. The default suite does not leak-check EMITTED programs -- only `tur` itself. `tests/run-leak-check.sh` now generalizes the three bespoke harnesses that did; coverage map in the test-suite portability guide |
+
+`compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/compiled-fixtures-are-not-leak-checked.md). Its two
+"still open" follow-ups had both landed in `3c457e92` without the report being
+updated: the opt-in set went from 2 fixtures to **54**, and the gate is wired to
+ctest as `tur_leak_check`. It had also been held back on the grounds that one
+leak is still marked known -- but that leak is
+[inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md)'s to
+carry, and removing the marker is row 2 of
+[workarounds-to-remove](workarounds-to-remove.md).
 
 `logic-streams-are-strict` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/logic-streams-are-strict.md): `stdlib/logic.tur`

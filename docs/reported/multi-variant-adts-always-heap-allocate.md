@@ -176,7 +176,7 @@ Three things follow, and the first corrects this report's original advice:
    predicate fixes this. The slab would need a whole-program pass marking every
    ADT def used as an `rc/of` payload and excluding those. The other half of the
    objection did resolve --
-   [leak checking now exists](compiled-fixtures-are-not-leak-checked.md) via
+   [leak checking now exists](../archive/compiled-fixtures-are-not-leak-checked.md) via
    `tests/run-leak-check.sh`, so a bad free is catchable.
 
    **The slab is now SHELVED** -- see the decision record below. Row E is no

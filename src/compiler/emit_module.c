@@ -14066,7 +14066,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
      * WITHOUT sanitizers.  Leak and bad-free checking of emitted code now
      * exists, but it is opt-in per fixture --
      * tests/run-leak-check.sh plus a requires.leak-check marker
-     * (docs/reported/compiled-fixtures-are-not-leak-checked.md).
+     * (docs/archive/compiled-fixtures-are-not-leak-checked.md).
      *
      * SHELVED 2026-08-25, and the escape pass above should NOT be built.  The
      * slab's whole case was "2.4x with no ownership analysis"; needing a

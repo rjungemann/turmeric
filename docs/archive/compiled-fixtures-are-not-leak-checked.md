@@ -1,7 +1,14 @@
 # Emitted-program leak checking was not generalized
 
-**Severity:** low-medium coverage gap. **Status:** ADDRESSED -- see below. Kept
-in `reported/` rather than archived because one open leak is still marked known.
+**Severity:** low-medium coverage gap. **Status:** RESOLVED 2026-08-26.
+
+An earlier revision kept this in `reported/` "because one open leak is still
+marked known". That was the wrong test: the known leak belongs to
+[inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md), which
+has its own report, and removing the marker is tracked as row 2 of
+[workarounds-to-remove](workarounds-to-remove.md). *This* report's finding --
+that emitted-program leak checking was never generalized -- is fully addressed,
+so it archives.
 
 ## The finding, stated correctly
 
@@ -60,10 +67,29 @@ is reachable by construction and will be called live however dead it is --
 and is why that gate counts collector work instead. A clean run here means
 "nothing was orphaned", not "nothing was retained".
 
-## Still open
+## Both follow-ups are done
 
-- Only two fixtures opt in so far (`leak-check-clean-baseline`, and the
-  `rc/of` case marked known). Widening the set is the obvious next step; the
-  allocation-heavy fixtures would be the useful ones.
-- Not wired into ctest. A sanitized compile per fixture is slow, and this is a
-  diagnostic gate rather than a correctness gate for everyday work.
+An earlier revision listed two. Both landed in `3c457e92` and this section was
+never updated -- recorded here rather than quietly edited, because a stale
+"still open" list is how a resolved report keeps looking unresolved.
+
+- **"Only two fixtures opt in so far."** Now **54**, and they are the
+  allocation-heavy ones the note asked for -- the `rc-*`, `weak-*`, `defer-*`
+  and `affine-*` families. Widening from 2 to 54 is what surfaced the two
+  ownership-handoff leaks that this branch went on to fix.
+- **"Not wired into ctest."** Now a `tur_leak_check` target
+  (`CMakeLists.txt:146`), marked `RUN_SERIAL` so it gets the machine rather
+  than competing with the other suites for it.
+
+Current state: **53 passed, 0 failed, 1 known-open**, the known one being the
+inline-C carrier box.
+
+## The staleness guard, verified
+
+The `known-leak` mechanism is only safe if a marker cannot outlive the bug it
+names, so the gate fails a fixture that is marked known and runs CLEAN
+(`run-leak-check.sh:126`). Checked by experiment rather than by reading it:
+marking `leak-check-clean-baseline` known-leak turns the run red with
+`marked known-leak but ran clean -- fix or delete ...`, and removing the marker
+restores `53 passed, 0 failed, 1 known-open`. A gate that has never been seen to
+fire is not a gate.
