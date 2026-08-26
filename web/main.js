@@ -3518,6 +3518,46 @@ let docsIndex = null;          // parsed index.json, once
 let docsIndexPromise = null;   // in-flight load, so concurrent opens share one
 let docsCurrentRef = null;     // e.g. 'guides/hkt-guide'
 let docsNavCollapsed = false;
+/**
+ * Where you were in each page you have read this session, keyed by ref.
+ *
+ * Per-ref rather than one global offset on purpose: the pane is a browser over
+ * many pages, so coming back to guide A must not restore guide B's offset.
+ * Session-scoped in memory -- surviving a reload is not worth a STORAGE_KEYS
+ * entry for something this cheap to re-establish by scrolling.
+ */
+const docsScrollByRef = new Map();
+
+/**
+ * Assign scrollTop without the smooth animation `.docs-article` sets in CSS.
+ *
+ * Restoring a remembered offset under `scroll-behavior: smooth` glides down
+ * the page on every reopen, which reads as the pane scrolling by itself rather
+ * than as returning you to your place.
+ */
+function docsSetScroll(article, top) {
+    try {
+        article.scrollTo({ top, behavior: 'instant' });
+    } catch {
+        // 'instant' is not universally accepted by scrollTo's options form;
+        // the plain assignment still lands, it just animates.
+        article.scrollTop = top;
+    }
+}
+
+/**
+ * Record where the article column is scrolled to for the page it is showing.
+ *
+ * Refuses to record while the pane is closed. A hidden element reports
+ * scrollTop 0, so a `scroll` callback still queued when the overlay went
+ * display:none would overwrite the offset closeDocsPane had just banked --
+ * with exactly the value the restore is supposed to avoid.
+ */
+function rememberDocsScroll() {
+    const article = document.getElementById('docs-article');
+    if (!article || !docsCurrentRef || !docsPaneIsOpen()) return;
+    docsScrollByRef.set(docsCurrentRef, article.scrollTop);
+}
 
 /**
  * Fetch and cache the pack manifest. Resolves to null when the pack is absent
@@ -3758,6 +3798,10 @@ async function showDocsPage(refWithAnchor, { updateHash = true } = {}) {
     const { ref, anchor } = parseDocsRef(refWithAnchor);
     if (!ref) return;
 
+    // Leaving the page you are on: bank its offset before the fragment is
+    // replaced, so navigating away and back returns you to your place.
+    if (docsCurrentRef && docsCurrentRef !== ref) rememberDocsScroll();
+
     const entry = docsEntryFor(ref);
     if (!entry) {
         article.innerHTML = `<p class="docs-empty">No page <code>${escapeHtml(ref)}</code> `
@@ -3787,12 +3831,21 @@ async function showDocsPage(refWithAnchor, { updateHash = true } = {}) {
     const siteLink = document.getElementById('docs-site-link');
     if (siteLink) siteLink.href = docsSiteUrl(ref);
 
-    // Anchor scrolling has to wait for the fragment to be in the document.
+    // Anchor scrolling has to wait for the fragment to be in the document --
+    // and so does restoring an offset, since the element is not tall enough to
+    // accept one until its content is there.
+    //
+    // Precedence: an explicit anchor always wins (you asked for that heading),
+    // then a remembered offset for this page, then the top for a page opened
+    // for the first time. A remembered offset can outlive the content it
+    // pointed into if the pack updated between visits; the browser clamps it
+    // to the scrollable range, which is the right behaviour, so it just does
+    // not round-trip exactly.
     if (anchor) {
         const target = article.querySelector(`#${CSS.escape(anchor)}`);
         if (target) { target.scrollIntoView({ block: 'start' }); return; }
     }
-    article.scrollTop = 0;
+    docsSetScroll(article, docsScrollByRef.get(ref) || 0);
 }
 
 /** The turmeric-lang.com URL for a pack ref, for the "open on the site" link. */
@@ -3912,6 +3965,10 @@ function openDocsPane(refWithAnchor) {
 }
 
 function closeDocsPane() {
+    // Bank the offset while the overlay is still laid out. Reading scrollTop
+    // after display:none would give 0, which is exactly the position the pane
+    // is not supposed to come back to.
+    rememberDocsScroll();
     const overlay = document.getElementById('docs-overlay');
     if (overlay) overlay.style.display = 'none';
     document.body.classList.remove('docs-open');
@@ -3981,6 +4038,20 @@ function initDocsLinkInterception() {
 function initDocsPane() {
     document.getElementById('docs-btn')?.addEventListener('click', () => openDocsPane());
     document.getElementById('docs-close')?.addEventListener('click', closeDocsPane);
+
+    // showDocsPage and closeDocsPane already bank the offset on the two ways of
+    // leaving a page, so this listener is a backstop rather than the mechanism:
+    // it keeps the map current for any exit path that forgets to, at the cost
+    // of one rAF-coalesced store per scroll burst.
+    const article = document.getElementById('docs-article');
+    if (article) {
+        let pending = false;
+        article.addEventListener('scroll', () => {
+            if (pending) return;
+            pending = true;
+            requestAnimationFrame(() => { pending = false; rememberDocsScroll(); });
+        }, { passive: true });
+    }
 
     // The doc panel's "Open full docs" used to navigate to /docs/html/api/,
     // dropping the REPL session. It opens the pane now.

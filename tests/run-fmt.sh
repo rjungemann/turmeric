@@ -223,6 +223,94 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: comments inside a `[...]` vector -- a defstruct field vector, a
+# defn parameter vector, a multi-pair let binding vector.  Every one of these
+# used to be DELETED: the vector printers called fmt_emit_inline with no
+# span_has_comment guard, and the broken printers never consulted the source
+# gaps.  `tur fmt` writes in place, so the text was destroyed with exit 0.
+#
+# The corpus this bug hid in is why the case is spelled out here rather than
+# left to FT7/FT8: no sampled stdlib file puts a comment inside a bracket
+# vector, so both idempotence checks passed over a format pass that was losing
+# source.  Assert preservation AND idempotence -- the second symptom is
+# downstream of the first (once the comments are gone, pass 2 collapses the
+# form further), so a fix that stopped only the collapse would still pass an
+# idempotence-only check while deleting the comments.
+# ---------------------------------------------------------------------------
+NAME="fmt-preserves-comments-in-vectors"
+read -r -d '' VECCOMMENT_INPUT <<'EOF'
+(defstruct P
+  [a : int    ; first field
+   b : int    ; second field
+   c : int])
+
+(defn f [x : int   ; the input
+         y : int] : int
+  (let [s (+ x y)  ; the sum
+        t 2]
+    (* s t)))
+EOF
+ACTUAL=$(printf '%s\n' "$VECCOMMENT_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+VECCOMMENT_MISSING=""
+for c in "; first field" "; second field" "; the input" "; the sum"; do
+    printf '%s\n' "$ACTUAL" | grep -qF "$c" || VECCOMMENT_MISSING="$VECCOMMENT_MISSING [$c]"
+done
+if [ -n "$VECCOMMENT_MISSING" ]; then
+    fail "$NAME" "comment(s) deleted:$VECCOMMENT_MISSING; got: $ACTUAL"
+elif [ "$ACTUAL" != "$ROUNDTRIP" ]; then
+    fail "$NAME" "fmt(fmt(x)) != fmt(x); pass1: $ACTUAL"
+else
+    pass "$NAME"
+fi
+
+# ---------------------------------------------------------------------------
+# A comment that trailed an element on its own source line must stay on that
+# line.  Relocating it one line down parks it above the NEXT element, where it
+# reads as a comment about that one -- a different claim about the code than
+# the author made, and not something a formatter gets to decide.
+# ---------------------------------------------------------------------------
+NAME="fmt-trailing-comment-stays-on-its-line"
+read -r -d '' TRAILING_INPUT <<'EOF'
+(defstruct Q
+  [alpha : int   ; belongs to alpha
+   beta : int])  ; belongs to beta
+EOF
+ACTUAL=$(printf '%s\n' "$TRAILING_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qE "alpha : int +; belongs to alpha" \
+   && printf '%s\n' "$ACTUAL" | grep -qE "beta : int\]\) +; belongs to beta" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "trailing comment relocated or not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
+# A comment between the last element and the closing bracket must not swallow
+# that bracket.  emit_comments_indented ends output mid-comment-line, so a `]`
+# written straight after it lands INSIDE the comment -- turning silent comment
+# loss into a file that no longer parses.
+# ---------------------------------------------------------------------------
+NAME="fmt-comment-before-close-bracket"
+read -r -d '' CLOSEBRACKET_INPUT <<'EOF'
+(defn h [aaaaaaaaaaaaaaaa : int bbbbbbbbbbbbbbbb : int cccccccccccccccc : int
+         ;; a note that sits before the closing bracket
+         ] : int
+  aaaaaaaaaaaaaaaa)
+EOF
+ACTUAL=$(printf '%s\n' "$CLOSEBRACKET_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+# The ']' must be on a line of its own, i.e. not trailing the comment text.
+if printf '%s\n' "$ACTUAL" | grep -qF ";; a note that sits before the closing bracket" \
+   && ! printf '%s\n' "$ACTUAL" | grep -qE ";.*\]" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "closing bracket swallowed by comment or not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
 # Regression: a defn parameter list that overflows the line width must break
 # one parameter per line, keeping each `name : type` pair together -- it used
 # to split the name and its annotation onto separate lines.

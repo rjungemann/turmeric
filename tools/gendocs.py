@@ -193,6 +193,64 @@ def _parse_docstring(lines):
     return sections
 
 
+def strip_line_comment(line):
+    """Return `line` with any `;` comment removed, respecting string literals.
+
+    Used when scanning source for forms: a form written inside a comment (a
+    docstring example, a commented-out declaration) is prose, not code, and
+    must not be read as the real thing.
+    """
+    out = []
+    in_str = False
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if in_str:
+            if c == '\\':
+                # Copy the escape AND what it escapes: a `\"` keeps the string
+                # open, so the `;` after it is still string content, and the
+                # text this returns has to stay verbatim for any other caller.
+                out.append(line[i:i + 2])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == ';':
+            break
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def apply_path_fallback_name(module, rel_parts):
+    """Refine a filename-derived module name with the file's subdirectory.
+
+    Only applies when the file declares no `(defmodule ...)`: a declared name is
+    the module's identity and its page URL, and neither is ours to rewrite.
+
+    The bare-stem fallback is keyed on the *basename*, so any two same-named
+    files anywhere under the source root resolve to one module name and one
+    page -- whichever renders last wins and the other silently does not exist.
+    That is not hypothetical: `stdlib/capability.tur` and
+    `stdlib/test/capability.tur` both became `tur/capability`, and the shipped
+    `tur-capability.html` held the *test* mocks while the real module had no
+    page. Everything under a subdirectory is a same-named sibling waiting to
+    happen, so the fallback carries the subdirectory:
+
+        stdlib/capability.tur       -> tur/capability
+        stdlib/test/capability.tur  -> tur/test/capability
+        stdlib/seq/core.tur         -> tur/seq/core
+    """
+    if module.get('name_declared'):
+        return
+    if not rel_parts or len(rel_parts) < 2:
+        return
+    stem = Path(rel_parts[-1]).stem
+    module['name'] = 'tur/' + '/'.join([*rel_parts[:-1], stem])
+
+
 def parse_tur_file(path):
     """
     Parse a .tur file and return a module description dict:
@@ -224,6 +282,7 @@ def parse_tur_file(path):
 
     module = {
         'name': None,
+        'name_declared': False,
         'file_stem': file_stem,
         'file_path': str(path),
         'exports': set(),
@@ -233,16 +292,27 @@ def parse_tur_file(path):
 
     # ------------------------------------------------------------------
     # Step 1: Find (defmodule tur/name ...)
+    #
+    # Scan code only.  A `defmodule` written inside a `;;` comment -- as an
+    # example in a module docstring, which is exactly where one gets written --
+    # used to win, because it appears before the real form.  That is how
+    # stdlib/turi/eval.tur came to publish itself as `myplugin/core`: its
+    # docstring shows `(defmodule myplugin/core ...)` at line 5 and its own
+    # declaration sits at line 20.  The result was a bogus myplugin-core.html
+    # on the site and no page at all for turi/eval.
     # ------------------------------------------------------------------
     module_re = re.compile(r'\(\s*defmodule\s+([\w/\-]+)')
     for line in lines:
-        m = module_re.search(line)
+        m = module_re.search(strip_line_comment(line))
         if m:
             module['name'] = m.group(1)
+            module['name_declared'] = True
             break
 
     if module['name'] is None:
-        # Derive pseudo-name from filename
+        # Derive a pseudo-name from the filename.  Callers that know the file's
+        # position under the source root refine this via apply_path_fallback_name
+        # -- the bare stem collides across subdirectories.
         module['name'] = 'tur/' + file_stem
 
     # ------------------------------------------------------------------
@@ -1786,9 +1856,11 @@ def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
         # here rather than letting the pack quietly carry one fewer page than
         # it parsed.
         if slug in seen_slugs:
-            print(f'  warning: {module.get("rel_path") or module["name"]} and '
-                  f'{seen_slugs[slug]} both render to {rel}; the last one wins',
-                  file=sys.stderr)
+            raise SystemExit(
+                f'  error: {module.get("rel_path") or module["name"]} and '
+                f'{seen_slugs[slug]} both render to {rel}; the last one would '
+                f'win and the other would silently have no page. Give one of '
+                f'them a distinct (defmodule ...) name.')
         seen_slugs[slug] = module.get('rel_path') or module['name']
         content = build_module_content(module)
         size = packlib.write_fragment(pack_dir, rel, content)
@@ -1885,6 +1957,7 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
                     rel_parts = Path(f).resolve().relative_to(source_root).parts
                     module['subdir'] = rel_parts[0] if len(rel_parts) > 1 else None
                     module['rel_path'] = f'{path_prefix}/' + '/'.join(rel_parts)
+                    apply_path_fallback_name(module, rel_parts)
                 except ValueError:
                     module['subdir'] = None
                     module['rel_path'] = None
@@ -1896,6 +1969,22 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
             print(f'  Parsed {f} -> {module["name"]} ({exported_count} exported defs)')
         except Exception as e:
             print(f'  Warning: failed to parse {f}: {e}', file=sys.stderr)
+
+    # Two modules that resolve to the same page name are a silent data loss:
+    # whichever renders second overwrites the first, the index still shows both
+    # cards, and one of those two links 404s. That shipped for as long as
+    # stdlib/capability.tur and stdlib/test/capability.tur both existed, and
+    # the only signal was a page count one short of the module count. Fail
+    # here, where the message can name both files.
+    seen_pages = {}
+    for module in modules:
+        page = module_page_name(module)
+        if page in seen_pages:
+            print(f'  error: {module.get("rel_path") or module["file_path"]} and '
+                  f'{seen_pages[page]} both render to {page}; give one of them a '
+                  f'distinct (defmodule ...) name', file=sys.stderr)
+            sys.exit(1)
+        seen_pages[page] = module.get('rel_path') or module['file_path']
 
     # Render per-module pages
     for module in modules:

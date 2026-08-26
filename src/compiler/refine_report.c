@@ -57,7 +57,7 @@ static const char *verdict_of(const RefineObligation *ob) {
 /* Only the caps that actually bit.  Emitting nine zeroes per record for the
  * overwhelmingly common "nothing was capped" obligation would bury the ones
  * that matter under noise. */
-static void emit_caps(Buf *out, const RefineCapStats *c) {
+static void emit_caps(Buf *out, const char *key, const RefineCapStats *c) {
     struct { const char *name; uint32_t hits; } rows[] = {
         { "cubes",         c->cubes_hits        },
         { "cube_literals", c->cube_lits_hits    },
@@ -69,7 +69,7 @@ static void emit_caps(Buf *out, const RefineCapStats *c) {
         { "no_shared",     c->no_shared_hits    },
         { "no_rounds",     c->no_rounds_hits    },
     };
-    buf_puts(out, "\"caps_hit\": {");
+    buf_printf(out, "\"%s\": {", key);
     bool first = true;
     for (size_t i = 0; i < sizeof(rows)/sizeof(rows[0]); i++) {
         if (!rows[i].hits) continue;
@@ -144,7 +144,15 @@ static void emit_one(Buf *out, const RefineObligation *ob) {
     emit_model(out, ob->counterex);
     buf_puts(out, ",\n     ");
 
-    emit_caps(out, &ob->caps);
+    emit_caps(out, "caps_hit", &ob->caps);
+    buf_puts(out, ", ");
+    /* Caps hit by the RT4 path-splitting probes run for this site before this
+     * obligation existed.  Separate from caps_hit because a probe asks a
+     * different question (one path, not the whole body) -- but reported,
+     * because the alternative is what this used to do: count them globally,
+     * so the per-compile summary said a cap bit while every obligation read
+     * zero.  Sum the two for "all solver work this site paid for". */
+    emit_caps(out, "caps_hit_probe", &ob->caps_probe);
     buf_puts(out, ",\n     ");
 
     /* The VC, as SMT-LIB2, in the refutation form the stages actually decide:

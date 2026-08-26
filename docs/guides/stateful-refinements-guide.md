@@ -77,7 +77,7 @@ This is sound by construction, and needs no new machinery:
   arrive by different routes -- an in-frame borrow is visible to the frame, while
   a `^borrow` parameter's aliasing happened in the caller -- and for a while only
   the first was checked (see
-  [docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md](../archive/borrow-param-passed-as-unique-mut-undiagnosed.md)).
+  [docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md)).
 - `frozen` *borrows*, it does not consume: `w` is usable again after the region,
   so a real `despawn!` outside the region is fine.
 - Read-only accessors take `[^borrow w]` and coexist with the region borrow, so

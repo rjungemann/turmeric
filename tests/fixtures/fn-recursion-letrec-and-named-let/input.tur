@@ -1,0 +1,12 @@
+;; Both recursion-in-lambda-position spellings that
+;; tests/fixtures/errors/fn-named-lambda-points-at-letrec's help lines
+;; recommend. This fixture exists so that suggestion cannot go stale: if
+;; letrec or named let ever stops working, the error message is telling
+;; people to write something that does not compile, and this goes red.
+(defn main [] : int
+  (letrec [fact (fn [n : int] : int (if (= n 0) 1 (* n (fact (- n 1)))))]
+    (println (fact 5)))
+  (let loop [n 5 acc 1]
+    (if (= n 0)
+      (do (println acc) 0)
+      (loop (- n 1) (* acc n)))))
