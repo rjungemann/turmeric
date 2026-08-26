@@ -6,13 +6,12 @@ description: The fix for logic-streams-are-strict is written, works, and cannot 
 
 # Lazy solution streams (LS)
 
-**Status:** implemented and verified, **blocked on a compiler fix**, reverted
-from `stdlib/logic.tur` pending it. The working change is checked in as
-[lazy-streams.patch](lazy-streams.patch) -- apply with
-`git apply docs/upcoming/lazy-streams.patch`.
+**Status:** LANDED 2026-08-26, in `stdlib/logic.tur`. The patch file that
+carried it while it was blocked is gone; the change is in the module.
 
-Fixes [logic-streams-are-strict](../reported/logic-streams-are-strict.md).
-Blocked by [closure-in-defdata-field](../reported/closure-in-defdata-field.md).
+Fixed [logic-streams-are-strict](logic-streams-are-strict.md). The blocker,
+[closure-in-defdata-field](../reported/closure-in-defdata-field.md), was fixed
+first -- see step 1 below.
 
 ## What the patch does
 
@@ -76,16 +75,26 @@ would paper over a mis-selected monomorph), so widening it wants care and a
 snapshot diff -- which is why this was not done at the tail of the session that
 found it.
 
-## Order
+## What actually happened
 
-1. Fix `closure-in-defdata-field` -- at minimum the cast, ideally also making
-   `:fn` fields either work or be a compile error rather than a runtime crash.
-2. Apply this patch; the 9 fixtures should go green with no other change.
-3. Add fixtures for the new behaviour: an infinite relation under `run-logic n`,
-   and `zzz` in a recursive relation. There are none today -- `logic.tur`'s
-   whole coverage is 8 fixtures that only exercise finite goals.
-4. Rewrite `docs/guides/tur-logic-guide.md`'s "Interleaving search" section:
-   the correction currently there says `mplus-i` cannot work, which stops being
-   true once `StInc` exists. `st-append` IS the interleaving `mplus` after this
-   patch, so the section becomes a description rather than a workaround.
-5. Update `logic-streams-are-strict` to resolved and archive it.
+1. **Fixed the blocker first.** Two predicates at the ctor-argument seam in
+   `emit_expr.c`: `field_is_carrier` extended to opaque fields (an opaque is a
+   named int64 carrier with its base erased), and `is_ptr_like` extended to an
+   ascription-stripped `EX_CLOSURE` (a closure resolves to the opaque but
+   lowers to a pointer). Zero drift across 147 snapshots; mutation-verified by
+   reverting it and watching the `logic-*` fixtures go red again.
+2. **Applied the patch.** The 9 fixtures went green with no other change, as
+   predicted.
+3. **Added `tests/fixtures/logic-lazy-infinite`** -- an infinite relation under
+   `run-logic 1 / 5 / 500`, plus a finite goal to pin that nothing else moved.
+   `logic.tur` previously had no coverage of either.
+4. **Rewrote the guide's "Interleaving search" section.** It no longer tells
+   readers to hand-write `mplus-i`; `st-append` is the interleaving `mplus`, and
+   the section explains why the old hand-written version could never have
+   worked (it swapped, but built a strict `StCons`).
+5. **Archived `logic-streams-are-strict`.**
+
+**Still open:** a `:fn` field in a `defdata` still segfaults on a capturing
+closure. The lazy-stream work routes around it via `defopaque :ptr<void>`, which
+is why it could land, but the underlying hole is unchanged -- see
+[closure-in-defdata-field](../reported/closure-in-defdata-field.md).

@@ -1,0 +1,26 @@
+;; Lazy solution streams: a relation with INFINITELY many solutions.
+;;
+;; Before StInc/zzz this program did not run at all -- it SIGSEGVed while the
+;; goal was being BUILT, because `disjoined` takes its goals strictly and
+;; `(nats)` called itself forever before any search started.  A strict Stream
+;; also meant `run-logic n` truncated the RESULT after running the whole search,
+;; so even a finite version paid for every solution it threw away.
+;;
+;; See docs/reported/logic-streams-are-strict.md.
+
+(load "stdlib/logic.tur")
+
+;; Infinitely many solutions: succeed, or recurse.  `zzz` delays the recursive
+;; goal so construction terminates and the search advances one step per pull.
+(defn nats [] : (Goal int)
+  (disjoined (succeed) (zzz (nats))))
+
+(defn main [] : int
+  ;; Each of these must terminate, and must cost only the solutions asked for.
+  (println (st-length (run-logic 1 (nats))))
+  (println (st-length (run-logic 5 (nats))))
+  (println (st-length (run-logic 500 (nats))))
+  ;; A finite goal still behaves exactly as before.
+  (println (st-length (run-logic 5 (disjoined (lequal (term-var 0) (term-int 1))
+                                              (lequal (term-var 0) (term-int 2))))))
+  0)

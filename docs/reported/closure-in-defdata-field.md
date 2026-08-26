@@ -5,9 +5,13 @@ miscompiles into a crash for the only case anyone would use it for. The working
 alternative is undocumented and discoverable only by reading how `Goal` is
 declared.
 
-**Status:** OPEN. Root-caused with three probes below, not fixed. Found while
-scoping the fix for
-[logic-streams-are-strict](logic-streams-are-strict.md), which needs exactly
+**Status:** PARTIALLY RESOLVED 2026-08-26. **Case 3 (the `:ptr<void>` route) is
+fixed** -- the emitted C is clean and the lazy-stream work it blocked has
+landed. **Case 1 (`:fn` field segfaults) is still OPEN**, and so is the warning
+on case 2.
+
+Kept in `reported/` for that reason. Found while scoping the fix for
+[logic-streams-are-strict](logic-streams-are-strict.md), which needed exactly
 this -- a thunk stored in a `Stream` variant.
 
 ## 1. `:fn` field + capturing closure = SIGSEGV
@@ -108,9 +112,24 @@ wall.
 
 ## Fix directions
 
-1. **Widen the argument-type determination in `emit_expr.c`** so the existing
-   carrier-cast fires for closure-valued ctor arguments. Fixes the warning in
-   cases 2 and 3, and unblocks the lazy-stream work; does not fix case 1.
+1. ~~**Widen the argument-type determination in `emit_expr.c`**~~ -- **DONE
+   2026-08-26.** Two predicates at the ctor-argument seam were extended, and
+   between them the existing pointer-to-carrier cast now fires for case 3:
+
+   - `field_is_carrier` now also holds for an **opaque** field, not only a
+     `TY_TYVAR` one. An opaque "has NO fields; it is a named int64_t carrier"
+     with its declared base erased (`types.h:353`), so a `(defopaque Th
+     :ptr<void>)` field lowers to `int64_t` exactly like a tyvar one.
+   - `is_ptr_like` now also holds when the argument, with any ascription
+     stripped, is an `EX_CLOSURE`. Ascribed to an opaque a closure *resolves*
+     to that opaque (a carrier) while still *lowering* to a pointer, so only
+     the expression form reveals the straddle.
+
+   **Zero snapshot drift** across all 147 `expected.c` fixtures, and the suite
+   is 2694/0 with `TUR_SANITIZER_GATE=1`. Mutation-verified: reverting it alone
+   turns the `logic-*` fixtures red again on the cc-warning gate.
+
+   Case 1 is untouched -- a `:fn` field still segfaults on a capturing closure.
 2. **Make `:fn` fields work, or reject them.** The call-through in case 1 has to
    dispatch a fat closure rather than assume a bare function pointer -- the same
    dispatch `apply-goal` performs. If that is not wanted, a `:fn` field should be

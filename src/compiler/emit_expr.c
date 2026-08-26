@@ -6073,6 +6073,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (e->as.call_.ctor && i < e->as.call_.ctor->n_fields) {
                         const Type *fft = e->as.call_.ctor->fields[i].full_type;
                         field_is_carrier = fft && fft->kind == TY_TYVAR;
+                        /* closure-in-defdata-field: an OPAQUE field is a carrier
+                         * slot too.  An opaque def "has NO constructors and NO
+                         * fields; it is a named int64_t carrier" (types.h:353) --
+                         * its declared base is erased -- so a `(defopaque Th
+                         * :ptr<void>)` field lowers to int64_t exactly like a
+                         * tyvar one, and a pointer stored into it is the same
+                         * straddle.  Without this an ADT holding a callback (the
+                         * only way to store one -- a `:fn` field segfaults)
+                         * emits C that warns, and tests/run.sh's cc-warning gate
+                         * rejects it.  See
+                         * docs/reported/closure-in-defdata-field.md. */
+                        if (!field_is_carrier && fft) {
+                            Type fr = emit_resolve_type(ctx, *fft);
+                            field_is_carrier = fr.kind == TY_ADT &&
+                                               fr.as.adt_.def &&
+                                               fr.as.adt_.def->is_opaque;
+                        }
                     }
                     Type resolved_arg_type = emit_resolve_type(ctx, arg->type);
                     TypeKind rk = resolved_arg_type.kind;
@@ -6087,6 +6104,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                         rk == TY_CONT ||
                                         rk == TY_CLONEABLE_CONT ||
                                         rk == TY_FORALL);
+                    /* A closure argument is pointer-like whatever its TYPE says.
+                     * Ascribed to an opaque it resolves to that opaque (a
+                     * carrier), but it still LOWERS to a pointer -- a lifted
+                     * `__fn_N` when it captures nothing, a `void *` env when it
+                     * does -- so the straddle is real and only the expression
+                     * form reveals it. */
+                    if (!is_ptr_like) {
+                        const Expr *ac = arg;
+                        while (ac && ac->kind == EX_ASCRIBE)
+                            ac = ac->as.ascribe_.inner;
+                        if (ac && ac->kind == EX_CLOSURE) is_ptr_like = true;
+                    }
                     if (!suffix && !field_inline && arg &&
                         (type_is_heap_struct(resolved_arg_type) ||
                          type_is_heap_adt(resolved_arg_type) ||

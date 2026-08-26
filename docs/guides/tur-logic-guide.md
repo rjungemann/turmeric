@@ -457,9 +457,9 @@ defmacro conde [& clauses]
 
 ### Interleaving search
 
-`disjoined` currently uses `mplus`, which appends streams left-to-right
-(*depth-first* enumeration).  For fairer, *breadth-first* (interleaved)
-search replace `mplus` with an interleaving version:
+`disjoined` uses `mplus` (`st-append`), which interleaves: it hands the other
+branch the next turn whenever it meets an immature stream.  This section used
+to tell you to hand-write that yourself, like this:
 
 ```turmeric
 ;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
@@ -480,29 +480,46 @@ defn mplus-i [xs : Stream ys : Stream] : Stream
     StCons(v mplus-i(ys rest))
 ```
 
-Then define `disjoined-i` analogously and use it in place of `disjoined` when
-you want solutions from both branches to alternate.
+**You no longer need to define this.** As of the lazy-stream change,
+`st-append` -- the `mplus` behind `disjoined` -- IS the interleaving version:
 
-> **This does NOT give you infinite search spaces, and an earlier version of
-> this guide said it did.** `Stream` is a strict `defdata` with no immature /
-> thunk constructor, so `StCons`'s tail is evaluated before the cell exists and
-> `mplus-i` changes the ORDER of a finite enumeration and nothing else. No
-> infinite `Stream` value can be built, `run-logic 1` costs the whole search
-> rather than one solution, and a self-recursive relation SIGSEGVs while the
-> goal is being constructed (there is no `Zzz`/delay form). Interleaving is only
-> half of miniKanren's `mplus`; the missing half is the half that makes infinite
-> enumeration work. Tracked in
-> [docs/reported/logic-streams-are-strict.md](../reported/logic-streams-are-strict.md).
+```turmeric
+(defn st-append [xs : Stream ys : Stream] : Stream
+  (match xs
+    (StNil)         ys
+    (StInc th)      (StInc (fn [] (st-append ys (st-force th))))   ;; SWAP
+    (StCons v rest) (StCons v (st-append rest ys))))
+```
+
+The swap on the `StInc` arm is the whole of fair interleaving.
+
+> **Why the hand-written `mplus-i` this section used to recommend could never
+> work.** It swapped the arguments but built a strict `StCons`, whose tail is
+> evaluated before the cell exists -- so it reordered a finite enumeration and
+> nothing else. Interleaving is only half of miniKanren's `mplus`; the other
+> half is that the result is **itself immature**, which is what `StInc` supplies.
+> Without a thunk no infinite `Stream` value can exist at all, so there was
+> nothing for the swap to buy.
+
+### Recursive relations need `zzz`
+
+`disjoined` takes its goals strictly, so a self-recursive relation would
+otherwise diverge while the goal is being *built*, before any search runs:
+
+```turmeric
+(defn nats [] : (Goal int) (disjoined (succeed) (nats)))        ;; SIGSEGV
+(defn nats [] : (Goal int) (disjoined (succeed) (zzz (nats))))  ;; fine
+```
+
+`zzz` is a macro and has to be: a function would evaluate its argument at the
+call site, which is the divergence it exists to prevent. With it,
+`(run-logic 1 (nats))` returns one solution off an infinite relation instead of
+never returning.
 
 ### Tabling / memoisation
 
 For relations that revisit the same subgoal, add a memo table keyed on
 `(goal-id, substitution)`:
-
-> Note this section previously opened "for recursive relations that diverge
-> under depth-first search". Such relations do not reach the search at all
-> today -- they diverge while the goal is being built, and crash. See the note
-> under "Interleaving search" above.
 
 ```turmeric
 ;; memo-table: map from (goal-name x subs-hash) -> result-list

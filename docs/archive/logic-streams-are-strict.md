@@ -6,14 +6,27 @@ here it cannot, because the stream type has no thunk and the goal combinators
 have no delay. Three shipped docs describe behaviour the implementation cannot
 have.
 
-**Status:** OPEN, but the fix is **written and verified** -- it is blocked on a
-compiler bug, not on design. See
-[../upcoming/lazy-streams-plan.md](../upcoming/lazy-streams-plan.md) and the
-patch beside it: `StInc` + `st-pull` + a swapping `st-append` + a `zzz` macro
-makes `run-logic 1` over an infinite relation return in 14 ms where it
-previously SIGSEGVed. It turns 9 shipped fixtures red on an emitted-C warning
-([closure-in-defdata-field](closure-in-defdata-field.md)), so it is reverted
-until that is fixed.
+**Status:** RESOLVED 2026-08-26. `stdlib/logic.tur` gained the immature stream
+constructor `(StInc :StThunk)`, `st-force` / `st-pull`, a swapping `st-append`,
+a deferring `st-bind`, and the `zzz` delay macro.
+
+`(defn nats [] (disjoined (succeed) (zzz (nats))))` under `run-logic 1` used to
+SIGSEGV while the goal was being built; it now returns, and 1 + 100 + 5000
+solutions off that infinite relation take 0.013 s. Regression fixture:
+`tests/fixtures/logic-lazy-infinite`.
+
+Landing it required a compiler fix first --
+[closure-in-defdata-field](../archive/closure-in-defdata-field.md), also
+resolved -- because the emitted C tripped `tests/run.sh`'s cc-warning gate on 9
+shipped fixtures.
+
+**Carried forward:** fair interleaving makes some first solutions more
+expensive. A goal whose solutions all sit at depth *d* of a binary disjunction
+tree went from 0.464 s to 3.524 s at d=18 for `run-logic 1` -- depth-first found
+the leftmost leaf in O(d), interleaving reaches it breadth-first. That is the
+standard miniKanren trade and the right one (DFS is fast on the goals it
+terminates on and diverges on the rest), but it is a real regression for that
+shape.
 
 Found while asking whether `logic.tur` has a region boundary an arena could
 reclaim at ([the arena thread](../archive/history/per-entry-arena-gate.md)).
