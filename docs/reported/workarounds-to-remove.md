@@ -46,23 +46,26 @@ and the gate's tally line should read `54 passed, 0 failed, 0 known-open`.
 
 **Proof:** `bash tests/run-leak-check.sh` -- the known-open count goes to zero.
 
-## 3. The sanitizer gate is not armed
+## 3. The sanitizer gate is not armed -- REMOVED 2026-08-26
 
-**Where:** `tests/run.sh` -- findings are reported after the summary but only
-fatal under `TUR_SANITIZER_GATE=1`, which nothing sets.
+The blocker ([sanitizer-gate-not-armed-in-ci](../archive/sanitizer-gate-not-armed-in-ci.md))
+is cleared and this entry's own instruction was carried out: `ci.yml`'s `test`
+job -- the only job that runs `tur_tests` -- sets `TUR_SANITIZER_GATE: "1"` at
+job level. The macOS half of the missing measurement came back zero (2703
+fixtures, Apple clang 21, arm64), matching Linux, and was confirmed with a
+positive control rather than inferred from silence.
 
-**Why:** arming it on discovery would have turned 60 silent findings into 60 red
-fixtures at once, which is how a gate gets switched off instead of fixed.
+The follow-on this entry floated -- flipping the *default* to armed and giving
+the opt-out an env var -- was deliberately **not** taken. The default governs
+every local run and every downstream harness that shells into `run.sh`, not
+just CI, and the two toolchains measured here are not the whole population: the
+first contributor on an unmeasured compiler would meet a red suite they did not
+cause. CI is where the invariant is worth enforcing, and CI now enforces it.
+Revisit if the local default ever starts costing more than it saves.
 
-**Blocker:** [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md)
--- specifically, the zero-finding count is measured on Linux only and UBSan
-findings vary by toolchain.
-
-**When it clears:** set `TUR_SANITIZER_GATE: 1` in the `ci.yml` jobs that run
-`tur_tests`. Consider then flipping the default to armed and giving the
-*opt-out* an env var instead, so a new finding is loud by default.
-
-**Proof:** CI green on every platform with the variable set.
+**Proof:** ran as specified -- `TUR_SANITIZER_GATE=1 bash tests/run.sh` exits 0
+on macOS/arm64 (`2703 passed, 0 failed`, no `SANITIZER:` block), and a planted
+overflow makes it exit 1 with the finding attributed to its fixture and phase.
 
 ## 4. `with-untrailed` callers bind a result they do not want -- REMOVED 2026-08-26
 

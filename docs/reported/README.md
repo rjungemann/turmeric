@@ -933,8 +933,17 @@ turned up a defect in the instrument that would have justified it.
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
 | [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
-| [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | `tests/run.sh` gained a gate for UBSan findings from the compiler and it is verified in both directions, but nothing sets `TUR_SANITIZER_GATE=1`, so CI runs unarmed. Not a pure flag flip: the zero-finding count was measured on Linux only, and UBSan findings vary by toolchain |
-| [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
+| [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker), each with its blocker and how to prove the workaround is no longer needed |
+
+`sanitizer-gate-not-armed-in-ci` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/sanitizer-gate-not-armed-in-ci.md). The blocking step
+was the one that could not be done from a Linux container: the macOS leg
+measures **0** findings across 2703 fixtures on Apple clang 21 / arm64, matching
+Linux, so `ci.yml`'s `test` job now carries `TUR_SANITIZER_GATE: "1"`. The zero
+was confirmed with a positive control rather than inferred from silence -- the
+failure mode this gate has already had once is reporting a clean tree because
+nothing was wired up (`note_sanitizer` missing from `export -f`). Also clears
+row 3 of [workarounds-to-remove](workarounds-to-remove.md).
 
 `compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/compiled-fixtures-are-not-leak-checked.md). Its two

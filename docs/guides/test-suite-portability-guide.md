@@ -343,12 +343,20 @@ SANITIZER: 63 finding(s) from `tur` across 59 fixture(s).
 **Findings are reported but do not fail the run by default.** That is deliberate
 rather than timid: arming it on discovery would have turned 60 silent findings
 into 60 red fixtures in one step, which is how a gate gets switched off instead
-of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run, which is the
-setting to use in CI once the count is at zero -- as it is on Linux now.
+of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run.
 
-**Nothing arms it yet, and it is not a pure flag flip**: the zero was measured
-on one platform, and UBSan findings vary by toolchain. Tracked in
-[sanitizer-gate-not-armed-in-ci](../reported/sanitizer-gate-not-armed-in-ci.md).
+**CI sets it.** `ci.yml`'s `test` job -- the only job that runs `tur_tests` --
+carries `TUR_SANITIZER_GATE: "1"` at job level, on both the Linux and macOS
+legs. Both measure zero findings, so a finding in CI is a regression, not
+backlog. Run the suite armed locally before pushing anything that touches the
+compiler's C if you want to find out first.
+
+**On a finding, read the log file, not the console.** The summary prints only
+the ten most common findings; the full per-fixture attribution is copied to
+`$(dirname "$TUR")/sanitizer-findings.log` (override with
+`TUR_SANITIZER_LOG_OUT`), because the harness's own results directory is a
+`mktemp -d` that the `EXIT` trap deletes. CI uploads that file as the
+`sanitizer-findings-<os>` artifact.
 
 Two things to know if you touch this:
 
