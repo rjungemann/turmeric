@@ -2020,6 +2020,27 @@ static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
     return have && want && strcmp(have, want) == 0;
 }
 
+/* RSP1, match-arm edition: an arm body that is a bare pass-by-pointer PARAM
+ * (`const T *`) assigned into the match's by-value result temp (`T`) must be
+ * deref-copied, exactly as emit_if_value's then/else branches already do.
+ * Reachable once a sum can be pbp (its widest variant + tag > 16): `(match s
+ * (Circle r) s ...)` returns the param from an arm.  Returns a replacement for
+ * `bv` (caller frees); a pointer-typed temp or a non-pbp body passes through. */
+static char *match_arm_pbp_deref(EmitCtx *ctx, const Expr *arm_body,
+                                 Type result_ty, char *bv) {
+    const char *tc = type_c_name(result_ty);
+    size_t tl = tc ? strlen(tc) : 0;
+    bool temp_is_ptr = tl > 0 && tc[tl - 1] == '*';
+    if (temp_is_ptr || !expr_is_pbp_param(ctx, arm_body)) return bv;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "*(%s)", bv);
+    buf_putc(&b, '\0');
+    free(bv);
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
+}
+
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
  * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
  * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
@@ -7188,9 +7209,27 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         emit_type_is_byvalue_sum(ctx, fd->param_types[i]) &&
                         (ak == TY_INT || ak == TY_INT64 || ak == TY_UINT64 ||
                          ak == TY_PTR_VOID)) {
-                        char *ub = emit_agg_unbox(ctx, fd->param_types[i], raw);
-                        free(raw);
-                        raw = ub;
+                        Type rpt = emit_resolve_type(ctx, fd->param_types[i]);
+                        const AdtDef *rpd = (rpt.kind == TY_ADT)
+                                                ? rpt.as.adt_.def : NULL;
+                        if (rpd && adt_byval_pass_by_ptr(rpd)) {
+                            /* The param is pass-by-pointer (`const T *`), and
+                             * the carrier word already IS a pointer to the
+                             * aggregate (the caller's box).  Deref'ing to a
+                             * value here hands an aggregate to a pointer slot;
+                             * just retype the word. */
+                            Buf c; buf_init(&c);
+                            buf_printf(&c, "((const %s *)(intptr_t)(%s))",
+                                       emit_type_c_name(ctx, rpt), raw);
+                            buf_putc(&c, '\0');
+                            free(raw);
+                            raw = strdup(c.data);
+                            buf_free(&c);
+                        } else {
+                            char *ub = emit_agg_unbox(ctx, fd->param_types[i], raw);
+                            free(raw);
+                            raw = ub;
+                        }
                     }
                 }
                 /* multiword-element-boxing (Map value / spec'd inline-C carrier
@@ -10992,6 +11031,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);
@@ -11078,6 +11118,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);
@@ -11501,6 +11542,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);
@@ -11534,7 +11576,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ctx->indent += 4;
 
                 indent_buf(body, ctx->indent);
-                if (adt_byval) {
+                if (adt_byval_pbp) {
+                    /* Slice 3: a pass-by-pointer scrutinee is ALREADY a
+                     * `const T *` -- binding a copy from it spells
+                     * `T __scrut_v = (w)`, an invalid initializer.  Bind the
+                     * pointer directly, exactly as the if-chain path does.
+                     * Reachable for a sum whose FIRST variant exceeds the pbp
+                     * threshold (adt_byval_pass_by_ptr reads ctors[0]). */
+                    buf_printf(body, "const %s *__scrut = (%s);\n",
+                               adt_c_name, scrut_val);
+                } else if (adt_byval) {
                     /* SR1: a by-value multi-variant sum still needs the tag
                      * test, but the value is an aggregate, not a carrier
                      * pointer -- casting it trips "aggregate value used where
@@ -11677,6 +11728,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);

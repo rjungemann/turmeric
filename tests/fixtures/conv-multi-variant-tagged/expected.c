@@ -4361,7 +4361,7 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
-static int64_t area(tur_adt_Shape);
+static int64_t area(const tur_adt_Shape *);
 static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
@@ -7827,11 +7827,10 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static int64_t area(tur_adt_Shape s) {
+static int64_t area(const tur_adt_Shape * s) {
         int64_t __t160 = 0;
         {
-            tur_adt_Shape __scrut_v = (s);
-            tur_adt_Shape *__scrut = &__scrut_v;
+            const tur_adt_Shape *__scrut = (s);
             switch (__scrut->tag) {
             case 0: {
                 int64_t r_1335 = (int64_t)__scrut->as.Circle._0;
@@ -7875,15 +7874,17 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Shape r_1339 = __ps_163;
             (void)r_1339;
-            int64_t __ps_164 = (area(c_1338));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%lld\n", (long long)(__ps_164));
-            int64_t __ps_165 = (area(r_1339));
+            tur_adt_Shape __t164 = c_1338;
+            int64_t __ps_165 = (area(&__t164));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             printf("%lld\n", (long long)(__ps_165));
-            int64_t __t166;
-            __t166 = INT64_C(0);
-            __t161 = __t166;
+            tur_adt_Shape __t166 = r_1339;
+            int64_t __ps_167 = (area(&__t166));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            printf("%lld\n", (long long)(__ps_167));
+            int64_t __t168;
+            __t168 = INT64_C(0);
+            __t161 = __t168;
         }
         return (int)__t161;
 }
@@ -7893,15 +7894,15 @@ static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_i
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_167 = (ctor_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_169 = (ctor_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_167;
+        return __ps_169;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_168 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_170 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_168;
+        return __ps_170;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

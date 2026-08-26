@@ -3140,15 +3140,17 @@ static size_t adt_field_size_bytes(TypeKind k) {
  * aggregate (its fields contribute their own bytes rather than a single 8-byte
  * carrier slot), so the >16-byte pass-by-pointer threshold lines up with the
  * nested-struct layout. */
+static size_t adt_byval_value_size_bytes_d(const AdtDef *def, int depth);
+
 static size_t adt_ctor_field_size_bytes(const CtorField *f, int depth) {
     if (depth > 0 && adt_field_is_inline_byval_d(f, depth) && f->full_type) {
         if (f->full_type->kind == TY_ADT && f->full_type->as.adt_.def) {
-            const AdtDef *ad = f->full_type->as.adt_.def;
-            const CtorDef *ic = ad->ctors[0];
-            size_t t = 0;
-            for (uint32_t i = 0; i < ic->n_fields; i++)
-                t += adt_ctor_field_size_bytes(&ic->fields[i], depth - 1);
-            return t;
+            /* SR1: an inline field can be a SUM now, so its size is the shared
+             * whole-value computation (tag + widest variant), not a walk of
+             * ctors[0].  Before SR1 only a flat product could be inlined, so
+             * the two were the same loop. */
+            return adt_byval_value_size_bytes_d(f->full_type->as.adt_.def,
+                                                depth - 1);
         }
     }
     return adt_field_size_bytes(f->kind);
@@ -3161,11 +3163,7 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
      * the call site (`bsum(&p)` where `p` is already a pointer). */
     if (def && def->is_heap) return false;
     if (!adt_is_byvalue_product(def)) return false;
-    const CtorDef *c = def->ctors[0];
-    size_t total = 0;
-    for (uint32_t i = 0; i < c->n_fields; i++)
-        total += adt_ctor_field_size_bytes(&c->fields[i], 16);
-    return total > 16;
+    return adt_byval_value_size_bytes(def) > 16;
 }
 
 /* B4: the by-value (aggregate) byte size of a by-value ADT product -- the sum of
@@ -3173,13 +3171,38 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
  * stored in a parametric carrier monomorph fits the int64 carrier slot directly
  * (<= 8 bytes, reinterpret; slice 1) or must ride a heap box (> 8 bytes; slice
  * 2).  Returns 0 for a non-by-value product. */
+static size_t adt_byval_value_size_bytes_d(const AdtDef *def, int depth) {
+    if (!adt_is_byvalue_product_d(def, depth > 0 ? depth : 1)) return 0;
+    /* SR1: a multi-variant sum's by-value size is the TAG WORD plus its WIDEST
+     * variant -- `struct { int tag; union { ... } as; }` -- not a walk of
+     * ctors[0].  The ctors[0]-only accounting (a flat-product assumption from
+     * before sums could be by value) sized `Subst` by its narrow SNil variant
+     * as 8 bytes, so type_is_wide_byval_adt called a ~40-byte value
+     * carrier-slot-safe: the closure b4box preamble never fired and the value
+     * was truncated to whatever the int64 slot held.  It also made
+     * adt_byval_pass_by_ptr's answer depend on DECLARATION ORDER.
+     *
+     * The 8 for the tag models `int tag;` padded to the union's 8-byte
+     * alignment -- exact for the int64-class fields these layouts hold, and
+     * safely conservative for the >8 / >16 threshold questions this number
+     * feeds.  Single-variant products keep the old sum-of-fields answer,
+     * byte for byte. */
+    const bool tagged = def->n_ctors > 1;
+    size_t widest = 0;
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        size_t total = 0;
+        for (uint32_t i = 0; i < c->n_fields; i++)
+            total += adt_ctor_field_size_bytes(&c->fields[i],
+                                               depth > 0 ? depth : 1);
+        if (total > widest) widest = total;
+    }
+    return (tagged ? 8u : 0u) + widest;
+}
+
 size_t adt_byval_value_size_bytes(const AdtDef *def) {
-    if (!adt_is_byvalue_product(def)) return 0;
-    const CtorDef *c = def->ctors[0];
-    size_t total = 0;
-    for (uint32_t i = 0; i < c->n_fields; i++)
-        total += adt_ctor_field_size_bytes(&c->fields[i], 16);
-    return total;
+    return adt_byval_value_size_bytes_d(def, 16);
 }
 
 /* B4 (byvalue-recursive-carrier, slice 2): true when `t` resolves to a WIDE

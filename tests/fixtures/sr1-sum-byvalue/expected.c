@@ -4404,8 +4404,8 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
-static int64_t area(tur_adt_Shape);
-static double dot_hyx(tur_adt_Shape);
+static int64_t area(const tur_adt_Shape *);
+static double dot_hyx(const tur_adt_Shape *);
 static int64_t sum_hyareas(int64_t, int64_t);
 static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
@@ -7872,11 +7872,10 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static int64_t area(tur_adt_Shape s) {
+static int64_t area(const tur_adt_Shape * s) {
         int64_t __t160 = 0;
         {
-            tur_adt_Shape __scrut_v = (s);
-            tur_adt_Shape *__scrut = &__scrut_v;
+            const tur_adt_Shape *__scrut = (s);
             switch (__scrut->tag) {
             case 0: {
                 int64_t r_1341 = (int64_t)__scrut->as.Circle._0;
@@ -7904,11 +7903,10 @@ static int64_t area(tur_adt_Shape s) {
         return __t160;
 }
 
-static double dot_hyx(tur_adt_Shape s) {
+static double dot_hyx(const tur_adt_Shape * s) {
         double __t161 = 0;
         {
-            tur_adt_Shape __scrut_v = (s);
-            tur_adt_Shape *__scrut = &__scrut_v;
+            const tur_adt_Shape *__scrut = (s);
             switch (__scrut->tag) {
             case 2: {
                 tur_adt_Pt p_1346 = __scrut->as.Dot._0;
@@ -7955,11 +7953,12 @@ static int64_t sum_hyareas(int64_t i, int64_t acc) {
             int64_t __t164 = (i) - (INT64_C(1));
             tur_adt_Shape __ps_165 = (ctor_Circle(INT64_C(2)));
             if (tur_panicking) return ((int64_t)0);
-            int64_t __ps_166 = (area(__ps_165));
+            tur_adt_Shape __t166 = __ps_165;
+            int64_t __ps_167 = (area(&__t166));
             if (tur_panicking) return ((int64_t)0);
-            int64_t __t167 = (acc) + (__ps_166);
+            int64_t __t168 = (acc) + (__ps_167);
             i = __t164;
-            acc = __t167;
+            acc = __t168;
             goto __tur_tailcall;
         }
 }
@@ -7979,34 +7978,38 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        tur_adt_Shape __ps_168 = (ctor_Circle(INT64_C(2)));
+        tur_adt_Shape __ps_169 = (ctor_Circle(INT64_C(2)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        int64_t __ps_169 = (area(__ps_168));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%lld\n", (long long)(__ps_169));
-        tur_adt_Shape __ps_170 = (ctor_Rect(INT64_C(3), INT64_C(4)));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        int64_t __ps_171 = (area(__ps_170));
+        tur_adt_Shape __t170 = __ps_169;
+        int64_t __ps_171 = (area(&__t170));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_171));
-        tur_adt_Shape __ps_172 = (ctor_Nowhere());
+        tur_adt_Shape __ps_172 = (ctor_Rect(INT64_C(3), INT64_C(4)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        int64_t __ps_173 = (area(__ps_172));
+        tur_adt_Shape __t173 = __ps_172;
+        int64_t __ps_174 = (area(&__t173));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%lld\n", (long long)(__ps_173));
-        tur_adt_Pt __ps_174 = (ctor_Pt(7.1, 2.0));
+        printf("%lld\n", (long long)(__ps_174));
+        tur_adt_Shape __ps_175 = (ctor_Nowhere());
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        tur_adt_Shape __ps_175 = (ctor_Dot(__ps_174));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        double __ps_176 = (dot_hyx(__ps_175));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%g\n", (double)(__ps_176));
-        int64_t __ps_177 = (sum_hyareas(INT64_C(1000), INT64_C(0)));
+        tur_adt_Shape __t176 = __ps_175;
+        int64_t __ps_177 = (area(&__t176));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_177));
-        int64_t __t178;
-        __t178 = INT64_C(0);
-        return (int)__t178;
+        tur_adt_Pt __ps_178 = (ctor_Pt(7.1, 2.0));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        tur_adt_Shape __ps_179 = (ctor_Dot(__ps_178));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        tur_adt_Shape __t180 = __ps_179;
+        double __ps_181 = (dot_hyx(&__t180));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%g\n", (double)(__ps_181));
+        int64_t __ps_182 = (sum_hyareas(INT64_C(1000), INT64_C(0)));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_182));
+        int64_t __t183;
+        __t183 = INT64_C(0);
+        return (int)__t183;
 }
 
 static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int o) {
@@ -8014,15 +8017,15 @@ static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_i
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_179 = (ctor_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_184 = (ctor_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_179;
+        return __ps_184;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_180 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_185 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_180;
+        return __ps_185;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
