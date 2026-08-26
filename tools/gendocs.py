@@ -20,6 +20,9 @@ import sys
 import html as html_module
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import packlib  # noqa: E402  (sibling module, path fixed up just above)
+
 
 # ---------------------------------------------------------------------------
 # Parser
@@ -1262,31 +1265,22 @@ def _render_def_card(defn, anchor_prefix=''):
     return h
 
 
-def render_module_page(module, out_dir, brand='stdlib'):
-    """Render a per-module HTML page and return the filename."""
-    mod_name = module['name']
-    # tur/list -> tur-list.html
-    page_name = mod_name.replace('/', '-') + '.html'
+def module_page_name(module):
+    """The per-module page/fragment filename: tur/list -> tur-list.html."""
+    return module['name'].replace('/', '-') + '.html'
 
+
+def build_module_content(module, brand='stdlib'):
+    """Render a module's article body -- the `<div class="content">` and nothing else.
+
+    This is the single rendering pass for a module's API page: the site wraps
+    it in chrome (`render_module_page`), and the docs pack ships it verbatim as
+    a fragment for Try Turmeric's in-app docs pane (`--emit-pack`). Rendering
+    it once is what keeps the two from drifting.
+    """
+    mod_name = module['name']
     exported = [d for d in module['definitions'] if d['exported']]
     internal = [d for d in module['definitions'] if not d['exported']]
-
-    # Build sidebar TOC (exported only)
-    sidebar = '<div class="sidebar">\n'
-    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
-    sidebar += '  <hr class="sidebar-divider">\n'
-    sidebar += '  <h3>Exported</h3>\n  <ul>\n'
-    for defn in exported:
-        anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
-        sidebar += f'    <li><a href="#{html_module.escape(anchor)}">{html_module.escape(defn["name"])}</a></li>\n'
-    sidebar += '  </ul>\n'
-    if internal:
-        sidebar += '  <h3>Internal</h3>\n  <ul>\n'
-        for defn in internal:
-            sidebar += f'    <li><a href="#{html_module.escape(defn["name"])}" style="color:var(--faint)">{html_module.escape(defn["name"])}</a></li>\n'
-        sidebar += '  </ul>\n'
-    sidebar += SIDEBAR_GLOBALS
-    sidebar += '</div>\n'
 
     # Path display: prefer the relative path stored on the module (when generated
     # by render_tree); fall back to "<brand>/<stem>.tur" for legacy callers.
@@ -1342,6 +1336,35 @@ def render_module_page(module, out_dir, brand='stdlib'):
         content += '  </div>\n</details>\n'
 
     content += '</div>\n'
+    return content
+
+
+def render_module_page(module, out_dir, brand='stdlib'):
+    """Render a per-module HTML page and return the filename."""
+    mod_name = module['name']
+    page_name = module_page_name(module)
+
+    exported = [d for d in module['definitions'] if d['exported']]
+    internal = [d for d in module['definitions'] if not d['exported']]
+
+    # Build sidebar TOC (exported only)
+    sidebar = '<div class="sidebar">\n'
+    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
+    sidebar += '  <hr class="sidebar-divider">\n'
+    sidebar += '  <h3>Exported</h3>\n  <ul>\n'
+    for defn in exported:
+        anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
+        sidebar += f'    <li><a href="#{html_module.escape(anchor)}">{html_module.escape(defn["name"])}</a></li>\n'
+    sidebar += '  </ul>\n'
+    if internal:
+        sidebar += '  <h3>Internal</h3>\n  <ul>\n'
+        for defn in internal:
+            sidebar += f'    <li><a href="#{html_module.escape(defn["name"])}" style="color:var(--faint)">{html_module.escape(defn["name"])}</a></li>\n'
+        sidebar += '  </ul>\n'
+    sidebar += SIDEBAR_GLOBALS
+    sidebar += '</div>\n'
+
+    content = build_module_content(module, brand=brand)
 
     page = _html_header(f'{html_module.escape(mod_name)} | Turmeric API')
     page += '<div class="page-layout">\n'
@@ -1741,6 +1764,62 @@ def emit_doc_names_json(modules, out_path, extra_entries=None):
 
 
 # ---------------------------------------------------------------------------
+# Docs pack  (--emit-pack)
+# ---------------------------------------------------------------------------
+
+def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
+    """Write chrome-free per-module fragments into the docs pack.
+
+    `section` names both the pack subdirectory and the sidecar that
+    tools/genpack.py merges into index.json. `slug_prefix` disambiguates spice
+    modules from stdlib ones when a spice tree is folded into the pack.
+    """
+    pack_dir = Path(pack_dir)
+    entries = []
+    seen_slugs = {}
+    for module in modules:
+        page = module_page_name(module)
+        slug = f'{slug_prefix}{page[:-len(".html")]}'
+        rel = f'{section}/{slug}.html'
+        # Two modules with the same name render to the same page. The site has
+        # always resolved that by letting the last one win silently; say so
+        # here rather than letting the pack quietly carry one fewer page than
+        # it parsed.
+        if slug in seen_slugs:
+            print(f'  warning: {module.get("rel_path") or module["name"]} and '
+                  f'{seen_slugs[slug]} both render to {rel}; the last one wins',
+                  file=sys.stderr)
+        seen_slugs[slug] = module.get('rel_path') or module['name']
+        content = build_module_content(module)
+        size = packlib.write_fragment(pack_dir, rel, content)
+
+        exported = [d['name'] for d in module['definitions'] if d['exported']]
+        summary = ''
+        if module.get('docstring') and module['docstring'].get('summary'):
+            s = module['docstring']['summary']
+            dash_idx = s.find(' -- ')
+            summary = s[dash_idx + 4:] if dash_idx != -1 else s
+
+        entries.append({
+            'slug': slug,
+            'path': rel,
+            'module': module['name'],
+            'title': module['name'],
+            'category': module.get('subdir') or 'core',
+            'description': summary,
+            'symbols': exported,
+            'bytes': size,
+            'words': packlib.search_string(
+                module['name'], summary, ' '.join(exported),
+                prose=packlib.strip_tags(content)),
+        })
+
+    packlib.write_sidecar(pack_dir, section, entries)
+    print(f'  pack: {len(entries)} {section} fragments -> {pack_dir}/{section}/')
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1759,7 +1838,8 @@ def collect_tur_files(source):
 
 
 def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
-                emit_tur=None, emit_json=None, extra_json_entries=None):
+                emit_tur=None, emit_json=None, extra_json_entries=None,
+                emit_pack=None, pack_section='api', pack_slug_prefix=''):
     """
     Generate an HTML doc tree from a .tur source root.
 
@@ -1842,6 +1922,11 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
     if emit_json:
         emit_doc_names_json(modules, emit_json, extra_entries=extra_json_entries)
 
+    # Optionally emit chrome-free fragments into the docs pack
+    if emit_pack:
+        emit_pack_api(modules, emit_pack, section=pack_section,
+                      slug_prefix=pack_slug_prefix)
+
     print(f'\nDone. {len(modules)} modules -> {out_dir}/')
     return modules
 
@@ -1886,6 +1971,12 @@ def main():
              'them into the --emit-json output. Used to fold spice symbols '
              'into the stdlib payload.',
     )
+    parser.add_argument(
+        '--emit-pack',
+        metavar='DIR',
+        help='Also write chrome-free per-module fragments into the docs pack '
+             'at DIR (see tools/genpack.py)',
+    )
     args = parser.parse_args()
 
     extra_entries = None
@@ -1903,6 +1994,7 @@ def main():
         emit_tur=args.emit_tur,
         emit_json=args.emit_json,
         extra_json_entries=extra_entries,
+        emit_pack=args.emit_pack,
     )
 
 

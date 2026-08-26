@@ -1730,6 +1730,316 @@ body.split-dragging * {
 }
 
 /* ==========================================================================
+ * In-app docs browser (OD2)
+ *
+ * A full-screen overlay over the REPL, not a navigation: opening docs never
+ * touches the editor buffer, the console, or the WASM session.
+ *
+ * Article typography comes from /docs-pack/guide.css -- the same GUIDE_CSS the
+ * site's guide pages inline, emitted into the docs pack by genguides.py. The
+ * rules below are the pane's own chrome (shell, nav column, search results)
+ * and the few places the pane has to adapt the shared guide rules to living
+ * inside a panel rather than a page.
+ * ========================================================================== */
+
+.docs-overlay {
+    background: rgba(0, 0, 0, 0.82);
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 2vh 2vw;
+}
+
+.docs-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    animation: slideIn 0.18s ease-out;
+}
+
+.docs-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px 0 8px;
+    height: 44px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+}
+
+.docs-brand {
+    font-family: var(--font-serif, serif);
+    font-size: 14px;
+    color: var(--gold);
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
+.docs-search-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+}
+
+.docs-search-icon {
+    position: absolute;
+    left: 9px;
+    color: var(--text-dim);
+    pointer-events: none;
+}
+
+.docs-search-input {
+    width: 100%;
+    height: 28px;
+    padding: 0 10px 0 28px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-md);
+    outline: none;
+}
+
+.docs-search-input:focus { border-color: var(--gold-line); }
+.docs-search-input::placeholder { color: var(--text-dim); }
+
+.docs-status {
+    font-size: 11px;
+    color: var(--text-sec);
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.docs-status.partial { color: var(--amber); }
+
+/* site.css styles the bare `nav` selector as the site's fixed header bar, and
+ * a guide fragment legitimately contains <nav class="guide-toc"> for its
+ * in-body Contents box. Unstyled, that box tears itself out of the article and
+ * pins itself across the top of the viewport. Undo the inherited positioning
+ * here rather than changing markup the website also renders.
+ *
+ * :where() keeps this at zero added specificity, so the .guide-toc rules in
+ * /docs-pack/guide.css -- which loads after this file -- still win on the
+ * properties they care about (background, padding, border). */
+.docs-shell :where(nav) {
+    position: static;
+    top: auto;
+    left: auto;
+    right: auto;
+    z-index: auto;
+    height: auto;
+    display: block;
+    padding: 0;
+    gap: 0;
+    align-items: initial;
+    background: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-bottom: none;
+}
+
+.docs-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.docs-nav {
+    width: 260px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: 12px 8px 24px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-surface);
+}
+
+.docs-overlay.nav-collapsed .docs-nav { display: none; }
+
+.docs-nav-section { margin-bottom: 16px; }
+
+.docs-nav-section h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin: 0 0 6px 8px;
+}
+
+.docs-nav-group > summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-sec);
+    padding: 3px 8px;
+    border-radius: var(--radius-md);
+    list-style: none;
+}
+
+.docs-nav-group > summary::-webkit-details-marker { display: none; }
+.docs-nav-group > summary::before { content: '▸ '; color: var(--text-dim); }
+.docs-nav-group[open] > summary::before { content: '▾ '; }
+.docs-nav-group > summary:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.docs-nav ul {
+    list-style: none;
+    margin: 2px 0 6px;
+    padding: 0 0 0 14px;
+}
+
+.docs-nav li a {
+    display: block;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    text-decoration: none;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.docs-nav li a:hover { background: var(--bg-hover); color: var(--gold-bright); }
+
+.docs-nav li a.active {
+    background: var(--gold-subtle);
+    color: var(--gold-bright);
+    box-shadow: inset 2px 0 0 var(--gold);
+}
+
+.docs-results li a {
+    white-space: normal;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.docs-result-title { display: inline; font-family: var(--font-mono); }
+
+.docs-result-kind {
+    display: inline;
+    margin-left: 6px;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.docs-result-desc {
+    display: block;
+    font-size: 11px;
+    color: var(--text-sec);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.docs-empty {
+    padding: 16px;
+    font-size: 12px;
+    color: var(--text-sec);
+}
+
+.docs-article {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 24px 32px 64px;
+    scroll-behavior: smooth;
+    /* The shared guide stylesheet sizes for a full-width page; a panel wants
+       a comfortable measure, centred. */
+    max-width: none;
+}
+
+.docs-article > * { max-width: 74ch; }
+.docs-article pre,
+.docs-article table,
+.docs-article .code-card { max-width: none; }
+
+/* A code block in the pane carries a "load into editor" button. Positioning is
+   on the <pre>, so the button rides along with a horizontally scrolled block
+   instead of drifting over the code. */
+.docs-article pre { position: relative; }
+
+.docs-load-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-sec);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--transition-normal), color var(--transition-normal);
+}
+
+.docs-article pre:hover .docs-load-btn,
+.docs-load-btn:focus { opacity: 1; }
+
+.docs-load-btn:hover {
+    color: var(--gold-bright);
+    border-color: var(--gold-line);
+}
+
+.docs-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: 30px;
+    flex-shrink: 0;
+    padding: 0 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-surface);
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.docs-site-link { color: var(--text-sec); text-decoration: none; }
+.docs-site-link:hover { color: var(--gold-bright); }
+
+/* Mobile: the pane becomes a full-screen sheet and the nav column collapses
+   behind the toolbar toggle, since 260px of tree plus an article does not fit. */
+@media (max-width: 768px) {
+    .docs-overlay { padding: 0; }
+    .docs-shell { border: none; border-radius: 0; }
+    /* Shown, the nav floats over the article rather than splitting a phone's
+       width in two. It starts collapsed here -- openDocsPane() seeds
+       docsNavCollapsed from the same breakpoint -- so a tap on Docs lands on
+       the page, not on a table of contents. */
+    .docs-nav {
+        position: absolute;
+        top: 44px;
+        bottom: 30px;
+        left: 0;
+        width: 82%;
+        max-width: 320px;
+        z-index: 2;
+        box-shadow: var(--shadow-lg);
+    }
+    .docs-article { padding: 16px 18px 48px; }
+    .docs-brand { display: none; }
+    .docs-status { display: none; }
+    .docs-load-btn { opacity: 1; }
+}
+
+@media (min-width: 769px) {
+    /* The toggle only earns its place where the nav can actually be hidden to
+       gain reading width; on mobile it is the nav's only opener. */
+    .docs-nav-toggle { display: none; }
+}
+
+/* ==========================================================================
  * Print Styles
  * ========================================================================== */
 

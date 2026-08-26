@@ -624,7 +624,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python doc deps (markdown)
-        run: python3 -m pip install --upgrade markdown
+        run: python3 -m pip install --upgrade -r tools/requirements.txt
 
       - name: Set up Emscripten
         uses: mymindstorm/setup-emsdk@v14
@@ -675,11 +675,30 @@ jobs:
         working-directory: web
         run: npx playwright test deploy-gate.spec.js --project=desktop
 
+      # docs-offline.spec.js asserts a property of the *built* artefact: the
+      # service worker precaching the docs pack, and the app booting from cache
+      # with the origin gone. Vite's dev server rewrites the module graph on the
+      # fly, and none of those dev-only URLs are precached, so the spec skips
+      # itself unless a production build exists. Build one, or the spec passes
+      # by not running -- which looks identical to passing.
+      - name: Build the web bundle (for the offline docs spec)
+        working-directory: web
+        run: npm run build
+
+      # Paths, not bare filenames: Playwright treats a positional argument as a
+      # regex over the test file path, so `smoke.spec.js` also matches
+      # `prod-smoke.spec.js` -- which tests the *live* turmeric-lang.com, has
+      # its own config, and is meant to be run by `npm run test:prod`. Pulled in
+      # here it contributed three standing failures (two from being pointed at
+      # localhost instead of production, one from a stale hardcoded guide list),
+      # which this step's continue-on-error quietly absorbed.
       - name: Run broader smoke suite (desktop, non-blocking)
         working-directory: web
         continue-on-error: true
         run: npx playwright test --project=desktop
-          smoke.spec.js diag.spec.js guide-toggle.spec.js meta-commands.spec.js
+          tests/smoke.spec.js tests/diag.spec.js tests/guide-toggle.spec.js
+          tests/meta-commands.spec.js tests/docs-pane.spec.js
+          tests/docs-offline.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
         working-directory: web

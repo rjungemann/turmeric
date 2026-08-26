@@ -177,6 +177,14 @@ add_test(
   COMMAND bash tests/run-tur-run-alias.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# OD4: `tur doc <symbol>` reads the full stdlib docstring table shipped with
+# the binary (not just the builtin list), and `tur docs` locates the rendered
+# guides. Both are the no-network half of the offline-docs work.
+add_test(
+  NAME tur_docs_cli
+  COMMAND bash tests/run-tur-docs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Regression for tur-run-just-assignment-eval-plan: `name := VALUE`
 # assignments used to be raw byte fragments; verify the balanced scanner
 # + RHS expression evaluator handle function calls, `/` and `+` concat,

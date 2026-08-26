@@ -119,6 +119,22 @@ web/public/turmeric.wasm
 # because it is a real source module the compiler imports.
 web/public/doc-names.json
 
+# The docs pack (OD1): chrome-free guide/API/spice fragments plus index.json,
+# emitted by `just docs` from the same generators that build docs/html/. Try
+# Turmeric renders it in its in-app docs pane and its service worker precaches
+# it wholesale for offline use. Gitignored for the same reasons as
+# doc-names.json above: it is a build output, it is large, and its spices
+# section depends on the optional sibling ../turmeric-spices/ checkout.
+web/public/docs-pack/
+
+# Release docs bundle from `just docs-tarball` (OD4).
+turmeric-docs-*.tar.gz
+
+# Local Playwright config override (e.g. pointing launchOptions.executablePath
+# at a sandbox's prebuilt Chromium when `npx playwright install` is not an
+# option). Developer-local; the committed playwright.config.js is the contract.
+web/pw.local.config.js
+
 # Playwright MCP browser session artifacts
 .playwright-mcp/
 
