@@ -1038,6 +1038,35 @@ the class of bug is closed, not just the one instance.
 | [two-stdlib-modules-render-to-one-api-page](two-stdlib-modules-render-to-one-api-page.md) | low | `stdlib/capability.tur` and `stdlib/test/capability.tur` have no `defmodule`, so both take the filename-derived name `tur/capability` and render to one page; the second silently wins |
 | [guide-cross-links-to-unrendered-docs](guide-cross-links-to-unrendered-docs.md) | low | four links in three published guides 404 -- one to a guide that was never written, three into `docs/upcoming/` and `docs/archive/`, which are not rendered |
 
+## Formatter (filed 2026-08-25)
+
+Filed from investigating the claim that "`tur fmt`'s own output isn't
+idempotent and eats the module docstring." The idempotence half is real; the
+module-docstring half **does not reproduce** and the report says so. The
+underlying defect is worse than either: silent comment deletion.
+
+Verified by a two-pass `tur fmt` sweep over 223 files (`stdlib/`,
+`tests/fixtures/`, `examples/`, `tutorials/` -- every `.tur.sweet` plus every
+`.tur` containing a `;;;` line). Exactly two files are non-idempotent, both
+from this bug; `;;;` counts were identical pre/post format across all 223,
+which is the evidence against the module-docstring claim.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fmt-drops-comments-inside-bracket-vectors](fmt-drops-comments-inside-bracket-vectors.md) | high | `tur fmt` silently deletes every `;`/`;;`/`;;;` comment inside a `defstruct` field, `defn` param, or `let` binding vector -- in place, exit 0, no diagnostic. `fmt_list`'s `span_has_comment` guard exists but is missing from both `F_VEC` paths, and the broken-vector printers never re-emit gap comments. Non-idempotence (`fmt` then `fmt --check` exits 1) is a downstream symptom |
+
+## Diagnostics (filed 2026-08-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fn-name-diagnostic-misleads-toward-letrec](fn-name-diagnostic-misleads-toward-letrec.md) | low | `(fn name [...] ...)` is correctly rejected but reports "parameter list must be a vector" with the caret on the name, so the reader hunts for a bracket error in a vector that is already well-formed. Never mentions `letrec`/named `let`, which is why hitting it can read as "Turmeric has no recursive lambdas" -- it has two, both verified |
+
+## Try Turmeric / web REPL (filed 2026-08-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [try-docs-pane-forgets-scroll-position](try-docs-pane-forgets-scroll-position.md) | low | the docs pane remembers which page you were on across close/reopen (`docsCurrentRef` survives `closeDocsPane`) but resets the offset to the top -- `showDocsPage` ends in an unconditional `article.scrollTop = 0` and no per-ref offset is stored. Enhancement; read-verified in source, not exercised in a browser |
+
 ## Windows port
 
 Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in
