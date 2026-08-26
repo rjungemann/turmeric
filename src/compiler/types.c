@@ -1837,6 +1837,22 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             buf_printf(out, "    return __r;\n");
         } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
+            /* SR2: a by-value SUM monomorph stores its tag and makes the dead
+             * bytes deterministic at the least possible cost -- the pad after
+             * the tag and the union tail beyond this variant.  Mirrors
+             * emit_byval_ctor_prologue (emit_module.c, SR4-perf); a flat
+             * product has no tag and skips all three lines. */
+            if (!flat) {
+                buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
+                buf_printf(out,
+                    "    memset((char *)&__r + sizeof(__r.tag), 0, "
+                    "offsetof(%s, as) - sizeof(__r.tag));\n",
+                    adt_inst_name);
+                buf_printf(out,
+                    "    memset((char *)&__r.as + sizeof(__r.as.%s), 0, "
+                    "sizeof(__r.as) - sizeof(__r.as.%s));\n",
+                    mctor, mctor);
+            }
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
                 /* CONV-S1 seam 4 (B4 wide element in a by-value product): the
@@ -3316,18 +3332,27 @@ bool adt_app_byval_pass_by_ptr(Type t) {
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
     /* seam 3: a :heap parametric ADT monomorph is a typed pointer, never pbp. */
     if (def->is_heap) return false;
-    const CtorDef *c = def->ctors[0];
-    size_t total = 0;
-    for (uint32_t i = 0; i < c->n_fields; i++) {
-        TypeKind k = c->fields[i].kind;
-        if (c->fields[i].full_type) {
-            Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
-            k = rf.kind;
-            free_struct_app_type(rf);
+    /* SR2: a sum monomorph is the tag word plus its WIDEST variant, exactly as
+     * adt_byval_value_size_bytes_d computes on the non-parametric side --
+     * ctors[0]-only sizing made the answer depend on declaration order. */
+    const bool tagged = def->n_ctors > 1;
+    size_t widest = 0;
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        size_t total = 0;
+        for (uint32_t i = 0; i < c->n_fields; i++) {
+            TypeKind k = c->fields[i].kind;
+            if (c->fields[i].full_type) {
+                Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
+                k = rf.kind;
+                free_struct_app_type(rf);
+            }
+            total += adt_field_size_bytes(k);
         }
-        total += adt_field_size_bytes(k);
+        if (total > widest) widest = total;
     }
-    return total > 16;
+    return (tagged ? 8u : 0u) + widest > 16;
 }
 
 /* Parametric-by-value: true when `t` is a by-value monomorph -- either a
@@ -3365,13 +3390,47 @@ bool type_is_byvalue_adt_product(Type t) {
  * predicate, so this never touches that machinery (B4 remains separate). */
 static const bool g_adt_app_byvalue = true;
 
+/* SR2 prototype gate (docs/upcoming/sum-representation-plan.md SR2):
+ * TUR_SR2_APP_SUM_BYVALUE=1 admits a MULTI-VARIANT parametric sum monomorph
+ * (`(Opt2 int)`) to the by-value path -- the app-side sibling of SR1's
+ * adt_sr1_sum_candidate, and the actual prerequisite for converting Option and
+ * Result to real sums: without it the conversion takes the two most-used types
+ * from by-value to heap-boxed-and-leaked, the exact regression the plan's
+ * section 5 warns about (SR1 as shipped covers non-parametric sums only).
+ * Same exclusions as the SR1 gate: non-GADT, non-heap, and not self-recursive
+ * (`(Cons2 a (Cons2 a))` stays on the carrier -- SR4's population, measured
+ * and declined there). */
+static bool sr2_app_sum_byvalue(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("TUR_SR2_APP_SUM_BYVALUE");
+        cached = (e && e[0] == '1') ? 1 : 0;
+    }
+    return cached == 1;
+}
+
 bool adt_app_is_byvalue_product(Type t) {
     if (!g_adt_app_byvalue) return false;
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
-    if (!adt_is_flat_product(def)) return false;       /* single-variant, non-GADT */
+    bool app_sum = sr2_app_sum_byvalue() && def->n_ctors > 1 &&
+                   !def->is_gadt && !def->is_heap &&
+                   !def->is_self_recursive && def->ctors != NULL;
+    /* SR2 exclusion: an app over a B4 recursive-carrier wrapper -- `(ExprF
+     * Expr)`, `(ReF Re)`, the fixpoint functors -- stays on B4's machinery.
+     * Its element rides the int64 carrier by DESIGN (the wrapper is the
+     * carrier), and admitting the functor here spells `tur_adt_Expr` fields
+     * inline into a typedef that precedes the wrapper's own ("field has
+     * incomplete type"), colliding with everything B4 already does for these
+     * shapes.  This is the same boundary the g_adt_app_byvalue comment above
+     * draws for the flat-product path. */
+    for (uint32_t i = 0; app_sum && i < n_args; i++)
+        if (args[i].kind == TY_ADT && args[i].as.adt_.def &&
+            adt_is_byval_recursive_carrier_wrapper(args[i].as.adt_.def))
+            app_sum = false;
+    if (!adt_is_flat_product(def) && !app_sum) return false; /* single-variant, non-GADT */
     if (def->n_type_params == 0) return false;          /* non-parametric is CONV-S1's path */
     /* A nested by-value-product element (`(Cons (Option int))`'s `(Option int)`)
      * is accepted ONLY for a :heap outer.  A :heap cell stores its element inline
@@ -3382,8 +3441,13 @@ bool adt_app_is_byvalue_product(Type t) {
         if (!type_has_concrete_codegen_layout(&args[i]) &&
             !adt_app_is_byvalue_product(args[i])) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --
-     * no residual tyvar / HKT / non-concrete application (those are M7's job). */
-    const CtorDef *c = def->ctors[0];
+     * no residual tyvar / HKT / non-concrete application (those are M7's job).
+     * SR2: for a sum, EVERY variant's fields -- a union is only as flat as its
+     * widest arm, exactly as adt_is_byvalue_product_d checks on the
+     * non-parametric side. */
+    for (uint32_t ci = 0; ci < (app_sum ? def->n_ctors : 1u); ci++) {
+    const CtorDef *c = def->ctors[ci];
+    if (!c) return false;                    /* ctor array still filling */
     for (uint32_t i = 0; i < c->n_fields; i++) {
         if (!c->fields[i].full_type) continue;          /* scalar storage -- by value */
         Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
@@ -3393,6 +3457,7 @@ bool adt_app_is_byvalue_product(Type t) {
                     !adt_app_is_byvalue_product(rf));
         free_struct_app_type(rf);
         if (bad) return false;
+    }
     }
     return true;
 }

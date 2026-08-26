@@ -318,7 +318,7 @@ allocation numbers came from.
 compile-time seam, not an `EXPERIMENTS[]` row, since this is a representation
 change with no user-visible surface. SR2 is different; see below.
 
-### SR2 -- Option and Result as real sums
+### SR2 -- Option and Result as real sums -- GATE RUN 2026-08-27
 
 The payoff phase, and the reason SR1 is worth doing.
 
@@ -330,9 +330,30 @@ The payoff phase, and the reason SR1 is worth doing.
 Buys: `Result` 24 -> 16 bytes, the dead-arm write gone (so `E` no longer needs
 a zero value), and SR3 becomes possible at all.
 
-**Hard prerequisite: SR1.** Doing SR2 first would take the two most-used types
-in the language from by-value to heap-allocated-and-leaked. That is a severe
-regression, not an improvement.
+~~**Hard prerequisite: SR1.**~~ **Corrected by the gate
+([sr2-gate-results.md](sr2-gate-results.md)): SR1 as shipped is NOT the
+prerequisite.** SR1 covers non-parametric sums only; Option and Result are
+parametric, and a parametric sum monomorph today mallocs and leaks even with
+SR1 done.  The real prerequisite is **SR2a -- by-value parametric sum
+monomorphs** -- and its prototype seam (`TUR_SR2_APP_SUM_BYVALUE=1`, default
+off, provably inert) is in the tree.  The original reasoning still stands one
+level down: doing the CONVERSION before SR2a would take the two most-used
+types in the language from by-value to heap-allocated-and-leaked.
+
+**Gate verdict (full results in the gate doc):** the direct-use subset --
+construct, match, params, returns -- already runs allocation-free under the
+seam.  The cost is an 11-fixture worklist (vs SR1's 34) that is ONE family:
+the M7 HKT-carrier machinery's assumption that a `(F A)` monomorph rides the
+int64 carrier -- which is exactly where Option and Result live (Functor and
+Monad instances).  One failure is a SILENT runtime SEGV (`parsec-tutorial`'s
+`PRes`, the Option shape verbatim, through parser-combinator closures) -- the
+same hidden-by-a-cast signature as the archived fat-dispatch report.  Two
+findings sit outside codegen: a nullary ctor with an inferable type argument
+does not select its monomorph (so `(none)` in argument position would regress
+to annotation-required -- an elaboration fix on the critical path), and
+`vec-of` over a parametric sum monomorph ICEs on the DEFAULT path today
+([filed](../reported/vec-of-parametric-sum-monomorph-ice.md), predates the SR
+work, and `vec<option<T>>` is that shape).
 
 **This one is user-visible**, so per the experimental-features rule in
 `CLAUDE.md` it wants an `EXPERIMENTS[]` row with every descriptor field
