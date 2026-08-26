@@ -577,6 +577,22 @@ written, the verdict, which stage decided it, whether the RT7 memo answered it,
 the counterexample when there was one, which caps bit **for that obligation**,
 and `vc_smtlib` -- the VC in the refutation form the stages actually decide.
 
+Caps come in **two** fields, and the distinction is load-bearing:
+
+| field | window |
+|---|---|
+| `caps_hit` | the obligation's own chain run |
+| `caps_hit_probe` | the RT4 path-splitting probes run for this site *before* the obligation existed |
+
+Path splitting tries each path silently first. Those probes are separate
+obligations, discharged earlier, so their cap hits fall outside `caps_hit`'s
+window -- and until 2026-08-26 they were counted globally and attributed to
+nobody, which showed up as a per-compile summary reporting `** HIT` while every
+obligation's `caps_hit` read empty. Sum the two fields for "all solver work
+this site paid for"; read them apart when it matters whether a cap bit on one
+path or on the whole body. They are not merged at the source because summing is
+one addition and separating after the fact is impossible.
+
 That last field is the point. It is replayable:
 
 ```sh

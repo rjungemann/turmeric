@@ -3189,19 +3189,38 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
     /* RT4: a branching body is proved per path when it can be.  Tried first
      * and silently; failing costs one extra pass and changes nothing the user
      * sees, because the whole-body obligation below still runs and still
-     * reports. */
+     * reports.
+     *
+     * The probes are separate obligations discharged before this site's
+     * obligation exists, so a cap that bites inside one is outside that
+     * obligation's own snapshot window.  Bracket the split here -- this is the
+     * only place where "on whose behalf" is well-defined -- and hand the delta
+     * to the obligation as `caps_probe`.  Without it the per-compile summary
+     * reports `** HIT` while the site's `caps_hit` reads empty, which is the
+     * wrong direction to be wrong in for a field SX6's gate reads as
+     * per-site evidence. */
+    const RefineCapStats caps_before_probes = *refine_caps();
+    RefineCapStats probe_caps;
+    memset(&probe_caps, 0, sizeof(probe_caps));
+    bool split_tried = false;
     if (subject && (rt_head_is(subject, "if") || rt_head_is(subject, "let") ||
-                    rt_head_is(subject, "match") || rt_head_is(subject, "do")) &&
-        rt_prove_paths(e, pred, var_name, subject, base_kind, env, loc, 0)) {
-        refine_note_split_proven();
-        env->head = ax_head; env->n_names = ax_names;
-        return true;
+                    rt_head_is(subject, "match") || rt_head_is(subject, "do"))) {
+        split_tried = true;
+        bool split_ok = rt_prove_paths(e, pred, var_name, subject, base_kind,
+                                       env, loc, 0);
+        refine_caps_delta(&probe_caps, refine_caps(), &caps_before_probes);
+        if (split_ok) {
+            refine_note_split_proven();
+            env->head = ax_head; env->n_names = ax_names;
+            return true;
+        }
     }
 
     RefineObligation *ob =
         refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
                                   rt_sort_of_kind(base_kind), type_name(type_simple(base_kind, CK_COPY)),
                                   loc, env, what, fn_name);
+    if (ob && split_tried) refine_caps_add_hits(&ob->caps_probe, &probe_caps);
     bool proven = refine_discharge_one(ob, e->arena);
     env->head = ax_head; env->n_names = ax_names;
     return proven;

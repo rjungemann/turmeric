@@ -95,6 +95,57 @@ void refine_caps_reset(void);
 static inline void refine_cap_peak(uint32_t *slot, uint32_t v) {
     if (v > *slot) *slot = v;
 }
+
+/* `out = now - before`, per field, for attributing a window of solver work to
+ * whatever asked for it.  The counters are global (a per-compile summary), so
+ * a delta around one decision is the only way to say which obligation hit a
+ * cap.
+ *
+ * The peaks are NOT differenced: they are maxima, not sums, so a difference of
+ * two high-water marks is meaningless.  `out` records the peak the window SAW,
+ * which is what "how close did this come to the cap" asks. */
+static inline void refine_caps_delta(RefineCapStats *out,
+                                     const RefineCapStats *now,
+                                     const RefineCapStats *before) {
+    out->cubes_hits        = now->cubes_hits        - before->cubes_hits;
+    out->cube_lits_hits    = now->cube_lits_hits    - before->cube_lits_hits;
+    out->expand_depth_hits = now->expand_depth_hits - before->expand_depth_hits;
+    out->la_vars_hits      = now->la_vars_hits      - before->la_vars_hits;
+    out->la_constr_hits    = now->la_constr_hits    - before->la_constr_hits;
+    out->la_fm_hits        = now->la_fm_hits        - before->la_fm_hits;
+    out->euf_terms_hits    = now->euf_terms_hits    - before->euf_terms_hits;
+    out->no_shared_hits    = now->no_shared_hits    - before->no_shared_hits;
+    out->no_rounds_hits    = now->no_rounds_hits    - before->no_rounds_hits;
+    out->cubes_peak        = now->cubes_peak;
+    out->cube_lits_peak    = now->cube_lits_peak;
+    out->expand_depth_peak = now->expand_depth_peak;
+    out->la_vars_peak      = now->la_vars_peak;
+    out->la_constr_peak    = now->la_constr_peak;
+    out->euf_terms_peak    = now->euf_terms_peak;
+    out->no_shared_peak    = now->no_shared_peak;
+}
+
+/* `a += b`, hits only.  Used to accumulate several probes' deltas into the one
+ * site they were run for. */
+static inline void refine_caps_add_hits(RefineCapStats *a,
+                                        const RefineCapStats *b) {
+    a->cubes_hits        += b->cubes_hits;
+    a->cube_lits_hits    += b->cube_lits_hits;
+    a->expand_depth_hits += b->expand_depth_hits;
+    a->la_vars_hits      += b->la_vars_hits;
+    a->la_constr_hits    += b->la_constr_hits;
+    a->la_fm_hits        += b->la_fm_hits;
+    a->euf_terms_hits    += b->euf_terms_hits;
+    a->no_shared_hits    += b->no_shared_hits;
+    a->no_rounds_hits    += b->no_rounds_hits;
+    refine_cap_peak(&a->cubes_peak,        b->cubes_peak);
+    refine_cap_peak(&a->cube_lits_peak,    b->cube_lits_peak);
+    refine_cap_peak(&a->expand_depth_peak, b->expand_depth_peak);
+    refine_cap_peak(&a->la_vars_peak,      b->la_vars_peak);
+    refine_cap_peak(&a->la_constr_peak,    b->la_constr_peak);
+    refine_cap_peak(&a->euf_terms_peak,    b->euf_terms_peak);
+    refine_cap_peak(&a->no_shared_peak,    b->no_shared_peak);
+}
 /* True when any cap fired since the last reset -- lets the printer stay quiet
  * on the overwhelmingly common "nothing was capped" compile. */
 bool refine_caps_any(void);

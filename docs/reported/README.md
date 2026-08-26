@@ -932,7 +932,21 @@ turned up a defect in the instrument that would have justified it.
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
-| [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
+`dump-refine-json-under-reports-caps` was resolved 2026-08-26 and moved to
+[docs/archive](../archive/dump-refine-json-under-reports-caps.md). Its root
+cause is right in substance and wrong in mechanism, in a way worth knowing
+before trusting a similar diagnosis: the fix it proposes -- move the snapshot
+above the probe block in `refine_discharge_one` -- **would have changed
+nothing**, because the speculative branch returns before ever reaching that
+snapshot. The probe is not an earlier phase of the same discharge; it is a
+different `RefineObligation`, discharged in a different call during
+elaboration, so there is no window in that function to widen. Traced on the
+report's own repro. Fixed by the report's own alternative reading, a second
+field: `caps_hit_probe`, filled by bracketing `rt_prove_paths` in
+`rt_try_prove_return`, which is the only place "on whose behalf" is defined.
+One more thing the trace turned up, unfixed and minor: `g_stats.path_probes` is
+only printed when `proven_by_path` is non-zero, so a path probe that proves
+nothing is invisible in the `TUR_REFINE_STATS` summary too.
 | [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | `tests/run.sh` gained a gate for UBSan findings from the compiler and it is verified in both directions, but nothing sets `TUR_SANITIZER_GATE=1`, so CI runs unarmed. Not a pure flag flip: the zero-finding count was measured on Linux only, and UBSan findings vary by toolchain |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
 
