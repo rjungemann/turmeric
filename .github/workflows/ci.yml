@@ -685,12 +685,20 @@ jobs:
         working-directory: web
         run: npm run build
 
+      # Paths, not bare filenames: Playwright treats a positional argument as a
+      # regex over the test file path, so `smoke.spec.js` also matches
+      # `prod-smoke.spec.js` -- which tests the *live* turmeric-lang.com, has
+      # its own config, and is meant to be run by `npm run test:prod`. Pulled in
+      # here it contributed three standing failures (two from being pointed at
+      # localhost instead of production, one from a stale hardcoded guide list),
+      # which this step's continue-on-error quietly absorbed.
       - name: Run broader smoke suite (desktop, non-blocking)
         working-directory: web
         continue-on-error: true
         run: npx playwright test --project=desktop
-          smoke.spec.js diag.spec.js guide-toggle.spec.js meta-commands.spec.js
-          docs-pane.spec.js docs-offline.spec.js
+          tests/smoke.spec.js tests/diag.spec.js tests/guide-toggle.spec.js
+          tests/meta-commands.spec.js tests/docs-pane.spec.js
+          tests/docs-offline.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
         working-directory: web
