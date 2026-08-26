@@ -12,6 +12,21 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------------- *
+ * Cap telemetry (see refine_solver.h)
+ * ------------------------------------------------------------------------- */
+
+static RefineCapStats g_caps;
+
+RefineCapStats *refine_caps(void) { return &g_caps; }
+void refine_caps_reset(void) { memset(&g_caps, 0, sizeof(g_caps)); }
+
+bool refine_caps_any(void) {
+    return g_caps.cubes_hits || g_caps.cube_lits_hits || g_caps.expand_depth_hits ||
+           g_caps.la_vars_hits || g_caps.la_constr_hits || g_caps.la_fm_hits ||
+           g_caps.euf_terms_hits || g_caps.no_shared_hits || g_caps.no_rounds_hits;
+}
+
+/* ------------------------------------------------------------------------- *
  * NNF
  * ------------------------------------------------------------------------- */
 
@@ -74,7 +89,11 @@ typedef struct {
 
 static void acc_push(CubeAcc *acc, VCTerm **lits, uint32_t n) {
     if (acc->overflow) return;
-    if (acc->n >= REFINE_MAX_CUBES) { acc->overflow = true; return; }
+    if (acc->n >= REFINE_MAX_CUBES) {
+        g_caps.cubes_hits++;
+        refine_cap_peak(&g_caps.cubes_peak, REFINE_MAX_CUBES);
+        acc->overflow = true; return;
+    }
     if (acc->n == acc->cap) {
         uint32_t ncap = acc->cap ? acc->cap * 2 : 8;
         VCCube *nc = (VCCube *)arena_alloc(acc->arena, ncap * sizeof(VCCube));
@@ -95,8 +114,13 @@ static void acc_push(CubeAcc *acc, VCTerm **lits, uint32_t n) {
 static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
                    VCTerm **conj, uint32_t n_conj) {
     if (acc->overflow) return;
-    if (acc->depth >= REFINE_MAX_EXPAND_DEPTH) { acc->overflow = true; return; }
+    if (acc->depth >= REFINE_MAX_EXPAND_DEPTH) {
+        g_caps.expand_depth_hits++;
+        refine_cap_peak(&g_caps.expand_depth_peak, REFINE_MAX_EXPAND_DEPTH);
+        acc->overflow = true; return;
+    }
     acc->depth++;
+    refine_cap_peak(&g_caps.expand_depth_peak, acc->depth);
 
     /* FLATTEN conjunctions first, so the disjunction scan below sees every
      * disjunct that is top-level in the FORMULA rather than top-level in this
@@ -113,7 +137,11 @@ static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
         if (pending[i]->op != VC_AND) continue;
         VCTerm *t = pending[i];
         uint32_t cap = n_pending - 1 + t->n;
-        if (cap > REFINE_MAX_CUBE_LITS * 4) { acc->overflow = true; acc->depth--; return; }
+        if (cap > REFINE_MAX_CUBE_LITS * 4) {
+            g_caps.cube_lits_hits++;
+            refine_cap_peak(&g_caps.cube_lits_peak, cap);
+            acc->overflow = true; acc->depth--; return;
+        }
         VCTerm **flat = (VCTerm **)arena_alloc(acc->arena,
                                                (cap ? cap : 1) * sizeof(VCTerm *));
         uint32_t m = 0;
@@ -147,7 +175,11 @@ static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
     /* No disjunctions left: everything pending is a literal (or a conjunction
      * already flattened by vc_mk).  Collect into one cube. */
     uint32_t total = n_conj + n_pending;
-    if (total > REFINE_MAX_CUBE_LITS) { acc->overflow = true; acc->depth--; return; }
+    refine_cap_peak(&g_caps.cube_lits_peak, total);
+    if (total > REFINE_MAX_CUBE_LITS) {
+        g_caps.cube_lits_hits++;
+        acc->overflow = true; acc->depth--; return;
+    }
 
     VCTerm **lits = (VCTerm **)arena_alloc(acc->arena, (total ? total : 1) * sizeof(VCTerm *));
     uint32_t k = 0;
@@ -195,6 +227,7 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
     acc.arena = a;
     expand(&acc, parts, n, NULL, 0);
     if (acc.overflow) { out->overflow = true; return false; }
+    refine_cap_peak(&g_caps.cubes_peak, acc.n);
     out->cubes = acc.cubes;
     out->n     = acc.n;
     return true;

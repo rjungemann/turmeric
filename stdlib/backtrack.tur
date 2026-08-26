@@ -122,16 +122,23 @@
 ;;;
 ;;; Example:
 ;;;   (mbind (mreturn 3) (fn [x] (mreturn (* x 2))))  ; => list [6]
-;; mbind ma fn — concatMap: apply fn to each element and concat all results.
-;; fn MUST be a fat closure (struct { int64_t __fn; ... }).
-;; Use backtrack-do which guarantees fat closures via forced capture.
+;; mbind ma f — concatMap: apply f to each element and concat all results.
+;;
+;; The continuation is `^fat`, and that annotation is load-bearing: the body
+;; reads fat[0] as the thunk, so the value MUST be a { thunk, env } box.  The
+;; param used to be untyped (the int64 carrier), which held only by
+;; convention -- a CAPTURELESS lambda crossed as a thin code pointer and the
+;; fat[0] read executed its first instructions as an address (SIGSEGV).  The
+;; old comment said "use backtrack-do which guarantees fat closures via
+;; forced capture"; `^fat` makes the compiler guarantee it instead, shimming
+;; a thin fn at the call site and passing a capturing closure through.
 
-(defn mbind [ma fn] : int
+(defn mbind [ma : int ^fat f : (fn [int] int)] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
   if (!cell) return 0;
-  int64_t *fat = (int64_t*)(intptr_t)fn;
+  int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   Cell *rev = NULL;
   while (cell) {
@@ -236,7 +243,7 @@
 ;;; Returns:
 ;;;   The result of applying f to the unbound sentinel (:int).
 
-(defn fresh [f] : int
+(defn fresh [^fat f : (fn [int] int)] : int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];

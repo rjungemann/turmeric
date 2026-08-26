@@ -292,6 +292,121 @@ Two rules fall out:
 
 ---
 
+## 7a. Leak checking -- what is covered and what is not
+
+The single most misread thing about this suite. `CLAUDE.md` says
+`bash tests/run.sh` runs "with leak detection ON", and that is true -- **of the
+compiler process**. It is not true of the programs the compiler produces, and
+the complement is what catches people out:
+
+| what runs | sanitized? | leak-checked? |
+|---|---|---|
+| `tur` itself (`build`, `emit-c`, `check`) in a Debug build | yes, ASan+UBSan | **yes** for LEAKS -- but see 7b for UBSan, which is a different story |
+| the fixture PROGRAM `tur` produced | **no** | **no** |
+| turi/eval interpreter harnesses (`run-turi.sh`, `run-flags.sh`) | yes | no -- `detect_leaks=0` by design (process-lifetime closures) |
+
+Emitted programs are built at `tests/run.sh:169` with
+`-O2 -std=c99 -Wall -fno-strict-aliasing` -- no `-fsanitize` -- link the lean
+non-ASan runtime by default, and run with `detect_leaks=0` regardless. A fixture
+built the normal way has **zero `__asan_init` symbols**. A program that leaks a
+megabyte passes the suite silently, because the suite only compares printed
+output.
+
+So `requires.no-leak-check` is a no-op in the default configuration. It only
+means anything in a build where fixtures do link an instrumented runtime.
+
+## 7b. UBSan findings in the compiler are collected, not fatal
+
+The row above says the compiler is ASan+UBSan instrumented, and it is -- but
+those two behave differently, and the difference hid a bug for as long as it
+existed.
+
+ASan aborts. **UBSan does not**: the Debug build uses
+`-fsanitize=address,undefined` *without* `-fno-sanitize-recover`, so a UBSan
+finding prints one line to stderr and execution continues. This suite compares
+stdout. So a UBSan line was, until 2026-08-25, completely invisible --
+`fat_captures_borrowed` was read out of uninitialized arena memory on 60
+fixtures, on every single run, and nothing ever failed
+([history](../archive/history/fat-captures-borrowed-read-uninitialized.md)).
+
+`tests/run.sh` now scans each phase's captured stderr for `: runtime error:`
+and reports what it finds after the summary:
+
+```
+SANITIZER: 63 finding(s) from `tur` across 59 fixture(s).
+  These are UBSan/ASan diagnostics from the COMPILER, not from emitted programs.
+  They do not fail the run (set TUR_SANITIZER_GATE=1 to make them fatal).
+         59 build   .../emit_fns.c:3131:66: runtime error: load of value N, ...
+          4 emit-c  .../emit_fns.c:3131:66: runtime error: load of value N, ...
+```
+
+**Findings are reported but do not fail the run by default.** That is deliberate
+rather than timid: arming it on discovery would have turned 60 silent findings
+into 60 red fixtures in one step, which is how a gate gets switched off instead
+of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run, which is the
+setting to use in CI once the count is at zero -- as it is on Linux now.
+
+**Nothing arms it yet, and it is not a pure flag flip**: the zero was measured
+on one platform, and UBSan findings vary by toolchain. Tracked in
+[sanitizer-gate-not-armed-in-ci](../reported/sanitizer-gate-not-armed-in-ci.md).
+
+Two things to know if you touch this:
+
+- **The scan runs inside the xargs workers**, which are separate `bash -c`
+  processes. `note_sanitizer` must stay in the `export -f` list. It was left out
+  of the first version, and the result was a gate that reported a clean tree
+  while the bug it was written for was present -- a mechanism that exercises
+  nothing looks exactly like a mechanism that found nothing.
+- **Verify it by putting a finding back**, not by watching it stay quiet. The
+  check that matters is deleting the three `fat_captures_borrowed = false`
+  initializers, rebuilding, and confirming the count goes from 0 to ~63.
+
+### If you are chasing a leak in emitted code
+
+Do not reach for `bash tests/run.sh` -- it cannot see one. Four harnesses can:
+
+- **`tests/run-leak-check.sh`** -- the general one, and the one ctest runs
+  (`ctest -R tur_leak_check`, `RUN_SERIAL` because it fans out across `nproc`
+  itself). Drop a `requires.leak-check` marker in any fixture directory and it
+  is rebuilt with ASan and run with `detect_leaks=1`, asserting both its
+  `expected.stdout` and no leak. Start here. 54 fixtures currently opt in --
+  the `rc-*`, `affine-*`, `weak-*` and `defer-*` families, where reclamation is
+  the point of the test.
+- `tests/run-gc-leak-gate.sh` -- cycle-collector fixtures, ASan, with a
+  collector-off control run.
+- `tests/run-closure-env-leak.sh`, `tests/run-fat-shim-leak.sh` -- one
+  regression each; they emit C and compile it by hand with ASan.
+- `tests/run-leak-gate.sh` -- despite the name, this is the COMPILER's error
+  path, not emitted code.
+
+A fixture with a real but not-yet-fixed leak carries a `known-leak` file naming
+its open report: `run-leak-check.sh` then reports it as `KNOWN` rather than
+failing, and fails if it ever runs *clean*, so the marker cannot outlive the
+bug.
+
+### Two traps, both of which have produced wrong answers here
+
+1. **Confirm the instrument before believing a clean result.** ASan silently
+   reports nothing when it is not linked -- which is the default for fixtures.
+   Plant a deliberate `malloc(1234)` that is never freed and check the tool
+   reports it before concluding that anything is leak-free.
+2. **LSan reports what is UNREACHABLE, not what is dead.** Anything held in a
+   global registry is reachable by construction and will be called live however
+   dead it is; section 7's rc-block case is exactly this. A clean run means
+   "nothing was orphaned", not "nothing was retained". For retention, count it.
+3. **A live LOCAL hides a leak just as well as a global does, so a small
+   program is the worst place to test one.** This is the same rule as trap 2
+   but it bites differently: in a `main` that ends right after the allocation,
+   the binding still holds the pointer at exit, LSan calls the block reachable,
+   and the run is CLEAN. Add one trailing statement and the same program
+   reports the leak -- with byte-identical emitted C for the leaking block.
+   `ref/from-rc` in
+   [rc-ref-conversion-and-weak-upgrade-leak](../reported/rc-ref-conversion-and-weak-upgrade-leak.md)
+   behaves exactly this way. When probing a suspected leak, always put work
+   after it.
+
+---
+
 ## 8. Harness environment parity
 
 `tests/run.sh` exports `TUR_BIND_LOOPBACK=1`; `stdlib/httpd.tur` and

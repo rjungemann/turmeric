@@ -4,6 +4,7 @@
 #include "globals.h"
 #include "mangle.h"   /* tur_cname_name_len */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
+#include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
@@ -2200,6 +2201,16 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     rf_resolve_read_frames(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);
+    /* SX8a: the JSON obligation dump.  Emitted here rather than from the
+     * discharge pass so it sees every obligation the unit produced, including
+     * the crossings resolved just above.  Goes to stdout: it is the artifact
+     * the caller asked for, not a diagnostic about one. */
+    if (g_dump_refine_json) {
+        Buf rb; buf_init(&rb);
+        refine_report_json(&e.refine_obs, &rb);
+        buf_to_file(&rb, stdout);
+        buf_free(&rb);
+    }
 
     if (sess) {
         /* TR2: the accumulated state IS the session -- hand it back instead of

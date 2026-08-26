@@ -6589,6 +6589,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * tail, symmetric with the ^fat parameter marker.  Consume the marker here
      * and advance past it so the return-type parser sees the real type form. */
     bool result_fat = false;
+    /* self-recursive-fn-returning-call-into-fat-sink: set when the RR1
+     * early-forwarding block pre-marks the declared fn result `boxed` so
+     * self-calls see the stage-2 truth; read by the stage-2 block so it
+     * still runs the tail normalization. */
+    bool premarked_self_fat_result = false;
     if (call->as.list.len >= (body_start + 1)) {
         Form *fat_f = call->as.list.items[body_start];
         if (fat_f->tag == F_SYM && fat_f->as.sym == e->sym_caret_fat) {
@@ -7070,6 +7075,32 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (return_exists_type)  rft = return_exists_type;
             if (return_borrow_type && !rft) rft = return_borrow_type;
             if (rft) existing->type.as.fn.result_full_type = rft;
+            /* self-recursive-fn-returning-call-into-fat-sink: forward the
+             * stage-2 fat-result marking early too, for the same reason this
+             * whole block exists.  Stage 2 (below, post-body) marks a concrete
+             * effect-free fn RESULT `boxed` so callers pass the fat handle
+             * through -- but it runs AFTER the body is elaborated, so a
+             * self-call inside the body consulted a still-unboxed result type,
+             * took the bare-fn auto-shim branch at its ^fat sink, and
+             * double-boxed the already-fat handle (slot 0 of the outer box is
+             * a shim that then calls the inner box as code -> SIGSEGV).  A
+             * one-line forwarder "fixed" it precisely because the forwarder's
+             * COMPLETED binding carried the marking.  Every input to the
+             * stage-2 decision except the body itself is the declared
+             * signature, so decide it here and mark the shared result-type
+             * pointer before the body sees it; the flag keeps the post-body
+             * tail normalization running (its guard would otherwise read the
+             * pre-marked bit as "already done"). */
+            if (rft && rft->kind == TY_FN && !rft->as.fn.boxed &&
+                !result_fat &&
+                rft->as.fn.result_kind != TY_FN &&
+                rft->as.fn.result_kind != TY_UNKNOWN &&
+                fn_result_type_is_fat_normalized(rft) &&
+                !(existing->name && existing->name->name &&
+                  strncmp(existing->name->name, "__inst_", 7) == 0)) {
+                rft->as.fn.boxed = true;
+                premarked_self_fat_result = true;
+            }
         }
     }
 
@@ -8383,7 +8414,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * the returns_boxed_closure block above. */
     {
         Type *rft = fn_type.as.fn.result_full_type;
-        if (body && rft && rft->kind == TY_FN && !rft->as.fn.boxed &&
+        /* `premarked_self_fat_result` means the RR1 recursion block already
+         * set `boxed` on this same pointer (see there); the `!boxed` test
+         * would read that as "already normalized" and skip the tail pass,
+         * leaving thin leaves behind a boxed-claiming type -- the inverse
+         * crash.  The other guards were vetted at pre-mark time. */
+        if (body && rft && rft->kind == TY_FN &&
+            (premarked_self_fat_result || !rft->as.fn.boxed) &&
             !fn_type.as.fn.result_fat &&
             rft->as.fn.result_kind != TY_FN &&
             rft->as.fn.result_kind != TY_UNKNOWN &&
@@ -9634,6 +9671,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         /* Create Closure struct */
         struct Closure *closure = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
         closure->fn = fd;
+        closure->fat_captures_borrowed = false;   /* arena mem is not zeroed */
         /* Copy captures into arena memory so it shares the closure's lifetime. */
         Binding **arena_captures = (Binding **)arena_alloc(e->arena, n_captures * sizeof(Binding *));
         memcpy(arena_captures, captures, n_captures * sizeof(Binding *));

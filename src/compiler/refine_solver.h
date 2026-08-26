@@ -39,6 +39,65 @@
 #define REFINE_MAX_LA_VARS      32
 #define REFINE_MAX_LA_CONSTR    512
 #define REFINE_MAX_EUF_TERMS    512
+/* S3's two caps live here rather than in refine_solver_no.c so the telemetry
+ * below can report a peak against the limit it is a peak of. */
+#define NO_MAX_ROUNDS           4
+/* Raised 8 -> 16 on SX0(b)'s evidence (solver-extension-plan SX5).  It was the
+ * ONLY cap in the solver with a live signal: it turned away eligible terms on
+ * four units across the three swept populations, every time by exactly one
+ * (9 eligible against a cap of 8), while every other cap sat on 72-98%
+ * headroom.  Not free -- the exchange is quadratic in the shared set and each
+ * `la_entails_eq` runs Fourier-Motzkin twice, so the pair work per S3 cube is
+ * 4x at the new cap and is paid by every obligation reaching S3, not only the
+ * ones near the cap.  Measured before landing: no verdict moved on the 125
+ * corpus benchmarks or the 89 in-tree refinement fixtures, and the corpus
+ * replay did not slow measurably.  Numbers and method in
+ * docs/archive/history/no-max-shared-raise.md. */
+#define NO_MAX_SHARED           16
+
+/* ------------------------------------------------------------------------- *
+ * Cap telemetry
+ * ------------------------------------------------------------------------- */
+
+/* Every cap above degrades to RT_UNKNOWN when it bites, which is sound but
+ * silent: from the outside, an obligation the solver capped out on and one
+ * that was never in its competence look exactly alike.  These counters make
+ * the difference visible under TUR_REFINE_STATS=1.
+ *
+ * They are also decision data.  The solver-extension plan gates its two
+ * largest phases on this measurement -- SX4 (incremental simplex) is worth
+ * building only if REFINE_MAX_LA_CONSTR actually bites, and SX6 (boolean
+ * structure beyond small DNF) only if the cube caps do.  See
+ * docs/upcoming/solver-extension-plan.md, SX0(b).
+ *
+ * `hits` counts the times a cap fired.  `peak` is the high-water mark of the
+ * quantity that cap bounds, recorded on every query rather than only on the
+ * ones that overflow -- so a cap that never fires still reports how much
+ * headroom was left, which is the difference between "we are nowhere near
+ * this" and "we are one wide function away from it". */
+typedef struct RefineCapStats {
+    uint32_t cubes_hits,        cubes_peak;
+    uint32_t cube_lits_hits,    cube_lits_peak;
+    uint32_t expand_depth_hits, expand_depth_peak;
+    uint32_t la_vars_hits,      la_vars_peak;
+    uint32_t la_constr_hits,    la_constr_peak;
+    uint32_t la_fm_hits;        /* FM elimination backed off before growing   */
+    uint32_t euf_terms_hits,    euf_terms_peak;
+    uint32_t no_shared_hits,    no_shared_peak;
+    uint32_t no_rounds_hits;    /* exchange still progressing when rounds ran out */
+} RefineCapStats;
+
+/* Mutable on purpose: the stages bump their own counters in place, which is
+ * cheaper and clearer than threading a stats pointer through every seam. */
+RefineCapStats *refine_caps(void);
+void refine_caps_reset(void);
+
+static inline void refine_cap_peak(uint32_t *slot, uint32_t v) {
+    if (v > *slot) *slot = v;
+}
+/* True when any cap fired since the last reset -- lets the printer stay quiet
+ * on the overwhelmingly common "nothing was capped" compile. */
+bool refine_caps_any(void);
 
 /* ------------------------------------------------------------------------- *
  * Cubes
@@ -74,6 +133,18 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out);
 typedef struct EufState EufState;
 
 EufState *euf_new(RefineVC *vc, Arena *a);
+/* SX3: mark / undo-to-mark over one state (incremental EUF), plus the env
+ * seam selecting it.  See trail_c.h for the trail; TUR_REFINE_EUF=rebuild
+ * restores the per-cube rebuild path. */
+typedef struct {
+    uint32_t trail_len;    /* TrailCMark, flattened to keep trail_c.h private */
+    uint32_t trail_level;
+    uint32_t n;
+    bool     unsat;
+} EufMark;
+EufMark  euf_mark(EufState *st);
+void     euf_undo_to(EufState *st, EufMark m);
+bool     euf_incremental_mode(void);
 /* Assert every literal of `c`.  Returns false when a contradiction is found. */
 bool      euf_assert_cube(EufState *st, const VCCube *c);
 /* Assert `a == b` and re-close.  Returns false on contradiction. */

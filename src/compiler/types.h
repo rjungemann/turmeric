@@ -697,8 +697,9 @@ typedef struct Type {
              * protocol (thunk = slot 0, env = the box) for all arities; a bare
              * TY_FN coerces to a boxed one of the same signature via the
              * EX_FN_TO_FAT auto-shim, never the reverse.  See
-             * docs/archive/history/closure-first-class-type-plan.md.  B-0 only plumbs
-             * the bit; nothing sets it true yet. */
+             * docs/archive/history/closure-first-class-type-plan.md (B-0..B-4
+             * shipped: the bit is set at ~10 sites -- fn-typed struct/ADT
+             * fields of arity <= 4 among them -- and read widely). */
             bool boxed;
             /* typed-c-abi-function-pointers: true when this TY_FN denotes a
              * bare C-ABI function pointer `R (*)(A...)` -- spelled `(c-fn

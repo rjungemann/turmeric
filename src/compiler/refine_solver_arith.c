@@ -133,8 +133,13 @@ bool la_is_shared_term(const VCTerm *t) {
 
 static uint32_t la_var(LaState *st, VCTerm *t) {
     for (uint32_t i = 0; i < st->n_vars; i++) if (st->vars[i] == t) return i;
-    if (st->n_vars >= REFINE_MAX_LA_VARS) { st->gave_up = true; return UINT32_MAX; }
+    if (st->n_vars >= REFINE_MAX_LA_VARS) {
+        refine_caps()->la_vars_hits++;
+        refine_cap_peak(&refine_caps()->la_vars_peak, REFINE_MAX_LA_VARS);
+        st->gave_up = true; return UINT32_MAX;
+    }
     st->vars[st->n_vars] = t;
+    refine_cap_peak(&refine_caps()->la_vars_peak, st->n_vars + 1);
     return st->n_vars++;
 }
 
@@ -248,7 +253,12 @@ static bool all_int_vars(LaState *st, const LinExp *e) {
 
 static void la_push(LaState *st, LinExp e, bool strict) {
     if (e.bad) return;              /* dropping a constraint only weakens us */
-    if (st->n_cs >= REFINE_MAX_LA_CONSTR) { st->gave_up = true; return; }
+    if (st->n_cs >= REFINE_MAX_LA_CONSTR) {
+        refine_caps()->la_constr_hits++;
+        refine_cap_peak(&refine_caps()->la_constr_peak, REFINE_MAX_LA_CONSTR);
+        st->gave_up = true; return;
+    }
+    refine_cap_peak(&refine_caps()->la_constr_peak, st->n_cs + 1);
     if (st->n_cs == st->cap_cs) {
         uint32_t ncap = st->cap_cs ? st->cap_cs * 2 : 16;
         LinC *nc = (LinC *)arena_alloc(st->a, ncap * sizeof(LinC));
@@ -361,7 +371,16 @@ bool la_unsat(LaState *st) {
             else                                n_zero++;
         }
         uint64_t next = (uint64_t)n_zero + (uint64_t)n_pos * (uint64_t)n_neg;
-        if (next > REFINE_MAX_LA_CONSTR) return false;   /* blow-up: give up, stay sound */
+        if (next > REFINE_MAX_LA_CONSTR) {
+            /* Counted apart from the static adder above: this is elimination
+             * GROWING past the cap, not an input that arrived too wide, and
+             * the two point at different fixes (SX4's simplex kills this one;
+             * only a wider cap helps the other). */
+            refine_caps()->la_fm_hits++;
+            refine_cap_peak(&refine_caps()->la_constr_peak, REFINE_MAX_LA_CONSTR);
+            return false;   /* blow-up: give up, stay sound */
+        }
+        refine_cap_peak(&refine_caps()->la_constr_peak, (uint32_t)next);
 
         LinC *nxt = (LinC *)arena_alloc(st->a, (next ? next : 1) * sizeof(LinC));
         uint32_t m = 0;

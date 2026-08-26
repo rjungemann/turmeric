@@ -1,0 +1,172 @@
+;; bench-dfs-queens -- N-queens on BOTH shipped search surfaces, head to head.
+;;
+;; SX2's acceptance asks for "both paths" on a real backtracking problem with
+;; the crossover recorded.  The two paths here are the two things a user can
+;; actually load:
+;;
+;;   list  -- stdlib/backtrack.tur's persistent list monad (mbind / choice /
+;;            guard / mreturn).  Board threaded through the monad as a packed
+;;            int (3 bits per column, so N <= 7 with columns 1..N).
+;;   dfs   -- stdlib/backtrack-dfs.tur, the SX2 trail driver.  Board lives in
+;;            trailed cells; the goal is the dfs-and chain a user would write.
+;;
+;; Both count all solutions for the same N.  Neither is hand-tuned: each is
+;; the straightforward program its surface invites.
+;;
+;; Output per N: n, list solutions, list ns/run, dfs solutions, dfs ns/run.
+;;
+;; Run: ./build/tur --enable=backtrackable-state run benchmarks/bench-dfs-queens.tur
+
+(load "stdlib/backtrack.tur")
+(load "stdlib/backtrack-dfs.tur")
+
+(defn now-ns [] : int
+  ```c
+  return tur_monotonic_ns();
+  ```)
+
+;; --------------------------------------------------------------------------
+;; Shared: attack check on a packed board.  Rows are APPENDED low (each row
+;; does b*8 + c), so with row-1 rows packed, row r sits at digit (row-1 - r)
+;; from the bottom.  (First draft indexed from the bottom as if row 1 were
+;; least significant -- rows 2..3 half-worked by accident and row 4 rejected
+;; everything, which is a good reminder to probe a solver against known
+;; counts, 4/6/4/2 for N=4, before timing it.)
+;; --------------------------------------------------------------------------
+
+(defn col-at [b : int nrows : int r : int] : int
+  ```c
+  return (b >> (3 * (nrows - r))) & 7;
+  ```)
+
+;;; packed-safe-go -- internal: rows r..row-1 of `b` vs a queen at (row, col).
+(defn packed-safe-go [b : int r : int row : int col : int] : bool
+  (if (>= r row)
+    true
+    (let [c (col-at b (- row 1) r)]
+      (if (and (not (= c col))
+               (not (= (- row r) (- c col)))
+               (not (= (- row r) (- col c))))
+        (packed-safe-go b (+ r 1) row col)
+        false))))
+
+;;; packed-safe? -- can a queen at (row, col) join packed board `b`?
+(defn packed-safe? [b : int row : int col : int] : bool
+  (packed-safe-go b 1 row col))
+
+;; --------------------------------------------------------------------------
+;; Path A: the list monad
+;; --------------------------------------------------------------------------
+
+;;; bt-range -- the choice of an int in [lo, hi] as a backtrack list.
+(defn bt-range [lo : int hi : int] : int
+  (if (> lo hi) (bt-nil) (bt-cons lo (bt-range (+ lo 1) hi))))
+
+;;; bt-pure -- lift into the typed Backtrack carrier.
+(defn bt-pure [x : int] : (Backtrack int) (:: (mreturn x) :Backtrack))
+
+;;; queens-list-row -- extend each partial board by one row.
+;;;
+;;; Through the typeclass `bind`, as tests/fixtures/hkt-stdlib-backtrack-
+;;; instances does -- NOT `mbind` directly.  A direct `(mbind xs (fn [x] ...))`
+;;; with a non-capturing lambda SEGFAULTS: mbind's untyped `fn` param is the
+;;; int64 carrier, a captureless lambda crosses it as a thin code pointer, and
+;;; mbind's body reads `fat[0]` -- the thin pointer's first instructions -- as
+;;; a thunk address.  The typed bind path fat-boxes the argument.
+(defn queens-list-row [boards : (Backtrack int) row : int n : int]
+  : (Backtrack int)
+  (bind boards
+    (fn [b]
+      (bind (:: (bt-range 1 n) :Backtrack)
+        (fn [c]
+          (if (packed-safe? b row c)
+            (bt-pure (+ (* b 8) c))
+            (:: (mzero) (Backtrack int))))))))
+
+;;; queens-list-go -- internal: fold queens-list-row over rows.
+(defn queens-list-go [boards : (Backtrack int) row : int n : int]
+  : (Backtrack int)
+  (if (> row n)
+    boards
+    (queens-list-go (queens-list-row boards row n) (+ row 1) n)))
+
+(defn queens-list [n : int] : int
+  (bt-length (:: (queens-list-go (bt-pure 0) 1 n) :int)))
+
+;; --------------------------------------------------------------------------
+;; Path B: the dfs driver over trailed cells
+;; --------------------------------------------------------------------------
+
+;;; dfs-safe-go -- internal: bound rows r..row-1 vs the queen bound at `row`.
+(defn dfs-safe-go [cells : (Vec BtCell) r : int row : int col : int] : bool
+  (if (>= r row)
+    true
+    (let [c (bt-get (:: (vec-get cells (- r 1)) :BtCell))]
+      (if (and (not (= c col))
+               (not (= (- row r) (- c col)))
+               (not (= (- row r) (- col c))))
+        (dfs-safe-go cells (+ r 1) row col)
+        false))))
+
+;;; dfs-safe? -- queen bound at `row` vs every earlier bound cell.
+(defn dfs-safe? [cells : (Vec BtCell) row : int] : bool
+  (dfs-safe-go cells 1 row
+               (bt-get (:: (vec-get cells (- row 1)) :BtCell))))
+
+;;; queens-goal -- the dfs-and chain: choose row's column, check, recurse.
+;;;
+;;; The recursion is a DIRECT self-call feeding a ^fat parameter -- the shape
+;;; that used to segfault (self-recursive-fn-returning-call-into-fat-sink,
+;;; fixed 2026-08-27: the stage-2 fat-result marking is now forwarded to the
+;;; recursion binding before the body elaborates).  This call site doubles as
+;;; the workaround-reverted proof: if the drop regresses, every dfs count
+;;; below goes wrong or crashes.
+(defn queens-goal [cells : (Vec BtCell) row : int n : int]
+  : (fn [(fn [] bool)] bool)
+  (if (> row n)
+    (dfs-succeed)
+    (dfs-and (dfs-choose-int (:: (vec-get cells (- row 1)) :BtCell) 1 n)
+      (dfs-and (dfs-guard (fn [] (dfs-safe? cells row)))
+               (queens-goal cells (+ row 1) n)))))
+
+;;; fill-cells -- internal: push n fresh cells.
+(defn fill-cells [cells : (Vec BtCell) i : int n : int] : int
+  (if (>= i n)
+    0
+    (do (vec-push! cells (bt-cell-new 0))
+        (fill-cells cells (+ i 1) n))))
+
+(defn queens-dfs [n : int] : int
+  (let [cells (:: (vec-new) (Vec BtCell))]
+    (fill-cells cells 0 n)
+    (dfs-solve (queens-goal cells 1 n) (fn [] true))))
+
+;; --------------------------------------------------------------------------
+;; Harness
+;; --------------------------------------------------------------------------
+
+(defn run-list [n : int i : int iters : int acc : int] : int
+  (if (>= i iters) acc (run-list n (+ i 1) iters (+ acc (queens-list n)))))
+
+(defn run-dfs [n : int i : int iters : int acc : int] : int
+  (if (>= i iters) acc (run-dfs n (+ i 1) iters (+ acc (queens-dfs n)))))
+
+(defn bench [n : int iters : int] : int
+  (let [t0    (now-ns)
+        sols  (run-list n 0 iters 0)
+        t1    (now-ns)
+        sols2 (run-dfs n 0 iters 0)
+        t2    (now-ns)]
+    (println n)
+    (println (/ sols iters))
+    (println (/ (- t1 t0) iters))
+    (println (/ sols2 iters))
+    (println (/ (- t2 t1) iters))
+    0))
+
+(defn main [] : int
+  (bench 4 200)
+  (bench 5 100)
+  (bench 6 50)
+  (bench 7 20)
+  0)

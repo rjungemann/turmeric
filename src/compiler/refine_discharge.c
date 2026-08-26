@@ -37,6 +37,7 @@ const RefineStats *refine_stats(void) { return &g_stats; }
 void refine_memo_reset(void);
 void refine_discharge_reset(void) {
     memset(&g_stats, 0, sizeof(g_stats));
+    refine_caps_reset();
     refine_memo_reset();
 }
 
@@ -59,6 +60,11 @@ static const RefineBackend CHAIN[] = {
     refine_s1_decide,   /* congruence closure (EUF)     */
     refine_s2_decide,   /* linear arithmetic            */
     refine_s3_decide,   /* Nelson-Oppen combination     */
+};
+/* Parallel to CHAIN, for the SX8a dump and `tur smt`: "which stage decided
+ * this" is the first thing anyone asks of an unexpected verdict. */
+static const char *const CHAIN_NAMES[] = {
+    "S0 (trivial)", "S1 (EUF)", "S2 (arithmetic)", "S3 (Nelson-Oppen)",
 };
 #define CHAIN_LEN (sizeof(CHAIN) / sizeof(CHAIN[0]))
 
@@ -547,7 +553,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         buf_free(&b);
     }
 
+    /* Per-obligation cap accounting: snapshot, run, subtract.  The counters
+     * are global (they are a per-compile summary), so the only way to say
+     * which obligation hit a cap is to diff around its own decision. */
+    const RefineCapStats caps_before = *refine_caps();
+
     RefineDecision d = refine_unknown();
+    ob->memo_hit = memo_hit;
     if (memo_hit) {
         /* The chain is the expensive part and its answer depends only on the
          * VC, so a confirmed hit skips it.  Only PROVED is carried across:
@@ -559,7 +571,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
             d = CHAIN[i](vc, a);
-            if (d.verdict != RT_UNKNOWN) break;
+            if (d.verdict != RT_UNKNOWN) { ob->decided_by = CHAIN_NAMES[i]; break; }
         }
         memo_insert(vc, memo_fp, d.verdict == RT_VALID);
     }
@@ -570,7 +582,30 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
      * model.  Finding none leaves the verdict exactly where it was. */
     if (d.verdict == RT_UNKNOWN) {
         RefineModel *m = refine_model_search(vc, a);
-        if (m) d = refine_invalid(m);
+        if (m) { d = refine_invalid(m); ob->decided_by = "bounded model search"; }
+    }
+
+    {   /* Subtract per field: a saturating "did anything move" bool would lose
+         * the count, and the peaks are maxima rather than sums, so the
+         * obligation records the peak it SAW, not a difference. */
+        const RefineCapStats *now = refine_caps();
+        RefineCapStats *o = &ob->caps;
+        o->cubes_hits        = now->cubes_hits        - caps_before.cubes_hits;
+        o->cube_lits_hits    = now->cube_lits_hits    - caps_before.cube_lits_hits;
+        o->expand_depth_hits = now->expand_depth_hits - caps_before.expand_depth_hits;
+        o->la_vars_hits      = now->la_vars_hits      - caps_before.la_vars_hits;
+        o->la_constr_hits    = now->la_constr_hits    - caps_before.la_constr_hits;
+        o->la_fm_hits        = now->la_fm_hits        - caps_before.la_fm_hits;
+        o->euf_terms_hits    = now->euf_terms_hits    - caps_before.euf_terms_hits;
+        o->no_shared_hits    = now->no_shared_hits    - caps_before.no_shared_hits;
+        o->no_rounds_hits    = now->no_rounds_hits    - caps_before.no_rounds_hits;
+        o->cubes_peak        = now->cubes_peak;
+        o->cube_lits_peak    = now->cube_lits_peak;
+        o->expand_depth_peak = now->expand_depth_peak;
+        o->la_vars_peak      = now->la_vars_peak;
+        o->la_constr_peak    = now->la_constr_peak;
+        o->euf_terms_peak    = now->euf_terms_peak;
+        o->no_shared_peak    = now->no_shared_peak;
     }
 
     switch (d.verdict) {
@@ -641,6 +676,44 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
     }
 }
 
+/* Cap telemetry.  Prints one line per cap, with the peak the run actually
+ * reached against the limit, and marks the caps that fired.  Every cap here
+ * degrades to RT_UNKNOWN, so a hit is not an error -- it is the difference
+ * between an obligation the solver declined and one it ran out of room on,
+ * which is otherwise invisible from the outside.
+ *
+ * The peaks print even when nothing fired: headroom is the point.  "cubes
+ * peaked at 3 of 64" and "cubes peaked at 61 of 64" are the same zero-hit
+ * summary and completely different signals about whether S4 needs building.
+ * See docs/upcoming/solver-extension-plan.md (SX0(b)). */
+static void refine_report_caps(void) {
+    const RefineCapStats *c = refine_caps();
+    struct { const char *name; uint32_t hits, peak, limit; } rows[] = {
+        { "cubes",         c->cubes_hits,        c->cubes_peak,        REFINE_MAX_CUBES        },
+        { "cube literals", c->cube_lits_hits,    c->cube_lits_peak,    REFINE_MAX_CUBE_LITS    },
+        { "expand depth",  c->expand_depth_hits, c->expand_depth_peak, REFINE_MAX_EXPAND_DEPTH },
+        { "LA vars",       c->la_vars_hits,      c->la_vars_peak,      REFINE_MAX_LA_VARS      },
+        { "LA constraints",c->la_constr_hits,    c->la_constr_peak,    REFINE_MAX_LA_CONSTR    },
+        { "NO shared",     c->no_shared_hits,    c->no_shared_peak,    NO_MAX_SHARED           },
+        { "EUF terms",     c->euf_terms_hits,    c->euf_terms_peak,    REFINE_MAX_EUF_TERMS    },
+    };
+    fprintf(stderr, "refine: caps %s\n",
+            refine_caps_any() ? "(one or more BIT -- those obligations answered "
+                                "unknown and kept their runtime check)"
+                              : "(none hit)");
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+        fprintf(stderr, "refine:   %-15s peak %6u / %-6u %s\n",
+                rows[i].name, rows[i].peak, rows[i].limit,
+                rows[i].hits ? "** HIT" : "");
+    /* Two counters with no meaningful peak of their own: FM growth is bounded
+     * by the LA-constraint limit it shares, and the round budget is a count of
+     * exchange passes, not of a sized structure. */
+    fprintf(stderr, "refine:   %-15s %u\n",
+            "FM blow-ups", c->la_fm_hits);
+    fprintf(stderr, "refine:   %-15s %u (of %u rounds)\n",
+            "NO rounds out", c->no_rounds_hits, (unsigned)NO_MAX_ROUNDS);
+}
+
 void refine_discharge_all(RefineObligationVec *v, Arena *a) {
     if (!v) return;
     for (uint32_t i = 0; i < v->n; i++) refine_discharge_one(v->obs[i], a);
@@ -659,5 +732,6 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
                     "refine: %u result refinement(s) inferred from %u template "
                     "probe(s)\n",
                     g_stats.inferred, g_stats.templates_tried);
+        refine_report_caps();
     }
 }

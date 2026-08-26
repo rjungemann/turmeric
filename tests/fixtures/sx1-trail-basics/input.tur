@@ -1,0 +1,147 @@
+;; SX1: backtrackable state -- the acceptance list, from the language surface.
+;;
+;; Each section pins one of the four decisions the design turns on (plan 3.2),
+;; or one of the three opt-out granularities (plan 3.3). The stamp and the
+;; generation are the two that are easy to get subtly wrong and impossible to
+;; notice: a missing stamp check costs one trail entry per write instead of per
+;; level, and a missing generation check silently unwinds the wrong level.
+
+;; --- value cells: writes undo -----------------------------------------------
+(defn t-value-cell [] : void
+  (let [c (bt-cell-new 10)
+        m (bt-mark)]
+    (bt-set! c 20)
+    (println (bt-get c))            ; 20
+    (bt-undo-to! m)
+    (println (bt-get c))            ; 10
+    (bt-cell-free c)))
+
+;; --- nesting: each level restores only its own writes ------------------------
+(defn t-nesting [] : void
+  (let [c  (bt-cell-new 1)
+        m1 (bt-mark)]
+    (bt-set! c 2)
+    (let [m2 (bt-mark)]
+      (bt-set! c 3)
+      (bt-undo-to! m2)
+      (println (bt-get c)))         ; 2 -- back to the outer level's value
+    (bt-undo-to! m1)
+    (println (bt-get c))            ; 1
+    (bt-cell-free c)))
+
+;; --- decision 2: the stamp ---------------------------------------------------
+;; A cell written many times inside one level costs ONE trail entry. This is
+;; what makes the primitive affordable in a search loop, and the entry count is
+;; the only place it is observable.
+(defn spin [c : BtCell n : int] : void
+  (if (<= n 0)
+    (do)
+    (do
+      (bt-set! c n)
+      (spin c (- n 1)))))
+
+(defn t-stamp [] : void
+  (let [c (bt-cell-new 0)
+        m (bt-mark)]
+    (spin c 500)
+    (println (bt-depth))            ; 1, not 500
+    (bt-undo-to! m)
+    (println (bt-get c))            ; 0
+    (bt-cell-free c)))
+
+;; --- write-once cells (the logic-variable shape) -----------------------------
+(defn t-lvar [] : void
+  (let [v (bt-lvar-new 0)
+        m (bt-mark)]
+    (println (if (bt-bound? v) 1 0))     ; 0 -- fresh lvars are unbound
+    (println (if (bt-set! v 42) 1 0))    ; 1 -- binding succeeds
+    (println (if (bt-set! v 43) 1 0))    ; 0 -- a second binding is REFUSED
+    (println (bt-get v))                 ; 42 -- and did not overwrite
+    (bt-undo-to! m)
+    (println (if (bt-bound? v) 1 0))     ; 0 -- undo returns it to unbound
+    (bt-cell-free v)))
+
+;; --- opt-out 1: a GCell is never trailed -------------------------------------
+(defn t-gcell [] : void
+  (let [g (g-cell-new 5)
+        c (bt-cell-new 1)
+        m (bt-mark)]
+    (g-set! g 6)
+    (bt-set! c 2)
+    (println (bt-depth))            ; 1 -- only the BtCell reached the trail
+    (bt-undo-to! m)
+    (println (g-get g))             ; 6 -- the GCell write survived
+    (println (bt-get c))            ; 1 -- the BtCell was restored
+    (g-cell-free g)
+    (bt-cell-free c)))
+
+;; --- opt-out 2: per-write, for a statistic that must outlive the search -------
+(defn t-untrailed [] : void
+  (let [counter (bt-cell-new 0)
+        m       (bt-mark)]
+    (untrailed-begin)
+    (bt-set! counter 99)
+    (untrailed-end)
+    (println (bt-depth))            ; 0 -- a paused write is not trailed
+    (bt-undo-to! m)
+    (println (bt-get counter))      ; 99 -- and survives the undo
+    (bt-cell-free counter)))
+
+;; --- opt-out 3: per-level, keep this level's writes --------------------------
+(defn t-commit [] : void
+  (let [c     (bt-cell-new 1)
+        outer (bt-mark)]
+    (bt-set! c 2)
+    (let [inner (bt-mark)]
+      (bt-set! c 3)
+      (println (if (bt-commit-to! inner) 1 0)))  ; 1
+    (println (bt-get c))            ; 3 -- committed writes are kept
+    ;; The outer level must still restore its OWN write. This is the case the
+    ;; `<` in the stamp comparison exists for: the commit left the cell stamped
+    ;; above the current level, and an equality test would re-trail it and then
+    ;; revert a write the caller explicitly asked to keep.
+    (bt-set! c 4)
+    (bt-undo-to! outer)
+    (println (bt-get c))            ; 1
+    (bt-cell-free c)))
+
+;; --- decision 4: a stale mark is DETECTED, not obeyed -------------------------
+;; This is what a re-entered continuation produces -- it captured control, not
+;; state, so it lands in a computation whose trail levels are already gone.
+(defn t-stale-mark [] : void
+  (let [c (bt-cell-new 1)
+        m (bt-mark)]
+    (bt-set! c 2)
+    (println (if (bt-undo-to! m) 1 0))   ; 1 -- the first undo works
+    (println (if (bt-undo-to! m) 1 0))   ; 0 -- the second is refused
+    (println (bt-get c))                 ; 1 -- and changed nothing
+    ;; A later mark REUSES the level index. Comparing indices alone would
+    ;; accept the stale mark here and unwind someone else's level; the
+    ;; generation is what makes the two distinguishable.
+    (let [reused (bt-mark)]
+      (bt-set! c 7)
+      (println (if (bt-undo-to! m) 1 0))       ; 0 -- still refused
+      (println (if (bt-undo-to! reused) 1 0))  ; 1 -- the live one works
+      (println (bt-get c)))                    ; 1
+    (bt-cell-free c)))
+
+;; --- no level: a write with nothing to come back to is not recorded ----------
+(defn t-no-level [] : void
+  (let [c (bt-cell-new 1)]
+    (bt-set! c 2)
+    (println (bt-level))            ; 0
+    (println (bt-depth))            ; 0
+    (println (bt-get c))            ; 2 -- but it still took effect
+    (bt-cell-free c)))
+
+(defn main [] : int
+  (t-value-cell)
+  (t-nesting)
+  (t-stamp)
+  (t-lvar)
+  (t-gcell)
+  (t-untrailed)
+  (t-commit)
+  (t-stale-mark)
+  (t-no-level)
+  0)

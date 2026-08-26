@@ -837,6 +837,44 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     return false;
 }
 
+/* The matched-spec result of a call argument, when that result is a concrete
+ * by-value ADT-app (`(Option int)` -> `tur_adt_Option__int`).
+ *
+ * type_uses_carrier_abi answers FALSE for such a type (emit_core.c:431 -- it is
+ * a concrete aggregate, not a carrier), and BOTH the shared reporters gate on
+ * that predicate: expr_emits_byvalue_carrier_abi's EX_CALL arm and
+ * fn_body_tail_byvalue_carrier_type_inner's.  So a spec-matched by-value-app
+ * argument is invisible to the heap-container-insert bridge below, in the guard
+ * and in the bridge type alike.
+ *
+ * Before nested-monomorph apps lowered by value this was unreachable: a
+ * `(Result (Option int) cstr)` rode the int64 carrier, so `ok-val`'s spec
+ * returned int64 and matched vec-push!'s int64 `val : A` slot with no bridge at
+ * all.  Now the accessor returns the aggregate and the bridge is mandatory.
+ *
+ * Deliberately local rather than folded into either shared predicate: teaching
+ * expr_emits_byvalue_carrier_abi to report these fires the escaping bridge at
+ * every other carrier sink too, which breaks 7 fixtures (list/vec by-value
+ * aggregate elements) by heap-promoting values that were already correct. */
+static bool call_spec_result_byvalue_app(EmitCtx *ctx, const Expr *e, Type *out) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_CALL) return false;
+    /* Only the RETURN-ONLY-POLY shape, whose elab type was collapsed to the
+     * int64 scalar.  An argument whose own type is already the by-value app
+     * (a direct `(some 42)`) reaches the carrier slot through the CONV-S1
+     * boxing block further down and must keep doing so -- routing it through
+     * the escaping bridge instead breaks 7 list/vec element fixtures. */
+    if (e->type.kind != TY_INT) return false;
+    const EmitAbiSpecialization *spec =
+        find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
+    if (!spec) return false;
+    Type sr = emit_resolve_type(ctx, spec->result_type);
+    if (sr.kind != TY_APP || type_is_heap_adt(sr) ||
+        !adt_app_is_byvalue_product(sr)) return false;
+    if (out) *out = sr;
+    return true;
+}
+
 /* CONV-S1/B3: true when `t` resolves to a by-value ADT (a flat aggregate, not the
  * int64 carrier).  Such a value crossing into an int64 carrier field slot (a
  * carrier ADT/GADT constructor field) must be boxed (malloc + copy) on the way in
@@ -6035,6 +6073,54 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (e->as.call_.ctor && i < e->as.call_.ctor->n_fields) {
                         const Type *fft = e->as.call_.ctor->fields[i].full_type;
                         field_is_carrier = fft && fft->kind == TY_TYVAR;
+                        /* closure-in-defdata-field: an OPAQUE field is a carrier
+                         * slot too.  An opaque def "has NO constructors and NO
+                         * fields; it is a named int64_t carrier" (types.h:353) --
+                         * its declared base is erased -- so a `(defopaque Th
+                         * :ptr<void>)` field lowers to int64_t exactly like a
+                         * tyvar one, and a pointer stored into it is the same
+                         * straddle.  Without this an ADT holding a callback (the
+                         * only way to store one -- a `:fn` field segfaults)
+                         * emits C that warns, and tests/run.sh's cc-warning gate
+                         * rejects it.  See
+                         * docs/reported/closure-in-defdata-field.md. */
+                        if (!field_is_carrier && fft) {
+                            Type fr = emit_resolve_type(ctx, *fft);
+                            field_is_carrier = fr.kind == TY_ADT &&
+                                               fr.as.adt_.def &&
+                                               fr.as.adt_.def->is_opaque;
+                        }
+                        /* A BOXED concrete `(fn ...)` field is a carrier slot
+                         * too: resolve_ctor_field boxes fn fields of arity
+                         * <= 4 (storage stays the int64 carrier; only the
+                         * dispatch changes), and the stored value is then a
+                         * fat pointer -- an env block for a capturing
+                         * closure, an EX_FN_TO_FAT shim box for a thin one.
+                         * Same straddle, same missing cast, same
+                         * -Wint-conversion at the ctor call that the
+                         * cc-warning gate rejects. */
+                        if (!field_is_carrier && fft &&
+                            fft->kind == TY_FN && fft->as.fn.boxed &&
+                            /* The fn-field path above may have cast this arg
+                             * already; a second wrap is redundant (and churns
+                             * two snapshots for nothing). */
+                            strncmp(arg_strs[i], "(int64_t)(intptr_t)", 19) != 0)
+                            field_is_carrier = true;
+                        /* A THIN fn field (bare `:fn` -- no signature, so
+                         * full_type is NULL -- or an unboxed >4-arity
+                         * signature) is an int64 slot receiving a bare
+                         * function pointer: a captureless lambda lifts to a
+                         * top-level `__fn_N` and lands here as
+                         * `int64_t (*)()` into `int64_t`, the case-2 warning
+                         * of closure-in-defdata-field.  (A CAPTURING closure
+                         * into such a field is rejected at elaboration, so by
+                         * here the value is a code pointer and the cast is
+                         * honest.) */
+                        if (!field_is_carrier &&
+                            e->as.call_.ctor->fields[i].kind == TY_FN &&
+                            (!fft || (fft->kind == TY_FN && !fft->as.fn.boxed)) &&
+                            strncmp(arg_strs[i], "(int64_t)(intptr_t)", 19) != 0)
+                            field_is_carrier = true;
                     }
                     Type resolved_arg_type = emit_resolve_type(ctx, arg->type);
                     TypeKind rk = resolved_arg_type.kind;
@@ -6049,6 +6135,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                         rk == TY_CONT ||
                                         rk == TY_CLONEABLE_CONT ||
                                         rk == TY_FORALL);
+                    /* A closure argument is pointer-like whatever its TYPE says.
+                     * Ascribed to an opaque it resolves to that opaque (a
+                     * carrier), but it still LOWERS to a pointer -- a lifted
+                     * `__fn_N` when it captures nothing, a `void *` env when it
+                     * does -- so the straddle is real and only the expression
+                     * form reveals it. */
+                    if (!is_ptr_like) {
+                        const Expr *ac = arg;
+                        while (ac && ac->kind == EX_ASCRIBE)
+                            ac = ac->as.ascribe_.inner;
+                        if (ac && ac->kind == EX_CLOSURE) is_ptr_like = true;
+                    }
                     if (!suffix && !field_inline && arg &&
                         (type_is_heap_struct(resolved_arg_type) ||
                          type_is_heap_adt(resolved_arg_type) ||
@@ -6711,8 +6809,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * -Wint-conversion cc error.  A matched concrete spec resolves A
                  * to the element's real C type and keeps its own
                  * (carrier->concrete) bridges, so it is excluded here. */
+                Type spec_byval_ty = type_simple(TY_UNKNOWN, CK_COPY);
+                bool spec_byval =
+                    call_spec_result_byvalue_app(ctx, emit_arg, &spec_byval_ty);
                 if (!needs_fn_cast && fn_binding->type.kind == TY_FN && emit_arg &&
-                    expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
+                    (expr_emits_byvalue_carrier_abi(ctx, emit_arg) || spec_byval)) {
                     uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i
                         : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
@@ -6736,6 +6837,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * temp and copy an `Option__int` into it.  The matched
                          * spec's resolved result is the source of truth. */
                         Type bridge_ty = fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                        if (bridge_ty.kind == TY_UNKNOWN && spec_byval)
+                            bridge_ty = spec_byval_ty;
                         if (bridge_ty.kind == TY_UNKNOWN) bridge_ty = emit_arg->type;
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,
@@ -8165,13 +8268,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * rather than at the record.  The drop glue then casts the cell,
              * reads the pointer bits as `s->tag`, and matches no case -- so the
              * owning fields were never released even once the glue existed.
-             * Adopt the ctor's pointer directly, exactly as the heap case does. */
+             * Adopt the ctor's pointer directly, exactly as the heap case does.
+             *
+             * rc-of-adt-leaks-the-payload: this used to also require
+             * `needs_drop_glue`, which made the fix above apply only to sums
+             * carrying an owning field.  A sum WITHOUT one has the identical
+             * shape -- its ctor mallocs the record and hands back a pointer as
+             * an int64 carrier -- so it kept the wrapper path: cb->value
+             * pointed at an 8-byte cell holding the pointer, the default drop
+             * glue freed that cell, and the record itself was orphaned.
+             * `(rc/of (PA 7))` leaked 16 bytes on every construction.
+             *
+             * Drop glue is not what makes the pointer adoptable; being a boxed
+             * record is.  With the pointer adopted and no explicit glue,
+             * rc_set_value re-derives default_rc_drop_fn, which frees exactly
+             * the record -- and the wrapper allocation disappears with it. */
             bool payload_is_boxed_adt =
                 e->as.rc_of_.expr->type.kind == TY_ADT &&
                 e->as.rc_of_.expr->type.as.adt_.def &&
                 !e->as.rc_of_.expr->type.as.adt_.def->is_heap &&
-                !adt_is_byvalue_product(e->as.rc_of_.expr->type.as.adt_.def) &&
-                e->as.rc_of_.expr->type.as.adt_.def->needs_drop_glue;
+                !adt_is_byvalue_product(e->as.rc_of_.expr->type.as.adt_.def);
 
             char *val_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
@@ -11212,8 +11328,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ctx->indent += 4;
 
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
-                           adt_c_name, adt_c_name, scrut_val);
+                if (adt_byval) {
+                    /* SR1: a by-value multi-variant sum still needs the tag
+                     * test, but the value is an aggregate, not a carrier
+                     * pointer -- casting it trips "aggregate value used where
+                     * an integer was expected".  Bind a pointer to a local
+                     * copy rather than rewriting this arm's ten `__scrut->`
+                     * field reads: the copy has exactly the match's lifetime,
+                     * and every reader below keeps working unchanged.  (The
+                     * if-chain path above already had its own by-value arm;
+                     * only the switch path was carrier-only, because a
+                     * by-value ADT could not previously carry a tag.) */
+                    buf_printf(body, "%s __scrut_v = (%s);\n",
+                               adt_c_name, scrut_val);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s *__scrut = &__scrut_v;\n", adt_c_name);
+                } else {
+                    buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
+                               adt_c_name, adt_c_name, scrut_val);
+                }
                 free(scrut_val);
 
                 indent_buf(body, ctx->indent);
@@ -11251,6 +11384,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         const char *vct = type_c_name(pat->var_binding->type);
                         char *vname = name_for_binding(ctx, pat->var_binding);
                         indent_buf(body, ctx->indent);
+                        if (adt_byval)
+                            /* Copy, never `&__scrut_v`: the binding can outlive
+                             * this arm, and handing out a stack address is the
+                             * dangling-element bug the heap-container inserts
+                             * already have to defend against. */
+                            buf_printf(body, "%s %s = *__scrut;\n", vct, vname);
+                        else
                         buf_printf(body, "%s %s = (%s)(intptr_t)__scrut;\n",
                                    vct, vname, vct);
                         indent_buf(body, ctx->indent);

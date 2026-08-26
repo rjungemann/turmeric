@@ -6,9 +6,44 @@ description: Extending the refinement solver into an incremental, backtracking d
 
 # Solver Extension (SX)
 
-**Status:** proposal, not started. Nothing here is on the critical path to v1;
-the whole of SX is *additive* to a solver that already ships and is already
-sound. Read section 5 for what to do first if only one phase gets built.
+**Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface),
+SX1 (the trail primitive, minus its effect row), SX2 in full (measurement,
+combinators, and the depth-first driver), and SX3 (incremental EUF) have
+landed; everything still open is parked on evidence. SX4 and SX6 are parked on SX0(b)'s
+evidence; SX2's gate came back the other way -- the trail pays for itself, so
+SX3/SX4 should build on it. Nothing here is on the critical path to v1; the whole of SX is
+*additive* to a solver that already ships and is already sound. Read section 5
+for what to do first if only one phase gets built.
+
+**What the measurements changed.** Both SX0 instruments have now run.
+
+SX0(b) exists to gate the two most expensive phases, and it gates them both
+**shut**: neither the arithmetic cap (SX4) nor the cube caps (SX6) fire on any
+of the 411 units swept, and no cap hit anywhere cost a real proof. That removes
+roughly the plan's whole right-hand side from consideration for now.
+
+SX0(a) answers the review's second question and moves a number the design was
+assuming: the DK chain and a ucontext fiber cross at **F ~ 20 frames on
+restore**, not at the hundreds the "small constant beats a real slope" framing
+implied -- and there is no one-shot fast path to fall into, so a search layer
+resuming over more than a shallow slice is on the wrong side of that line
+today. It also found the plan's own `a + b*F + c*E` cost model mis-specified
+for a chain (the env term is per-frame, `c*F*E`).
+
+SX8a has since landed too, so the solver is now answerable from outside the
+compile pipeline (`tur smt`, `--dump-refine=json`) -- which is what every later
+phase's acceptance tests were going to want a door for.
+
+**SX2's driver has now landed too** (`stdlib/backtrack-dfs.tur`; see the
+phase's landing note for what moved and the two compiler bugs the work
+surfaced).  **SX3 has landed** -- one EUF state with mark/undo per cube,
+verdict-identical to the rebuild path, `TUR_REFINE_EUF=rebuild` kept as the
+replay seam.  With those two down, every live phase of this plan is done:
+what remains is parked on evidence (SX4, SX6, and their dependents) or is
+follow-up filed in its own right (`#fx{Bt}` for precision, the self-recursion
+bug below).  Details under
+SX0(a), SX0(b) and SX8a; reproduce the two measurements with
+`benchmarks/run-capture-curve.sh` and `benchmarks/run-cap-sweep.sh`.
 
 ## 0. Provenance
 
@@ -529,6 +564,12 @@ unmeasured number, and it is the number that decides 3.5(b) -- and, per 3.5,
 whether a one-shot fast path needs to exist before any search layer uses
 capture at all.
 
+**Measured (SX0(a)):** the answer is neither 100 nor 10 000 -- it is **about
+20**. Restore costs roughly `36 + 22*F` ns against a fiber's flat 429 ns, so
+the slope starts mattering almost immediately, and the per-resume slope at
+R = 8 is within 1% of R = 1, meaning there is no one-shot fast path today.
+See `benchmarks/capture-curve-results.md`.
+
 ### 4.3 The benchmark, specified
 
 **Independent variables** (sweep each, hold the others fixed):
@@ -583,24 +624,243 @@ you're building it".
 
 Two instruments, no language or runtime change:
 
-- **(a) The capture/restore curve** -- section 4.3, with `T = 0`.
-  Files: `benchmarks/bench-capture-restore.tur`,
-  `benchmarks/run-capture-curve.sh`, `benchmarks/benchmark-results.md`.
-  Accept: the three paths of 4.2 each produce a fitted slope and intercept
-  over `F` and `E`; the table is checked in; a rerun on an idle box reproduces
-  within noise.
-- **(b) Cap-hit telemetry** -- extend `TUR_REFINE_STATS=1` to report *which*
-  cap bit and how often (cubes, cube literals, LA vars, LA constraints, EUF
-  terms, NO shared/rounds), then sweep the corpus, the fuzzer seeds, and the
-  largest in-tree refinement users. This answers 2.1's question -- do
-  path-sensitive VCs with real propositional structure exist yet? -- and gates
-  SX4 and SX6: if `REFINE_MAX_LA_CONSTR` never bites, SX4 waits; if the cube
-  caps never bite, SX6 waits.
+- **(a) The capture/restore curve** -- **LANDED.**
+  `benchmarks/bench-capture-restore.tur` sweeps `F`, `E`, `R` (and carries the
+  `T` column at 0) across all three paths of 4.2;
+  `benchmarks/run-capture-curve.sh` fits each and writes
+  `benchmarks/capture-curve-results.md` plus the raw CSV.
+
+  **Result -- the three paths are the three shapes the literature predicts, and
+  the crossover is much lower than the design assumed.** Measured on a Release
+  build (a sanitized one measures ASan, and the script refuses to publish from
+  one), best of three timed rounds after an untimed warm-up:
+
+  | path | capture | restore |
+  |---|---|---|
+  | DK chain slice | `~23 + 17*F` ns | `~36 + 22*F` ns |
+  | fiber (ucontext) | `~2060` ns, flat | `~429` ns, flat |
+  | cloneable snapshot | `~8 + 0.15*E` ns | `~2` ns |
+
+  Figures are rounded and the results file is the source of truth; across
+  reruns the DK slope moves within about +/-15% and the fiber restore constant
+  within about 1%. The restore crossover below is stable to the frame; the
+  capture crossover is not, because fiber creation is the noisiest thing here.
+
+  1. **The restore crossover is F ~ 20 frames.** A fiber switch costs a flat
+     432 ns; the DK chain costs 41 + 17.2 per frame, so past about twenty
+     frames under the prompt the fiber is cheaper *per resume* -- and the DK
+     path pays that slope on **every** resume, because `dk_invoke` re-copies
+     the chain (`tur_rt_split.c:1461`). The capture crossover is much further
+     out -- F ~ 140-155, and it wanders across reruns -- because a fiber pays
+     for a stack up front. Twenty frames is not a deep stack. Any search layer
+     that resumes repeatedly over more than a shallow slice is on the wrong
+     side of this line today.
+  2. **`R` shows no one-shot optimization exists.** The per-resume *slope* is
+     the same whether a capture is resumed once or eight times -- 22.36 versus
+     22.56 ns/frame on the DK path in the checked-in run, under 1% apart, and
+     the fiber constant likewise (428.8 against 425.2 ns). That is the
+     measurement behind 3.5(b): there is
+     no one-shot fast path to fall into, so if a search layer wants one it has
+     to be built, and the curve says what it would be worth.
+  3. **The plan's own cost model was mis-specified.** Section 4.3 asks for a fit
+     of `a + b*F + c*E`. On a chain that is wrong: `dk_copy_node` fires
+     `env_clone` once per *owning frame*, so the env term is `c*F*E`. Fitting
+     the literal `c*E` produced an intercept of **-1876 ns** -- a constant no
+     mechanism can have -- because the fit had to absorb 4096 frames' worth of
+     64-byte copies into `b`. The results file fits `a + b*F + c*(F*E)` for the
+     chain and `a + c*E` for the (chainless) cloneable path, which is the same
+     formula wherever the two agree.
+  4. **Per-frame cost is flat from F=32 to F=2048 and then steps up ~65% at
+     F=4096** -- a chain that size stops fitting in cache. The fitted `b` is
+     the flat band; past ~2048 frames the real cost is worse than the model.
+
+  Two method notes worth carrying into SX1's `bench-trail-undo`, both of which
+  produced wrong numbers before they were caught: the first pass through any of
+  these paths pays page-fault and allocator-warmup costs that no later pass
+  repeats (an untimed warm-up round moved the first fiber row from 425,346 ns
+  to 3,172 ns), and a baseline whose result is unused is deleted outright -- the
+  closure baseline read 0.33 ns per invocation, *below an empty loop iteration*,
+  until the callee was made opaque to devirtualization.
+
+  **The interpreter row the phase asks for is not obtainable from this
+  benchmark**, and that is a real answer rather than a gap: every timed region
+  is inline C by design, so `tur --interpret` declines the file outright
+  ("inline-C not supported in interpreter mode"). The 3.6 question the
+  interpreter row was meant to settle -- is the tree-walker adequate for a
+  thousands-per-second search layer? -- needs a *Turmeric-level* search
+  benchmark, which is exactly what SX2's `bench-logic-query` and
+  `bench-backtrack-n-queens` are. That row belongs there, not here.
+- **(b) Cap-hit telemetry** -- **LANDED.** `TUR_REFINE_STATS=1` now reports
+  *which* cap bit and how often, plus the high-water mark of the quantity each
+  cap bounds, so a cap that never fires still reports its headroom.
+  `benchmarks/run-cap-sweep.sh` sweeps all three populations the phase asks for
+  and writes `benchmarks/cap-sweep-results.md`.
+
+  **Result -- both gates come back NO.** Across 411 units (124 corpus
+  benchmarks, 87 in-tree refinement fixtures, 200 fuzzer-generated VCs):
+
+  | cap | corpus peak | in-tree peak | fuzzer peak | hits |
+  |---|---:|---:|---:|---|
+  | `REFINE_MAX_LA_CONSTR` (512) | 42 | 12 | 9 | none, anywhere |
+  | FM blow-up (same 512) | -- | -- | -- | none, anywhere |
+  | `REFINE_MAX_CUBES` (64) | 40 | 4 | 8 | none, anywhere |
+  | `REFINE_MAX_CUBE_LITS` (64) | 13 | 10 | 5 | none, anywhere |
+  | `REFINE_MAX_EXPAND_DEPTH` (256) | 8 | 5 | 6 | none, anywhere |
+  | `REFINE_MAX_LA_VARS` (32) | 9 | 9 | 7 | none, anywhere |
+  | `REFINE_MAX_EUF_TERMS` (512) | 512 | 25 | 23 | 982, all on one unit |
+  | `NO_MAX_SHARED` (8) | 9 | 9 | 7 | 4 units, always by exactly 1 |
+  | `NO_MAX_ROUNDS` (4) | -- | -- | -- | none, anywhere |
+
+  Three readings, in descending order of consequence:
+
+  1. **SX4 does not start.** `REFINE_MAX_LA_CONSTR` peaks at 42 of 512 -- 92%
+     headroom on the widest thing in the corpus, 98% on real code -- and the FM
+     elimination never once backed off. The archived plan reserved simplex for
+     "if the cap ever bites"; measured, it does not come close.
+  2. **SX6 does not start.** The cube caps never fire either. The corpus's
+     40-of-64 peak is `gen_mixed_sat_00003`, a generated benchmark; in-tree
+     refinement code peaks at 4 cubes of 64. This is 2.1's question answered
+     directly: path-sensitive VCs with real propositional structure **do not
+     exist in this codebase yet**.
+  3. **Not one cap hit cost a proof.** Every capped unit was one that must
+     answer `UNKNOWN` regardless -- four corpus benchmarks labelled `sat`, and
+     `refine-match-field-wrong`, a soundness fixture whose obligation is a
+     genuine violation. The EUF column's 982 hits are all
+     `qf_lra_deep_arith_chain_sat`, a 1000-deep `(+ 1 (+ 1 ...))` nesting that
+     exists to regress a stack overflow -- an artifact of the regression, not a
+     shape real code produces.
+
+  The one cap with a live signal is `NO_MAX_SHARED`, and it is a small one: it
+  turned away exactly one eligible term on each of four units, and the fuzzer's
+  own peak sits at 7 of 8. That is SX5's "raise on evidence rather than
+  caution" note becoming actionable -- see SX5. **Acted on: raised to 16 on
+  2026-08-25**, so the table above is the pre-raise record; the current
+  telemetry is whatever `benchmarks/run-cap-sweep.sh` last wrote.
 
 **Size:** small. **Gate:** none (benchmarks and stats are not compiler
 features).
 
 ### SX1 -- the trail primitive
+
+**LANDED (partially -- see "what is not here" below).**
+
+`src/runtime/trail.{c,h}` implements all four decisions of 3.2; `stdlib/trail.tur`
+is the surface, behind the `backtrackable-state` experiment; `tests/unit/trail.c`
+is 58 checks at the C level and `tests/fixtures/sx1-trail-basics` is the same
+acceptance list through the language.
+
+**The measurement, which is the phase's real output.** `bench-capture-restore.tur`
+grew the T axis it had been reserving since SX0, so the trail now sits in the
+same table as the three capture paths:
+
+| mechanism | cost per unit of live state |
+|---|---|
+| trail: `bt-mark` + write + `bt-undo-to!` | **~5 ns per write** (flat, T = 8..4096) |
+| DK chain slice: restore | ~23 ns per frame |
+| fiber: restore | 486 ns flat, any depth |
+
+Undoing recorded state is roughly **5x cheaper per unit of live state** than
+replaying captured control -- and unlike a continuation it can be *asymmetric*,
+which is the whole argument of 3.5. A continuation restores everything; a search
+needs to discard what it assumed while keeping what it learned. The constant is
+a nice-to-have; the asymmetry is the reason.
+
+**Design notes worth carrying into SX3/SX4**, all of which cost a bug first:
+
+1. **Ownership is a TRANSFER, not a copy.** Recording moves the cell's reference
+   into the trail entry; undoing moves it back. The first draft cloned at both
+   ends, which leaks exactly one payload per undone write -- invisible until
+   something real is on the other end of the drop hook. The unit test checks a
+   fake refcount to zero rather than leaving it to LeakSanitizer.
+2. **Commit must roll the stamp back, and the first version did not.** This was
+   filed as "the comparison must be `<` not `!=`" and that was wrong -- `<` was
+   a band-aid over a real bug that shipped. A commit left the cell stamped at a
+   level that had been popped; a later mark reuses that index, the stamp already
+   equals the new level, so the write is not trailed and its undo **silently
+   does nothing**. The worst shape a backtracking bug can have: no crash, no
+   error, just a value that quietly fails to come back.
+
+   It surfaced from mutation testing -- flipping `<` to `!=` did not fail the
+   suite, which meant the invariant was not actually pinned, which meant looking
+   at why. The fix is one line in `tur_trail_commit_to` (restore each entry's
+   `old_stamp`), and with stamps kept in range `<` and `!=` become equivalent.
+   `test_commit_then_reused_level` pins it, and is itself mutation-verified to
+   fail without the fix.
+
+   **Method note for SX3/SX4:** the original `test_commit` passed either way,
+   because it undid to the OUTER mark, whose entry restored the right value
+   regardless. A test that exercises a mechanism is not the same as a test that
+   would notice the mechanism breaking.
+3. **`g-set!` is the trail paused, not a second cell representation.** One struct,
+   one set of semantics; the opt-out is the TYPE that reaches it.
+4. **A mark is packed into an int64 at the language boundary**, because
+   `extern-c` can express pointers, ints and bools but not a two-word struct
+   returned by value. The C API keeps the struct.
+
+**What is NOT here, and why:**
+
+- **The `#fx{Bt}` effect row.** Not added -- and **checked 2026-08-26, it is not
+  a soundness prerequisite after all.** The reason it was thought to matter is
+  real in shape: the refinement solver's purity whitelist decides whether two
+  occurrences of a call may be congruence-collapsed, and a function that mutates
+  a trailed cell must not be. This note used to say the hole was merely
+  unreachable "today" for want of callers. Made reachable and measured, the hole
+  **does not exist**:
+
+  ```turmeric
+  (defn tick [c : BtCell] : int
+    (let [v (bt-get c)] (do (bt-set! c (+ v 1)) v)))
+  (defn probe [c : BtCell] : #refine{ r : int | (>= r 0) }
+    (- (tick c) (tick c)))          ; really -1
+  ```
+
+  The solver answers **unknown** and keeps the runtime check, which then fires
+  on the real value. A pure measure in the same unit is still proven, so this is
+  discrimination rather than the solver giving up: `1 proven, 1 unknown`.
+
+  Why: `rt_classify_binding_top` (`elab_fns.c:517`) is a **default-deny** walk,
+  and `bt-set!` is an `extern-c` call it cannot prove pure. So any function
+  touching the trail is at best UNKNOWN by construction, with no annotation.
+  The declared-row veto in the same function is a second line that is never
+  reached here. And `refine_purity` is a memo of that walk, not a user-settable
+  claim, so there is no override to lie with.
+
+  Pinned by `tests/fixtures/sx2-trail-measure-not-congruent`, which asserts the
+  W0372 rather than stdout -- mutation-verified by making the measure pure and
+  watching the fixture fail.
+
+  **What the row would still buy** is precision and documentation, not safety:
+  a way to say "this touches the trail" that is checked, instead of relying on
+  a conservative walk to notice. That is worth having, but it does not gate
+  SX2's engine work, and this phase should stop listing it as a prerequisite.
+
+  The one residual worth knowing: the `#reads`-frame grant
+  (`enc_reads_args_frozen`) *can* hand congruence to an otherwise-impure
+  measure when its named arguments are frozen at the site. That is a
+  user-facing trusted claim and it is the general
+  [trusted-refinement-claims](../upcoming/trusted-refinement-claims-plan.md)
+  problem rather than a trail-specific one, but a trailed cell is exactly the
+  kind of state where a wrong `#reads` frame would cost a check.
+- **The serialization refusal of 3.5.** Not added. Same reasoning: no serializable
+  continuation currently spans a `bt-scope`, because nothing spans one yet.
+- **`bt-scope` / `with-untrailed` as higher-order forms.** The surface ships the
+  bracket halves (`bt-mark` / `bt-undo-to!`, `untrailed-begin` / `untrailed-end`)
+  rather than combinators taking a thunk. The combinators want the effect row to
+  type honestly, so they land with it.
+
+The gate is `EXPERIMENTS[]` row `backtrackable-state`, prototype lifecycle,
+introduced 0.39.0, expires 0.42.0, `opt_global` `g_opt_backtrackable_state`. It
+gates the AUTOLOAD of `stdlib/trail.tur`: with the experiment off the module is
+simply not there and `bt-set!` is an unknown function, which is a more honest
+report than names that exist and refuse to work. `experiment_warn_if_used` fires
+once per compile from the same place.
+
+One bug fixed on the way: `tur_stdlib_prepend_forms` iterated the raw autoload
+array while project mode went through the accessor, so a gated entry was honoured
+in one build mode and silently ignored in the other -- the same program compiling
+two different ways. Both now go through the accessor.
+
+Original specification follows.
 
 - **Do:** `src/runtime/trail.{c,h}` per 3.2, `stdlib/trail.tur` per the surface
   in 3.2, the `#fx{Bt}` effect row, the generational stale-mark error, the
@@ -622,6 +882,156 @@ features).
 
 ### SX2 -- make the stdlib search paths use it
 
+**The gate is answered: the trail pays for itself, decisively.** The measurement
+is `benchmarks/bench-logic-subst.tur`, results in
+`benchmarks/logic-subst-results.md`.
+
+| bindings | persistent ns/op | trailed ns/op | speedup |
+|---:|---:|---:|---:|
+| 1 | 209.5 | 18.7 | 11.2x |
+| 8 | 194.1 | 11.5 | 16.8x |
+| 64 | 369.9 | 20.7 | 17.9x |
+| 512 | 782.2 | 22.7 | 34.4x |
+
+**There is no crossover.** The expectation going in was that a persistent list
+would win at small n -- it is O(1) to extend and free to backtrack -- and lose
+only once its O(n) lookup dominated. It never wins. So the conditional in "why
+it is in this plan at all" resolves the other way: SX3/SX4 **should** build on
+the shared trail rather than proceeding as plain C.
+
+The shape carries a second finding. The persistent path's cost is roughly FLAT
+at ~190-230 ns/op from n=1 to n=16 and only climbs past n=128, so what dominates
+at every size a real query reaches is a large per-operation CONSTANT, not the
+linear scan. That constant is the thing worth attacking in the persistent path,
+and it is not diagnosed here: a microbenchmark that tried to isolate it was
+optimized away entirely -- the same trap as SX0(a)'s closure baseline -- and a
+number from a folded loop is worse than no number. Filed under
+[../reported/solver-hot-structures-linear-scans.md](../reported/solver-hot-structures-linear-scans.md).
+
+**The two benchmarks this phase names do not measure what it needs.** Both
+`bench-logic-query.tur` and `bench-backtrack-n-queens.tur` are self-contained
+inline-C simulations of a backtracking monad; neither loads `stdlib/logic.tur`
+or `stdlib/backtrack.tur`, so "run both paths" on them would have measured a
+hand-written C list against a trail and answered a much kinder question than the
+one asked. `bench-logic-subst.tur` measures `logic.tur`'s REAL `Subst` --
+`SBind`, `logic-walk`, `subst-lookup` -- which is what would actually change.
+
+**What landed:** `tur_uf_*` in `src/runtime/trail.c` -- an indexed, trailed
+variable->term map built on write-once cells, which is also the shape SX3's EUF
+union-find wants -- plus the head-to-head benchmark and its results.
+
+**What did NOT land:** the engine swap itself. Putting the trailed substitution
+behind `logic.tur`'s `Goal`/`Subst` API is not a drop-in: `Subst` is a persistent
+value threaded through a `Stream` monad that FORKS it, and a trail is a stack
+discipline that cannot be forked. That is exactly why the phase also calls for a
+`bt-scope`-bracketed depth-first driver in `stdlib/backtrack.tur` -- the driver
+has to change with the representation. Sequencing it after the measurement was
+deliberate: the plan says not to build it if the trail loses, and until now
+nobody knew. It does not lose, so the driver is the next increment, and it is
+where the `#fx{Bt}` effect row belongs too (see SX1) -- that is the first caller
+the refinement solver's purity whitelist can actually see.
+
+**LANDED 2026-08-26: the driver.** `stdlib/backtrack-dfs.tur` -- CPS goal
+combinators over trailed cells (`dfs-succeed` / `dfs-fail` / `dfs-and` /
+`dfs-or` / `dfs-guard` / `dfs-set` / `dfs-choose-int` / `dfs-solve`), typed
+end to end as `(fn [(fn [] bool)] bool)` per this phase's no-`:int` note.
+Reify-at-success is the API: `dfs-solve`'s `on-solution` runs with bindings
+live and must copy out what it keeps; the whole run is bracketed in
+`bt-scope`, so the fixture pins cells reading their PRE-search values
+afterwards.  It is a sibling file rather than an addition to `backtrack.tur`
+as originally specced, deliberately: the driver references `bt-scope` /
+`bt-set!`, so folding it in would break every `(load "stdlib/backtrack.tur")`
+under the default (experiment-off) configuration.  Fixture: `sx2-dfs-driver`
+(reify+undo, or-ordering, cut, lvar refusal-as-failure).
+
+Two spellings inside the driver are dictated by checkers, worth knowing
+before extending it: the combinators use the `bt-mark`/`bt-undo-to!` HALVES,
+not the `bt-scope` bracket, because wrapping `(g1 k)` in a scope thunk
+CAPTURES `k` and capturing a fat closure moves it (TUR-E0005) -- calling is
+non-consuming, capture is not.  And recursion is written pass-`k`-through
+(`dfs-choose-go`) rather than goal-returning, because of the second bug
+below.
+
+**The head-to-head the phase asked for**
+(`benchmarks/bench-dfs-queens.tur`, results in
+`benchmarks/dfs-queens-results.md`): N-queens on both shipped surfaces.
+**No crossover in range -- the list monad is 4-11% ahead at N=4..7.**  Both
+prior results stand together: the trail's 11-34x was against persistent-state
+LOOKUP; enumeration against the monad's inline-C cell walk is a different
+fight, and the driver pays a fat-dispatch per combinator layer per node.
+What the driver buys is scale and reification: the list path's packed-int
+board is structurally capped at N=7, while the driver runs N=8/9/10 (92 /
+352 / 724 solutions, all matching the known sequence) and reads any
+solution out of live cells.
+
+**Two compiler bugs surfaced by this work, filed:**
+
+- `mbind` called DIRECTLY with a non-capturing lambda segfaults (its untyped
+  `:int` param takes a thin code pointer, its body reads `fat[0]`); the
+  typeclass `bind` path fat-boxes and works, which is why the in-tree corpus
+  never hit it.  Recorded in the benchmark's comments; the benchmark uses
+  `bind`.
+- A SELF-recursive call whose fn-typed result feeds a `^fat` parameter
+  segfaults; the same call through a one-line forwarder works --
+  [self-recursive-fn-returning-call-into-fat-sink](../reported/self-recursive-fn-returning-call-into-fat-sink.md).
+  The natural recursive-combinator shape, so anyone composing goals
+  recursively hits it; the benchmark carries the forwarder workaround.
+
+**A measurement trap, re-learned:** the first Release numbers came from a
+STALE `build-release/tur` predating two landed fixes -- it silently dropped
+the `with-untrailed` call (the statement-position bug) and mis-emitted the
+slab preamble, producing wrong answers fast.  Rebuild Release before
+believing any number from it; the results file carries the warning.
+
+**Corrected 2026-08-26: the row is NOT a prerequisite.** A trail-mutating
+measure is already refused congruence by the default-deny purity walk, with no
+annotation -- measured, and pinned by
+`tests/fixtures/sx2-trail-measure-not-congruent`. See SX1's note for the probe
+and the mechanism. The row remains worth having for precision, but the driver
+no longer waits on it, which removes one of this phase's two coupled pieces.
+
+**Re-checked 2026-08-26, after lazy streams landed in `logic.tur`.** Two of the
+statements above have moved, one helpfully and one not.
+
+**The fork got a shape a trail can use.** The blocker as written is that `Subst`
+is threaded through a `Stream` monad that FORKS it while a trail is a stack
+discipline. `logic.tur` now has `disjoined-dfs` / `st-append-dfs`: depth-first
+*and* lazy, so the left branch is fully exhausted before the right one is
+touched. That is exactly mark / explore / undo-to-mark -- the discipline a trail
+wants -- and it did not exist when this phase was written. The default
+`disjoined` interleaves, which is the *worst* case for a trail (it alternates
+branches, so every alternation would need an undo and a redo), so a trailed
+engine would be built against the dfs pair, not against the default.
+
+**But there is a second obstacle the phase does not name, and it is the harder
+one: solutions ESCAPE the search.** `run-logic` returns a `Stream` of `Subst`
+and the caller reads it afterwards -- `reify-walk` walks a term through
+`(first-state results)` once `run-logic` has already returned. Today that is
+fine: a `Subst` is a persistent `SBind` chain, so it outlives the search that
+built it. Under a trailed union-find the bindings live in cells that backtracking
+UNDOES, so every answer would be empty by the time the caller looked at it.
+
+The standard fix is to reify at success time inside the driver -- copy each
+answer out of the trailed store before backtracking past it -- which changes
+what `run-logic` returns. That is an API change to a shipped module, and it is
+the real reason "put the trailed substitution behind `logic.tur`'s existing
+`Goal`/`Subst` API" is not a drop-in. The phase's own instinct to build the
+driver in `stdlib/backtrack.tur` instead sidesteps it, and on this evidence that
+is the right call.
+
+**Two more things worth knowing before starting:**
+
+- `tur_uf_*` (the piece that DID land) has exactly one caller in the tree:
+  `benchmarks/bench-logic-subst.tur`, via `extern-c`. Nothing in `stdlib/` uses
+  it, so the engine work starts from an unexercised primitive.
+- `stdlib/backtrack.tur` -- where the driver goes -- is written entirely in
+  `:int`: `mplus`, `mbind`, `bt-cons` and `run-backtrack` all take and return
+  `:int` for what are really stream handles. Per CLAUDE.md's no-lazy-`:int`
+  rule the new driver should not extend that, which means the phase carries a
+  typing decision for its own surface that the original spec does not mention.
+
+Original specification follows.
+
 - **Do:** a trailed union-find substitution behind `stdlib/logic.tur`'s existing
   `Goal`/`Subst` API (the persistent path stays as the default until the
   benchmark says otherwise); a `bt-scope`-bracketed depth-first driver in
@@ -635,6 +1045,49 @@ features).
   should proceed as plain C with no shared utility.
 
 ### SX3 -- incremental EUF (S1i)
+
+**LANDED 2026-08-26.** `euf_mark` / `euf_undo_to` over one state, backed by
+`src/compiler/trail_c.h` -- a header-only value trail carrying two lessons
+from the runtime trail rather than relearning them: entries record slot
+INDICES (the arrays are arena-grown, so a trailed pointer can dangle into the
+superseded allocation), and the level counter is MONOTONIC (undo does not roll
+it back; a rolled-back level plus stale-high stamps silently suppresses
+trailing -- the exact bug the runtime trail's commit path shipped).  Every
+`parent[]` write is trailed, path compression included, so the merge history a
+Nieuwenhuis-Oliveras proof forest needs stays recoverable -- the
+representation question this phase was told to keep open.
+
+Both rebuild sites converted: `refine_s1_decide` and `refine_s3_decide` hold
+one state and bracket each cube with mark/undo; each cube still starts from
+the empty partition, so verdicts and cap telemetry are identical to the
+rebuild path by construction.  `LaState` stays per-cube -- making it
+incremental is SX4, which is parked.
+
+**Accepted as specified:** the corpus output is BIT-IDENTICAL between
+`TUR_REFINE_EUF=rebuild` and the incremental default (full-output diff, 138
+lines), all 93 `refine-*` fixtures agree under both modes including
+`TUR_REFINE_STATS` counts, and the full suite is green.  Compile time on the
+widest fixture (`refine-crossing-path-conditions`) is a wash -- 184 vs 189
+ms/check -- which is what the phase predicted: the payoff is the deleted
+per-cube allocation churn, not speed.  Unit tests: `test_euf_mark_undo`,
+mutation-verified against both failure modes (a silently-skipped trail entry,
+and the stale-stamp level reuse), each caught independently.  The first draft
+of the stale-stamp check did NOT catch its mutation -- undo truncated the
+re-registered term, refreshing its stamp -- so the landed test registers its
+probe vars below the marks, which is the only shape the trap actually bites.
+
+Original specification follows; its second-payoff note stands.
+
+**A second reason to want this, measured 2026-08-25.** `no_cube_unsat` calls
+`euf_new` and `la_new` per cube, up to 64 cubes per obligation, all into the
+unit arena and never reclaimed -- ~267 KB of theory state per compile on a
+generated 400-obligation file, and ~613 KB on the heaviest in-tree refinement
+fixture. Replacing the rebuild with mark/undo over one state deletes most of
+that as a side effect. It is not a reason to start SX3 on its own (the number is
+a flat constant, not a growth curve), but it is a real second payoff once the
+phase is taken for its cost argument. A per-entry arena was measured as the
+alternative way to reclaim it and came back NO --
+[per-entry-arena-gate.md](../archive/history/per-entry-arena-gate.md).
 
 - **Do:** extend the `euf_*` seam with `euf_mark` / `euf_undo_to`, backed by
   `src/compiler/trail_c.h` (the C sibling of SX1, same stamp discipline).
@@ -677,6 +1130,12 @@ features).
   deliberately, with simplex reserved for "if the cap ever bites". If the
   telemetry says it does not bite, SX4 is a performance project with no
   user-visible payoff and waits behind SX6a.
+  **Measured: it does not bite.** `REFINE_MAX_LA_CONSTR` peaked at 42 of 512
+  across all three populations and fired zero times; the FM blow-up path never
+  triggered. SX4 is **parked** on this evidence. Re-run
+  `benchmarks/run-cap-sweep.sh` before reconsidering -- the number to watch is
+  the `la_constr` peak, and the thing that would move it is wider arithmetic
+  obligations than anything in the tree today.
 
 ### SX5 -- incremental Nelson-Oppen (S3i)
 
@@ -684,6 +1143,35 @@ features).
   instead of rebuilding both per cube. The exchange loop itself is unchanged.
 - **Accept:** as SX3 -- identical verdicts, lower cost. `NO_MAX_SHARED` and
   `NO_MAX_ROUNDS` can then be raised on evidence rather than caution.
+- **The `NO_MAX_SHARED` raise is DONE** -- 8 -> 16, landed 2026-08-25, ahead of
+  the rest of SX5 and independent of it. SX0(b) found it turning away eligible
+  terms on four units, every time by exactly one (9 eligible against a cap of
+  8), while `NO_MAX_ROUNDS` never ran out anywhere; it was the only cap in the
+  solver with a live signal.
+
+  It was taken with the measurement this bullet asked for rather than as a
+  drive-by, because the cost is real: the exchange is quadratic in the shared
+  set and each `la_entails_eq` runs Fourier-Motzkin twice, so 8 -> 16 is 4x the
+  pair work on every S3 cube, paid by every obligation that reaches S3 rather
+  than only by the ones near the cap.
+
+  **Measured, Release build, before landing:** verdicts identical on all 125
+  corpus benchmarks (per-benchmark diff, not just the totals) and all 89
+  in-tree refinement fixtures; `bash tests/run.sh` unchanged at 2694/0; corpus
+  replay 0.0926s -> 0.0923s and the fixture population 1.566s -> 1.552s, both
+  inside noise. The round budget was not traded into -- the unit that hit the
+  cap now reaches its fixpoint with `NO rounds out 0 (of 4)`. The regenerated
+  `benchmarks/cap-sweep-results.md` shows `no_shared` at **0 hits across all
+  three populations**, 44-56% headroom.
+
+  **It bought headroom, not capability:** all four capped units had to answer
+  `UNKNOWN` regardless, so no verdict moved. Full numbers and method in
+  [../archive/history/no-max-shared-raise.md](../archive/history/no-max-shared-raise.md).
+
+  This leaves S3 with **no cap carrying a live signal**, which removes the one
+  standalone reason to start SX5 early. The rest of SX5 (running the exchange
+  over marked/undoable S1i/S2b states) still trades cost for cost and still
+  waits on SX3/SX4.
 
 ### SX6 -- boolean structure beyond small DNF (S4)
 
@@ -718,6 +1206,11 @@ stepping stone may be where it permanently stops:
 - **Gate:** `EXPERIMENTS[]` row `solver-lazy-smt` while in flux; graduation
   deletes the row per the project rule. Gate on *starting*: SX0(b) shows the
   cube caps biting on real obligations.
+  **Measured: they do not.** Zero cube-cap hits across all three populations;
+  in-tree refinement code peaks at 4 cubes of 64. SX6 is **parked**, and SX6b
+  is parked behind it. The step-zero item above (streaming cubes off an
+  explicit stack) is still a fine cleanup on its own merits, but it is now a
+  cleanup rather than a cap-driven necessity.
 
 **SX6b -- CDCL(T) proper.** Only if SX6a's blocking-clause loop measurably
 thrashes (many iterations rediscovering the same theory conflict) on real
@@ -762,8 +1255,67 @@ complete SMT-LIB2 reader *in* (s-expr parser, term builder onto `RefineVC`,
 `:status` handling) that today only the ctest harness can invoke. SX8 is
 mostly relocation and plumbing, in three tiers that ride the other phases:
 
-**SX8a -- `tur smt` (batch CLI) and the JSON obligation dump.** Independent of
-everything else; can land right after SX0.
+**SX8a -- `tur smt` (batch CLI) and the JSON obligation dump. LANDED.**
+
+Both halves shipped, and the loop between them closes: a compile emits each
+obligation's VC as SMT-LIB2 text, and that text feeds straight back into
+`tur smt` and reaches the same verdict via the same stage. That round trip is
+pinned by a fixture, and it is the two-way differential-testing door the tier
+existed for -- an external harness can now drive any solver against `tur` in
+both directions without `tur` linking one.
+
+What landed:
+
+- **The reader moved.** The s-expr parser, term builder and `:status` handling
+  are out of `tests/unit/refine_corpus.c` and into
+  `src/compiler/refine_smtlib.c`, which is now the whole SMT-LIB2 seam in both
+  directions (`refine_smtlib_read` / `refine_smtlib_emit`). The corpus harness
+  shrank to what it always was underneath -- fork-per-benchmark isolation, the
+  label check, the time budget, the tally -- and replays bit-identically: 125
+  benchmarks, 68 proved, 56 sat-correct, 1 skipped, 0 soundness failures.
+- **`tur smt <file.smt2>`** runs the standard S0-S3 chain and prints
+  `sat` / `unsat` / `unknown`, the deciding stage, and the model when the
+  bounded search finds one. Exit codes mirror the answer (0 unsat, 1 sat,
+  2 unknown, 3 error) so a shell harness branches on `$?` without parsing
+  stdout -- deliberately not the 0-is-success convention, because `unsat` is an
+  answer rather than a success.
+- **`--dump-refine=json`** emits one record per obligation: location,
+  predicate as written, verdict, deciding stage, memo hit, counterexample,
+  the replayable `vc_smtlib`, and the caps that bit *for that obligation*.
+  It is stripped in the global argv pre-pass, so it works on `check` as well
+  as `emit-c` -- the records come from the elaboration both share, and forcing
+  a codegen run to read a report would be the wrong shape.
+
+**Acceptance, checked:** the corpus replay expressed as 125 `tur smt`
+invocations agrees with the ctest harness -- 124 agree, 1 refused as outside
+the fragment (the same one the harness skips), 0 soundness failures, 0
+disagreements. The JSON round-trips through `python3 -m json.tool`. Both are
+exercised by fixtures (`sx8a-tur-smt`, `sx8a-refine-json-dump`).
+
+**Two things the tier turned up that the plan should carry forward:**
+
+1. **The per-obligation cap deltas are new machinery, not a re-read.** SX0(b)'s
+   counters are a per-compile summary, so "which obligation hit the cube cap"
+   is not recoverable from them -- each obligation now snapshots and subtracts
+   around its own decision. That is what lets a record say `caps_hit: {cubes: 4}`
+   next to `verdict: unknown`, which is the single most useful pairing in the
+   dump and exactly what SX6's gate would want per-site evidence from.
+2. **`decided_by` had to be recorded, not derived.** Nothing on the obligation
+   said which stage answered; the chain loop now names it. `tur smt` reports
+   the same string, which is why a replayed VC can be checked for reaching the
+   same verdict *the same way* rather than merely the same answer.
+
+**Deferred within the tier, deliberately:** the record carries the predicate as
+written and the VC as SMT-LIB2, but not a separate rendering of the hypotheses
+-- the SMT-LIB text already states them precisely and a second, prettier copy
+would be a second thing to keep true. `help:` hints are likewise not in the
+record: they are generated during diagnostic emission for obligations that
+report, and plumbing them into every record is SX8b-shaped work with no
+consumer yet.
+
+Original specification follows.
+
+Independent of everything else; can land right after SX0.
 
 - `tur smt <file.smt2>`: lift the corpus harness's reader out of `tests/unit/`
   into `src/compiler/refine_smtlib.c` (making that file the reader *and*
@@ -845,23 +1397,40 @@ one dishonest failure mode a query surface can have.
 This mirrors the review's own next-steps list, with the interrogation
 surface slotted where it is cheapest:
 
-1. **SX0**, both instruments -- the telemetry and the curve are the decision
-   data for everything below, and cost days.
-2. **SX8a alongside or immediately after SX0** -- it shares SX0(b)'s
-   emitter, costs little (the SMT-LIB reader already exists in
-   `tests/unit/refine_corpus.c`), and every phase after it gets a public
-   query door for its acceptance tests plus two-way differential testing
-   against external solvers.
-3. **SX1, then SX2** -- answers the opt-out question with a shipped design
-   instead of a promise, and immediately tests whether the primitive pays for
-   itself on the stdlib search paths.
-4. **If SX0(b) says the cube caps bite: SX6a** -- offline lazy SMT needs no
-   incremental theories, so it can leapfrog SX3-SX5 entirely.
-5. **SX3-SX5** when SX6b or measured compile-time cost justifies them; SX4
-   only if its own cap bites. SX8b rides whichever of SX3/SX4 lands first.
+1. ~~**SX0**, both instruments~~ -- **both done.** (b) reshaped items 4 and 5
+   below; (a) supplied the crossover SX1's design turns on, and its two method
+   traps (untimed warm-up, and a baseline the optimizer deletes) carry straight
+   into SX1's `bench-trail-undo`.
+2. ~~**SX8a alongside or immediately after SX0**~~ -- **done.** Every phase
+   after it now has a public query door for its acceptance tests, plus two-way
+   differential testing against external solvers. SX3/SX4's "identical
+   verdicts" criteria can be checked through `tur smt` rather than only through
+   the ctest harness, and SX6's gate can read per-obligation cap attribution
+   out of the JSON dump.
+3. ~~**SX1**~~, **then SX2** (re-checked 2026-08-26: the fork now has a
+   trail-shaped variant in `disjoined-dfs`, but answers escaping the search is a
+   second obstacle the phase never named -- see SX2) -- SX1 answered the opt-out question with a shipped
+   design instead of a promise: three granularities, and a measurement showing
+   record-and-undo is ~5x cheaper per unit of state than capture-and-restore.
+   **SX2 is now the live phase**, and it is the honest test -- if a trailed
+   union-find does not beat a persistent assoc list on `bench-logic-query`, the
+   primitive is not paying for itself. SX2 is also what should carry the
+   `#fx{Bt}` effect row, since it brings the first caller the solver's purity
+   whitelist can actually see.
+4. ~~**If SX0(b) says the cube caps bite: SX6a**~~ -- **it says they do not.**
+   Parked; revisit only if a later sweep moves the cube peaks off the floor.
+5. ~~**SX3-SX5**~~ -- SX4 is **parked** on its own gate (the LA cap does not
+   bite). SX3/SX5 were never cap-gated -- they trade cost, not answers -- so
+   they stay available, but with SX6b parked behind SX4 there is no longer a
+   consumer pulling them forward; take them only if measured compile time asks.
+   The one exception worth doing on its own was the `NO_MAX_SHARED` raise
+   SX0(b) turned up, and it is now **done** (8 -> 16, no verdict moved, no
+   measurable cost; see SX5). No cap in the solver carries a live signal any
+   more.
 6. **SX7 prototype in Turmeric early**, via the SX8c seam (it needs only
    SX4's seam or even today's S2 for a first cut against the corpus), C port
-   last or never. **SX6b** last of all, and only if SX6a thrashes.
+   last or never. **SX6b** last of all, and only if SX6a thrashes -- which now
+   requires SX6a to exist first, which requires its own gate to reopen.
 
 ## 6. Explicitly not doing
 

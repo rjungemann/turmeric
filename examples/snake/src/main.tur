@@ -161,7 +161,7 @@
 ;; ============================================================
 ;; Entry point
 ;; ============================================================
-(defn -main [] : int
+(defn main [] : int
   (tur-init-window WIN_W WIN_H "Turmeric Snake")
   (defer (tur-close-window))        ;; always close window on exit
   (tur-set-fps 60)

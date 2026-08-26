@@ -879,9 +879,26 @@ Expr *elab_let(Elab *e, const Form *call) {
          * TUR-E0201) apply.  This makes hand-annotating ^unique unnecessary in
          * the common "let-bind a unique factory result" shape.
          *
-         * A borrowed ref obtained from `ref/from-rc` shares the rc's payload and
-         * is intentionally excluded -- it is a non-owning view, not a unique
-         * owner, and marking it unique would reject legitimate re-reads. */
+         * A ref obtained from `ref/from-rc` is excluded.  The original reason
+         * given -- "it shares the rc's payload ... a non-owning view, not a
+         * unique owner" -- is FALSE: tur_ref_from_rc destroys the control block
+         * and hands the payload over, so the ref is its sole owner.  Believing
+         * otherwise at the sibling site suppressed the scope-exit auto-drop and
+         * leaked the payload (fixed; see
+         * docs/archive/history/ref-from-rc-orphans-the-payload.md).
+         *
+         * The exclusion is kept here anyway, and the stated cost -- "marking it
+         * unique would reject legitimate re-reads" -- is also wrong: a re-read
+         * is already rejected as use-after-move (TUR-E0005), uniqueness or not.
+         * It is kept because removing it is not currently observable. Checked:
+         * the full suite is 2694/0 either way, aliasing is caught by
+         * move-checking with or without it, an explicit `(drop! r)` does not
+         * double-free, and a `^unique ^mut` parameter accepts the ref both
+         * ways.  `type_ref` sets CK_UNIQUE, so the branch IS reachable -- the
+         * binding simply disagrees with its own type's copy_kind.  Since
+         * `is_unique` only gates additional alias diagnostics, the exclusion
+         * can at worst MISS a diagnostic, never invent one.  Left as-is rather
+         * than changed on a premise nobody can currently test. */
         if (!is_unique_ann && !b->is_unique &&
             ty_is_unique(init->type) &&
             init->kind != EX_REF_FROM_RC) {
@@ -1045,12 +1062,21 @@ Expr *elab_let(Elab *e, const Form *call) {
             }
         }
         
-        /* Theme 1: mark a ref obtained from `ref/from-rc` as non-owning so
-         * elab_deref leaves its deref consuming (it shares the rc payload and
-         * cannot auto-drop -- see Binding.is_nonowning_ref). */
-        if (b->type.kind == TY_REF && init && init->kind == EX_REF_FROM_RC) {
-            b->is_nonowning_ref = true;
-        }
+        /* A `ref/from-rc` result used to be marked is_nonowning_ref here, on the
+         * reasoning that it "shares the rc payload and cannot auto-drop".  The
+         * runtime contract is the opposite: rc.h documents tur_ref_from_rc as
+         * DESTROYING the control block, and its body nulls `cb->value` before
+         * `free(cb)`, so the payload survives with the returned ref as its only
+         * owner.  Nothing shared it and nothing freed it --
+         * docs/reported/rc-ref-conversion-and-weak-upgrade-leak.md.
+         *
+         * It is therefore an ordinary owning ref, exactly like a fresh
+         * `(ref ...)`: deref is non-consuming and the scope-exit auto-drop
+         * below discharges the obligation.  The fixture guarding this path says
+         * the same thing in its own header -- "ownership transfers to the
+         * caller ... the caller owns the resulting ref" -- and what it asserts
+         * is that the CONSUMED rc gets no auto-drop, which is a different
+         * binding and still holds. */
 
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
@@ -1066,11 +1092,27 @@ Expr *elab_let(Elab *e, const Form *call) {
      * where the elaborated body is available; here we only decide whether to
      * wrap the body in a `do` so defers can be appended, so over-detecting a
      * ref that ends up not needing a drop is harmless (n_refs == 0 -> no-op). */
+    /* `(upgrade w)` returns its option<rc<T>> as a heap box minted in EMIT
+     * (emit_expr.c EX_WEAK_UPGRADE) and typed `ptr<void>`, so no binding owned
+     * it and nothing freed it -- bug 2 of
+     * docs/reported/rc-ref-conversion-and-weak-upgrade-leak.md.
+     *
+     * It cannot be typed `ref<...>` instead (that is the obvious fix and it
+     * fails): every consumer takes the result as a `ptr<void>` parameter, and
+     * `ref<ptr<void>>` does not coerce to one -- all five in-tree callers get
+     * TUR-E0001.  So the binding keeps its `ptr<void>` type and the ownership
+     * is keyed on the INIT instead.  The disposal is the same `drop!` builtin
+     * the ref path uses, which is BS_PREFIX_UNARY_FREE -- it emits a plain
+     * `free`, which is exactly right for this malloc.  (The "drop! requires
+     * ref<T>" check lives in elab_drop, the surface form; building the builtin
+     * directly here bypasses it, which is what makes this work.) */
+    #define binding_owns_upgrade_box(bp) \
+        ((bp)->init && (bp)->init->kind == EX_WEAK_UPGRADE)
+
     bool has_ref_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
-        /* Skip refs that come from ref/from-rc - they don't own the data */
-        if (binds[k].binding->type.kind == TY_REF &&
-            binds[k].init->kind != EX_REF_FROM_RC) {
+        if (binds[k].binding->type.kind == TY_REF ||
+            binding_owns_upgrade_box(&binds[k])) {
             has_ref_bindings = true;
             break;
         }
@@ -1171,14 +1213,24 @@ Expr *elab_let(Elab *e, const Form *call) {
             /* First, collect all ref binding names that need drops (excluding moved ones) */
             uint32_t n_refs = 0;
             for (uint32_t k = 0; k < n_binds; k++) {
-                /* Skip refs that come from ref/from-rc - they don't own the data */
                 /* Skip refs that were moved during init or body elaboration - avoid use-after-move defer */
                 /* Theme 1: a linear ref consumed by a non-drop path (e.g. `(return r)`
                  * or a tail move) has is_linear_consumed set and must NOT also auto-drop
                  * -- that would double-free / free an escaping ref.  A deref'd ref has
-                 * been un-marked (see elab_deref) so it still auto-drops here. */
-                if (binds[k].binding->type.kind == TY_REF &&
-                    binds[k].init->kind != EX_REF_FROM_RC &&
+                 * been un-marked (see elab_deref) so it still auto-drops here.
+                 *
+                 * `ref/from-rc` results USED to be excluded here, on the reasoning
+                 * that "they don't own the data".  That is backwards: rc.h documents
+                 * tur_ref_from_rc as destroying the control block, and its body nulls
+                 * `cb->value` before `free(cb)` -- so the payload survives and the
+                 * returned ref is its only owner.  Excluding it meant nothing ever
+                 * freed the payload (rc-ref-conversion-and-weak-upgrade-leak).  The
+                 * fixture guarding this path agrees in its own header: "ownership
+                 * transfers to the caller ... the caller owns the resulting ref" --
+                 * what it asserts is that the consumed RC gets no auto-drop, which is
+                 * a different binding and still holds. */
+                if ((binds[k].binding->type.kind == TY_REF ||
+                     binding_owns_upgrade_box(&binds[k])) &&
                     !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&
                     !binds[k].binding->is_linear_consumed &&
@@ -1211,11 +1263,11 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * what we want for scope-exit behavior. */
                 uint32_t defer_idx = body->as.do_.n;
                 for (uint32_t k = 0; k < n_binds; k++) {
-                    /* Skip refs that come from ref/from-rc - they don't own the data */
                     /* Skip refs moved during init or body elaboration - avoid use-after-move defer */
-                    /* Theme 1: mirror the count-loop guard (see above). */
-                    if (binds[k].binding->type.kind == TY_REF &&
-                        binds[k].init->kind != EX_REF_FROM_RC &&
+                    /* Theme 1: mirror the count-loop guard (see above), including the
+                     * dropped ref/from-rc exclusion. */
+                    if ((binds[k].binding->type.kind == TY_REF ||
+                         binding_owns_upgrade_box(&binds[k])) &&
                         !binding_moved_during_init[k] &&
                         !binds[k].binding->is_moved &&
                         !binds[k].binding->is_linear_consumed &&

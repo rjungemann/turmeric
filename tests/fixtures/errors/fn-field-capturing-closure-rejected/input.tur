@@ -1,0 +1,11 @@
+;; A capturing closure stored into a bare `:fn` field used to compile clean and
+;; SIGSEGV at force time -- the field has no signature to box, so the store
+;; stays on the thin function-pointer path and the force jumps into the env
+;; block as code.  The store is now rejected at elaboration.
+;; See docs/archive/closure-in-defdata-field.md.
+(defdata S :copy (SNil) (SInc :fn))
+
+(defn main [] : int
+  (let [n 7]
+    (SInc (fn [] n)))
+  0)

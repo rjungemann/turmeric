@@ -2,6 +2,8 @@
 
 #include "diag.h"
 #include "reader.h"
+#include "runtime/experiments.h"
+#include "runtime/globals.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,8 +50,29 @@ static const char *const autoload_files_[] = {
     NULL
 };
 
+/* SX1 (solver-extension-plan): stdlib/trail.tur is auto-loaded ONLY when the
+ * `backtrackable-state` experiment is on.
+ *
+ * This is where the gate belongs for an experimental stdlib module.  Gating a
+ * call site would mean the names exist and then refuse to work; gating the
+ * autoload means that with the experiment off the module is simply not there,
+ * and `bt-set!` is an unknown function like any other -- which is the honest
+ * report.  With it on, the lifecycle warning fires once per compile, from the
+ * one place that knows the feature was actually pulled in.
+ *
+ * The copy is rebuilt per call rather than cached: `tur repl` and the test
+ * harnesses flip experiment bits between compiles in one process, and a cached
+ * list would serve the first compile's answer to the second. */
 const char *const *tur_stdlib_autoload_files(void) {
-    return autoload_files_;
+    if (!g_opt_backtrackable_state) return autoload_files_;
+
+    static const char *gated_[sizeof(autoload_files_) / sizeof(autoload_files_[0]) + 1];
+    size_t n = 0;
+    for (; autoload_files_[n]; n++) gated_[n] = autoload_files_[n];
+    gated_[n++] = "trail.tur";
+    gated_[n]   = NULL;
+    experiment_warn_if_used("backtrackable-state");
+    return gated_;
 }
 
 static const char *basename_of(const char *path) {
@@ -90,11 +113,17 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
                                   uint8_t *file_id_in_out) {
     if (!stdlib_dir || !*stdlib_dir) stdlib_dir = "stdlib";
 
+    /* Through the accessor, not the raw array: that is where the SX1
+     * experiment gate adds trail.tur, and reading `autoload_files_` directly
+     * here meant the single-file path silently ignored it while project mode
+     * honoured it -- the same program compiling two different ways. */
+    const char *const *files = tur_stdlib_autoload_files();
+
     int no_stdlib_skip_from = -1;
     if (no_auto_stdlib) {
         const char *input_base = basename_of(entry_path);
-        for (int j = 0; autoload_files_[j] != NULL; j++) {
-            if (strcmp(input_base, autoload_files_[j]) == 0) {
+        for (int j = 0; files[j] != NULL; j++) {
+            if (strcmp(input_base, files[j]) == 0) {
                 no_stdlib_skip_from = j;
                 break;
             }
@@ -103,14 +132,14 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
 
     uint32_t total = 0;
     Form **all = NULL;
-    for (int i = 0; autoload_files_[i] != NULL; i++) {
+    for (int i = 0; files[i] != NULL; i++) {
         if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from) continue;
         char path_buf[4096];
         int pn = snprintf(path_buf, sizeof(path_buf), "%s/%s",
-                          stdlib_dir, autoload_files_[i]);
+                          stdlib_dir, files[i]);
         if (pn < 0 || (size_t)pn >= sizeof(path_buf)) {
             fprintf(stderr, "tur: stdlib path too long for '%s' (dir='%s')\n",
-                    autoload_files_[i], stdlib_dir);
+                    files[i], stdlib_dir);
             continue;
         }
         char *stdlib_src = NULL;

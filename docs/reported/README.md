@@ -916,6 +916,108 @@ clean corpus -- which is how two passes of the original sweep produced a false
 zero. Per-platform wording is deliberately still open; the self-test is what
 will report it on a clang or Windows leg.
 
+## Allocation and memory-checking (filed 2026-08-22)
+
+Reports from one thread of work: measuring the refinement solver's cost led
+into how the compiler allocates, which led into what the test suite can
+actually see. They are best read in that order -- each one is why the next was
+found. The last two arrived later, from the same thread continuing: the
+`-main` fix left a coverage hole behind it, and the `NO_MAX_SHARED` raise
+turned up a defect in the instrument that would have justified it.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: reclamation 2.6x, by-value 1.8x, both 18x. The slab allocator (2.1x measured in-compiler) is **shelved** -- it needs a whole-program escape pass to be safe at all, and reclamation measures better without one |
+| [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
+| [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
+| [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
+| [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
+| [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
+| [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | `tests/run.sh` gained a gate for UBSan findings from the compiler and it is verified in both directions, but nothing sets `TUR_SANITIZER_GATE=1`, so CI runs unarmed. Not a pure flag flip: the zero-finding count was measured on Linux only, and UBSan findings vary by toolchain |
+| [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
+
+`compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/compiled-fixtures-are-not-leak-checked.md). Its two
+"still open" follow-ups had both landed in `3c457e92` without the report being
+updated: the opt-in set went from 2 fixtures to **54**, and the gate is wired to
+ctest as `tur_leak_check`. It had also been held back on the grounds that one
+leak is still marked known -- but that leak is
+[inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md)'s to
+carry, and removing the marker is row 2 of
+[workarounds-to-remove](workarounds-to-remove.md).
+
+`logic-streams-are-strict` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/logic-streams-are-strict.md): `stdlib/logic.tur`
+gained immature streams and a `zzz` delay macro, so a relation with infinitely
+many solutions is now expressible and `run-logic n` costs n solutions rather
+than the whole search. Landing it needed a codegen fix first; the plan is in
+[docs/archive/lazy-streams-plan.md](../archive/lazy-streams-plan.md).
+
+`fat_captures_borrowed` was found being read out of uninitialized arena memory
+and fixed the same day; 60 in-tree fixtures had been tripping UBSan on every
+suite run without anything failing, because UBSan here prints and continues.
+Paper trail:
+[docs/archive/history/](../archive/history/fat-captures-borrowed-read-uninitialized.md).
+
+`dash-main-entry-point-never-invoked` was resolved 2026-08-25 and moved to
+[docs/archive/](../archive/dash-main-entry-point-never-invoked.md): both
+examples' entries renamed `-main` -> `main` and the snake tutorial corrected, so
+the documented entry point is now the one the compiler calls. Its residue is
+open as [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) --
+nothing exercises `examples/` and nothing diagnoses a build with no entry point,
+which is why it survived as long as it did.
+
+`self-recursive-fn-returning-call-into-fat-sink` was resolved 2026-08-27 and
+moved to [docs/archive/](../archive/self-recursive-fn-returning-call-into-fat-sink.md):
+the stage-2 fat-result marking is now forwarded to the recursion binding
+before the body elaborates, so a self-call sees what a fresh caller sees. The
+same session retyped `backtrack.tur`'s `mbind`/`fresh` continuations `^fat`,
+turning the documented "must be a fat closure" convention into a compiler
+guarantee (a captureless lambda used to cross thin and be executed as data).
+
+`closure-in-defdata-field` was resolved 2026-08-26 (all three cases) and moved
+to [docs/archive/](../archive/closure-in-defdata-field.md). Capturing closures
+in spelled-out fn fields work at arity 0..4 in both containers (two staleness
+bugs: arity-0 excluded from boxing, match-arm extraction not consulting
+boxedness); thin `:fn` / >4-arity fields reject a capturing store instead of
+segfaulting.
+
+`poly-call-in-statement-position-dropped` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/poly-call-in-statement-position-dropped.md).
+`emit_stmt` treated four pure WRAPPER nodes (reinterpret/cast/ascribe/poly-wrap)
+as emit-nothing, deleting the wrapped call; they now delegate to the inner
+expression. The pinning fixture is green and the `with-untrailed` workarounds
+are reverted.
+
+`rc-ref-conversion-and-weak-upgrade-leak` was resolved 2026-08-23 and moved to
+[docs/archive/](../archive/rc-ref-conversion-and-weak-upgrade-leak.md). Its
+residue -- an Option built inside inline C -- is open as
+`inline-c-option-carrier-box-leaks` above.
+
+`byvalue-adt-app-rejects-nested-monomorphs` was filed and resolved on
+2026-08-22 and moved to
+[docs/archive/](../archive/byvalue-adt-app-rejects-nested-monomorphs.md);
+`option<list<int>>` and `result<vec<T>,cstr>` now lower by value.
+
+`rc-of-adt-leaks-the-payload` was resolved 2026-08-22 and moved to
+[docs/archive](../archive/rc-of-adt-leaks-the-payload.md): one over-narrow
+condition in `emit_expr.c` (the pointer-adoption path was gated on
+`needs_drop_glue`), and both the leak and the redundant allocation went with it.
+Its predicted coupling to the slab allocator was then confirmed -- with the leak
+fixed and the slab on, ASan reports `attempting free on address which was not
+malloc()-ed`, so that blocker got worse, not better. That is what led to the
+slab being **shelved** on 2026-08-25: fixing it needs a whole-program escape
+pass, which removes the "no ownership analysis" advantage that was its entire
+case over plain reclamation -- and reclamation measures better anyway. Decision
+record in the allocation report.
+
+Two of the remaining three were filed with claims that later measurement overturned, and both
+say so in place rather than having been quietly edited: an "8x degradation with
+heap size" that was an artifact of measuring cumulative passes in one process,
+and a "by-value lowering is highest leverage by a wide margin" that pricing
+reduced to 1.8x. Read the "Withdrawn" and "corrects this report's original
+advice" notes before acting on either.
+
 ## Documentation output (filed 2026-08-26)
 
 Two findings from building the docs pack (OD1,

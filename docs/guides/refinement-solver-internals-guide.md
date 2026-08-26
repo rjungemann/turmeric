@@ -474,17 +474,27 @@ Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
 | `REFINE_MAX_LA_VARS` | 32 | linear-arithmetic variables |
 | `REFINE_MAX_LA_CONSTR` | 512 | linear-arithmetic constraints |
 | `REFINE_MAX_EUF_TERMS` | 512 | congruence-closure terms |
+| `NO_MAX_SHARED` | 8 | terms in the S3 equality exchange |
+| `NO_MAX_ROUNDS` | 4 | S3 exchange rounds before giving up |
 | `MODEL_MAX_VARS` | 3 | counterexample-search variables |
 | `MODEL_MAX_CANDS` | 16 | counterexample candidate values |
+
+Every cap except the two `MODEL_MAX_*` ones is counted at runtime under
+`TUR_REFINE_STATS=1` -- see "Reading the cap lines" below.
 
 ---
 
 ## Debugging
 
 ```sh
-# Per-unit stats: how many obligations were proven / refuted / unknown.
+# Per-unit stats: how many obligations were proven / refuted / unknown, then
+# one line per cap with the run's high-water mark against the limit.
 TUR_REFINE_STATS=1 tur build main.tur
 # refine: 3 obligation(s): 2 proven, 0 refuted, 1 unknown (7 backend call(s))
+# refine: caps (none hit)
+# refine:   cubes           peak      4 / 64
+# refine:   cube literals   peak      7 / 64
+# ...
 
 # Dump each VC as SMT-LIB2 (the refutation form shown earlier).
 TUR_REFINE_DUMP=1 tur emit-c main.tur
@@ -493,6 +503,96 @@ TUR_REFINE_DUMP=1 tur emit-c main.tur
 # elided and every refinement keeps its runtime check.
 TUR_REFINE_NO_DISCHARGE=1 tur build main.tur
 ```
+
+### Reading the cap lines
+
+Every cap in the table above degrades to `RT_UNKNOWN` when it bites, which is
+sound but **silent**: from the outside, an obligation the solver capped out on
+and one that was simply never in its competence produce the identical
+"unknown" tally. The cap lines separate the two. A cap that fired is marked
+`** HIT`, and the summary line says whether anything fired at all.
+
+The `peak` is recorded on **every** query, not only on the ones that overflow,
+so a cap that never fires still reports how much headroom was left --
+`cubes peak 3 / 64` and `cubes peak 61 / 64` are the same zero-hit summary and
+completely different signals about whether the next slightly wider function
+falls off the cliff.
+
+Two counters have no peak of their own: `FM blow-ups` counts the times
+Fourier-Motzkin elimination backed off before growing past
+`REFINE_MAX_LA_CONSTR` (distinct from the constraint adder hitting the same
+limit -- different causes, different fixes), and `NO rounds out` counts the
+times the Nelson-Oppen exchange was still learning equalities when its round
+budget ran out.
+
+A hit is not an error. It is lost completeness, and only lost completeness that
+costs a real proof is worth acting on -- a cap that fires on an obligation
+which had to answer `UNKNOWN` anyway cost nothing.
+
+To sweep this across the corpus, the in-tree refinement fixtures and the
+fuzzer's own generated VCs in one go, run
+[`benchmarks/run-cap-sweep.sh`](../../benchmarks/run-cap-sweep.sh); it writes a
+per-population table to `benchmarks/cap-sweep-results.md`. The corpus harness
+emits its own machine-readable per-benchmark line under `TUR_CORPUS_CAPS=1`
+(aggregation lives in the sweep script because each benchmark is decided in a
+forked child). The current numbers, and what they say about which solver
+extensions are worth building, are in
+[../upcoming/solver-extension-plan.md](../upcoming/solver-extension-plan.md)
+under SX0(b).
+
+### Asking the solver directly -- `tur smt` and `--dump-refine=json`
+
+Both of these exist so the solver can be interrogated from *outside* a compile.
+
+```sh
+# Run an SMT-LIB2 script through the standard S0-S3 chain.
+tur smt query.smt2
+# unsat
+# (stderr) tur smt: decided by S2 (arithmetic)
+
+# One JSON record per refinement obligation in a unit.
+tur check --dump-refine=json main.tur
+```
+
+`tur smt` accepts the **corpus subset** of SMT-LIB2 over `QF_UFLIA` /
+`QF_UFLRA`. A script using anything outside that fragment is refused **whole**,
+never partially parsed -- a partly-read assertion set has weaker hypotheses
+than the script wrote, so answering `unsat` from it would be a claim about work
+that was not done. `unknown` is a first-class answer, and parity with a
+production SMT solver is a non-goal.
+
+Its exit codes mirror the answer so a shell harness can branch on `$?` without
+parsing stdout. They are deliberately **not** the 0-is-success convention --
+`unsat` is an answer, not a success, and `sat` is not a failure:
+
+| code | meaning |
+|---:|---|
+| 0 | `unsat` -- the assertion set is contradictory (proved) |
+| 1 | `sat` -- a model was found |
+| 2 | `unknown` -- no stage decided it |
+| 3 | error -- unreadable, or outside the accepted fragment |
+
+The JSON dump carries, per obligation: source location, the predicate as
+written, the verdict, which stage decided it, whether the RT7 memo answered it,
+the counterexample when there was one, which caps bit **for that obligation**,
+and `vc_smtlib` -- the VC in the refutation form the stages actually decide.
+
+That last field is the point. It is replayable:
+
+```sh
+tur check --dump-refine=json main.tur   | python3 -c 'import json,sys; print(json.load(sys.stdin)["obligations"][0]["vc_smtlib"], end="")'   > vc.smt2
+tur smt vc.smt2        # same verdict, same deciding stage
+```
+
+`unsat` on the recorded VC is the same answer as `proven` on the obligation --
+the VC is the refutation form, so refuting it *is* the proof. Because the
+writer and reader are now the same file
+([`refine_smtlib.c`](../../src/compiler/refine_smtlib.c)), this closes a loop
+in both directions: an external harness can differentially test any solver
+against `tur` without `tur` ever linking one.
+
+The JSON schema is **explicitly unstable** and says so in every record
+(`"schema": 0`). Branch on it; do not assume it.
 
 `TUR_REFINE_NO_DISCHARGE` is a **test seam, not a feature gate** -- env-only,
 with no `--enable`, no `EXPERIMENTS[]` row and no CLI flag. It exists because

@@ -1,0 +1,19 @@
+;; A discarded call to a PARAMETRIC function must still happen.
+;;
+;; It is dropped today for every instantiation except `int` -- the side effect
+;; is lost, with no diagnostic and no crash.  See
+;; docs/reported/poly-call-in-statement-position-dropped.md.
+;;
+;; The assertion is the printed order: each "ran" line must appear between its
+;; label and the next.  A dropped call removes a line, so the diff catches it.
+
+(defn polyA [A] [x : A] : A
+  (do (println "  ran") x))
+
+(defn main [] : int
+  (println "bool:")  (polyA true)
+  (println "int:")   (polyA 1)
+  (println "float:") (polyA 7.1)
+  (println "cstr:")  (polyA "s")
+  (println "done")
+  0)

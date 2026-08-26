@@ -134,6 +134,20 @@ add_test(
 # RUN_SERIAL tells ctest to give these two the machine to themselves, which is
 # what they already assume.
 set_tests_properties(tur_tests PROPERTIES RUN_SERIAL TRUE)
+# Emitted-program leak gate. tests/run.sh compiles fixture programs WITHOUT
+# sanitizers and runs them with detect_leaks=0, so only `tur` itself is
+# leak-checked -- a leak in EMITTED code passes the ordinary suite silently,
+# which only compares printed output. This harness compiles an opted-in fixture
+# (`requires.leak-check` marker) with -fsanitize=address and LeakSanitizer on.
+#
+# Opt-in because a sanitized compile per fixture is slow. RUN_SERIAL for the
+# same reason tur_tests is: it fans out across nproc on its own.
+add_test(
+  NAME tur_leak_check
+  COMMAND bash tests/run-leak-check.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_leak_check PROPERTIES RUN_SERIAL TRUE)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh

@@ -87,6 +87,10 @@ extern bool g_sized_types_enabled;
 /* Phase SZ8: --dump-sizes flag — print inferred size index per sized-GADT
  * constructor application during elaboration (requires -Xsized-types) */
 extern bool g_dump_sizes;
+/* SX8a: --dump-refine=json -- one JSON record per refinement obligation.
+ * A diagnostic/dump surface, so explicitly outside the EXPERIMENTS[]
+ * regime per the experimental-features rule. */
+extern bool g_dump_refine_json;
 
 /* ER1: --strict-effects flag — warn/check unannotated effectful functions */
 extern bool g_strict_effects;
@@ -253,6 +257,25 @@ extern bool g_dump_cps_mono;
 
 /* g_opt_cps_effects RETIRED 2026-07-12 -- the `cps-effects` experiment graduated
  * and `handle-shallow` is now unconditionally accepted (see experiments.c). */
+
+/* SX1 (solver-extension-plan): the `backtrackable-state` experiment.  Gates
+ * `(import trail)` -- the trail primitive's semantics are in flux on
+ * purpose (the multi-shot re-entry question in plan 3.5 is open), which is
+ * exactly the case the experiment gate exists for. */
+/* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
+ * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
+ * not a shipping default.  SHELVED 2026-08-25 -- kept reproducible, not
+ * headed anywhere; the decision record in that report says why, and why
+ * reclamation rather than a slab is the thing to build. */
+extern bool g_adt_slab;
+/* TUR_SR1_SUM_BYVALUE=1: flow a non-recursive, non-parametric, non-heap
+ * MULTI-VARIANT sum by value (tag + union aggregate) instead of the int64
+ * heap carrier.  The SR1 prototype gate in
+ * docs/upcoming/sum-representation-plan.md -- a measurement seam for how far
+ * the by-value ABI generalises past single-variant products, not a shipping
+ * feature.  Default off; flipping it changes no codegen until set. */
+extern bool g_sr1_sum_byvalue;
+extern bool g_opt_backtrackable_state;
 
 /* g_opt_cps_tramp_resume RETIRED 2026-08-22 -- the `cps-tramp-resume`
  * experiment graduated 2026-07-19 and E7's trampolined tail-resume is the sole

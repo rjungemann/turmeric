@@ -638,11 +638,16 @@ bool type_app_is_concrete_adt(const Type *t) {
      * ADT -- so it must not be registered/monomorphized. */
     if (def->is_opaque) return false;
     for (uint32_t i = 0; i < n_args; i++) {
-        /* Nested by-value-product element accepted only for a :heap outer (see
-         * adt_app_is_byvalue_product) so the ctor selection picks the monomorph
-         * ctor matching the field-read consumer's layout. */
+        /* A nested by-value-product element is accepted for ANY outer, not just
+         * a :heap one.  This must stay in lockstep with the identical loop in
+         * adt_app_is_byvalue_product: that predicate decides the monomorph's
+         * REPRESENTATION and this one decides whether a ctor CALL SITE names
+         * the monomorph.  Widening one alone makes `some__spec__..._Vec__int`
+         * return the by-value aggregate while its body still calls the
+         * carrier `ctor_Option` -- eight fixtures fail to compile with
+         * "incompatible types when returning type 'int64_t'". */
         if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
+            !adt_app_is_byvalue_product(args[i])) return false;
     }
     return true;
 }
@@ -2915,9 +2920,59 @@ static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
     return false;
 }
 
+/* SR1 prototype gate (docs/upcoming/sum-representation-plan.md).  True when
+ * `def` is a MULTI-VARIANT sum that could flow by value as a tag+union
+ * aggregate: non-parametric, non-GADT, non-heap, and not self-recursive.
+ *
+ * Self-recursion is the hard exclusion, not a conservatism: `(TPair :Term
+ * :Term)` has no finite inline size, so a recursive sum needs field-level
+ * boxing (SR4), not by-value.
+ *
+ * Note what this does NOT touch: `adt_is_flat_product` still reports false for
+ * these, so the tagged-union typedef, the tag store in each ctor and the tag
+ * test in `match` all stay exactly as they are.  Only the ABI moves.  Today
+ * those two questions -- "has no tag" and "flows by value" -- are conflated,
+ * because adt_is_byvalue_product_d requires adt_is_flat_product; separating
+ * them is the whole of SR1. */
+static bool adt_sr1_sum_candidate(const AdtDef *def) {
+    if (!g_sr1_sum_byvalue) return false;
+    if (!def || def->is_gadt || def->is_heap) return false;
+    if (def->n_ctors < 2 || def->n_type_params != 0) return false;
+    if (!def->ctors) return false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        /* The predicate is reached DURING elaboration of the very def it is
+         * asked about -- a self-recursive `(Node :Tree :Tree)` queries `Tree`
+         * while `Tree`'s ctor array is still being filled, so an entry can be
+         * NULL.  Decline rather than guess: a def whose variants are not all
+         * known yet cannot be shown non-recursive, and admitting it by default
+         * is how a recursive sum would slip onto the by-value path. */
+        if (!c) return false;
+        for (uint32_t i = 0; i < c->n_fields; i++) {
+            const CtorField *f = &c->fields[i];
+            if (f->full_type && f->full_type->kind == TY_ADT &&
+                f->full_type->as.adt_.def == def) return false;
+            /* A field naming this def by NAME but not yet resolved to its
+             * AdtDef is the same forward-reference case; compare names too. */
+            if (f->full_type && f->full_type->kind == TY_ADT &&
+                f->full_type->as.adt_.def && def->name &&
+                f->full_type->as.adt_.def->name &&
+                strcmp(f->full_type->as.adt_.def->name, def->name) == 0)
+                return false;
+            if (f->full_type && f->full_type->kind == TY_APP) return false;
+        }
+    }
+    return true;
+}
+
 static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
-    if (!adt_is_flat_product(def) || def->n_type_params != 0) return false;
-    const CtorDef *c = def->ctors[0];
+    const bool sr1_sum = adt_sr1_sum_candidate(def);
+    if (!sr1_sum && (!adt_is_flat_product(def) || def->n_type_params != 0))
+        return false;
+    /* Every variant's fields must be by-value-able, not just variant 0's --
+     * a union is only as flat as its widest arm. */
+    for (uint32_t ci = 0; ci < (sr1_sum ? def->n_ctors : 1u); ci++) {
+    const CtorDef *c = def->ctors[ci];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         const CtorField *f = &c->fields[i];
         /* slice 4: a by-value aggregate field is inlined -- admit it. */
@@ -2940,6 +2995,7 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
         TypeKind k = f->kind;
         if (k == TY_ADT || k == TY_APP || k == TY_STRUCT || k == TY_TYVAR)
             return false;
+    }
     }
     return true;
 }
@@ -3198,7 +3254,7 @@ bool adt_app_is_byvalue_product(Type t) {
      * it untouched avoids perturbing the constrained-instance-body specs. */
     for (uint32_t i = 0; i < n_args; i++)
         if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
+            !adt_app_is_byvalue_product(args[i])) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --
      * no residual tyvar / HKT / non-concrete application (those are M7's job). */
     const CtorDef *c = def->ctors[0];
@@ -3208,7 +3264,7 @@ bool adt_app_is_byvalue_product(Type t) {
         TypeKind k = rf.kind;
         bool bad = (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) ||
                    (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
-                    !(def->is_heap && adt_app_is_byvalue_product(rf)));
+                    !adt_app_is_byvalue_product(rf));
         free_struct_app_type(rf);
         if (bad) return false;
     }

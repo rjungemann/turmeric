@@ -29,8 +29,30 @@
 #include <stdlib.h>   /* getenv, exit, malloc, free */
 #include <string.h>
 
-/* The registry.  Empty by design (see file header). */
+/* The registry. */
 static const ExperimentDescriptor EXPERIMENTS[] = {
+    /* SX1 (solver-extension-plan): backtrackable state as a runtime primitive
+     * -- a trail with per-cell, per-write and per-level opt-out.
+     *
+     * Prototype rather than beta because the surface has a genuinely open
+     * question, not because it is unfinished: plan 3.5 leaves multi-shot
+     * re-entry across a trail scope undecided.  A captured continuation
+     * restores CONTROL, not state, so re-entering one resumes a computation
+     * whose trail levels are already gone.  This ships the checked-error
+     * answer (generational marks); whether `call/cc*` should instead snapshot
+     * the live trail segment is a measured decision nobody has made yet.
+     *
+     * `introduced` is 0.39.0 rather than the plan's 0.36.0: the plan was
+     * written when 0.36.0 was current and this landed after 0.38.0.  The
+     * expiry is advisory and never blocks a release -- on its cut, graduate,
+     * shelve, or bump with a one-line rationale. */
+    { "backtrackable-state",
+      "trail-backed mutable cells with mark/undo (stdlib/trail.tur)",
+      "docs/upcoming/solver-extension-plan.md",
+      "0.39.0",                  /* introduced */
+      "0.42.0",                  /* expires_at (soft deadline) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_backtrackable_state },
     /* defstruct-as-defadt GRADUATED 2026-06-28 -- a `defstruct` now lowers to a
      * single-variant record `defadt` unconditionally (always-on; the gate lives
      * in defstruct_lowers_to_adt, elab_structs.c).  See

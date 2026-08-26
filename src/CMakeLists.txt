@@ -196,6 +196,7 @@ set(TUR_CORE_SOURCES
     compiler/refine_collect.c
     compiler/refine_smtlib.c
     compiler/refine_discharge.c
+    compiler/refine_report.c
     compiler/refine_solver.c
     compiler/refine_solver_s0.c
     compiler/refine_solver_euf.c
@@ -255,6 +256,10 @@ set(TUR_CORE_SOURCES
     # whole-archive consumer (the JIT, which resolves runtime symbols by NAME
     # at run time) needs it present.  docs/archive/history/libturi-symbols-basename-collision.md.
     runtime/symbols.c
+    # SX1 (solver-extension-plan): the backtrackable-state trail.  Dual-listed
+    # in TURT_RUNTIME_SOURCES like every other runtime TU here, so a compiled
+    # program can link the one maintained copy.
+    runtime/trail.c
     runtime/tur_string.c
     # S2 (jit-engine-plan, findings 19.4 item 2 / seam 3): the generated
     # runtime TU -- the emitted preamble, every gate on, statics externalized,
@@ -582,6 +587,7 @@ endif()
 # symbol), so the archive grows but no existing link changes.
 set(TURT_RUNTIME_SOURCES
     runtime/hamt.c
+    runtime/trail.c
     runtime/symbols.c
     runtime/tur_atomics.c
     runtime/tur_tls.c
@@ -942,6 +948,30 @@ endif()
 set_target_properties(tur_ffi_dispatch_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+
+# ---------------------------------------------------------------------------
+# SX1 (solver-extension-plan): unit tests for the backtrackable-state trail.
+# Links the runtime source directly rather than tur_core -- the trail has no
+# compiler dependencies, and keeping the target that narrow is what lets a
+# failure here mean exactly one thing.
+# ---------------------------------------------------------------------------
+add_executable(tur_trail
+    ${CMAKE_SOURCE_DIR}/tests/unit/trail.c
+    runtime/trail.c
+)
+target_include_directories(tur_trail PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_trail PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_trail PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_trail PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+add_test(NAME tur_trail COMMAND tur_trail)
 
 # ---------------------------------------------------------------------------
 # RT2/S0--S3: refinement normalized-VC + decision-procedure unit test

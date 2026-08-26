@@ -36,6 +36,16 @@ build-release-check/
 !docs/**/*.h
 !tools/**/*.c
 !tools/**/*.h
+# benchmarks/ carries hand-written C harnesses too.  Without these two lines the
+# blanket *.c above silently swallows them: benchmarks/adt-alloc/ceiling.c was
+# lost exactly that way in 00052f16 -- the commit that published its numbers
+# landed with only the README, and nobody could re-run the measurement until it
+# was reconstructed.  The four older harnesses under benchmarks/ survive only
+# because someone force-added them past this rule.
+!benchmarks/*.c
+!benchmarks/**/*.c
+!benchmarks/*.h
+!benchmarks/**/*.h
 
 # Python bytecode
 __pycache__/

@@ -2,6 +2,94 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Lazy solution streams in `stdlib/logic.tur`.** `Stream` gained the immature
+  constructor `(StInc :StThunk)` plus `st-force` / `st-pull`, so `run-logic n`
+  now costs n solutions instead of running the whole search and truncating the
+  result. `st-append` swaps on an immature stream, which is fair interleaving;
+  `st-bind` defers through one rather than forcing it. **A relation with
+  infinitely many solutions is now expressible at all** -- previously
+  `(defn nats [] (disjoined (succeed) (nats)))` did not merely diverge, it
+  SIGSEGVed while the goal was being *built*.
+- **`zzz`, a delay macro for recursive relations.** `(disjoined (succeed) (zzz
+  (nats)))` terminates where the undelayed form crashes. It is a macro by
+  necessity: a function would evaluate its argument at the call site, which is
+  the divergence it exists to prevent.
+- **`disjoined-dfs` / `st-append-dfs` -- depth-first search that is still
+  lazy.** `disjoined` interleaves and is complete; this pair keeps depth-first
+  order for goals whose left branch is known finite, reaching a solution at
+  depth 18 in 0.012s against 3.5s interleaved. Incomplete by construction -- it
+  never reaches the right branch of a goal whose left branch is infinite.
+- **`stdlib/trail.tur` -- backtrackable state**, behind
+  `--enable=backtrackable-state`. Trailed cells whose writes undo to a mark,
+  with the opt-out at three granularities: per cell (`g-cell-new`, never
+  trailed), per write (`untrailed-begin` / `untrailed-end`), and per level
+  (`bt-commit-to!`). `BtCell` and `GCell` are distinct types so opting out is
+  visible in a signature. Recording and undoing state measures ~5ns per write,
+  roughly 5x cheaper per unit of live state than capturing and restoring
+  control.
+- **`tur smt <file.smt2>`** runs an SMT-LIB2 script through the refinement
+  solver's staged chain and prints `sat` / `unsat` / `unknown`, which stage
+  decided, and a model when the bounded search finds one. Exit codes mirror the
+  answer (0 unsat, 1 sat, 2 unknown, 3 error) so a shell harness can branch on
+  `$?` without parsing stdout.
+- **`--dump-refine=json`** emits one record per refinement obligation --
+  location, predicate, verdict, deciding stage, counterexample, the replayable
+  VC as SMT-LIB2, and which caps bit for that obligation. Works on `check` as
+  well as `emit-c`. The schema is explicitly unstable and says so in every
+  record (`"schema": 0`).
+- **`tests/run-leak-check.sh`** runs compiled fixtures under LeakSanitizer, opt
+  in per fixture with a `requires.leak-check` marker. This generalizes three
+  bespoke per-regression harnesses; coverage went from 2 fixtures to 54.
+
+### Changed
+
+- **`Option` and `Result` monomorphs lower by value when a type argument is
+  itself a monomorph.** `option<list<int>>`, `result<vec<T>, cstr>` and
+  `option<(Pair a b)>` previously fell back to the heap carrier -- a silent
+  representation downgrade that reintroduced a `malloc` per construction on some
+  of the most common shapes in the language.
+- **`NO_MAX_SHARED` raised 8 -> 16.** It was the only cap in the refinement
+  solver with a live signal, turning away eligible terms on four units and
+  always by exactly one. No verdict moved on the 125-benchmark corpus or the 89
+  in-tree refinement fixtures, and the corpus replay did not slow measurably.
+- **`-main` is no longer documented as an entry point.** Nothing ever called it:
+  both shipped examples and the snake tutorial used it, and `examples/minikanren`
+  built, linked, ran, exited 0 and printed nothing. Both examples and all 24 of
+  the tutorial's listings now use `main`.
+
+### Fixed
+
+- **`rc/of` did not release a multi-variant ADT payload.** It allocated a second
+  box for the carrier word and freed only that wrapper, so the payload leaked --
+  code doing exactly the documented thing lost 16 bytes per value.
+- **`ref/from-rc` and `(upgrade w)` leaked at the ownership handoff.** Two
+  unrelated call sites, one shape: a heap allocation handed across an ownership
+  boundary to something that never freed it.
+- **A closure stored in an ADT field emitted C that warned.** A `defopaque`
+  over `:ptr<void>` is a named `int64_t` carrier, and a closure ascribed to one
+  still lowers to a pointer, so the store was an int/pointer straddle the
+  emitted C complained about. This is what any ADT holding a callback hits.
+- **`fat_captures_borrowed` was read out of uninitialized memory.** The flag
+  suppresses one specific use-after-free; 60 fixtures were reading it as garbage
+  on every compile, and nothing failed because UBSan here prints and continues
+  rather than aborting.
+
+### Docs
+
+- **The logic guide no longer tells you to hand-write an interleaving `mplus`.**
+  `st-append` is the interleaving one now, and the section explains why the
+  hand-written version it used to recommend could never have worked: it swapped
+  its arguments but built a strict cell, and interleaving without an immature
+  result is half a mechanism.
+- **The test-suite portability guide gained a section on what the sanitizers
+  actually catch** -- ASan aborts, UBSan does not, and the suite now collects
+  UBSan findings from the compiler and reports them after the summary
+  (`TUR_SANITIZER_GATE=1` makes them fatal).
+
 ## [0.38.0] -- 2026-08-21
 
 ### Added

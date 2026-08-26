@@ -1,0 +1,37 @@
+;; closure-field-boxed-all-shapes -- capturing closures in fn-typed fields, all
+;; four container/arity shapes that used to SIGSEGV.
+;;
+;; Regression (docs/archive/closure-in-defdata-field.md):
+;;   - resolve_ctor_field boxed concrete fn fields only at arity 1..4, leaving
+;;     a THUNK field (arity 0 -- the lazy-stream shape) on the thin path, where
+;;     a capturing closure's env block was jumped into as code;
+;;   - the match-arm extraction marked is_fat only for TYVAR fields, its
+;;     comment still claiming concrete fn fields are never boxed -- so for a
+;;     defdata the store was fat and the match-arm force was thin, and every
+;;     arity crashed even though the same field worked through a defstruct
+;;     field read.
+;;
+;; Each value below both stores a CAPTURING closure and forces it.
+
+;; defdata, arity 0 (thunk field)
+(defdata L :copy (LNil) (LThunk (fn [] int)))
+(defn lforce [l : L] : int (match l (LThunk th) (th) _ -1))
+
+;; defdata, arity 1
+(defdata M :copy (MNil) (MStep (fn [int] int)))
+(defn mforce [m : M x : int] : int (match m (MStep f) (f x) _ -1))
+
+;; defstruct, arity 0 (thunk field)
+(defstruct TBox [run : (fn [] int)])
+
+;; defstruct, arity 1
+(defstruct FBox [step : (fn [int] int)])
+
+(defn main [] : int
+  (let [n 40]
+    (println (lforce (LThunk (fn [] (+ n 2)))))          ;; 42
+    (println (mforce (MStep (fn [x : int] (+ x n))) 2))  ;; 42
+    (println ((.run (TBox (fn [] (* n 2)))))             ;; 80
+    )
+    (println ((.step (FBox (fn [x : int] (- x n)))) 42)) ;; 2
+    0))
