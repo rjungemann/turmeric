@@ -34,10 +34,12 @@ cd "$(dirname "$0")/.."
 
 if ! command -v emcc >/dev/null 2>&1; then
   echo "SKIP refine-wasm: emcc not on PATH (source emsdk_env.sh to enable)"
+  echo "TUR_SKIP: emcc not on PATH"
   exit 0
 fi
 if ! command -v node >/dev/null 2>&1; then
   echo "SKIP refine-wasm: node not on PATH"
+  echo "TUR_SKIP: node not on PATH"
   exit 0
 fi
 

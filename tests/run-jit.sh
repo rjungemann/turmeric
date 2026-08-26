@@ -77,6 +77,7 @@ probe=$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
 case "$probe" in
   *"carries no JIT"*)
      echo "run-jit: SKIP ($TUR carries no JIT engine; configure -DTUR_JIT=ON)"
+     echo "TUR_SKIP: $TUR carries no JIT engine (configure -DTUR_JIT=ON)"
      exit 0 ;;
 esac
 

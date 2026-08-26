@@ -25,8 +25,8 @@ cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tutorial-quickstart: $TUR not built" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP tutorial-quickstart (no python3)"; exit 0; }
-python3 -c 'import yaml' 2>/dev/null || { echo "SKIP tutorial-quickstart (no pyyaml)"; exit 0; }
+command -v python3 >/dev/null 2>&1 || { echo "SKIP tutorial-quickstart (no python3)"; echo "TUR_SKIP: python3 unavailable"; exit 0; }
+python3 -c 'import yaml' 2>/dev/null || { echo "SKIP tutorial-quickstart (no pyyaml)"; echo "TUR_SKIP: pyyaml unavailable"; exit 0; }
 
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 export TUR_NO_AUTO_SPICE=1

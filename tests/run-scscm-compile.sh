@@ -30,7 +30,8 @@ fi
 
 # Skip when the sibling turmeric-spices repo is absent.
 if [ ! -d "$SPICE_DIR" ]; then
-    pass "scscm-compile (turmeric-spices absent -- skipped)"
+    echo "SKIP scscm-compile (turmeric-spices absent)"
+    echo "TUR_SKIP: sibling ../turmeric-spices checkout absent"
     echo
     echo "summary: $PASS passed, $FAIL failed"
     exit 0

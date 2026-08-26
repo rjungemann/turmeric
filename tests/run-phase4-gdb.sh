@@ -85,7 +85,12 @@ expect "--debug emit-c maps the body back to input.tur" "$dbg" \
 
 # -- 2) native backtrace under gdb -------------------------------------------
 if ! command -v gdb >/dev/null 2>&1; then
-  echo "PASS phase4: gdb not available -- skipping native backtrace check"
+  # PARTIAL, not a whole-suite skip: the emit-c assertions above already ran,
+  # so this suite still has a meaningful duration. TUR_SKIP_PARTIAL keeps the
+  # timing ingest recording it as a pass with a note, rather than dropping it
+  # from the trend the way a bare TUR_SKIP would.
+  echo "SKIP phase4: gdb not available -- skipping native backtrace check"
+  echo "TUR_SKIP_PARTIAL: gdb unavailable (native backtrace check)"
 else
   BIN="$(mktemp -u "${TMPDIR:-/tmp}/tur-phase4-XXXXXX")"
   build_out=$("$TUR" --debug build "$FIX" -o "$BIN" 2>&1)

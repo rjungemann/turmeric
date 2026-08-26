@@ -153,6 +153,14 @@ add_test(
   COMMAND bash tests/run-cli.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `tur demangle` (docs/upcoming/profiling-plan.md P0): CLI surface plus the
+# false-positive ratchet over ./build/tur's own symbol table. The token
+# recognizer's unit tests are in tur_mangle_unit.
+add_test(
+  NAME tur_demangle_tests
+  COMMAND bash tests/run-demangle.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # NW6 acceptance gate: a freshly scaffolded spice (`tur new`) passes its own
 # `tur run ci` (clean + check + test) end-to-end. Hermetic: no git, no
 # network, no ../turmeric-spices, no `just`. See docs/tur-new-ci-bootstrap-plan.md.

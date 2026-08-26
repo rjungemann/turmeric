@@ -112,6 +112,7 @@
 #include "cli/lsp_lite.h"
 /* tur completion <zsh|bash>: emit a shell completion script */
 #include "cli/completion.h"
+#include "cli/demangle.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -8239,7 +8240,7 @@ static const char *const CANONICAL_COMMANDS[] = {
     "lsp", "mcp", "dap", "lsp-lite",
     "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
     "eval", "doc", "docs", "image-info", "image-verify", "explain",
-    "format", "fmt", "parse-check", "test",
+    "format", "fmt", "parse-check", "test", "demangle",
     "new", "init", "add", "add-cmake", "fetch", "audit",
     "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
     "smt",
@@ -8298,6 +8299,9 @@ static int usage(void) {
         "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
         "  tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking\n"
         "  tur parse-check <a> <b>           exit 0 if both files read to the same AST\n"
+        "  tur demangle [<name>...]          decode mangled C symbols back to Turmeric names\n"
+        "                                    (filters stdin when given no names, so\n"
+        "                                     `perf script | tur demangle` reads clean)\n"
         "  tur smt <file.smt2>               run an SMT-LIB2 script through the refinement solver\n"
         "  tur check --dump-refine=json <f>  print one JSON record per refinement obligation\n"
         "  tur experiments                   list experimental features (--enable=<name>)\n"
@@ -11002,6 +11006,8 @@ int main(int argc, char **argv) {
         if (argc != 4) return usage_parse_check();
         return cmd_parse_check(argv[2], argv[3]);
     }
+    if (strcmp(cmd, "demangle") == 0)
+        return cmd_demangle(argc, argv);
     if (strcmp(cmd, "test") == 0) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_test();

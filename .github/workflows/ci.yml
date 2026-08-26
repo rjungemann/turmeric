@@ -1,6 +1,14 @@
 name: CI
 
 on:
+  # `branches: [main]` is load-bearing beyond the obvious: it is what keeps this
+  # workflow off the `ci-metrics` orphan branch, which tools/ci/publish-timings.sh
+  # pushes to on every green `main` run.  That branch carries no source at all
+  # (one JSONL file per year plus a README), so a build there would be both
+  # meaningless and self-perpetuating -- each publish would trigger a run whose
+  # own publish triggers another.  Do NOT widen this to `branches-ignore` or an
+  # unfiltered `push:` without excluding ci-metrics explicitly.  The publish
+  # commits additionally carry [skip ci] as a second, independent layer.
   push:
     branches: [main]
   pull_request:
@@ -118,9 +126,18 @@ jobs:
         # is still a real finding, it was just never visible), then drop the
         # runner.os condition here. See
         # docs/reported/sanitizer-gate-not-armed-in-ci.md.
+        #
+        # --output-junit: per-suite name/status/duration for the timing trend
+        # (docs/upcoming/suite-timing-trends-plan.md).  It writes its OWN file
+        # rather than sharing one with the auxiliary step below, because a
+        # single path would let that second ctest invocation overwrite this
+        # one and silently drop tur_tests -- the most valuable series here.
+        # The XML also embeds each test's stdout in <system-out>, even under
+        # --output-on-failure, which is where the TUR_SKIP markers are read
+        # from; no -V or tee plumbing is needed.
         env:
           TUR_SANITIZER_GATE: ${{ runner.os == 'Linux' && '1' || '0' }}
-        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$'
+        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml
 
       - name: Run auxiliary suites (once per OS)
         # Sharding temporarily disabled -- previously gated on `matrix.shard == '1/4'`
@@ -142,7 +159,39 @@ jobs:
         # opt-out for the interpreter's process-lifetime bindings, which they
         # now carry. The step above is a single RUN_SERIAL target, so -j would
         # do nothing there.
-        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$'
+        # --output-junit to a DISTINCT path from the step above -- see the note
+        # there. The two files are merged by the collect step.
+        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$' --output-junit results-aux.xml
+
+      # `always()`, NOT `continue-on-error` on the ctest steps: a suite that
+      # regressed into a timeout is exactly the signal this exists to catch, so
+      # the timings must be collected on a red run too -- but making the test
+      # steps non-fatal to achieve that would turn the repo's main gate green
+      # while tests fail. This gets the same data without touching the gate.
+      - name: Collect suite timings
+        if: always()
+        run: |
+          # NOTE the build/ prefix: a RELATIVE --output-junit path is resolved
+          # against --test-dir, not the working directory, so ctest wrote these
+          # into build/. Reading them from the workspace root instead yields
+          # zero rows and (because the script only warns) a silently empty
+          # dashboard -- which is exactly how this would have shipped broken.
+          python3 tools/ci/collect-suite-timings.py --build-dir build \
+            build/results-main.xml build/results-aux.xml > timings.jsonl || true
+          if [ ! -s timings.jsonl ]; then
+            echo "::warning::no suite timings collected -- check the ctest --output-junit paths above"
+          else
+            echo "collected $(wc -l < timings.jsonl) suite rows"
+          fi
+
+      - name: Upload suite timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-test-${{ matrix.os }}
+          path: timings.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
       # Save after everything (incl. the fixture suite, which also feeds ccache
       # via run.sh) regardless of whether the suite passed. The exact key never
@@ -344,8 +393,13 @@ jobs:
           # `#if defined(__aarch64__)` and had NEVER executed anywhere: this
           # macOS leg is the only arm64 machine in the matrix, so this line
           # is what turns that case from documentation into a test.
+          #
+          # --output-junit rides along for the suite-timing trend
+          # (docs/upcoming/suite-timing-trends-plan.md).  These rows carry
+          # jit=true from the build cache, so they form their own series and
+          # are never averaged against the `test` job's jit=false rows.
           set +e
-          ctest --test-dir build -V --no-tests=error \
+          ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
                 -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
@@ -363,12 +417,85 @@ jobs:
           path: jit-ctest.log
           if-no-files-found: warn
 
+      - name: Collect suite timings
+        if: always()
+        run: |
+          # build/ prefix: a relative --output-junit path resolves against
+          # --test-dir. See the same note in the `test` job.
+          python3 tools/ci/collect-suite-timings.py --build-dir build \
+            build/results-jit.xml > timings.jsonl || true
+          if [ ! -s timings.jsonl ]; then
+            echo "::warning::no suite timings collected -- check the ctest --output-junit paths above"
+          else
+            echo "collected $(wc -l < timings.jsonl) suite rows"
+          fi
+
+      - name: Upload suite timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-jit-${{ matrix.os }}
+          path: timings.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Save ccache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+
+  # Phase 3A/4 of docs/upcoming/suite-timing-trends-plan.md.
+  #
+  # A SEPARATE job, not a step on `test`, specifically because of the
+  # concurrency group.  `group: ci-metrics` serializes publishers so two runs
+  # cannot race the same branch -- but hung on the `test` job it would serialize
+  # the whole build-and-test matrix across runs, which is an enormous cost for a
+  # metrics feature.  Isolated here it serializes only an artifact download and
+  # a git push.
+  publish-timings:
+    name: Publish suite timings
+    needs: [test, jit]
+    # always(): a red run's timings are the interesting ones (a suite that
+    # regressed into a timeout), so publish regardless of upstream job status.
+    # Restricted to main pushes: PR runs -- especially from forks, whose token
+    # is read-only -- collect and upload artifacts but must never write.
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      # Scoped to this job rather than declared workflow-wide: a top-level block
+      # would silently re-scope every other job's token too.
+      contents: write
+    concurrency:
+      group: ci-metrics
+      cancel-in-progress: false
+    steps:
+      # Full history: the publish script pushes a branch, and a shallow clone
+      # can have a push rejected with "shallow update not allowed".
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timings-*
+          path: timings-artifacts
+
+      - name: Merge and publish
+        run: |
+          set -euo pipefail
+          # Every leg of both matrices contributes a file; each row carries its
+          # own (build_type, os, cc, nproc, jit) tuple, so they coexist in one
+          # log and are separated at query time rather than at write time.
+          find timings-artifacts -name 'timings.jsonl' -print0 \
+            | xargs -0 cat > all-timings.jsonl 2>/dev/null || true
+          if [ ! -s all-timings.jsonl ]; then
+            echo "::warning::no suite timings collected; nothing to publish"
+            exit 0
+          fi
+          echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
+          bash tools/ci/publish-timings.sh all-timings.jsonl
 
   windows:
     name: Windows build (MSYS2/UCRT64)
