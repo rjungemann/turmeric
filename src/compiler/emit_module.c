@@ -12429,8 +12429,9 @@ int emit_program(Buf *out, const Expr *program) {
              * only a single-variant flat product could be inlined, and a sum
              * field rode the carrier -- so source order sufficed.  A by-value sum
              * field is a real forward dependency; see emit_adt_inline_field_deps. */
-            bool td_guard = emit_adt_inline_field_deps(&early_file, def, 16) ||
-                            adt_is_inline_byval_dep(items, n_items, def);
+            bool td_guard = g_sr1_sum_byvalue &&
+                            (emit_adt_inline_field_deps(&early_file, def, 16) ||
+                             adt_is_inline_byval_dep(items, n_items, def));
             /* CONV-S1 seam 4: flat named C-ABI layout + surface alias (mirror of
              * emit_adt_typedef_and_ctors). */
             bool named = adt_uses_named_layout(def);

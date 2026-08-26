@@ -1395,10 +1395,25 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * reached for them.  The ctor heap-boxes the by-value param into the slot
          * (see the byval ctor branch's struct-pointer box). */
         if (adt_field_is_ros_pointer_box(owner, &resolved)) {
-            static char ptrbuf[128];
-            snprintf(ptrbuf, sizeof(ptrbuf), "%s *", type_c_name(resolved));
+            /* A ROTATING pool, not one shared static buffer.  Callers collect
+             * several of these before printing any of them -- the monomorph ctor
+             * emitter fills `val_ctype[]` for every field and only then writes
+             * the parameter list -- so a single buffer hands every field the LAST
+             * field's spelling.  That emitted
+             * `ctor_Result__Rational__ArithError(bool, tur_adt_ArithError *,
+             * tur_adt_ArithError *)`, silently mistyping ok_val as the error arm.
+             *
+             * Latent until two fields of one constructor could both take this
+             * path: it needs a Result/Option monomorph whose OK and ERR arms are
+             * both non-parametric by-value ADTs, which is what a by-value sum
+             * makes ordinary (`(Result Rational ArithError)`). */
+            enum { PTRBUF_N = 16, PTRBUF_LEN = 128 };
+            static char ptrbuf[PTRBUF_N][PTRBUF_LEN];
+            static unsigned ptrbuf_i = 0;
+            char *slot = ptrbuf[ptrbuf_i++ % PTRBUF_N];
+            snprintf(slot, PTRBUF_LEN, "%s *", type_c_name(resolved));
             free_struct_app_type(resolved);
-            return ptrbuf;
+            return slot;
         }
         const char *nm = type_c_name(resolved);
         free_struct_app_type(resolved);
@@ -2992,6 +3007,16 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
     if (!def || def->is_gadt || def->is_heap) return false;
     if (def->n_ctors < 2 || def->n_type_params != 0) return false;
     if (!def->ctors) return false;
+    /* SR1 covers NON-recursive sums; the recursive ones are SR4.  A recursive
+     * sum lowers by value perfectly well (its recursive field is a one-word
+     * carrier, so the layout is finite -- see AdtDef.is_self_recursive), and the
+     * codegen crossings are the same ones SR1 fixes.  What holds SR4 back is not
+     * codegen: `stdlib/logic.tur` ascribes carrier-erased polymorphic results
+     * back to `Subst` / `Stream` (`(:: (f s) :Subst)`), a no-op cast while those
+     * ride the carrier and a hard TUR-E0295 once they do not.  That is library
+     * source to rewrite, not a predicate to widen, so the recursive population
+     * stays where it is until SR4 does it deliberately. */
+    if (def->is_self_recursive) return false;
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         const CtorDef *c = def->ctors[ci];
         /* The predicate is reached DURING elaboration of the very def it is

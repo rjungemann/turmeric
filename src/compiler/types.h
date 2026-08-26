@@ -314,6 +314,22 @@ typedef struct AdtDef {
     bool        is_heap;
     /* Phase G1: GADT flag and type parameters */
     bool        is_gadt;         /* true for defgadt, false for defdata */
+    /* SR1 (sum-representation-plan): a constructor field names this ADT, so the
+     * type is self-recursive -- `(TPair :Term :Term)`, `(SBind :int :Term
+     * :Subst)`, `(StCons :Subst :Stream)`.
+     *
+     * Recorded at declaration time because it cannot be recovered afterwards: a
+     * recursive field rides the int64 carrier and its CtorField.full_type is
+     * deliberately left NULL (recording a carrier-ADT full_type would
+     * misclassify the field READ), so nothing downstream can tell `(SBind :int
+     * :Term :Subst)` from `(SBind :int :int :int)`.
+     *
+     * The layout is finite either way -- the carrier field is one word -- so
+     * this is not a soundness gate; adt_graph_reaches is.  It is the SR1/SR4
+     * phase boundary: SR1 covers non-recursive sums, and the recursive ones are
+     * SR4, which is blocked on library source that ascribes carrier-erased
+     * results back to a sum type (stdlib/logic.tur). */
+    bool        is_self_recursive;
     const char **type_params;    /* arena-allocated array of type param names (interned) */
     uint8_t     n_type_params;
     /* TP1/TP2: arena-alloc'd Kind array, one per type_params entry.

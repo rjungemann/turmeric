@@ -1293,11 +1293,33 @@ void elab_register_adt_def(Elab *e, AdtDef *def) {
  * Shared by positional-style variants (`(Just :int)`) and record-style variants
  * (`(Circle [radius : float])`); the record path also sets ctor->fields[fi].name.
  * Returns false (diag already emitted) on an unresolvable field type. */
+/* SR1: does this field-type form name `def` itself?  See AdtDef.is_self_recursive
+ * -- a recursive field's resolved full_type is deliberately NULL, so the only
+ * place the fact is observable is here, against the form the user wrote.  Walks
+ * a compound form (`(Vec Term)`, `(Pair Term int)`) so a self-reference nested
+ * inside a type application counts too. */
+static bool ctor_field_form_names_adt(const Form *ft_form, const char *adt_name) {
+    if (!ft_form || !adt_name) return false;
+    if (ft_form->tag == F_SYM || ft_form->tag == F_KEYWORD) {
+        const Symbol *s = ft_form->as.sym;
+        return s && s->name && strlen(adt_name) == s->len &&
+               memcmp(s->name, adt_name, s->len) == 0;
+    }
+    if (ft_form->tag == F_LIST) {
+        for (uint32_t i = 0; i < ft_form->as.list.len; i++)
+            if (ctor_field_form_names_adt(ft_form->as.list.items[i], adt_name))
+                return true;
+    }
+    return false;
+}
+
 static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                                Form *ft_form, const Symbol **tp_syms,
                                uint32_t n_type_params, bool record_style) {
     ctor->fields[fi].full_type = NULL;
     if (ctor->field_forms) ctor->field_forms[fi] = NULL;
+    if (ctor_field_form_names_adt(ft_form, def->name))
+        def->is_self_recursive = true;
 
     /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
      * E.g. `a` in `(defdata Opt2 [a] (Yep a))`. */

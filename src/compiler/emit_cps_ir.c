@@ -6217,7 +6217,27 @@ static void emit_match(CE *ce, const CTerm *t) {
     char *scrut = atom_str(ce, &t->as.match.scrut);
     char *mn = mangle_field_name(adt->name);
     char *sv = fresh_tmp(ce->ctx);
-    ce_line(ce, "tur_adt_%s *%s = (tur_adt_%s *)(intptr_t)(%s);", mn, sv, mn, scrut);
+    /* SR1: a by-value sum scrutinee is an AGGREGATE, not a carrier pointer --
+     * casting it through intptr_t trips "aggregate value used where an integer
+     * was expected".  Bind a local copy and take its address, so every `->tag`
+     * and `->as.<Ctor>._N` read below keeps working unchanged; the copy has
+     * exactly this match's lifetime.  This mirrors the direct emitter's switch
+     * path (emit_expr.c).  Keyed on the SCRUTINEE's own type kind, not the
+     * pattern's ADT: a value that is statically a carrier word stays on the
+     * pointer path even when its patterns name a by-value sum. */
+    TypeKind sk = t->as.match.scrut.ty;
+    bool scrut_carrier_word = (sk == TY_INT || sk == TY_INT64 ||
+                               sk == TY_UINT64 || sk == TY_PTR_VOID);
+    bool byval = adt_is_byvalue_product(adt) && !adt->is_heap &&
+                 !scrut_carrier_word;
+    if (byval) {
+        char *sc = fresh_tmp(ce->ctx);
+        ce_line(ce, "tur_adt_%s %s = (%s);", mn, sc, scrut);
+        ce_line(ce, "tur_adt_%s *%s = &%s;", mn, sv, sc);
+        free(sc);
+    } else {
+        ce_line(ce, "tur_adt_%s *%s = (tur_adt_%s *)(intptr_t)(%s);", mn, sv, mn, scrut);
+    }
     free(scrut);
 
     uint32_t n = t->as.match.n_arms;
@@ -6240,7 +6260,14 @@ static void emit_match(CE *ce, const CTerm *t) {
             const char *ctype = type_c_name(fb->type);
             char *bname = name_for_binding(ce->ctx, fb);
             char *mp = adt_field_member_path(arm->ctor->adt, arm->ctor, bi);
-            ce_line(ce, "%s %s = (%s)%s->%s;", ctype, bname, ctype, sv, mp);
+            /* SR1: an inline by-value aggregate field IS the aggregate in the
+             * union slot -- bind it directly.  A cast-to-aggregate is invalid C,
+             * so the general `(%s)` coercion below cannot be used for it. */
+            if (byval && bi < arm->ctor->n_fields &&
+                adt_field_is_inline_byval(&arm->ctor->fields[bi]))
+                ce_line(ce, "%s %s = %s->%s;", ctype, bname, sv, mp);
+            else
+                ce_line(ce, "%s %s = (%s)%s->%s;", ctype, bname, ctype, sv, mp);
             free(mp); free(bname);
         }
         emit_term(ce, arm->body);

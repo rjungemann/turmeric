@@ -1968,6 +1968,36 @@ static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
            strcmp(lv, "int64_t") != 0 && strchr(lv, '*') == NULL;
 }
 
+/* SR1 companion to emit_arm_is_recorded_byval_agg: the arm is a bare VARIABLE
+ * that already holds the by-value aggregate.
+ *
+ * The recorded-local check above answers this from the local-var side table,
+ * which records locals -- a PARAMETER is never in it.  That was sufficient while
+ * a by-value ADT could only be a single-variant product: a sum-typed parameter
+ * was always the int64 carrier, so a by-value aggregate parameter never reached
+ * a control-form merge.  `(defn re-repeat-n [atom : Regex n : int] ...)`
+ * returning `atom` from one `if` arm is exactly that case now, and bridging it
+ * carrier->concrete derefs a value that is not a pointer.
+ *
+ * A pass-by-pointer parameter is excluded: it really is held as `const T *`, and
+ * the caller's own `then_is_byptr_param` branch derefs it. */
+static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
+static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
+    if (!g_sr1_sum_byvalue) return false;
+    if (!arm || bv.kind == TY_UNKNOWN) return false;
+    while (arm->kind == EX_ASCRIBE && arm->as.ascribe_.inner)
+        arm = arm->as.ascribe_.inner;
+    if (arm->kind != EX_VAR || !arm->as.var.binding) return false;
+    if (expr_is_pbp_param(ctx, arm)) return false;
+    Type at = emit_resolve_type(ctx, arm->as.var.binding->type);
+    if (!emit_type_is_byvalue_adt(ctx, at)) return false;
+    char *have = strdup(emit_type_c_name(ctx, at));
+    const char *want = emit_type_c_name(ctx, bv);
+    bool same = want && strcmp(have, want) == 0;
+    free(have);
+    return same;
+}
+
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
  * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
  * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
@@ -2937,7 +2967,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         bool then_is_byptr_param = expr_is_pbp_param(ctx, th) && !temp_is_ptr;
         if (if_bv.kind != TY_UNKNOWN &&
             !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_) &&
-            !emit_arm_is_recorded_byval_agg(ctx, t, if_bv)) {
+            !emit_arm_is_recorded_byval_agg(ctx, t, if_bv) &&
+            !emit_arm_is_byval_agg_var(ctx, e->as.if_.then_, if_bv)) {
             /* by-value merge temp, carrier-producing arm: bridge to concrete */
             t = emit_carrier_bridge(ctx, body, t, CK_CARRIER, CK_CONCRETE, if_bv);
             indent_buf(body, ctx->indent);
@@ -2980,7 +3011,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool else_is_byptr_param = expr_is_pbp_param(ctx, eb) && !temp_is_ptr2;
             if (if_bv.kind != TY_UNKNOWN &&
                 !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null) &&
-                !emit_arm_is_recorded_byval_agg(ctx, el, if_bv)) {
+                !emit_arm_is_recorded_byval_agg(ctx, el, if_bv) &&
+                !emit_arm_is_byval_agg_var(ctx, e->as.if_.else_or_null, if_bv)) {
                 el = emit_carrier_bridge(ctx, body, el, CK_CARRIER, CK_CONCRETE, if_bv);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);
@@ -7040,7 +7072,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 ? (strcmp(pct, "int64_t") == 0)
                                 : (pk == TY_INT || pk == TY_INT64 ||
                                    pk == TY_UINT64 || pk == TY_PTR_VOID);
-                        if (int_carrier_param && !matched_spec) {
+                        if (g_sr1_sum_byvalue && int_carrier_param &&
+                            !matched_spec) {
                             raw = emit_carrier_bridge_escaping(
                                       ctx, body, raw, CK_CONCRETE, CK_CARRIER, rarg);
                         } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
@@ -7116,7 +7149,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * callee's declared TY_FN still says `:int`.  Narrow on purpose: a
                  * non-pointer `tur_adt_` C name (a by-value ADT aggregate) against
                  * an argument that is statically a carrier word. */
-                if (!needs_fn_cast && !matched_spec && emit_arg) {
+                if (g_sr1_sum_byvalue && !needs_fn_cast && !matched_spec &&
+                    emit_arg) {
                     const char *pct = emit_sig_lookup_param_ctype(fn_name, i);
                     size_t pl = pct ? strlen(pct) : 0;
                     TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
@@ -8051,7 +8085,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * carrier and concrete forms are the same bare int64 -- derefing that
              * would read through a value, not a pointer -- and a matched ABI spec,
              * whose clone already returns the aggregate by value. */
-            if (fn_binding && fn_binding->type.kind == TY_FN &&
+            if (g_sr1_sum_byvalue &&
+                fn_binding && fn_binding->type.kind == TY_FN &&
                 emit_type_is_byvalue_adt(ctx, e->type) &&
                 !type_is_transparent_int_newtype(emit_resolve_type(ctx, e->type)) &&
                 !find_matched_abi_spec(ctx, e, fn_binding)) {
@@ -11710,7 +11745,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&cell,
                         "__tur_cons_of(((union { %s d; int64_t i; }){.d = (%s)}).i, %s)",
                         cty, head, tail);
-                } else if (emit_type_is_byvalue_adt(
+                } else if (g_sr1_sum_byvalue &&
+                           emit_type_is_byvalue_adt(
                                ctx, e->as.cons_list_.items[i]->type)) {
                     /* SR1: a by-value AGGREGATE head does not survive
                      * `(int64_t)(intptr_t)` either -- a cast from a struct is not
