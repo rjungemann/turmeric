@@ -1,0 +1,8 @@
+# Python packages the docs generators need.
+#
+#   python3 -m pip install -r tools/requirements.txt
+#
+# `just docs` (genguides.py / genspices.py) renders guide and spice markdown
+# with this; without it the recipe stops with an install hint rather than
+# half-generating the site and the docs pack.
+markdown>=3.4

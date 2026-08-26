@@ -23,13 +23,21 @@ import re
 import sys
 from pathlib import Path
 
-import markdown as md_lib
+try:
+    import markdown as md_lib
+except ImportError:  # pragma: no cover -- preflight, not a code path
+    sys.exit(
+        "error: tools/genspices.py needs the 'markdown' package\n"
+        "       install it with:  python3 -m pip install -r tools/requirements.txt\n"
+        "       (or:  python3 -m pip install markdown)"
+    )
 
 sys.path.insert(0, str(Path(__file__).parent))
 from genguides import (SIDEBAR_TOGGLE_JS, SYNTAX_TOGGLE_JS,
                        TURMERIC_HIGHLIGHT_JS, GUIDE_CSS,
                        inject_syntax_toggles, toc_tokens_to_sidebar)
 from gendocs import render_tree, collect_doc_entries
+import packlib
 
 GITHUB_BASE = 'https://github.com/rjungemann/turmeric-spices'
 SPICES_REPO = Path('../turmeric-spices')
@@ -148,8 +156,15 @@ Docs in progress.
 '''
 
 
-def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
-    """Render docs/html/spices/<name>/index.html from the spice's README.md."""
+def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
+                      pack_dir: Path | None = None) -> dict | None:
+    """Render docs/html/spices/<name>/index.html from the spice's README.md.
+
+    When `pack_dir` is given, the same rendered body is also written into the
+    docs pack as `spices/<name>.html` -- one rendering pass, two wrappers, so
+    the site page and Try's in-app pane cannot drift. Returns the pack index
+    entry (or None when not emitting a pack).
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     readme = meta['path'] / 'README.md'
 
@@ -227,16 +242,41 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
 '''
     (out_dir / 'index.html').write_text(html, encoding='utf-8')
 
+    if pack_dir is None:
+        return None
+
+    name = meta['name']
+    rel = f'spices/{name}.html'
+    size = packlib.write_fragment(pack_dir, rel, body_html)
+    description = (meta.get('description', '') or '').strip()
+    return {
+        'slug': name,
+        'path': rel,
+        'title': f'tur-{name}',
+        'category': 'Spices',
+        'description': description,
+        'bytes': size,
+        'words': packlib.search_string(
+            f'tur-{name}', name, description,
+            *packlib.heading_names(toc_tokens),
+            prose=packlib.strip_tags(body_html)),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Per-spice API reference (delegates to gendocs.render_tree)
 # ---------------------------------------------------------------------------
 
-def render_api_reference(meta: SpiceMeta, out_dir: Path):
+def render_api_reference(meta: SpiceMeta, out_dir: Path,
+                         pack_dir: Path | None = None):
     """
     Generate the per-spice API tree under out_dir/api/.
     Returns the parsed module list (for collect_doc_entries), or None when
     the spice has no src/ directory.
+
+    With `pack_dir`, the spice's module fragments also land in the pack under
+    `spices/<spice>/<module>.html` -- namespaced by spice so a module name
+    shared with the stdlib cannot collide.
     """
     src_dir = meta['path'] / 'src'
     if not src_dir.is_dir():
@@ -247,6 +287,9 @@ def render_api_reference(meta: SpiceMeta, out_dir: Path):
         api_out,
         brand=f'tur-{meta["name"]}',
         brand_label=f'tur-{meta["name"]} API',
+        emit_pack=pack_dir,
+        pack_section='spices',
+        pack_slug_prefix=f'{meta["name"]}/',
     )
 
 
@@ -363,9 +406,18 @@ def main() -> None:
         help='Write a JSON array of {name, summary, kind, spice} entries to PATH. '
              'Used by `just docs` to fold spice symbols into web/public/doc-names.json.',
     )
+    p.add_argument(
+        '--emit-pack',
+        metavar='DIR',
+        help='Also write chrome-free spice fragments into the docs pack at DIR '
+             '(see tools/genpack.py). Spices absent from this checkout simply '
+             'contribute nothing, so the pack never advertises a page it does '
+             'not carry.',
+    )
     args = p.parse_args()
 
     out_dir = Path(args.out)
+    pack_dir = Path(args.emit_pack) if args.emit_pack else None
 
     spice_dirs = discover_spices()
     readme_path = SPICES_REPO / 'README.md'
@@ -375,16 +427,25 @@ def main() -> None:
 
     print(f'Generating docs for {len(metas)} spices into {out_dir}/')
     all_entries: list[dict] = []
+    pack_entries: list[dict] = []
     for meta in metas:
         print(f'-> {meta["name"]}')
         spice_out = out_dir / meta['name']
         # Front page links to /docs/html/api/style.css via two-level relative path
-        render_front_page(meta, spice_out, style_rel='../../api/style.css')
-        modules = render_api_reference(meta, spice_out)
+        front = render_front_page(meta, spice_out, style_rel='../../api/style.css',
+                                  pack_dir=pack_dir)
+        if front:
+            pack_entries.append(front)
+        modules = render_api_reference(meta, spice_out, pack_dir=pack_dir)
         if modules is None:
             print(f'   (no src/ directory; skipping API reference)')
             continue
         all_entries.extend(collect_doc_entries(modules, spice=meta['name']))
+
+    if pack_dir is not None:
+        # Front pages go in alongside whatever render_api_reference already
+        # merged into the `spices` sidecar.
+        packlib.write_sidecar(pack_dir, 'spices', pack_entries)
 
     render_top_index(metas, out_dir)
     if args.emit_json:

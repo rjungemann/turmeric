@@ -4,6 +4,14 @@ tools/genguides.py -- Render Turmeric guide markdown files to HTML.
 
 Usage:
     python3 tools/genguides.py docs/guides/ [--out docs/html/guides/]
+                                            [--emit-pack web/public/docs-pack/]
+
+Two consumers, one rendering pass. `build_guide_body` converts a guide's
+markdown into its article body exactly once; `render_guide` wraps that body in
+site chrome for docs/html/guides/, and `emit_pack_fragment` writes the same
+body -- chrome-free, links rewritten into the pack's `#doc=` URL space -- into
+the docs pack that Try Turmeric renders in-app and precaches for offline use.
+The two outputs cannot drift because there is only one renderer.
 """
 
 import argparse
@@ -13,7 +21,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-import markdown as md_lib
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import packlib  # noqa: E402  (sibling module, path fixed up just above)
+
+try:
+    import markdown as md_lib
+except ImportError:  # pragma: no cover -- preflight, not a code path
+    sys.exit(
+        "error: tools/genguides.py needs the 'markdown' package\n"
+        "       install it with:  python3 -m pip install -r tools/requirements.txt\n"
+        "       (or:  python3 -m pip install markdown)"
+    )
 
 
 def get_creation_date(path: Path, repo_root: Path) -> str | None:
@@ -397,6 +415,79 @@ def strip_manual_toc(text: str) -> str:
     return _MANUAL_TOC_RE.sub('', text, count=1)
 
 
+_LANG_FENCE_OPEN_RE = re.compile(r'(?m)^(`{3})(turmeric|sweet-exp)([^\n]*)\n')
+
+
+def _read_fenced_block(text: str, pos: int) -> tuple[str, int]:
+    """Read a markdown fenced block whose opening fence's newline is at `pos`.
+
+    Returns (content, end) where `end` is just past the closing fence line.
+
+    A markdown block closes at a column-0 bare ``` line. Turmeric inline-C
+    blocks use ``` to toggle a C span (```c opens; ``` or ```) closes) and may
+    be indented or written inline, so track the C span and only treat a bare
+    ``` as the block close when not inside one. This is the same scan
+    tools/check-guide-pairs.py uses to delimit blocks.
+    """
+    n = len(text)
+    i = pos
+    line_start = pos
+    in_c = False
+    while i < n:
+        if text.startswith('```', i):
+            at_col0 = (i == line_start)
+            after = text[i + 3] if i + 3 < n else '\n'
+            if in_c:
+                in_c = False
+                i += 3
+                continue
+            if after.isalnum():           # info string -> opens a (C) span
+                in_c = True
+                i += 3
+                continue
+            if at_col0:                   # bare ``` at column 0 -> block close
+                j = text.find('\n', i)
+                end = (j + 1) if j != -1 else n
+                return text[pos:i], end
+            i += 3
+            continue
+        if text[i] == '\n':
+            line_start = i + 1
+        i += 1
+    return text[pos:], n
+
+
+def widen_nested_fences(text: str) -> str:
+    """Re-fence turmeric/sweet-exp blocks that contain inline-C fences.
+
+    Turmeric's inline-C syntax puts ``` runs *inside* a code block. The project
+    style closes an inline-C body with ```) on the same line, which markdown
+    ignores -- but a module-level inline-C block legitimately closes with a bare
+    ``` at column 0, and python-markdown's fenced_code reads that as the end of
+    the *enclosing* turmeric block. Everything after it then renders as prose
+    instead of code (docs/guides/thread-pool-guide.md is the case in the tree).
+
+    Widening the enclosing fence to five backticks makes the inner
+    three-backtick runs ordinary content, so the block survives intact. Only
+    blocks that actually contain a nested run are touched.
+    """
+    out = []
+    pos = 0
+    for m in _LANG_FENCE_OPEN_RE.finditer(text):
+        if m.start() < pos:
+            continue  # inside a block already consumed
+        content, end = _read_fenced_block(text, m.end())
+        if '```' not in content:
+            continue
+        out.append(text[pos:m.start()])
+        out.append(f'`````{m.group(2)}{m.group(3)}\n{content}`````\n')
+        pos = end
+    if not out:
+        return text
+    out.append(text[pos:])
+    return ''.join(out)
+
+
 def _count_toc_entries(tokens: list) -> int:
     return sum(1 + _count_toc_entries(t.get('children', [])) for t in tokens)
 
@@ -451,7 +542,18 @@ def toc_tokens_to_sidebar(tokens: list) -> str:
     return '\n'.join(items)
 
 
-def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | None = None) -> None:
+def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
+    """Render one guide's markdown to its article body -- the single rendering pass.
+
+    The returned ``body`` still carries the source's raw ``href="other.md"``
+    cross-links: each consumer rewrites them into its own URL space
+    (``rewrite_links_site`` for docs/html/, ``rewrite_links_pack`` for the docs
+    pack). Everything else about the body -- the syntax toggles, the in-body
+    Contents box, the heading anchors -- is identical for both, which is what
+    keeps the site and the pack from drifting.
+
+    Returns a dict with: stem, title, body, toc_tokens, meta.
+    """
     raw = src.read_text(encoding='utf-8')
     fm_meta, text = parse_front_matter(raw)
     if meta is None:
@@ -460,22 +562,12 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
                   flags=re.MULTILINE)
     text = strip_manual_toc(text)
+    text = widen_nested_fences(text)
 
     conv = md_lib.Markdown(extensions=['fenced_code', 'tables', 'toc'],
                             extension_configs={'toc': {'permalink': False}})
     body_html = conv.convert(text)
     body_html = inject_syntax_toggles(body_html)
-
-    # Rewrite .md links to .html (only local, non-absolute links).
-    # Must run AFTER markdown conversion -- the source uses `[text](file.md)`
-    # syntax, which only becomes `href="file.md"` after the converter runs.
-    def rewrite_md_link(m: re.Match) -> str:
-        href = m.group(1)
-        if href.startswith(('http://', 'https://', '/', '..')):
-            return m.group(0)
-        return f'href="{Path(href).stem}.html"'
-
-    body_html = re.sub(r'href="([^"]+\.md)"', rewrite_md_link, body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     # In-body "Contents" box, inserted right after the page title (first <h1>),
@@ -495,6 +587,45 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     else:
         title_match = re.match(r'^#\s+(.+)', text, re.MULTILINE)
         title = title_match.group(1) if title_match else stem.replace('-', ' ').title()
+
+    return {
+        'stem': stem,
+        'title': title,
+        'body': body_html,
+        'toc_tokens': toc_tokens,
+        'meta': meta,
+    }
+
+
+# `[text](other-guide.md)` and `[text](other-guide.md#anchor)`, as they appear
+# in the converted HTML. The optional fragment group is what lets a
+# deep-linking cross-reference survive the rewrite instead of being left as a
+# dead `.md` href.
+_MD_HREF_RE = re.compile(r'href="([^"#]+)\.md(#[^"]*)?"')
+
+
+def rewrite_links_site(body_html: str) -> str:
+    """Rewrite `.md` cross-links to the sibling `.html` pages of docs/html/guides/.
+
+    Must run AFTER markdown conversion -- the source uses `[text](file.md)`
+    syntax, which only becomes `href="file.md"` once the converter has run.
+    """
+    def rewrite(m: re.Match) -> str:
+        href, frag = m.group(1), m.group(2) or ''
+        if href.startswith(('http://', 'https://', '/', '..')):
+            return m.group(0)
+        return f'href="{Path(href).name}.html{frag}"'
+
+    return _MD_HREF_RE.sub(rewrite, body_html)
+
+
+def render_guide(stem: str, src: Path, out: Path, all_stems: set,
+                 meta: dict | None = None, doc: dict | None = None) -> None:
+    if doc is None:
+        doc = build_guide_body(stem, src, meta)
+    title = doc['title']
+    toc_tokens = doc['toc_tokens']
+    body_html = rewrite_links_site(doc['body'])
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = f'''\
@@ -686,10 +817,57 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     print('  index.html')
 
 
+def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path) -> None:
+    """Write the chrome-free guide fragments and the guides slice of index.json.
+
+    Fragments keep their source links; `tools/genpack.py` rewrites them into the
+    pack's `#doc=` URL space once every generator has contributed, because only
+    it knows what the finished pack contains.
+    """
+    pack_dir = Path(pack_dir)
+    entries = []
+    for doc in docs:
+        stem = doc['stem']
+        rel = f'guides/{stem}.html'
+        size = packlib.write_fragment(pack_dir, rel, doc['body'])
+        meta = doc['meta'] or {}
+        headings = packlib.heading_names(doc['toc_tokens'])
+        description = (meta.get('description', '') or '').replace('—', '--').strip()
+        entries.append({
+            'slug': stem,
+            'path': rel,
+            'title': doc['title'],
+            'category': (meta.get('category', '') or '').strip() or 'Other',
+            'description': description,
+            'bytes': size,
+            'words': packlib.search_string(
+                stem.replace('-', ' '), doc['title'], description,
+                *headings, prose=packlib.strip_tags(doc['body'])),
+        })
+
+        # Copy any local images the guide references, so the pack is
+        # self-contained and the budget check counts what it ships.
+        for src_rel in packlib.local_image_srcs(doc['body']):
+            src_path = (guides_dir / src_rel).resolve()
+            if not src_path.is_file():
+                print(f'  warning: {stem}.md references missing image {src_rel}',
+                      file=sys.stderr)
+                continue
+            dst = pack_dir / 'guides' / src_rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(src_path.read_bytes())
+
+    packlib.write_sidecar(pack_dir, 'guides', entries)
+    print(f'  pack: {len(entries)} guide fragments -> {pack_dir}/guides/')
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description='Render Turmeric guide markdown to HTML.')
     p.add_argument('guides_dir', help='Path to docs/guides/ directory')
     p.add_argument('--out', default=None, help='Output directory (default: same as guides_dir)')
+    p.add_argument('--emit-pack', metavar='DIR', default=None,
+                   help='Also write chrome-free guide fragments into the docs '
+                        'pack at DIR (see tools/genpack.py)')
     args = p.parse_args()
 
     guides_dir = Path(args.guides_dir)
@@ -724,11 +902,17 @@ def main() -> None:
         recent.append({'stem': src.stem, 'label': label, 'date': date})
 
     print('Generating guides:')
+    docs = []
     for src in md_files:
+        doc = build_guide_body(src.stem, src, meta_by_stem.get(src.stem, {}))
         render_guide(src.stem, src, out_dir / f'{src.stem}.html', all_stems,
-                     meta_by_stem.get(src.stem, {}))
+                     doc=doc)
+        docs.append(doc)
     render_index(categories, all_stems, out_dir, recent=recent)
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
+
+    if args.emit_pack:
+        emit_pack_guides(docs, guides_dir, Path(args.emit_pack))
 
 
 if __name__ == '__main__':

@@ -328,18 +328,40 @@ rebuild: clean configure build
 # See docs/archive/docstrings-verified-table-zeroed-by-regen.md.
 # Spice symbols are folded into doc-names.json via --extra-json so the web
 # search bar surfaces stdlib + spices in a single list.
+#
+# OD1: every generator also emits its pages a second way -- chrome-free
+# fragments into web/public/docs-pack/ -- and `genpack` merges them into
+# index.json, resolves cross-links, and enforces the size budget. The body of
+# each page is rendered exactly once and wrapped twice, so the website and Try
+# Turmeric's in-app docs pane cannot drift. See docs/guides/offline-docs-guide.md.
 docs: guides spices
-    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json --extra-json docs/html/spices/doc-names-spices.json
+    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json --extra-json docs/html/spices/doc-names-spices.json --emit-pack web/public/docs-pack/
+    python3 tools/genpack.py web/public/docs-pack/
 
 # Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:
-    python3 tools/genguides.py docs/guides/ --out docs/html/guides/
+    python3 tools/genguides.py docs/guides/ --out docs/html/guides/ --emit-pack web/public/docs-pack/
 
 # Generate per-spice doc pages from the sibling ../turmeric-spices/ checkout.
 # Also emits docs/html/spices/doc-names-spices.json which gendocs merges into
 # web/public/doc-names.json on the next step.
 spices:
-    python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json
+    python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json --emit-pack web/public/docs-pack/
+
+# Bundle the rendered docs (site HTML + docs pack) for offline use off the web.
+# `just docs` first, then: turmeric-docs-<version>.tar.gz, which the release cut
+# attaches to the GitHub release and the Homebrew formula can install into
+# share/doc/turmeric/ for `tur docs --open`. See OD4.
+docs-tarball: docs
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(cat VERSION)"
+    out="turmeric-docs-${version}.tar.gz"
+    rm -f "$out"
+    tar -czf "$out" \
+        --transform "s,^,turmeric-docs-${version}/," \
+        -C . docs/html web/public/docs-pack
+    echo "wrote $out ($(du -h "$out" | cut -f1))"
 
 
 # Check that every turmeric+sweet-exp toggle pair in the guides is valid, and
