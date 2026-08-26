@@ -7154,23 +7154,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                 }
-                /* SR1, the other direction: a CARRIER argument reaching a param
-                 * the callee emits as a by-value aggregate.  A `:int`-declared
-                 * parameter whose body matches it against constructors is refined
-                 * to that ADT, so the emitted signature takes the aggregate --
-                 * `(defn run-calc-op [op : int] ...)` becomes
-                 * `run_calc_op(tur_adt_CalcOp)`.  Callers that honour the
-                 * DECLARATION still hand over an int64 carrier word: here the
-                 * lifted `(fn [op] (run-calc-op op))`, whose own `op` is an
-                 * untyped carrier param.  Deref the box back to the aggregate.
-                 * While every sum rode the carrier the refinement was invisible
-                 * and both sides were int64.
-                 *
-                 * Keyed on the emitted signature rather than any Type, because the
-                 * refined param type is not reachable from the call site -- the
-                 * callee's declared TY_FN still says `:int`.  Narrow on purpose: a
-                 * non-pointer `tur_adt_` C name (a by-value ADT aggregate) against
-                 * an argument that is statically a carrier word. */
                 /* SR1, the other direction: a CARRIER argument reaching a
                  * parameter the callee emits as a by-value SUM.  A `:int`-declared
                  * parameter whose body matches it against constructors is refined
@@ -7195,6 +7178,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_arg && fn_binding->source_fn_def) {
                     const FnDef *fd = fn_binding->source_fn_def;
                     TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
+                    /* This bridge and the return-side unbox below cannot stack
+                     * on one node: this one requires the arg's e->type to be a
+                     * carrier word, that one requires the call's e->type to be
+                     * the sum, and a node has one type.  (Probed with the
+                     * composed eraser `(eat (unwrap2 ...))` -- exactly one
+                     * fires.) */
                     if (i < fd->n_params && fd->param_types &&
                         emit_type_is_byvalue_sum(ctx, fd->param_types[i]) &&
                         (ak == TY_INT || ak == TY_INT64 || ak == TY_UINT64 ||
@@ -8125,6 +8114,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * whose clone already returns the aggregate by value. */
             if (g_sr1_sum_byvalue &&
                 fn_binding && fn_binding->type.kind == TY_FN &&
+                /* Only a MONOMORPHIC `:int` declaration takes this unbox.  A
+                 * TYVAR result erased to the carrier (vec-get's `: A`) reads the
+                 * same at this site, but its recovery already has owners -- the
+                 * seam-4 carrier-producer arg bridge and the poly-result unbox --
+                 * and a second deref on top of theirs reads a struct as a
+                 * pointer.  Same discriminator as the arg side: full_type is
+                 * non-NULL exactly for the polymorphic case. */
+                fn_binding->type.as.fn.result_full_type == NULL &&
                 emit_type_is_byvalue_sum(ctx, e->type) &&
                 !type_is_transparent_int_newtype(emit_resolve_type(ctx, e->type)) &&
                 !find_matched_abi_spec(ctx, e, fn_binding)) {
