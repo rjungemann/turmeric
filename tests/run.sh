@@ -1146,7 +1146,15 @@ if [ -s "$SANITIZER_LOG" ]; then
     echo
     echo "SANITIZER: $SAN_COUNT finding(s) from \`tur\` across $SAN_FIXTURES fixture(s)."
     echo "  These are UBSan/ASan diagnostics from the COMPILER, not from emitted programs."
-    echo "  They do not fail the run (set TUR_SANITIZER_GATE=1 to make them fatal)."
+    # Say which configuration is actually running.  The unconditional "they do
+    # not fail the run" was a lie under TUR_SANITIZER_GATE=1 -- the run fails
+    # thirty lines later -- and the advice to set the variable is noise to
+    # someone who already has.
+    if [ "${TUR_SANITIZER_GATE:-0}" = "1" ]; then
+        echo "  TUR_SANITIZER_GATE=1: these are FATAL; the run fails below."
+    else
+        echo "  They do not fail the run (set TUR_SANITIZER_GATE=1 to make them fatal)."
+    fi
     cut -f2- "$SANITIZER_LOG" | sed 's/value [0-9][0-9]*/value N/' \
         | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
     echo "  full log: $SANITIZER_LOG"

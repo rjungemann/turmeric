@@ -346,8 +346,19 @@ into 60 red fixtures in one step, which is how a gate gets switched off instead
 of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run, which is the
 setting to use in CI once the count is at zero -- as it is on Linux now.
 
-**Nothing arms it yet, and it is not a pure flag flip**: the zero was measured
-on one platform, and UBSan findings vary by toolchain. Tracked in
+**CI arms it on the Linux leg only.** `.github/workflows/ci.yml`'s "Run fixture
+suite" step sets `TUR_SANITIZER_GATE: 1` when `runner.os == 'Linux'` and `0`
+otherwise. The asymmetry is the point rather than an oversight: the zero-finding
+measurement was taken on Linux/GCC, and UBSan findings are exactly the class of
+thing that varies with toolchain -- struct padding, which bytes are
+uninitialized, which corners are implementation-defined. The macOS count has
+never been taken, and arming it blind would redden that leg on findings nobody
+has looked at.
+
+**To finish the job**, run the suite on a macOS box with the gate armed, triage
+what it reports (a finding that reproduces on only one toolchain is still a real
+finding -- it was just never visible), then drop the `runner.os` condition.
+Tracked in
 [sanitizer-gate-not-armed-in-ci](https://github.com/rjungemann/turmeric/blob/main/docs/reported/sanitizer-gate-not-armed-in-ci.md).
 
 Two things to know if you touch this:

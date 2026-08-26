@@ -947,7 +947,7 @@ field: `caps_hit_probe`, filled by bracketing `rt_prove_paths` in
 One more thing the trace turned up, unfixed and minor: `g_stats.path_probes` is
 only printed when `proven_by_path` is non-zero, so a path probe that proves
 nothing is invisible in the `TUR_REFINE_STATS` summary too.
-| [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | `tests/run.sh` gained a gate for UBSan findings from the compiler and it is verified in both directions, but nothing sets `TUR_SANITIZER_GATE=1`, so CI runs unarmed. Not a pure flag flip: the zero-finding count was measured on Linux only, and UBSan findings vary by toolchain |
+| [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | **half done 2026-08-26: Linux armed, macOS open.** CI sets `TUR_SANITIZER_GATE: 1` on the Linux leg (zero findings, re-measured at HEAD); macOS stays unarmed because its count has never been taken and UBSan findings vary by toolchain. Finishing needs a mac: measure, triage, drop the `runner.os` condition |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
 
 `compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
