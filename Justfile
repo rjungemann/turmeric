@@ -438,6 +438,13 @@ web-dev: web-deps
       echo "        the REPL's doc panel silently finds nothing)" >&2
       exit 1
     fi
+    if [ ! -f web/public/docs-pack/index.json ]; then
+      echo "error: web/public/docs-pack/index.json missing -- run 'just docs' first" >&2
+      echo "       (it is a build output and is not committed; without it the" >&2
+      echo "        REPL's docs pane opens onto an empty nav and the service" >&2
+      echo "        worker has nothing to precache for offline reading)" >&2
+      exit 1
+    fi
     cd web && npm run dev
 
 # Clean WASM build
