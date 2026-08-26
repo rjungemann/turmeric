@@ -27,14 +27,31 @@ function injectSwVersion() {
     name: 'inject-sw-version',
     apply: 'build',
     closeBundle() {
-      const swPath = resolve(__dirname, 'dist/sw.js');
-      if (!existsSync(swPath)) return;
-      const src = readFileSync(swPath, 'utf-8');
-      const rewritten = src.replace(
-        /tur-try-v1-\d+\.\d+\.\d+/g,
-        `tur-try-v1-${turmericVersion}`,
-      );
-      if (rewritten !== src) writeFileSync(swPath, rewritten);
+      // The Cloudflare plugin splits the output into dist/client/ and
+      // dist/<worker>/, so public/ assets land at dist/client/sw.js -- not
+      // dist/sw.js, which is where this looked and silently found nothing.
+      // Check both, and say so if neither is there: a rewrite that quietly
+      // does not happen is exactly the stale-precache bug this plugin exists
+      // to prevent.
+      const candidates = [
+        resolve(__dirname, 'dist/client/sw.js'),
+        resolve(__dirname, 'dist/sw.js'),
+      ].filter(existsSync);
+
+      if (candidates.length === 0) {
+        this.warn('sw.js not found in dist/ -- CACHE_VERSION was not stamped, '
+                  + 'so returning visitors may be served stale precached assets');
+        return;
+      }
+
+      for (const swPath of candidates) {
+        const src = readFileSync(swPath, 'utf-8');
+        const rewritten = src.replace(
+          /tur-try-v1-\d+\.\d+\.\d+/g,
+          `tur-try-v1-${turmericVersion}`,
+        );
+        if (rewritten !== src) writeFileSync(swPath, rewritten);
+      }
     },
   };
 }

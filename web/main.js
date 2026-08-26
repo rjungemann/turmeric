@@ -3863,6 +3863,13 @@ async function refreshDocsStatus() {
         if (status.cached < status.expected) {
             el.textContent = `${status.cached} of ${status.expected} pages cached -- reconnect to finish`;
             el.classList.add('partial');
+            // Ask the worker to top up now rather than waiting for a release.
+            // An install is per-URL failure-tolerant, so a flaky first load can
+            // leave the pack short; a guarantee that silently waits a version
+            // bump to come true is not a guarantee.
+            if (navigator.onLine) {
+                navigator.serviceWorker?.controller?.postMessage('REPAIR_DOCS_PACK');
+            }
         }
     } catch {
         // No service worker (dev server, or a browser with SW disabled). The
