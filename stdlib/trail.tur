@@ -360,6 +360,90 @@
   tur_trail_resume();
   ```)
 
+;;; bt-scope -- run `body` in a fresh trail level and undo its writes after.
+;;;
+;;; The bracket form of `bt-mark` / `bt-undo-to!`. Prefer it: the halves are
+;;; easy to leave unpaired on an early return, and this cannot be.
+;;;
+;;; Parameters:
+;;;   body -- a thunk. Taken ^fat, so a capturing lambda works -- which is the
+;;;           only interesting case, since the body has to reach the cells.
+;;;
+;;; Returns:
+;;;   Whatever `body` returned. The VALUE survives; the trailed WRITES do not.
+;;;   Returning something that points into state the scope just undid is the
+;;;   caller's problem -- this is a search primitive, not a memory-safe region.
+;;;
+;;; Example:
+;;;   (bt-scope (fn [] (do (bt-set! c 99) (bt-get c))))  ; => 99, c restored
+;;;
+;;; TWO THINGS THAT COMPOSE SURPRISINGLY:
+;;;
+;;;   1. `bt-commit-to!` inside the body escapes this scope ENTIRELY, not just
+;;;      one level. Commit means "promote to level 0" -- it discards the undo
+;;;      information rather than merging it into the enclosing level -- so a
+;;;      committed write survives every enclosing `bt-scope` too. That is
+;;;      deliberate (it is how a learned clause outlives a backjump), but it is
+;;;      the opposite of what "commit into the parent" suggests to a Prolog ear.
+;;;
+;;;   2. A panic inside `body` skips the undo, leaving the trail at the inner
+;;;      level. A later `bt-undo-to!` on an OUTER mark still unwinds past it,
+;;;      but anything reading cells in between sees the body's writes. There is
+;;;      no unwind protection to hang the restore on.
+;;;
+;;; The `bt-undo-to!` result is discarded: it reports only that the mark was
+;;; already spent, which inside this bracket means the body undid or committed
+;;; its own enclosing level -- covered by note 1.
+;;;
+;;; Since: SX2
+
+(defn bt-scope [A] [^fat body : (fn [] A)] : A
+  (let [m (bt-mark)
+        r (body)]
+    (do (bt-undo-to! m)
+        r)))
+;;; with-untrailed -- run `body` with trailing PAUSED, then resume.
+;;;
+;;; The bracket form of `untrailed-begin` / `untrailed-end`, and the per-write
+;;; opt-out: writes made inside are not recorded, so they survive an undo that
+;;; unwinds past this point. Nests -- the pause is a depth counter, not a flag.
+;;;
+;;; Parameters:
+;;;   body -- a thunk, taken ^fat so it can capture the cells it writes.
+;;;
+;;; Returns:
+;;;   Whatever `body` returned.
+;;;
+;;; HAZARD -- USE THE RESULT.  A discarded call to a parametric function is
+;;; currently DROPPED unless it instantiates at `int`, taking its side effects
+;;; with it, so the obvious spelling silently does nothing:
+;;;
+;;;   (with-untrailed (fn [] (bt-set! c 7)))    ;; BROKEN: bool result, discarded
+;;;
+;;; Bind or otherwise consume the result until that is fixed:
+;;;
+;;;   (let [_ (with-untrailed (fn [] (bt-set! c 7)))] ...)   ;; works
+;;;   (with-untrailed (fn [] (do (bt-set! c 7) 0)))          ;; works (int)
+;;;
+;;; See docs/reported/poly-call-in-statement-position-dropped.md.
+;;;
+;;; Example:
+;;;   (let [m (bt-mark)]
+;;;     (let [_ (with-untrailed (fn [] (bt-set! c 7)))]
+;;;       (do (bt-undo-to! m)
+;;;           (bt-get c))))                               ; => 7, not restored
+;;;
+;;; Same panic caveat as `bt-scope`, and worse: a panic inside `body` leaves
+;;; trailing paused for everything after it, so later writes silently stop
+;;; being undoable. Do not put fallible work here that a `bt-scope` could hold.
+;;;
+;;; Since: SX2
+
+(defn with-untrailed [A] [^fat body : (fn [] A)] : A
+  (do (untrailed-begin)
+      (let [r (body)]
+        (do (untrailed-end)
+            r))))
 ;;; trail-reset! -- drop every level and entry WITHOUT running undo.
 ;;;
 ;;; Teardown and tests only; not part of the search protocol.
