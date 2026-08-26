@@ -120,6 +120,11 @@ web/public/docs-pack/
 # Release docs bundle from `just docs-tarball` (OD4).
 turmeric-docs-*.tar.gz
 
+# Local Playwright config override (e.g. pointing launchOptions.executablePath
+# at a sandbox's prebuilt Chromium when `npx playwright install` is not an
+# option). Developer-local; the committed playwright.config.js is the contract.
+web/pw.local.config.js
+
 # Playwright MCP browser session artifacts
 .playwright-mcp/
 

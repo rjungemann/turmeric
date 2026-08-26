@@ -219,35 +219,129 @@ SIDEBAR_TOGGLE_JS = '''\
     });
   </script>'''
 
-SYNTAX_TOGGLE_JS = '''\
-  <script>
-  (function(){
-    function applyToggle(toggle, syntax) {
-      var card = toggle.closest('.code-card');
-      if (!card) return;
-      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
-        var active = btn.dataset.syntax === syntax;
-        btn.classList.toggle('active', active);
-        btn.setAttribute('aria-selected', active ? 'true' : 'false');
-      });
-      card.querySelectorAll('.code-version').forEach(function(v){
-        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
-      });
-    }
+# ---------------------------------------------------------------------------
+# Guide runtime -- one source, three consumers
+#
+# A rendered guide body needs two behaviours to look right: Turmeric syntax
+# highlighting on its code blocks, and the turmeric/sweet-exp segmented toggle
+# on paired blocks. Those behaviours are needed by the site pages under
+# docs/html/guides/, by the spice pages genspices.py renders, and by Try
+# Turmeric's in-app docs pane, which renders the very same bodies out of the
+# docs pack.
+#
+# So GUIDE_JS_CORE below is the only copy. The site pages inline it and call
+# into it immediately (GUIDE_RUNTIME_JS); the docs pack ships it as guide.js
+# and the pane calls the same two entry points against its own subtree after
+# each render. Both entry points take a root element and are idempotent, which
+# is what makes re-running them on a freshly rendered fragment safe.
+# ---------------------------------------------------------------------------
 
-    // ST1.5: restore stored preference across all cards on load
-    var stored = localStorage.getItem('guide-syntax');
-    if (stored) {
-      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+GUIDE_JS_CORE = '''\
+(function(){
+  var KW = new Set([
+    'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+    'if','cond','when','unless','do','begin','and','or','not',
+    'fn','lambda','async','await','match','case',
+    'quote','quasiquote','unquote','for','while','loop','do-m',
+    'set!','try','catch','finally','with','use',
+    'import','export','module','require','provide',
+    'cons','car','cdr','nil-value','some','none','ok','err',
+    'map','filter','reduce','apply','return','yield','raise','throw',
+    'coerce','cast','type-of','any',
+  ]);
+  function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function hl(code){
+    var out='', i=0, n=code.length;
+    while(i<n){
+      var c=code[i];
+      // Line comment
+      if(c===';'){
+        var e=code.indexOf('\\n',i); if(e===-1)e=n;
+        out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+      }
+      // String
+      if(c==='"'){
+        var j=i+1;
+        while(j<n){if(code[j]==='\\\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+        out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+      }
+      // Type annotation :keyword
+      if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+        var j=i+1;
+        while(j<n&&/[a-zA-Z0-9_\\-?!]/.test(code[j]))j++;
+        out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+      }
+      // Number (integer or float, possibly negative)
+      if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+        var j=i; if(code[j]==='-')j++;
+        while(j<n&&/[0-9a-fA-FxX_\\.]/.test(code[j]))j++;
+        out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+      }
+      // Symbol / identifier
+      if(/[a-zA-Z_\\-!?*+<>=\\/&%^~#@]/.test(c)){
+        var j=i;
+        while(j<n&&/[a-zA-Z0-9_\\-!?*+<>=\\/&%^~#@\\.]/.test(code[j]))j++;
+        var sym=code.slice(i,j);
+        if(sym==='true'||sym==='false'||sym==='nil'){
+          out+='<span class="hl-number">'+esc(sym)+'</span>';
+        } else if(KW.has(sym)){
+          out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+        } else {
+          out+=esc(sym);
+        }
+        i=j; continue;
+      }
+      out+=esc(c); i++;
     }
+    return out;
+  }
 
-    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+  // Idempotent: the data-hl stamp means a second pass over the same DOM (the
+  // docs pane re-renders on every navigation) cannot double-escape the markup.
+  function highlightGuideCode(root){
+    var scope = root || document;
+    scope.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp')
+      .forEach(function(el){
+        if (el.dataset.hlDone) return;
+        el.dataset.hlDone = '1';
+        el.innerHTML = hl(el.textContent);
+      });
+  }
+
+  function applyToggle(toggle, syntax) {
+    var card = toggle.closest('.code-card');
+    if (!card) return;
+    toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+      var active = btn.dataset.syntax === syntax;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    card.querySelectorAll('.code-version').forEach(function(v){
+      v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+    });
+  }
+
+  function storedSyntax(){
+    try { return localStorage.getItem('guide-syntax'); } catch (e) { return null; }
+  }
+
+  function initSyntaxToggles(root){
+    var scope = root || document;
+    var toggles = scope.querySelectorAll('.code-syntax-toggle');
+
+    // ST1.5: restore the stored preference across every card on load
+    var stored = storedSyntax();
+    if (stored) toggles.forEach(function(t){ applyToggle(t, stored); });
+
+    toggles.forEach(function(toggle){
+      if (toggle.dataset.toggleWired) return;
+      toggle.dataset.toggleWired = '1';
       // Click handler
       toggle.addEventListener('click', function(e){
         if (!e.target.classList.contains('seg-btn')) return;
         var syntax = e.target.dataset.syntax;
         document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
-        localStorage.setItem('guide-syntax', syntax);
+        try { localStorage.setItem('guide-syntax', syntax); } catch (err) {}
       });
       // ST5.2: arrow-key navigation within the tablist
       toggle.addEventListener('keydown', function(e){
@@ -258,74 +352,26 @@ SYNTAX_TOGGLE_JS = '''\
         if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
       });
     });
-  })();
+  }
+
+  var api = { highlightGuideCode: highlightGuideCode, initSyntaxToggles: initSyntaxToggles };
+  if (typeof window !== 'undefined') window.turmericGuide = api;
+})();'''
+
+# What a rendered site page carries: the shared core, then the two calls that
+# used to be the bodies of TURMERIC_HIGHLIGHT_JS and SYNTAX_TOGGLE_JS.
+GUIDE_RUNTIME_JS = '''\
+  <script>
+''' + GUIDE_JS_CORE + '''
+  window.turmericGuide.highlightGuideCode(document);
+  window.turmericGuide.initSyntaxToggles(document);
   </script>'''
 
-TURMERIC_HIGHLIGHT_JS = '''\
-  <script>
-  (function(){
-    var KW = new Set([
-      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
-      'if','cond','when','unless','do','begin','and','or','not',
-      'fn','lambda','async','await','match','case',
-      'quote','quasiquote','unquote','for','while','loop','do-m',
-      'set!','try','catch','finally','with','use',
-      'import','export','module','require','provide',
-      'cons','car','cdr','nil-value','some','none','ok','err',
-      'map','filter','reduce','apply','return','yield','raise','throw',
-      'coerce','cast','type-of','any',
-    ]);
-    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-    function hl(code){
-      var out='', i=0, n=code.length;
-      while(i<n){
-        var c=code[i];
-        // Line comment
-        if(c===';'){
-          var e=code.indexOf('\\n',i); if(e===-1)e=n;
-          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
-        }
-        // String
-        if(c==='"'){
-          var j=i+1;
-          while(j<n){if(code[j]==='\\\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
-          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
-        }
-        // Type annotation :keyword
-        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
-          var j=i+1;
-          while(j<n&&/[a-zA-Z0-9_\\-?!]/.test(code[j]))j++;
-          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
-        }
-        // Number (integer or float, possibly negative)
-        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
-          var j=i; if(code[j]==='-')j++;
-          while(j<n&&/[0-9a-fA-FxX_\\.]/.test(code[j]))j++;
-          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
-        }
-        // Symbol / identifier
-        if(/[a-zA-Z_\\-!?*+<>=\\/&%^~#@]/.test(c)){
-          var j=i;
-          while(j<n&&/[a-zA-Z0-9_\\-!?*+<>=\\/&%^~#@\\.]/.test(code[j]))j++;
-          var sym=code.slice(i,j);
-          if(sym==='true'||sym==='false'||sym==='nil'){
-            out+='<span class="hl-number">'+esc(sym)+'</span>';
-          } else if(KW.has(sym)){
-            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
-          } else {
-            out+=esc(sym);
-          }
-          i=j; continue;
-        }
-        out+=esc(c); i++;
-      }
-      return out;
-    }
-    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
-      el.innerHTML=hl(el.textContent);
-    });
-  })();
-  </script>'''
+# Kept under their historical names so genspices.py (and any other caller)
+# keeps working; both now expand to the shared runtime, and emitting both into
+# one page is harmless because the core is idempotent and self-registering.
+TURMERIC_HIGHLIGHT_JS = GUIDE_RUNTIME_JS
+SYNTAX_TOGGLE_JS = ''
 
 GUIDE_CSS = '''\
     .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
@@ -825,6 +871,15 @@ def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path) -> None
     it knows what the finished pack contains.
     """
     pack_dir = Path(pack_dir)
+
+    # The pane owns typography, so the pack ships the same guide stylesheet the
+    # site pages inline and the same runtime that highlights their code blocks
+    # and drives the turmeric/sweet-exp toggles -- emitted from the very
+    # constants those pages are built from, so a guide looks the same in Try as
+    # it does on turmeric-lang.com without the rules being written twice.
+    packlib.write_fragment(pack_dir, 'guide.css', GUIDE_CSS)
+    packlib.write_fragment(pack_dir, 'guide.js', GUIDE_JS_CORE)
+
     entries = []
     for doc in docs:
         stem = doc['stem']

@@ -869,7 +869,9 @@ function updateUrlHash() {
     const code = editor.getValue();
     const encoded = encodeState(code);
     if (encoded) {
-        window.location.hash = `code=${encoded}`;
+        // Merge rather than assign: the docs pane keeps a `doc=` key in the
+        // same hash, and clobbering it would close the pane mid-read.
+        setHashParam('code', encoded);
     }
 }
 
@@ -2656,8 +2658,11 @@ function initEventListeners() {
         }
     });
     
-    // Handle hash changes (for sharing)
-    window.addEventListener('hashchange', loadFromUrlHash);
+    // Handle hash changes (for sharing, and for #doc= docs deep links)
+    window.addEventListener('hashchange', () => {
+        loadFromUrlHash();
+        syncDocsPaneFromHash();
+    });
 
     // REPL input
     initReplInput();
@@ -3135,20 +3140,32 @@ let docNames = [];
 /**
  * Fetch the doc name list and set up the search bar.
  */
+let docNamesPromise = null;
+
 async function fetchDocNames() {
-    try {
-        const res = await fetch('/doc-names.json');
-        if (!res.ok) {
-            console.error('Failed to fetch doc-names.json:', res.status, res.statusText);
-            return;
+    // Idempotent. The WASM boot calls this, and so does the docs pane -- which
+    // needs the symbol list for its search but has no reason to wait on (or be
+    // lost to) a WASM boot that is slow or never completes. doc-names.json is
+    // a static file; nothing about it depends on the runtime.
+    if (docNamesPromise) return docNamesPromise;
+    docNamesPromise = (async () => {
+        try {
+            const res = await fetch('/doc-names.json');
+            if (!res.ok) {
+                console.error('Failed to fetch doc-names.json:', res.status, res.statusText);
+                docNamesPromise = null;
+                return;
+            }
+            docNames = await res.json();
+            console.log('docNames loaded successfully. Length:', docNames.length);
+            initDocSearch();
+        } catch (err) {
+            console.error('Error fetching doc-names.json:', err);
+            docNamesPromise = null;
+            // Non-fatal — search bar stays empty
         }
-        docNames = await res.json();
-        console.log('docNames loaded successfully. Length:', docNames.length);
-        initDocSearch();
-    } catch (err) {
-        console.error('Error fetching doc-names.json:', err);
-        // Non-fatal — search bar stays empty
-    }
+    })();
+    return docNamesPromise;
 }
 
 /**
@@ -3334,6 +3351,7 @@ async function dispatchReplMetaCommand(line) {
             '  :help               show this help text\n' +
             '  :type <expr>        print inferred type without evaluating\n' +
             '  :doc  <sym>         print builtin/standard operator documentation\n' +
+            '  :docs [page]        open the docs browser (guides + API), offline-ready\n' +
             '  :reset              clear session and start fresh\n' +
             '  :explain [code]     explain the most recent error, or a TUR-E#### code\n' +
             '\n' +
@@ -3357,6 +3375,27 @@ async function dispatchReplMetaCommand(line) {
                 appendToConsole(`<span class="console-output">no documentation for \'${escapeHtml(arg)}\'</span>`);
             }
         }
+
+    } else if (cmd === ':docs') {
+        // `:docs` opens the browser at its last location; `:docs <page>` jumps
+        // straight to one. A bare slug is resolved against guides first, then
+        // API modules, so `:docs hkt-guide` and `:docs tur-list` both work
+        // without the reader knowing the pack's section layout.
+        await loadDocsIndex();
+        let ref;
+        if (arg) {
+            const candidates = arg.includes('/')
+                ? [arg]
+                : [`guides/${arg}`, `guides/${arg}-guide`, `api/${arg}`, `spices/${arg}`];
+            ref = candidates.find(c => docsEntryFor(parseDocsRef(c).ref));
+            if (!ref) {
+                appendToConsole(
+                    `<span class="console-error">no documentation page '${escapeHtml(arg)}'`
+                    + ' -- open :docs and search</span>');
+                return;
+            }
+        }
+        openDocsPane(ref);
 
     } else if (cmd === ':type') {
         if (!arg) {
@@ -3460,6 +3499,540 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('close-doc-btn')?.addEventListener('click', hideDocPanel);
 });
 
+// ============================================================================
+// In-app docs browser (OD2)
+//
+// Reads the docs pack -- chrome-free fragments plus index.json, emitted by the
+// same generators that build turmeric-lang.com/docs/html/ -- and renders it
+// over the REPL. Nothing here navigates: the editor buffer, console history,
+// and WASM session all survive a docs session untouched, which is the whole
+// point of embedding rather than linking out.
+//
+// The pack is precached by the service worker (OD3), so every fetch below is
+// expected to hit the cache when offline.
+// ============================================================================
+
+const DOCS_PACK_BASE = '/docs-pack';
+
+let docsIndex = null;          // parsed index.json, once
+let docsIndexPromise = null;   // in-flight load, so concurrent opens share one
+let docsCurrentRef = null;     // e.g. 'guides/hkt-guide'
+let docsNavCollapsed = false;
+
+/**
+ * Fetch and cache the pack manifest. Resolves to null when the pack is absent
+ * (a dev server that never ran `just docs`), which the pane reports rather
+ * than failing silently.
+ */
+function loadDocsIndex() {
+    if (docsIndex) return Promise.resolve(docsIndex);
+    if (docsIndexPromise) return docsIndexPromise;
+    docsIndexPromise = (async () => {
+        try {
+            const res = await fetch(`${DOCS_PACK_BASE}/index.json`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            docsIndex = await res.json();
+            return docsIndex;
+        } catch (err) {
+            console.warn('docs pack unavailable:', err);
+            docsIndexPromise = null;
+            return null;
+        }
+    })();
+    return docsIndexPromise;
+}
+
+/** All pack pages as one flat list of {ref, title, description, words, kind}. */
+function docsAllPages() {
+    if (!docsIndex) return [];
+    const out = [];
+    for (const g of docsIndex.guides || []) {
+        out.push({ ref: `guides/${g.slug}`, title: g.title, kind: 'guide',
+                   category: g.category, description: g.description, words: g.words });
+    }
+    for (const m of docsIndex.api || []) {
+        out.push({ ref: `api/${m.slug}`, title: m.title, kind: 'module',
+                   category: m.category, description: m.description, words: m.words });
+    }
+    for (const s of docsIndex.spices || []) {
+        out.push({ ref: `spices/${s.slug}`, title: s.title, kind: 'spice',
+                   category: s.category, description: s.description, words: s.words });
+    }
+    return out;
+}
+
+/** Look up the manifest entry for a pack ref (no #fragment). */
+function docsEntryFor(ref) {
+    return docsAllPages().find(p => p.ref === ref) || null;
+}
+
+/**
+ * Split a `#doc=` value into its page ref and in-page anchor.
+ * 'guides/hkt-guide#kinds' -> { ref: 'guides/hkt-guide', anchor: 'kinds' }
+ */
+function parseDocsRef(value) {
+    if (!value) return { ref: null, anchor: null };
+    const hashAt = value.indexOf('#');
+    if (hashAt === -1) return { ref: value, anchor: null };
+    return { ref: value.slice(0, hashAt), anchor: value.slice(hashAt + 1) };
+}
+
+/**
+ * The URL hash as an ordered list of [key, value] pairs.
+ *
+ * `key=value&key=value`, the shape the share feature already used for
+ * `#code=<compressed>` -- but parsed by hand rather than with URLSearchParams,
+ * because a docs deep link should read `#doc=guides/hkt-guide`, not
+ * `#doc=guides%2Fhkt-guide`. Values are written literally and only `&` and `%`
+ * are escaped; neither of our two values (url-safe base64 for `code`, a slug
+ * path for `doc`) contains either, so in practice the hash stays plain text.
+ */
+function parseHashPairs() {
+    const raw = window.location.hash.slice(1);
+    if (!raw) return [];
+    return raw.split('&').filter(Boolean).map(part => {
+        const eq = part.indexOf('=');
+        const key = eq === -1 ? part : part.slice(0, eq);
+        const value = eq === -1 ? '' : part.slice(eq + 1);
+        return [key, value.replace(/%26/gi, '&').replace(/%25/g, '%')];
+    });
+}
+
+/**
+ * Merge a key into the URL hash without disturbing the others.
+ *
+ * The share feature writes `code`; the docs pane writes `doc`. A shared link
+ * that also points at a guide round-trips, and neither key clobbers the other.
+ * Passing null removes the key.
+ */
+function setHashParam(key, value) {
+    const pairs = parseHashPairs().filter(([k]) => k !== key);
+    if (value !== null && value !== undefined) {
+        pairs.push([key, String(value).replace(/%/g, '%25').replace(/&/g, '%26')]);
+    }
+    const next = pairs.map(([k, v]) => (v === '' ? k : `${k}=${v}`)).join('&');
+    // replaceState, not `location.hash =`: a docs navigation should not push a
+    // history entry per page, and it must not fire our own hashchange handler.
+    const url = `${window.location.pathname}${window.location.search}${next ? '#' + next : ''}`;
+    window.history.replaceState(null, '', url);
+}
+
+function getHashParam(key) {
+    const hit = parseHashPairs().find(([k]) => k === key);
+    return hit ? hit[1] : null;
+}
+
+/** Group pack pages by category, preserving 'Other'/'core' last. */
+function docsGroupByCategory(pages) {
+    const groups = new Map();
+    for (const p of pages) {
+        const key = p.category || 'Other';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(p);
+    }
+    const names = [...groups.keys()].sort((a, b) => {
+        const rank = (n) => (n === 'core' ? -1 : n === 'Other' ? 1 : 0);
+        return rank(a) - rank(b) || a.localeCompare(b);
+    });
+    return names.map(name => ({ name, pages: groups.get(name) }));
+}
+
+function docsNavSection(label, groups) {
+    let html = `<div class="docs-nav-section"><h4>${escapeHtml(label)}</h4>`;
+    for (const g of groups) {
+        html += `<details class="docs-nav-group"><summary>${escapeHtml(g.name)}</summary><ul>`;
+        for (const p of g.pages) {
+            html += `<li><a href="#doc=${escapeHtml(p.ref)}" data-doc-ref="${escapeHtml(p.ref)}"`
+                 +  ` title="${escapeHtml(p.description || '')}">${escapeHtml(p.title)}</a></li>`;
+        }
+        html += '</ul></details>';
+    }
+    return html + '</div>';
+}
+
+/** Render the full nav tree (guides by category, API by group, spices). */
+function renderDocsNav() {
+    const nav = document.getElementById('docs-nav');
+    if (!nav) return;
+    if (!docsIndex) {
+        nav.innerHTML = '<p class="docs-empty">Documentation pack not found. '
+                      + 'Run <code>just docs</code> to build it.</p>';
+        return;
+    }
+    const pages = docsAllPages();
+    let html = '';
+    const guides = pages.filter(p => p.kind === 'guide');
+    const modules = pages.filter(p => p.kind === 'module');
+    const spices = pages.filter(p => p.kind === 'spice');
+    if (guides.length) html += docsNavSection('Guides', docsGroupByCategory(guides));
+    if (modules.length) html += docsNavSection('API', docsGroupByCategory(modules));
+    // Spices only appear when this build actually carries their pages, so the
+    // nav never offers a link the pack cannot serve offline.
+    if (spices.length) html += docsNavSection('Spices', docsGroupByCategory(spices));
+    nav.innerHTML = html;
+    markDocsNavActive();
+}
+
+function markDocsNavActive() {
+    const nav = document.getElementById('docs-nav');
+    if (!nav) return;
+    nav.querySelectorAll('a[data-doc-ref]').forEach(a => {
+        const active = a.dataset.docRef === docsCurrentRef;
+        a.classList.toggle('active', active);
+        if (active) {
+            a.closest('details')?.setAttribute('open', '');
+            a.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+/**
+ * Render search results into the nav column.
+ *
+ * One box, two result kinds. Pages come from index.json's `words` blob; symbols
+ * come from the doc-names.json the panel already uses, and selecting one routes
+ * to the existing docstring panel rather than duplicating it here.
+ */
+function renderDocsSearch(query) {
+    const nav = document.getElementById('docs-nav');
+    if (!nav) return;
+    const q = query.trim().toLowerCase();
+    if (!q) { renderDocsNav(); return; }
+
+    const pages = docsAllPages()
+        .map(p => ({ p, score: docsScore(p, q) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 40);
+
+    const symbols = (docNames || [])
+        .filter(d => d.name.toLowerCase().includes(q))
+        .slice(0, 25);
+
+    let html = '';
+    if (pages.length) {
+        html += '<div class="docs-nav-section"><h4>Pages</h4><ul class="docs-results">';
+        for (const { p } of pages) {
+            html += `<li><a href="#doc=${escapeHtml(p.ref)}" data-doc-ref="${escapeHtml(p.ref)}">`
+                 +  `<span class="docs-result-title">${escapeHtml(p.title)}</span>`
+                 +  `<span class="docs-result-kind">${escapeHtml(p.kind)}</span>`
+                 +  `<span class="docs-result-desc">${escapeHtml(p.description || '')}</span>`
+                 +  '</a></li>';
+        }
+        html += '</ul></div>';
+    }
+    if (symbols.length) {
+        html += '<div class="docs-nav-section"><h4>Symbols</h4><ul class="docs-results">';
+        for (const s of symbols) {
+            const short = s.summary.replace(/^[\w/\-!?*+<>]+\s+--\s+/, '');
+            html += `<li><a href="#" data-doc-symbol="${escapeHtml(s.name)}">`
+                 +  `<span class="docs-result-title">${escapeHtml(s.name)}</span>`
+                 +  `<span class="docs-result-kind">${escapeHtml(s.kind)}</span>`
+                 +  `<span class="docs-result-desc">${escapeHtml(short)}</span>`
+                 +  '</a></li>';
+        }
+        html += '</ul></div>';
+    }
+    nav.innerHTML = html || '<p class="docs-empty">No matches.</p>';
+}
+
+/** Rank a page against a query: title hits beat description hits beat body. */
+function docsScore(page, q) {
+    const title = (page.title || '').toLowerCase();
+    if (title === q) return 100;
+    if (title.includes(q)) return 50;
+    if ((page.description || '').toLowerCase().includes(q)) return 20;
+    if ((page.words || '').includes(q)) return 5;
+    return 0;
+}
+
+/**
+ * Fetch a pack fragment and render it into the article column.
+ *
+ * `ref` is a pack-relative page id, optionally with an in-page anchor:
+ * 'guides/hkt-guide', 'api/tur-list#map', 'spices/json'.
+ */
+async function showDocsPage(refWithAnchor, { updateHash = true } = {}) {
+    const article = document.getElementById('docs-article');
+    if (!article) return;
+    const { ref, anchor } = parseDocsRef(refWithAnchor);
+    if (!ref) return;
+
+    const entry = docsEntryFor(ref);
+    if (!entry) {
+        article.innerHTML = `<p class="docs-empty">No page <code>${escapeHtml(ref)}</code> `
+                          + 'in this documentation pack.</p>';
+        return;
+    }
+
+    article.setAttribute('aria-busy', 'true');
+    try {
+        const res = await fetch(`${DOCS_PACK_BASE}/${ref}.html`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        article.innerHTML = await res.text();
+    } catch (err) {
+        article.innerHTML = '<p class="docs-empty">This page is not available offline yet. '
+                          + 'Reconnect once and it will be cached for good.</p>';
+        console.warn('docs fragment fetch failed:', ref, err);
+        article.removeAttribute('aria-busy');
+        return;
+    }
+    article.removeAttribute('aria-busy');
+
+    docsCurrentRef = ref;
+    decorateDocsArticle(article);
+    markDocsNavActive();
+    if (updateHash) setHashParam('doc', refWithAnchor);
+
+    const siteLink = document.getElementById('docs-site-link');
+    if (siteLink) siteLink.href = docsSiteUrl(ref);
+
+    // Anchor scrolling has to wait for the fragment to be in the document.
+    if (anchor) {
+        const target = article.querySelector(`#${CSS.escape(anchor)}`);
+        if (target) { target.scrollIntoView({ block: 'start' }); return; }
+    }
+    article.scrollTop = 0;
+}
+
+/** The turmeric-lang.com URL for a pack ref, for the "open on the site" link. */
+function docsSiteUrl(ref) {
+    const [section, ...rest] = ref.split('/');
+    const slug = rest.join('/');
+    if (section === 'guides') return `/docs/html/guides/${slug}.html`;
+    if (section === 'api') return `/docs/html/api/${slug}.html`;
+    if (section === 'spices') return `/docs/html/spices/${slug}/`;
+    return '/docs/html/guides/';
+}
+
+/**
+ * Post-process a freshly rendered fragment: syntax highlighting, the
+ * turmeric/sweet-exp toggles, and a "load into editor" affordance on every
+ * runnable code block.
+ *
+ * The first two come from window.turmericGuide, which /docs-pack/guide.js
+ * defines -- the same code the site's guide pages run, so highlighting and
+ * toggles behave identically in both places.
+ */
+function decorateDocsArticle(article) {
+    if (window.turmericGuide) {
+        window.turmericGuide.highlightGuideCode(article);
+        window.turmericGuide.initSyntaxToggles(article);
+    }
+    article.querySelectorAll('pre').forEach(pre => {
+        const code = pre.querySelector('code.language-turmeric, code.language-sweet-exp');
+        if (!code || pre.querySelector('.docs-load-btn')) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'docs-load-btn';
+        btn.textContent = 'Load into editor';
+        btn.title = 'Replace the editor buffer with this snippet';
+        btn.addEventListener('click', () => {
+            loadSnippetIntoEditor(code.textContent);
+            btn.textContent = 'Loaded';
+            setTimeout(() => { btn.textContent = 'Load into editor'; }, 1400);
+        });
+        pre.appendChild(btn);
+    });
+}
+
+/** Put a guide snippet in the editor and close the docs pane so it is visible. */
+function loadSnippetIntoEditor(source) {
+    if (!editor) return;
+    editor.setValue(source.replace(/\s+$/, '') + '\n');
+    closeDocsPane();
+    editor.focus();
+    if (typeof showStatus === 'function') showStatus('Snippet loaded into the editor', 'info');
+}
+
+/**
+ * Report offline readiness from the pack-status the service worker writes
+ * during install (OD3). Says nothing when the pack is complete -- a working
+ * guarantee does not need announcing; a partial one does.
+ */
+async function refreshDocsStatus() {
+    const el = document.getElementById('docs-status');
+    if (!el) return;
+    el.textContent = '';
+    el.className = 'docs-status';
+    try {
+        const res = await fetch('/docs-pack/pack-status');
+        if (!res.ok) return;
+        const status = await res.json();
+        if (!status || typeof status.cached !== 'number') return;
+        if (status.cached < status.expected) {
+            el.textContent = `${status.cached} of ${status.expected} pages cached -- reconnect to finish`;
+            el.classList.add('partial');
+        }
+    } catch {
+        // No service worker (dev server, or a browser with SW disabled). The
+        // pane still works online; there is nothing useful to report.
+    }
+}
+
+function openDocsPane(refWithAnchor) {
+    const overlay = document.getElementById('docs-overlay');
+    if (!overlay) return;
+    overlay.style.display = 'flex';
+    document.body.classList.add('docs-open');
+
+    // On a phone the nav column would cover the page it navigates to, so open
+    // onto the article and leave the tree behind the toolbar toggle.
+    if (window.matchMedia('(max-width: 768px)').matches && !docsCurrentRef) {
+        docsNavCollapsed = true;
+    }
+    overlay.classList.toggle('nav-collapsed', docsNavCollapsed);
+
+    // The symbol half of the pane's search comes from doc-names.json; make
+    // sure it is on its way even if the WASM boot has not got there yet.
+    fetchDocNames();
+
+    loadDocsIndex().then(index => {
+        const version = document.getElementById('docs-version');
+        if (version) {
+            version.textContent = index ? `Docs v${index.version}` : '';
+        }
+        renderDocsNav();
+        const target = refWithAnchor
+            || docsCurrentRef
+            || (index && index.guides && index.guides.length
+                ? `guides/${index.guides[0].slug}`
+                : null);
+        if (target) showDocsPage(target);
+        refreshDocsStatus();
+        document.getElementById('docs-search')?.focus();
+    });
+}
+
+function closeDocsPane() {
+    const overlay = document.getElementById('docs-overlay');
+    if (overlay) overlay.style.display = 'none';
+    document.body.classList.remove('docs-open');
+    setHashParam('doc', null);
+}
+
+function docsPaneIsOpen() {
+    const overlay = document.getElementById('docs-overlay');
+    return !!overlay && overlay.style.display !== 'none';
+}
+
+/**
+ * Intercept clicks inside the pane.
+ *
+ * Three cases: a `#doc=` link is a pack navigation, a bare `#anchor` scrolls
+ * within the current page, and anything else is an outbound link that opens in
+ * a new tab so the REPL session is never replaced.
+ */
+function initDocsLinkInterception() {
+    const overlay = document.getElementById('docs-overlay');
+    if (!overlay) return;
+    overlay.addEventListener('click', (e) => {
+        const link = e.target.closest('a');
+        if (!link) return;
+
+        if (link.dataset.docSymbol) {
+            e.preventDefault();
+            const name = link.dataset.docSymbol;
+            const entry = (docNames || []).find(d => d.name === name) || null;
+            closeDocsPane();
+            wasmDocLookup(name).then(text => showDocPanel(name, text, entry));
+            return;
+        }
+
+        const href = link.getAttribute('href') || '';
+        if (href.startsWith('#doc=')) {
+            e.preventDefault();
+            const raw = href.slice('#doc='.length);
+            let ref = raw;
+            try { ref = decodeURIComponent(raw); } catch { /* literal already */ }
+            // On mobile the nav floats over the article, so picking a page
+            // should get out of the way and show it.
+            if (link.dataset.docRef
+                && window.matchMedia('(max-width: 768px)').matches) {
+                docsNavCollapsed = true;
+                overlay.classList.add('nav-collapsed');
+            }
+            showDocsPage(ref);
+            return;
+        }
+        if (href.startsWith('#')) {
+            e.preventDefault();
+            const id = href.slice(1);
+            const article = document.getElementById('docs-article');
+            const target = id && article ? article.querySelector(`#${CSS.escape(id)}`) : null;
+            if (target) target.scrollIntoView({ block: 'start' });
+            return;
+        }
+        if (href && !href.startsWith('javascript:')) {
+            // Absolute or site-relative: leave /try/ intact.
+            link.target = '_blank';
+            link.rel = 'noopener';
+        }
+    });
+}
+
+function initDocsPane() {
+    document.getElementById('docs-btn')?.addEventListener('click', () => openDocsPane());
+    document.getElementById('docs-close')?.addEventListener('click', closeDocsPane);
+
+    // The doc panel's "Open full docs" used to navigate to /docs/html/api/,
+    // dropping the REPL session. It opens the pane now.
+    document.getElementById('doc-full-link')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        const href = e.currentTarget.getAttribute('href') || '';
+        const ref = href.startsWith('#doc=') ? href.slice('#doc='.length) : null;
+        openDocsPane(ref && docsEntryFor(ref) ? ref : undefined);
+    });
+
+    document.getElementById('docs-nav-toggle')?.addEventListener('click', () => {
+        docsNavCollapsed = !docsNavCollapsed;
+        document.getElementById('docs-overlay')
+            ?.classList.toggle('nav-collapsed', docsNavCollapsed);
+    });
+
+    const search = document.getElementById('docs-search');
+    if (search) {
+        search.addEventListener('input', debounce(() => {
+            renderDocsSearch(search.value);
+        }, 120));
+        search.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (search.value) { search.value = ''; renderDocsNav(); }
+                else closeDocsPane();
+            }
+        });
+    }
+
+    // Click the backdrop (not the shell) to dismiss.
+    document.getElementById('docs-overlay')?.addEventListener('mousedown', (e) => {
+        if (e.target.id === 'docs-overlay') closeDocsPane();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && docsPaneIsOpen()) closeDocsPane();
+    });
+
+    initDocsLinkInterception();
+
+    // Deep link: /try/#doc=guides/hkt-guide restores a docs location, and
+    // composes with the existing #code= share hash rather than replacing it.
+    const initial = getHashParam('doc');
+    if (initial) openDocsPane(initial);
+}
+
+/** hashchange hook: a #doc= change opens or moves the pane. */
+function syncDocsPaneFromHash() {
+    const ref = getHashParam('doc');
+    if (!ref) {
+        if (docsPaneIsOpen()) closeDocsPane();
+        return;
+    }
+    if (docsPaneIsOpen()) showDocsPage(ref, { updateHash: false });
+    else openDocsPane(ref);
+}
+
+document.addEventListener('DOMContentLoaded', initDocsPane);
+
 // Export for debugging
 window.turmericApp = {
     runCode,
@@ -3473,9 +4046,15 @@ window.turmericApp = {
     showDocPanel,
     hideDocPanel,
     wasmDocLookup,
+    openDocsPane,
+    closeDocsPane,
+    showDocsPage,
+    loadDocsIndex,
     getState: () => ({
         wasmState,
         hasEditor: !!editor,
         hasWasm: !!evalWorker && wasmState === WASM_STATE.READY,
+        docsOpen: docsPaneIsOpen(),
+        docsRef: docsCurrentRef,
     })
 };

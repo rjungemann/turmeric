@@ -161,16 +161,18 @@ def build(pack_dir: Path, version: str, max_bytes: int,
 
     # --- 1. the manifest -----------------------------------------------------
     files = [e['path'] for e in guides + api + spices]
-    # Images the guides reference were copied in alongside their fragments;
-    # they are part of the pack and part of the budget.
+    # Non-fragment assets: guide.css and guide.js (the shared guide runtime the
+    # pane needs to style and highlight a fragment) and any images a guide
+    # references, copied in alongside their fragments. They are part of the
+    # pack, so they are part of the precache list and part of the budget.
     known = set(files)
-    images = sorted(
+    assets = sorted(
         str(p.relative_to(pack_dir))
         for p in pack_dir.rglob('*')
         if p.is_file() and str(p.relative_to(pack_dir)) not in known
         and p.name != 'index.json' and p.suffix.lower() != '.html'
     )
-    files.extend(images)
+    files.extend(assets)
 
     index = {
         'version': version,
