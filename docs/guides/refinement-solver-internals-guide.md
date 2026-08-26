@@ -537,7 +537,7 @@ emits its own machine-readable per-benchmark line under `TUR_CORPUS_CAPS=1`
 (aggregation lives in the sweep script because each benchmark is decided in a
 forked child). The current numbers, and what they say about which solver
 extensions are worth building, are in
-[../upcoming/solver-extension-plan.md](../upcoming/solver-extension-plan.md)
+[../upcoming/solver-extension-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/solver-extension-plan.md)
 under SX0(b).
 
 ### Asking the solver directly -- `tur smt` and `--dump-refine=json`

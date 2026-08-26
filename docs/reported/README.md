@@ -1035,7 +1035,21 @@ the class of bug is closed, not just the one instance.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [guide-cross-links-to-unrendered-docs](guide-cross-links-to-unrendered-docs.md) | low | four links in three published guides 404 -- one to a guide that was never written, three into `docs/upcoming/` and `docs/archive/`, which are not rendered |
+`guide-cross-links-to-unrendered-docs` was resolved 2026-08-26 and moved to
+[docs/archive](../archive/guide-cross-links-to-unrendered-docs.md). It was
+**eight** links in five pages, not four in three: the report's list came from
+the pack's link pass, which only sees pages that made it into the pack, and a
+grep plus arming the gate found four more of the same shape. The "missing"
+`memory-management-guide.md` was not missing -- `gc-guide.md` is that guide
+under a different name, and its description matches the linking paragraph
+point for point, so fix direction 1's "confirm with the author" was avoidable.
+The rest went to GitHub blob URLs, which three other guides were already using
+for the same kind of reference. `--strict-links` already existed in
+`tools/genpack.py` with nothing invoking it; the Justfile `docs` recipe (what
+CI runs) now passes it, so a new dead cross-link fails the docs build. One
+detail worth carrying: a `../reported/` link rots **twice** -- once because
+that directory is not rendered, and again when the report is archived and the
+blob URL moves too.
 
 `two-stdlib-modules-render-to-one-api-page` was resolved 2026-08-26 and moved
 to [docs/archive](../archive/two-stdlib-modules-render-to-one-api-page.md).

@@ -327,7 +327,7 @@ finding prints one line to stderr and execution continues. This suite compares
 stdout. So a UBSan line was, until 2026-08-25, completely invisible --
 `fat_captures_borrowed` was read out of uninitialized arena memory on 60
 fixtures, on every single run, and nothing ever failed
-([history](../archive/history/fat-captures-borrowed-read-uninitialized.md)).
+([history](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fat-captures-borrowed-read-uninitialized.md)).
 
 `tests/run.sh` now scans each phase's captured stderr for `: runtime error:`
 and reports what it finds after the summary:
@@ -348,7 +348,7 @@ setting to use in CI once the count is at zero -- as it is on Linux now.
 
 **Nothing arms it yet, and it is not a pure flag flip**: the zero was measured
 on one platform, and UBSan findings vary by toolchain. Tracked in
-[sanitizer-gate-not-armed-in-ci](../reported/sanitizer-gate-not-armed-in-ci.md).
+[sanitizer-gate-not-armed-in-ci](https://github.com/rjungemann/turmeric/blob/main/docs/reported/sanitizer-gate-not-armed-in-ci.md).
 
 Two things to know if you touch this:
 
@@ -401,7 +401,7 @@ bug.
    and the run is CLEAN. Add one trailing statement and the same program
    reports the leak -- with byte-identical emitted C for the leaking block.
    `ref/from-rc` in
-   [rc-ref-conversion-and-weak-upgrade-leak](../reported/rc-ref-conversion-and-weak-upgrade-leak.md)
+   [rc-ref-conversion-and-weak-upgrade-leak](https://github.com/rjungemann/turmeric/blob/main/docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md)
    behaves exactly this way. When probing a suspected leak, always put work
    after it.
 
