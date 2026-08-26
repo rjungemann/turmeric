@@ -1,5 +1,11 @@
 # MIR/c2mir on aarch64 mis-passes floating-point aggregates across the native boundary
 
+**Status: RESOLVED 2026-08-26.** Fixed properly, in MIR: the aarch64 back end
+now implements the AAPCS64 HFA rule. Pin bumped to
+[`472fa4c6`](https://github.com/rjungemann/mir/commit/472fa4c6fa608ba515e2214e2c2bc8c0e934c8d9)
+(`cmake/mir.cmake`). See "Resolution" below; the original analysis is kept
+intact underneath because it is what made the fix tractable.
+
 **Severity: high** (silent wrong answers, data-dependent) -- but scoped: it
 fires only where c2mir-generated code calls a *natively compiled* function
 that takes or returns a floating-point aggregate by value. Pure `tur jit`
@@ -7,8 +13,101 @@ programs are unaffected because both sides are c2mir and agree with each
 other.
 
 Found while scoping F4 (struct-by-value) of
-[jit-ffi-c2mir-plan](../archive/jit-ffi-c2mir-plan.md). This is the blocker
-that keeps F4's *interpreter* half from covering FP aggregates.
+[jit-ffi-c2mir-plan](jit-ffi-c2mir-plan.md). This was the blocker that kept
+F4's *interpreter* half from covering FP aggregates.
+
+## Resolution
+
+The "Fix directions" section below called for changes in two layers of the
+vendored fork and warned it was "not small". That is what was done. A third
+layer it also listed -- the hand-encoded `_MIR_get_ff_call` thunks in
+`mir-aarch64.c` -- turned out **not** to need touching: turmeric's dynamic-FFI
+thunks are *generated C compiled by c2mir* (`render_thunk_source` in
+`src/turi/jit_ffi.c`), so they inherit the c2mir/generator fix. That is why the
+`call-ptr` path works below without a single hand-encoded instruction changing.
+
+**`c2mir/aarch64/caarch64-ABI-code.c`** -- `hfa_flatten`/`hfa_type` classify an
+aggregate by flattening it to at most four scalar leaves and requiring them all
+to be the same FP type. Nested structs and constant-bound arrays flatten;
+unions, bitfields, over-aligned aggregates and `long double` deliberately do
+not and keep the previous general-purpose treatment. The classifier also
+asserts `size == n * member_size`, which is what lets the member count be
+recovered downstream from the block size alone. `target_return_by_addr_p` stops
+sending an HFA back by address, and the return hooks declare one typed `F`/`D`
+result per member.
+
+Two things were load-bearing and non-obvious:
+
+- **The return direction needed almost nothing in the generator.** It already
+  routed `MIR_T_F`/`MIR_T_D` results through `v0..v7` on both the call side and
+  the `MIR_RET` side. Declaring the results with their real types was the whole
+  fix. Worth knowing before anyone re-derives that half.
+- **`target_add_arg_proto`/`target_add_call_arg_op` had to stop delegating to
+  the `simple_*` helpers**, which hardcode `MIR_T_BLK` and never consult
+  `target_get_blk_type`. Without that, the classification would never have
+  reached an argument at all and the whole change would have been a no-op on
+  the argument side while looking complete.
+
+**`mir-aarch64.h` / `mir-gen-aarch64.c`** -- two of MIR's five reserved block
+classes carry the HFA cases (`MIR_T_BLK_HFA_F`/`_D`), with arms on the call
+side, the callee-side gather in `target_machinize`, and the pre-pass that sizes
+the outgoing argument area. All three must agree or the frame is mis-sized.
+Members reach `v0..v7` via `get_arg_reg` and are kept live with
+`setup_call_hard_reg_args`, which -- unlike the base/index trick the plain BLK
+path uses -- has no two-register limit, so four members are expressible.
+Assignment is all-or-nothing: an HFA that does not fit entirely in the
+remaining v registers goes wholly on the stack and sets NSRN to 8 so a later,
+smaller HFA cannot backfill. On Apple targets varargs have already forced
+`fp_arg_num` to 8, so they take the stack arm, which is what that ABI wants.
+
+### The support matrix, re-measured
+
+Every row measured against the same program built by `cc`, on Apple arm64 /
+macOS 27.0 / Apple clang 21. "fixed" marks a row the original matrix further
+down reported as BROKEN.
+
+| aggregate | as arg | as return |
+| --- | --- | --- |
+| `{float,float}` / `{double,double}` | fixed | fixed |
+| `{float}` / `{double}` (1-member HFA) | fixed | fixed |
+| `{float x4}` / `{double x4}` | fixed | fixed (32b, not by address) |
+| `{float x3}`, `float[3]`, nested `{{f,f},f}` | fixed | -- |
+| HFA after scalar FP args consume v regs | fixed | -- |
+| 3 x `{double x4}` (exhausts v0..v7 -> stack) | fixed | -- |
+| `{int,int}`, `{double,i64}`, 24b by-ref | unchanged | unchanged |
+
+The original repro now prints `152.25` under both `tur run` and `tur jit`,
+where `tur jit` printed `225`.
+
+The single-member rows are not redundant with the two-member ones, for the
+reason this report itself flagged: a one-argument probe of a 1-member HFA
+*passes even when broken*, because the value wrongly read from `v0` is usually
+the one the caller just materialized there. The tests use two HFA arguments so
+at most one can be accidentally right.
+
+Both FFI directions are covered, including the inbound one -- a natively
+compiled caller passing an HFA *into* a c2mir-generated callback, which is the
+only thing that exercises the callee-side gather.
+
+Tests, arch-gated in `tests/run-flags.sh` and SKIPped off aarch64:
+`jit-ffi-call-ptr-hfa`, `jit-ffi-extern-c-hfa-compiled` (asserted against
+`tur run` rather than a literal, so the two backends are compared directly),
+`jit-ffi-callback-hfa`, and `jit-ffi-extern-c-nonhfa-still-jits` -- the last so
+that widening the classifier to "any aggregate containing a float" cannot pass
+while silently breaking INTEGER-class aggregates that work today.
+
+MIR's own `make test` (c2mir gcc/lacc/new torture suites) reports the same 6
+failures before and after, exit 0 both times.
+
+### What was removed
+
+The interim refusals are gone, because there is nothing left to refuse:
+`tur_jit_ffi_struct_supported`'s aarch64 HFA carve-out and the
+`tur_jit_ffi_is_hfa` predicate that existed only to drive it, plus the
+short-lived compiled-path refusal (TUR-E0711) and the `g_target_c2mir` backend
+flag that gated it. **Reverting the MIR pin below `472fa4c6` therefore silently
+reinstates the miscall rather than diagnosing it** -- noted in
+`cmake/mir.cmake` next to the pin.
 
 ## Summary
 
@@ -137,7 +236,7 @@ MEMORY-class (>16 bytes), nested, and aggregate returns of each. All
 correct, so the `#if defined(__aarch64__)` scope of the refusal is right.
 (The same sweep did find a *nested*-aggregate miscall on every
 architecture, but that was a turi sig-rendering bug, not an ABI one --
-fixed, see [jit-ffi-c2mir-plan](../upcoming/jit-ffi-c2mir-plan.md).)
+fixed, see [jit-ffi-c2mir-plan](jit-ffi-c2mir-plan.md).)
 
 **The refusal now covers both directions, 2026-08-21.** F5 callbacks
 gained aggregate parameters and returns, which is the same hazard
@@ -199,6 +298,10 @@ vendored-fork work the real fix needs. So the coverage line is exactly:
 | `extern` inside an inline-C fence | **still silently miscalls** |
 
 ## Also worth knowing
+
+*(Everything from here down is the original 2026-08-21 analysis, preserved as
+written. It describes the broken behaviour in the present tense; see
+"Resolution" at the top for what is true now.)*
 
 This is not only a jit-ffi problem. Any `tur jit` program that calls an
 external C function taking or returning an FP aggregate -- e.g. a spice

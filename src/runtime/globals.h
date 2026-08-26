@@ -58,17 +58,6 @@ extern bool g_needs_hamt;
  * lifecycle as g_needs_hamt: set during elaboration, read by the preamble. */
 extern bool g_needs_dlfcn;
 
-/* mir-aarch64-fp-aggregate-abi: this compilation's output will be compiled by
- * c2mir and run in-process (`tur jit`, and the `--engine jit` / manifest
- * `:engine "jit"` paths, which re-dispatch through cmd_jit) rather than handed
- * to cc.  Set before compile_to_c, read during elaboration.
- *
- * It exists because a handful of shapes are correct under cc and wrong under
- * MIR, so the admissible language is very slightly narrower when the JIT is
- * the backend.  Elaboration is otherwise backend-agnostic -- keep that true,
- * and gate on this only where MIR genuinely cannot express what cc can. */
-extern bool g_target_c2mir;
-
 /* AR8: Variadic rest parameters -- set when any variadic defn is compiled */
 extern bool g_has_variadics;
 

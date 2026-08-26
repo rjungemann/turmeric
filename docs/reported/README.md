@@ -585,7 +585,6 @@ suite 2687 passed, 0 failed.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree. PARTIALLY CONTAINED 2026-08-26: `extern-c` is now refused under `tur jit` on aarch64 (TUR-E0711), joining the interpreter's existing `call-ptr`/callback refusal; an HFA declared inside an inline-C fence is still silently miscalled, and the real fix (HFA support in MIR's aarch64 backend) is untouched |
 | [jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md) | low | `call-ptr` under `--interpret` refuses a record with a parametric-monomorph field (`(BoxW int32)`) that the compiled path inlines by value: a compiled/interpreted divergence, refused cleanly. Its diagnostic ("no by-value C member type") is inaccurate in every case it can fire |
 
 The `mir-aarch64` row was indexed 2026-08-21. It had **no row at all** since it
@@ -934,6 +933,16 @@ turned up a defect in the instrument that would have justified it.
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
 | [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker), each with its blocker and how to prove the workaround is no longer needed |
+
+`mir-aarch64-fp-aggregate-abi` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/mir-aarch64-fp-aggregate-abi.md). Fixed at the root
+rather than contained: MIR's aarch64 back end now implements the AAPCS64 HFA
+rule, so floating-point aggregates travel in `v0..v7` and c2mir agrees with a
+natively compiled callee. Pin bumped to `472fa4c6`. The interim refusals are
+gone with it -- including TUR-E0711, which existed for a matter of hours --
+so **reverting the MIR pin below that commit silently reinstates the miscall
+instead of diagnosing it**; that warning lives next to the pin in
+`cmake/mir.cmake`.
 
 `sanitizer-gate-not-armed-in-ci` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/sanitizer-gate-not-armed-in-ci.md). The blocking step

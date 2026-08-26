@@ -163,47 +163,11 @@ const char *tur_jit_ffi_struct_layout(const char *s, size_t *out_size,
                                       size_t *out_align, size_t *offs,
                                       char *codes, int max, int *out_nleaf);
 
-/* True when the aggregate at `s` is an AAPCS64 Homogeneous Floating-point
- * Aggregate: every leaf is the same floating-point code and there are no
- * more than four of them.  Such an aggregate is passed in v0..v7 by a
- * conforming aarch64 compiler -- and in x0..x7 by MIR, which has no HFA
- * concept, so a c2mir thunk calling a natively compiled function silently
- * reads the wrong registers.  See
- * docs/reported/mir-aarch64-fp-aggregate-abi.md; the provider refuses these
- * on aarch64 rather than emitting a thunk that miscalls. */
-bool tur_jit_ffi_is_hfa(const char *s);
-
-/* How one record field renders into the aggregate vocabulary above. */
-typedef enum TurJitAggField {
-    TUR_AGGF_SCALAR,       /* a single member code */
-    TUR_AGGF_NESTED,       /* an inline by-value record: renders as its own {...} */
-    TUR_AGGF_UNSUPPORTED,  /* no by-value member representation we can describe --
-                            * e.g. a TY_APP monomorph field, whose layout needs
-                            * per-application substitution.  Refuse rather than
-                            * mis-describe (see
-                            * docs/reported/jit-ffi-interp-refuses-parametric-record-field.md). */
-} TurJitAggField;
-
-TurJitAggField tur_jit_ffi_agg_field_class(const CtorField *f,
-                                           const AdtDef **out_def);
-
-/* Sig bytes an aggregate for `def` needs, braces included; 0 if any field has
- * no describable by-value representation. */
-size_t tur_jit_ffi_agg_sig_len(const AdtDef *def);
-
-/* Render `{...}` for a single-constructor record ADT into `buf` (which must
- * hold tur_jit_ffi_agg_sig_len bytes).  A nested by-value record field renders
- * as its own inline `{...}`, matching the layout codegen inlines.  Returns
- * bytes written, or 0 if any field is undescribable. */
-size_t tur_jit_ffi_agg_sig_render(const AdtDef *def, char *buf);
-
-/* tur_jit_ffi_is_hfa, asked directly of a record ADT -- the form the COMPILER
- * needs when deciding whether an extern-c slot can cross the c2mir boundary on
- * aarch64 (TUR-E0711).  False for anything that does not render. */
-bool tur_jit_ffi_adt_is_hfa(const AdtDef *def);
-
 /* True when this host's thunk provider can pass the aggregate at `s`
- * correctly.  Today: everywhere except an HFA on aarch64.  `why` (optional)
+ * correctly.  Today: everywhere -- the aarch64 HFA carve-out is gone now that
+ * the pinned MIR fork implements the AAPCS64 HFA rule (see
+ * docs/archive/mir-aarch64-fp-aggregate-abi.md).  Kept as the extension point
+ * for the next host that cannot pass some aggregate shape.  `why` (optional)
  * receives a short human-readable reason when the answer is false. */
 bool tur_jit_ffi_struct_supported(const char *s, const char **why);
 

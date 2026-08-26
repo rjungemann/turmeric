@@ -3,7 +3,6 @@
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
 #include "globals.h"            /* repr-trace: g_emit_abi_trace; G1: g_dump_write_frames */
-#include "turi/jit_ffi.h"       /* mir-aarch64-fp-aggregate-abi: tur_jit_ffi_adt_is_hfa */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
  * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
@@ -9797,33 +9796,8 @@ static bool extern_c_aggregate_ok(const Type *t, Span span) {
     const AdtDef *def = t->as.adt_.def;
     if (def && def->n_ctors == 1 && def->ctors[0]->is_record &&
         !def->is_heap && def->n_type_params == 0 &&
-        def->ctors[0]->n_fields > 0 && adt_is_byvalue_product(def)) {
-#if defined(__aarch64__) || defined(_M_ARM64)
-        /* mir-aarch64-fp-aggregate-abi: the aggregate is a perfectly good C
-         * struct -- cc passes it correctly and `tur run` / `tur build` are
-         * unaffected -- but MIR's aarch64 backend has no HFA class, so under
-         * c2mir the caller writes x0..x7 while a natively compiled callee
-         * reads v0..v7.  The wrong answer is data-dependent, which makes it
-         * far more dangerous than a crash, so refuse instead of mis-calling.
-         * Mirrors tur_jit_ffi_struct_supported's thunk-side refusal, and asks
-         * the same classifier so the two cannot drift apart. */
-        if (g_target_c2mir && tur_jit_ffi_adt_is_hfa(def)) {
-            diag_emit_with_code(
-                DIAG_ERROR, span, TUR_E0711_JIT_FP_AGGREGATE_ABI,
-                "extern-c: '%s' is a floating-point aggregate (AAPCS64 HFA) "
-                "and cannot cross the JIT boundary on aarch64\n"
-                "  = note: MIR has no HFA class -- it would pass the members "
-                "in x0..x7 where a natively compiled callee reads v0..v7, so "
-                "the result is wrong in a data-dependent way\n"
-                "  = help: build with the native backend (`tur run` / "
-                "`tur build`, which use cc and are correct), or pass the "
-                "record by pointer; run `tur explain TUR-E0711` for details",
-                def->name ? def->name : "this type");
-            return false;
-        }
-#endif
+        def->ctors[0]->n_fields > 0 && adt_is_byvalue_product(def))
         return true;
-    }
     diag_emit(DIAG_ERROR, span,
               "extern-c: '%s' cannot cross the C boundary by value -- only "
               "a single-constructor, non-:heap, non-parametric record with "

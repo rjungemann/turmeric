@@ -316,15 +316,15 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      *   - The plan's F1/F2 plumbing (runtime spice-export thunks,
      *     thunk-backed extern-c under --interpret) was never behind this flag.
      *
-     * One substantive boundary survives graduation, and it is a diagnostic
-     * rather than silence: under `--interpret` on aarch64, an aggregate whose
-     * fields are all the same float type (an AAPCS64 HFA) is REFUSED in both
-     * directions, because MIR has no HFA class and would pass it in x0..x7
-     * where a natively compiled callee reads v0..v7.  Compiled code is
-     * unaffected and correct on every target.  Fixing it is vendored MIR
-     * backend work, tracked in docs/reported/mir-aarch64-fp-aggregate-abi.md
-     * (which stays OPEN).  The name moves to GRADUATED[] below (a lingering
-     * --enable is a TUR-W0063 no-op).  See
+     * One substantive boundary used to survive graduation: under `--interpret`
+     * on aarch64, an aggregate whose fields are all the same float type (an
+     * AAPCS64 HFA) was REFUSED in both directions, because MIR had no HFA
+     * class and would pass it in x0..x7 where a natively compiled callee reads
+     * v0..v7.  That is FIXED as of 2026-08-26 -- the pinned MIR fork
+     * implements the HFA rule, the refusal is gone, and no aggregate shape is
+     * carved out any more.  See
+     * docs/archive/mir-aarch64-fp-aggregate-abi.md.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
      * docs/archive/jit-ffi-c2mir-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */

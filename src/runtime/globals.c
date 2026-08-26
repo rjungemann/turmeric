@@ -55,10 +55,6 @@ uint32_t g_unsafe_total_lines = 0;
 bool g_needs_hamt = false;
 bool g_needs_dlfcn = false;   /* jit-ffi: program uses dlopen/dlsym/call-ptr */
 
-/* mir-aarch64-fp-aggregate-abi: c2mir is the backend for this compilation
- * (see globals.h).  Default false -- cc is the backend unless told otherwise. */
-bool g_target_c2mir = false;
-
 /* stdlib/re.tur: track when any inline-C in this compilation references
  * <regex.h>. When true, the emitter hoists `#include <regex.h>` into the
  * preamble so multiple re_* functions can share the typedef. */
