@@ -8689,6 +8689,35 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Parse param vector */
     Form *params_f = call->as.list.items[params_idx];
     if (params_f->tag != F_VEC) {
+        /* A symbol here with a vector right after it is not a malformed
+         * parameter list -- it is a named lambda, the way Scheme, Racket, and
+         * Common Lisp spell a self-recursive anonymous function.  Saying
+         * "parameter list must be a vector" while a well-formed `[n : int]`
+         * sits one token later sends the reader hunting for a bracket problem
+         * that does not exist, and never mentions the two forms that DO give
+         * recursion here.  Hitting this and concluding Turmeric has no
+         * recursive lambdas is a reading the old message invited.
+         *
+         * Anything else in this slot really is a malformed parameter list, so
+         * it keeps the generic message. */
+        bool named_lambda = (params_f->tag == F_SYM)
+            && (params_idx + 1 < call->as.list.len)
+            && (call->as.list.items[params_idx + 1]->tag == F_VEC);
+        if (named_lambda) {
+            const Symbol *nm = params_f->as.sym;
+            diag_emit(DIAG_ERROR, params_f->span,
+                      "fn does not take a name; Turmeric has no named-lambda "
+                      "form -- remove '%.*s'", (int)nm->len, nm->name);
+            diag_emit(DIAG_HELP, params_f->span,
+                      "for a self-recursive anonymous function, use letrec: "
+                      "(letrec [%.*s (fn [...] ... (%.*s ...))] ...)",
+                      (int)nm->len, nm->name, (int)nm->len, nm->name);
+            diag_emit(DIAG_HELP, params_f->span,
+                      "for a recursive loop, use a named let: "
+                      "(let %.*s [n 5] ... (%.*s ...))",
+                      (int)nm->len, nm->name, (int)nm->len, nm->name);
+            return NULL;
+        }
         diag_emit(DIAG_ERROR, params_f->span,
                   "fn: parameter list must be a vector [name1 name2 ...]");
         return NULL;

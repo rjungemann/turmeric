@@ -1116,9 +1116,18 @@ with no new failures; the remaining 8 are the row above.
 
 ## Diagnostics (filed 2026-08-25)
 
-| Report | Severity | One line |
-| --- | --- | --- |
-| [fn-name-diagnostic-misleads-toward-letrec](fn-name-diagnostic-misleads-toward-letrec.md) | low | `(fn name [...] ...)` is correctly rejected but reports "parameter list must be a vector" with the caret on the name, so the reader hunts for a bracket error in a vector that is already well-formed. Never mentions `letrec`/named `let`, which is why hitting it can read as "Turmeric has no recursive lambdas" -- it has two, both verified |
+*(empty -- the one row here is resolved)*
+
+`fn-name-diagnostic-misleads-toward-letrec` was resolved 2026-08-26 and moved
+to [docs/archive](../archive/fn-name-diagnostic-misleads-toward-letrec.md),
+along its fix direction: `(fn <sym> <vec> ...)` is detected as a named-lambda
+attempt and reports that, with `letrec` and named-`let` help lines carrying the
+user's own name. `λ` shares the path and got it for free; a non-symbol in that
+slot still gets the generic message. Two fixtures, cross-referenced so the pair
+is maintained together -- the happy-path one runs *both* spellings the help
+text recommends, so the suggestion cannot go stale silently. Worth knowing:
+the report's own named-let snippet does not compile (its `if` branches are
+`nil` and `int`); the claim it illustrates is true, the snippet is not.
 
 ## Try Turmeric / web REPL (filed 2026-08-25)
 

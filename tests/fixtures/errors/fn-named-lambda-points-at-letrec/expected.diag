@@ -1,0 +1,3 @@
+fn does not take a name; Turmeric has no named-lambda form -- remove 'fact'
+for a self-recursive anonymous function, use letrec
+for a recursive loop, use a named let
