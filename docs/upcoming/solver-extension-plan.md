@@ -7,8 +7,9 @@ description: Extending the refinement solver into an incremental, backtracking d
 # Solver Extension (SX)
 
 **Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface),
-SX1 (the trail primitive, minus its effect row), SX2's measurement and
-combinators, and SX3 (incremental EUF) have landed; the rest is unstarted. SX4 and SX6 are parked on SX0(b)'s
+SX1 (the trail primitive, minus its effect row), SX2 in full (measurement,
+combinators, and the depth-first driver), and SX3 (incremental EUF) have
+landed; everything still open is parked on evidence. SX4 and SX6 are parked on SX0(b)'s
 evidence; SX2's gate came back the other way -- the trail pays for itself, so
 SX3/SX4 should build on it. Nothing here is on the critical path to v1; the whole of SX is
 *additive* to a solver that already ships and is already sound. Read section 5
@@ -33,11 +34,14 @@ SX8a has since landed too, so the solver is now answerable from outside the
 compile pipeline (`tur smt`, `--dump-refine=json`) -- which is what every later
 phase's acceptance tests were going to want a door for.
 
-What is left live: **SX2's driver increment** (the `bt-scope`-bracketed
-depth-first engine in `stdlib/backtrack.tur`; see that phase's re-check for
-the reify-at-success obstacle and the typing decision it carries).  **SX3 has
-landed** -- one EUF state with mark/undo per cube, verdict-identical to the
-rebuild path, `TUR_REFINE_EUF=rebuild` kept as the replay seam.  Details under
+**SX2's driver has now landed too** (`stdlib/backtrack-dfs.tur`; see the
+phase's landing note for what moved and the two compiler bugs the work
+surfaced).  **SX3 has landed** -- one EUF state with mark/undo per cube,
+verdict-identical to the rebuild path, `TUR_REFINE_EUF=rebuild` kept as the
+replay seam.  With those two down, every live phase of this plan is done:
+what remains is parked on evidence (SX4, SX6, and their dependents) or is
+follow-up filed in its own right (`#fx{Bt}` for precision, the self-recursion
+bug below).  Details under
 SX0(a), SX0(b) and SX8a; reproduce the two measurements with
 `benchmarks/run-capture-curve.sh` and `benchmarks/run-cap-sweep.sh`.
 
@@ -926,6 +930,58 @@ deliberate: the plan says not to build it if the trail loses, and until now
 nobody knew. It does not lose, so the driver is the next increment, and it is
 where the `#fx{Bt}` effect row belongs too (see SX1) -- that is the first caller
 the refinement solver's purity whitelist can actually see.
+
+**LANDED 2026-08-26: the driver.** `stdlib/backtrack-dfs.tur` -- CPS goal
+combinators over trailed cells (`dfs-succeed` / `dfs-fail` / `dfs-and` /
+`dfs-or` / `dfs-guard` / `dfs-set` / `dfs-choose-int` / `dfs-solve`), typed
+end to end as `(fn [(fn [] bool)] bool)` per this phase's no-`:int` note.
+Reify-at-success is the API: `dfs-solve`'s `on-solution` runs with bindings
+live and must copy out what it keeps; the whole run is bracketed in
+`bt-scope`, so the fixture pins cells reading their PRE-search values
+afterwards.  It is a sibling file rather than an addition to `backtrack.tur`
+as originally specced, deliberately: the driver references `bt-scope` /
+`bt-set!`, so folding it in would break every `(load "stdlib/backtrack.tur")`
+under the default (experiment-off) configuration.  Fixture: `sx2-dfs-driver`
+(reify+undo, or-ordering, cut, lvar refusal-as-failure).
+
+Two spellings inside the driver are dictated by checkers, worth knowing
+before extending it: the combinators use the `bt-mark`/`bt-undo-to!` HALVES,
+not the `bt-scope` bracket, because wrapping `(g1 k)` in a scope thunk
+CAPTURES `k` and capturing a fat closure moves it (TUR-E0005) -- calling is
+non-consuming, capture is not.  And recursion is written pass-`k`-through
+(`dfs-choose-go`) rather than goal-returning, because of the second bug
+below.
+
+**The head-to-head the phase asked for**
+(`benchmarks/bench-dfs-queens.tur`, results in
+`benchmarks/dfs-queens-results.md`): N-queens on both shipped surfaces.
+**No crossover in range -- the list monad is 4-11% ahead at N=4..7.**  Both
+prior results stand together: the trail's 11-34x was against persistent-state
+LOOKUP; enumeration against the monad's inline-C cell walk is a different
+fight, and the driver pays a fat-dispatch per combinator layer per node.
+What the driver buys is scale and reification: the list path's packed-int
+board is structurally capped at N=7, while the driver runs N=8/9/10 (92 /
+352 / 724 solutions, all matching the known sequence) and reads any
+solution out of live cells.
+
+**Two compiler bugs surfaced by this work, filed:**
+
+- `mbind` called DIRECTLY with a non-capturing lambda segfaults (its untyped
+  `:int` param takes a thin code pointer, its body reads `fat[0]`); the
+  typeclass `bind` path fat-boxes and works, which is why the in-tree corpus
+  never hit it.  Recorded in the benchmark's comments; the benchmark uses
+  `bind`.
+- A SELF-recursive call whose fn-typed result feeds a `^fat` parameter
+  segfaults; the same call through a one-line forwarder works --
+  [self-recursive-fn-returning-call-into-fat-sink](../reported/self-recursive-fn-returning-call-into-fat-sink.md).
+  The natural recursive-combinator shape, so anyone composing goals
+  recursively hits it; the benchmark carries the forwarder workaround.
+
+**A measurement trap, re-learned:** the first Release numbers came from a
+STALE `build-release/tur` predating two landed fixes -- it silently dropped
+the `with-untrailed` call (the statement-position bug) and mis-emitted the
+slab preamble, producing wrong answers fast.  Rebuild Release before
+believing any number from it; the results file carries the warning.
 
 **Corrected 2026-08-26: the row is NOT a prerequisite.** A trail-mutating
 measure is already refused congruence by the default-deny purity walk, with no
