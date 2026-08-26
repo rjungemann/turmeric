@@ -2011,15 +2011,13 @@ static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
     if (expr_is_pbp_param(ctx, arm)) return false;
     Type at = emit_resolve_type(ctx, arm->as.var.binding->type);
     if (!emit_type_is_byvalue_sum(ctx, at)) return false;
-    /* strdup the first: emit_type_c_name hands out an interned/shared buffer, so
-     * the second call can invalidate the first's pointer. */
-    const char *have0 = emit_type_c_name(ctx, at);
-    if (!have0) return false;
-    char *have = strdup(have0);
+    /* Both names are interned for the whole compilation (type_c_name ->
+     * intern_type_name), so holding the first across the second call is safe --
+     * unlike adt_field_c_type's pointer-box spelling, which is a shared buffer
+     * and must be copied.  See the report on that distinction. */
+    const char *have = emit_type_c_name(ctx, at);
     const char *want = emit_type_c_name(ctx, bv);
-    bool same = want && strcmp(have, want) == 0;
-    free(have);
-    return same;
+    return have && want && strcmp(have, want) == 0;
 }
 
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
