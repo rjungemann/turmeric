@@ -792,13 +792,48 @@ a nice-to-have; the asymmetry is the reason.
 
 **What is NOT here, and why:**
 
-- **The `#fx{Bt}` effect row.** Not added. The reason it matters is real and
-  unchanged -- the refinement solver's purity whitelist decides whether two
+- **The `#fx{Bt}` effect row.** Not added -- and **checked 2026-08-26, it is not
+  a soundness prerequisite after all.** The reason it was thought to matter is
+  real in shape: the refinement solver's purity whitelist decides whether two
   occurrences of a call may be congruence-collapsed, and a function that mutates
-  a trailed cell must not be -- but nothing in-tree calls the trail from a
-  context the solver reasons about yet, so the hole is not reachable today. It
-  has to land before SX2 puts `stdlib/logic.tur` on the trail, and that is the
-  right pairing: the row and its first real caller in one change.
+  a trailed cell must not be. This note used to say the hole was merely
+  unreachable "today" for want of callers. Made reachable and measured, the hole
+  **does not exist**:
+
+  ```turmeric
+  (defn tick [c : BtCell] : int
+    (let [v (bt-get c)] (do (bt-set! c (+ v 1)) v)))
+  (defn probe [c : BtCell] : #refine{ r : int | (>= r 0) }
+    (- (tick c) (tick c)))          ; really -1
+  ```
+
+  The solver answers **unknown** and keeps the runtime check, which then fires
+  on the real value. A pure measure in the same unit is still proven, so this is
+  discrimination rather than the solver giving up: `1 proven, 1 unknown`.
+
+  Why: `rt_classify_binding_top` (`elab_fns.c:517`) is a **default-deny** walk,
+  and `bt-set!` is an `extern-c` call it cannot prove pure. So any function
+  touching the trail is at best UNKNOWN by construction, with no annotation.
+  The declared-row veto in the same function is a second line that is never
+  reached here. And `refine_purity` is a memo of that walk, not a user-settable
+  claim, so there is no override to lie with.
+
+  Pinned by `tests/fixtures/sx2-trail-measure-not-congruent`, which asserts the
+  W0372 rather than stdout -- mutation-verified by making the measure pure and
+  watching the fixture fail.
+
+  **What the row would still buy** is precision and documentation, not safety:
+  a way to say "this touches the trail" that is checked, instead of relying on
+  a conservative walk to notice. That is worth having, but it does not gate
+  SX2's engine work, and this phase should stop listing it as a prerequisite.
+
+  The one residual worth knowing: the `#reads`-frame grant
+  (`enc_reads_args_frozen`) *can* hand congruence to an otherwise-impure
+  measure when its named arguments are frozen at the site. That is a
+  user-facing trusted claim and it is the general
+  [trusted-refinement-claims](../upcoming/trusted-refinement-claims-plan.md)
+  problem rather than a trail-specific one, but a trailed cell is exactly the
+  kind of state where a wrong `#reads` frame would cost a check.
 - **The serialization refusal of 3.5.** Not added. Same reasoning: no serializable
   continuation currently spans a `bt-scope`, because nothing spans one yet.
 - **`bt-scope` / `with-untrailed` as higher-order forms.** The surface ships the

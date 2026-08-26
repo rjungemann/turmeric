@@ -1,0 +1,50 @@
+;; SX2: a function that MUTATES a trailed cell must never be congruence-
+;; collapsed by the refinement solver.
+;;
+;; Getting this wrong is a miscompile, not a missed proof.  With `tick` counting
+;; up, `(- (tick c) (tick c))` encoded congruently becomes `t - t`; the solver
+;; proves `t - t >= 0` and ELIDES the runtime check that would have caught the
+;; real value, which is -1.
+;;
+;; SX1 deferred the `#fx{Bt}` effect row on the grounds that "nothing in-tree
+;; calls the trail from a context the solver reasons about yet, so the hole is
+;; not reachable today".  This fixture makes it reachable and pins the answer:
+;; the hole does not exist, because the purity walk is DEFAULT-DENY and
+;; `bt-set!` is an extern-c call it cannot prove pure.  The row is therefore not
+;; a soundness prerequisite for SX2 -- see docs/upcoming/solver-extension-plan.md.
+;;
+;; WHAT THIS FIXTURE ACTUALLY ASSERTS.  Not stdout -- `probe` is deliberately
+;; never called, so stdout would look identical either way.  The observable is
+;; the W0372 in expected.stderr: the solver reporting that it could NOT decide
+;; `probe`, which is exactly the refusal to congruence-collapse.  If the purity
+;; walk is ever widened so `tick` reads as pure, that warning disappears and
+;; this fixture fails -- which is the regression worth catching, because it is
+;; the unsound direction.
+;;
+;; It does NOT catch the opposite drift (the walk becoming so conservative that
+;; the pure control stops being proven): expected.stderr can only assert that a
+;; substring is present, not absent.  `pure-probe` below is still worth keeping
+;; as documentation of the contrast, and a stats-based assertion would pin both
+;; directions if the harness ever grows one.
+
+;; Mutates the cell on every call, so two calls differ by exactly 1.
+(defn tick [c : BtCell] : int
+  (let [v (bt-get c)]
+    (do (bt-set! c (+ v 1))
+        v)))
+
+;; The refinement is FALSE -- the result is -1 -- so the only safe verdicts are
+;; "unknown" (keep the check) or "refuted".  "proven" would be unsound.
+(defn probe [c : BtCell] : #refine{ r : int | (>= r 0) }
+  (- (tick c) (tick c)))
+
+;; A genuinely pure measure in the same unit, as the control: this one SHOULD
+;; collapse, so a fixture that passes by proving nothing at all is ruled out.
+(defn idv [x : int] : int x)
+
+(defn pure-probe [x : int] : #refine{ r : int | (>= r 0) }
+  (- (idv x) (idv x)))
+
+(defn main [] : int
+  (println (pure-probe 5))
+  0)
