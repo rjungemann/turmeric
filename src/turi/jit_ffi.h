@@ -163,18 +163,11 @@ const char *tur_jit_ffi_struct_layout(const char *s, size_t *out_size,
                                       size_t *out_align, size_t *offs,
                                       char *codes, int max, int *out_nleaf);
 
-/* True when the aggregate at `s` is an AAPCS64 Homogeneous Floating-point
- * Aggregate: every leaf is the same floating-point code and there are no
- * more than four of them.  Such an aggregate is passed in v0..v7 by a
- * conforming aarch64 compiler -- and in x0..x7 by MIR, which has no HFA
- * concept, so a c2mir thunk calling a natively compiled function silently
- * reads the wrong registers.  See
- * docs/reported/mir-aarch64-fp-aggregate-abi.md; the provider refuses these
- * on aarch64 rather than emitting a thunk that miscalls. */
-bool tur_jit_ffi_is_hfa(const char *s);
-
 /* True when this host's thunk provider can pass the aggregate at `s`
- * correctly.  Today: everywhere except an HFA on aarch64.  `why` (optional)
+ * correctly.  Today: everywhere -- the aarch64 HFA carve-out is gone now that
+ * the pinned MIR fork implements the AAPCS64 HFA rule (see
+ * docs/archive/mir-aarch64-fp-aggregate-abi.md).  Kept as the extension point
+ * for the next host that cannot pass some aggregate shape.  `why` (optional)
  * receives a short human-readable reason when the answer is false. */
 bool tur_jit_ffi_struct_supported(const char *s, const char **why);
 

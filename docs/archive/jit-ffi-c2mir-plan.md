@@ -84,7 +84,7 @@
 >   registers, so some call sites are accidentally right.  The interpreter
 >   REFUSES an HFA on aarch64 rather than miscall it; compiled code is
 >   unaffected.  Matrix + root cause at file:line:
->   [docs/reported/mir-aarch64-fp-aggregate-abi.md](../reported/mir-aarch64-fp-aggregate-abi.md).
+>   [docs/archive/mir-aarch64-fp-aggregate-abi.md](mir-aarch64-fp-aggregate-abi.md).
 > - **F5 reuses F3's node** -- a `CallPtrSig` with `is_callback`, the closure
 >   sitting where the target address sat -- so F3's "no walker had to learn a
 >   new kind" property still holds, and both forms share one `[T1 T2 -> R]`

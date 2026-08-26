@@ -63,6 +63,23 @@ include_guard(GLOBAL)
 #     defines __unused unconditionally, so the whole DIR struct failed to parse
 #     -- surfacing far away as "undeclared identifier d" at every later
 #     `DIR *d = opendir(...)` use, with nothing pointing at the attribute.
+#   472fa4c6 -- the aarch64 back end had no AAPCS64 HFA concept: it passed every
+#     aggregate <= 16 bytes in x0..x7, where a conforming compiler puts a
+#     Homogeneous Floating-point Aggregate (1-4 members, all the same FP type)
+#     in v0..v7.  Self-consistent within one c2mir compilation, so pure-JIT code
+#     was fine and nothing complained; wrong the instant c2mir code called a
+#     natively compiled function taking or returning one, with the callee
+#     reading whatever was left in the SIMD registers.  DATA-DEPENDENT wrong
+#     answers, no diagnostic -- `tur run` printed 152.25 where `tur jit` printed
+#     225 for the same source.  `struct { float x, y; }` vector APIs are exactly
+#     this shape.  Classification is in caarch64-ABI-code.c, register assignment
+#     in mir-gen-aarch64.c, sharing two of MIR's five reserved block classes
+#     (docs/archive/mir-aarch64-fp-aggregate-abi.md).
+#
+#     BEWARE reverting the pin below this commit: turmeric no longer carries the
+#     refusals that used to catch this shape (they were deleted with the fix, in
+#     jit_ffi_hook.c and elab_fns.c), so an older MIR silently reinstates the
+#     miscall rather than diagnosing it.
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -76,8 +93,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "9c221f9602e0b3f537e60a74982616b4fc53d561"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes")
+set(TUR_MIR_GIT_TAG "472fa4c6fa608ba515e2214e2c2bc8c0e934c8d9"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing")
 
 include(FetchContent)
 

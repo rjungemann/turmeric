@@ -343,23 +343,25 @@ SANITIZER: 63 finding(s) from `tur` across 59 fixture(s).
 **Findings are reported but do not fail the run by default.** That is deliberate
 rather than timid: arming it on discovery would have turned 60 silent findings
 into 60 red fixtures in one step, which is how a gate gets switched off instead
-of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run, which is the
-setting to use in CI once the count is at zero -- as it is on Linux now.
+of fixed. `TUR_SANITIZER_GATE=1` makes any finding fail the run.
 
-**CI arms it on the Linux leg only.** `.github/workflows/ci.yml`'s "Run fixture
-suite" step sets `TUR_SANITIZER_GATE: 1` when `runner.os == 'Linux'` and `0`
-otherwise. The asymmetry is the point rather than an oversight: the zero-finding
-measurement was taken on Linux/GCC, and UBSan findings are exactly the class of
-thing that varies with toolchain -- struct padding, which bytes are
-uninitialized, which corners are implementation-defined. The macOS count has
-never been taken, and arming it blind would redden that leg on findings nobody
-has looked at.
+**CI arms it on both legs.** `.github/workflows/ci.yml`'s "Run fixture suite"
+step -- the only step that runs `tur_tests` -- sets `TUR_SANITIZER_GATE: "1"`
+unconditionally. Linux and macOS both measure zero findings, so a finding in CI
+is a regression rather than backlog. Run the suite armed locally before pushing
+anything that touches the compiler's C if you would rather find out first.
 
-**To finish the job**, run the suite on a macOS box with the gate armed, triage
-what it reports (a finding that reproduces on only one toolchain is still a real
-finding -- it was just never visible), then drop the `runner.os` condition.
-Tracked in
-[sanitizer-gate-not-armed-in-ci](https://github.com/rjungemann/turmeric/blob/main/docs/reported/sanitizer-gate-not-armed-in-ci.md).
+One asymmetry to keep in mind: the Linux zero was measured on the CI toolchain,
+while the macOS zero was measured on a local Apple-silicon box rather than the
+`macos-latest` runner image. Same libubsan lineage and architecture, so a first
+macOS finding is more likely a genuine version-specific one than a broken gate.
+
+**On a finding, read the log file, not the console.** The summary prints only
+the ten most common findings; the full per-fixture attribution is copied to
+`$(dirname "$TUR")/sanitizer-findings.log` (override with
+`TUR_SANITIZER_LOG_OUT`), because the harness's own results directory is a
+`mktemp -d` that the `EXIT` trap deletes. CI uploads that file as the
+`sanitizer-findings-<os>` artifact.
 
 Two things to know if you touch this:
 

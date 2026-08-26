@@ -1298,31 +1298,200 @@ else
     pass "jit-ffi-extern-c-struct-rejects-heap"
 fi
 
-# jit-ffi-call-ptr-hfa-refused: on aarch64 the interpreter must REFUSE a
-# floating-point aggregate rather than emit a thunk that mis-passes it --
-# MIR has no HFA class and would put it in x0..x7 where a natively compiled
-# callee reads v0..v7.  See docs/reported/mir-aarch64-fp-aggregate-abi.md.
-# The failure mode this guards against is a silent wrong ANSWER, so the
-# assertion is that the diagnostic appears, not that the call fails.
+# jit-ffi-call-ptr-hfa: an AAPCS64 Homogeneous Floating-point Aggregate (all
+# members the same FP type, 1-4 of them) travels in v0..v7.  MIR's aarch64
+# backend had no HFA class and passed every aggregate in x0..x7, so a c2mir
+# thunk calling a natively compiled callee read the wrong registers and
+# produced a DATA-DEPENDENT wrong answer -- `tur run` printed 152.25 where
+# `tur jit` printed 225.  Fixed in the pinned MIR fork; see
+# docs/archive/mir-aarch64-fp-aggregate-abi.md.
+#
+# These assert the ANSWER, not a diagnostic: the failure mode was never a
+# crash.  The callee is compiled with the native cc so the call really crosses
+# the c2mir <-> native ABI boundary.
+#
+# Note the single-member cases are not redundant with the two-member ones. A
+# naive one-argument probe of a 1-member HFA PASSES even when broken, because
+# the value wrongly read out of v0 is very often the one the caller just
+# materialized there on its way to the store.  Two HFA arguments disambiguate:
+# at most one can be accidentally right.
 case "$(uname -m)" in
   arm64|aarch64) HFA_HOST=1 ;;
   *)             HFA_HOST=0 ;;
 esac
-if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ]; then
-    cat > "$TMP_FFI" <<'TURFFI'
-(defstruct Vec2 [x : float y : float])
+if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _hfa_dir="$(mktemp -d -t tur-ffi-hfa-XXXXXX)"
+    cat > "$_hfa_dir/helper.c" <<'EOF'
+typedef struct { double a, b; } D2;
+typedef struct { float a, b; }  F2;
+typedef struct { double x; }    D1;
+double h_d2 (D2 v)        { return v.a * 100.0 + v.b; }
+double h_f2 (F2 v)        { return (double) v.a * 100.0 + v.b; }
+double h_d1x2 (D1 a, D1 b) { return a.x * 100.0 + b.x; }
+D2     h_ret (void)       { D2 r = {1.5, 2.25}; return r; }
+EOF
+    if cc -shared -fPIC -Wl,-install_name,"$_hfa_dir/libhfa.$SOEXT" \
+          -o "$_hfa_dir/libhfa.$SOEXT" "$_hfa_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct D2 [a : float b : float])
+(defstruct F2 [a : float32 b : float32])
+(defstruct D1 [x : float])
 (defn main [] : int
-  (unsafe (println (call-ptr 1 [Vec2 -> :float] (Vec2 3.0 4.0))))
+  (unsafe
+    (let [h (dlopen "$_hfa_dir/libhfa.$SOEXT")]
+      (println (call-ptr (dlsym h "h_d2") [D2 -> :float] (D2 1.5 2.25)))
+      (println (call-ptr (dlsym h "h_f2") [F2 -> :float]
+                         (F2 (:: 1.5 :float32) (:: 2.25 :float32))))
+      (println (call-ptr (dlsym h "h_d1x2") [D1 D1 -> :float] (D1 3.0) (D1 4.0)))
+      (let [r (call-ptr (dlsym h "h_ret") [-> D2])]
+        (println (.a r))
+        (println (.b r)))))
   0)
 TURFFI
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
-    if ! grep -q "AAPCS64 HFA" <<< "$out"; then
-        fail "jit-ffi-call-ptr-hfa-refused" "expected the aarch64 HFA refusal, got: $out"
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null \
+              | tr '\n' ' ')
+        if [ "$out" != "152.25 152.25 304 1.5 2.25 " ]; then
+            fail "jit-ffi-call-ptr-hfa" \
+                 "expected '152.25 152.25 304 1.5 2.25 ' from HFA call-ptr, got: $out"
+        else
+            pass "jit-ffi-call-ptr-hfa"
+        fi
     else
-        pass "jit-ffi-call-ptr-hfa-refused"
+        echo "SKIP jit-ffi-call-ptr-hfa (helper library did not build)"
     fi
+    rm -rf "$_hfa_dir"
 else
-    echo "SKIP jit-ffi-call-ptr-hfa-refused (needs a JIT build on aarch64)"
+    echo "SKIP jit-ffi-call-ptr-hfa (needs a JIT build on aarch64 with cc)"
+fi
+
+# jit-ffi-extern-c-hfa-compiled: the same shape on the COMPILED side.  The test
+# above covers the interpreter's thunk engine; this covers `tur jit`, where the
+# whole program goes through c2mir.  This is the case that had no diagnostic at
+# all before the MIR fix: `tur run` printed 152.25 and `tur jit` printed 226.5
+# for the same source, exit 0 both times.
+#
+# Asserted against `tur run` rather than a literal, so the two backends are
+# compared directly -- the property that actually matters is that they agree.
+if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _hfa2_dir="$(mktemp -d -t tur-ffi-hfa2-XXXXXX)"
+    cat > "$_hfa2_dir/helper.c" <<'EOF'
+typedef struct { double a, b; } D2;
+double h_ec_d2 (D2 v) { return v.a * 100.0 + v.b; }
+EOF
+    if cc -shared -fPIC -Wl,-install_name,"$_hfa2_dir/libhfa2.$SOEXT" \
+          -o "$_hfa2_dir/libhfa2.$SOEXT" "$_hfa2_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct D2 [a : float b : float])
+(extern-c h_ec_d2 [v : D2] : float)
+(defn linkme [] : int
+  \`\`\`c
+  /* __tur_autolink__: -L$_hfa2_dir -lhfa2 */
+  return 0;
+  \`\`\`)
+(defn main [] : int
+  (let [_ (linkme)]
+    (println (h_ec_d2 (D2 1.5 2.25)))
+    0))
+TURFFI
+        jit_out=$("$TUR" jit "$TMP_FFI" 2>/dev/null | tr -d '[:space:]')
+        native_out=$("$TUR" run "$TMP_FFI" 2>/dev/null | tr -d '[:space:]')
+        if [ "$native_out" != "152.25" ]; then
+            fail "jit-ffi-extern-c-hfa-compiled" \
+                 "native cc path is itself wrong (got '$native_out'); the test is broken"
+        elif [ "$jit_out" != "$native_out" ]; then
+            fail "jit-ffi-extern-c-hfa-compiled" \
+                 "tur jit disagrees with tur run on an HFA extern-c: '$jit_out' vs '$native_out'"
+        else
+            pass "jit-ffi-extern-c-hfa-compiled"
+        fi
+    else
+        echo "SKIP jit-ffi-extern-c-hfa-compiled (helper library did not build)"
+    fi
+    rm -rf "$_hfa2_dir"
+else
+    echo "SKIP jit-ffi-extern-c-hfa-compiled (needs a JIT build on aarch64 with cc)"
+fi
+
+# jit-ffi-callback-hfa: the INBOUND direction, which is the mirror hazard and
+# the only one that exercises the callee-side half of the MIR fix (the arg
+# gather in target_machinize).  Here a NATIVELY compiled caller writes v0..v7
+# and a c2mir-generated callback must read them from the same place; before the
+# fix the callback read x0..x7.  Nothing else in this file covers that half.
+if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _cb_dir="$(mktemp -d -t tur-ffi-cbhfa-XXXXXX)"
+    cat > "$_cb_dir/helper.c" <<'EOF'
+typedef struct { double a, b; } D2;
+double call_cb_d2 (double (*cb) (D2), double x, double y) { D2 v = {x, y}; return cb (v); }
+EOF
+    if cc -shared -fPIC -Wl,-install_name,"$_cb_dir/libcbhfa.$SOEXT" \
+          -o "$_cb_dir/libcbhfa.$SOEXT" "$_cb_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct D2 [a : float b : float])
+(defn cb-d2 [v : D2] : float (+ (* (.a v) 100.0) (.b v)))
+(defn main [] : int
+  (unsafe
+    (let [h (dlopen "$_cb_dir/libcbhfa.$SOEXT")]
+      (println (call-ptr (dlsym h "call_cb_d2") [:ptr :float :float -> :float]
+                         (callback-ptr cb-d2 [D2 -> :float]) 1.5 2.25))))
+  0)
+TURFFI
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>/dev/null \
+              | tr -d '[:space:]')
+        if [ "$out" != "152.25" ]; then
+            fail "jit-ffi-callback-hfa" \
+                 "expected 152.25 from an HFA passed INTO a callback, got: $out"
+        else
+            pass "jit-ffi-callback-hfa"
+        fi
+    else
+        echo "SKIP jit-ffi-callback-hfa (helper library did not build)"
+    fi
+    rm -rf "$_cb_dir"
+else
+    echo "SKIP jit-ffi-callback-hfa (needs a JIT build on aarch64 with cc)"
+fi
+
+# jit-ffi-extern-c-nonhfa-still-jits: proof the HFA classification is narrow.
+# A mixed-member aggregate is INTEGER-class under AAPCS64, not an HFA, so it
+# must keep travelling in x0..x7 exactly as a natively compiled callee expects.
+# Without this, widening the classifier to "any aggregate containing a float"
+# would still look green while silently breaking a large amount of code that
+# works today.
+if [ "$HAS_JIT" = "1" ] && [ "$HFA_HOST" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _mix_dir="$(mktemp -d -t tur-ffi-mix-XXXXXX)"
+    cat > "$_mix_dir/helper.c" <<'EOF'
+typedef struct { double a; long long b; } MixT;
+double __sbv_mix(MixT v) { return v.a * 100.0 + (double)v.b; }
+EOF
+    if cc -shared -fPIC -Wl,-install_name,"$_mix_dir/libmix.$SOEXT" \
+          -o "$_mix_dir/libmix.$SOEXT" "$_mix_dir/helper.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
+(defstruct MixT [a : float b : int])
+(extern-c __sbv_mix [v : MixT] : float)
+(defn linkme [] : int
+  \`\`\`c
+  /* __tur_autolink__: -L$_mix_dir -lmix */
+  return 0;
+  \`\`\`)
+(defn main [] : int
+  (let [_ (linkme)
+        v (MixT 1.5 2)]
+    (println (__sbv_mix v))
+    0))
+TURFFI
+        out=$("$TUR" jit "$TMP_FFI" 2>/dev/null | tr -d '[:space:]')
+        if [ "$out" != "152" ]; then
+            fail "jit-ffi-extern-c-nonhfa-still-jits" \
+                 "expected 152 from an INTEGER-class aggregate under \`tur jit\`, got: $out"
+        else
+            pass "jit-ffi-extern-c-nonhfa-still-jits"
+        fi
+    else
+        echo "SKIP jit-ffi-extern-c-nonhfa-still-jits (helper library did not build)"
+    fi
+    rm -rf "$_mix_dir"
+else
+    echo "SKIP jit-ffi-extern-c-nonhfa-still-jits (needs a JIT build on aarch64 with cc)"
 fi
 
 # jit-ffi-callback-interp: F5 in the direction only the interpreter exercises

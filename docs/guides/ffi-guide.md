@@ -121,16 +121,9 @@ Arguments are matched by **type identity**, not by shape: two records with
 the same field types are still different C types, and passing one where the
 other is declared is an error.
 
-> **aarch64 limitation, interpreter only.** Under `--interpret`, an
-> aggregate whose fields are all the same floating-point type (an AAPCS64
-> *HFA* -- `{float, float}`, `{double, double, double}`, and so on) is
-> **refused with a diagnostic** on arm64. MIR has no HFA class and would
-> pass it in the general-purpose registers where a natively compiled callee
-> reads the SIMD ones, which produces silently wrong numbers rather than a
-> crash. Compiled code is unaffected and correct on every target, because
-> the C compiler implements the ABI. Details, measurements, and fix
-> directions:
-> [mir-aarch64-fp-aggregate-abi](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mir-aarch64-fp-aggregate-abi.md).
+An aggregate whose fields are all the same floating-point type (an AAPCS64
+*HFA* -- `{float, float}`, `{double, double, double}`, and so on) crosses
+correctly in both directions on arm64, as does every other aggregate shape.
 
 ### Callbacks: `callback-ptr`
 
@@ -381,6 +374,18 @@ representable signatures only, loudly documented over silently wrong.
 (Redeclaring a symbol a libc header already declares -- `div` above --
 still trips the C compiler on the *compiled* path, as with any extern-c;
 use the real header type or a symbol of your own there.)
+
+Floating-point aggregates cross by value on every backend, including
+`struct { float x, y; }`-flavoured vector APIs. On aarch64 such a record is an
+AAPCS64 HFA and travels in `v0..v7` rather than the general-purpose registers;
+the pinned MIR fork implements that rule, so `tur jit`, `tur run`/`tur build`
+and the interpreter's `call-ptr`/`callback-ptr` all agree with a natively
+compiled callee:
+
+```turmeric
+(defstruct Vec2 [x : float y : float])
+(extern-c length [v : Vec2] : float)   ;; float length(Vec2)
+```
 
 ---
 
