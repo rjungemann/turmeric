@@ -1,5 +1,89 @@
 # Plan: Test Suite Timing Trends for `rjungemann/turmeric`
 
+## Execution record (2026-08-25)
+
+**Phases 0-4 are implemented and validated.** Phases 5 (dashboard) and 6
+(per-fixture drill-down) are deliberately NOT done -- the rollout order gates
+the first on "~2 weeks of data exists" and the second on "only if `tur_tests`
+turns out to be the thing that moves." Neither precondition is met yet.
+
+Landed:
+
+- `tools/ci/collect-suite-timings.py` -- merges N JUnit files, emits NDJSON.
+- `tools/ci/publish-timings.sh` -- appends to the `ci-metrics` orphan branch.
+- `.github/workflows/ci.yml` -- `--output-junit` on all three ctest
+  invocations, collect+upload on both `test` and `jit`, and a new
+  `publish-timings` job.
+- 14 `TUR_SKIP:` / `TUR_SKIP_PARTIAL:` markers across 10 harnesses.
+
+### What the plan got wrong (corrected in the implementation)
+
+1. **A relative `--output-junit` path resolves against `--test-dir`, not the
+   working directory.** `ctest --test-dir build --output-junit results-aux.xml`
+   writes `build/results-aux.xml`. The plan's Phase 2 reads the files from the
+   workspace root, which yields zero rows -- and because the collect step only
+   warns, it would have shipped as a silently empty dashboard. The workflow now
+   passes `build/results-*.xml` explicitly, with a comment.
+
+2. **JUnit already carries per-test stdout.** Phase 1 asserted "JUnit output
+   alone will not carry this ... either add `-V`/`--verbose` or capture via
+   `tee`." False: ctest embeds each testcase's output in `<system-out>` even
+   under `--output-on-failure`. No `-V`, no `tee`, no `LastTest.log`. This
+   removes the plan's only real objection to the skip-marker design and keeps
+   the console output unchanged.
+
+3. **The skip inventory was over-counted: 10 harnesses, not 13.** The Phase 1
+   table came from a loose heuristic (`command -v` near an `exit 0`) and
+   carried five false positives. `run-bench.sh`'s `command -v clock_gettime` is
+   a timing-mechanism fallback that never exits early; `run-turi.sh`'s `SKIP`s
+   are per-fixture; and `run-build-project.sh`, `run-flags.sh`, and
+   `run-install.sh` have no whole-suite skip at all (their `echo "PASS $1"` hits
+   are the generic `pass()` helper, not a skip site). Conversely `run-jit.sh`
+   has a **fourth** convention the table missed: `run-jit: SKIP (...)`.
+
+4. **`tur_phase4_gdb` / `tur_phase5_gdb` are PARTIAL skips, and the plan's
+   acceptance criterion for them was wrong.** It asked that `tur_phase4_gdb`
+   "land as `skip`". It must not: only the gdb half is skipped: the emit-c
+   assertions still run, and the suite still takes real time (586 ms and
+   1392 ms measured). Recording it as a skip would drop a working suite from
+   the duration trend -- the exact failure mode Phase 1 exists to prevent, in
+   the opposite direction. These two now emit `TUR_SKIP_PARTIAL:`, which the
+   ingest records as `status: "pass"` plus a `partial_skip_reason` note.
+
+5. **Force-push replaced with fetch/append/retry.** Phase 3A specified a
+   force-push. That can silently discard rows another run appended between our
+   fetch and our push -- the one outcome an append-only metrics log must never
+   have. The script now re-fetches, re-appends onto the new tip, and retries
+   (5 attempts, backoff). Verified: with a second publisher's row already on the
+   remote, publishing preserved both.
+
+6. **Publishing is a separate job, not a step.** Phase 4 put
+   `concurrency: {group: ci-metrics}` on the canonical job. Hung on `test` that
+   would serialize the entire build-and-test matrix across runs -- an enormous
+   cost for a metrics feature. The `publish-timings` job carries the group
+   instead, so it serializes only an artifact download and a git push.
+
+7. `continue-on-error` was not used, per the plan's own Phase 4 note; the
+   collect/upload steps are `if: always()`, leaving the gate untouched.
+
+### CI never runs on `ci-metrics`
+
+Two independent layers: `ci.yml` triggers only on `branches: [main]` (documented
+in the `on:` block so it is not widened casually), and every publish commit
+carries `[skip ci]`. `release.yml` triggers on `v*` tags only. The branch is a
+true orphan (no parent, no source files -- verified) carrying only a README and
+`suite-timings-<year>.jsonl`.
+
+### Measured baseline (local, Debug, AppleClang-21.0.0, 8 cores)
+
+111 auxiliary suites ingested cleanly: 109 pass, 2 fail, 2 partial-skips. The
+two failures (`tur_engine_select`, `turi_fixture_tests`) are **pre-existing** --
+`tur_engine_select` reproduces with all of this work stashed. Slowest suites:
+`tur_span_coverage` 264.8 s, `turi_fixture_tests` 100.9 s,
+`tur_spice_resolver_tests` 39.7 s. Note `tur_span_coverage`, not `tur_tests`,
+dominates the auxiliary run -- worth knowing before Phase 6 assumes `tur_tests`
+is the thing to drill into.
+
 ## Goal
 
 Track wall-clock duration of each CTest suite over time, so duration

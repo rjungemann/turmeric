@@ -295,6 +295,7 @@ set(TUR_CORE_SOURCES
     # cli/ -- standalone subcommands
     cli/lsp_lite.c
     cli/completion.c
+    cli/demangle.c
 )
 
 # ---------------------------------------------------------------------------
@@ -1462,6 +1463,11 @@ set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
 add_executable(tur_mangle_unit
     ${CMAKE_SOURCE_DIR}/tests/mangle_test.c
     ${CMAKE_SOURCE_DIR}/src/compiler/mangle.c
+    # `tur demangle`'s token recognizer (profiling-plan P0) is tested here
+    # rather than through the CLI: the decode is pure, and which tokens it
+    # accepts is the part worth pinning. cli/demangle.c depends on nothing
+    # but mangle.h and stdio.
+    ${CMAKE_SOURCE_DIR}/src/cli/demangle.c
 )
 target_include_directories(tur_mangle_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_mangle_unit PRIVATE

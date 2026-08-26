@@ -8,12 +8,16 @@ cd "$(dirname "$0")/../.."
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP: python3 not available -- MCP/LSP end-to-end tests skipped"
+    echo "TUR_SKIP: python3 unavailable"
     exit 0
 fi
 
 TUR="./build/tur"
 if [ ! -x "$TUR" ]; then
     echo "SKIP: $TUR not built" >&2
+    # On stdout, unlike the human line above: the marker has to land in the
+    # test's captured output for the timing ingest to see it.
+    echo "TUR_SKIP: $TUR not built"
     exit 0
 fi
 

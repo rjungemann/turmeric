@@ -77,7 +77,9 @@ if [ ! -x "$BIN" ]; then
 fi
 
 if ! command -v gdb >/dev/null 2>&1; then
-  echo "PASS phase5: gdb not available -- skipping DWARF + pretty-printer checks"
+  # PARTIAL, not a whole-suite skip -- see the same note in run-phase4-gdb.sh.
+  echo "SKIP phase5: gdb not available -- skipping DWARF + pretty-printer checks"
+  echo "TUR_SKIP_PARTIAL: gdb unavailable (DWARF + pretty-printer checks)"
 else
   # -- N1b) the carrier type names round-trip into DWARF ----------------------
   # The Result parameter is the concrete `(Result int cstr)`, which monomorphizes

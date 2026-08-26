@@ -26,7 +26,8 @@ if [ ! -x "$TUR" ]; then
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "PASS dap: python3 not available -- skipping DAP regression"
+  echo "SKIP dap: python3 not available -- skipping DAP regression"
+  echo "TUR_SKIP: python3 unavailable"
   exit 0
 fi
 

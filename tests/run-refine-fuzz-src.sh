@@ -31,10 +31,12 @@ SEED="${REFINE_FUZZ_SEED:-1}"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "SKIP refine-fuzz-src: python3 unavailable"
+  echo "TUR_SKIP: python3 unavailable"
   exit 0
 fi
 if [ ! -x "$TUR" ]; then
   echo "SKIP refine-fuzz-src: no compiler at $TUR"
+  echo "TUR_SKIP: no compiler at $TUR"
   exit 0
 fi
 
