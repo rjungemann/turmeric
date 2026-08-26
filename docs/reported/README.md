@@ -934,7 +934,6 @@ turned up a defect in the instrument that would have justified it.
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
 | [dump-refine-json-under-reports-caps](dump-refine-json-under-reports-caps.md) | low | `--dump-refine=json`'s per-obligation `caps_hit` reads empty when the cap bit during the speculative RT4/path-splitting probe -- the snapshot window opens after that probe runs. The global counters (`TUR_REFINE_STATS`, the cap sweep) are unaffected |
 | [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | `tests/run.sh` gained a gate for UBSan findings from the compiler and it is verified in both directions, but nothing sets `TUR_SANITIZER_GATE=1`, so CI runs unarmed. Not a pure flag flip: the zero-finding count was measured on Linux only, and UBSan findings vary by toolchain |
-| [closure-in-defdata-field](closure-in-defdata-field.md) | medium | PARTIALLY FIXED. The `defopaque :ptr<void>` route is clean now and the lazy-stream work it blocked has landed. Still open: a `:fn` field accepts a capturing closure, type-checks, and SIGSEGVs when forced, while a non-capturing one works -- so the shape you write first is fine and the shape you need crashes |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
 
 `compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
@@ -967,6 +966,13 @@ the documented entry point is now the one the compiler calls. Its residue is
 open as [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) --
 nothing exercises `examples/` and nothing diagnoses a build with no entry point,
 which is why it survived as long as it did.
+
+`closure-in-defdata-field` was resolved 2026-08-26 (all three cases) and moved
+to [docs/archive/](../archive/closure-in-defdata-field.md). Capturing closures
+in spelled-out fn fields work at arity 0..4 in both containers (two staleness
+bugs: arity-0 excluded from boxing, match-arm extraction not consulting
+boxedness); thin `:fn` / >4-arity fields reject a capturing store instead of
+segfaulting.
 
 `poly-call-in-statement-position-dropped` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/poly-call-in-statement-position-dropped.md).

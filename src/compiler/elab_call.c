@@ -3216,13 +3216,54 @@ Expr *elab_call(Elab *e, Form *call) {
                          fn_param_type_is_fat_normalized(&fa->as.var.binding->type)))
                         continue;
                     uint32_t inner_arity = fa->type.as.fn.arity;
-                    if (inner_arity < 1 || inner_arity > 5) continue;
+                    /* Arity 0 admitted alongside the field-boxing change in
+                     * resolve_ctor_field: a thunk field is boxed now, so a
+                     * thin nullary fn stored into it needs the same shim. */
+                    if (inner_arity > 5) continue;
                     Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
                     *bt = fa->type;
                     bt->as.fn.boxed = true;
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, fa->span);
                     shim->as.fn_to_fat_.inner = fa;
                     call_expr->as.call_.args[fi] = shim;
+                }
+
+                /* closure-in-defdata-field, the residue: a field declared as
+                 * bare `:fn` (no signature -- full_type NULL) or as a >4-arity
+                 * `(fn ...)` stays on the THIN calling convention; there is no
+                 * signature (or no TUR_APPLY<N>_T) to box it with.  A
+                 * CAPTURING closure stored into such a field is a fat env
+                 * block that every force site will jump into as code --
+                 * a guaranteed runtime SIGSEGV with no diagnostic anywhere.
+                 * Reject the store instead.  Captureless lambdas lift to bare
+                 * function pointers and stay correct on the thin path, and
+                 * every in-tree `:fn` field stores exactly those, so this
+                 * rejects nothing that works today. */
+                for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+                    if (ctor->fields[fi].kind != TY_FN) continue;
+                    const Type *ft = ctor->fields[fi].full_type;
+                    bool thin_fn_field =
+                        !ft || (ft->kind == TY_FN && !ft->as.fn.boxed);
+                    if (!thin_fn_field) continue;
+                    const Expr *fa = call_expr->as.call_.args[fi];
+                    while (fa && fa->kind == EX_ASCRIBE) fa = fa->as.ascribe_.inner;
+                    if (fa && fa->kind == EX_CLOSURE && fa->as.closure_.closure &&
+                        fa->as.closure_.closure->n_captures > 0) {
+                        diag_emit(DIAG_ERROR, fa->span,
+                                  "constructor '%s': a capturing closure cannot be "
+                                  "stored in field %u, whose type ('%s') uses the "
+                                  "thin function-pointer representation\n"
+                                  "  = note: the closure's environment would be "
+                                  "called as code at every use -- a runtime crash\n"
+                                  "  = help: declare the field with a full "
+                                  "signature of arity <= 4, e.g. (fn [int] int), "
+                                  "which stores closures correctly; or wrap the "
+                                  "closure in an opaque carrier "
+                                  "((defopaque Th :ptr<void>)) as stdlib/logic.tur's "
+                                  "Goal does",
+                                  ctor->name, fi,
+                                  ft ? type_name(*ft) : "fn");
+                    }
                 }
 
                 /* closure-drop-glue S2 (Model U): storing a CAPTURING closure

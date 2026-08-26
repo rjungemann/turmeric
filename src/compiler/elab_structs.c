@@ -1331,12 +1331,17 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
          * the fat dispatch (TUR_APPLY*); the make-struct store shims a bare/thin
          * fn into a fat handle (elab_call.c constructor arg loop).  Storage stays
          * the int64 carrier -- only the dispatch/representation changes. */
-        /* Bound to arity 1..4: the store shim (elab_call.c) shims arity >=1 and
-         * the field-call fat dispatch (emit_expr.c TUR_APPLY<N>_T) covers N<=4, so
-         * boxing outside that range would make the store and read disagree.  A
-         * nullary or >4-arg fn field stays on the pre-existing thin path. */
+        /* Bound to arity 0..4: the field-call fat dispatch (emit_expr.c,
+         * TUR_APPLY<N>_T) covers N<=4; the store shim (elab_call.c) covers the
+         * same range.  Arity 0 was originally excluded alongside >4, which
+         * left a THUNK field -- the lazy-stream shape, and the one the
+         * closure-in-defdata-field report was filed about -- on the thin path,
+         * where a capturing closure stored into it segfaulted at force time
+         * (TUR_APPLY0_T existed all along; the exclusion was stale).  A >4-arg
+         * fn field stays thin, and a capturing store into one is rejected at
+         * elaboration rather than left to crash. */
         if (t && t->kind == TY_FN && !t->as.fn.boxed &&
-            t->as.fn.arity >= 1 && t->as.fn.arity <= 4) {
+            t->as.fn.arity <= 4) {
             Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
             *bt = *t;
             bt->as.fn.boxed = true;
@@ -4339,11 +4344,23 @@ Expr *elab_match(Elab *e, const Form *call) {
                  * closure value is already a fat box.  Mark the extracted match
                  * binding `boxed` so an application `(f env)` fat-dispatches
                  * through slot 0 (ER2, emit_expr.c) instead of jumping into the
-                 * box as thin code -> SIGSEGV.  A concrete (non-tyvar) TY_FN
-                 * field is NOT auto-boxed at construction, so it stays thin. */
+                 * box as thin code -> SIGSEGV.
+                 *
+                 * A concrete BOXED `(fn ...)` field is the same case: since
+                 * resolve_ctor_field started boxing concrete arity<=4 fn
+                 * fields, construction stores a fat handle there too -- but
+                 * this site still said "a concrete TY_FN field is NOT
+                 * auto-boxed" and marked only tyvar fields, so a match-arm
+                 * extraction called the fat box THIN and jumped into the env
+                 * block as code.  That store/read disagreement is why the
+                 * defdata half of closure-in-defdata-field crashed at every
+                 * arity while the defstruct field-read half worked at 1..4:
+                 * the two force paths consulted different facts. */
                 if (fb->type.kind == TY_FN &&
                     ctor->fields[bi].full_type &&
-                    ctor->fields[bi].full_type->kind == TY_TYVAR) {
+                    (ctor->fields[bi].full_type->kind == TY_TYVAR ||
+                     (ctor->fields[bi].full_type->kind == TY_FN &&
+                      ctor->fields[bi].full_type->as.fn.boxed))) {
                     fb->is_fat = true;
                 }
                 /* LT1: Propagate linearity from the field's type to its binding */

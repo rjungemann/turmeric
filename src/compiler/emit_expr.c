@@ -6090,6 +6090,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                fr.as.adt_.def &&
                                                fr.as.adt_.def->is_opaque;
                         }
+                        /* A BOXED concrete `(fn ...)` field is a carrier slot
+                         * too: resolve_ctor_field boxes fn fields of arity
+                         * <= 4 (storage stays the int64 carrier; only the
+                         * dispatch changes), and the stored value is then a
+                         * fat pointer -- an env block for a capturing
+                         * closure, an EX_FN_TO_FAT shim box for a thin one.
+                         * Same straddle, same missing cast, same
+                         * -Wint-conversion at the ctor call that the
+                         * cc-warning gate rejects. */
+                        if (!field_is_carrier && fft &&
+                            fft->kind == TY_FN && fft->as.fn.boxed &&
+                            /* The fn-field path above may have cast this arg
+                             * already; a second wrap is redundant (and churns
+                             * two snapshots for nothing). */
+                            strncmp(arg_strs[i], "(int64_t)(intptr_t)", 19) != 0)
+                            field_is_carrier = true;
+                        /* A THIN fn field (bare `:fn` -- no signature, so
+                         * full_type is NULL -- or an unboxed >4-arity
+                         * signature) is an int64 slot receiving a bare
+                         * function pointer: a captureless lambda lifts to a
+                         * top-level `__fn_N` and lands here as
+                         * `int64_t (*)()` into `int64_t`, the case-2 warning
+                         * of closure-in-defdata-field.  (A CAPTURING closure
+                         * into such a field is rejected at elaboration, so by
+                         * here the value is a code pointer and the cast is
+                         * honest.) */
+                        if (!field_is_carrier &&
+                            e->as.call_.ctor->fields[i].kind == TY_FN &&
+                            (!fft || (fft->kind == TY_FN && !fft->as.fn.boxed)) &&
+                            strncmp(arg_strs[i], "(int64_t)(intptr_t)", 19) != 0)
+                            field_is_carrier = true;
                     }
                     Type resolved_arg_type = emit_resolve_type(ctx, arg->type);
                     TypeKind rk = resolved_arg_type.kind;

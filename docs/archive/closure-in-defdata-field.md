@@ -5,12 +5,29 @@ miscompiles into a crash for the only case anyone would use it for. The working
 alternative is undocumented and discoverable only by reading how `Goal` is
 declared.
 
-**Status:** PARTIALLY RESOLVED 2026-08-26. **Case 3 (the `:ptr<void>` route) is
-fixed** -- the emitted C is clean and the lazy-stream work it blocked has
-landed. **Case 1 (`:fn` field segfaults) is still OPEN**, and so is the warning
-on case 2.
+**Status:** RESOLVED 2026-08-26 (all three cases). Case 3 first (the
+`:ptr<void>` route); cases 1 and 2 in the follow-up recorded at
+[history/closure-in-defdata-field](history/closure-in-defdata-field.md):
 
-Kept in `reported/` for that reason. Found while scoping the fix for
+- A capturing closure in a SPELLED-OUT fn field now works at **arity 0..4, in
+  both `defstruct` and `defdata`**. Two one-line staleness bugs, not a
+  representation change: field boxing excluded arity 0 (`TUR_APPLY0_T` existed
+  all along), and the match-arm extraction marked `is_fat` only for tyvar
+  fields, its comment still claiming concrete fn fields are never boxed -- so a
+  defdata's store was fat while its match-arm force called thin, at every
+  arity.
+- A capturing closure stored into a field that STAYS thin -- bare `:fn` (no
+  signature to box) or a >4-arity signature -- is now **rejected at
+  elaboration** with the working routes named, instead of compiling clean and
+  segfaulting at force time.
+- The case-2 / case-3 `-Wint-conversion` warnings are gone: a boxed fn field
+  and a thin `:fn` slot both take the pointer-to-carrier cast at the ctor call.
+
+Regression fixtures: `closure-field-boxed-all-shapes` (all four
+container/arity shapes that used to SIGSEGV) and
+`errors/fn-field-capturing-closure-rejected` (the diagnostic).
+
+Found while scoping the fix for
 [logic-streams-are-strict](logic-streams-are-strict.md), which needed exactly
 this -- a thunk stored in a `Stream` variant.
 
