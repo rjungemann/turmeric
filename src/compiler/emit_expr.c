@@ -900,6 +900,26 @@ static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     return false;
 }
 
+/* SR1: true when `t` resolves to a by-value MULTI-VARIANT sum -- the population
+ * SR1 moves onto the by-value ABI, and nothing else.
+ *
+ * The crossings SR1 adds all key off this rather than emit_type_is_byvalue_adt,
+ * and the distinction is load-bearing, not tidiness.  Single-variant by-value
+ * products (a lowered struct, an `Option`/`Result` monomorph, a `(Pair2 int
+ * int)`) have ridden the by-value ABI since B3, and every carrier crossing they
+ * make is already handled -- often by a more specific rule that knows whether
+ * the value escapes into a heap container.  A second, blunter bridge layered on
+ * top double-boxes them: keyed on emit_type_is_byvalue_adt these rules broke 27
+ * vec/map/inline-C fixtures that have no sum in them at all. */
+static bool emit_type_is_byvalue_sum(EmitCtx *ctx, Type t) {
+    if (!emit_type_is_byvalue_adt(ctx, t)) return false;
+    Type r = emit_resolve_type(ctx, t);
+    const AdtDef *d = (r.kind == TY_ADT) ? r.as.adt_.def
+                    : (r.kind == TY_APP) ? type_adt_app_def(&r)
+                                         : NULL;
+    return d && d->n_ctors > 1;
+}
+
 /* catch-unwind-aggregate-return-miscompiled: when a catch boundary's thunk
  * returns a by-value AGGREGATE, the generic `TUR_APPLY0` call in
  * tur_catch_unwind_box is a function-pointer type mismatch -- it casts slot 0
@@ -1990,7 +2010,7 @@ static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
     if (arm->kind != EX_VAR || !arm->as.var.binding) return false;
     if (expr_is_pbp_param(ctx, arm)) return false;
     Type at = emit_resolve_type(ctx, arm->as.var.binding->type);
-    if (!emit_type_is_byvalue_adt(ctx, at)) return false;
+    if (!emit_type_is_byvalue_sum(ctx, at)) return false;
     char *have = strdup(emit_type_c_name(ctx, at));
     const char *want = emit_type_c_name(ctx, bv);
     bool same = want && strcmp(have, want) == 0;
@@ -7073,7 +7093,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 : (pk == TY_INT || pk == TY_INT64 ||
                                    pk == TY_UINT64 || pk == TY_PTR_VOID);
                         if (g_sr1_sum_byvalue && int_carrier_param &&
-                            !matched_spec) {
+                            !matched_spec && emit_type_is_byvalue_sum(ctx, rarg)) {
                             raw = emit_carrier_bridge_escaping(
                                       ctx, body, raw, CK_CONCRETE, CK_CARRIER, rarg);
                         } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
@@ -7149,21 +7169,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * callee's declared TY_FN still says `:int`.  Narrow on purpose: a
                  * non-pointer `tur_adt_` C name (a by-value ADT aggregate) against
                  * an argument that is statically a carrier word. */
+                /* SR1, the other direction: a CARRIER argument reaching a
+                 * parameter the callee emits as a by-value SUM.  A `:int`-declared
+                 * parameter whose body matches it against constructors is refined
+                 * to that ADT, so the emitted signature takes the aggregate --
+                 * `(defn run-calc-op [op : int] ...)` becomes
+                 * `run_calc_op(tur_adt_CalcOp)`.  Callers that honour the
+                 * DECLARATION still hand over an int64 carrier word: here the
+                 * lifted `(fn [op] (run-calc-op op))`, whose own `op` is an
+                 * untyped carrier param.  Deref the box back to the aggregate.
+                 * While every sum rode the carrier the refinement was invisible
+                 * and both sides were int64.
+                 *
+                 * Keyed on the callee's REFINED parameter type (FnDef.param_types),
+                 * which is the only place the refinement is visible -- the callee's
+                 * declared TY_FN still says `:int`, and its emitted C parameter
+                 * type is just a name.  Restricted to a by-value SUM so it cannot
+                 * fire on a by-value product parameter (a typeclass method taking
+                 * its receiver by value reads the same at this site, but its
+                 * argument was already unboxed by the rule that owns that
+                 * crossing -- bridging again double-derefs). */
                 if (g_sr1_sum_byvalue && !needs_fn_cast && !matched_spec &&
-                    emit_arg) {
-                    const char *pct = emit_sig_lookup_param_ctype(fn_name, i);
-                    size_t pl = pct ? strlen(pct) : 0;
+                    emit_arg && fn_binding->source_fn_def) {
+                    const FnDef *fd = fn_binding->source_fn_def;
                     TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
-                    if (pct && pl > 0 && pct[pl - 1] != '*' &&
-                        strncmp(pct, "tur_adt_", 8) == 0 &&
+                    if (i < fd->n_params && fd->param_types &&
+                        emit_type_is_byvalue_sum(ctx, fd->param_types[i]) &&
                         (ak == TY_INT || ak == TY_INT64 || ak == TY_UINT64 ||
                          ak == TY_PTR_VOID)) {
-                        Buf ub; buf_init(&ub);
-                        buf_printf(&ub, "(*(%s *)(intptr_t)(%s))", pct, raw);
-                        buf_putc(&ub, '\0');
+                        char *ub = emit_agg_unbox(ctx, fd->param_types[i], raw);
                         free(raw);
-                        raw = strdup(ub.data);
-                        buf_free(&ub);
+                        raw = ub;
                     }
                 }
                 /* multiword-element-boxing (Map value / spec'd inline-C carrier
@@ -8087,7 +8123,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * whose clone already returns the aggregate by value. */
             if (g_sr1_sum_byvalue &&
                 fn_binding && fn_binding->type.kind == TY_FN &&
-                emit_type_is_byvalue_adt(ctx, e->type) &&
+                emit_type_is_byvalue_sum(ctx, e->type) &&
                 !type_is_transparent_int_newtype(emit_resolve_type(ctx, e->type)) &&
                 !find_matched_abi_spec(ctx, e, fn_binding)) {
                 TypeKind rk = fn_binding->type.as.fn.result_kind;
@@ -11746,7 +11782,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         "__tur_cons_of(((union { %s d; int64_t i; }){.d = (%s)}).i, %s)",
                         cty, head, tail);
                 } else if (g_sr1_sum_byvalue &&
-                           emit_type_is_byvalue_adt(
+                           emit_type_is_byvalue_sum(
                                ctx, e->as.cons_list_.items[i]->type)) {
                     /* SR1: a by-value AGGREGATE head does not survive
                      * `(int64_t)(intptr_t)` either -- a cast from a struct is not

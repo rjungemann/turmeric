@@ -3911,12 +3911,15 @@ static int64_t ctor_Schema(int64_t _0) {
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_TD_tur_adt_Pt
+#define TUR_TD_tur_adt_Pt
 typedef struct tur_adt_Pt {
     double x;
     double y;
 } tur_adt_Pt;
 typedef tur_adt_Pt Pt;
 
+#endif
 static tur_adt_Pt ctor_Pt(double _0, double _1) {
     tur_adt_Pt __r;
     __r.x = _0;
@@ -3924,12 +3927,33 @@ static tur_adt_Pt ctor_Pt(double _0, double _1) {
     return __r;
 }
 
+#ifndef TUR_TD_tur_adt_Pt
+#define TUR_TD_tur_adt_Pt
+typedef struct tur_adt_Pt {
+    double x;
+    double y;
+} tur_adt_Pt;
+typedef tur_adt_Pt Pt;
+
+#endif
+#ifndef TUR_TD_tur_adt_Pt
+#define TUR_TD_tur_adt_Pt
+typedef struct tur_adt_Pt {
+    double x;
+    double y;
+} tur_adt_Pt;
+typedef tur_adt_Pt Pt;
+
+#endif
+#ifndef TUR_TD_tur_adt_Line
+#define TUR_TD_tur_adt_Line
 typedef struct tur_adt_Line {
     tur_adt_Pt a;
     tur_adt_Pt b;
 } tur_adt_Line;
 typedef tur_adt_Line Line;
 
+#endif
 static tur_adt_Line ctor_Line(tur_adt_Pt _0, tur_adt_Pt _1) {
     tur_adt_Line __r;
     __r.a = _0;
@@ -3937,11 +3961,23 @@ static tur_adt_Line ctor_Line(tur_adt_Pt _0, tur_adt_Pt _1) {
     return __r;
 }
 
+#ifndef TUR_TD_tur_adt_Pt
+#define TUR_TD_tur_adt_Pt
+typedef struct tur_adt_Pt {
+    double x;
+    double y;
+} tur_adt_Pt;
+typedef tur_adt_Pt Pt;
+
+#endif
+#ifndef TUR_TD_tur_adt_Box
+#define TUR_TD_tur_adt_Box
 typedef struct tur_adt_Box {
     tur_adt_Pt p;
 } tur_adt_Box;
 typedef tur_adt_Box Box;
 
+#endif
 static tur_adt_Box ctor_Box(tur_adt_Pt _0) {
     tur_adt_Box __r;
     __r.p = _0;

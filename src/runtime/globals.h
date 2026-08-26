@@ -268,12 +268,20 @@ extern bool g_dump_cps_mono;
  * headed anywhere; the decision record in that report says why, and why
  * reclamation rather than a slab is the thing to build. */
 extern bool g_adt_slab;
-/* TUR_SR1_SUM_BYVALUE=1: flow a non-recursive, non-parametric, non-heap
- * MULTI-VARIANT sum by value (tag + union aggregate) instead of the int64
- * heap carrier.  The SR1 prototype gate in
- * docs/upcoming/sum-representation-plan.md -- a measurement seam for how far
- * the by-value ABI generalises past single-variant products, not a shipping
- * feature.  Default off; flipping it changes no codegen until set. */
+/* SR1 (docs/upcoming/sum-representation-plan.md): flow a non-recursive,
+ * non-parametric, non-heap MULTI-VARIANT sum by value (tag + union aggregate)
+ * instead of the int64 heap carrier.
+ *
+ * ON by default since 2026-08-26.  It is the fix for both halves of
+ * docs/archive/multi-variant-adts-always-heap-allocate.md: such a sum is no
+ * longer malloc'd on every construction, and a value that is never boxed has
+ * nothing to leak.  A 2e6-construction loop over a two-variant `:copy` sum
+ * went from 62.6 MB peak RSS to 1.2 MB.
+ *
+ * `TUR_SR1_SUM_BYVALUE=0` restores the int64 carrier -- an escape hatch for
+ * bisecting a suspected representation bug, not a supported mode.  Recursive
+ * sums are unaffected either way; they are SR4's population and still ride the
+ * carrier (see AdtDef.is_self_recursive for why, and what blocks them). */
 extern bool g_sr1_sum_byvalue;
 extern bool g_opt_backtrackable_state;
 

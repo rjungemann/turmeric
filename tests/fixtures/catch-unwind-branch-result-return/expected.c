@@ -3919,16 +3919,16 @@ typedef struct tur_adt_Pick {
     } as;
 } tur_adt_Pick;
 
-static int64_t ctor_First() {
-    tur_adt_Pick *__r = (tur_adt_Pick *)malloc(sizeof(tur_adt_Pick));
-    __r->tag = 0;
-    return (int64_t)(intptr_t)__r;
+static tur_adt_Pick ctor_First() {
+    tur_adt_Pick __r = {0};
+    __r.tag = 0;
+    return __r;
 }
 
-static int64_t ctor_Second() {
-    tur_adt_Pick *__r = (tur_adt_Pick *)malloc(sizeof(tur_adt_Pick));
-    __r->tag = 1;
-    return (int64_t)(intptr_t)__r;
+static tur_adt_Pick ctor_Second() {
+    tur_adt_Pick __r = {0};
+    __r.tag = 1;
+    return __r;
 }
 
 
@@ -4385,7 +4385,7 @@ static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
 static tur_adt_Result__int__int make_hyif(int64_t);
-static tur_adt_Result__int__int make_hymatch(int64_t);
+static tur_adt_Result__int__int make_hymatch(tur_adt_Pick);
 static tur_adt_Result__int__int make_hyif_hycaught(int64_t);
 static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
@@ -7961,10 +7961,11 @@ static tur_adt_Result__int__int make_hyif(int64_t c) {
         }
 }
 
-static tur_adt_Result__int__int make_hymatch(int64_t p) {
+static tur_adt_Result__int__int make_hymatch(tur_adt_Pick p) {
         int64_t __t166 = 0;
         {
-            tur_adt_Pick *__scrut = (tur_adt_Pick *)(intptr_t)(p);
+            tur_adt_Pick __scrut_v = (p);
+            tur_adt_Pick *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
                 void *__t168 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
@@ -8128,7 +8129,7 @@ int main(int argc, char **argv) {
             }
         }
         {
-            int64_t __ps_190 = (ctor_First());
+            tur_adt_Pick __ps_190 = (ctor_First());
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Result__int__int __ps_191 = (make_hymatch(__ps_190));
             /* panic-return-signal: ret ctype unknown; no propagation here */
