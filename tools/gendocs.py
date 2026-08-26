@@ -207,6 +207,10 @@ def strip_line_comment(line):
         c = line[i]
         if in_str:
             if c == '\\':
+                # Copy the escape AND what it escapes: a `\"` keeps the string
+                # open, so the `;` after it is still string content, and the
+                # text this returns has to stay verbatim for any other caller.
+                out.append(line[i:i + 2])
                 i += 2
                 continue
             if c == '"':
