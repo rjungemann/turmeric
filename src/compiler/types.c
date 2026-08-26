@@ -2989,12 +2989,22 @@ static bool adt_graph_reaches(const AdtDef *from, const AdtDef *target,
 
 /* SR1 prototype gate (docs/upcoming/sum-representation-plan.md).  True when
  * `def` is a MULTI-VARIANT sum that could flow by value as a tag+union
- * aggregate: non-parametric, non-GADT, non-heap, and not recursive -- directly
- * or through another by-value type (see adt_graph_reaches).
+ * aggregate: non-parametric, non-GADT, non-heap, and not recursive.
  *
- * Recursion is the hard exclusion, not a conservatism: `(TPair :Term :Term)`
- * has no finite inline size, so a recursive sum needs field-level boxing (SR4),
- * not by-value.
+ * The two recursion exclusions below are NOT the same test and are not
+ * redundant, which is worth stating because an earlier revision of this comment
+ * conflated them:
+ *
+ *   - `is_self_recursive` is the SR1/SR4 PHASE boundary.  Such a type lowers by
+ *     value perfectly well -- its recursive field is a one-word carrier, so the
+ *     layout is finite, and the gate proved a self-recursive `Tree` compiles and
+ *     runs.  (The plan's original claim that `(TPair :Term :Term)` "has no
+ *     finite inline size" is wrong for Turmeric.)  It is excluded because of
+ *     library source, not layout: see the comment at the test itself.
+ *
+ *   - `adt_graph_reaches` is a SOUNDNESS gate over the INLINE-by-value field
+ *     graph, where a cycle genuinely has no finite layout.  It covers the
+ *     mutual case, which the phase boundary does not.
  *
  * Note what this does NOT touch: `adt_is_flat_product` still reports false for
  * these, so the tagged-union typedef, the tag store in each ctor and the tag
