@@ -139,7 +139,8 @@
     (StInc th)
     (let [lth th
           lys ys]
-      (StInc (:: (fn [] (let [_ lth] (st-append-dfs (st-force lth) lys))) :StThunk)))
+      (StInc (:: (fn [] (let [_ lth] (st-append-dfs (st-force lth) lys)))
+               :StThunk)))
     (StCons v rest)
     (StCons v (st-append-dfs rest ys))))
 ;;; st-bind -- concatMap: apply f to each state and concatenate the streams.
@@ -569,9 +570,8 @@
 ;;; Since: lazy-streams
 
 (defmacro zzz [g]
-  `(:: (fn [state : Subst]
-         (StInc (:: (fn [] (apply-goal ~g state)) :StThunk)))
-    :Goal))
+  `(:: (fn [state : Subst] (StInc (:: (fn [] (apply-goal ~g state)) :StThunk)))
+     :Goal))
 ;;; disjoined-dfs -- disjunction that searches DEPTH-FIRST.
 ;;;
 ;;; `disjoined` interleaves, which is what makes it complete on relations with

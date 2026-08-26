@@ -43,8 +43,7 @@
 ;;;   (dfs-solve (dfs-succeed) (fn [] true))  ; => 1
 ;;;
 ;;; Since: SX2
-(defn dfs-succeed [] : (fn [(fn [] bool)] bool)
-  (fn [k : (fn [] bool)] (k)))
+(defn dfs-succeed [] : (fn [(fn [] bool)] bool) (fn [k : (fn [] bool)] (k)))
 
 ;;; dfs-fail -- the goal with no solutions.
 ;;;
@@ -105,7 +104,7 @@
 (defn dfs-or [^fat g1 : (fn [(fn [] bool)] bool)
               ^fat g2 : (fn [(fn [] bool)] bool)] : (fn [(fn [] bool)] bool)
   (fn [k : (fn [] bool)]
-    (let [m (bt-mark)
+    (let [m  (bt-mark)
           r1 (g1 k)]
       (bt-undo-to! m)
       (if r1
@@ -155,16 +154,13 @@
 ;;; dfs-choose-go -- internal: try binding c to each of lo..hi in order.
 ;;; Mark/undo halves for the same reason as dfs-or: a bt-scope thunk would
 ;;; capture (and so consume) `k`, which the next candidate still needs.
-(defn dfs-choose-go [c : BtCell lo : int hi : int
-                     ^fat k : (fn [] bool)] : bool
+(defn dfs-choose-go [c : BtCell lo : int hi : int ^fat k : (fn [] bool)] : bool
   (if (> lo hi)
     true
     (let [m (bt-mark)
           r (if (bt-set! c lo) (k) true)]
       (bt-undo-to! m)
-      (if r
-        (dfs-choose-go c (+ lo 1) hi k)
-        false))))
+      (if r (dfs-choose-go c (+ lo 1) hi k) false))))
 
 ;;; dfs-choose-int -- nondeterministically bind `c` to an integer in [lo, hi].
 ;;;
@@ -215,8 +211,6 @@
 (defn dfs-solve [^fat goal : (fn [(fn [] bool)] bool)
                  ^fat on-solution : (fn [] bool)] : int
   (let [n (g-cell-new 0)]
-    (bt-scope (fn [] (goal (fn [] (do (g-set! n (+ (g-get n) 1))
-                                      (on-solution))))))
-    (let [total (g-get n)]
-      (g-cell-free n)
-      total)))
+    (bt-scope (fn []
+                (goal (fn [] (do (g-set! n (+ (g-get n) 1)) (on-solution))))))
+    (let [total (g-get n)] (g-cell-free n) total)))

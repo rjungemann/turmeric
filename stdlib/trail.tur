@@ -33,18 +33,31 @@
 ;;; already undone or committed is refused rather than unwinding whichever
 ;;; level happens to sit at that index now.
 (extern-c tur_trail_mark_packed [] :int)
+
 (extern-c tur_trail_undo_to_packed [p :int] :bool)
+
 (extern-c tur_trail_commit_to_packed [p :int] :bool)
+
 (extern-c tur_trail_level [] :int)
+
 (extern-c tur_trail_depth [] :int)
+
 (extern-c tur_trail_pause [] :void)
+
 (extern-c tur_trail_resume [] :void)
+
 (extern-c tur_trail_reset [] :void)
+
 (extern-c tur_bt_cell_new [init :int] :ptr)
+
 (extern-c tur_bt_lvar_new [unbound :int] :ptr)
+
 (extern-c tur_bt_cell_free [c :ptr] :void)
+
 (extern-c tur_bt_cell_get [c :ptr] :int)
+
 (extern-c tur_bt_cell_bound [c :ptr] :bool)
+
 (extern-c tur_bt_cell_set [c :ptr v :int] :bool)
 
 ;;; Mark -- an opaque handle to a trail level.
@@ -400,8 +413,7 @@
 (defn bt-scope [A] [^fat body : (fn [] A)] : A
   (let [m (bt-mark)
         r (body)]
-    (do (bt-undo-to! m)
-        r)))
+    (do (bt-undo-to! m) r)))
 ;;; with-untrailed -- run `body` with trailing PAUSED, then resume.
 ;;;
 ;;; The bracket form of `untrailed-begin` / `untrailed-end`, and the per-write
@@ -427,10 +439,7 @@
 ;;; Since: SX2
 
 (defn with-untrailed [A] [^fat body : (fn [] A)] : A
-  (do (untrailed-begin)
-      (let [r (body)]
-        (do (untrailed-end)
-            r))))
+  (do (untrailed-begin) (let [r (body)] (do (untrailed-end) r))))
 ;;; trail-reset! -- drop every level and entry WITHOUT running undo.
 ;;;
 ;;; Teardown and tests only; not part of the search protocol.
