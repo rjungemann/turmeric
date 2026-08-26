@@ -5982,10 +5982,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (rt.kind == TY_ADT && rt.as.adt_.def &&
                             adt_is_byvalue_product(rt.as.adt_.def)) {
                             const AdtDef *od = rt.as.adt_.def;
-                            if (od->n_ctors == 1 && i < od->ctors[0]->n_fields) {
-                                field_inline = adt_field_is_inline_byval(
-                                    &od->ctors[0]->fields[i]);
-                                field_is_fn = od->ctors[0]->fields[i].kind == TY_FN;
+                            /* SR1: a by-value owner may now be MULTI-variant, so
+                             * the field being stored belongs to the constructor
+                             * being applied -- reading `ctors[0]` would answer for
+                             * the wrong arm (or index out of it).  Fall back to
+                             * `ctors[0]` only for the single-variant case this was
+                             * written for, where the two are the same ctor. */
+                            const CtorDef *oc =
+                                (e->as.call_.ctor && e->as.call_.ctor->adt == od)
+                                    ? e->as.call_.ctor
+                                    : (od->n_ctors == 1 ? od->ctors[0] : NULL);
+                            if (oc && i < oc->n_fields) {
+                                field_inline = adt_field_is_inline_byval(&oc->fields[i]);
+                                field_is_fn = oc->fields[i].kind == TY_FN;
                             }
                         }
                     }
@@ -7002,7 +7011,39 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
                             : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                         TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
-                        if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
+                        /* SR1: an explicitly `:int`-typed parameter is a carrier
+                         * slot too, and a by-value aggregate has to be boxed into
+                         * it exactly as it is into a tyvar slot.  This is the
+                         * `:int`-as-type-eraser shape CLAUDE.md warns about, and
+                         * `stdlib/fix.tur` is built on it -- `(defn roll [layer :
+                         * int] ...)` takes any functor layer, so `(roll (Stop 0))`
+                         * hands a `CountF` to an `int64_t` formal.  While every sum
+                         * rode the carrier that was a no-op; now it is a hard C
+                         * error ("incompatible type for argument 1 of 'roll'").
+                         * The value is stored into the Fix cell and outlives the
+                         * call, so it takes the ESCAPING bridge -- a stack spill
+                         * would hand out an address that dangles on return.
+                         * (`emit_carrier_bridge` short-circuits a transparent int
+                         * newtype to the identity, so a real int-shaped value that
+                         * merely wears an ADT name is not boxed.) */
+                        /* Prefer the callee's EMITTED parameter type over its
+                         * declared kind.  The two disagree exactly where this
+                         * matters: `(defn eval-node [n : int] ...)` whose body
+                         * matches `n` against `ExprNode` patterns has its
+                         * parameter refined to the ADT, so the emitted signature
+                         * takes the aggregate by value while `arg_kinds[]` still
+                         * reads TY_INT.  Boxing into that is the mirror-image
+                         * mismatch of not boxing into a real carrier slot. */
+                        const char *pct = emit_sig_lookup_param_ctype(fn_name, i);
+                        bool int_carrier_param =
+                            (pct && *pct)
+                                ? (strcmp(pct, "int64_t") == 0)
+                                : (pk == TY_INT || pk == TY_INT64 ||
+                                   pk == TY_UINT64 || pk == TY_PTR_VOID);
+                        if (int_carrier_param && !matched_spec) {
+                            raw = emit_carrier_bridge_escaping(
+                                      ctx, body, raw, CK_CONCRETE, CK_CARRIER, rarg);
+                        } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
                             (fn_binding->body_is_inline_c || !matched_spec)) {
                             /* multiword-element-boxing: a WIDE (> 8 byte) by-value
                              * ADT stored into a heap container through an inline-C
@@ -7056,6 +7097,39 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                           CK_CONCRETE, CK_CARRIER,
                                                           rarg);
                         }
+                    }
+                }
+                /* SR1, the other direction: a CARRIER argument reaching a param
+                 * the callee emits as a by-value aggregate.  A `:int`-declared
+                 * parameter whose body matches it against constructors is refined
+                 * to that ADT, so the emitted signature takes the aggregate --
+                 * `(defn run-calc-op [op : int] ...)` becomes
+                 * `run_calc_op(tur_adt_CalcOp)`.  Callers that honour the
+                 * DECLARATION still hand over an int64 carrier word: here the
+                 * lifted `(fn [op] (run-calc-op op))`, whose own `op` is an
+                 * untyped carrier param.  Deref the box back to the aggregate.
+                 * While every sum rode the carrier the refinement was invisible
+                 * and both sides were int64.
+                 *
+                 * Keyed on the emitted signature rather than any Type, because the
+                 * refined param type is not reachable from the call site -- the
+                 * callee's declared TY_FN still says `:int`.  Narrow on purpose: a
+                 * non-pointer `tur_adt_` C name (a by-value ADT aggregate) against
+                 * an argument that is statically a carrier word. */
+                if (!needs_fn_cast && !matched_spec && emit_arg) {
+                    const char *pct = emit_sig_lookup_param_ctype(fn_name, i);
+                    size_t pl = pct ? strlen(pct) : 0;
+                    TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
+                    if (pct && pl > 0 && pct[pl - 1] != '*' &&
+                        strncmp(pct, "tur_adt_", 8) == 0 &&
+                        (ak == TY_INT || ak == TY_INT64 || ak == TY_UINT64 ||
+                         ak == TY_PTR_VOID)) {
+                        Buf ub; buf_init(&ub);
+                        buf_printf(&ub, "(*(%s *)(intptr_t)(%s))", pct, raw);
+                        buf_putc(&ub, '\0');
+                        free(raw);
+                        raw = strdup(ub.data);
+                        buf_free(&ub);
                     }
                 }
                 /* multiword-element-boxing (Map value / spec'd inline-C carrier
@@ -7967,6 +8041,43 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_putc(&out, '\0');
             char *result = strdup(out.data);
             buf_free(&out);
+            /* SR1: the readback half of the `:int`-carrier-parameter bridge.  A
+             * callee declared `: int` that really hands back a sum -- `(defn
+             * unroll [fix : int] : int ...)` in stdlib/fix.tur -- returns the
+             * int64 carrier, while the caller's expression type is the by-value
+             * ADT the patterns name.  Deref the box the producing side stored (see
+             * the int-carrier-param bridge in the arg loop above), so the two ends
+             * of the crossing agree.  Excluded: a transparent int newtype, whose
+             * carrier and concrete forms are the same bare int64 -- derefing that
+             * would read through a value, not a pointer -- and a matched ABI spec,
+             * whose clone already returns the aggregate by value. */
+            if (fn_binding && fn_binding->type.kind == TY_FN &&
+                emit_type_is_byvalue_adt(ctx, e->type) &&
+                !type_is_transparent_int_newtype(emit_resolve_type(ctx, e->type)) &&
+                !find_matched_abi_spec(ctx, e, fn_binding)) {
+                TypeKind rk = fn_binding->type.as.fn.result_kind;
+                /* Emitted signature first, declared kind as the fallback -- same
+                 * reason as the argument side: a `: int` return refined to the
+                 * ADT comes back as the aggregate already, and derefing it would
+                 * read through a value rather than a pointer. */
+                const char *rct = emit_sig_lookup_ret_ctype(fn_name);
+                bool ret_is_carrier_word =
+                    (rct && *rct)
+                        ? (strcmp(rct, "int64_t") == 0)
+                        : (rk == TY_INT || rk == TY_INT64 || rk == TY_UINT64 ||
+                           rk == TY_PTR_VOID);
+                if (ret_is_carrier_word) {
+                    char *ub = emit_agg_unbox(ctx, e->type, result);
+                    free(result);
+                    result = ub;
+                    /* The unbox retypes the expression, and the panic-hoist in
+                     * emit_value types its `__ps_N` temp from this note -- without
+                     * it the hoist falls back to reading the emitted text and
+                     * misreads the deref's own `*(T *)` as the cast-wrap form.
+                     * Same re-note the poly-carrier unbox site performs. */
+                    note_call_ret(ctx, emit_type_c_name(ctx, e->type));
+                }
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
             free(arg_strs);
             free(fn_name);
@@ -11140,8 +11251,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* seam 3: a :heap ADT scrutinee is a typed pointer, never a by-value
              * aggregate -- it falls to the carrier branch below (bind as a
              * pointer, read fields with `->`), exactly as a carrier ADT does. */
+            /* SR1: the by-value decision belongs to the SCRUTINEE's
+             * representation, not to the ADT its patterns name.  Those were the
+             * same question while a sum always rode the carrier, so this site
+             * could read the answer off `adt` alone.  They come apart on the
+             * `:int`-as-type-eraser shape (CLAUDE.md's "No Lazy `:int`
+             * Stand-Ins"): `stdlib/fix.tur` declares `(defn unroll [fix : int]
+             * ...)` and matches the result against `CountF` constructors, so the
+             * pattern's ADT is by-value while the value in hand is an int64
+             * carrier word.  Emitting `tur_adt_CountF __scrut = <int64>` is not a
+             * coercion, it is "invalid initializer".  When the scrutinee is
+             * statically a carrier word, keep the carrier path -- the producing
+             * side boxed into it (see the int-carrier-param bridge in the call
+             * emitter), so the deref below reads back exactly what was stored. */
+            Type rscrut_ty = emit_resolve_type(ctx, scrut_ty);
+            bool scrut_is_carrier_word =
+                rscrut_ty.kind == TY_INT || rscrut_ty.kind == TY_INT64 ||
+                rscrut_ty.kind == TY_UINT64 || rscrut_ty.kind == TY_PTR_VOID;
             bool adt_byval = (adt_is_byvalue_product(adt) ||
                               adt_app_is_byvalue_product(scrut_ty)) &&
+                             !scrut_is_carrier_word &&
                              !type_is_heap_adt(scrut_ty) &&
                              !(adt && adt->is_heap);
             /* Slice 3: a large by-value ADT scrutinee that is a pass-by-pointer
@@ -11187,7 +11316,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * constructor arm is entered unconditionally. */
                         buf_puts(body, "{\n");
                     } else {
-                        buf_printf(body, "if (__scrut->tag == %u) {\n", pat->ctor->tag);
+                        /* SR1: a by-value sum HAS a tag, and `__scrut` is then the
+                         * aggregate itself rather than a carrier pointer, so the
+                         * tag test reads with `.` -- the same accessor the field
+                         * binds below already use.  Before SR1 a tagged scrutinee
+                         * was always a pointer, so this site could hardcode `->`. */
+                        buf_printf(body, "if (__scrut%stag == %u) {\n",
+                                   (adt_byval && !adt_byval_pbp) ? "." : "->",
+                                   pat->ctor->tag);
                     }
                     ctx->indent += 4;
 
@@ -11408,10 +11544,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             char *bname = name_for_binding(ctx, fb);
                             char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                             indent_buf(body, ctx->indent);
+                            /* SR1: a by-value SUM inlines its by-value aggregate
+                             * fields into the union slot, exactly as the typedef
+                             * emitter lays them out (adt_ctor_field_c_type keys
+                             * the same predicate off the owner's by-value status).
+                             * Bind the aggregate directly -- no carrier unbox, and
+                             * no cast, since a cast-to-aggregate is invalid C.
+                             * The if-chain path below/above already had this
+                             * branch; the switch path could not previously be
+                             * reached by a by-value owner, because "flows by
+                             * value" implied "has no tag". */
+                            bool inline_byval = adt_byval &&
+                                bi < pat->ctor->n_fields &&
+                                adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             /* CONV-S1/B3: a by-value ADT field is stored boxed
                              * (int64 heap pointer) in the carrier tagged union;
                              * unbox it by deref. */
-                            if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
+                            if (inline_byval) {
+                                buf_printf(body, "%s %s = __scrut->%s;\n",
+                                           ctype, bname, mp);
+                            } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
                                 (emit_type_is_wide_byval_adt(ctx, fb->type) &&
                                  strcmp(ctype, "int64_t") == 0)) {
                                 /* B4: read the int64 carrier raw (no deref).
@@ -11558,6 +11710,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&cell,
                         "__tur_cons_of(((union { %s d; int64_t i; }){.d = (%s)}).i, %s)",
                         cty, head, tail);
+                } else if (emit_type_is_byvalue_adt(
+                               ctx, e->as.cons_list_.items[i]->type)) {
+                    /* SR1: a by-value AGGREGATE head does not survive
+                     * `(int64_t)(intptr_t)` either -- a cast from a struct is not
+                     * a coercion, it is a hard C error ("aggregate value used
+                     * where an integer was expected").  Route it through the
+                     * escaping carrier bridge, which heap-promotes the value and
+                     * carries the pointer: the cons cell outlives the statement
+                     * that built it, so a stack spill would dangle.  This is the
+                     * same crossing a by-value ADT already makes into a carrier
+                     * ctor field slot.  Before SR1 only a single-variant product
+                     * could be by-value, and one never reached a variadic rest
+                     * slot in the suite; a by-value sum does. */
+                    char *boxed = emit_carrier_bridge_escaping(
+                        ctx, body, head, CK_CONCRETE, CK_CARRIER,
+                        emit_resolve_type(ctx, e->as.cons_list_.items[i]->type));
+                    head = boxed;
+                    buf_printf(&cell, "__tur_cons_of((int64_t)(intptr_t)(%s), %s)", head, tail);
                 } else {
                     buf_printf(&cell, "__tur_cons_of((int64_t)(intptr_t)(%s), %s)", head, tail);
                 }

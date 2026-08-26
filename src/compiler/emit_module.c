@@ -6886,6 +6886,73 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     }
 }
 
+/* SR1 (typedef ordering): emit the base typedefs an ADT's INLINE by-value
+ * aggregate fields depend on, ahead of the ADT's own.
+ *
+ * Pass 0 walks items in SOURCE order, which was enough while every ADT-typed
+ * ctor field rode the int64 carrier: an int64 slot names no other typedef, so
+ * there was no ordering constraint to violate.  A by-value sum embeds such a
+ * field INLINE, so `(defdata Expr (Expr :ExprNode))` written ABOVE `ExprNode`
+ * now names an incomplete type ("unknown type name 'tur_adt_ExprNode'").
+ *
+ * Emit the dependency's guarded typedef-only layout first.  The `TUR_TD_<Name>`
+ * guard makes Pass 0's own later emission of the same layout a no-op, and its
+ * constructors are outside that guard, so they are still emitted exactly once,
+ * in their original place.
+ *
+ * `depth` is a backstop, not the termination argument: a cycle in the inline
+ * field graph cannot reach here, because adt_graph_reaches declines a recursive
+ * sum before it can be by-value at all. */
+static bool emit_adt_inline_field_deps(Buf *out, const AdtDef *def, int depth) {
+    if (!def || depth <= 0 || !def->ctors) return false;
+    bool any = false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const CtorField *f = &c->fields[fi];
+            if (!f->full_type || f->full_type->kind != TY_ADT) continue;
+            if (!adt_field_is_inline_byval(f)) continue;
+            AdtDef *fd = (AdtDef *)f->full_type->as.adt_.def;
+            if (!fd || fd == def) continue;
+            emit_adt_inline_field_deps(out, fd, depth - 1);
+            emit_adt_typedef_and_ctors(out, fd, true);
+            any = true;
+        }
+    }
+    return any;
+}
+
+/* SR1: is `def` an inline-by-value field of some OTHER ADT in this program?
+ *
+ * Such a def can be emitted early by that owner's dependency pre-flush, so its
+ * own Pass 0 emission has to be guarded or it is a C redefinition.  Asking the
+ * question keeps the guard off every ADT that is not involved in the ordering,
+ * which is what keeps the emitted C byte-identical wherever the by-value sum
+ * path changes nothing. */
+static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
+                                    const AdtDef *def) {
+    if (!def) return false;
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (!e || (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT)) continue;
+        const AdtDef *od = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
+                                                   : e->as.defdata_.def;
+        if (!od || od == def || !od->ctors) continue;
+        for (uint32_t ci = 0; ci < od->n_ctors; ci++) {
+            const CtorDef *c = od->ctors[ci];
+            if (!c) continue;
+            for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+                const CtorField *f = &c->fields[fi];
+                if (!f->full_type || f->full_type->kind != TY_ADT) continue;
+                if (f->full_type->as.adt_.def != def) continue;
+                if (adt_field_is_inline_byval(f)) return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* Closure / fat-closure fixed runtime: tagged-union accessors, the
  * TUR_APPLY/TUR_CLOSURE_FN inline-C macros, Option/Result inline-C helpers, the
  * `^fat` auto-shim thunks (__tur_fatshim0..5), and the poly-to-fat thunks
@@ -12357,9 +12424,25 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                 }
             }
+            /* SR1: the same pre-flush for a NON-parametric inline-by-value ADT
+             * field.  Before SR1 such a field was orderable by construction --
+             * only a single-variant flat product could be inlined, and a sum
+             * field rode the carrier -- so source order sufficed.  A by-value sum
+             * field is a real forward dependency; see emit_adt_inline_field_deps. */
+            bool td_guard = emit_adt_inline_field_deps(&early_file, def, 16) ||
+                            adt_is_inline_byval_dep(items, n_items, def);
             /* CONV-S1 seam 4: flat named C-ABI layout + surface alias (mirror of
              * emit_adt_typedef_and_ctors). */
             bool named = adt_uses_named_layout(def);
+            /* Guarded exactly as emit_adt_typedef_and_ctors guards it, and with
+             * the same macro name, so a layout already emitted by the dependency
+             * pre-flush above is not redefined here.  The constructors below sit
+             * OUTSIDE the guard and are still emitted once, in place.  Only ADTs
+             * actually involved in the ordering carry the guard, so the emitted C
+             * is unchanged everywhere the by-value sum path changes nothing. */
+            if (td_guard)
+                buf_printf(&early_file, "#ifndef TUR_TD_%s\n#define TUR_TD_%s\n",
+                           adt_c_name, adt_c_name);
             if (named) {
                 CtorDef *ctor = def->ctors[0];
                 buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
@@ -12421,6 +12504,8 @@ int emit_program(Buf *out, const Expr *program) {
                     free(sname);
                 }
             }
+            if (td_guard)
+                buf_puts(&early_file, "#endif\n");  /* TUR_TD_<Name> base layout */
 
             /* CONV-S1 (slice 2): by-value ADT drop/walk glue (mirror of
              * emit_adt_typedef_and_ctors). */

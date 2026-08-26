@@ -2920,13 +2920,66 @@ static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
     return false;
 }
 
+/* SR1: does the ADT reference graph rooted at `from` reach `target`?
+ *
+ * A by-value product embeds its by-value ADT fields INLINE, so a CYCLE in that
+ * graph has no finite C layout.  Self-recursion (`(Node :Tree :Tree)`) is the
+ * one-step case and was the only one the gate excluded; the mutual case is the
+ * same defect one hop further out -- `(defdata Expr (Expr :ExprNode))` against
+ * `(defdata ExprNode (Lit :int) (Add :Expr :Expr))`, where admitting `ExprNode`
+ * makes each type embed the other.
+ *
+ * That shape is worse than an unorderable typedef, which is how it surfaced.
+ * `adt_is_byvalue_product_d` walks the same graph under a depth budget, so on a
+ * cycle it answers the SAME question differently at different depths -- and the
+ * typedef emitter (depth 16 from the owner) and a field-store site (depth 16
+ * from the field) enter at different points.  Two emission sites disagreeing
+ * about one type's layout is a silent miscompile, not a build error.
+ *
+ * Conservative by construction: it follows every non-`:heap` ADT-typed field,
+ * whether or not that field would actually be inlined, and treats "not known
+ * yet" (a NULL ctor mid-definition, an unresolved def, an exhausted budget) as
+ * reaching.  Declining leaves the type exactly where it is with SR1 off -- on
+ * the int64 carrier -- so a false positive costs representation, never
+ * correctness.  A `:heap` field is a typed POINTER, which breaks the cycle the
+ * same way the carrier does. */
+static bool adt_graph_reaches(const AdtDef *from, const AdtDef *target,
+                              const AdtDef **seen, uint32_t *n_seen,
+                              uint32_t cap) {
+    if (!from || !target) return true;
+    for (uint32_t i = 0; i < *n_seen; i++)
+        if (seen[i] == from) return false;      /* already fully explored */
+    if (*n_seen >= cap) return true;            /* out of budget */
+    seen[(*n_seen)++] = from;
+    if (!from->ctors) return true;
+    for (uint32_t ci = 0; ci < from->n_ctors; ci++) {
+        const CtorDef *c = from->ctors[ci];
+        if (!c) return true;                    /* ctor array still filling */
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const Type *ft = c->fields[fi].full_type;
+            if (!ft || ft->kind != TY_ADT) continue;
+            const AdtDef *fd = ft->as.adt_.def;
+            if (!fd) return true;
+            if (fd == target) return true;
+            /* A field naming the target by NAME but not yet resolved to its
+             * AdtDef is the same forward reference wearing a different hat. */
+            if (fd->name && target->name &&
+                strcmp(fd->name, target->name) == 0) return true;
+            if (fd->is_heap) continue;
+            if (adt_graph_reaches(fd, target, seen, n_seen, cap)) return true;
+        }
+    }
+    return false;
+}
+
 /* SR1 prototype gate (docs/upcoming/sum-representation-plan.md).  True when
  * `def` is a MULTI-VARIANT sum that could flow by value as a tag+union
- * aggregate: non-parametric, non-GADT, non-heap, and not self-recursive.
+ * aggregate: non-parametric, non-GADT, non-heap, and not recursive -- directly
+ * or through another by-value type (see adt_graph_reaches).
  *
- * Self-recursion is the hard exclusion, not a conservatism: `(TPair :Term
- * :Term)` has no finite inline size, so a recursive sum needs field-level
- * boxing (SR4), not by-value.
+ * Recursion is the hard exclusion, not a conservatism: `(TPair :Term :Term)`
+ * has no finite inline size, so a recursive sum needs field-level boxing (SR4),
+ * not by-value.
  *
  * Note what this does NOT touch: `adt_is_flat_product` still reports false for
  * these, so the tagged-union typedef, the tag store in each ctor and the tag
@@ -2950,18 +3003,14 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
         if (!c) return false;
         for (uint32_t i = 0; i < c->n_fields; i++) {
             const CtorField *f = &c->fields[i];
-            if (f->full_type && f->full_type->kind == TY_ADT &&
-                f->full_type->as.adt_.def == def) return false;
-            /* A field naming this def by NAME but not yet resolved to its
-             * AdtDef is the same forward-reference case; compare names too. */
-            if (f->full_type && f->full_type->kind == TY_ADT &&
-                f->full_type->as.adt_.def && def->name &&
-                f->full_type->as.adt_.def->name &&
-                strcmp(f->full_type->as.adt_.def->name, def->name) == 0)
-                return false;
             if (f->full_type && f->full_type->kind == TY_APP) return false;
         }
     }
+    /* Direct AND mutual recursion, in one check: a sum that can reach itself
+     * through ADT-typed fields has no finite by-value layout. */
+    const AdtDef *seen[64];
+    uint32_t n_seen = 0;
+    if (adt_graph_reaches(def, def, seen, &n_seen, 64)) return false;
     return true;
 }
 
