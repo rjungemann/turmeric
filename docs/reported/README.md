@@ -1035,8 +1035,22 @@ the class of bug is closed, not just the one instance.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [two-stdlib-modules-render-to-one-api-page](two-stdlib-modules-render-to-one-api-page.md) | low | `stdlib/capability.tur` and `stdlib/test/capability.tur` have no `defmodule`, so both take the filename-derived name `tur/capability` and render to one page; the second silently wins |
 | [guide-cross-links-to-unrendered-docs](guide-cross-links-to-unrendered-docs.md) | low | four links in three published guides 404 -- one to a guide that was never written, three into `docs/upcoming/` and `docs/archive/`, which are not rendered |
+
+`two-stdlib-modules-render-to-one-api-page` was resolved 2026-08-26 and moved
+to [docs/archive](../archive/two-stdlib-modules-render-to-one-api-page.md).
+Neither fix direction as written: option 1 would have been a semantic change
+(`defmodule` wraps and namespaces the body, and that file is pulled in by a
+`load`, not an `import`), so option 2 was taken **scoped to the fallback** --
+a filename-derived pseudo-name now carries its subdirectory, while a *declared*
+module name keeps its identity and URL. That confines the URL churn the report
+objected to: five `stdlib/seq/*` pages move, and `stdlib/seq/core.tur`
+publishing itself as `tur/core` was wrong anyway. The pass turned up a second,
+worse instance in the same function: the `defmodule` scan matched inside
+comments, so `stdlib/turi/eval.tur` was publishing as **`myplugin/core`** --
+a name from an example in its own docstring -- with no page for `turi/eval` at
+all. Both collision checks are now hard errors naming both files; `just docs`
+writes 148 pages for 148 modules, was 147.
 
 ## Formatter (filed 2026-08-25)
 
