@@ -69,7 +69,10 @@ path, the poly-carrier arg box).
 a one-line change and the suite is green with it -- so it was measured first,
 and the measurement says the trade is memory-for-time: logic bind+walk 400k
 passes runs 0.41s -> 0.57s (~1.4x slower) at 116 MB -> 51 MB peak RSS, regex
-compile+match 14 ms -> 19 ms. By value halves the mallocs but each walk step
+compile+match 14 ms -> 19 ms. (Follow-up 2026-08-27: profiling that gap found
+half of it was the by-value ctors' whole-union zero-init; with the SR4-perf
+prologue fix the regression is ~1.13x / ~1.07x -- current numbers live in the
+SR plan's SR4 section and the types.c decision record.) By value halves the mallocs but each walk step
 deref-copies a 24-48 byte aggregate where the carrier copied one word. Per
 the SR plan (justify SR4 against the post-reclamation baseline), the default
 stays carrier; `TUR_SR4_RECURSIVE_BYVALUE=1` is the seam that reproduces all

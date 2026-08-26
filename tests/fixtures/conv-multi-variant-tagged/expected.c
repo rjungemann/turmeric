@@ -3920,15 +3920,19 @@ typedef struct tur_adt_Shape {
 } tur_adt_Shape;
 
 static tur_adt_Shape ctor_Circle(int64_t _0) {
-    tur_adt_Shape __r = {0};
+    tur_adt_Shape __r;
     __r.tag = 0;
+    memset((char *)&__r + sizeof(__r.tag), 0, offsetof(tur_adt_Shape, as) - sizeof(__r.tag));
+    memset((char *)&__r.as + sizeof(__r.as.Circle), 0, sizeof(__r.as) - sizeof(__r.as.Circle));
     __r.as.Circle._0 = _0;
     return __r;
 }
 
 static tur_adt_Shape ctor_Rect(int64_t _0, int64_t _1) {
-    tur_adt_Shape __r = {0};
+    tur_adt_Shape __r;
     __r.tag = 1;
+    memset((char *)&__r + sizeof(__r.tag), 0, offsetof(tur_adt_Shape, as) - sizeof(__r.tag));
+    memset((char *)&__r.as + sizeof(__r.as.Rect), 0, sizeof(__r.as) - sizeof(__r.as.Rect));
     __r.as.Rect._0 = _0;
     __r.as.Rect._1 = _1;
     return __r;

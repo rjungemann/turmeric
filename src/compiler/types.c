@@ -3024,19 +3024,24 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
      * thunk_param_slot_c_name; see the archived
      * fat-dispatch-wide-byvalue-aggregate-argument report) -- so this line is
      * now a PERFORMANCE decision, not a correctness one, and it was measured
-     * before being made:
+     * before being made (re-measured after the SR4-perf ctor-prologue fix,
+     * which halved the original ~1.4x regression -- the whole-union `{0}`
+     * zero-init was half the cost; see emit_byval_ctor_prologue):
      *
-     *   logic.tur bind+walk, 400k passes:  carrier 0.41s / by-value 0.57s
+     *   logic.tur bind+walk, 400k passes:  carrier 0.40s / by-value 0.45s
      *                                      peak RSS 116 MB -> 51 MB
-     *   re.tur compile+match, 5k passes:   carrier 14 ms / by-value 19 ms
+     *   re.tur compile+match, 5k passes:   carrier 14 ms / by-value 15 ms
      *
      * By value halves the mallocs (the payload no longer boxes; the spine box
-     * per node remains) but each walk step then deref-COPIES a 24-48 byte
+     * per node remains) but each walk step still deref-COPIES a 24-48 byte
      * aggregate out of the spine box where the carrier copied one word --
-     * ~1.4x slower on both walk-heavy workloads, for ~2.2x less memory.  The
-     * SR plan says to justify this phase against the post-reclamation
-     * baseline, where the memory argument only weakens.  So the default stays
-     * carrier until a workload wants that trade.  is_self_recursive is the
+     * ~1.13x slower on logic, ~1.07x on regex, for ~2.2x less memory.  The
+     * residue is spread across many small copies (an arg spill here, a
+     * return-slot copy there; each hand-measured at ~2%), so there is no
+     * second big lever short of pointer-binding match fields.  The SR plan
+     * says to justify this phase against the post-reclamation baseline; the
+     * trade is now close enough that a memory-constrained workload could
+     * reasonably take it, but the default stays carrier until one asks.  is_self_recursive is the
      * boundary; adt_graph_reaches below is the separate SOUNDNESS gate over
      * inline-field cycles and is never bypassed. */
     if (def->is_self_recursive && !getenv("TUR_SR4_RECURSIVE_BYVALUE"))

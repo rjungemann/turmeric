@@ -6706,6 +6706,46 @@ static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
     return chosen;
 }
 
+/* SR4-perf: the by-value constructor prologue -- declare `__r`, store the tag,
+ * and make the DEAD bytes deterministic at the least possible cost.
+ *
+ * This used to be `__r = {0}`, a whole-aggregate zero-init added alongside the
+ * SR1 tag-store fix as belt and braces ("the padding and the unused union arms
+ * must not be indeterminate").  Measured on the logic.tur bind+walk workload
+ * under the SR4 seam it was HALF of the by-value time regression: every
+ * construction wrote 24-48 bytes of zeros and then overwrote most of them,
+ * and at 400k passes that alone was 0.556s -> 0.472s (against the carrier's
+ * 0.385s).  Nothing consumes those bytes bytewise -- ADT equality and hashing
+ * are structural, the HAMT value box memcpys but never compares, and flat
+ * PRODUCTS have never zero-initialized at all (plain `__r;`), so full byte
+ * determinism was never an invariant the tree held.
+ *
+ * What we keep deterministic, because it is nearly free: the padding after
+ * the tag word (one 4-byte store) and the union tail BEYOND this variant's
+ * payload (zero bytes for the widest variant -- which is the hot one, since
+ * the widest arm is what sized the type).  Both memset sizes are
+ * compile-time constants, so cc lowers them to plain stores and elides the
+ * zero-length case.  Padding INSIDE the active payload struct is left
+ * indeterminate, exactly as flat products always have.  If a bytewise
+ * consumer of aggregate bytes is ever added (a memcmp Eq, a bytes hash), it
+ * must canonicalize or this choice must be revisited -- grep for SR4-perf. */
+static void emit_byval_ctor_prologue(Buf *out, const char *adt_c_name,
+                                     const CtorDef *ctor, bool flat) {
+    buf_printf(out, "    %s __r;\n", adt_c_name);
+    if (flat) return;
+    char *mctor = mangle_field_name(ctor->name);
+    buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
+    buf_printf(out,
+        "    memset((char *)&__r + sizeof(__r.tag), 0, "
+        "offsetof(%s, as) - sizeof(__r.tag));\n",
+        adt_c_name);
+    buf_printf(out,
+        "    memset((char *)&__r.as + sizeof(__r.as.%s), 0, "
+        "sizeof(__r.as) - sizeof(__r.as.%s));\n",
+        mctor, mctor);
+    free(mctor);
+}
+
 /* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`
  * plus one `ctor_<Ctor>` allocator per constructor for an ADT (defdata/defgadt).
  *
@@ -6895,10 +6935,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
              * nullary variant of a by-value sum has no field writes at all, so
              * without this the ctor returned an UNINITIALISED struct and every
              * match read a garbage tag -- silently wrong answers, not a build
-             * error.  Zero-init for the same reason: the padding and the
-             * unused union arms must not be indeterminate. */
-            buf_printf(out, "    %s __r%s;\n", adt_c_name, flat ? "" : " = {0}");
-            if (!flat) buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
+             * error.  Dead bytes are made deterministic by the prologue
+             * helper at the least possible cost -- see emit_byval_ctor_prologue
+             * (SR4-perf) for why whole-aggregate `{0}` was retired. */
+            emit_byval_ctor_prologue(out, adt_c_name, ctor, flat);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
                 buf_printf(out, "    __r.%s = _%u;\n", mp, fi);
@@ -12590,10 +12630,9 @@ int emit_program(Buf *out, const Expr *program) {
                     buf_printf(&early_file, "    return __r;\n");
                 } else if (byval) {
                     /* CONV-S1 / SR1: mirror of the emit_adt_typedef_and_ctors
-                     * site -- conditional tag store, zero-init for sums. */
-                    buf_printf(&early_file, "    %s __r%s;\n",
-                               adt_c_name, flat ? "" : " = {0}");
-                    if (!flat) buf_printf(&early_file, "    __r.tag = %u;\n", ctor->tag);
+                     * site -- conditional tag store, cheap deterministic dead
+                     * bytes (emit_byval_ctor_prologue, SR4-perf). */
+                    emit_byval_ctor_prologue(&early_file, adt_c_name, ctor, flat);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
                         buf_printf(&early_file, "    __r.%s = _%u;\n", mp, fi);

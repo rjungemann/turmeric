@@ -3920,14 +3920,18 @@ typedef struct tur_adt_Pick {
 } tur_adt_Pick;
 
 static tur_adt_Pick ctor_First() {
-    tur_adt_Pick __r = {0};
+    tur_adt_Pick __r;
     __r.tag = 0;
+    memset((char *)&__r + sizeof(__r.tag), 0, offsetof(tur_adt_Pick, as) - sizeof(__r.tag));
+    memset((char *)&__r.as + sizeof(__r.as.First), 0, sizeof(__r.as) - sizeof(__r.as.First));
     return __r;
 }
 
 static tur_adt_Pick ctor_Second() {
-    tur_adt_Pick __r = {0};
+    tur_adt_Pick __r;
     __r.tag = 1;
+    memset((char *)&__r + sizeof(__r.tag), 0, offsetof(tur_adt_Pick, as) - sizeof(__r.tag));
+    memset((char *)&__r.as + sizeof(__r.as.Second), 0, sizeof(__r.as) - sizeof(__r.as.Second));
     return __r;
 }
 

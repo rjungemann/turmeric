@@ -363,18 +363,35 @@ says no** (or: not yet). On the two real recursive-sum workloads:
 
 | workload | carrier | by value | |
 |---|---:|---:|---|
-| logic.tur bind+walk, 400k passes | 0.41s | 0.57s | ~1.4x slower |
+| logic.tur bind+walk, 400k passes | 0.40s | 0.45s | ~1.13x slower |
 | ... peak RSS | 116 MB | 51 MB | ~2.2x less memory |
-| re.tur compile+match, 5k passes | 14 ms | 19 ms | ~1.35x slower |
+| re.tur compile+match, 5k passes | 14 ms | 15 ms | ~1.07x slower |
+
+(Re-measured after the SR4-perf constructor-prologue fix, 2026-08-27. The
+original measurement was ~1.4x / ~1.35x; profiling the gap found HALF of it
+was the by-value ctors' whole-union `{0}` zero-init -- 24-48 bytes of zeros
+written and mostly overwritten per construction. The zeroing is now scoped
+to the tag pad and the union tail beyond the active variant, which is free
+on the widest variant; `emit_byval_ctor_prologue` in emit_module.c carries
+the rationale, including why full byte determinism was never an invariant --
+flat products never zero-initialized at all. This also cheapens every
+NON-recursive sum construction on the default path.)
 
 By value halves the mallocs (the payload no longer boxes; the spine box per
-node remains), but each walk step then deref-COPIES a 24-48 byte aggregate
-out of the spine box where the carrier copied one word. Walk-heavy code --
-which is what a logic engine and a regex matcher are -- pays more in copies
-than it saves in allocation. This is the same lesson as rows B-vs-C above
-from the other side: the allocation was never the whole cost.
+node remains), but each walk step still deref-COPIES a 24-48 byte aggregate
+out of the spine box where the carrier copied one word. The remaining ~13% /
+~7% is spread thin: the arg-spill and in-place-construction candidates were
+each hand-measured at ~2%, so the next real lever is pointer-binding match
+fields read out of the spine box (safe today only because the boxes are
+never freed -- a borrow that reclamation would invalidate). Instruction
+counts and valgrind's cache sim both FAVOR by-value (99M vs 144M Ir, fewer
+simulated misses); the residual slowdown is memory-system behavior the sim
+does not model, so trust the wall clock here, not the counters. This is the
+same lesson as rows B-vs-C above from the other side: the allocation was
+never the whole cost.
 
-**What this phase now is:** a one-line default flip
+**What this phase now is:** a one-line default flip, and the trade is now
+close (7-13% time for 2.2x memory) --
 (`is_self_recursive` in `adt_sr1_sum_candidate`, types.c, where the decision
 record lives) waiting on either a workload that wants memory over speed, or
 reclamation landing first -- an arena makes the carrier's mallocs cheap AND
