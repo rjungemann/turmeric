@@ -8143,7 +8143,7 @@ static void list_external_subcommands(void) {
     static const char *const builtins[] = {
         "build", "compile", "link",
         "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
-        "eval", "doc", "explain", "test", "check", "expand", "format", "fmt",
+        "eval", "doc", "docs", "explain", "test", "check", "expand", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
         "init", "add", "add-cmake", "fetch", "audit",
         "install", "uninstall", "list", "upgrade",
@@ -8235,7 +8235,7 @@ static const char *const CANONICAL_COMMANDS[] = {
     "emit-c", "emit-h", "emit-cmake", "check", "expand", "audit-spans",
     "lsp", "mcp", "dap", "lsp-lite",
     "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
-    "eval", "doc", "image-info", "image-verify", "explain",
+    "eval", "doc", "docs", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test",
     "new", "init", "add", "add-cmake", "fetch", "audit",
     "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
@@ -8285,7 +8285,8 @@ static int usage(void) {
         "  tur dap                           Debug Adapter Protocol server (JSON-RPC/stdio) for editors\n"
         "  tur lsp-lite                      lightweight completion/calltip/doc backend (NDJSON/stdio)\n"
         "  tur eval '<expr>'                 evaluate an inline expression\n"
-        "  tur doc <symbol>                  print documentation for a builtin or special form\n"
+        "  tur doc <symbol>                  print documentation for a builtin, special form, or stdlib definition\n"
+        "  tur docs [--open|--serve]         locate, open, or serve the rendered guides and API reference\n"
         "  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
@@ -8530,27 +8531,159 @@ static int usage_eval(void) {
 static int usage_doc(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur doc <symbol>          print documentation for a builtin or special form\n"
+        "  tur doc <symbol>          print documentation for a builtin, special\n"
+        "                            form, or stdlib definition\n"
         "  tur doc --json <symbol>   print documentation as JSON\n"
+        "\n"
+        "Reads the docstring table shipped alongside the binary\n"
+        "(<stdlib>/docstrings.tur); no network access is involved.\n"
+        "For rendered guides and API pages offline, see `tur docs`.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
 }
 
-/* E5: tur doc <symbol> -- print documentation for a builtin or special form. */
-static int cmd_doc_cli(const char *sym) {
-    const char *d = turi_doc_lookup_builtin(sym);
-    if (d) {
-        if (use_json_output) {
-            char esc_sym[128], esc_doc[512];
-            json_escape(sym, esc_sym, sizeof(esc_sym));
-            json_escape(d,   esc_doc, sizeof(esc_doc));
-            printf("{\"name\":\"%s\",\"doc\":\"%s\"}\n", esc_sym, esc_doc);
-        } else {
-            printf("%s\n", d);
+/* ---------------------------------------------------------------------------
+ * OD4: stdlib docstring lookup for `tur doc`.
+ *
+ * The full docstrings already ship with every install: `just docs` generates
+ * stdlib/docstrings.tur, and the formula installs stdlib/ under
+ * <prefix>/share/turmeric/. What was missing is a way to read them from a
+ * shell -- the table was reachable only from the REPL's (doc ...) and, in the
+ * browser, through turi_doc_lookup's interpreter eval.
+ *
+ * Rather than boot the interpreter and preload the whole stdlib to answer one
+ * lookup, read the generated table directly. Its shape is a contract we own on
+ * both sides: tools/gendocs.py's emit_docstrings_tur writes
+ *
+ *     static const struct { const char *key; const char *val; } entries[] = {
+ *       {"name", "docstring with \n escapes"},
+ *       ...
+ *     };
+ *
+ * so the scanner below only has to understand C string literals -- it does not
+ * care about line layout, ordering, or how many entries there are. It stops at
+ * the end of that array, which keeps the separate doc-verified? table (a flat
+ * list of bare names) from being mistaken for entries.
+ * ------------------------------------------------------------------------ */
+
+/* Read one C string literal starting at *p (which must point at the opening
+ * quote), unescaping into `out`. Returns a pointer just past the closing
+ * quote, or NULL if the literal is unterminated. `out` may be NULL to scan
+ * without copying; `cap` then does not matter. */
+static const char *scan_c_string(const char *p, char *out, size_t cap) {
+    if (*p != '"') return NULL;
+    p++;
+    size_t i = 0;
+    while (*p && *p != '"') {
+        char c = *p++;
+        if (c == '\\' && *p) {
+            char e = *p++;
+            switch (e) {
+                case 'n':  c = '\n'; break;
+                case 't':  c = '\t'; break;
+                case 'r':  c = '\r'; break;
+                case '0':  c = '\0'; break;
+                case '\\': c = '\\'; break;
+                case '"':  c = '"';  break;
+                default:   c = e;    break;
+            }
         }
-        return 0;
+        if (out && i + 1 < cap) out[i++] = c;
     }
+    if (*p != '"') return NULL;
+    if (out && cap) out[i] = '\0';
+    return p + 1;
+}
+
+/* Look up `sym` in <stdlib>/docstrings.tur. Returns a malloc'd string the
+ * caller frees, or NULL when the table has no entry (or is not installed). */
+static char *stdlib_docstring_lookup(const char *sym) {
+    char path[4096];
+    tur_stdlib_path("docstrings.tur", path, sizeof(path));
+
+    char *text = NULL;
+    size_t len = 0;
+    if (read_entire_file_quiet(path, &text, &len) != 0) return NULL;
+
+    char *found = NULL;
+    const char *p = strstr(text, "entries[] = {");
+    if (!p) goto done;
+    p += strlen("entries[] = {");
+
+#define SKIP_WS_COMMA(q) \
+    while (*(q) == ' ' || *(q) == '\t' || *(q) == '\n' || \
+           *(q) == '\r' || *(q) == ',') (q)++
+
+    for (;;) {
+        SKIP_WS_COMMA(p);
+        /* The array's own closing brace ends the table. Note each entry also
+         * ends in `}`, which is consumed at the bottom of the loop -- leaving
+         * it there would stop the scan after the first entry. */
+        if (*p != '{') break;
+        p++;
+        SKIP_WS_COMMA(p);
+
+        char key[512];
+        const char *after_key = scan_c_string(p, key, sizeof(key));
+        if (!after_key) break;
+        p = after_key;
+        SKIP_WS_COMMA(p);
+        if (*p != '"') break;                 /* malformed pair; stop */
+
+        const char *after_val = scan_c_string(p, NULL, 0);
+        if (!after_val) break;
+
+        if (strcmp(key, sym) == 0) {
+            /* Size the value from the literal's own extent, then read it.
+             * Docstrings run to a few KB; measuring first avoids both a fixed
+             * cap that truncates and a guess that over-allocates. */
+            size_t room = (size_t)(after_val - p) + 1;
+            found = (char *)malloc(room);
+            if (found) scan_c_string(p, found, room);
+            break;
+        }
+
+        p = after_val;
+        SKIP_WS_COMMA(p);
+        if (*p == '}') p++;                   /* close this entry */
+    }
+#undef SKIP_WS_COMMA
+
+done:
+    free(text);
+    return found;
+}
+
+/* Print one docstring, honouring --json. `owned` is freed when non-NULL. */
+static int print_doc_result(const char *sym, const char *doc, char *owned) {
+    if (use_json_output) {
+        char esc_sym[128];
+        json_escape(sym, esc_sym, sizeof(esc_sym));
+        /* Stdlib docstrings carry Parameters/Returns/Example blocks and run
+         * well past the 512 bytes the old fixed buffer allowed. */
+        size_t cap = strlen(doc) * 2 + 8;
+        char *esc_doc = (char *)malloc(cap);
+        if (!esc_doc) { free(owned); return 1; }
+        json_escape(doc, esc_doc, cap);
+        printf("{\"name\":\"%s\",\"doc\":\"%s\"}\n", esc_sym, esc_doc);
+        free(esc_doc);
+    } else {
+        printf("%s\n", doc);
+    }
+    free(owned);
+    return 0;
+}
+
+/* E5 / OD4: tur doc <symbol> -- print documentation for a builtin, special
+ * form, or stdlib definition. */
+static int cmd_doc_cli(const char *sym) {
+    const char *builtin = turi_doc_lookup_builtin(sym);
+    if (builtin) return print_doc_result(sym, builtin, NULL);
+
+    char *from_stdlib = stdlib_docstring_lookup(sym);
+    if (from_stdlib) return print_doc_result(sym, from_stdlib, from_stdlib);
+
     if (use_json_output)
         fprintf(stderr, "{\"error\":\"no documentation for '%s'\"}\n", sym);
     else
@@ -8625,6 +8758,363 @@ static int usage_repl(void) {
         "  (reload)        rebuild the loaded spice and refresh bindings\n"
         "\n"
         "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * OD4: `tur docs` -- the rendered guides and API reference, offline.
+ *
+ * `tur doc <symbol>` above answers a symbol-sized question from the docstring
+ * table. This answers the page-sized one: where are the rendered guides on
+ * this machine, and how do I read them without a network?
+ *
+ * The docs are a separate artifact from the binary -- `just docs-tarball`
+ * builds turmeric-docs-<version>.tar.gz, which a release attaches and a
+ * package manager can unpack into <prefix>/share/doc/turmeric/. When they are
+ * not installed, say so and point at the website rather than failing: an
+ * absent optional artifact is not an error.
+ * ------------------------------------------------------------------------ */
+
+#define TUR_DOCS_URL "https://turmeric-lang.com/docs/html/guides/"
+
+static int usage_docs(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur docs                  print where the rendered docs are installed\n"
+        "  tur docs --open           open them in your browser\n"
+        "  tur docs --serve [--port N]\n"
+        "                            serve them from localhost (default port 8137)\n"
+        "\n"
+        "Looks for the docs in, in order:\n"
+        "  $TUR_DOCS_DIR\n"
+        "  <prefix>/share/doc/turmeric   (installed alongside the binary)\n"
+        "  <repo>/docs/html              (a source checkout)\n"
+        "\n"
+        "--serve exists because some browsers refuse cross-page navigation\n"
+        "under file://, which breaks the links between guides.\n"
+        "\n"
+        "For a single symbol, `tur doc <symbol>` needs no docs install at all.\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+/* Locate the rendered docs root. Returns 1 and fills `out` on success. */
+static int resolve_docs_root(char *out, size_t cap) {
+    char probe[4096];
+
+    const char *env = getenv("TUR_DOCS_DIR");
+    if (env && *env) {
+        int n = snprintf(probe, sizeof(probe), "%s/guides/index.html", env);
+        if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
+            snprintf(out, cap, "%s", env);
+            return 1;
+        }
+        fprintf(stderr,
+                "tur: ignoring TUR_DOCS_DIR=%s (no guides/index.html there)\n",
+                env);
+    }
+
+    char exe[4096];
+    if (get_exe_path(exe, sizeof(exe)) != 0) return 0;
+    char dir[4096];
+    dir_of_path(exe, dir, sizeof(dir));
+
+    /* Same walk-up shape as resolve_stdlib_root: an installed prefix layout
+     * and a source checkout are both ancestors of the binary. */
+    for (int depth = 0; depth < 8; depth++) {
+        int n = snprintf(probe, sizeof(probe),
+                         "%s/share/doc/turmeric/guides/index.html", dir);
+        if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
+            snprintf(out, cap, "%s/share/doc/turmeric", dir);
+            return 1;
+        }
+        n = snprintf(probe, sizeof(probe), "%s/docs/html/guides/index.html", dir);
+        if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
+            snprintf(out, cap, "%s/docs/html", dir);
+            return 1;
+        }
+        char *slash = strrchr(dir, '/');
+        if (!slash || slash == dir) break;
+        *slash = '\0';
+    }
+    return 0;
+}
+
+static void docs_not_installed_note(void) {
+    fprintf(stderr,
+        "tur: no rendered documentation found on this machine.\n"
+        "\n"
+        "  Read it online:   %s\n"
+        "  Or install it:    download turmeric-docs-<version>.tar.gz from the\n"
+        "                    release and unpack it, then point TUR_DOCS_DIR at\n"
+        "                    the directory holding guides/ and api/.\n"
+        "  Or build it:      just docs   (writes docs/html/ in a checkout)\n"
+        "\n"
+        "`tur doc <symbol>` works without any of this -- the docstring table\n"
+        "ships with the binary.\n", TUR_DOCS_URL);
+}
+
+/* Hand a URL to the platform's browser opener. Returns 0 on success. */
+static int open_in_browser(const char *url) {
+#ifdef _WIN32
+    const char *opener = "start \"\"";
+#elif defined(__APPLE__)
+    const char *opener = "open";
+#else
+    const char *opener = "xdg-open";
+#endif
+    char cmd[8192];
+    int n = snprintf(cmd, sizeof(cmd), "%s \"%s\"", opener, url);
+    if (n < 0 || (size_t)n >= sizeof(cmd)) return -1;
+    int rc = system(cmd);
+    return (rc == 0) ? 0 : -1;
+}
+
+#ifndef _WIN32
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+static const char *docs_mime(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+    if (strcmp(dot, ".html") == 0) return "text/html; charset=utf-8";
+    if (strcmp(dot, ".css")  == 0) return "text/css; charset=utf-8";
+    if (strcmp(dot, ".js")   == 0) return "text/javascript; charset=utf-8";
+    if (strcmp(dot, ".json") == 0) return "application/json; charset=utf-8";
+    if (strcmp(dot, ".svg")  == 0) return "image/svg+xml";
+    if (strcmp(dot, ".png")  == 0) return "image/png";
+    if (strcmp(dot, ".jpg")  == 0 || strcmp(dot, ".jpeg") == 0) return "image/jpeg";
+    if (strcmp(dot, ".woff2") == 0) return "font/woff2";
+    if (strcmp(dot, ".woff") == 0) return "font/woff";
+    if (strcmp(dot, ".txt")  == 0 || strcmp(dot, ".md") == 0)
+        return "text/plain; charset=utf-8";
+    return "application/octet-stream";
+}
+
+static void docs_send_status(int fd, const char *status, const char *body) {
+    char head[512];
+    int n = snprintf(head, sizeof(head),
+                     "HTTP/1.1 %s\r\n"
+                     "Content-Type: text/plain; charset=utf-8\r\n"
+                     "Content-Length: %zu\r\n"
+                     "Connection: close\r\n\r\n",
+                     status, strlen(body));
+    if (n > 0) { (void)!write(fd, head, (size_t)n); }
+    (void)!write(fd, body, strlen(body));
+}
+
+/*
+ * Resolve a request path to a file inside `root`, or return -1.
+ *
+ * realpath() on the joined path is the containment check: a request for
+ * `/../../etc/passwd`, or a symlink pointing outside the tree, resolves to
+ * something that does not start with the (also realpath'd) root, and is
+ * refused. Doing it after the join rather than by inspecting the request
+ * string means no clever encoding gets a second chance.
+ */
+static int docs_resolve_path(const char *root_real, const char *req,
+                             char *out, size_t cap) {
+    char joined[4096];
+    const char *rel = req;
+    while (*rel == '/') rel++;
+    if (*rel == '\0') rel = "guides/index.html";
+
+    int n = snprintf(joined, sizeof(joined), "%s/%s", root_real, rel);
+    if (n < 0 || (size_t)n >= sizeof(joined)) return -1;
+
+    char resolved[4096];
+    if (!realpath(joined, resolved)) return -1;
+
+    size_t rootlen = strlen(root_real);
+    if (strncmp(resolved, root_real, rootlen) != 0) return -1;
+    if (resolved[rootlen] != '\0' && resolved[rootlen] != '/') return -1;
+
+    struct stat st;
+    if (stat(resolved, &st) != 0) return -1;
+    if (S_ISDIR(st.st_mode)) {
+        char idx[4096];
+        int m = snprintf(idx, sizeof(idx), "%s/index.html", resolved);
+        if (m < 0 || (size_t)m >= sizeof(idx)) return -1;
+        if (stat(idx, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
+        snprintf(out, cap, "%s", idx);
+        return 0;
+    }
+    if (!S_ISREG(st.st_mode)) return -1;
+    snprintf(out, cap, "%s", resolved);
+    return 0;
+}
+
+static void docs_serve_one(int fd, const char *root_real) {
+    char req[8192];
+    ssize_t got = read(fd, req, sizeof(req) - 1);
+    if (got <= 0) return;
+    req[got] = '\0';
+
+    if (strncmp(req, "GET ", 4) != 0) {
+        docs_send_status(fd, "405 Method Not Allowed", "only GET is served\n");
+        return;
+    }
+    char *path = req + 4;
+    char *sp = strchr(path, ' ');
+    if (!sp) { docs_send_status(fd, "400 Bad Request", "malformed request\n"); return; }
+    *sp = '\0';
+    char *q = strchr(path, '?');
+    if (q) *q = '\0';
+    char *frag = strchr(path, '#');
+    if (frag) *frag = '\0';
+
+    char file[4096];
+    if (docs_resolve_path(root_real, path, file, sizeof(file)) != 0) {
+        docs_send_status(fd, "404 Not Found", "not found\n");
+        return;
+    }
+
+    FILE *f = fopen(file, "rb");
+    if (!f) { docs_send_status(fd, "404 Not Found", "not found\n"); return; }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return; }
+    long size = ftell(f);
+    if (size < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return; }
+
+    char head[512];
+    int n = snprintf(head, sizeof(head),
+                     "HTTP/1.1 200 OK\r\n"
+                     "Content-Type: %s\r\n"
+                     "Content-Length: %ld\r\n"
+                     "Cache-Control: no-cache\r\n"
+                     "Connection: close\r\n\r\n",
+                     docs_mime(file), size);
+    if (n > 0) { (void)!write(fd, head, (size_t)n); }
+
+    char buf[65536];
+    size_t chunk;
+    while ((chunk = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (write(fd, buf, chunk) < 0) break;
+    }
+    fclose(f);
+}
+
+/*
+ * Serve `root` on 127.0.0.1:<port> until interrupted.
+ *
+ * Loopback only, GET only, and one connection at a time: this is a way to read
+ * your own documentation, not a web server. Binding to a wildcard address
+ * would put a filesystem-backed handler on the network for no benefit to the
+ * one reader it exists for.
+ */
+static int cmd_docs_serve(const char *root, int port, bool open_browser) {
+    char root_real[4096];
+    if (!realpath(root, root_real)) {
+        fprintf(stderr, "tur: cannot resolve docs directory '%s'\n", root);
+        return 1;
+    }
+
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    if (srv < 0) { perror("tur docs: socket"); return 1; }
+    int one = 1;
+    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        fprintf(stderr, "tur docs: cannot bind 127.0.0.1:%d: %s\n",
+                port, strerror(errno));
+        close(srv);
+        return 1;
+    }
+    if (listen(srv, 16) != 0) { perror("tur docs: listen"); close(srv); return 1; }
+
+    char url[256];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/guides/index.html", port);
+    printf("serving %s at %s\n", root_real, url);
+    printf("press Ctrl-C to stop\n");
+    fflush(stdout);
+
+    if (open_browser) open_in_browser(url);
+
+    /* SIGPIPE would kill the process when a browser closes a connection
+     * mid-response, which is routine. */
+    signal(SIGPIPE, SIG_IGN);
+
+    for (;;) {
+        int fd = accept(srv, NULL, NULL);
+        if (fd < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        docs_serve_one(fd, root_real);
+        close(fd);
+    }
+    close(srv);
+    return 0;
+}
+#endif /* !_WIN32 */
+
+#define TUR_DOCS_DEFAULT_PORT 8137
+
+static int cmd_docs(int argc, char **argv) {
+    bool want_open = false, want_serve = false;
+    int port = TUR_DOCS_DEFAULT_PORT;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+            return usage_docs();
+        if (strcmp(argv[i], "--open") == 0)  { want_open = true;  continue; }
+        if (strcmp(argv[i], "--serve") == 0) { want_serve = true; continue; }
+        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+            port = atoi(argv[++i]);
+            if (port <= 0 || port > 65535) {
+                fprintf(stderr, "tur docs: --port must be 1-65535\n");
+                return 2;
+            }
+            want_serve = true;
+            continue;
+        }
+        fprintf(stderr, "tur docs: unknown argument '%s'\n", argv[i]);
+        return usage_docs() ? 2 : 2;
+    }
+
+    char root[4096];
+    if (!resolve_docs_root(root, sizeof(root))) {
+        docs_not_installed_note();
+        if (want_open) return open_in_browser(TUR_DOCS_URL) == 0 ? 0 : 1;
+        return 1;
+    }
+
+    if (want_serve) {
+#ifdef _WIN32
+        fprintf(stderr, "tur docs: --serve is not available on Windows; "
+                        "use `tur docs --open`\n");
+        return 1;
+#else
+        return cmd_docs_serve(root, port, want_open);
+#endif
+    }
+
+    char index[4096];
+    snprintf(index, sizeof(index), "%s/guides/index.html", root);
+
+    if (want_open) {
+        char url[4200];
+        snprintf(url, sizeof(url), "file://%s", index);
+        if (open_in_browser(url) != 0) {
+            fprintf(stderr, "tur docs: could not launch a browser; open this "
+                            "by hand:\n  %s\n", url);
+            return 1;
+        }
+        return 0;
+    }
+
+    printf("%s\n", root);
+    printf("  guides: %s/guides/index.html\n", root);
+    printf("  api:    %s/api/index.html\n", root);
+    printf("\nOpen them with `tur docs --open`, or `tur docs --serve` if your\n"
+           "browser blocks navigation between file:// pages.\n");
     return 0;
 }
 
@@ -10282,6 +10772,9 @@ int main(int argc, char **argv) {
         if (argc != 3) return usage_doc();
         return cmd_doc_cli(argv[2]);
     }
+    /* OD4: tur docs -- locate/open/serve the rendered guides and API pages. */
+    if (strcmp(cmd, "docs") == 0)
+        return cmd_docs(argc, argv);
     /* AI6: tur image-info <image> -- print header without resuming. */
     if (strcmp(cmd, "image-info") == 0) {
         if (argc != 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
