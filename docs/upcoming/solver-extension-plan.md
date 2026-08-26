@@ -924,6 +924,13 @@ nobody knew. It does not lose, so the driver is the next increment, and it is
 where the `#fx{Bt}` effect row belongs too (see SX1) -- that is the first caller
 the refinement solver's purity whitelist can actually see.
 
+**Corrected 2026-08-26: the row is NOT a prerequisite.** A trail-mutating
+measure is already refused congruence by the default-deny purity walk, with no
+annotation -- measured, and pinned by
+`tests/fixtures/sx2-trail-measure-not-congruent`. See SX1's note for the probe
+and the mechanism. The row remains worth having for precision, but the driver
+no longer waits on it, which removes one of this phase's two coupled pieces.
+
 **Re-checked 2026-08-26, after lazy streams landed in `logic.tur`.** Two of the
 statements above have moved, one helpfully and one not.
 
