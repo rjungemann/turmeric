@@ -7,8 +7,8 @@ description: Extending the refinement solver into an incremental, backtracking d
 # Solver Extension (SX)
 
 **Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface),
-SX1 (the trail primitive, minus its effect row) and SX2's measurement have
-landed; everything else is unstarted. SX4 and SX6 are parked on SX0(b)'s
+SX1 (the trail primitive, minus its effect row), SX2's measurement and
+combinators, and SX3 (incremental EUF) have landed; the rest is unstarted. SX4 and SX6 are parked on SX0(b)'s
 evidence; SX2's gate came back the other way -- the trail pays for itself, so
 SX3/SX4 should build on it. Nothing here is on the critical path to v1; the whole of SX is
 *additive* to a solver that already ships and is already sound. Read section 5
@@ -33,10 +33,13 @@ SX8a has since landed too, so the solver is now answerable from outside the
 compile pipeline (`tur smt`, `--dump-refine=json`) -- which is what every later
 phase's acceptance tests were going to want a door for.
 
-What is left live: **SX1/SX2** -- the trail, and the honest test of whether it
-pays for itself. Details under SX0(a), SX0(b) and SX8a; reproduce the two
-measurements with `benchmarks/run-capture-curve.sh` and
-`benchmarks/run-cap-sweep.sh`.
+What is left live: **SX2's driver increment** (the `bt-scope`-bracketed
+depth-first engine in `stdlib/backtrack.tur`; see that phase's re-check for
+the reify-at-success obstacle and the typing decision it carries).  **SX3 has
+landed** -- one EUF state with mark/undo per cube, verdict-identical to the
+rebuild path, `TUR_REFINE_EUF=rebuild` kept as the replay seam.  Details under
+SX0(a), SX0(b) and SX8a; reproduce the two measurements with
+`benchmarks/run-capture-curve.sh` and `benchmarks/run-cap-sweep.sh`.
 
 ## 0. Provenance
 
@@ -986,6 +989,38 @@ Original specification follows.
   should proceed as plain C with no shared utility.
 
 ### SX3 -- incremental EUF (S1i)
+
+**LANDED 2026-08-26.** `euf_mark` / `euf_undo_to` over one state, backed by
+`src/compiler/trail_c.h` -- a header-only value trail carrying two lessons
+from the runtime trail rather than relearning them: entries record slot
+INDICES (the arrays are arena-grown, so a trailed pointer can dangle into the
+superseded allocation), and the level counter is MONOTONIC (undo does not roll
+it back; a rolled-back level plus stale-high stamps silently suppresses
+trailing -- the exact bug the runtime trail's commit path shipped).  Every
+`parent[]` write is trailed, path compression included, so the merge history a
+Nieuwenhuis-Oliveras proof forest needs stays recoverable -- the
+representation question this phase was told to keep open.
+
+Both rebuild sites converted: `refine_s1_decide` and `refine_s3_decide` hold
+one state and bracket each cube with mark/undo; each cube still starts from
+the empty partition, so verdicts and cap telemetry are identical to the
+rebuild path by construction.  `LaState` stays per-cube -- making it
+incremental is SX4, which is parked.
+
+**Accepted as specified:** the corpus output is BIT-IDENTICAL between
+`TUR_REFINE_EUF=rebuild` and the incremental default (full-output diff, 138
+lines), all 93 `refine-*` fixtures agree under both modes including
+`TUR_REFINE_STATS` counts, and the full suite is green.  Compile time on the
+widest fixture (`refine-crossing-path-conditions`) is a wash -- 184 vs 189
+ms/check -- which is what the phase predicted: the payoff is the deleted
+per-cube allocation churn, not speed.  Unit tests: `test_euf_mark_undo`,
+mutation-verified against both failure modes (a silently-skipped trail entry,
+and the stale-stamp level reuse), each caught independently.  The first draft
+of the stale-stamp check did NOT catch its mutation -- undo truncated the
+re-registered term, refreshing its stamp -- so the landed test registers its
+probe vars below the marks, which is the only shape the trap actually bites.
+
+Original specification follows; its second-payoff note stands.
 
 **A second reason to want this, measured 2026-08-25.** `no_cube_unsat` calls
 `euf_new` and `la_new` per cube, up to 64 cubes per obligation, all into the

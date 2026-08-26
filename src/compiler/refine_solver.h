@@ -133,6 +133,18 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out);
 typedef struct EufState EufState;
 
 EufState *euf_new(RefineVC *vc, Arena *a);
+/* SX3: mark / undo-to-mark over one state (incremental EUF), plus the env
+ * seam selecting it.  See trail_c.h for the trail; TUR_REFINE_EUF=rebuild
+ * restores the per-cube rebuild path. */
+typedef struct {
+    uint32_t trail_len;    /* TrailCMark, flattened to keep trail_c.h private */
+    uint32_t trail_level;
+    uint32_t n;
+    bool     unsat;
+} EufMark;
+EufMark  euf_mark(EufState *st);
+void     euf_undo_to(EufState *st, EufMark m);
+bool     euf_incremental_mode(void);
 /* Assert every literal of `c`.  Returns false when a contradiction is found. */
 bool      euf_assert_cube(EufState *st, const VCCube *c);
 /* Assert `a == b` and re-close.  Returns false on contradiction. */

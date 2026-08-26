@@ -43,8 +43,14 @@ static uint32_t collect_shared(EufState *euf, VCTerm **out, uint32_t cap) {
 
 /* Decide a single cube by running both theories and exchanging entailed
  * equalities to a fixpoint.  Returns true when the cube is refuted. */
-static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c) {
-    EufState *euf = euf_new(vc, a);
+/* `shared_euf` non-NULL selects the SX3 incremental path: the caller owns one
+ * EufState and brackets each call with euf_mark / euf_undo_to, so this
+ * function's asserts are rolled back on return.  NULL keeps the per-cube
+ * rebuild (TUR_REFINE_EUF=rebuild).  LaState stays per-cube either way --
+ * making IT incremental is SX4, which is parked. */
+static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c,
+                          EufState *shared_euf) {
+    EufState *euf = shared_euf ? shared_euf : euf_new(vc, a);
     LaState  *la  = la_new(vc, a);
 
     if (!euf_assert_cube(euf, c)) return true;
@@ -109,7 +115,17 @@ RefineDecision refine_s3_decide(RefineVC *vc, Arena *a) {
     if (!refine_cubes_build(vc, a, &cs)) return refine_unknown();
     if (cs.trivial || cs.n == 0) return refine_valid();
 
-    for (uint32_t i = 0; i < cs.n; i++)
-        if (!no_cube_unsat(vc, a, &cs.cubes[i])) return refine_unknown();
+    EufState *inc = euf_incremental_mode() ? euf_new(vc, a) : NULL;
+    for (uint32_t i = 0; i < cs.n; i++) {
+        bool refuted;
+        if (inc) {
+            EufMark m = euf_mark(inc);
+            refuted = no_cube_unsat(vc, a, &cs.cubes[i], inc);
+            euf_undo_to(inc, m);
+        } else {
+            refuted = no_cube_unsat(vc, a, &cs.cubes[i], NULL);
+        }
+        if (!refuted) return refine_unknown();
+    }
     return refine_valid();
 }
