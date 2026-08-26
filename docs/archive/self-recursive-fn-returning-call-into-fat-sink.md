@@ -4,8 +4,19 @@
 is the natural way to build a combinator chain recursively -- the first thing
 anyone composing searches, parsers, or streams will write.
 
-**Status:** OPEN. Minimal repro and a one-line workaround below; root cause
-narrowed but not fixed. Found building SX2's depth-first driver
+**Status:** RESOLVED 2026-08-27. The hypothesis below was exactly right --
+stage-2 fat-result normalization marked the declared result `boxed` only
+AFTER the body elaborated, so the self-binding answered differently than a
+completed one.  The fix forwards the marking to the recursion binding in the
+RR1 early-forwarding block (elab_fns.c), with a flag so the post-body tail
+normalization still runs (its `!boxed` guard would otherwise read the
+pre-mark as "already done" and leave thin leaves behind a boxed-claiming
+type -- the inverse crash).  Both spellings from the probe table (direct and
+let-bound) are pinned by `tests/fixtures/self-recursive-goal-into-fat-sink`,
+mutation-verified: reverting the pre-mark alone segfaults the fixture.  The
+`queens-goal-fwd` forwarder workaround in `bench-dfs-queens.tur` is reverted
+per this report's own instruction, and the direct self-call there doubles as
+the stdlib-reach proof.  Found building SX2's depth-first driver
 (`stdlib/backtrack-dfs.tur`).
 
 ## Repro
@@ -58,7 +69,8 @@ then gets dispatched as an env.
 ## In-tree workaround sites (revert when fixed)
 
 - `benchmarks/bench-dfs-queens.tur` -- `queens-goal-fwd`, a forwarder whose
-  docstring names this report. Inline it when this lands.
+  docstring names this report. Inline it when this lands. **Done: reverted
+  with the fix; the direct self-call is the live spelling.**
 
 `stdlib/backtrack-dfs.tur` itself is NOT affected: its recursion
 (`dfs-choose-go`) passes `k` through as a parameter rather than feeding a

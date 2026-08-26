@@ -1,0 +1,24 @@
+;; backtrack-mbind-captureless-lambda -- mbind and fresh called DIRECTLY with
+;; non-capturing lambdas.
+;;
+;; Regression: mbind's continuation param was untyped (the int64 carrier), so
+;; a captureless lambda crossed as a thin code pointer while the inline-C body
+;; read fat[0] as the thunk -- executing the lambda's first instructions as an
+;; address (SIGSEGV).  It held by convention only ("use backtrack-do which
+;; guarantees fat closures via forced capture"); the in-tree corpus never hit
+;; it because every existing caller's lambda happened to capture.  The param
+;; is `^fat` now, so the compiler shims a thin fn at the call site and passes
+;; a capturing closure through -- both spellings below must work.
+
+(load "stdlib/backtrack.tur")
+
+(defn main [] : int
+  ;; captureless -- the shape that used to crash
+  (println (bt-length (mbind (mplus (mreturn 1) (mreturn 2))
+                             (fn [x] (mreturn (* x 10))))))
+  (println (bt-length (fresh (fn [v] (mreturn v)))))
+  ;; capturing -- the shape that always worked; must not double-box
+  (let [k 5]
+    (println (bt-length (mbind (mplus (mreturn 1) (mreturn 2))
+                               (fn [x] (mreturn (* x k)))))))
+  0)

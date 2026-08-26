@@ -113,26 +113,21 @@
   (dfs-safe-go cells 1 row
                (bt-get (:: (vec-get cells (- row 1)) :BtCell))))
 
-;;; queens-goal-fwd -- forwarder for the recursion below.
-;;;
-;;; NOT decorative: a DIRECT self-recursive call whose fn-typed result feeds a
-;;; ^fat parameter segfaults -- the self-call inside the not-yet-normalized
-;;; defn hands back a value the ^fat sink then mis-shims.  The same call
-;;; routed through this one-line forwarder works.  See
-;;; docs/reported/self-recursive-fn-returning-call-into-fat-sink.md; when
-;;; that lands, inline this.
-(defn queens-goal-fwd [cells : (Vec BtCell) row : int n : int]
-  : (fn [(fn [] bool)] bool)
-  (queens-goal cells row n))
-
 ;;; queens-goal -- the dfs-and chain: choose row's column, check, recurse.
+;;;
+;;; The recursion is a DIRECT self-call feeding a ^fat parameter -- the shape
+;;; that used to segfault (self-recursive-fn-returning-call-into-fat-sink,
+;;; fixed 2026-08-27: the stage-2 fat-result marking is now forwarded to the
+;;; recursion binding before the body elaborates).  This call site doubles as
+;;; the workaround-reverted proof: if the drop regresses, every dfs count
+;;; below goes wrong or crashes.
 (defn queens-goal [cells : (Vec BtCell) row : int n : int]
   : (fn [(fn [] bool)] bool)
   (if (> row n)
     (dfs-succeed)
     (dfs-and (dfs-choose-int (:: (vec-get cells (- row 1)) :BtCell) 1 n)
       (dfs-and (dfs-guard (fn [] (dfs-safe? cells row)))
-               (queens-goal-fwd cells (+ row 1) n)))))
+               (queens-goal cells (+ row 1) n)))))
 
 ;;; fill-cells -- internal: push n fresh cells.
 (defn fill-cells [cells : (Vec BtCell) i : int n : int] : int
