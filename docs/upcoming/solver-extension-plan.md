@@ -889,6 +889,46 @@ nobody knew. It does not lose, so the driver is the next increment, and it is
 where the `#fx{Bt}` effect row belongs too (see SX1) -- that is the first caller
 the refinement solver's purity whitelist can actually see.
 
+**Re-checked 2026-08-26, after lazy streams landed in `logic.tur`.** Two of the
+statements above have moved, one helpfully and one not.
+
+**The fork got a shape a trail can use.** The blocker as written is that `Subst`
+is threaded through a `Stream` monad that FORKS it while a trail is a stack
+discipline. `logic.tur` now has `disjoined-dfs` / `st-append-dfs`: depth-first
+*and* lazy, so the left branch is fully exhausted before the right one is
+touched. That is exactly mark / explore / undo-to-mark -- the discipline a trail
+wants -- and it did not exist when this phase was written. The default
+`disjoined` interleaves, which is the *worst* case for a trail (it alternates
+branches, so every alternation would need an undo and a redo), so a trailed
+engine would be built against the dfs pair, not against the default.
+
+**But there is a second obstacle the phase does not name, and it is the harder
+one: solutions ESCAPE the search.** `run-logic` returns a `Stream` of `Subst`
+and the caller reads it afterwards -- `reify-walk` walks a term through
+`(first-state results)` once `run-logic` has already returned. Today that is
+fine: a `Subst` is a persistent `SBind` chain, so it outlives the search that
+built it. Under a trailed union-find the bindings live in cells that backtracking
+UNDOES, so every answer would be empty by the time the caller looked at it.
+
+The standard fix is to reify at success time inside the driver -- copy each
+answer out of the trailed store before backtracking past it -- which changes
+what `run-logic` returns. That is an API change to a shipped module, and it is
+the real reason "put the trailed substitution behind `logic.tur`'s existing
+`Goal`/`Subst` API" is not a drop-in. The phase's own instinct to build the
+driver in `stdlib/backtrack.tur` instead sidesteps it, and on this evidence that
+is the right call.
+
+**Two more things worth knowing before starting:**
+
+- `tur_uf_*` (the piece that DID land) has exactly one caller in the tree:
+  `benchmarks/bench-logic-subst.tur`, via `extern-c`. Nothing in `stdlib/` uses
+  it, so the engine work starts from an unexercised primitive.
+- `stdlib/backtrack.tur` -- where the driver goes -- is written entirely in
+  `:int`: `mplus`, `mbind`, `bt-cons` and `run-backtrack` all take and return
+  `:int` for what are really stream handles. Per CLAUDE.md's no-lazy-`:int`
+  rule the new driver should not extend that, which means the phase carries a
+  typing decision for its own surface that the original spec does not mention.
+
 Original specification follows.
 
 - **Do:** a trailed union-find substitution behind `stdlib/logic.tur`'s existing
@@ -1234,7 +1274,9 @@ surface slotted where it is cheapest:
    verdicts" criteria can be checked through `tur smt` rather than only through
    the ctest harness, and SX6's gate can read per-obligation cap attribution
    out of the JSON dump.
-3. ~~**SX1**~~, **then SX2** -- SX1 answered the opt-out question with a shipped
+3. ~~**SX1**~~, **then SX2** (re-checked 2026-08-26: the fork now has a
+   trail-shaped variant in `disjoined-dfs`, but answers escaping the search is a
+   second obstacle the phase never named -- see SX2) -- SX1 answered the opt-out question with a shipped
    design instead of a promise: three granularities, and a measurement showing
    record-and-undo is ~5x cheaper per unit of state than capture-and-restore.
    **SX2 is now the live phase**, and it is the honest test -- if a trailed
