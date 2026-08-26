@@ -5,8 +5,11 @@ happen -- its effects are lost, not deferred -- and the program runs on to print
 a plausible wrong answer. Only `int` instantiations survive, which is why it has
 gone unnoticed: `int` is the carrier and the overwhelmingly common case.
 
-**Status:** OPEN. Minimal repro below, root cause not located. Found while
-adding `with-untrailed` for SX2, whose most natural call is exactly this shape.
+**Status:** RESOLVED 2026-08-26. Root cause found and fixed; paper trail in
+[history/poly-call-in-statement-position-dropped](history/poly-call-in-statement-position-dropped.md).
+The pinning fixture `poly-statement-position-effect` is green, and all three
+workaround sites are reverted to the natural spelling. Found while adding
+`with-untrailed` for SX2, whose most natural call is exactly this shape.
 
 ## Repro
 
@@ -125,4 +128,4 @@ infer it from `poly-statement-position-effect` alone -- that fixture pins the
 general rule, while these sites pin that the rule reaches real stdlib code.
 
 Tracked alongside the others in
-[workarounds-to-remove](workarounds-to-remove.md).
+[workarounds-to-remove](../reported/workarounds-to-remove.md).

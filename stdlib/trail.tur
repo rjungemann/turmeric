@@ -414,24 +414,11 @@
 ;;; Returns:
 ;;;   Whatever `body` returned.
 ;;;
-;;; HAZARD -- USE THE RESULT.  A discarded call to a parametric function is
-;;; currently DROPPED unless it instantiates at `int`, taking its side effects
-;;; with it, so the obvious spelling silently does nothing:
-;;;
-;;;   (with-untrailed (fn [] (bt-set! c 7)))    ;; BROKEN: bool result, discarded
-;;;
-;;; Bind or otherwise consume the result until that is fixed:
-;;;
-;;;   (let [_ (with-untrailed (fn [] (bt-set! c 7)))] ...)   ;; works
-;;;   (with-untrailed (fn [] (do (bt-set! c 7) 0)))          ;; works (int)
-;;;
-;;; See docs/reported/poly-call-in-statement-position-dropped.md.
-;;;
 ;;; Example:
 ;;;   (let [m (bt-mark)]
-;;;     (let [_ (with-untrailed (fn [] (bt-set! c 7)))]
-;;;       (do (bt-undo-to! m)
-;;;           (bt-get c))))                               ; => 7, not restored
+;;;     (with-untrailed (fn [] (bt-set! c 7)))
+;;;     (bt-undo-to! m)
+;;;     (bt-get c))                                      ; => 7, not restored
 ;;;
 ;;; Same panic caveat as `bt-scope`, and worse: a panic inside `body` leaves
 ;;; trailing paused for everything after it, so later writes silently stop

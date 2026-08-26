@@ -936,7 +936,6 @@ turned up a defect in the instrument that would have justified it.
 | [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | `tests/run.sh` gained a gate for UBSan findings from the compiler and it is verified in both directions, but nothing sets `TUR_SANITIZER_GATE=1`, so CI runs unarmed. Not a pure flag flip: the zero-finding count was measured on Linux only, and UBSan findings vary by toolchain |
 | [closure-in-defdata-field](closure-in-defdata-field.md) | medium | PARTIALLY FIXED. The `defopaque :ptr<void>` route is clean now and the lazy-stream work it blocked has landed. Still open: a `:fn` field accepts a capturing closure, type-checks, and SIGSEGVs when forced, while a non-capturing one works -- so the shape you write first is fine and the shape you need crashes |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
-| [poly-call-in-statement-position-dropped](poly-call-in-statement-position-dropped.md) | **high** | a discarded call to a parametric function is DROPPED unless it instantiates at `int` -- the side effects are lost, silently, with no diagnostic. `(polyA true)` in statement position never runs; `(polyA 1)` does. Fixture `poly-statement-position-effect` is red on purpose and goes green when this is fixed |
 
 `compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/compiled-fixtures-are-not-leak-checked.md). Its two
@@ -968,6 +967,13 @@ the documented entry point is now the one the compiler calls. Its residue is
 open as [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) --
 nothing exercises `examples/` and nothing diagnoses a build with no entry point,
 which is why it survived as long as it did.
+
+`poly-call-in-statement-position-dropped` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/poly-call-in-statement-position-dropped.md).
+`emit_stmt` treated four pure WRAPPER nodes (reinterpret/cast/ascribe/poly-wrap)
+as emit-nothing, deleting the wrapped call; they now delegate to the inner
+expression. The pinning fixture is green and the `with-untrailed` workarounds
+are reverted.
 
 `rc-ref-conversion-and-weak-upgrade-leak` was resolved 2026-08-23 and moved to
 [docs/archive/](../archive/rc-ref-conversion-and-weak-upgrade-leak.md). Its

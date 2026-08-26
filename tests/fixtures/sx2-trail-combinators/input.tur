@@ -29,10 +29,12 @@
     (println (bt-get c))                                          ;; 7
 
     ;; with-untrailed: writes inside are not recorded, so they survive an undo
-    ;; that unwinds past them.  The result is bound rather than discarded --
-    ;; discarding it would hit poly-call-in-statement-position-dropped.
+    ;; that unwinds past them.  The result is DISCARDED on purpose: this is the
+    ;; spelling users write, and it was the repro for the (now fixed)
+    ;; poly-call-in-statement-position-dropped miscompile -- if the discard
+    ;; regresses, the write never happens and this prints 0, not 55.
     (let [m (bt-mark)]
-      (let [_ (with-untrailed (fn [] (bt-set! c 55)))]
-        (do (bt-undo-to! m)
-            (println (bt-get c)))))                               ;; 55
+      (with-untrailed (fn [] (bt-set! c 55)))
+      (bt-undo-to! m)
+      (println (bt-get c)))                                       ;; 55
     0))
