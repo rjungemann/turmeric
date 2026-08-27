@@ -230,6 +230,20 @@ add_test(
   COMMAND bash tests/run-sr4-seam.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# SR2 seam-rot gate: the same argument one phase over.  Parametric sum
+# monomorphs by value (TUR_SR2_APP_SUM_BYVALUE=1) are OFF by default -- SR2a is
+# unfinished, not declined -- so nothing else in CI compiles a parametric sum by
+# value, and the eight M7 worklist fixtures worked green on 2026-08-27 are a
+# claim docs/upcoming/sr2-gate-results.md makes with nothing enforcing it.  Same
+# shape as the SR4 harness: a canary that asserts the seam bites, then build +
+# run + stdout compare.  Values, not just builds -- this family's failures hide
+# behind function-pointer casts cc cannot see through, and the acceptance test
+# used to compile cleanly and SEGV.
+add_test(
+  NAME tur_sr2_seam
+  COMMAND bash tests/run-sr2-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # `tur check` sweep over examples/, ratcheted against
 # examples/examples-check-baseline.txt. Nothing referenced examples/ before
 # this, so nothing compiled them and they rotted -- 9 of 17 were failing when

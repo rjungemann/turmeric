@@ -1,7 +1,7 @@
 ---
 title: SR2 prototype gate -- results
 category: Planning
-description: What happened when a multi-variant PARAMETRIC sum monomorph was forced by value behind a compile-time seam -- the plan's prerequisite line corrected, a ten-fixture worklist that is one family (the M7 HKT carrier machinery), one silent SEGV that turned out to be a default-path ABI bug and is now fixed, one elaboration gap on nullary constructors, and a pre-existing default-path ICE found while probing.
+description: What happened when a multi-variant PARAMETRIC sum monomorph was forced by value behind a compile-time seam -- the plan's prerequisite line corrected, an eleven-fixture worklist worked down to three, the silent SEGV traced to a default-path ABI bug and fixed, the two remaining causes named, and a pre-existing default-path ICE found while probing.
 ---
 
 # SR2 prototype gate -- results
@@ -15,6 +15,13 @@ blockers, before writing any of the phase.
 REAL prerequisite (by-value parametric sum monomorphs, call it SR2a) is
 tractable and its direct-use subset already works, and the cost lives in one
 place the plan already knew was expensive: the M7 HKT carrier machinery.**
+
+**Update 2026-08-27: SR2a's codegen is mostly paid.** The worklist below is 8
+of 11 green, and what closed was not new machinery -- four existing conventions
+each had a `TY_ADT` case and no `TY_APP` one. Two causes remain, named in
+**Remaining damage**; one of them (a bare ctor call with no expected type) is
+the elaboration item this document already flagged as SR2's real ergonomic
+risk, now shown to be broader than nullary constructors.
 
 ## The prerequisite correction
 
@@ -54,13 +61,20 @@ Three lockstep changes, all in `types.c`:
 
 **Default off, provably inert: 2709 passed / 0 failed, zero snapshot drift.**
 
-One exclusion was required immediately: an app over a **B4 recursive-carrier
+One exclusion was required immediately: an app over a **recursive-carrier
 wrapper** -- `(ExprF Expr)`, `(ReF Re)`, the fixpoint functors -- stays on
 B4's machinery.  Its element rides the int64 carrier BY DESIGN (the wrapper
 is the carrier), and admitting the functor spelled `tur_adt_Expr` fields
 inline into a typedef that precedes the wrapper's own ("field has incomplete
 type").  This is the same boundary the `g_adt_app_byvalue` comment already
 draws for the flat-product path.
+
+The exclusion first reused B4's `adt_is_byval_recursive_carrier_wrapper`, which
+was too narrow: it requires a SOLE field because it promises something else
+entirely ("an 8-byte wrapper whose by-value form IS its carrier int64", a
+promise its own caller relies on).  `Expr = (Roll :int (ExprF Expr))` carries a
+tag alongside the carrier field and failed that test.  The question here is
+fixpoint PARTNERSHIP -- `adt_is_fixpoint_partner_of`.
 
 ## What already works under the seam
 
@@ -77,63 +91,94 @@ static tur_adt_Res2__int__cstr ctor_Good__int__cstr(int64_t _0) {
 Probe: `(defdata Res2 :copy [a b] (Bad b) (Good a))` with a `div2` returning
 `(Res2 int cstr)`, matched by the caller.  Both variants print correctly.
 
-## Remaining damage: 10 fixtures, one family
+## Remaining damage: 3 fixtures, two causes (was 11, one family)
 
-Against the 2709-green baseline (SR1's gate had 34):
+Against the 2709-green baseline (SR1's gate had 34).  **Worked 2026-08-27; 8 of
+the 11 now build and print correct values under the seam.**
 
-| fixture | first error |
+| fixture | state |
 |---|---|
-| hkt-cata-* (6) | `(ExprF (fn [int] int))` etc. assigned into an int64 slot -- the cata/fmap machinery hard-assumes `(F B)` monomorphs ride the carrier |
-| hkt-fmap-byvalue-sum-element | aggregate used where an integer was expected |
-| class-method-hkt-tyvar-grounding | same |
-| poly-combinator-application-element-inference | invalid initializer |
-| conv-with-narrowed-variant-parametric | pbp/by-value param mismatch at `getv` |
-| ~~parsec-tutorial~~ | **FIXED 2026-08-27** -- see below |
+| hkt-cata-* (6) | **GREEN** |
+| hkt-fmap-byvalue-sum-element | **GREEN** |
+| parsec-tutorial | **GREEN** -- and it was a default-path bug, see below |
+| class-method-hkt-tyvar-grounding | cause A |
+| conv-with-narrowed-variant-parametric | cause A |
+| poly-combinator-application-element-inference | cause B |
 
-Every one is the M7 HKT-carrier bridge family: `fmap`/`cata` specs, functor
-element slots, and closure returns that assume a `(F A)` monomorph is an
-int64 carrier word.  The B4 exclusion moved the fixpoint functors out of the
-way, but any OTHER parametric sum used through `Functor`/`Monad` -- which is
-precisely what Option and Result are, everywhere -- hits the same
-assumptions.  **This is the actual cost of SR2a**, and it is the same
-machinery the plan's provenance section already priced as "four predicates
-had to move in lockstep."
+The original entry read "every one is the M7 HKT-carrier bridge family."  That
+was right about the shape and wrong about the count: seven of the eight closed
+by teaching four existing conventions that a concrete parametric monomorph is
+one of their members, not by new machinery.
 
-**The one to respect: parsec-tutorial -- CLOSED 2026-08-27, and it was not
-the seam's bug.** `PRes` -- `(PFail)` / `(POK a int)`, the Option shape
-verbatim -- driven through parser-combinator closures, compiled cleanly under
-the seam and segfaulted at runtime.  The guess above (a sum monomorph crossing
-a `:fn` carrier as an aggregate where the reader assumes a box pointer) named
-the right family and the wrong member.  The actual cause was ABI SELECTION:
-`thunk_type_has_concrete_c_abi` had no `TY_APP` case, so a concrete parametric
-monomorph reported "no C ABI", the typed fatshim was declined, and slot 0 kept
-the generic `int64_t (*)(void *, int64_t...)` shim that the dispatch site then
-cast to the aggregate signature.
+- **The typed fatshim** (`thunk_type_has_concrete_c_abi`) had no `TY_APP` case,
+  so slot 0 of a fatbox kept the generic int64 shim while the call site cast it
+  to the aggregate signature.  Default-path SEGV past 16 bytes; see below.
+- **The match's two ends** read types that a by-value HKT instance-method spec
+  leaves erased -- the scrutinee's `(ReF a)` and the result's bare `ReF` -- while
+  the element that grounds them lives in the emit ctx.  Both now ground from the
+  active spec, the result through `emit_hkt_spec_app_result`, the result-type
+  twin of the existing `emit_hkt_spec_ctor_suffix`.
+- **The b4box closure-slot convention** (`type_is_wide_byval_adt`) answered for
+  `TY_ADT` only, so `(ExprF (fn [int] int))` -- 24 bytes, pass-by-pointer at the
+  callee -- was spelled BY VALUE in the fat-dispatch cast.  Now
+  `type_is_b4box_closure_slot`, deliberately separate: the old predicate also
+  drives ADT FIELD layout, where a monomorph must stay inline, and folding the
+  two questions together broke six DEFAULT-path fixtures.
+- **The fixpoint exclusion** reused B4's narrow `adt_is_byval_recursive_carrier_
+  wrapper`, which requires a sole field because it promises something else
+  ("an 8-byte wrapper whose by-value form IS its carrier int64").  `Expr = (Roll
+  :int (ExprF Expr))` failed that test, so `(ExprF Expr)` was admitted and its
+  functor monomorph laid `tur_adt_Expr` out inline in a typedef that precedes
+  the wrapper's own.  `adt_is_fixpoint_partner_of` asks the right question.
 
-**That is a DEFAULT-PATH bug**, reproducible at the pre-session merge base with
-a bare 24-byte parametric product and no seam anywhere:
+**The pattern across all four: a predicate that had a `TY_ADT` case and no
+`TY_APP` one.**  That is the shape to look for in whatever is left.
 
-```turmeric
-(defdata Big3 :copy [a] (Big3 [x : a y : a z : a]))
-(defn mk3 [n : int] : (Big3 int) (Big3 n (* n 2) (* n 3)))
-(defn apply3 [^fat f : (fn [int] (Big3 int)) n : int] : int
-  (match (f n) (Big3 x y z) (+ x (+ y z))))
-(defn main [] : int (println (apply3 mk3 5)) 0)   ; expect 30 -> SEGV
-```
+### Cause A -- a bare ctor call has no expected type
 
-It hid because the generic shim is a transparent forwarding tail-call, so
-aggregates returned in registers survived it by luck; only past the SysV
-16-byte threshold does sret shift the arguments and the shim read the caller's
-sret destination as its env.  Fixed, with all three widths pinned by value in
-`tests/fixtures/fat-dispatch-parametric-monomorph-return`:
-[fat-dispatch-parametric-monomorph-generic-shim](../archive/fat-dispatch-parametric-monomorph-generic-shim.md).
+`class-method-hkt-tyvar-grounding` and `conv-with-narrowed-variant-parametric`
+are the SAME defect as the nullary-constructor gap the next section already
+describes, and that section understates it: it is not only about nullary ctors.
 
-The lesson the entry above already stated stands, and paid: **assert VALUES in
-these fixtures, not just that they build** -- a function-pointer cast is
-precisely what cc cannot see through, and the two narrow widths pass a
-build-only check while the wide one jumps to 0.
+- `(Empty)` bound in a `let` and later passed to `getv [b : (Box int)]` emits
+  the un-monomorphised `ctor_Empty()`.  Nullary, as described.
+- `(Some (None))` inside a `trav` instance body emits `ctor_None__Opt__int` for
+  the INNER `(None)`: with no expected type of its own it falls back to the
+  active spec's RESULT family, which is the OUTER `(Opt (Opt int))`.  The outer
+  ctor knows its field is `(Opt int)` and nothing carries that down.
+
+One channel closes both: push the expected type onto a constructor call's own
+type and onto each of its argument slots, the way the ascription path
+(`(:: (Nah) (Opt2 int))`) already does.  **Scope it once, for both.**
+
+### Cause B -- the fat RESULT slot has two consumers that disagree
+
+`poly-combinator-application-element-inference` builds and SEGVs.  A fatbox for
+`s-fail : (fn [int] (PRes cstr))` holds a typed shim in slot 0 returning the
+24-byte aggregate -- correct for a typed consumer, and what closed
+parsec-tutorial.  But the closure lifted out of the POLYMORPHIC combinator
+`or-parser` keeps that combinator's ungrounded `(PRes A)`, so it dispatches slot
+0 through `int64_t (*)(void *, int64_t)`.  Past 16 bytes sret shifts every
+argument and the program jumps to 0.
+
+Both casts are right about their own side; the SLOT cannot be both.  The
+argument-position answer already exists and is uniform -- the b4box convention,
+where a wide by-value aggregate crosses as an int64 box and every reader derefs
+(the archived
+[fat-dispatch-wide-byvalue-aggregate-argument](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md)).
+Applying the same rule to RESULTS is the obvious candidate and is NOT a local
+change: it inverts what the typed fatshim currently does, so it must move the
+typed call sites to deref in the same commit.  Decide it deliberately.
+
+The readback half is already in place for one crossing: a direct thunk call
+whose thunk returns the carrier now derefs at the call site, keyed on the
+thunk's emitted return spelling so an already-grounded thunk is untouched.
 
 ## The elaboration gap the codegen list does not show
+
+This is **Cause A** above, seen from the ergonomic side rather than the fixture
+side.  It is not confined to nullary constructors -- `(Some (None))` misses for
+the same reason -- but the nullary case is what makes it urgent.
 
 A **nullary constructor with an inferable type argument does not select its
 monomorph**: `(get-or (Nah) 7)` against `get-or [o : (Opt2 int) ...]` calls
@@ -161,16 +206,17 @@ It is also on SR2's path: `vec<option<T>>` is an everyday shape.
 
 ## What SR2 now costs, in order
 
-1. **SR2a codegen**: the 10-fixture M7 worklist above (was 11; the parsec SEGV
-   is closed and was a default-path ABI-selection bug, not seam damage).
-   Smaller than SR1's 34 and clustered the same way, but in the HKT machinery,
-   where the archived nested-monomorph paper trail says changes move four
-   predicates in lockstep and fail quietly.  What remains is one shape: the
-   cata/fmap machinery assumes an `(F A)` monomorph IS an int64 carrier word,
-   which is a representation assumption rather than an ABI-selection hole, so
-   the parsec fix does not generalise to it.
-2. **The nullary-ctor elaboration fix** -- without it `(none)` regresses
-   ergonomically everywhere.
+1. **SR2a codegen**: mostly PAID.  8 of the 11 worklist fixtures are green and
+   the default path stayed at 2710/0 throughout.  What is left is **Cause B**
+   alone -- one deliberate decision about whether a fat RESULT slot speaks the
+   aggregate or the b4box carrier, which inverts the typed fatshim and must
+   move its call sites in the same commit.  One fixture
+   (poly-combinator-application-element-inference) is the acceptance test, and
+   it SEGVs rather than failing to build, so assert values.
+2. **The bare-ctor expected-type fix** (**Cause A**) -- now the largest
+   remaining item, and it grew: two of the three surviving fixtures are this,
+   not just `(none)` ergonomics.  Without it `(none)` regresses everywhere AND
+   a nested ctor inside an HKT instance body picks the wrong family.
 3. **The vec-of-sum ICE** -- pre-existing, but `vec<option<T>>` cannot ICE in
    a world where Option IS a sum.
 4. **SR2b stdlib conversion**: Option/Result defstruct -> defdata, the 47
@@ -183,3 +229,14 @@ It is also on SR2's path: `vec<option<T>>` is an everyday shape.
 
 The seam stays in the tree, default off, as the instrument -- flipping it on
 is one env var and the failure list above is the worklist.
+
+**Regression cover.**  The fatshim fix is a DEFAULT-path bug and is pinned by
+`tests/fixtures/fat-dispatch-parametric-monomorph-return` (all three SysV
+return widths, values asserted) plus a row in `tests/run-sr4-seam.sh`.
+
+The seam-only work would otherwise have no cover at all -- nothing in the
+ordinary suite compiles a parametric sum by value, so the eight fixtures above
+would be a claim this document makes and nothing enforces.  `tests/run-sr2-
+seam.sh` (ctest target `tur_sr2_seam`) is that cover: a canary asserting the
+seam actually bites, then build + run + stdout compare for all eight.  Add the
+remaining three as their causes close.
