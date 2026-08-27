@@ -284,6 +284,19 @@ extern bool g_adt_slab;
  * carrier (see AdtDef.is_self_recursive for why, and what blocks them). */
 extern bool g_sr1_sum_byvalue;
 extern bool g_opt_backtrackable_state;
+/* SR2a (--enable=parametric-sum-byvalue): a MULTI-VARIANT parametric sum
+ * monomorph -- `(Opt2 int)`, `(PRes cstr)` -- flows by value instead of riding
+ * the int64 heap-pointer carrier.  The parametric sibling of g_sr1_sum_byvalue
+ * above, and the actual prerequisite for Option/Result as real sums: the
+ * carrier's monomorph ctors malloc per construction and never free (measured:
+ * 16,000 bytes leaked in 1,000 constructions; by value is 3.6x faster at 71x
+ * less peak RSS on the same loop).  Same exclusions as SR1: non-GADT,
+ * non-heap, not self-recursive, and never a fixpoint partner's functor app
+ * (adt_is_fixpoint_partner_of).  Consumed by sr2_app_sum_byvalue (types.c),
+ * which also honours the TUR_SR2_APP_SUM_BYVALUE=1 env seam the measurement
+ * harnesses (tests/run-sr2-seam.sh) use.  See
+ * docs/upcoming/sr2-gate-results.md. */
+extern bool g_opt_parametric_sum_byvalue;
 
 /* g_opt_cps_tramp_resume RETIRED 2026-08-22 -- the `cps-tramp-resume`
  * experiment graduated 2026-07-19 and E7's trampolined tail-resume is the sole

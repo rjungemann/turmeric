@@ -5,7 +5,8 @@
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
 #include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
 #include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
-#include "mangle.h"  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
+#include "mangle.h"
+#include "runtime/experiments.h"  /* SR2a: parametric-sum-byvalue lifecycle warning */  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -3510,7 +3511,17 @@ static bool sr2_app_sum_byvalue(void) {
         const char *e = getenv("TUR_SR2_APP_SUM_BYVALUE");
         cached = (e && e[0] == '1') ? 1 : 0;
     }
-    return cached == 1;
+    if (cached == 1) return true;
+    /* --enable=parametric-sum-byvalue (the EXPERIMENTS[] row).  The env seam
+     * above is the harness/measurement channel and carries no lifecycle
+     * warning; an experiment enable is a user opting in, so it gets the
+     * TUR-W0061 beta notice, once per compile, at the moment the gate first
+     * decides anything. */
+    if (g_opt_parametric_sum_byvalue) {
+        experiment_warn_if_used("parametric-sum-byvalue");
+        return true;
+    }
+    return false;
 }
 
 bool adt_app_is_byvalue_product(Type t) {

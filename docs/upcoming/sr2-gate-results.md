@@ -244,8 +244,15 @@ value.  Pinned by `tests/fixtures/vec-of-parametric-sum-monomorph`, archived as
    **This is now the whole remaining cost, and it is the part the gate never
    measured** -- everything above was about whether the representation WORKS,
    and this is about moving the two most-used types onto it.
-5. **SR2c**: the `EXPERIMENTS[]` row (user-visible change), docs, and the
-   `.value`-accessor API migration in `option.tur`/`result.tur`.
+5. **SR2c**: ~~the `EXPERIMENTS[]` row~~ -- **LANDED 2026-08-27** as
+   `--enable=parametric-sum-byvalue` (beta, expires 0.42.0), wired to the same
+   `sr2_app_sum_byvalue` gate the env seam drives, with the TUR-W0061 lifecycle
+   notice firing the first time the gate decides anything.  Exercised in the
+   ordinary suite by `tests/fixtures/parametric-sum-byvalue-enable` (per-fixture
+   `flags`), so every default run compiles a parametric sum by value through
+   the user-facing channel.  Still open in SR2c: docs, and the
+   `.value`-accessor API migration in `option.tur`/`result.tur` -- both of
+   which only make sense alongside SR2b.
 
 ## What it costs -- measured
 
@@ -280,9 +287,10 @@ lower than the plan assumed -- on correctness (2710/0 both ways) and now on
 performance.  That makes the flip a live decision rather than a distant one.  It
 is still a decision, not a formality:
 
-- **CLAUDE.md's rule applies.**  An in-flight representation change ships behind
-  `--enable=`, not gatelessly -- so the next step is an `EXPERIMENTS[]` row
-  (SR2c), not a default change, until it graduates.
+- **CLAUDE.md's rule applies, and is now satisfied.**  The representation ships
+  behind `--enable=parametric-sum-byvalue` (beta, `expires_at` 0.42.0).  The
+  soak is not a formality: graduating before SR2b lands would fix the ABI
+  against the one migration most likely to want it changed.
 - **SR2b is still unwritten**, and it is the part no gate measured: moving
   Option and Result themselves, plus the inline-C builders every user of the
   results guide depends on.  Flipping the representation before that lands
