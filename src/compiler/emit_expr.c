@@ -3575,9 +3575,23 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
  * concrete result element (`(ReF bool)`) names the right ctor variant.  Returns a
  * malloc'd suffix (caller frees) or NULL when not applicable. */
 static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
-    if (!ctx || !ctx->current_abi_specialization || !e ||
-        e->kind != EX_CALL || !e->as.call_.ctor || !e->as.call_.ctor->adt)
+    if (!ctx || !e || e->kind != EX_CALL || !e->as.call_.ctor ||
+        !e->as.call_.ctor->adt)
         return NULL;
+    /* A ctor call in ARGUMENT position of another ctor answers to the enclosing
+     * ctor's field type, not to the spec's result: `(Some (None))` in a `trav`
+     * body has the spec result `(Opt (Opt int))`, and handing that to the INNER
+     * `(None)` emits `ctor_None__Opt__int` where `ctor_Some__Opt__int` wants a
+     * `tur_adt_Opt__int`.  Checked first, and gated on the same ADT identity as
+     * the spec path below, so it can only ever pick a different MONOMORPH of the
+     * family the constructor already belongs to. */
+    if (ctx->pending_ctor_field_ty) {
+        Type ft = emit_resolve_type(ctx, *ctx->pending_ctor_field_ty);
+        if (ft.kind == TY_APP && type_app_is_concrete_adt(&ft) &&
+            type_adt_app_def(&ft) == e->as.call_.ctor->adt)
+            return type_adt_app_ctor_suffix(ft);
+    }
+    if (!ctx->current_abi_specialization) return NULL;
     Type sret = emit_resolve_type(ctx, ctx->current_abi_specialization->result_type);
     if (sret.kind != TY_APP) return NULL;
     AdtDef *sdef = type_adt_app_def(&sret);
@@ -6081,10 +6095,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * `none__spec__tur_adt_Option__int` body emits `ctor_Option__int`. */
                 char *suffix = (rty.kind == TY_APP && type_app_is_concrete_adt(&rty))
                     ? type_adt_app_ctor_suffix(rty) : NULL;
-                if (!suffix)
+                /* The FAMILY this call constructs, kept alongside the suffix so
+                 * the argument loop can hand each nested ctor its own field
+                 * type.  Concrete `rty` names it directly; otherwise the active
+                 * spec's result does (same source as the suffix, so the two
+                 * cannot disagree). */
+                Type ctor_family = rty;
+                bool have_family = (suffix != NULL);
+                if (!suffix) {
                     suffix = emit_hkt_spec_ctor_suffix(ctx, e);
-                if (!suffix && rty.kind == TY_APP)
+                    if (suffix)
+                        have_family = emit_hkt_spec_app_result(ctx, rty, &ctor_family);
+                }
+                if (!suffix && rty.kind == TY_APP) {
                     suffix = type_adt_app_ctor_suffix(rty);  /* last resort: prior behaviour */
+                    have_family = (suffix != NULL);
+                }
                 /* macos-int-conversion-carrier-pointer-straddles (case A):
                  * the emitted C name of the ctor being called, for the
                  * signature-table lookup at the end of the arg loop. */
@@ -6110,7 +6136,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg->as.reinterpret_.expr) {
                         arg = arg->as.reinterpret_.expr;
                     }
+                    /* Hand a nested bare ctor the field type it is filling --
+                     * see pending_ctor_field_ty in emit_internal.h.  Substituted
+                     * against THIS call's family, so `(Some (None))` gives the
+                     * inner `(None)` its `(Opt int)` rather than the outer
+                     * `(Opt (Opt int))`. */
+                    Type _fld_ty;
+                    bool _have_fld = false;
+                    const Type *_saved_fld = ctx->pending_ctor_field_ty;
+                    if (have_family && ctor_family.kind == TY_APP &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].full_type) {
+                        AdtDef *_fd = NULL;
+                        Type _fargs[16];
+                        uint8_t _fn_args = 0;
+                        if (type_extract_adt_app(&ctor_family, &_fd, _fargs, &_fn_args) && _fd) {
+                            _fld_ty = substitute_adt_app_type_owned(
+                                e->as.call_.ctor->fields[i].full_type, _fd, _fargs);
+                            _have_fld = true;
+                            ctx->pending_ctor_field_ty = &_fld_ty;
+                        }
+                    }
+                    if (!_have_fld) ctx->pending_ctor_field_ty = NULL;
                     arg_strs[i] = emit_value(ctx, body, arg);
+                    ctx->pending_ctor_field_ty = _saved_fld;
+                    if (_have_fld) free_struct_app_type(_fld_ty);
                     /* CONV-S1 (seam 2): a `(default-of T)` argument to a
                      * monomorphised ctor whose field type is heterogeneous --
                      * `(ok v) : (Result int cstr)` passes `(default-of B)` for the

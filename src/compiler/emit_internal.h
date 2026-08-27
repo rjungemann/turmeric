@@ -265,6 +265,16 @@ typedef struct EmitCtx {
      * emitted before. */
     const Binding **inline_c_raw_locals;
     uint32_t        n_inline_c_raw_locals;
+    /* M7: while emitting the ARGUMENTS of a constructor call, the enclosing
+     * ctor's substituted field type for the argument being emitted (NULL
+     * otherwise).  A nested bare ctor -- the inner `(None)` of `(Some (None))`
+     * -- has no concrete type of its own, and the fallback it would otherwise
+     * take (the active spec's RESULT family) is the OUTER family, so it emits
+     * `ctor_None__Opt__int` where the outer expects `tur_adt_Opt__int`.  The
+     * field type is the answer, and only the enclosing call knows it.  Set and
+     * restored around each argument; never nested-owned (the pointee lives in
+     * the caller's frame for exactly that span). */
+    const Type *pending_ctor_field_ty;
     /* Phase 3: Track emitted env struct names to avoid duplicates */
     const Symbol **env_struct_names;
     /* The `__fn` field spelling each registered env struct was ACTUALLY
