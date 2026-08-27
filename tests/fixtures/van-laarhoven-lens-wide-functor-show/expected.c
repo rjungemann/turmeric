@@ -4078,6 +4078,12 @@ static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1
 }
 typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+static tur_adt_Identity__int __tur_fatshim_tur_adt_Identity__int_int64_t(void *__e, int64_t a0) {
+    return ((tur_adt_Identity__int (*)(int64_t))(intptr_t)((int64_t *)__e)[1])(a0);
+}
+static tur_adt_Identity__bool __tur_fatshim_tur_adt_Identity__bool_bool(void *__e, bool a0) {
+    return ((tur_adt_Identity__bool (*)(bool))(intptr_t)((int64_t *)__e)[1])(a0);
+}
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
@@ -8059,7 +8065,7 @@ static const char * use_hyint(tur_poly_fn_t l, int64_t s) {
         void *__t198 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
         *(void (**)(void *))__t198 = 0;
         int64_t *__t197 = (int64_t *)((char *)__t198 + sizeof(void *));
-        __t197[0] = (int64_t)(intptr_t)__tur_fatshim1;
+        __t197[0] = (int64_t)(intptr_t)__tur_fatshim_tur_adt_Identity__int_int64_t;
         __t197[1] = (int64_t)(intptr_t)__fn_1360;
         void *__t199 = __t197;
         tur_adt_Identity__cstr __ps_200 = ((*(tur_adt_Identity__cstr *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton))), (int64_t)((int64_t)(intptr_t)(__t199)), (int64_t)(s)))));
@@ -8073,7 +8079,7 @@ static const char * use_hybool(tur_poly_fn_t l, bool s) {
         void *__t203 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
         *(void (**)(void *))__t203 = 0;
         int64_t *__t202 = (int64_t *)((char *)__t203 + sizeof(void *));
-        __t202[0] = (int64_t)(intptr_t)__tur_fatshim1;
+        __t202[0] = (int64_t)(intptr_t)__tur_fatshim_tur_adt_Identity__bool_bool;
         __t202[1] = (int64_t)(intptr_t)__fn_1365;
         void *__t204 = __t202;
         tur_adt_Identity__cstr __ps_205 = ((*(tur_adt_Identity__cstr *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton))), (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_bool_singleton))), (int64_t)((int64_t)(intptr_t)(__t204)), (int64_t)(s)))));

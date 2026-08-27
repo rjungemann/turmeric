@@ -3062,13 +3062,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             uint32_t thunk_arity = fd->n_params > 0 ? (uint32_t)(fd->n_params - 1) : 0;
             char *thunk_typedef = ensure_typed_thunk_typedef(ctx, file, thunk_result, thunk_params, thunk_arity);
-            if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
-                ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
-                ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
-                    ctx->cap_env_struct_names * sizeof(const Symbol *));
-            }
-            ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
-            
+            emit_env_struct_register(ctx, env_name, thunk_typedef);
+
+
             /* Phase HKT §5: fat closure layout — __fn (int64_t) first, then
              * captures.  The fat pointer doubles as the env ptr for the thunk:
              * thunk receives fat_ptr as self, accesses captures via ->field

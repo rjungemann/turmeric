@@ -29,6 +29,35 @@ static Type emit_fn_result_type_from_type(Type fn_type);
  * capturing callback lands earlier in the file than its construction site.
  * `resolve_spec_params` mirrors the inner-closure-spec path (thunk param types
  * resolved under the active spec); the CPS pre-pass passes false. */
+/* Record that `env_name`'s struct was emitted with `typedef_name` as its `__fn`
+ * field type (NULL = the field is a plain `int64_t`).  The string is copied.
+ * Both env-struct emit sites -- here and the emit_fns.c pre-pass twin -- go
+ * through this, so the registry and the declarations cannot drift. */
+void emit_env_struct_register(EmitCtx *ctx, const Symbol *env_name,
+                              const char *typedef_name) {
+    if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
+        ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
+        ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
+            ctx->cap_env_struct_names * sizeof(const Symbol *));
+        ctx->env_struct_fn_typedefs = (char **)realloc(ctx->env_struct_fn_typedefs,
+            ctx->cap_env_struct_names * sizeof(char *));
+    }
+    ctx->env_struct_fn_typedefs[ctx->n_env_struct_names] =
+        typedef_name ? strdup(typedef_name) : NULL;
+    ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+}
+
+/* The `__fn` field spelling `env_name`'s struct was declared with, or NULL when
+ * that field is an `int64_t` (or the struct has not been registered).  Borrowed
+ * -- the registry owns it. */
+const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name) {
+    if (!ctx->env_struct_names || !ctx->env_struct_fn_typedefs) return NULL;
+    for (uint8_t i = 0; i < ctx->n_env_struct_names; i++)
+        if (ctx->env_struct_names[i] == env_name)
+            return ctx->env_struct_fn_typedefs[i];
+    return NULL;
+}
+
 void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                                       struct Closure *closure,
                                       const Symbol *env_name,
@@ -53,13 +82,8 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
         thunk_params = _rtp;
     }
     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, out, thunk_result, thunk_params, thunk_arity);
-    /* Track this env struct */
-    if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
-        ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
-        ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
-            ctx->cap_env_struct_names * sizeof(const Symbol *));
-    }
-    ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+    /* Track this env struct, and the `__fn` spelling it is about to get. */
+    emit_env_struct_register(ctx, env_name, thunk_typedef);
 
     /* Phase HKT §5: fat closure struct -- __fn first, then captures. */
     if (thunk_typedef) {
@@ -8467,10 +8491,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(base_tmp);
             }
             indent_buf(body, ctx->indent);
-            if (thunk_typedef) {
-                buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, thunk_typedef, thunk_sym);
-            } else {
-                buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+            /* Cast to whatever the struct's `__fn` field was DECLARED as, not
+             * to what this site would compute -- see the
+             * env_struct_fn_typedefs comment in emit_internal.h.  A `__byval`
+             * or `__spec__` construction site resolves a tyvar result to a
+             * concrete aggregate typedef that the generic site (which emitted
+             * the struct) resolved to the int64 carrier, and casting to the
+             * typedef there stores a function pointer through an `int64_t`
+             * field. */
+            {
+                const char *decl_typedef = emit_env_struct_fn_typedef(ctx, env_name);
+                if (decl_typedef) {
+                    buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, decl_typedef, thunk_sym);
+                } else {
+                    buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+                }
             }
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];

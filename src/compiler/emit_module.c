@@ -363,6 +363,31 @@ static bool thunk_type_has_concrete_c_abi(Type t) {
             return true;
         case TY_ADT:
             return t.as.adt_.def != NULL;
+        case TY_APP:
+            /* A concrete parametric MONOMORPH -- `(Box2 int)`, `(PRes Expr)` --
+             * has a real C typedef (`tur_adt_Box2__int`) and belongs in a typed
+             * thunk signature exactly as a non-parametric ADT does.  Reporting
+             * false here declined the typed fatshim and left slot 0 holding the
+             * generic `__tur_fatshim<arity>`, whose `int64_t (*)(void *,
+             * int64_t...)` ABI the call site then casts to the aggregate's.
+             *
+             * That lie survived for as long as it did because the generic shim
+             * is a transparent forwarding tail-call: whatever registers the real
+             * function reads and writes pass through it untouched, so a <= 16
+             * byte aggregate (returned in RAX:RDX, or XMM0:XMM1) came back
+             * correct by luck.  Past 16 bytes the SysV hidden-pointer (sret)
+             * convention shifts every argument right by one, the shim reads the
+             * caller's sret destination as its env, and the program SEGVs --
+             * fat-dispatch-parametric-monomorph-generic-shim.
+             *
+             * An UNAPPLIED or non-concrete app has no such typedef.  The
+             * predicate for "this app names a real monomorph" is
+             * `type_app_is_concrete_adt`, NOT
+             * `type_has_concrete_codegen_layout` -- the latter answers false
+             * for every TY_APP by design (its struct-app branch defers to
+             * `type_extract_struct_app`), so gating on it reads as "no
+             * parametric app ever has a C ABI" and reinstates the bug. */
+            return type_app_is_concrete_adt(&t);
         default:
             return false;
     }
@@ -13868,6 +13893,8 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.fatbox_keys);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
+    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
@@ -15282,6 +15309,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.fatbox_keys);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
+    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope

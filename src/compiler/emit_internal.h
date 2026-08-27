@@ -267,6 +267,20 @@ typedef struct EmitCtx {
     uint32_t        n_inline_c_raw_locals;
     /* Phase 3: Track emitted env struct names to avoid duplicates */
     const Symbol **env_struct_names;
+    /* The `__fn` field spelling each registered env struct was ACTUALLY
+     * emitted with (a typed-thunk typedef, or NULL meaning `int64_t`),
+     * parallel to env_struct_names.
+     *
+     * A struct is emitted once, at whichever site reaches it first, but its
+     * `__fn` is assigned at every closure-construction site -- and those sites
+     * do not all resolve the thunk's result the same way.  A generic site
+     * resolves a tyvar result to the int64 carrier while a monomorphising site
+     * (`..__byval`, `..__spec__..`) resolves the same result to a concrete
+     * aggregate typedef, so recomputing the spelling at the assignment site
+     * can contradict the declaration and store a function pointer through an
+     * `int64_t` field ("makes integer from pointer without a cast").  Record
+     * the decision once here and have the assignment read it back. */
+    char     **env_struct_fn_typedefs;
     uint8_t   n_env_struct_names;
     uint8_t   cap_env_struct_names;
     /* TS1: per-signature thunk typedef tracking */
@@ -894,6 +908,12 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                                       struct Closure *closure,
                                       const Symbol *env_name,
                                       bool resolve_spec_params);
+/* Register / read back the `__fn` field spelling an env struct was emitted
+ * with (NULL = `int64_t`).  Every env-struct emit site registers; every
+ * `__fn` assignment site reads, so the two cannot disagree. */
+void emit_env_struct_register(EmitCtx *ctx, const Symbol *env_name,
+                              const char *typedef_name);
+const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name);
 /* closure-typed-invocation-abi-plan: ensure a typed fat-shim exists for the
  * given closure signature, returning its C function name.  Returns NULL when
  * the signature is the all-int64_t carrier case (caller uses the preamble

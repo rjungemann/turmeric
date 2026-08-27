@@ -98,6 +98,7 @@ recursive-types/hkt-recursive
 sr1-sum-byvalue
 sr1-sum-vec-element
 fat-dispatch-wide-byval-arg
+fat-dispatch-parametric-monomorph-return
 "
 
 for fx in $FIXTURES; do
