@@ -3138,6 +3138,33 @@ bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def) {
     return f->full_type && f->full_type->kind == TY_APP;
 }
 
+/* True when `arg_def` and `functor_def` form a FIXPOINT PAIR: `arg_def` is a
+ * non-parametric ADT one of whose fields is a type-application headed by
+ * `functor_def`, so `Expr`/`ExprF` and `Re`/`ReF` qualify.  Such a pair's C
+ * typedefs are mutually recursive, and only the carrier breaks the cycle -- the
+ * functor monomorph `tur_adt_ExprF__Expr` is emitted before `tur_adt_Expr`
+ * exists, so laying its fields out inline is an incomplete type, not merely a
+ * representation choice.
+ *
+ * Deliberately broader than adt_is_byval_recursive_carrier_wrapper, which is
+ * about a DIFFERENT property (an 8-byte wrapper whose by-value form IS its
+ * carrier int64) and whose sole-field requirement its own callers rely on. */
+bool adt_is_fixpoint_partner_of(const AdtDef *arg_def, const AdtDef *functor_def) {
+    if (!arg_def || !functor_def || arg_def->n_type_params != 0) return false;
+    if (!arg_def->ctors) return false;
+    for (uint32_t ci = 0; ci < arg_def->n_ctors; ci++) {
+        const CtorDef *c = arg_def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t i = 0; i < c->n_fields; i++) {
+            const CtorField *f = &c->fields[i];
+            if (!f->full_type || f->full_type->kind != TY_APP) continue;
+            Type ft = *f->full_type;
+            if (type_adt_app_def(&ft) == functor_def) return true;
+        }
+    }
+    return false;
+}
+
 /* CONV-S1 (slice 4): public predicate -- is this field stored inline by value?
  * (See adt_field_is_inline_byval_d.)  Codegen sites that emit the field type,
  * construct the product, read a field, or bind a match pattern consult this to
@@ -3457,17 +3484,26 @@ bool adt_app_is_byvalue_product(Type t) {
     bool app_sum = sr2_app_sum_byvalue() && def->n_ctors > 1 &&
                    !def->is_gadt && !def->is_heap &&
                    !def->is_self_recursive && def->ctors != NULL;
-    /* SR2 exclusion: an app over a B4 recursive-carrier wrapper -- `(ExprF
-     * Expr)`, `(ReF Re)`, the fixpoint functors -- stays on B4's machinery.
-     * Its element rides the int64 carrier by DESIGN (the wrapper is the
-     * carrier), and admitting the functor here spells `tur_adt_Expr` fields
-     * inline into a typedef that precedes the wrapper's own ("field has
-     * incomplete type"), colliding with everything B4 already does for these
-     * shapes.  This is the same boundary the g_adt_app_byvalue comment above
-     * draws for the flat-product path. */
+    /* SR2 exclusion: an app over a recursive-carrier wrapper -- `(ExprF Expr)`,
+     * `(ReF Re)`, the fixpoint functors -- stays on B4's machinery.  Its element
+     * rides the int64 carrier by DESIGN (the wrapper is the carrier), and
+     * admitting the functor here spells `tur_adt_Expr` fields inline into a
+     * typedef that PRECEDES the wrapper's own ("parameter has incomplete type"),
+     * colliding with everything B4 already does for these shapes.  This is the
+     * same boundary the g_adt_app_byvalue comment above draws for the
+     * flat-product path.
+     *
+     * The question is fixpoint PARTNERSHIP, not B4's narrower
+     * adt_is_byval_recursive_carrier_wrapper: that predicate means "an 8-byte
+     * wrapper whose by-value representation IS its carrier int64", so it
+     * requires a SOLE field and its caller in emit_expr.c reinterprets the
+     * carrier on that promise.  `Expr = (Roll :int (ExprF Expr))` carries a tag
+     * alongside the carrier field, so it is not that -- yet `(ExprF Expr)` is
+     * still the typedef-ordering cycle this exclusion exists to avoid.  Ask the
+     * broader question here and leave B4's promise alone. */
     for (uint32_t i = 0; app_sum && i < n_args; i++)
-        if (args[i].kind == TY_ADT && args[i].as.adt_.def &&
-            adt_is_byval_recursive_carrier_wrapper(args[i].as.adt_.def))
+        if (args[i].kind == TY_ADT &&
+            adt_is_fixpoint_partner_of(args[i].as.adt_.def, def))
             app_sum = false;
     if (!adt_is_flat_product(def) && !app_sum) return false; /* single-variant, non-GADT */
     if (def->n_type_params == 0) return false;          /* non-parametric is CONV-S1's path */

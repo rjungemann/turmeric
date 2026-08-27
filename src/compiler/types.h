@@ -452,6 +452,9 @@ bool adt_is_byvalue_product(const AdtDef *def);
  * reinterpreting the carrier (no heap box, no deref).  (B4 graduated; always
  * active.) */
 bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def);
+/* `arg_def` and `functor_def` form a fixpoint pair (Expr/ExprF, Re/ReF): their C
+ * typedefs are mutually recursive and only the carrier breaks the cycle. */
+bool adt_is_fixpoint_partner_of(const AdtDef *arg_def, const AdtDef *functor_def);
 /* CONV-S1 (slice 3): true when a by-value ADT product is large enough (>16
  * bytes) to use the struct-style `const tur_adt_<Name> *` pass-by-pointer ABI. */
 bool adt_byval_pass_by_ptr(const AdtDef *def);
