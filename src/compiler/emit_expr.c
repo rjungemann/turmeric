@@ -2074,7 +2074,7 @@ static char *match_arm_pbp_deref(EmitCtx *ctx, const Expr *arm_body,
  * a replacement for `raw` (caller frees); a non-wide slot passes through. */
 static char *fat_dispatch_box_arg(EmitCtx *ctx, Buf *body, const Expr *arg,
                                   Type slot_ty, char *raw) {
-    if (!type_is_wide_byval_adt(emit_resolve_type(ctx, slot_ty))) return raw;
+    if (!type_is_b4box_closure_slot(emit_resolve_type(ctx, slot_ty))) return raw;
     Buf b; buf_init(&b);
     if (arg && expr_is_pbp_param(ctx, arg)) {
         buf_printf(&b, "(int64_t)(intptr_t)(%s)", raw);
@@ -5560,6 +5560,34 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
+                /* SR2a: the readback half of the fn-carrier crossing, for a
+                 * DIRECT thunk call.  A closure lifted out of a POLYMORPHIC
+                 * combinator keeps that combinator's ungrounded result -- the
+                 * `(fn [xs : int] : (PRes A))` inside `or-parser` -- so its
+                 * lifted thunk is declared to return the int64 carrier and
+                 * boxes into it.  This call site, though, has the GROUNDED
+                 * `(PRes cstr)`, which is an aggregate once parametric sums go
+                 * by value, and binding the carrier word straight into it is
+                 * "invalid initializer" at the match below.  Deref what the
+                 * producing side stored, exactly as the named-fn `:int`-carrier
+                 * bridge does at its own return site.
+                 *
+                 * Keyed on the THUNK's emitted return spelling, not on its
+                 * declared kind: a thunk whose result was already grounded
+                 * returns the aggregate itself, and derefing that would read
+                 * through a value rather than a pointer. */
+                if (emit_type_is_byvalue_sum(ctx, e->type) &&
+                    !type_is_transparent_int_newtype(emit_resolve_type(ctx, e->type))) {
+                    const char *rct = emit_sig_lookup_ret_ctype(thunk_name);
+                    if (rct && *rct && strcmp(rct, "int64_t") == 0) {
+                        char *ub = emit_agg_unbox(ctx, e->type, result);
+                        free(result);
+                        result = ub;
+                        /* Re-note: the unbox retypes the expression, and the
+                         * panic-hoist types its `__ps_N` temp from this note. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
+                    }
+                }
                 for (uint32_t i = 0; i <= e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
                 free(thunk_name);
@@ -5625,7 +5653,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * an int64 box pointer, and fat_dispatch_box_arg
                              * above already converted the argument. */
                             buf_printf(&out, ", %s",
-                                type_is_wide_byval_adt(arg_types[i])
+                                type_is_b4box_closure_slot(arg_types[i])
                                     ? "int64_t" : type_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
@@ -5800,7 +5828,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         for (uint32_t i = 0; i < n; i++) {
                             /* SR-fat-abi: see the CY2 twin above. */
                             buf_printf(&out, ", %s",
-                                type_is_wide_byval_adt(emit_resolve_type(ctx, arg_types[i]))
+                                type_is_b4box_closure_slot(emit_resolve_type(ctx, arg_types[i]))
                                     ? "int64_t" : type_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);

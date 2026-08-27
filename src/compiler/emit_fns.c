@@ -3445,7 +3445,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 ? ctx->current_abi_specialization->arg_types[i]
                 : ((e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
                        ? *e->type.as.fn.arg_full_types[i] : fd->param_types[i]);
-            if (type_is_wide_byval_adt(emit_resolve_type(ctx, pty)))
+            if (type_is_b4box_closure_slot(emit_resolve_type(ctx, pty)))
                 needs_box_load[i] = true;
         }
     }

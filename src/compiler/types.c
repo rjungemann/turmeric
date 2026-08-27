@@ -3265,6 +3265,33 @@ bool type_is_wide_byval_adt(Type t) {
     return false;
 }
 
+/* The b4box CLOSURE-SLOT width question, deliberately NOT folded into
+ * type_is_wide_byval_adt.
+ *
+ * A wide by-value aggregate crossing a closure/thunk parameter slot rides the
+ * int64 box-pointer convention: the typed-thunk typedef spells the slot
+ * `int64_t`, the dispatch site boxes, the thunk body derefs at entry.  A
+ * concrete parametric monomorph -- `(ExprF (fn [int] int))`, 24 bytes and
+ * pass-by-pointer at the callee -- belongs to that convention exactly as its
+ * non-parametric sibling does; spelled BY VALUE in the fat-dispatch cast, the
+ * call hands an aggregate to a `const T *` slot and the program SEGVs.  Same
+ * shape as the archived fat-dispatch-wide-byvalue-aggregate-argument, one
+ * representation over.
+ *
+ * The separation is load-bearing, not tidiness.  type_is_wide_byval_adt also
+ * drives ADT FIELD layout, where a parametric monomorph must stay INLINE:
+ * `(Cons (Option int))` lays its `head` out as a `tur_adt_Option__int`, and
+ * answering "wide" there retypes the field to the int64 carrier while every
+ * reader still binds the aggregate ("invalid initializer" -- six fixtures on
+ * the DEFAULT path).  Two questions, two predicates; only the closure-slot
+ * lockstep set (thunk_param_slot_c_name, the typed fatshims, the dispatch-site
+ * boxing, the thunk-body deref) consults this one. */
+bool type_is_b4box_closure_slot(Type t) {
+    if (type_is_wide_byval_adt(t)) return true;
+    if (t.kind == TY_APP) return adt_app_byval_value_size_bytes(t) > 8;
+    return false;
+}
+
 /* Increment 3 (representation-consolidation meta-plan): the CONTAINER-ELEMENT
  * boxing predicate.  True when `t` is a non-heap by-value ADT product of ANY
  * width -- the class of element that must be heap-boxed when stored into a
@@ -3324,17 +3351,25 @@ bool type_is_boxed_container_elem(Type t) {
  * convention.  Each field's byte size is taken from its monomorphised kind
  * (substituting the app args for the base def's type params); aggregate fields
  * default to the 8-byte carrier slot size, monotone for the threshold. */
-bool adt_app_byval_pass_by_ptr(Type t) {
-    if (!adt_app_is_byvalue_product(t)) return false;
+/* The in-memory size of a by-value parametric monomorph: the tag word (when the
+ * def is a sum) plus its WIDEST substituted variant -- exactly what
+ * adt_byval_value_size_bytes_d computes on the non-parametric side.  Returns 0
+ * when `t` is not a by-value monomorph at all, so every caller can treat 0 as
+ * "not applicable" rather than "zero-sized".
+ *
+ * Every width question about such a value routes here: pass-by-pointer (> 16,
+ * the SysV threshold) and the b4box closure-slot convention (> 8) are two
+ * thresholds on ONE size, and reading `ctors[0]` alone made the answer depend on
+ * declaration order. */
+size_t adt_app_byval_value_size_bytes(Type t) {
+    if (!adt_app_is_byvalue_product(t)) return 0;
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;
-    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
-    /* seam 3: a :heap parametric ADT monomorph is a typed pointer, never pbp. */
-    if (def->is_heap) return false;
-    /* SR2: a sum monomorph is the tag word plus its WIDEST variant, exactly as
-     * adt_byval_value_size_bytes_d computes on the non-parametric side --
-     * ctors[0]-only sizing made the answer depend on declaration order. */
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return 0;
+    /* seam 3: a :heap parametric ADT monomorph is a typed pointer, not an
+     * aggregate -- it has no by-value width. */
+    if (def->is_heap) return 0;
     const bool tagged = def->n_ctors > 1;
     size_t widest = 0;
     for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
@@ -3352,7 +3387,11 @@ bool adt_app_byval_pass_by_ptr(Type t) {
         }
         if (total > widest) widest = total;
     }
-    return (tagged ? 8u : 0u) + widest > 16;
+    return (tagged ? 8u : 0u) + widest;
+}
+
+bool adt_app_byval_pass_by_ptr(Type t) {
+    return adt_app_byval_value_size_bytes(t) > 16;
 }
 
 /* Parametric-by-value: true when `t` is a by-value monomorph -- either a

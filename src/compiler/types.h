@@ -1870,6 +1870,14 @@ void         repr_shadow_disagree(const char *site, bool known,
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the
  * >16-byte pass-by-pointer size gate and the by-value-product representation
  * decision (the latter covering both the non-parametric ADT and the app). */
+/* Size of a by-value parametric monomorph: tag word (sums only) + widest
+ * substituted variant.  0 when `t` is not a by-value monomorph.  The single
+ * source for every width threshold on such a value -- pbp (> 16) and the b4box
+ * closure slot (> 8). */
+size_t       adt_app_byval_value_size_bytes(Type t);
+/* b4box closure-slot width -- see the definition's comment for why this is
+ * separate from type_is_wide_byval_adt (which also drives ADT field layout). */
+bool         type_is_b4box_closure_slot(Type t);
 bool         adt_app_byval_pass_by_ptr(Type t);
 bool         type_is_byvalue_adt_product(Type t);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */

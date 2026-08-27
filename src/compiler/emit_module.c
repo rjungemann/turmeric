@@ -446,7 +446,7 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
  * (<= 8 bytes) and results are untouched: both have working by-value
  * conventions. */
 static const char *thunk_param_slot_c_name(Type t) {
-    if (type_is_wide_byval_adt(t)) return "int64_t";
+    if (type_is_b4box_closure_slot(t)) return "int64_t";
     return type_c_name(t);
 }
 
@@ -1000,8 +1000,12 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
              * the pbp threshold.  The shim is where the box-pointer slot
              * meets it. */
             Type rp = param_types[i];
-            const AdtDef *pd = (rp.kind == TY_ADT) ? rp.as.adt_.def : NULL;
-            if (pd && type_is_wide_byval_adt(rp) && adt_byval_pass_by_ptr(pd))
+            /* App-aware: a parametric monomorph reaches the pbp threshold the
+             * same way, via adt_app_byval_pass_by_ptr. */
+            bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                              ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                              : adt_app_byval_pass_by_ptr(rp);
+            if (type_is_b4box_closure_slot(rp) && rp_pbp)
                 buf_printf(target, "const %s *", type_c_name(rp));
             else
                 buf_puts(target, type_c_name(rp));
@@ -1011,12 +1015,14 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     for (uint32_t i = 0; i < n_params; i++) {
         if (i) buf_puts(target, ", ");
         Type rp = param_types[i];
-        const AdtDef *pd = (rp.kind == TY_ADT) ? rp.as.adt_.def : NULL;
-        if (pd && type_is_wide_byval_adt(rp) && adt_byval_pass_by_ptr(pd))
+        bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                          ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                          : adt_app_byval_pass_by_ptr(rp);
+        if (type_is_b4box_closure_slot(rp) && rp_pbp)
             /* pbp callee: the box pointer IS the address it wants. */
             buf_printf(target, "(const %s *)(intptr_t)a%u",
                        type_c_name(rp), (unsigned)i);
-        else if (type_is_wide_byval_adt(rp))
+        else if (type_is_b4box_closure_slot(rp))
             /* by-value callee below the pbp threshold: deref the box. */
             buf_printf(target, "*(%s *)(intptr_t)a%u",
                        type_c_name(rp), (unsigned)i);
