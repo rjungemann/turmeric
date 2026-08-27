@@ -12,10 +12,10 @@
 (load "stdlib/rational.tur")
 
 (defn outcome [r : (Result Rational ArithError)] : void
-  (if (.is-ok r)
-    (let [s (rat->string (.ok-val r))]
+  (if (ok? r)
+    (let [s (rat->string (ok-val r))]
       (do (println (string/to-cstr s)) (string/release s)))
-    (println (match (.err-val r) (DivByZero) "Err DivByZero" (Overflow) "Err Overflow"))))
+    (println (match (err-val r) (DivByZero) "Err DivByZero" (Overflow) "Err Overflow"))))
 
 (defn main [] : int
   ;; In range: the checked forms agree with the plain ones.

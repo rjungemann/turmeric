@@ -37,9 +37,8 @@
 
 (defn result-panic [r : int] : Panic
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (void *)(intptr_t)r;
-  return (res && !res->is_ok) ? (int64_t)res->err_val : 0;
+  struct { int tag; int64_t payload; } *res = (void *)(intptr_t)r;
+  return (res && res->tag != 0) ? (int64_t)res->payload : 0;
   ```)
 ;;; panic-message -- the message string carried by a caught Panic.
 ;;;

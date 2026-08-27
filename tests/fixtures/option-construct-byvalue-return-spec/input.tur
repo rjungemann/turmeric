@@ -29,17 +29,17 @@
 ;; by value; the `(none)` arm now mints a by-value `none__spec__Option__A`
 ;; clone instead of the carrier base.
 (defn keep-if [A] [o : (Option A) ^fat pred : (fn [A] bool)] : (Option A)
-  (if (.is-some o)
-    (if (pred (.value o)) o (none))
+  (if (some? o)
+    (if (pred (unwrap o)) o (none))
     (none)))
 
 ;; By-value consumer -- the bridge IS retired when the producer spec
 ;; returns by-value.
 (defn unwrap-or-default [o : (Option int) d : int] : int
-  (if (.is-some o) (.value o) d))
+  (if (some? o) (unwrap o) d))
 
 (defn unwrap-or-default-f [o : (Option float) d : float] : float
-  (if (.is-some o) (.value o) d))
+  (if (some? o) (unwrap o) d))
 
 (defn pos-i? [x : int] : bool (> x 0))
 (defn pos-f? [x : float] : bool (> x 0.0))

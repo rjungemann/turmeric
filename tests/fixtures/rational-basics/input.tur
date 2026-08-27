@@ -15,7 +15,7 @@
   (let [s (show r)]
     (do (println (string/to-cstr s)) (string/release s))))
 
-(defn res-ok? [r : (Result Rational ArithError)] : bool (.is-ok r))
+(defn res-ok? [r : (Result Rational ArithError)] : bool (ok? r))
 
 (defn main [] : int
   ;; Literal + read-time normalization.

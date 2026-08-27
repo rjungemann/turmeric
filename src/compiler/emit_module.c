@@ -2614,6 +2614,40 @@ static bool body_has_dispatch_on_app_tyvar(
                 }
             }
         }
+        /* SR2b: the sum-Option edition of the field-read case directly above.
+         * `unwrap` is no longer a `.value` field read but a generic accessor
+         * CALL (`(enc (unwrap x))`), so the dispatch receiver is an EX_CALL
+         * whose callee's declared result is a bare type-param (`:A`) and whose
+         * container argument is the instance's applied class-var head
+         * (`(Option A)`).  Same consequence as before: the element varies per
+         * instantiation while the carrier ABI does not, so a per-element spec
+         * must be minted for the re-resolver to fix the inner dispatch in.
+         * Detect: receiver call's result_full_type is a TYVAR, and some
+         * argument's type head matches the head of a concrete TY_APP class-var
+         * binding. */
+        if (recv && recv->kind == EX_CALL && recv->as.call_.fn_binding &&
+            recv->as.call_.args) {
+            const Type *ft2 = &recv->as.call_.fn_binding->type;
+            if (ft2->kind == TY_FN && ft2->as.fn.result_full_type &&
+                ft2->as.fn.result_full_type->kind == TY_TYVAR) {
+                for (uint32_t ai = 0; ai < recv->as.call_.n_args; ai++) {
+                    const Expr *ae = recv->as.call_.args[ai];
+                    while (ae && ae->kind == EX_ASCRIBE)
+                        ae = ae->as.ascribe_.inner;
+                    if (!ae) continue;
+                    AdtDef *ahead =
+                        (ae->type.kind == TY_APP) ? type_adt_app_def(&ae->type)
+                      : (ae->type.kind == TY_ADT) ? ae->type.as.adt_.def
+                      : NULL;
+                    if (!ahead) continue;
+                    for (uint8_t i = 0; i < n_bindings; i++) {
+                        if (bindings[i].type.kind != TY_APP) continue;
+                        if (type_adt_app_def(&bindings[i].type) == ahead)
+                            return true;
+                    }
+                }
+            }
+        }
     }
     switch (e->kind) {
         case EX_PROGRAM:
@@ -4239,6 +4273,56 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         result_type.kind == TY_APP && type_app_is_concrete_adt(&result_type) &&
         !emit_abi_type_has_concrete_named_tyvar(&result_type)) {
         abi_changes = true;
+    }
+    /* SR2b: a COLORED generic's concrete monomorph is what the CPS backend's
+     * G3a island path adopts (emit_cps_ir.c) -- the generic base SIG-REJECTs
+     * on its tyvars by design, and the island classification needs a spec to
+     * resolve them through.  That spec used to exist as a side effect:
+     * `(Option int)` was a by-value record product, an ABI change, so a clone
+     * was minted anyway.  Option as a sum rides the carrier (no ABI change),
+     * and without the clone a colored generic like
+     * `choose-or [A] [o : (Option A) ...]` fell to the direct emitter, which
+     * cannot lower its `perform`.  Mint the clone for exactly this case. */
+    if (!abi_changes && !instance_changes && fd && !borrow_path &&
+        bindings && n_bindings > 0 &&
+        emit_cps_ir_colored_fn_needs_mono(fd)) {
+        abi_changes = true;
+    }
+    /* SR2b: a generic that RECEIVES a fat closure whose element tyvar
+     * resolves to FLOAT must still be minted per spec.  The carrier base
+     * invokes the closure through the erased `(bool (*)(void*, int64_t))`
+     * cast, but the callsite's fatbox holds a typed float shim
+     * (`__tur_fatshim_bool_double(void*, double)`), so the element crosses in
+     * the wrong register class -- `keep-if`'s float predicate read garbage
+     * bits > 0 as true (option-construct-byvalue-return-spec line 5).  The
+     * by-value `(Option float)` RETURN used to force these specs as a side
+     * effect; as a sum it rides the carrier, so force on the closure-param
+     * shape directly.  Float only: every int64-register element round-trips
+     * through the erased cast unchanged. */
+    if (!abi_changes && !instance_changes && fd && !borrow_path &&
+        bindings && n_bindings > 0 && fd->param_types) {
+        for (uint32_t pi = 0; pi < fd->n_params && !abi_changes; pi++) {
+            const Type *pt = &fd->param_types[pi];
+            if (pt->kind != TY_FN) continue;
+            uint32_t na = pt->as.fn.arity;
+            for (uint32_t aj = 0; aj <= na && !abi_changes; aj++) {
+                const Type *at = (aj < na)
+                    ? (pt->as.fn.arg_full_types ? pt->as.fn.arg_full_types[aj]
+                                                : NULL)
+                    : pt->as.fn.result_full_type;
+                if (!at || at->kind != TY_TYVAR || !at->as.tyvar_.name)
+                    continue;
+                for (uint8_t bi2 = 0; bi2 < n_bindings; bi2++) {
+                    if (bindings[bi2].name &&
+                        strcmp(bindings[bi2].name, at->as.tyvar_.name) == 0 &&
+                        (bindings[bi2].type.kind == TY_FLOAT ||
+                         bindings[bi2].type.kind == TY_FLOAT64)) {
+                        abi_changes = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
     if (!abi_changes && !instance_changes) {
         if (!borrow_path &&
@@ -7226,49 +7310,59 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
         buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
     }
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
-     * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
-     * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
-     * { bool is_ok; int64_t ok_val; int64_t err_val; }.  These helpers let an
-     * inline-C block construct and inspect Option/Result values through the
-     * canonical layout instead of hand-rolling the struct cast + a magic
-     * sentinel integer (`-1`, `INT64_MIN`, `0`-as-absent).  The layout matches
-     * stdlib/option.tur and stdlib/result.tur byte-for-byte, so values built
-     * with tur_box_some/tur_box_ok flow transparently into the stdlib accessors and
-     * vice versa.  Marked unused so a program that touches neither type still
-     * compiles clean under -Wall. */
-    buf_puts(out, "typedef struct { bool is_some; int64_t value; } tur_option_t;\n");
-    buf_puts(out, "typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;\n");
+     *
+     * SR2b: Option and Result are REAL SUMS (stdlib/option.tur, result.tur),
+     * so the canonical layout is the tagged monomorph the ADT emitter
+     * produces -- { int tag; union { ... } as; } with the payload at offset 8
+     * (the union aligns to the widest member).  Tag values follow ctor
+     * declaration order: Option None=0 / Some=1, Result Ok=0 / Err=1.
+     * A `:Option<A>` carrier value is a heap pointer to that layout, with the
+     * HISTORICAL none == NULL (0) still accepted on the read side
+     * (tur_is_some(0) is false).  A `:Result<A,B>` carrier value likewise.
+     *
+     * These helpers let an inline-C block construct and inspect Option/Result
+     * values through the canonical layout instead of hand-rolling the struct
+     * cast + a magic sentinel integer.  The layout matches the monomorph
+     * typedefs byte-for-byte for every word-sized element (int, cstr, ptr,
+     * float bits), so values built with tur_box_some/tur_box_ok flow
+     * transparently into the stdlib accessors and vice versa -- and under
+     * --enable=parametric-sum-byvalue the carrier<->by-value bridges deref
+     * these boxes into the same layout.  Keep tag values and offsets in
+     * lockstep with the two stdlib declarations.  Marked unused so a program
+     * that touches neither type still compiles clean under -Wall. */
+    buf_puts(out, "typedef struct { int tag; union { char __none; int64_t value; } as; } tur_option_t;\n");
+    buf_puts(out, "typedef struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } tur_result_box_t;\n");
     buf_puts(out, "#define TUR_NONE ((int64_t)0)\n");
     buf_puts(out, "static int64_t tur_box_some(int64_t __x) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_box_some(int64_t __x) {\n");
     buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
-    buf_puts(out, "    __o->is_some = true; __o->value = __x;\n");
+    buf_puts(out, "    __o->tag = 1; __o->as.value = __x;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
     buf_puts(out, "static bool tur_is_some(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static bool tur_is_some(int64_t __o) {\n");
-    buf_puts(out, "    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->is_some;\n}\n");
+    buf_puts(out, "    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->tag == 1;\n}\n");
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
-    buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->value;\n}\n");
+    buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->as.value;\n}\n");
     buf_puts(out, "static int64_t tur_box_ok(int64_t __v) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_box_ok(int64_t __v) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
-    buf_puts(out, "    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;\n");
+    buf_puts(out, "    __r->tag = 0; __r->as.ok_val = __v;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
     buf_puts(out, "static int64_t tur_box_err(int64_t __e) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_box_err(int64_t __e) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
-    buf_puts(out, "    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;\n");
+    buf_puts(out, "    __r->tag = 1; __r->as.err_val = __e;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
     buf_puts(out, "static bool tur_is_ok(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static bool tur_is_ok(int64_t __r) {\n");
-    buf_puts(out, "    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->is_ok;\n}\n");
+    buf_puts(out, "    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->tag == 0;\n}\n");
     buf_puts(out, "static int64_t tur_ok_value(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_ok_value(int64_t __r) {\n");
-    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->ok_val;\n}\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->as.ok_val;\n}\n");
     buf_puts(out, "static int64_t tur_err_value(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_err_value(int64_t __r) {\n");
-    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->err_val;\n}\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->as.err_val;\n}\n");
     /* TC5 (type-system-c-abi-followups): typed result/option builders.  The
      * _int / _ptr suffix spells out the payload's cast direction so an inline-C
      * author never has to remember whether a pointer payload needs an
@@ -7277,15 +7371,16 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * result builders and both option builders construct the same canonical
      * tur_result_box_t / tur_option_t layout as tur_box_*, so values built here
      * flow transparently into the stdlib accessors (ok?/ok-val/err-val and
-     * some?/opt-val) and vice versa.  tur_none() is the canonical empty option
-     * (NULL == none), the function-call companion to the TUR_NONE macro.  The
-     * _Static_assert pair pins the byte layout these depend on -- it must match
-     * stdlib/result.tur and stdlib/option.tur, and trips the build at the
-     * source if either struct's size drifts. */
+     * some?/opt-val) and vice versa.  tur_none() builds a real None record
+     * (SR2b: the canonical empty option is a tagged value now, not NULL --
+     * TUR_NONE stays for the read-side compatibility described above).  The
+     * _Static_assert pair pins the byte layout these depend on -- it must
+     * match the tagged monomorph typedefs, and trips the build at the source
+     * if either struct's size drifts. */
     buf_puts(out, "_Static_assert(sizeof(tur_option_t) == 2 * sizeof(int64_t),\n");
-    buf_puts(out, "    \"tur_option_t must match stdlib/option.tur layout\");\n");
-    buf_puts(out, "_Static_assert(sizeof(tur_result_box_t) == 3 * sizeof(int64_t),\n");
-    buf_puts(out, "    \"tur_result_box_t must match stdlib/result.tur layout\");\n");
+    buf_puts(out, "    \"tur_option_t must match the tagged Option monomorph layout\");\n");
+    buf_puts(out, "_Static_assert(sizeof(tur_result_box_t) == 2 * sizeof(int64_t),\n");
+    buf_puts(out, "    \"tur_result_box_t must match the tagged Result monomorph layout\");\n");
     buf_puts(out, "static int64_t tur_ok_int(int64_t __v) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_ok_int(int64_t __v) { return tur_box_ok(__v); }\n");
     buf_puts(out, "static int64_t tur_err_int(int64_t __e) __attribute__((unused));\n");
@@ -7302,7 +7397,10 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "static int64_t tur_some_ptr(void *__p) {\n");
     buf_puts(out, "    return tur_box_some((int64_t)(intptr_t)__p);\n}\n");
     buf_puts(out, "static int64_t tur_none(void) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_none(void) { return TUR_NONE; }\n");
+    buf_puts(out, "static int64_t tur_none(void) {\n");
+    buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
+    buf_puts(out, "    __o->tag = 0; __o->as.value = 0;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
     /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
      * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
      * fn passed to a ^fat parameter is invoked through the standard fat-closure
@@ -9324,7 +9422,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static void tur_result_box_free(int64_t __r) {\n");
     buf_puts(out, "    tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;\n");
     buf_puts(out, "    if (!__b) return;\n");
-    buf_puts(out, "    if (!__b->is_ok) panic_payload_free((tur_panic_payload *)(intptr_t)__b->err_val);\n");
+    buf_puts(out, "    if (__b->tag != 0) panic_payload_free((tur_panic_payload *)(intptr_t)__b->as.err_val);\n");
     buf_puts(out, "    free(__b);\n");
     buf_puts(out, "}\n\n");
 

@@ -10,14 +10,14 @@
 
 ;; int-carrier extractors (Result = { bool is_ok; int64_t ok_val; int64_t err_val; })
 (defn res-ok  [r : int] : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
-       return p ? p->ok_val : -1; ```)
+  ```c struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *p = (void*)(intptr_t)r;
+       return p ? p->as.ok_val : -1; ```)
 (defn res-err [r : int] : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
-       return p ? p->err_val : -1; ```)
+  ```c struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *p = (void*)(intptr_t)r;
+       return p ? p->as.err_val : -1; ```)
 (defn res-ok? [r : int] : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
-       return (p && p->is_ok) ? 1 : 0; ```)
+  ```c struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *p = (void*)(intptr_t)r;
+       return (p && p->tag == 0) ? 1 : 0; ```)
 
 (defn main [] : int
   ;; Functor [(Result _ B)]: fmap varies ok, holds err -- the report's proof case

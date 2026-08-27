@@ -2320,6 +2320,29 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                         have_disp = true;
                         break;
                     }
+                    /* SR2b: inside a constrained-instance body the container
+                     * argument's elaborated type is often the BARE head ADT
+                     * (`Option`, TY_ADT) rather than the applied `(Option A)`,
+                     * so the structural match above has nothing to walk.  When
+                     * the declared param's app head is that same ADT, dispatch
+                     * on the accessor's declared result tyvar itself -- the
+                     * constraint-var grounding below (param_idx into the
+                     * class-var binding's type args) resolves it per spec,
+                     * exactly as it does for the field-read receiver shape.
+                     * (constrained-instance-element-dispatch: `(enc (unwrap
+                     * x))` kept baking `__inst_Enc_enc_int` for float / cstr /
+                     * Box elements.) */
+                    if (pft->kind == TY_APP && ae->type.kind == TY_ADT) {
+                        const Type *ph = pft;
+                        while (ph->kind == TY_APP && ph->as.app.fn)
+                            ph = ph->as.app.fn;
+                        if (ph->kind == TY_ADT &&
+                            ph->as.adt_.def == ae->type.as.adt_.def) {
+                            disp_ty = *ft->as.fn.result_full_type;
+                            have_disp = true;
+                            break;
+                        }
+                    }
                 }
             }
         }

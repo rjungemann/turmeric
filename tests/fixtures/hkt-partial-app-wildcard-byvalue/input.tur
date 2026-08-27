@@ -15,9 +15,9 @@
 
 (definstance MyFunctorP [(Result _ B)]
   (pmap [container g]
-    (if (.is-ok container)
-      (ok (g (.ok-val container)))
-      (err (.err-val container)))))
+    (if (ok? container)
+      (ok (g (ok-val container)))
+      (err (err-val container)))))
 
 (defn dbl [x : int] : int (* x 2))
 

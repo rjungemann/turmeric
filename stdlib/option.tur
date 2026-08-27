@@ -1,23 +1,30 @@
 ;;; tur/option -- typed Option[A]: parameterized optional value.
 ;;;
-;;; First-class parameterized optional value type.
-;;; Runtime layout specializes the payload slot for concrete A.
+;;; First-class parameterized optional value, as a REAL SUM (SR2b of
+;;; docs/upcoming/sum-representation-plan.md): `(None)` or `(Some A)`.
+;;; Runtime layout is the tagged monomorph -- { int tag; union { None; Some } }
+;;; -- 16 bytes, with no dead arm to zero-fill.  On the default path values
+;;; ride the int64 carrier (a heap pointer to that layout); under
+;;; `--enable=parametric-sum-byvalue` they flow by value with no per-ctor
+;;; allocation.  Tag values follow declaration order: None = 0, Some = 1.
+;;; The inline-C helpers in the codegen preamble (tur_box_some / tur_is_some /
+;;; tur_opt_value / tur_some_ptr / tur_none) build and read this exact layout;
+;;; keep them in lockstep with this declaration.
 ;;;
-;;; Since: Phase TC1-D
-;; Phase TC1-D: Typed Option[A]
-;; First-class parameterized optional value type.
-;; Runtime layout specializes the payload slot for concrete A.
+;;; Since: Phase TC1-D; converted to a sum in SR2b.
 ;;; Option -- parameterized optional value containing either some A or none.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Option [A] (is-some :bool) (value A))
+(defdata Option :copy [A]
+  (None)
+  (Some A))
 ;;; some -- wrap a value of type A in a some Option[A].
 ;;;
 ;;; Parameters:
-;;;   x -- the value to wrap (type A, stored as int64_t)
+;;;   x -- the value to wrap (type A)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated Option[A] with is-some=true.
+;;;   An Option[A] carrying the Some variant.
 ;;;
 ;;; Example:
 ;;;   (some 42)  ; => some(42)
@@ -27,11 +34,12 @@
 (defn some [A] [x : A]
   #fx{Construct}
   : (Option A)
-  (make-struct Option :is-some true :value x))
-;;; none -- return the none Option[A] (NULL).
+  (Some x))
+;;; none -- return the none Option[A].
 ;;;
 ;;; Returns:
-;;;   0 (NULL) representing the absent option.
+;;;   The None variant.  (The historical none-as-NULL carrier value is still
+;;;   accepted by the inline-C readers -- tur_is_some treats 0 as none.)
 ;;;
 ;;; Example:
 ;;;   (none)  ; => none
@@ -41,7 +49,7 @@
 (defn none [A]
   #fx{Construct}
   : (Option A)
-  (make-struct Option :is-some false :value (default-of A)))
+  (None))
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:
@@ -56,7 +64,10 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some? [A] [o : (Option A)] : bool (.is-some o))
+(defn some? [A] [o : (Option A)] : bool
+  (match o
+    (Some _) true
+    (None)   false))
 ;;; none? -- check whether an Option[A] is empty.
 ;;;
 ;;; The complement of `some?`. It existed in the compiler's pure-builtin list
@@ -79,22 +90,29 @@
 ;;;
 ;;; Since: 2026-08-20
 
-(defn none? [A] [o : (Option A)] : bool (not (.is-some o)))
+(defn none? [A] [o : (Option A)] : bool
+  (match o
+    (Some _) false
+    (None)   true))
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:
 ;;;   o -- Option[A]
 ;;;
 ;;; Returns:
-;;;   The contained value of type A.
+;;;   The contained value of type A; the zero value of A when o is none
+;;;   (preserving the pre-sum behaviour, where none's dead value slot held
+;;;   `(default-of A)`).
 ;;;
 ;;; Example:
-;;;   (let [o (:: (make-struct Option true 7) (Option int))]
-;;;     (unwrap o))  ; => 7
+;;;   (unwrap (some 7))  ; => 7
 ;;;
 ;;; Since: Phase TC1
 
-(defn unwrap [A] [o : (Option A)] :A (.value o))
+(defn unwrap [A] [o : (Option A)] :A
+  (match o
+    (Some v) v
+    (None)   (default-of A)))
 ;;; unwrap-or -- extract the value or return a default.
 ;;;
 ;;; Parameters:
@@ -111,12 +129,9 @@
 ;;; Since: Phase TC1
 
 (defn unwrap-or [A] [o : (Option A) dflt : A] : A
-  ;; Option none-as-NULL retirement (Track A, step 1.3): by-value `(Option A)`
-  ;; receiver.  Pure-Turmeric body reads `.is-some`/`.value` directly; A is
-  ;; inferred from `o` or from `dflt`.  The interpreter keeps its
-  ;; `native_option_unwrap_or` override.  Carrier-context callers (a producer
-  ;; that still returns the int64 carrier Option) use `unwrap-or-carrier` below.
-  (if (.is-some o) (.value o) dflt))
+  (match o
+    (Some v) v
+    (None)   dflt))
 ;;; unwrap-or-carrier -- carrier-ABI shim for the Track A cascade: extract the
 ;;; value from the int64 carrier Option, or return dflt.  Temporary surface
 ;;; for producers that still return the carrier Option (e.g. zipper / kleisli);
@@ -145,16 +160,6 @@
   ```c
   if (o) free((void*)(intptr_t)o);
   ```)
-;; Option none-as-NULL retirement (Track A): option-map is a pure-Turmeric
-;; by-value `(Option A) -> (Option B)` body.  It reads `.is-some`/`.value`
-;; directly and constructs its result with `(some ...)` / `(none)` in RETURN
-;; position; inside a monomorphized spec the `(some ...)` arm constructs
-;; `Option__B` by value (construct_recovered_byvalue, emit_module.c) and the
-;; `(none)` arm now likewise mints a by-value `none__spec` clone -- elab
-;; attaches the constructor-result-tyvar -> caller-tyvar binding for the 0-arg
-;; `(none)` so emit can compose it through the active spec (the step-2
-;; "0-arg constructor abi_bindings" follow-up in docs/reported/option-consumer-
-;; retype-byvalue.md).  The interpreter keeps its `native_option_map` override.
 ;;; option-map -- apply a function to the contained value if some.
 ;;;
 ;;; Parameters:
@@ -176,10 +181,9 @@
 ;;; Since: Phase TC1
 
 (defn option-map [A B] [o : (Option A) ^fat f : (fn [A] B)] : (Option B)
-  (if (.is-some o) (some (f (.value o))) (none)))
-;; Option none-as-NULL retirement (Track A): by-value `(Option A)` receivers.
-;; Pure-Turmeric body reads `.is-some`/`.value` directly; none (`{is_some=false}`)
-;; is never deref'd.  The interpreter keeps its `native_option_eq` override.
+  (match o
+    (Some v) (some (f v))
+    (None)   (none)))
 ;;; option-eq? -- compare two Option[A] values using a comparator.
 ;;;
 ;;; Parameters:
@@ -198,23 +202,23 @@
 (defn option-eq? [A] [o1 : (Option A)
                       o2 : (Option A)
                       ^fat cmp-fn : (fn [A A] bool)] : bool
-  (if (.is-some o1)
-    (if (.is-some o2) (cmp-fn (.value o1) (.value o2)) false)
-    (not (.is-some o2))))
+  (match o1
+    (Some v1) (match o2
+                (Some v2) (cmp-fn v1 v2)
+                (None)    false)
+    (None)    (none? o2)))
 ;;; Eq [Option] -- equality using the inner type's Eq instance.
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
-;; Note: element comparison uses integer equality; correct for all primitive A.
-;; M4c-pre-ext: rewrite to consult by-value fields directly via Eq A,
-;; mirroring Eq Result/Tuple2/Pair.  `option-eq?` itself stays as a free
-;; helper for callers that consult it directly via the carrier ABI.  See
-;; docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+;; SR2b: match on the sum instead of reading record fields.
 
 (definstance Eq [Option]
   [(Eq A)]
   (eq? [x y]
-    (if (= (.is-some x) (.is-some y))
-      (if (.is-some x) (eq? (.value x) (.value y)) true)
-      false)))
+    (match x
+      (Some vx) (match y
+                  (Some vy) (eq? vx vy)
+                  (None)    false)
+      (None)    (none? y))))
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
 ;;
@@ -233,7 +237,9 @@
 
 (definstance Functor [Option]
   (fmap [container g]
-    (if (some? container) (some (g (.value container))) (none))))
+    (match container
+      (Some v) (some (g v))
+      (None)   (none))))
 ;;; Applicative [Option] -- pure wraps in some; ap applies a some function to a
 ;;; some argument (none when either side is none).
 ;;;
@@ -245,9 +251,11 @@
 (definstance Applicative [Option]
   (pure [x] (some x))
   (ap [ff fa]
-    (if (some? ff)
-      (if (some? fa) (some ((.value ff) (.value fa))) (none))
-      (none))))
+    (match ff
+      (Some f) (match fa
+                 (Some a) (some (f a))
+                 (None)   (none))
+      (None)   (none))))
 ;;; Monad [Option] -- bind sequences through some; short-circuits on none.
 ;;;
 ;;; Example:
@@ -256,7 +264,10 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Monad [Option]
-  (bind [ma k] (if (some? ma) (k (.value ma)) (none))))
+  (bind [ma k]
+    (match ma
+      (Some v) (k v)
+      (None)   (none))))
 ;;; Alternative [Option] -- empty is none; alt-or picks the first some.
 ;;;
 ;;; Example:
@@ -266,4 +277,7 @@
 
 (definstance Alternative [Option]
   (empty [a] (none))
-  (alt-or [x y] (if (some? x) x y)))
+  (alt-or [x y]
+    (match x
+      (Some _) x
+      (None)   y)))

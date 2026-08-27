@@ -10,6 +10,6 @@
 (defn main [] : int
   (let [r (parse 7)
         o (some 9)]
-    (println (.ok-val r))
-    (println (.value o))
+    (println (ok-val r))
+    (println (unwrap o))
     0))

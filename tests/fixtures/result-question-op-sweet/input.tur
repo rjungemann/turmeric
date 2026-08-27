@@ -5,14 +5,14 @@
 
 (defn u-ok [x : int] : ptr<void>
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *r = malloc(sizeof(*r));
+  r->tag = 0; r->as.ok_val = x; return r;
   ```)
 
 (defn u-ok-val [r : ptr<void>] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r2 = (void*)r;
-  return r2->ok_val;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *r2 = (void*)r;
+  return r2->as.ok_val;
   ```)
 
 (defn produce [] : ptr<void>

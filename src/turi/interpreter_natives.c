@@ -58,37 +58,47 @@
  * ---------------------------------------------------------------------- */
 
 /* Option functions */
-static bool wk_result_payload_is_heap(TuriValue v); /* fwd: defined with native_ok */
+/* SR2b: stdlib Option/Result are real sums, and the tree-walker represents an
+ * ADT constructor value as a TuriStruct NAMED BY THE CONSTRUCTOR ("Some" with
+ * one payload field, "None" with none; "Ok"/"Err" with one payload field) --
+ * that is what the EX_MATCH ctor patterns compare against, so the natives
+ * must build exactly this shape or every stdlib `(match o (Some v) ...)`
+ * body dies with "no arm matched".  The field readers below keep the legacy
+ * representations readable (the int64[2]/[3] carrier boxes hand-rolled
+ * inline-C still produces, and the pre-sum record TuriStructs) so mixed
+ * flows keep working. */
+static bool ctor_struct_is(TuriValue v, const char *name) {
+    if (v.tag != TURI_STRUCT) return false;
+    const char *sn = turi_struct_name(v);
+    return sn && strcmp(sn, name) == 0;
+}
+static TuriValue ctor_struct_payload(TuriValue v) {
+    bool found = false;
+    TuriValue f = turi_struct_field(v, 0, &found);
+    return found ? f : turi_int(0);
+}
 static TuriValue native_some(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
-    /* Mirror native_ok (R5): the int64[2] box flattens the payload to a bare
-     * int64, losing the tag of a *heap* value (a make-struct, cstr, closure,
-     * float).  `.value`/unwrap would then hand back a TURI_INT and a downstream
-     * field access reads garbage.  For a heap payload build a make-struct
-     * Option whose fields hold the full TuriValue; scalar payloads keep the
-     * carrier box unchanged.  option_field reads both reps. */
-    if (wk_result_payload_is_heap(payload)) {
-        TuriValue fields[2] = { turi_bool(true), payload };
-        return turi_make_struct(env, "Option", fields, 2);
-    }
-    int64_t *opt = (int64_t *)malloc(2 * sizeof(int64_t));
-    if (!opt) return turi_nil();
-    opt[0] = 1; /* is_some = true */
-    opt[1] = payload.as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)opt;
-    return v;
+    TuriValue fields[1] = { payload };
+    return turi_make_struct(env, "Some", fields, 1);
 }
 static TuriValue native_none(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)a; (void)n; (void)ud;
-    return turi_int(0); /* NULL pointer */
+    (void)a; (void)n; (void)ud;
+    return turi_make_struct(env, "None", NULL, 0);
 }
-/* W1b: an Option reaches these shims either as a native int64[2] box
- * {is_some, value} (from native_some / tur_box_some) or as a make-struct TuriStruct
- * with the same field order (from `(make-struct Option ...)`).  option_field
- * reads field `idx` from whichever representation so the two coexist -- the same
- * dual-rep pattern as result_field.  none is the 0/NULL box (every field 0). */
+/* W1b + SR2b: an Option reaches these shims as a ctor-named TuriStruct
+ * ("Some"/"None", from native_some/none or an interpreted `(Some x)`), as a
+ * native int64[2] box {is_some, value} (hand-rolled inline-C / tur_box_some),
+ * or as a legacy make-struct TuriStruct with {is_some, value} field order.
+ * option_field maps the ctor rep onto the legacy field indices (0 = is_some,
+ * 1 = value) so every reader keeps a single call site.  none is the "None"
+ * struct or the 0/NULL box (every field 0). */
 static TuriValue option_field(TuriValue o, int idx) {
+    if (ctor_struct_is(o, "Some"))
+        return idx == 0 ? turi_bool(true) : ctor_struct_payload(o);
+    if (ctor_struct_is(o, "None"))
+        return idx == 0 ? turi_bool(false) : turi_int(0);
     bool found = false;
     TuriValue f = turi_struct_field(o, (uint32_t)idx, &found);
     if (found) return f;
@@ -115,8 +125,8 @@ static TuriValue native_option_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *
     if (!a_some && !b_some) return turi_bool(true);
     if (a_some != b_some)   return turi_bool(false);
     TuriValue cargs[2];
-    cargs[0].tag = TURI_INT; cargs[0].as_int = option_field_int(a[0], 1);
-    cargs[1].tag = TURI_INT; cargs[1].as_int = option_field_int(a[1], 1);
+    cargs[0] = option_field(a[0], 1);
+    cargs[1] = option_field(a[1], 1);
     TuriValue rv = turi_call(env, a[2], cargs, 2);
     if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
     return turi_bool(rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0);
@@ -130,14 +140,20 @@ static TuriValue native_option_unwrap(TuriEnv *env, TuriValue *a, uint32_t n, vo
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
     if (!option_is_some(a[0])) { fprintf(stderr, "unwrap called on none\n"); return turi_int(0); }
-    return turi_int(option_field_int(a[0], 1));
+    /* SR2b: hand back the FULL payload value (tag preserved) -- flattening to
+     * int lost float/cstr/struct payloads. */
+    return option_field(a[0], 1);
 }
 static TuriValue native_option_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     return native_option_unwrap(env, a, n, ud);
 }
 static TuriValue native_option_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n > 0) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
+    /* A ctor-named TuriStruct is env-pool-owned -- only the legacy raw box is
+     * individually freed. */
+    if (n > 0 && a[0].tag != TURI_STRUCT) {
+        void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p);
+    }
     return turi_nil();
 }
 static TuriValue native_option_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -147,7 +163,7 @@ static TuriValue native_option_must(TuriEnv *env, TuriValue *a, uint32_t n, void
         turi_runtime_panic(env, "option-must: called on none");
         return turi_nil(); /* unreachable */
     }
-    return turi_int(option_field_int(a[0], 1));
+    return option_field(a[0], 1);
 }
 static TuriValue native_option_expect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -156,28 +172,26 @@ static TuriValue native_option_expect(TuriEnv *env, TuriValue *a, uint32_t n, vo
         turi_runtime_panic(env, msg);
         return turi_nil(); /* unreachable */
     }
-    return turi_int(option_field_int(a[0], 1));
+    return option_field(a[0], 1);
 }
 static TuriValue native_option_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_int(0);
-    if (!option_is_some(a[0])) return turi_int(a[1].as_int);
-    return turi_int(option_field_int(a[0], 1));
+    if (!option_is_some(a[0])) return a[1];
+    return option_field(a[0], 1);
 }
 /* option-map -- apply f to the some value, returning a new Option.  option.tur's
  * body fat-dispatches f via TUR_APPLY1; this native invokes f (a turi closure)
  * via turi_call and returns a fresh native int64[2] {is_some, value} box. */
 static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    if (n < 2) return turi_int(0);
-    if (!option_is_some(a[0])) return turi_int(0);
-    TuriValue arg; arg.tag = TURI_INT; arg.as_int = option_field_int(a[0], 1);
+    if (n < 2) return turi_make_struct(env, "None", NULL, 0);
+    if (!option_is_some(a[0])) return turi_make_struct(env, "None", NULL, 0);
+    TuriValue arg = option_field(a[0], 1);
     TuriValue rv = turi_call(env, a[1], &arg, 1);
     if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
-    int64_t *r = (int64_t *)malloc(2 * sizeof(int64_t));
-    if (!r) return turi_int(0);
-    r[0] = 1; r[1] = rv.as_int;
-    return turi_int((int64_t)(intptr_t)r);
+    TuriValue fields[1] = { rv };
+    return turi_make_struct(env, "Some", fields, 1);
 }
 
 /* Result functions: { bool is_ok (offset 0); int64_t ok_val (offset 8); int64_t err_val (offset 16) }
@@ -191,33 +205,17 @@ static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void 
  * fields hold the full TuriValue (tag preserved); int/bool payloads keep the box
  * (no change to the carrier-ABI fixtures that depend on it). result_field reads
  * both reps, so ok?/err?/ok-val/err-val/result-eq stay uniform. */
-static bool wk_result_payload_is_heap(TuriValue v) {
-    return v.tag == TURI_STRUCT || v.tag == TURI_CSTR ||
-           v.tag == TURI_CLOSURE || v.tag == TURI_FLOAT;
-}
 static TuriValue native_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
-    if (wk_result_payload_is_heap(payload)) {
-        TuriValue fields[3] = { turi_bool(true), payload, turi_int(0) };
-        return turi_make_struct(env, "Result", fields, 3);
-    }
-    int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!r) return turi_nil();
-    r[0] = 1; r[1] = payload.as_int; r[2] = 0;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+    TuriValue fields[1] = { payload };
+    return turi_make_struct(env, "Ok", fields, 1);
 }
 static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
-    if (wk_result_payload_is_heap(payload)) {
-        TuriValue fields[3] = { turi_bool(false), turi_int(0), payload };
-        return turi_make_struct(env, "Result", fields, 3);
-    }
-    int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!r) return turi_nil();
-    r[0] = 0; r[1] = 0; r[2] = payload.as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+    TuriValue fields[1] = { payload };
+    return turi_make_struct(env, "Err", fields, 1);
 }
 /* W1b: a Result reaches these shims either as a native int64[3] box
  * {is_ok, ok_val, err_val} (from native_ok/err) or as a make-struct TuriStruct
@@ -226,6 +224,15 @@ static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
  * the three pieces (with native_result_eq and the EX_GET_FIELD carrier path)
  * that let result.tur join the prelude. */
 static TuriValue result_field(TuriValue r, int idx) {
+    /* SR2b: ctor-named rep first (see the Option twin above): "Ok"/"Err"
+     * structs carry one payload field; map onto the legacy indices
+     * (0 = is_ok, 1 = ok_val, 2 = err_val). */
+    if (ctor_struct_is(r, "Ok"))
+        return idx == 0 ? turi_bool(true)
+             : idx == 1 ? ctor_struct_payload(r) : turi_int(0);
+    if (ctor_struct_is(r, "Err"))
+        return idx == 0 ? turi_bool(false)
+             : idx == 2 ? ctor_struct_payload(r) : turi_int(0);
     bool found = false;
     TuriValue f = turi_struct_field(r, (uint32_t)idx, &found);
     if (found) return f;
@@ -456,7 +463,9 @@ static TuriValue native_result_unwrap_err(TuriEnv *env, TuriValue *a, uint32_t n
 }
 static TuriValue native_result_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n > 0) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
+    if (n > 0 && a[0].tag != TURI_STRUCT) {
+        void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p);
+    }
     return turi_nil();
 }
 static TuriValue native_result_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {

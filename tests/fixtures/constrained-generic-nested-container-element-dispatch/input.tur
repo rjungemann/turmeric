@@ -25,7 +25,10 @@
 ;; container instance whose element A may itself be a container; the +100 lets
 ;; us prove the Option instance actually ran (vs a baked int representative).
 (definstance Tag [(Option A)] [(Tag A)]
-  (tag [x] (if (.is-some x) (+ 100 (tag (.value x))) 0)))
+  (tag [x]
+    (match x
+      (Some v) (+ 100 (tag v))
+      (None)   0)))
 
 ;; per-element helper over a (Cons A); recovers A via the ascription idiom.
 (defn tag-head [A] [(Tag A)] [c : (Cons A)] : int

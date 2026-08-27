@@ -8331,6 +8331,87 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 uint32_t arg_base = 0;
                 if (top->expr->as.call_.is_poly_call && n > effective_params)
                     arg_base = n - effective_params;
+                /* SR2b: baked-representative correction by RUNTIME ctor name.
+                 * A dict-carrying method call whose static dispatch stayed
+                 * abstract falls back to the elab-baked representative
+                 * instance, which is a registration-order accident (Monad's
+                 * flipped from Option to Result when the stdlib sums were
+                 * rewritten).  Pre-sum this was invisible: every instance body
+                 * was a field read over the same {flag, payload} box layout,
+                 * so the wrong instance still computed the right answer.  The
+                 * bodies are ctor MATCHES now, so a "Some" receiver entering
+                 * Result's `(match ma (Ok v) ...)` dies with "no arm matched".
+                 * With the receiver VALUE in hand, re-dispatch: if the owner
+                 * instance's head ADT does not declare the receiver's ctor,
+                 * swap to the same class's instance whose head does.  Sibling
+                 * method impls share arity, so the bound-args prologue below
+                 * is unaffected. */
+                if (fn->owner_instance && fn->owner_instance->typeclass &&
+                    env->last_tc_env && n - arg_base >= 1) {
+                    TuriValue __recv = acc[arg_base];
+                    const char *__sn = (__recv.tag == TURI_STRUCT)
+                                           ? turi_struct_name(__recv) : NULL;
+                    TypeClassInstance *__own = fn->owner_instance;
+                    AdtDef *__oh = NULL;
+                    if (__sn && __own->n_type_args >= 1 && __own->type_args) {
+                        const Type *__ht = &__own->type_args[0];
+                        while (__ht->kind == TY_APP && __ht->as.app.fn)
+                            __ht = __ht->as.app.fn;
+                        __oh = (__ht->kind == TY_ADT) ? __ht->as.adt_.def : NULL;
+                    }
+                    bool __owner_has = false;
+                    if (__oh) {
+                        for (uint32_t __ci = 0; __ci < __oh->n_ctors; __ci++)
+                            if (__oh->ctors[__ci] && __oh->ctors[__ci]->name &&
+                                strcmp(__oh->ctors[__ci]->name, __sn) == 0) {
+                                __owner_has = true;
+                                break;
+                            }
+                    }
+                    if (__oh && !__owner_has) {
+                        int __ms = -1;
+                        for (uint8_t __mi = 0; __mi < __own->n_method_impls; __mi++)
+                            if (__own->method_impls[__mi] == fn) { __ms = __mi; break; }
+                        if (__ms >= 0) {
+                            TypeClassEnv *__tce = (TypeClassEnv *)env->last_tc_env;
+                            for (TypeClassInstance *__ins = __tce->instances;
+                                 __ins; __ins = __ins->next) {
+                                if (__ins == __own) continue;
+                                bool __same_class =
+                                    __ins->typeclass == __own->typeclass ||
+                                    (__ins->typeclass && __ins->typeclass->name &&
+                                     __own->typeclass->name &&
+                                     strcmp(__ins->typeclass->name->name,
+                                            __own->typeclass->name->name) == 0);
+                                if (!__same_class) continue;
+                                AdtDef *__h = NULL;
+                                if (__ins->n_type_args >= 1 && __ins->type_args) {
+                                    const Type *__t = &__ins->type_args[0];
+                                    while (__t->kind == TY_APP && __t->as.app.fn)
+                                        __t = __t->as.app.fn;
+                                    __h = (__t->kind == TY_ADT) ? __t->as.adt_.def : NULL;
+                                }
+                                bool __has = false;
+                                if (__h) {
+                                    for (uint32_t __ci = 0; __ci < __h->n_ctors; __ci++)
+                                        if (__h->ctors[__ci] && __h->ctors[__ci]->name &&
+                                            strcmp(__h->ctors[__ci]->name, __sn) == 0) {
+                                            __has = true;
+                                            break;
+                                        }
+                                }
+                                if (!__has) continue;
+                                if (__ms < __ins->n_method_impls &&
+                                    __ins->method_impls[__ms] &&
+                                    __ins->method_impls[__ms]->body &&
+                                    __ins->method_impls[__ms]->body->kind != EX_INLINE_C) {
+                                    fn = __ins->method_impls[__ms];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 if (effective_params != n - arg_base) {
                     cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                       fn->binding ? fn->binding->name->name : "<fn>",

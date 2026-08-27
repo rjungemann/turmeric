@@ -23,14 +23,17 @@
       (println (arc-weak-count a))           ; 1  -- sentinel excluded
       (println (arc-strong-count a))         ; 1
 
-      ;; upgrade while the value is alive -> some, and it is a REAL strong ref
+      ;; upgrade while the value is alive -> some, and it is a REAL strong ref.
+      ;; SR2b: the Option rides the carrier as a heap box the caller owns --
+      ;; release it once the payload has been read out.
       (let [u (arc-upgrade w)]
         (if (some? u)
           (let [b (unwrap u)]
             (println (arc-get b))            ; 42
             (println (arc-strong-count b))   ; 2  -- upgrade took a reference
             (arc-drop b))
-          (println -1)))
+          (println -1))
+        (option-free (:: u :int)))
       (println (arc-strong-count a))         ; 1  -- back down after the drop
 
       ;; drop the last strong reference; the weak handle survives it
@@ -38,7 +41,8 @@
 
       ;; upgrade after the value is gone -> none, not a dangling handle
       (let [u2 (arc-upgrade w)]
-        (println (if (some? u2) 1 -1)))      ; -1
+        (println (if (some? u2) 1 -1))       ; -1
+        (option-free (:: u2 :int)))
 
       ;; releasing the last weak handle frees the control block
       (arc-weak-drop w))

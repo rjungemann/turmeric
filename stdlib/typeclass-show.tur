@@ -136,13 +136,13 @@
   (show [x]
     : String
     ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    struct { int tag; int64_t payload; } *res = (void*)x;
     if (res == NULL) { return (int64_t)(intptr_t)tur_string_from_cstr("err"); }
     char buf[48];
-    if (res->is_ok) {
-        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
+    if (res->tag == 0) {
+        snprintf(buf, 48, "ok(%lld)", (long long)res->payload);
     } else {
-        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
+        snprintf(buf, 48, "err(%lld)", (long long)res->payload);
     }
     return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     ```))

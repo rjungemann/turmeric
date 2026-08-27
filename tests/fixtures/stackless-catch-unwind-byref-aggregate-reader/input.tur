@@ -10,7 +10,7 @@
 ;; segment), so its borrow is materialized into `acc__agg` (is_ref, from BR1).
 ;; Native (a non-flat recursion) SIGSEGVs deep; the trampoline runs flat.
 ;; step(acc, n) = n + describe(acc).
-(defn describe [r : (Result int int)] : int (if (.is-ok r) 1 0))
+(defn describe [r : (Result int int)] : int (if (ok? r) 1 0))
 
 (defn step [acc : (Result int int) n : int] : int
   (if (= n 0)

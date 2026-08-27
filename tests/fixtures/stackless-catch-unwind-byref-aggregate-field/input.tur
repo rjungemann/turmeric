@@ -1,7 +1,7 @@
 ;; BR3a (catch-unwind-byref-aggregate-br3-plan): widen the by-const-ptr aggregate
 ;; param read gate past the pure-accessor whitelist.  This is the BR1 fixture with
 ;; ONE change -- the read of the borrowed `(Result int int)` param goes through
-;; FIELD ACCESS `(.is-ok acc)` instead of the whitelisted `(ok? acc)` accessor.
+;; FIELD ACCESS `(ok? acc)` instead of the whitelisted `(ok? acc)` accessor.
 ;; `.is-ok` is not one of ok?/err?/ok-val/err-val/some?/none?, so before BR3a this
 ;; forced the whole function to bail to native.  A field read is an identity-
 ;; agnostic READ, exactly what the borrow-becomes-owned-copy contract permits, so
@@ -11,12 +11,12 @@
 ;; borrow is materialized into the stable `acc__agg` buffer and re-homed on resume
 ;; -- the same is_ref save/restore BR1 shipped, unchanged.  Native (a non-flat
 ;; recursion) SIGSEGVs deep; the stackless lowering runs flat.
-;; step(acc, n) = n + (.is-ok acc ? 1 : 0).
+;; step(acc, n) = n + (ok? acc ? 1 : 0).
 (defn step [acc : (Result int int) n : int] : int
   (if (= n 0)
-    (if (.is-ok acc) 100 200)
+    (if (ok? acc) 100 200)
     (do (catch-unwind (fn [] : int (step acc (- n 1))))
-        (+ n (if (.is-ok acc) 1 0)))))
+        (+ n (if (ok? acc) 1 0)))))
 
 (defn main [] : int
   (println (step (ok 7) 200000))

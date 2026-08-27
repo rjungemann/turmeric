@@ -133,9 +133,9 @@
                         dflt : (Option cstr)] : ArgSpec
   ;; none is the "required" marker: the cell stores NULL, which is what the
   ;; default-injection pass and print-help both read as "no default".
-  (if (.is-some dflt)
-    (args/-spec-option-raw spec name type (.value dflt))
-    (args/-spec-option-raw spec name type (args/-no-default))))
+  (match dflt
+    (Some d) (args/-spec-option-raw spec name type d)
+    (None)   (args/-spec-option-raw spec name type (args/-no-default))))
 ;;; args/spec-subcommand -- register a nested subcommand.
 ;;;
 ;;; Parameters:
@@ -529,7 +529,9 @@
 ;;;
 ;;; Example:
 ;;;   (let [sub (args/sub-result res)]
-;;;     (if (.is-some sub) (args/get-bool (.value sub) "release") false))
+;;;     (match sub
+;;;       (Some s) (args/get-bool s "release")
+;;;       (None)   false))
 ;;;
 ;;; Since: Phase A1
 

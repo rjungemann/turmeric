@@ -2981,6 +2981,25 @@ static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
             return arm_arg_join(e, a, b, out);
         }
     }
+    /* SR2b: one arm's type is an application headed by an UNGROUNDED tyvar --
+     * `(m b)` from `(k v)` in a Monad bind's Some arm -- and the peer is a
+     * concrete ADT application (`(Option A)` from the None arm's `(none)`).
+     * The class variable `m` is grounded by the INSTANCE, not by this join,
+     * so the abstract head can never win here: take the concrete side.  This
+     * is the class-method-hkt-tyvar-grounding rule one level up -- that fix
+     * grounds a method tyvar BELOW a shared concrete head (arm_arg_join);
+     * this grounds the head itself.  Reachable once Option/Result are sums,
+     * because a sum's empty arm is a bare constructor call rather than an
+     * accessor whose type the record head already fixed. */
+    if (a.kind == TY_APP && b.kind == TY_APP && (ad != NULL) != (bd != NULL)) {
+        const Type *abs = ad ? &b : &a;
+        const Type *spine = abs;
+        while (spine->kind == TY_APP && spine->as.app.fn) spine = spine->as.app.fn;
+        if (spine->kind == TY_TYVAR) {
+            *out = ad ? a : b;
+            return true;
+        }
+    }
     return false;
 }
 
@@ -4463,7 +4482,23 @@ Expr *elab_match(Elab *e, const Form *call) {
                 move_state_restore(match_move_bindings, match_move_before, n_match_move);
             }
             bool _s_ctor = e->in_match_arm; e->in_match_arm = true;
+            /* SR2b: sibling-arm bidirectional inference, the match twin of the
+             * if-form's have_sibling_ty push (elab_forms.c).  Once an earlier
+             * arm established a concrete parametric-app result -- `(k v)` in a
+             * Monad bind grounding `(Option b)` -- push it as the expected type
+             * so a later arm that is a bare parametric constructor (`(none)`,
+             * `(err e)`) selects its monomorph from the join instead of
+             * failing it with an ungrounded fresh tyvar.  Narrowed to a TY_APP
+             * join so every non-app match elaborates exactly as before, and
+             * restored immediately. */
+            Type *_arm_saved_expected = e->expected_type;
+            bool  _arm_pushed = false;
+            if (result_type.kind == TY_APP && !e->expected_type) {
+                e->expected_type = &result_type;
+                _arm_pushed = true;
+            }
             Expr *body = elab_form(e, body_form);
+            if (_arm_pushed) e->expected_type = _arm_saved_expected;
             e->in_match_arm = _s_ctor;
 
             /* Phase G4: Elaborate optional when-guard while arm scope is still live */

@@ -8,20 +8,20 @@
 
 (defn u-ok [x : int] : ptr<void>
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *r = malloc(sizeof(*r));
+  r->tag = 0; r->as.ok_val = x; return r;
   ```)
 
 (defn u-err [e : int] : ptr<void>
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *r = malloc(sizeof(*r));
+  r->tag = 1; r->as.err_val = e; return r;
   ```)
 
 (defn u-err-val [r : ptr<void>] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r2 = (void*)r;
-  return r2->err_val;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *r2 = (void*)r;
+  return r2->as.err_val;
   ```)
 
 (defn produce [b : bool] : ptr<void>

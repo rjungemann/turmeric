@@ -147,6 +147,22 @@ static const AdtDef *slot_agg_def(const Type *t) {
  * refcount).  The def must be present: a bare surface annotation (e.g. a NULL
  * `return_type` def) is not enough -- callers pass the body/value Type, which
  * carries the real monomorphized def. */
+/* SR2b: a CONCRETE parametric monomorph that rides the int64 carrier --
+ * `(Option int)` while the parametric-sum-byvalue experiment is off.  Its C
+ * spelling IS int64_t (type_c_name's TY_APP arm answers the carrier), so it
+ * crosses a DK slot exactly like a scalar: plain cast, no box, no drop
+ * concern (the carrier ctor's box is process-lifetime today).  Before
+ * Option/Result were sums this shape never reached the gate -- their record
+ * monomorphs were by-value products and took slot_box_ty. */
+static bool slot_carrier_app(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    if (t->kind != TY_APP) return false;
+    if (!type_app_is_concrete_adt((Type *)t)) return false;
+    const char *cn = type_c_name(*(Type *)t);
+    return cn && strcmp(cn, "int64_t") == 0;
+}
+
 static bool slot_box_ty(const Type *t) {
     if (!t) return false;
     Type _r; t = cps_resolve_ty(t, &_r);
@@ -284,6 +300,19 @@ static bool slot_ok_t(const Type *t, TypeKind k) {
 static bool sig_slot_ok(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
+    /* SR2b: a CONCRETE application whose C spelling IS the int64 carrier -- a
+     * sum monomorph like `(Option int)` while the parametric-sum-byvalue
+     * experiment is off -- crosses a DK slot as the plain word it already is.
+     * CONCRETE only, deliberately: a tyvar-elemented app (`(Option A)`,
+     * `(Map A B)`) must keep rejecting, because the whole mono-template /
+     * island machinery is built on the generic BASE sig-rejecting (see the
+     * "sig-rejects itself so in_s stays false" invariants); admitting it
+     * flipped map-eq drivers to candidates and double-emitted their CPS
+     * joins.  Before Option/Result were sums this case never arose: a
+     * concrete `(Option int)` was a by-value product and took slot_box_ty. */
+    if (r->kind == TY_APP && type_app_is_concrete_adt((Type *)r) &&
+        strcmp(type_c_name(*r), "int64_t") == 0)
+        return true;
     return slot_ty(k);
 }
 
@@ -2906,6 +2935,30 @@ static bool fn_sig_ok(const FnDef *fd) {
         if (param_name_clashes_cps(p)) return false;
     }
     return true;
+}
+
+/* SR2b (G3a clone mint): does this colored fn need a MONOMORPH CLONE to be
+ * CPS-emittable?  True when its own generic signature sig-rejects (tyvar
+ * params/result), so only a spec resolved through concrete bindings can carry
+ * its `perform` -- the island/mono-template machinery's precondition.  A
+ * colored fn whose base signature is admissible is emitted directly; minting
+ * a clone for it double-emits its CPS joins (same `<name>_j<N>` symbols).
+ * Read by emit_abi_register_call. */
+bool emit_cps_ir_colored_fn_needs_mono(const FnDef *fd) {
+    /* Keyed on the SYNTACTIC effect test (cps_expr_contains_effect_op:
+     * a body that itself performs / awaits / shifts -- NOT any handle: an
+     * `unsafe` block is a self-discharging handle whose fn emits fine on the
+     * direct path, and minting for it broke pass-by-pointer instance params,
+     * see typeclass-unsafe-passbyptr-struct-arg), not fd->cps_colored -- the coloring
+     * pass has not run yet when the ABI scan asks, and running it early
+     * perturbs emission state other emitters read (derive-show's pbp reads
+     * broke under an early cps_color_program).  The syntactic test is the
+     * coloring seed anyway, so it can only over-approximate transitively
+     * colored callers -- which never reach here, because a caller without its
+     * own effect form fails this test and needed no island. */
+    if (!fd || !fd->body) return false;
+    if (!cps_expr_contains_effect_op(fd->body)) return false;
+    return !fn_sig_ok(fd);
 }
 
 /* ---- whole-program classification cache ------------------------------ */
@@ -8599,7 +8652,8 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
      * (show-collections: a Map with cstr keys printed the key POINTERS), so those
      * stay on the strict scalar gate.  A scalar always passes `sig_slot_ok`. */
     #define MONO_SLOT_OK(t, k) (is_inst ? sig_slot_ok((t), (k)) \
-                                        : (sig_slot_ok((t), (k)) || slot_box_ty(t)))
+                                        : (sig_slot_ok((t), (k)) || slot_box_ty(t) || \
+                                           slot_carrier_app(t)))
     if (rt->kind != TY_NIL && !MONO_SLOT_OK(rt, rt->kind)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];

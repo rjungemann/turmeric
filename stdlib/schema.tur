@@ -995,15 +995,11 @@
 
   int64_t value = sch_hydecode_hyrec_hy(schema, node, "", (void *)errs);
 
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   if (errs->len == 0) {
-    r->is_ok = true; r->ok_val = value; r->err_val = 0;
     free(errs->data); free(errs);
-  } else {
-    r->is_ok = false; r->ok_val = 0;
-    r->err_val = (int64_t)(intptr_t)errs;
+    return tur_box_ok(value);
   }
-  return (int64_t)(intptr_t)r;
+  return tur_box_err((int64_t)(intptr_t)errs);
   ```)
 ;;; schema-decode-ok? -- whether a schema-decode Result succeeded.
 ;;;
@@ -1017,8 +1013,7 @@
 
 (defn schema-decode-ok? [r : int] : bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res && res->is_ok;
+  return tur_is_ok(r);
   ```)
 ;;; schema-decode-value -- the decoded value of a successful Result.
 ;;;
@@ -1032,8 +1027,7 @@
 
 (defn schema-decode-value [r : int] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res ? res->ok_val : 0;
+  return r ? tur_ok_value(r) : 0;
   ```)
 ;;; schema-decode-errors -- the error Vec of a failed Result.
 ;;;
@@ -1047,8 +1041,7 @@
 
 (defn schema-decode-errors [r : int] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res ? res->err_val : 0;
+  return r ? tur_err_value(r) : 0;
   ```)
 ;;; schema-decode-report -- internal: print an error Vec to stderr.
 

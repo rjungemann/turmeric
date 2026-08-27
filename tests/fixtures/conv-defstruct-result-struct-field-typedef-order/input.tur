@@ -21,7 +21,7 @@
 (defn mk-err [] : (Result User cstr) (err "boom"))
 
 (defn describe [r : (Result User cstr)] : cstr
-  (if (.is-ok r) "ok" "err"))
+  (if (ok? r) "ok" "err"))
 
 (defn wrap-opt [u : User] : (Option User) (some u))
 
@@ -32,10 +32,10 @@
         r1   (mk-ok u1)
         r2   (mk-err)
         o1   (wrap-opt u2)
-        back (.ok-val r1)]
+        back (ok-val r1)]
     (println (describe r1))          ; ok
     (println (describe r2))          ; err
-    (if (.is-some o1) (println "some") (println "none"))   ; some
+    (if (some? o1) (println "some") (println "none"))   ; some
     (println (.id back))             ; 7
     (println (.id (unwrap o1))))     ; 9
   0)

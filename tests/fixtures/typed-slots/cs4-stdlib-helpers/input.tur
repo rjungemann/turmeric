@@ -14,9 +14,9 @@
   (let [l (:: (make-struct Cons 42 0) (Cons int))]
     (println (thead l)))
   ;; Option helpers
-  (let [o (:: (make-struct Option true 7) (Option int))]
+  (let [o (:: (some 7) (Option int))]
     (println (unwrap o)))
   ;; Result helpers
-  (let [r (:: (make-struct Result true 99 0) (Result int int))]
+  (let [r (:: (ok 99) (Result int int))]
     (println (ok-val r)))
   0)

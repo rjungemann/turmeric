@@ -318,7 +318,28 @@ allocation numbers came from.
 compile-time seam, not an `EXPERIMENTS[]` row, since this is a representation
 change with no user-visible surface. SR2 is different; see below.
 
-### SR2 -- Option and Result as real sums -- GATE RUN 2026-08-27
+### SR2 -- Option and Result as real sums -- **SHIPPED (SR2b) 2026-08-27**
+
+**Status: the conversion is done.** `stdlib/option.tur` and `stdlib/result.tur`
+declare real `defdata` sums (`(None)/(Some A)`, `(Ok A)/(Err B)`; tags follow
+declaration order), every accessor and instance is match-based, and the whole
+inline-C surface -- the codegen preamble helpers (`tur_box_some` / `tur_is_ok`
+/ ...), the stdlib layout users (json / schema / serial / safe / panic /
+process / future / weak / refined / args / typeclass-show), and the fixture
+population -- speaks the tagged monomorph layout `{ int tag; union { ... }
+as; }` (16 bytes for both types; `Result` down from 24, the dead arm gone).
+The historical none-as-NULL is still accepted on the READ side (`tur_is_some(0)`
+is false, and a carrier match reads a NULL scrutinee as tag 0).  On the
+default path values ride the int64 carrier; under
+`--enable=parametric-sum-byvalue` (the SR2c experiment row) / the
+`TUR_SR2_APP_SUM_BYVALUE=1` seam they flow by value.  The tree-walking
+interpreter builds and matches ctor-named values ("Some"/"None"/"Ok"/"Err")
+with the legacy box shapes still readable.  Validation at landing: full
+compiled suite 2712/0, interpreter suite 1867/0, sr2-seam 12/12, sr4-seam
+24/24.  Known cost, filed not hidden: carrier-riding sum boxes have no
+automatic owner
+([reported](../reported/carrier-sum-option-boxes-have-no-owner.md)) --
+byvalue graduation is the ending that removes the box entirely.
 
 The payoff phase, and the reason SR1 is worth doing.
 

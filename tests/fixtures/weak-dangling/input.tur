@@ -2,8 +2,8 @@
 
 (defn weak-some? [o : ptr<void>] : bool
   ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)o;
-  return opt != NULL && opt->is_some;
+  struct { int tag; int64_t value; } *opt = (void*)o;
+  return opt != NULL && opt->tag == 1;
   ```)
 
 (defn main [] : int

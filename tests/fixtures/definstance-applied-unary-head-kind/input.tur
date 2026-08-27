@@ -13,7 +13,9 @@
 (definstance Enc [cstr] (enc [x] : cstr x))
 ; Applied UNARY head: (Option cstr) is fully applied -> kind *, same class.
 (definstance Enc [(Option cstr)] (enc [x] : cstr
-  (if (.is-some x) (enc (.value x)) "null")))
+  (match x
+    (Some v) (enc v)
+    (None)   "null")))
 
 (defn main [] : int
   (let [o (:: (some "hi") (Option cstr))]

@@ -1644,6 +1644,15 @@ char *type_adt_app_ctor_suffix(Type t) {
     for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
     }
+    /* SR2b: choosing a suffix is a PROMISE that `ctor_<Name><suffix>` exists,
+     * and only a REGISTERED app emits its monomorph ctors.  Every caller used
+     * to reach here for types that were registered anyway (by being named in a
+     * signature); a ctor call deep in a spec body -- `(ok (some v))` grounding
+     * to `(Result (Option int) cstr)` -- can be the type's ONLY appearance,
+     * and skipping registration left the call referencing an undefined
+     * `ctor_Ok__Option__int__cstr` at link time.  Registration is idempotent
+     * and an unused registration costs one guarded typedef. */
+    (void)type_register_adt_app(t);
     Buf b; buf_init(&b);
     append_adt_app_type_suffix(&b, def, args, n_args);
     buf_putc(&b, '\0');
@@ -3578,6 +3587,21 @@ bool adt_app_is_byvalue_product(Type t) {
         bool bad = (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) ||
                    (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
                     !adt_app_is_byvalue_product(rf));
+        /* SR2b: a field that NAMES a concrete monomorph is storable whatever
+         * its representation -- `(Cons (Option int))`'s `head` holds a
+         * carrier-riding sum monomorph as the int64 word its own type_c_name
+         * spells, exactly as a scalar field holds its word.  This is the field
+         * loop's copy of the arg loop's adt_app_type_arg_is_concrete widening
+         * (the two must move together; see type_app_is_concrete_adt).  Vec
+         * never needed it because its element parameter is PHANTOM -- no
+         * field mentions it -- which is why `(Vec (Option int))` worked while
+         * `(Cons (Option int))` fell to the carrier and the let binder ICEd
+         * against repr_of's heap-ptr answer.  Excluded for a self-recursive
+         * def, where accepting the self-field would inline the typedef into
+         * itself. */
+        if (bad && k == TY_APP && !def->is_self_recursive &&
+            type_app_is_concrete_adt(&rf))
+            bad = false;
         free_struct_app_type(rf);
         if (bad) return false;
     }

@@ -433,12 +433,11 @@
   ;; by-value spec, no concrete->carrier bridge -- this instance never crossed).
   (serialize [x]
     ```c
-    struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)x;
     int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
     if (!buf) { fprintf(stderr, "serialize Option: oom\n"); exit(1); }
     buf[0] = 16;
-    buf[1] = (o && o->is_some) ? 1 : 0;
-    buf[2] = (o && o->is_some) ? o->value : 0;
+    buf[1] = tur_is_some(x) ? 1 : 0;
+    buf[2] = tur_is_some(x) ? tur_opt_value(x) : 0;
     return buf;
     ```)
   (deserialize [b]
@@ -447,10 +446,7 @@
       fprintf(stderr, "deserialize Option: short buffer\n"); exit(1);
     }
     int64_t *d = (int64_t*)b + 1;
-    struct { bool is_some; int64_t value; } *o = malloc(sizeof(*o));
-    if (!o) { fprintf(stderr, "deserialize Option: oom\n"); exit(1); }
-    o->is_some = d[0] != 0; o->value = d[1];
-    return (int64_t)(intptr_t)o;
+    return d[0] != 0 ? tur_box_some(d[1]) : tur_none();
     ```))
 ;; ---------------------------------------------------------------------------
 ;; File I/O helpers (cont-to-file / cont-from-file)

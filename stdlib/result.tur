@@ -1,23 +1,31 @@
 ;;; tur/result -- typed Result[A B]: ok value A or err value B.
 ;;;
-;;; Parameterized result type. Runtime layout:
-;;; { bool is_ok; A ok_val; B err_val; } for concrete payload types.
+;;; Parameterized result type, as a REAL SUM (SR2b of
+;;; docs/upcoming/sum-representation-plan.md): `(Ok A)` or `(Err B)`.
+;;; Runtime layout is the tagged monomorph -- { int tag; union { Ok; Err } } --
+;;; 16 bytes (down from the record's 24), one payload slot, no dead arm to
+;;; zero-fill, so `err` no longer needs a zero value for A nor `ok` one for B.
+;;; On the default path values ride the int64 carrier (a heap pointer to that
+;;; layout); under `--enable=parametric-sum-byvalue` they flow by value with no
+;;; per-ctor allocation.  Tag values follow declaration order: Ok = 0, Err = 1.
+;;; The inline-C helpers in the codegen preamble (tur_box_ok / tur_box_err /
+;;; tur_is_ok / tur_ok_value / tur_err_value and the _int/_ptr builders) build
+;;; and read this exact layout; keep them in lockstep with this declaration.
 ;;;
-;;; Since: Phase TC1-E
-;; Phase TC1-E: Typed Result[A B]
-;; ok value of type A, err value of type B.
-;; Runtime layout specializes ok/err payload fields for concrete A/B.
+;;; Since: Phase TC1-E; converted to a sum in SR2b.
 ;;; Result -- parameterized result type with ok type A and err type B.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Result [A B] (is-ok :bool) (ok-val A) (err-val B))
+(defdata Result :copy [A B]
+  (Ok A)
+  (Err B))
 ;;; ok -- wrap a success value of type A in a Result[A B].
 ;;;
 ;;; Parameters:
 ;;;   x -- the ok value (type A)
 ;;;
 ;;; Returns:
-;;;   A Result[A B] with is-ok=true. B is a phantom tyvar inferred
+;;;   A Result[A B] carrying the Ok variant. B is a phantom tyvar inferred
 ;;;   from the call site (or pinned with an ascription such as
 ;;;   `(:: (ok x) (Result A B))`).
 ;;;
@@ -26,24 +34,20 @@
 ;;;   (:: (ok "hi") (Result cstr cstr))
 ;;;
 ;;; Since: Phase TC1 (made polymorphic over A/B as Prereq 3, 2026-06-12;
-;;;   the previous monomorphic-on-`:int` shape rejected non-int payloads
-;;;   at TUR-E0001 and blocked the typed Decode surface in the json
-;;;   spice. The body still goes through the int64 carrier helper
-;;;   `tur_box_ok`; the type-level polymorphism is achieved by ascribing the
-;;;   carrier handle to `(Result A B)` and letting the carrier-ABI
-;;;   codegen take care of the rest).
+;;;   converted to a sum constructor in SR2b -- the dead err arm, and the
+;;;   `(default-of B)` zero it required, are gone).
 
 (defn ok [A B] [x : A]
   #fx{Construct}
   : (Result A B)
-  (make-struct Result :is-ok true :ok-val x :err-val (default-of B)))
+  (Ok x))
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
 ;;; Parameters:
 ;;;   e -- the error value (type B)
 ;;;
 ;;; Returns:
-;;;   A Result[A B] with is-ok=false. A is a phantom tyvar inferred
+;;;   A Result[A B] carrying the Err variant. A is a phantom tyvar inferred
 ;;;   from the call site (or pinned with an ascription such as
 ;;;   `(:: (err msg) (Result A B))`).
 ;;;
@@ -51,13 +55,13 @@
 ;;;   (err 404)                       ; => Result A int   (A inferred)
 ;;;   (:: (err "missing") (Result int cstr))
 ;;;
-;;; Since: Phase TC1 (made polymorphic as Prereq 3, 2026-06-12; same
-;;;   notes as `ok`).
+;;; Since: Phase TC1 (made polymorphic as Prereq 3, 2026-06-12; sum
+;;;   constructor since SR2b -- no more `(default-of A)` for the dead ok arm).
 
 (defn err [A B] [e : B]
   #fx{Construct}
   : (Result A B)
-  (make-struct Result :is-ok false :ok-val (default-of A) :err-val e))
+  (Err e))
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:
@@ -103,30 +107,37 @@
 ;;;   r -- Result[A B]
 ;;;
 ;;; Returns:
-;;;   The ok value of type A.
+;;;   The ok value of type A; the zero value of A when r is err (preserving
+;;;   the pre-sum behaviour, where err's dead ok slot held `(default-of A)`).
 ;;;
 ;;; Example:
-;;;   (let [r (:: (make-struct Result true 7 "err") (Result int cstr))]
+;;;   (let [r (:: (ok 7) (Result int cstr))]
 ;;;     (ok-val r))  ; => 7
 ;;;
 ;;; Since: Phase TC1
 
-(defn ok-val [A B] [r : (Result A B)] :A (.ok-val r))
+(defn ok-val [A B] [r : (Result A B)] :A
+  (match r
+    (Ok v)  v
+    (Err _) (default-of A)))
 ;;; err-val -- extract the error value from a typed Result[A B].
 ;;;
 ;;; Parameters:
 ;;;   r -- Result[A B]
 ;;;
 ;;; Returns:
-;;;   The error value of type B.
+;;;   The error value of type B; the zero value of B when r is ok.
 ;;;
 ;;; Example:
-;;;   (let [r (:: (make-struct Result false 0 "boom") (Result int cstr))]
+;;;   (let [r (:: (err "boom") (Result int cstr))]
 ;;;     (err-val r))  ; => "boom"
 ;;;
 ;;; Since: Phase TC1
 
-(defn err-val [A B] [r : (Result A B)] :B (.err-val r))
+(defn err-val [A B] [r : (Result A B)] :B
+  (match r
+    (Ok _)  (default-of B)
+    (Err e) e))
 ;;; result-free -- free a heap-allocated Result[A B].
 ;;;
 ;;; Parameters:
@@ -151,8 +162,7 @@
 ;;;
 ;;; Returns:
 ;;;   Result[C B] with f applied to the ok value if ok, or the
-;;;   unchanged err otherwise. The returned value is a freshly
-;;;   allocated Result; the input r is not modified.
+;;;   unchanged err otherwise.
 ;;;
 ;;; Example:
 ;;;   (result-map (ok 3) (fn [x] (* x 2)))  ; => ok(6)
@@ -161,11 +171,9 @@
 ;;; Since: Phase TC1
 
 (defn result-map [A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)
-  ;; Option/Result none-as-NULL retirement (Track A): by-value `(Result A E)`
-  ;; receiver.  Pure-Turmeric body reads `.is-ok`/`.ok-val`/`.err-val` directly
-  ;; and rebuilds via the `#{Construct}` ok/err constructors -- no inline-C
-  ;; carrier round-trip.  The interpreter keeps its native override.
-  (if (.is-ok r) (ok (f (.ok-val r))) (err (.err-val r))))
+  (match r
+    (Ok v)  (ok (f v))
+    (Err e) (err e)))
 ;;; result-eq? -- compare two Result[A B] values.
 ;;;
 ;;; Parameters:
@@ -186,16 +194,18 @@
   #fx{}
   : bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
+  /* SR2b: the carrier points at the tagged sum layout (tag 0 = Ok, 1 = Err);
+   * both payloads share the union slot after the tag. */
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *a = (void*)(intptr_t)r1;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *b = (void*)(intptr_t)r2;
   if (!a && !b) return true;
   if (!a || !b) return false;
-  if (a->is_ok != b->is_ok) return false;
+  if (a->tag != b->tag) return false;
   /* CRU B-3: ok-cmp/err-cmp are fat closure boxes; fat-dispatch via slot 0. */
-  if (a->is_ok)
-      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)ok_cmp)[0])((void*)(intptr_t)ok_cmp, a->ok_val, b->ok_val);
+  if (a->tag == 0)
+      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)ok_cmp)[0])((void*)(intptr_t)ok_cmp, a->as.ok_val, b->as.ok_val);
   else
-      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)err_cmp)[0])((void*)(intptr_t)err_cmp, a->err_val, b->err_val);
+      return ((bool(*)(void*, int64_t, int64_t))(intptr_t)((int64_t*)(intptr_t)err_cmp)[0])((void*)(intptr_t)err_cmp, a->as.err_val, b->as.err_val);
   ```)
 ;;; __tur-q-is-err? -- ? operator helper; checks if a Result value is an error.
 
@@ -203,8 +213,8 @@
   #fx{}
   : bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
-  return !res || !res->is_ok;
+  struct { int tag; int64_t payload; } *res = r;
+  return !res || res->tag != 0;
   ```)
 ;;; __tur-q-ok-val -- ? operator helper; extracts the ok payload from a Result value.
 
@@ -212,26 +222,23 @@
   #fx{}
   : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
-  return res ? res->ok_val : 0;
+  struct { int tag; int64_t payload; } *res = r;
+  return res ? res->payload : 0;
   ```)
 ;;; Eq [Result] -- equality using the ok and err types' Eq instances.
 ;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
-;; Note: element comparison uses integer equality; correct for all primitive A/B.
-;; M4c-pre: rewrite to consult by-value fields directly via Eq A / Eq B,
-;; mirroring Eq Tuple2 / Eq Pair.  `result-eq?` itself is kept (the
-;; structural-eq fixture still consults it from the carrier path); only the
-;; instance body switches off it.  See
-;; docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+;; SR2b: match on the sum instead of reading record fields.
 
 (definstance Eq [Result]
   [(Eq A) (Eq B)]
   (eq? [x y]
-    (if (= (.is-ok x) (.is-ok y))
-      (if (.is-ok x)
-        (eq? (.ok-val x) (.ok-val y))
-        (eq? (.err-val x) (.err-val y)))
-      false)))
+    (match x
+      (Ok vx)  (match y
+                 (Ok vy)  (eq? vx vy)
+                 (Err _)  false)
+      (Err ex) (match y
+                 (Ok _)   false
+                 (Err ey) (eq? ex ey)))))
 ;;; result-bimap -- map fn-left over the err arm and fn-right over the ok arm.
 ;;;
 ;;; Follows the Either convention: the err arm is the "left" side and the ok
@@ -256,11 +263,11 @@
   #fx{}
   : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;
+  struct { int tag; int64_t payload; } *res = (void*)(intptr_t)container;
   if (!res) return 0;
-  if (res->is_ok)
-      return tur_box_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val));
-  return tur_box_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val));
+  if (res->tag == 0)
+      return tur_box_ok(((int64_t(*)(int64_t))(intptr_t)fn_right)(res->payload));
+  return tur_box_err(((int64_t(*)(int64_t))(intptr_t)fn_left)(res->payload));
   ```)
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
@@ -275,9 +282,7 @@
 ;; fixes the err arm B and varies the ok arm. (Result's parameters are
 ;; [A=ok B=err] with ok FIRST, so leftmost-only application `(Result A)` would
 ;; fix ok and vary err -- the opposite of the right-biased convention. The `_`
-;; hole marks the free parameter, sidestepping that.) The element arm is erased
-;; to the int64 carrier, so these instances delegate to inline-C carrier-level
-;; bodies that operate on the ok arm and pass err through unchanged. See
+;; hole marks the free parameter, sidestepping that.) See
 ;; docs/archive/history/result-param-order-blocks-functor-monad.md.
 ;; ---------------------------------------------------------------------------
 ;;; Bifunctor [Result] -- map fn-left over err, fn-right over ok.
@@ -290,9 +295,9 @@
 
 (definstance Bifunctor [Result]
   (bimap [container fn-left fn-right]
-    (if (.is-ok container)
-      (ok (fn-right (.ok-val container)))
-      (err (fn-left (.err-val container))))))
+    (match container
+      (Ok v)  (ok (fn-right v))
+      (Err e) (err (fn-left e)))))
 ;; ---------------------------------------------------------------------------
 ;; Ok-biased kind-(* -> *) instances (stdlib-hkt-consolidation T4)
 ;;
@@ -311,9 +316,9 @@
 
 (definstance Functor [(Result _ B)]
   (fmap [container g]
-    (if (.is-ok container)
-      (ok (g (.ok-val container)))
-      (err (.err-val container)))))
+    (match container
+      (Ok v)  (ok (g v))
+      (Err e) (err e))))
 ;;; Monad [(Result _ B)] -- bind sequences through ok; short-circuits on err.
 ;;;
 ;;; Example:
@@ -322,7 +327,10 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Monad [(Result _ B)]
-  (bind [ma k] (if (.is-ok ma) (k (.ok-val ma)) (err (.err-val ma)))))
+  (bind [ma k]
+    (match ma
+      (Ok v)  (k v)
+      (Err e) (err e))))
 ;;; MonadError [(Result _ B)] -- throw-error builds an err; catch-error runs a
 ;;; handler on the err payload (ok values pass through unchanged).
 ;;;
@@ -337,7 +345,7 @@
   (throw-error [err] ```c return tur_box_err(err); ```)
   (catch-error [ma handler]
     ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
-    if (!r || r->is_ok) return ma;
-    return handler.fn(handler.env, r->err_val);
+    struct { int tag; int64_t payload; } *r = (void*)(intptr_t)ma;
+    if (!r || r->tag == 0) return ma;
+    return handler.fn(handler.env, r->payload);
     ```))
