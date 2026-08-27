@@ -1337,6 +1337,10 @@ Expr *elab_unsafe(Elab *e, const Form *call) {
     /* Create handle expression with Unsafe handler
      * The handler just resumes with nil (Unsafe effect carries no value) */
     HandleCase *unsafe_case = arena_alloc(e->arena, sizeof(HandleCase));
+    /* Arena memory is not zeroed; every field this site does not set
+     * (resumable_payload, cont_kind, ...) must still hold a valid value for
+     * any reader -- same rule as the memset'd HandleExpr below. */
+    memset(unsafe_case, 0, sizeof(HandleCase));
     unsafe_case->effect_name = e->sym_effect_unsafe;
     unsafe_case->n_params = 0;
     unsafe_case->param_names = NULL;
