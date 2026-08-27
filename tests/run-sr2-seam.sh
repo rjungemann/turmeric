@@ -11,6 +11,11 @@
 # makes a specific claim -- its ELEVEN-fixture M7 worklist all green as of
 # 2026-08-27 -- that this harness is what keeps true.
 #
+# As of that date the FULL suite is also green under the seam (2710/0), so this
+# harness is a fast subset chosen for signal, not the whole claim.  When the
+# seam moves, `TUR_SR2_APP_SUM_BYVALUE=1 bash tests/run.sh` is the real check;
+# this one is what CI can afford to run every time.
+#
 # See docs/upcoming/sr2-gate-results.md.
 #
 # Two checks:

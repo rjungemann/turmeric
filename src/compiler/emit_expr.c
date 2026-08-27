@@ -11958,6 +11958,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
+                            /* SR2a: inside a per-instantiation clone the pattern
+                             * BINDING's own type is still the generic tyvar --
+                             * `(POK a int)` binds `v : a`, the int64 carrier --
+                             * while the scrutinee is the monomorph whose field is
+                             * `const char *`.  Binding the carrier there reads the
+                             * pointer as an integer and hands it straight back to
+                             * `ctor_POK__cstr`: "makes pointer from integer without
+                             * a cast", a warning cc will take and -Werror will not.
+                             * The scrutinee's own monomorph knows the field type;
+                             * take it from there.
+                             *
+                             * Narrow: only when the binding is the ERASED int64
+                             * carrier and the substituted field is something else,
+                             * so a binding that already has a real type is
+                             * untouched. */
+                            char _sub_ctype[256];
+                            if (scrut_is_app_monomorph && adt_byval &&
+                                bi < pat->ctor->n_fields &&
+                                pat->ctor->fields[bi].full_type &&
+                                strcmp(ctype, "int64_t") == 0) {
+                                AdtDef *_sd = NULL;
+                                Type _sargs[16];
+                                uint8_t _sn = 0;
+                                if (type_extract_adt_app(&scrut_ty, &_sd, _sargs, &_sn) &&
+                                    _sd == pat->ctor->adt) {
+                                    Type _sf = substitute_adt_app_type_owned(
+                                        pat->ctor->fields[bi].full_type, _sd, _sargs);
+                                    const char *_sc = type_c_name(_sf);
+                                    if (_sc && strcmp(_sc, "int64_t") != 0) {
+                                        snprintf(_sub_ctype, sizeof _sub_ctype, "%s", _sc);
+                                        ctype = _sub_ctype;
+                                    }
+                                    free_struct_app_type(_sf);
+                                }
+                            }
                             /* Use name_for_binding to get the canonical C name */
                             char *bname = name_for_binding(ctx, fb);
                             char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
