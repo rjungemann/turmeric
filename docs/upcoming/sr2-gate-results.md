@@ -1,7 +1,7 @@
 ---
 title: SR2 prototype gate -- results
 category: Planning
-description: What happened when a multi-variant PARAMETRIC sum monomorph was forced by value behind a compile-time seam -- the plan's prerequisite line corrected, an eleven-fixture worklist worked down to three, the silent SEGV traced to a default-path ABI bug and fixed, the two remaining causes named, and a pre-existing default-path ICE found while probing.
+description: What happened when a multi-variant PARAMETRIC sum monomorph was forced by value behind a compile-time seam -- the plan's prerequisite line corrected, an eleven-fixture worklist worked to zero, the silent SEGV traced to a default-path ABI bug, and the whole suite green under the seam. SR2a's codegen is done; what remains is the stdlib conversion.
 ---
 
 # SR2 prototype gate -- results
@@ -16,12 +16,14 @@ REAL prerequisite (by-value parametric sum monomorphs, call it SR2a) is
 tractable and its direct-use subset already works, and the cost lives in one
 place the plan already knew was expensive: the M7 HKT carrier machinery.**
 
-**Update 2026-08-27: SR2a's codegen is mostly paid.** The worklist below is 8
-of 11 green, and what closed was not new machinery -- four existing conventions
-each had a `TY_ADT` case and no `TY_APP` one. Two causes remain, named in
-**Remaining damage**; one of them (a bare ctor call with no expected type) is
-the elaboration item this document already flagged as SR2's real ergonomic
-risk, now shown to be broader than nullary constructors.
+**Update 2026-08-27: SR2a's codegen is PAID.** The eleven-fixture worklist is
+all green, and so is everything else -- `TUR_SR2_APP_SUM_BYVALUE=1 bash
+tests/run.sh` reports 2710 passed, 0 failed, with the default path unchanged
+throughout. What closed it was not new machinery: almost every blocker was an
+existing predicate with a `TY_ADT` case and no `TY_APP` one. The two items this
+document flagged as separate costs -- the nullary-ctor elaboration gap and the
+`vec-of` ICE -- are also closed. What remains of SR2 is the stdlib conversion
+and the experiment row.
 
 ## The prerequisite correction
 
@@ -91,88 +93,103 @@ static tur_adt_Res2__int__cstr ctor_Good__int__cstr(int64_t _0) {
 Probe: `(defdata Res2 :copy [a b] (Bad b) (Good a))` with a `div2` returning
 `(Res2 int cstr)`, matched by the caller.  Both variants print correctly.
 
-## Remaining damage: 3 fixtures, two causes (was 11, one family)
+## The worklist, worked: 11 of 11
 
-Against the 2709-green baseline (SR1's gate had 34).  **Worked 2026-08-27; 8 of
-the 11 now build and print correct values under the seam.**
+Against the 2709-green baseline (SR1's gate had 34).  **Worked 2026-08-27: all
+eleven build and print correct values under the seam, and so does everything
+else -- `TUR_SR2_APP_SUM_BYVALUE=1 bash tests/run.sh` is 2710 passed, 0
+failed.**  SR2a's codegen is done.
 
-| fixture | state |
-|---|---|
-| hkt-cata-* (6) | **GREEN** |
-| hkt-fmap-byvalue-sum-element | **GREEN** |
-| parsec-tutorial | **GREEN** -- and it was a default-path bug, see below |
-| class-method-hkt-tyvar-grounding | cause A |
-| conv-with-narrowed-variant-parametric | cause A |
-| poly-combinator-application-element-inference | cause B |
+The original entry read "every one is the M7 HKT-carrier bridge family."  Right
+about the shape, wrong about the cost.  Almost all of it closed by teaching
+existing conventions that a concrete parametric monomorph is one of their
+members -- **each was a predicate with a `TY_ADT` case and no `TY_APP` one**:
 
-The original entry read "every one is the M7 HKT-carrier bridge family."  That
-was right about the shape and wrong about the count: seven of the eight closed
-by teaching four existing conventions that a concrete parametric monomorph is
-one of their members, not by new machinery.
+- **The typed fatshim** (`thunk_type_has_concrete_c_abi`) -- slot 0 of a fatbox
+  kept the generic int64 shim while the call site cast it to the aggregate
+  signature.  A DEFAULT-path SEGV past 16 bytes; see below.
+- **The match's three parts** -- the scrutinee's `(ReF a)`, the result's bare
+  `ReF`, and a binder's erased tyvar -- all read types a by-value HKT
+  instance-method spec leaves erased, while the element that grounds them lives
+  in the emit ctx or in the scrutinee's own monomorph.
+- **The b4box closure-slot convention** (`type_is_wide_byval_adt`) --
+  `(ExprF (fn [int] int))`, 24 bytes and pass-by-pointer at the callee, was
+  spelled BY VALUE in the fat-dispatch cast.  Now `type_is_b4box_closure_slot`,
+  deliberately separate: the old predicate also drives ADT FIELD layout, where a
+  monomorph must stay inline, and folding the two questions together broke six
+  DEFAULT-path fixtures.
+- **The fixpoint exclusion** reused B4's narrow
+  `adt_is_byval_recursive_carrier_wrapper`, which requires a sole field because
+  it promises something else.  `adt_is_fixpoint_partner_of` asks the right
+  question.
+- **The type-ARGUMENT test** answered "does this have a layout / is it by-value"
+  where the question was "does it NAME a monomorph".
 
-- **The typed fatshim** (`thunk_type_has_concrete_c_abi`) had no `TY_APP` case,
-  so slot 0 of a fatbox kept the generic int64 shim while the call site cast it
-  to the aggregate signature.  Default-path SEGV past 16 bytes; see below.
-- **The match's two ends** read types that a by-value HKT instance-method spec
-  leaves erased -- the scrutinee's `(ReF a)` and the result's bare `ReF` -- while
-  the element that grounds them lives in the emit ctx.  Both now ground from the
-  active spec, the result through `emit_hkt_spec_app_result`, the result-type
-  twin of the existing `emit_hkt_spec_ctor_suffix`.
-- **The b4box closure-slot convention** (`type_is_wide_byval_adt`) answered for
-  `TY_ADT` only, so `(ExprF (fn [int] int))` -- 24 bytes, pass-by-pointer at the
-  callee -- was spelled BY VALUE in the fat-dispatch cast.  Now
-  `type_is_b4box_closure_slot`, deliberately separate: the old predicate also
-  drives ADT FIELD layout, where a monomorph must stay inline, and folding the
-  two questions together broke six DEFAULT-path fixtures.
-- **The fixpoint exclusion** reused B4's narrow `adt_is_byval_recursive_carrier_
-  wrapper`, which requires a sole field because it promises something else
-  ("an 8-byte wrapper whose by-value form IS its carrier int64").  `Expr = (Roll
-  :int (ExprF Expr))` failed that test, so `(ExprF Expr)` was admitted and its
-  functor monomorph laid `tur_adt_Expr` out inline in a typedef that precedes
-  the wrapper's own.  `adt_is_fixpoint_partner_of` asks the right question.
+Two were elaboration, not codegen, and are **Cause A** below.  One was a
+specialization gate.  Details in the git log; the two findings worth carrying
+forward are these:
 
-**The pattern across all four: a predicate that had a `TY_ADT` case and no
-`TY_APP` one.**  That is the shape to look for in whatever is left.
+### The acceptance test was a default-path bug
 
-### Cause A -- a bare ctor call has no expected type
+parsec-tutorial compiled cleanly under the seam and SEGVed.  The guess recorded
+here first -- a sum monomorph crossing a `:fn` carrier as an aggregate where the
+reader assumes a box pointer -- named the right family and the wrong member.
+The cause was ABI SELECTION, and it had nothing to do with the seam:
+
+```turmeric
+(defdata Big3 :copy [a] (Big3 [x : a y : a z : a]))
+(defn mk3 [n : int] : (Big3 int) (Big3 n (* n 2) (* n 3)))
+(defn apply3 [^fat f : (fn [int] (Big3 int)) n : int] : int
+  (match (f n) (Big3 x y z) (+ x (+ y z))))
+(defn main [] : int (println (apply3 mk3 5)) 0)   ; expect 30 -> SEGV
+```
+
+Reproducible at the pre-session merge base.  It hid because the generic shim is
+a transparent forwarding tail-call, so aggregates returned in registers survived
+it by luck; only past the SysV 16-byte threshold does sret shift the arguments.
+Fixed and pinned at all three widths:
+[fat-dispatch-parametric-monomorph-generic-shim](../archive/fat-dispatch-parametric-monomorph-generic-shim.md).
+
+The lesson this document already stated stands, and paid: **assert VALUES, not
+just that it builds** -- a function-pointer cast is what cc cannot see through,
+and the two narrow widths pass a build-only check while the wide one jumps to 0.
+
+### Cause A was one channel in three positions
 
 `class-method-hkt-tyvar-grounding` and `conv-with-narrowed-variant-parametric`
-are the SAME defect as the nullary-constructor gap the next section already
-describes, and that section understates it: it is not only about nullary ctors.
+were the SAME defect as the nullary-constructor gap the next section describes,
+and that section understated it -- it is not confined to nullary ctors, and it
+appears in three places, all now closed:
 
-- `(Empty)` bound in a `let` and later passed to `getv [b : (Box int)]` emits
-  the un-monomorphised `ctor_Empty()`.  Nullary, as described.
-- `(Some (None))` inside a `trav` instance body emits `ctor_None__Opt__int` for
-  the INNER `(None)`: with no expected type of its own it falls back to the
-  active spec's RESULT family, which is the OUTER `(Opt (Opt int))`.  The outer
-  ctor knows its field is `(Opt int)` and nothing carries that down.
+- **Argument position.** `(getv (Empty))` against `getv [b : (Box int)]`.  The
+  parameter slot already carried a bidirectional channel for lambda arguments;
+  a bare constructor argument now uses it too.
+- **Nested ctor field.** The inner `(None)` of `(Some (None))` fell back to the
+  active spec's RESULT family, which is the OUTER one.  The enclosing call is
+  the only site that knows the field type, so it now supplies it.
+- **Unannotated let.** `(let [e (Empty)] ... (getv e))`.  Annotating the binding
+  already worked, so only the channel was missing; a bounded, depth-capped
+  look-ahead over the let's own text finds the same answer.
 
-One channel closes both: push the expected type onto a constructor call's own
-type and onto each of its argument slots, the way the ascription path
-(`(:: (Nah) (Opt2 int))`) already does.  **Scope it once, for both.**
+### Cause B dissolved
 
-### Cause B -- the fat RESULT slot has two consumers that disagree
+The last fixture looked like a genuine design decision: a fatbox slot 0 holding
+a typed shim that returns the aggregate (right for a typed consumer, and what
+closed parsec) versus a generic carrier cast from a polymorphic combinator's
+lifted closure.  Inverting the fat RESULT ABI would have been a large, deliberate
+change.
 
-`poly-combinator-application-element-inference` builds and SEGVs.  A fatbox for
-`s-fail : (fn [int] (PRes cstr))` holds a typed shim in slot 0 returning the
-24-byte aggregate -- correct for a typed consumer, and what closed
-parsec-tutorial.  But the closure lifted out of the POLYMORPHIC combinator
-`or-parser` keeps that combinator's ungrounded `(PRes A)`, so it dispatches slot
-0 through `int64_t (*)(void *, int64_t)`.  Past 16 bytes sret shifts every
-argument and the program jumps to 0.
+It was not needed.  That generic dispatch is not something the combinator is
+entitled to keep -- `(or-parser s-fail s-ok)` grounds `A := cstr`, and the
+compiler already clones a generic fn's lifted closure per instantiation for
+exactly this reason.  Three one-line gates had to admit it: the `inner_app`
+trigger (which keys on an UNANNOTATED closure result, and this closure wrote its
+type down), the spec dedup (whose C signature is identical across
+instantiations, so both interned to one -- `match_bindings` exists for that), and
+the inner-clone guard's list of triggers.
 
-Both casts are right about their own side; the SLOT cannot be both.  The
-argument-position answer already exists and is uniform -- the b4box convention,
-where a wide by-value aggregate crosses as an int64 box and every reader derefs
-(the archived
-[fat-dispatch-wide-byvalue-aggregate-argument](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md)).
-Applying the same rule to RESULTS is the obvious candidate and is NOT a local
-change: it inverts what the typed fatshim currently does, so it must move the
-typed call sites to deref in the same commit.  Decide it deliberately.
-
-The readback half is already in place for one crossing: a direct thunk call
-whose thunk returns the carrier now derefs at the call site, keyed on the
-thunk's emitted return spelling so an already-grounded thunk is untouched.
+**Worth remembering: "two consumers disagree about a slot" can mean the slot is
+fine and one consumer should not be generic.**
 
 ## The elaboration gap the codegen list does not show
 
@@ -195,48 +212,65 @@ annotation-required, the migration is not "47 mechanical sites" -- every
 elaboration fix (push the expected app type onto ctor calls, the way the
 ascription path already does) before starting the codegen half.
 
-## Found while probing, unrelated to the seam
+## Found while probing, unrelated to the seam -- CLOSED
 
-`(vec-of (Yep 8) ...)` -- a Vec of a parametric sum monomorph -- **ICEs on
-the DEFAULT path** (repr-shadow: let-bind of `(Vec (Opt2 int))` wants
-heap-ptr, gets carrier-i64).  Reproduced at the pre-session merge base, so it
-predates all SR work.  Filed:
-[vec-of-parametric-sum-monomorph-ice](../reported/vec-of-parametric-sum-monomorph-ice.md).
-It is also on SR2's path: `vec<option<T>>` is an everyday shape.
+`(vec-of (Yep 8) ...)` -- a Vec of a parametric sum monomorph -- **ICEd on the
+DEFAULT path** (repr-shadow: let-bind of `(Vec (Opt2 int))` wants heap-ptr, gets
+carrier-i64).  Reproduced at the pre-session merge base, so it predated all SR
+work, and it is on SR2's path either way: `vec<option<T>>` is an everyday shape.
+
+The seam diagnosed it before a fix was written -- the repro compiles and runs
+correctly under `TUR_SR2_APP_SUM_BYVALUE=1`, because the seam makes `(Opt2 int)`
+by-value and the disqualifying predicate starts answering yes.  The predicate is
+the same type-ARGUMENT test listed above, and the fix is the same one:
+`(Vec (Opt2 int))` names a real monomorph whether or not its element is by
+value.  Pinned by `tests/fixtures/vec-of-parametric-sum-monomorph`, archived as
+[vec-of-parametric-sum-monomorph-ice](../archive/vec-of-parametric-sum-monomorph-ice.md).
 
 ## What SR2 now costs, in order
 
-1. **SR2a codegen**: mostly PAID.  8 of the 11 worklist fixtures are green and
-   the default path stayed at 2710/0 throughout.  What is left is **Cause B**
-   alone -- one deliberate decision about whether a fat RESULT slot speaks the
-   aggregate or the b4box carrier, which inverts the typed fatshim and must
-   move its call sites in the same commit.  One fixture
-   (poly-combinator-application-element-inference) is the acceptance test, and
-   it SEGVs rather than failing to build, so assert values.
-2. **The bare-ctor expected-type fix** (**Cause A**) -- now the largest
-   remaining item, and it grew: two of the three surviving fixtures are this,
-   not just `(none)` ergonomics.  Without it `(none)` regresses everywhere AND
-   a nested ctor inside an HKT instance body picks the wrong family.
-3. **The vec-of-sum ICE** -- pre-existing, but `vec<option<T>>` cannot ICE in
-   a world where Option IS a sum.
+1. ~~**SR2a codegen**~~ -- **DONE.**  Full suite green under the seam, default
+   path unchanged, and `tests/run-sr2-seam.sh` (ctest `tur_sr2_seam`) keeps a
+   fast subset of it honest.
+2. ~~**The bare-ctor expected-type fix**~~ -- **DONE**, in all three positions
+   the gap appears: argument, nested ctor field, unannotated let.  `(none)` no
+   longer needs an ascription to select its monomorph.
+3. ~~**The vec-of-sum ICE**~~ -- **DONE.**
 4. **SR2b stdlib conversion**: Option/Result defstruct -> defdata, the 47
    sites SR0(b) verified, and the inline-C result builders
    (`tur_ok_ptr`/`tur_some_ptr`/`tur_box_*` in the preamble) which hand-build
    the CURRENT discriminated-record layout and every user of
    [the inline-C results guide](../guides/inline-c-results-guide.md) depends on.
+   **This is now the whole remaining cost, and it is the part the gate never
+   measured** -- everything above was about whether the representation WORKS,
+   and this is about moving the two most-used types onto it.
 5. **SR2c**: the `EXPERIMENTS[]` row (user-visible change), docs, and the
    `.value`-accessor API migration in `option.tur`/`result.tur`.
 
-The seam stays in the tree, default off, as the instrument -- flipping it on
-is one env var and the failure list above is the worklist.
+## The open question: should the seam flip?
+
+The gate's job was to answer "what would SR2a cost", and the answer came out
+lower than the plan assumed.  That makes the flip a live decision rather than a
+distant one, and it is a decision, not a formality:
+
+- **Correctness** is not the blocker any more.  2710/0 both ways.
+- **Cost is unmeasured.**  SR1's flip was justified by numbers (62.6 MB -> 1.2
+  MB peak RSS); SR4's was measured and DECLINED (1.13x slower for 2.2x less
+  memory).  Nobody has measured SR2a, and a parametric sum going by value has
+  the same shape of tradeoff.
+- **CLAUDE.md's rule applies.**  An in-flight representation change ships behind
+  `--enable=`, not gatelessly -- so the flip is an `EXPERIMENTS[]` row (SR2c),
+  not a default change, until it graduates.
+
+The seam stays in the tree, default off, as the instrument -- flipping it on is
+one env var, and there is no longer a failure list behind it.
 
 **Regression cover.**  The fatshim fix is a DEFAULT-path bug and is pinned by
-`tests/fixtures/fat-dispatch-parametric-monomorph-return` (all three SysV
-return widths, values asserted) plus a row in `tests/run-sr4-seam.sh`.
-
-The seam-only work would otherwise have no cover at all -- nothing in the
-ordinary suite compiles a parametric sum by value, so the eight fixtures above
-would be a claim this document makes and nothing enforces.  `tests/run-sr2-
-seam.sh` (ctest target `tur_sr2_seam`) is that cover: a canary asserting the
-seam actually bites, then build + run + stdout compare for all eight.  Add the
-remaining three as their causes close.
+`tests/fixtures/fat-dispatch-parametric-monomorph-return` (all three SysV return
+widths, values asserted) plus a row in `tests/run-sr4-seam.sh`.  The seam-only
+work is covered by `tests/run-sr2-seam.sh` (ctest `tur_sr2_seam`): a canary
+asserting the seam actually bites, then build + run + stdout compare for the
+whole worklist.  That harness is a fast subset chosen for signal -- when the
+seam moves, `TUR_SR2_APP_SUM_BYVALUE=1 bash tests/run.sh` is the real check, and
+it is what caught the last defect (an emitted-C warning the subset does not
+look for).

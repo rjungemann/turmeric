@@ -645,7 +645,25 @@ static bool adt_app_type_arg_is_concrete(const Type *a) {
     if (!a) return false;
     if (a->kind == TY_ADT && a->as.adt_.def && a->as.adt_.def->n_type_params > 0)
         return false;
-    return type_has_concrete_codegen_layout(a) || adt_app_is_byvalue_product(*a);
+    if (type_has_concrete_codegen_layout(a) || adt_app_is_byvalue_product(*a))
+        return true;
+    /* A nested app that NAMES a real monomorph, whatever its REPRESENTATION.
+     *
+     * The two tests above ask "does this argument have a C layout" and "is it a
+     * by-value monomorph".  A multi-variant parametric sum monomorph answers no
+     * to both on the default path -- it rides the carrier -- yet
+     * `tur_adt_Opt2__int` is a registered typedef all the same, and the OUTER
+     * app is perfectly nameable over it.  Answering no here made
+     * `(Vec (Opt2 int))` not-a-concrete-app, so the let binder fell to the int64
+     * carrier while repr_of said typed heap pointer, and the repr-shadow
+     * aborted the compile:
+     *
+     *   ICE: want=heap-ptr got=carrier-i64 ... type=(type-app Vec (type-app Opt2 int))
+     *
+     * A Vec of a parametric PRODUCT monomorph never hit it, because a product
+     * IS by-value and passed the second test.  See
+     * docs/archive/vec-of-parametric-sum-monomorph-ice.md. */
+    return a->kind == TY_APP && type_app_is_concrete_adt(a);
 }
 
 bool type_app_is_concrete_adt(const Type *t) {

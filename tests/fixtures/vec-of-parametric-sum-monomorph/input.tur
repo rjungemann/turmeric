@@ -1,0 +1,30 @@
+;; vec-of-parametric-sum-monomorph: a Vec whose ELEMENT is a multi-variant
+;; parametric sum monomorph -- `(Vec (Opt2 int))`, and therefore
+;; `vec<option<T>>` the moment Option becomes a real sum.
+;;
+;; This ICEd on the DEFAULT path: the repr-shadow caught the let binder deciding
+;; int64-carrier for `(Vec (Opt2 int))` while repr_of said typed heap pointer.
+;; The cause was a type-ARGUMENT test that asked "does this argument have a C
+;; layout / is it by-value" -- a carrier-riding sum answers no to both -- when
+;; the question at that site is only "does it NAME a registered monomorph".
+;; A Vec of a parametric PRODUCT monomorph never hit it, because a product IS
+;; by-value and passed the second test, which is why the whole shape looked
+;; covered.
+;;
+;; The fixture reads BOTH elements: a mis-decoded element would still let the
+;; first one through by luck, and the `Nah` arm is where a wrong representation
+;; shows up as a plausible number rather than a crash.
+
+(defdata Opt2 :copy [a] (Nah) (Yep a))
+
+(defn get-or [o : (Opt2 int) d : int] : int
+  (match o
+    (Yep v) v
+    (Nah)   d))
+
+(defn main [] : int
+  (let [v (vec-of (Yep 8) (:: (Nah) (Opt2 int)) (Yep 21))]
+    (println (get-or (vec-get v 0) -1))    ; 8
+    (println (get-or (vec-get v 1) -1))    ; -1  (the Nah arm)
+    (println (get-or (vec-get v 2) -1)))   ; 21
+  0)
