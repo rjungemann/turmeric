@@ -627,6 +627,27 @@ bool type_has_concrete_codegen_layout(const Type *t) {
  * type_has_concrete_codegen_layout deliberately rejects ADT apps (its callers
  * then call type_extract_struct_app), so this is a separate predicate used by
  * the M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
+/* Is one type ARGUMENT of an ADT application concrete enough to monomorphise?
+ *
+ * type_has_concrete_codegen_layout answers `true` for every TY_ADT, which is
+ * right when the question is "does this value have a C representation" but
+ * wrong here: an UNAPPLIED parametric ADT names a type CONSTRUCTOR, not a type.
+ * Admitting it mangles `(Opt (Opt int))` -- whose inner argument was dropped
+ * somewhere upstream, leaving `(Opt Opt)` -- to the suffix `__Opt`, so a ctor
+ * call site names `ctor_Some__Opt` (an int64 carrier ctor) while the value in
+ * hand is `tur_adt_Opt__Opt__int`.  Declining lets the caller fall through to
+ * the spec-grounded suffix, which knows the real family.
+ *
+ * Shared by type_app_is_concrete_adt and adt_app_is_byvalue_product, whose
+ * argument loops were already required to stay in lockstep -- see the comment
+ * in the former.  A single helper is how they stay that way. */
+static bool adt_app_type_arg_is_concrete(const Type *a) {
+    if (!a) return false;
+    if (a->kind == TY_ADT && a->as.adt_.def && a->as.adt_.def->n_type_params > 0)
+        return false;
+    return type_has_concrete_codegen_layout(a) || adt_app_is_byvalue_product(*a);
+}
+
 bool type_app_is_concrete_adt(const Type *t) {
     if (!t || t->kind != TY_APP) return false;
     AdtDef *def = NULL;
@@ -646,8 +667,7 @@ bool type_app_is_concrete_adt(const Type *t) {
          * return the by-value aggregate while its body still calls the
          * carrier `ctor_Option` -- eight fixtures fail to compile with
          * "incompatible types when returning type 'int64_t'". */
-        if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !adt_app_is_byvalue_product(args[i])) return false;
+        if (!adt_app_type_arg_is_concrete(&args[i])) return false;
     }
     return true;
 }
@@ -3513,8 +3533,7 @@ bool adt_app_is_byvalue_product(Type t) {
      * aggregate already round-trips via the struct-app monomorph path, so leaving
      * it untouched avoids perturbing the constrained-instance-body specs. */
     for (uint32_t i = 0; i < n_args; i++)
-        if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !adt_app_is_byvalue_product(args[i])) return false;
+        if (!adt_app_type_arg_is_concrete(&args[i])) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --
      * no residual tyvar / HKT / non-concrete application (those are M7's job).
      * SR2: for a sum, EVERY variant's fields -- a union is only as flat as its
