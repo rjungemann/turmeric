@@ -8,11 +8,11 @@
 # fixtures below are green under the seam and NOTHING enforces that.  A gate
 # nobody turns on decays to a gate nobody notices (the lesson of
 # docs/reported/sanitizer-gate-not-armed-in-ci.md), and the SR2 gate document
-# makes a specific claim -- 9 of its 11-fixture M7 worklist green as of
+# makes a specific claim -- 10 of its 11-fixture M7 worklist green as of
 # 2026-08-27 -- that this harness is what keeps true.
 #
-# See docs/upcoming/sr2-gate-results.md.  The two fixtures NOT listed here are
-# the open causes that document names; add them as they close.
+# See docs/upcoming/sr2-gate-results.md.  The one fixture NOT listed here is the
+# single open cause that document names; add it when it closes.
 #
 # Two checks:
 #   1. A CANARY: emit-c of a parametric-sum fixture must show the by-value ctor
@@ -78,6 +78,8 @@ fi
 #   SECOND child, so a layout mismatch shows up as a wrong value.
 # class-method-hkt-tyvar-grounding: a method-level tyvar in result position,
 #   and the nested-ctor field channel -- the inner `(None)` of `(Some (None))`.
+# conv-with-narrowed-variant-parametric: the let use-site look-ahead -- an
+#   unannotated `(Empty)` grounded from a later `(getv e)`.
 # parsec-tutorial: the gate document's acceptance test.  PRes is the Option
 #   shape verbatim, driven through parser-combinator closures.
 FIXTURES="
@@ -89,6 +91,7 @@ hkt-cata-mixed-fn-value-carrier
 hkt-cata-wide-byvalue-carrier
 hkt-fmap-byvalue-sum-element
 class-method-hkt-tyvar-grounding
+conv-with-narrowed-variant-parametric
 parsec-tutorial
 "
 
