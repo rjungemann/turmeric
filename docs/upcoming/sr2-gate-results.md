@@ -1,7 +1,7 @@
 ---
 title: SR2 prototype gate -- results
 category: Planning
-description: What happened when a multi-variant PARAMETRIC sum monomorph was forced by value behind a compile-time seam -- the plan's prerequisite line corrected, an eleven-fixture worklist worked to zero, the silent SEGV traced to a default-path ABI bug, and the whole suite green under the seam. SR2a's codegen is done; what remains is the stdlib conversion.
+description: What happened when a multi-variant PARAMETRIC sum monomorph was forced by value behind a compile-time seam -- the plan's prerequisite line corrected, an eleven-fixture worklist worked to zero, the silent SEGV traced to a default-path ABI bug, the whole suite green under the seam, and the cost measured (3.6x faster, 71x less memory, one leaked allocation per construction eliminated). SR2a is done; what remains is the stdlib conversion.
 ---
 
 # SR2 prototype gate -- results
@@ -247,20 +247,46 @@ value.  Pinned by `tests/fixtures/vec-of-parametric-sum-monomorph`, archived as
 5. **SR2c**: the `EXPERIMENTS[]` row (user-visible change), docs, and the
    `.value`-accessor API migration in `option.tur`/`result.tur`.
 
+## What it costs -- measured
+
+SR1's flip was justified by numbers and SR4's was measured and DECLINED (1.13x
+slower for 2.2x less memory), so SR2a gets the same treatment.  Measured
+2026-08-27 on the same box as the rest of this document; three runs each,
+Release-equivalent fixture builds (emitted programs carry no sanitizer).
+
+| benchmark | seam off | seam on | delta |
+|---|---|---|---|
+| narrow sum, 3e6 construct+match | 0.097-0.112 s, 86-93 MB peak RSS | 0.029 s, 1.2 MB | **3.6x faster, 71x less memory** |
+| WIDE sum (6 payload words), 3e6 | 0.135-0.150 s, 172-188 MB | 0.042 s, 1.2 MB | **3.2x faster, 145x less memory** |
+| leak check, 1000 ctor calls | 16,000 bytes in 1,000 allocations | zero | one leaked allocation PER CONSTRUCTION |
+| compile time (parsec `emit-c`) | 0.107-0.109 s | 0.111-0.114 s | ~4% slower |
+
+The wide sum was included expecting by-value to LOSE -- 6 payload words means
+every pass copies 56 bytes or goes pass-by-pointer, where the carrier passes
+one word.  It does not lose, and the leak row says why: **the comparison is
+against a carrier path that mallocs per construction and never frees.**  That is
+this document's own opening finding, now with a number on it.  Against a
+hypothetical carrier that freed correctly the gap would be smaller; against the
+carrier as it exists, by-value wins on both axes at every width tried.
+
+Note what this does NOT measure: recursive sums, which the seam excludes by
+design and which SR4 measured separately and declined.  The favorable result
+here is for the population the seam actually admits.
+
 ## The open question: should the seam flip?
 
 The gate's job was to answer "what would SR2a cost", and the answer came out
-lower than the plan assumed.  That makes the flip a live decision rather than a
-distant one, and it is a decision, not a formality:
+lower than the plan assumed -- on correctness (2710/0 both ways) and now on
+performance.  That makes the flip a live decision rather than a distant one.  It
+is still a decision, not a formality:
 
-- **Correctness** is not the blocker any more.  2710/0 both ways.
-- **Cost is unmeasured.**  SR1's flip was justified by numbers (62.6 MB -> 1.2
-  MB peak RSS); SR4's was measured and DECLINED (1.13x slower for 2.2x less
-  memory).  Nobody has measured SR2a, and a parametric sum going by value has
-  the same shape of tradeoff.
 - **CLAUDE.md's rule applies.**  An in-flight representation change ships behind
-  `--enable=`, not gatelessly -- so the flip is an `EXPERIMENTS[]` row (SR2c),
-  not a default change, until it graduates.
+  `--enable=`, not gatelessly -- so the next step is an `EXPERIMENTS[]` row
+  (SR2c), not a default change, until it graduates.
+- **SR2b is still unwritten**, and it is the part no gate measured: moving
+  Option and Result themselves, plus the inline-C builders every user of the
+  results guide depends on.  Flipping the representation before that lands
+  changes the cost of doing it.
 
 The seam stays in the tree, default off, as the instrument -- flipping it on is
 one env var, and there is no longer a failure list behind it.
