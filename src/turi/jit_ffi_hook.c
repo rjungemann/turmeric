@@ -166,33 +166,15 @@ const char *tur_jit_ffi_struct_layout(const char *s, size_t *out_size,
     return p + 1;
 }
 
-bool tur_jit_ffi_is_hfa(const char *s) {
-    size_t offs[8];
-    char   codes[8];
-    int    n = 0;
-    /* > 4 leaves cannot be an HFA, so a cap of 8 both answers the question
-     * and rejects the oversized case by failing the walk. */
-    if (!tur_jit_ffi_struct_layout(s, NULL, NULL, offs, codes, 8, &n))
-        return false;
-    if (n < 1 || n > 4) return false;
-    if (codes[0] != 'F' && codes[0] != 'f') return false;
-    for (int i = 1; i < n; i++)
-        if (codes[i] != codes[0]) return false;
-    return true;
-}
-
+/* The aarch64 HFA refusal that used to guard this -- and the
+ * tur_jit_ffi_is_hfa predicate that existed only to drive it -- are GONE.  The
+ * pinned MIR fork now classifies AAPCS64 Homogeneous Floating-point Aggregates
+ * and passes/returns them in v0..v7, so a c2mir thunk and a natively compiled
+ * callee agree and there is nothing left to refuse.  See
+ * docs/archive/mir-aarch64-fp-aggregate-abi.md, and note that reverting the
+ * MIR pin below that fix silently reinstates the miscall this file used to
+ * catch. */
 bool tur_jit_ffi_struct_supported(const char *s, const char **why) {
-#if defined(__aarch64__) || defined(_M_ARM64)
-    if (tur_jit_ffi_is_hfa(s)) {
-        if (why)
-            *why = "a floating-point aggregate (AAPCS64 HFA) cannot be "
-                   "passed through a c2mir thunk on aarch64 -- MIR has no "
-                   "HFA class and would pass it in x0..x7 where the callee "
-                   "reads v0..v7 (see "
-                   "docs/reported/mir-aarch64-fp-aggregate-abi.md)";
-        return false;
-    }
-#endif
     if (!tur_jit_ffi_struct_layout(s, NULL, NULL, NULL, NULL, 0, NULL)) {
         if (why) *why = "malformed aggregate signature";
         return false;

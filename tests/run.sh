@@ -1157,7 +1157,18 @@ if [ -s "$SANITIZER_LOG" ]; then
     fi
     cut -f2- "$SANITIZER_LOG" | sed 's/value [0-9][0-9]*/value N/' \
         | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
-    echo "  full log: $SANITIZER_LOG"
+    # $SANITIZER_LOG lives under $RESULTS_DIR, which the EXIT trap deletes -- so
+    # printing that path alone leaves a reader (and, once the gate is armed in
+    # CI, a red job) pointing at a file that is already gone.  Copy it somewhere
+    # durable next to the compiler under test before the trap fires.  Best-effort:
+    # an unwritable build dir must not turn a report into a harness failure.
+    SAN_LOG_OUT="${TUR_SANITIZER_LOG_OUT:-$(dirname "$TUR")/sanitizer-findings.log}"
+    if cp "$SANITIZER_LOG" "$SAN_LOG_OUT" 2>/dev/null; then
+        echo "  full log ($SAN_COUNT line(s), fixture<TAB>phase<TAB>finding): $SAN_LOG_OUT"
+    else
+        echo "  full log could not be saved to $SAN_LOG_OUT; dumping it here:"
+        sed 's/^/    /' "$SANITIZER_LOG"
+    fi
 fi
 
 echo "summary: $PASS passed, $FAIL failed"

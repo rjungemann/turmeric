@@ -521,7 +521,6 @@ rejecting them would trade the bug for a restriction. Pinned by
 `tests/check-libc-collision-list.sh` (ctest `tur_libc_collision_list`), which
 guards the bsearch sort-order precondition.
 
-
 `reads-frame-cannot-name-multiple-params` was filed and resolved 2026-08-18,
 and moved to
 [docs/archive](../archive/reads-frame-cannot-name-multiple-params.md).
@@ -586,7 +585,6 @@ suite 2687 passed, 0 failed.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [mir-aarch64-fp-aggregate-abi](mir-aarch64-fp-aggregate-abi.md) | high | c2mir on aarch64 mis-passes floating-point aggregates by value across the c2mir -> natively-compiled boundary: silent wrong answers, data-dependent. Scoped -- a pure `tur jit` program is unaffected because both sides are c2mir and agree |
 | [jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md) | low | `call-ptr` under `--interpret` refuses a record with a parametric-monomorph field (`(BoxW int32)`) that the compiled path inlines by value: a compiled/interpreted divergence, refused cleanly. Its diagnostic ("no by-value C member type") is inaccurate in every case it can fire |
 
 The `mir-aarch64` row was indexed 2026-08-21. It had **no row at all** since it
@@ -937,6 +935,8 @@ turned up a defect in the instrument that would have justified it.
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
+| [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker), each with its blocker and how to prove the workaround is no longer needed |
+
 `fat-dispatch-wide-byvalue-aggregate-argument` was resolved 2026-08-27 and
 moved to
 [docs/archive](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md):
@@ -977,8 +977,27 @@ field: `caps_hit_probe`, filled by bracketing `rt_prove_paths` in
 One more thing the trace turned up, unfixed and minor: `g_stats.path_probes` is
 only printed when `proven_by_path` is non-zero, so a path probe that proves
 nothing is invisible in the `TUR_REFINE_STATS` summary too.
-| [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | **half done 2026-08-26: Linux armed, macOS open.** CI sets `TUR_SANITIZER_GATE: 1` on the Linux leg (zero findings, re-measured at HEAD); macOS stays unarmed because its count has never been taken and UBSan findings vary by toolchain. Finishing needs a mac: measure, triage, drop the `runner.os` condition |
-| [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
+
+`mir-aarch64-fp-aggregate-abi` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/mir-aarch64-fp-aggregate-abi.md). Fixed at the root
+rather than contained: MIR's aarch64 back end now implements the AAPCS64 HFA
+rule, so floating-point aggregates travel in `v0..v7` and c2mir agrees with a
+natively compiled callee. Pin bumped to `472fa4c6`. The interim refusals are
+gone with it -- including TUR-E0711, which existed for a matter of hours -- so
+**reverting the MIR pin below that commit silently reinstates the miscall
+instead of diagnosing it**; that warning lives next to the pin in
+`cmake/mir.cmake`.
+
+`sanitizer-gate-not-armed-in-ci` was resolved 2026-08-26 and moved to
+[docs/archive/](../archive/sanitizer-gate-not-armed-in-ci.md), finishing the
+half that landed the same day: Linux was armed, macOS was not and could not be
+measured from a Linux container. The macOS leg measures **0** findings across
+2703 fixtures on Apple clang 21 / arm64, matching Linux, so the fixture-suite
+step now sets `TUR_SANITIZER_GATE: "1"` unconditionally. The zero was confirmed
+with a positive control rather than inferred from silence -- the failure mode
+this gate has already had once is reporting a clean tree because nothing was
+wired up (`note_sanitizer` missing from `export -f`). Note the macOS number was
+taken on a local Apple-silicon box, not the `macos-latest` runner image.
 
 `compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/compiled-fixtures-are-not-leak-checked.md). Its two
