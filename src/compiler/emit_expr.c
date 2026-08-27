@@ -7133,6 +7133,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 Type spec_byval_ty = type_simple(TY_UNKNOWN, CK_COPY);
                 bool spec_byval =
                     call_spec_result_byvalue_app(ctx, emit_arg, &spec_byval_ty);
+                /* SR2a: set once this argument has been bridged to the carrier,
+                 * so the by-value-APP seam below does not bridge it a SECOND
+                 * time.  The two blocks were written to divide by the param's
+                 * nominal kind -- that block's own comment says "when `A`
+                 * resolves to a by-value parametric app the param kind here is
+                 * TY_APP, so this seam handles it instead" -- but its guard
+                 * admits a TY_TYVAR param too, and the split only held because
+                 * `adt_app_is_byvalue_product` answered false for a multi-variant
+                 * sum.  Once it answers true, `vec-push!`'s `val : A` satisfies
+                 * both, and the second box stores the FIRST box's pointer into a
+                 * fresh aggregate slot: "incompatible types when assigning to
+                 * type 'tur_adt_Opt2__int' from type 'long int'". */
+                bool arg_carrier_boxed = false;
                 if (!needs_fn_cast && fn_binding->type.kind == TY_FN && emit_arg &&
                     (expr_emits_byvalue_carrier_abi(ctx, emit_arg) || spec_byval)) {
                     uint32_t n_fnparams = fn_binding->type.as.fn.arity;
@@ -7164,6 +7177,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,
                                                            bridge_ty);
+                        arg_carrier_boxed = true;
                     }
                 }
                 /* CONV-S1: a by-value parametric ADT-app argument
@@ -7180,7 +7194,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * concrete-aggregate param (which already takes the value by value).
                  * A matched concrete spec resolves the param to the real C type and
                  * carries its own bridges, so it is excluded. */
-                if (!needs_fn_cast && !matched_spec &&
+                if (!needs_fn_cast && !matched_spec && !arg_carrier_boxed &&
                     fn_binding->type.kind == TY_FN && emit_arg &&
                     emit_arg->type.kind == TY_APP &&
                     adt_app_is_byvalue_product(emit_arg->type)) {

@@ -7987,7 +7987,7 @@ static int64_t vec_hyof_hymaps() {
                     if (tur_panicking) return ((int64_t)0);
                     tur_adt_Vec__Map__sym__int * _un_unv_1337 = __ps_174;
                     (void)_un_unv_1337;
-                    vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1337))), (int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unvw_1336))));
+                    vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1337))), (int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unvw_1336)));
                     tur_adt_Map__sym__int * __t175;
                     tur_adt_Map__sym__int * __t176;
                     {
@@ -8020,7 +8020,7 @@ static int64_t vec_hyof_hymaps() {
                         __t176 = __ps_185;
                     }
                     __t175 = __t176;
-                    vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1337))), (int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(__t175))));
+                    vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1337))), (int64_t)(intptr_t)((int64_t)(intptr_t)(__t175)));
                     tur_adt_Vec__Map__sym__int * __t186;
                     __t186 = _un_unv_1337;
                     __t173 = __t186;

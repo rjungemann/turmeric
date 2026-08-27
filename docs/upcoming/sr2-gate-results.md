@@ -18,7 +18,7 @@ place the plan already knew was expensive: the M7 HKT carrier machinery.**
 
 **Update 2026-08-27: SR2a's codegen is PAID.** The eleven-fixture worklist is
 all green, and so is everything else -- `TUR_SR2_APP_SUM_BYVALUE=1 bash
-tests/run.sh` reports 2710 passed, 0 failed, with the default path unchanged
+tests/run.sh` reports 2711 passed, 0 failed, with the default path unchanged
 throughout. What closed it was not new machinery: almost every blocker was an
 existing predicate with a `TY_ADT` case and no `TY_APP` one. The two items this
 document flagged as separate costs -- the nullary-ctor elaboration gap and the
@@ -97,7 +97,7 @@ Probe: `(defdata Res2 :copy [a b] (Bad b) (Good a))` with a `div2` returning
 
 Against the 2709-green baseline (SR1's gate had 34).  **Worked 2026-08-27: all
 eleven build and print correct values under the seam, and so does everything
-else -- `TUR_SR2_APP_SUM_BYVALUE=1 bash tests/run.sh` is 2710 passed, 0
+else -- `TUR_SR2_APP_SUM_BYVALUE=1 bash tests/run.sh` is 2711 passed, 0
 failed.**  SR2a's codegen is done.
 
 The original entry read "every one is the M7 HKT-carrier bridge family."  Right
