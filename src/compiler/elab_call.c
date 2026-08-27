@@ -4254,6 +4254,31 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
     return r;
 }
 
+/* Bare-ctor expected type: is `f` literally a constructor call -- `(Empty)`,
+ * `(none)`, `(Some x)` -- of the SAME ADT that `app` applies?
+ *
+ * A nullary constructor of a parametric ADT carries no field arguments to bind
+ * its type parameters from, so it defaults to the bare TY_ADT and emits the
+ * un-monomorphised carrier ctor.  The consumer that fixes this already exists
+ * (see the "Parametric 0-arg constructor result-type inference" block), and the
+ * ascription path `(:: (Empty) (Box int))` already feeds it -- but nothing fed
+ * it from a call's ARGUMENT position, so `(getv (Empty))` against
+ * `getv [b : (Box int)]` still picked `ctor_Empty()`.
+ *
+ * Gated on the ctor's own ADT matching the parameter's, so the pushed type can
+ * only ever ground a constructor to a family it already belongs to. */
+static bool arg_form_is_ctor_call_of(Elab *e, const Form *f, const Type *app) {
+    if (!e || !f || !app || app->kind != TY_APP) return false;
+    const Symbol *name = NULL;
+    if (f->tag == F_LIST && f->as.list.len >= 1 &&
+        f->as.list.items[0]->tag == F_SYM)
+        name = f->as.list.items[0]->as.sym;
+    if (!name) return false;
+    CtorDef *c = elab_lookup_ctor(e, name);
+    return c && c->adt && c->adt->n_type_params > 0 &&
+           c->adt == type_adt_app_def(app);
+}
+
 /* Phase 2: Elaborate a function call (f a b c) */
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
@@ -4776,11 +4801,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         const Form *arg_form = call->as.list.items[1 + i];
         /* Expected concrete fn type for this parameter (if any). */
         const Type *exp_param_fn = NULL;
+        /* The same slot, when it declares a parametric ADT application -- the
+         * channel a bare constructor argument needs.  See
+         * arg_form_is_ctor_call_of. */
+        const Type *exp_param_app = NULL;
         if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
             uint32_t idx = fn_binding->closure_fn_binding ? i + 1 : i;
-            if (idx < fn_type.as.fn.arity && fn_type.as.fn.arg_full_types[idx] &&
-                fn_type.as.fn.arg_full_types[idx]->kind == TY_FN)
-                exp_param_fn = fn_type.as.fn.arg_full_types[idx];
+            if (idx < fn_type.as.fn.arity && fn_type.as.fn.arg_full_types[idx]) {
+                if (fn_type.as.fn.arg_full_types[idx]->kind == TY_FN)
+                    exp_param_fn = fn_type.as.fn.arg_full_types[idx];
+                else if (fn_type.as.fn.arg_full_types[idx]->kind == TY_APP)
+                    exp_param_app = fn_type.as.fn.arg_full_types[idx];
+            }
         }
         /* poly-hof-constrained-arg-baked-carrier: when the function-typed
          * parameter is itself polymorphic (`f : (fn [A] int)` on a HOF
@@ -4872,6 +4904,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 (arg_form->as.list.items[0]->as.sym == e->sym_fn ||
                  arg_form->as.list.items[0]->as.sym == e->sym_lambda)) {
                 e->expected_type = (Type *)exp_param_fn;
+                pushed_expected = true;
+            } else if (arg_form_is_ctor_call_of(e, arg_form, exp_param_app)) {
+                /* Bare constructor argument: hand it the parameter's own
+                 * family so it selects that monomorph rather than the carrier
+                 * base.  Same channel the lambda case above uses, same
+                 * immediate restore. */
+                e->expected_type = (Type *)exp_param_app;
                 pushed_expected = true;
             }
             args[i] = elab_form(e, call->as.list.items[1 + i]);
