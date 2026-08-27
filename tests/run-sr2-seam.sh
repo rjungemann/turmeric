@@ -8,11 +8,10 @@
 # fixtures below are green under the seam and NOTHING enforces that.  A gate
 # nobody turns on decays to a gate nobody notices (the lesson of
 # docs/reported/sanitizer-gate-not-armed-in-ci.md), and the SR2 gate document
-# makes a specific claim -- 10 of its 11-fixture M7 worklist green as of
+# makes a specific claim -- its ELEVEN-fixture M7 worklist all green as of
 # 2026-08-27 -- that this harness is what keeps true.
 #
-# See docs/upcoming/sr2-gate-results.md.  The one fixture NOT listed here is the
-# single open cause that document names; add it when it closes.
+# See docs/upcoming/sr2-gate-results.md.
 #
 # Two checks:
 #   1. A CANARY: emit-c of a parametric-sum fixture must show the by-value ctor
@@ -80,6 +79,9 @@ fi
 #   and the nested-ctor field channel -- the inner `(None)` of `(Some (None))`.
 # conv-with-narrowed-variant-parametric: the let use-site look-ahead -- an
 #   unannotated `(Empty)` grounded from a later `(getv e)`.
+# poly-combinator-application-element-inference: a closure lifted out of a
+#   POLYMORPHIC combinator, cloned per instantiation so its dispatch is typed.
+#   Pins a non-zero expected.exit.
 # parsec-tutorial: the gate document's acceptance test.  PRes is the Option
 #   shape verbatim, driven through parser-combinator closures.
 FIXTURES="
@@ -92,6 +94,7 @@ hkt-cata-wide-byvalue-carrier
 hkt-fmap-byvalue-sum-element
 class-method-hkt-tyvar-grounding
 conv-with-narrowed-variant-parametric
+poly-combinator-application-element-inference
 parsec-tutorial
 "
 
@@ -111,8 +114,13 @@ for fx in $FIXTURES; do
     fi
     actual=$($TIMEOUT "$bin" 2>/dev/null)
     rc=$?
-    if [ $rc -ne 0 ]; then
-        fail "$fx" "program exited $rc"
+    # A fixture may pin a non-zero exit (expected.exit), the way the main suite
+    # does -- poly-combinator-application-element-inference returns 42 from
+    # main by design.  Absent the file, 0 is the expectation.
+    want_rc=0
+    [ -f "$dir/expected.exit" ] && want_rc=$(cat "$dir/expected.exit")
+    if [ "$rc" != "$want_rc" ]; then
+        fail "$fx" "program exited $rc (expected $want_rc)"
         continue
     fi
     if [ "$actual" = "$(cat "$expected")" ]; then

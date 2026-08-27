@@ -3956,7 +3956,34 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         (inner_closure->type.as.fn.result_kind == TY_APP ||
          inner_closure->type.as.fn.result_kind == TY_ADT) &&
         n_bindings > 0;
-    if (inner_float || inner_app) abi_changes = true;
+    /* SR2a, the ANNOTATED twin of inner_app.  The gate above keys on
+     * `result_full_type == NULL` -- the shell elaboration leaves when a lifted
+     * closure's body type mentions the enclosing fn's tyvar and nothing wrote
+     * the type down.  A closure that DID write it down (`(fn [xs : int] :
+     * (PRes A) ...)` inside `or-parser [A]`) has a non-NULL result_full_type
+     * and slipped past, so the single shared thunk kept the carrier while the
+     * combinator's instantiation made `(PRes cstr)` a by-value aggregate.  The
+     * fatbox it dispatches then holds a typed shim returning that aggregate
+     * while the generic thunk casts slot 0 to the int64 carrier ABI -- past 16
+     * bytes, sret shifts every argument and the program jumps to 0.
+     *
+     * Fires only when the spec turns a carrier-riding generic result INTO a
+     * by-value monomorph, which is exactly when the shared thunk is wrong.  On
+     * the default path a parametric sum still rides the carrier, so this is
+     * inert there. */
+    bool inner_app_annotated = false;
+    if (inner_closure && !inner_app && !fn_binding->closure_return_dispatches_untyped &&
+        inner_closure->type.kind == TY_FN &&
+        inner_closure->type.as.fn.result_full_type && n_bindings > 0) {
+        const Type *gr = inner_closure->type.as.fn.result_full_type;
+        if (gr->kind == TY_APP && !adt_app_is_byvalue_product(*gr)) {
+            Type inst = emit_abi_instantiate_type(gr, bindings, n_bindings,
+                                                  ctx->type_arena);
+            if (inst.kind == TY_APP && adt_app_is_byvalue_product(inst))
+                inner_app_annotated = true;
+        }
+    }
+    if (inner_float || inner_app || inner_app_annotated) abi_changes = true;
     /* M6 / gap G6(c): a generic body PASSES a captured closure whose result type
      * follows the spec's tyvar (the recursive `(fn [c] : B (re-cata alg c))` to
      * `fmap` inside `re-cata [B]`).  Clone it per spec so its recursive call
@@ -4420,9 +4447,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     }
 
     uint32_t before_specs = ctx->n_abi_specializations;
+    /* SR2a: an inner_app_annotated clone has the SAME outer C signature across
+     * instantiations -- `or-parser` returns a closure handle whether A is cstr
+     * or int -- so without binding-matching the two instantiations dedup into
+     * one spec and one inner clone, and whichever element was emitted first
+     * wins for both.  Exactly the collapse the match_bindings flag was added
+     * for (see its comment in emit_abi_intern_spec); ask for it here too. */
+    bool spec_match_bindings = inner_app_annotated;
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
-        arg_types, n_spec_args, result_type, call, false);
+        arg_types, n_spec_args, result_type, call, spec_match_bindings);
     /* Interning the inner-closure spec below may realloc abi_specializations,
      * invalidating `spec`; refer to the outer spec by index afterward. */
     uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
@@ -4468,7 +4502,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * params / env fields / dispatch typedefs all resolve through
      * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
      * construction then stores the clone's thunk + uses its suffixed env. */
-    if ((inner_float || inner_app || inner_passed || inner_dispatch) && inner_closure) {
+    if ((inner_float || inner_app || inner_passed || inner_dispatch ||
+         inner_app_annotated) && inner_closure) {
         const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
@@ -4548,7 +4583,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             uint32_t before_inner = ctx->n_abi_specializations;
             EmitAbiSpecialization *inner_spec = emit_abi_intern_spec(
                 ctx, inner_closure, inner_expr, inner_fd, spec_in_bindings, spec_in_nb,
-                inner_args, inner_n, inner_res, NULL, inner_dispatch);
+                inner_args, inner_n, inner_res, NULL,
+                inner_dispatch || spec_match_bindings);
             bool inner_is_new = ctx->n_abi_specializations != before_inner;
             /* Build the suffixed env-struct symbol both sites agree on.
              * constrained-instance-element-dispatch-in-closures: an inner_dispatch
@@ -4557,7 +4593,11 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * the base env struct (no suffixed override).  Suffixing it would emit
              * a redundant identical struct; sharing keeps the base `__env_N` and
              * snapshots minimal. */
-            if (!inner_dispatch)
+            /* An inner_app_annotated clone, like an inner_dispatch one, keeps
+             * the base env layout -- only the body's representation differs --
+             * so it reuses `__env_N` rather than emitting an identical
+             * suffixed twin. */
+            if (!inner_dispatch && !spec_match_bindings)
                 emit_assign_inner_env_override(ctx, inner_fd, inner_res, inner_spec);
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
             ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
