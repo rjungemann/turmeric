@@ -381,7 +381,7 @@ work, and `vec<option<T>>` is that shape).
 populated, `experiment_warn_if_used` at the elaboration entry point, and
 `plan_path` pointing here.
 
-### SR3 -- niche filling
+### SR3 -- niche filling -- GATE RUN 2026-08-27; slice A SHIPPED, slice B held
 
 Once `Option` is a real sum, `None` can be represented as the null pointer for
 pointer-payload elements, taking `Option<ptr<T>>`, `option<Vec T>`,
@@ -389,8 +389,54 @@ pointer-payload elements, taking `Option<ptr<T>>`, `option<Vec T>`,
 
 Plausibly the largest of the three size wins, given how common those shapes are
 -- `option<vec<...>>` and `option<Cons ...>` were exactly the shapes the
-nested-monomorph fix touched. **Gate:** needs SR2, and needs SR0(a) to show the
-volume is there.
+nested-monomorph fix touched. **Gate:** needs SR2 (done), and needs SR0(a) to
+show the volume is there.
+
+**Census (stdlib + fixtures; no spices checkout on the gate box):** the
+pointer-payload Option shapes are real but concentrated -- `env` (5 spellings),
+`httpd-string` (5), `args` (2), `re` (2), `docstrings` (2), plus the
+`(Option String)` / `(Option (Vec ...))` idioms, and ~19 fixture files.
+**Result gets no niche at all**: both of its variants carry a payload, so NULL
+cannot discriminate `Ok` from `Err` -- SR3 is Option-only.
+
+**Slice A -- nullary `None` as the null carrier -- SHIPPED 2026-08-27, default
+on.** SR2b's read side already accepted none-as-NULL everywhere
+(`tur_is_some(0)` false, carrier matches read a NULL scrutinee as tag 0), so
+a tagged None box whose only content was `tag = 0` was pure allocation.  The
+three producers now return the null carrier: the monomorph carrier ctor
+(types.c `emit_registered_adt_app_rec`), the generic base ctor
+(emit_module.c), and the preamble `tur_none()` -- keyed by
+`adt_ctor_is_null_none` (shape-pinned name check, the
+`adt_field_is_ros_pointer_box` precedent).  The if-chain match path gained
+the same NULL-as-tag-0 guard the switch path had.  This removes the None
+allocation for EVERY element type, not just pointers: a 2e6-iteration
+`(none)` loop peaks at 10.3 MB RSS where the still-boxing `(some i)` twin
+peaks at 64 MB.  It also shrinks the
+[carrier-box ownership leak](../reported/carrier-sum-option-boxes-have-no-owner.md)
+to Some/Ok/Err constructions only.  Validation: full suite 2712/0, turi
+1867/0, sr2-seam 12/12, sr4-seam 24/24.
+
+**Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- HELD, and
+here is the obstacle.** The compiled pipeline's default path is semi-erased:
+generic bases (`unwrap`, `some?`, every instance-method carrier base) receive
+`(Option A)` as one int64 for EVERY `A` and read `->tag` through one shared
+layout.  A niche-filled value entering such a base would have its "tag" read
+deref the payload pointer's first word -- the representation must be known at
+every read site, which only the fully-monomorphized tier guarantees.  So
+slice B is confined to the byvalue experiment tier, plus
+materialize/dematerialize bridges at every erased crossing (build the tagged
+16-byte form when a niche Option passes erased, re-derive on return) -- a new
+representation state layered on the bridge family the byvalue path already
+maintains.  There is also a semantic edge slice A does not have: a genuinely
+NULL pointer payload (`(some (:: 0 :ptr<void>))`) becomes indistinguishable
+from `(none)`; the niche is sound only for payload types whose valid values
+exclude 0 (`:heap` handles, `String`, fat closures), and nothing in the type
+system marks non-nullness today.  **Recommendation: fold slice B into the
+`parametric-sum-byvalue` graduation** -- once byvalue is the default, niche
+filling is a layout decision inside a monomorph the compiler always sees, and
+the erased-crossing bridges are the ones that graduation must harden anyway.
+Building it before then doubles the bridge states for an 8-byte win on a
+non-default tier.
 
 ### SR4 -- recursive sums -- UNBLOCKED AND MEASURED 2026-08-27; default stays carrier
 

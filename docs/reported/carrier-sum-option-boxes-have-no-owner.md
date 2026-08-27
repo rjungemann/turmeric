@@ -3,6 +3,10 @@
 **Severity: medium (memory growth in long-lived carrier-path programs).**
 Filed 2026-08-27 during SR2b.
 
+**Narrowed 2026-08-27 (SR3 slice A):** `(none)` no longer allocates -- the
+carrier None is the null pointer (`adt_ctor_is_null_none`, types.c).  The
+report now covers `(some x)` / `(ok x)` / `(err e)` boxes only.
+
 ## Summary
 
 SR2b made stdlib Option/Result real sums.  On the default path a `(some x)` /

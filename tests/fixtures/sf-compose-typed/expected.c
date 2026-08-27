@@ -387,9 +387,7 @@ static int64_t tur_some_ptr(void *__p) {
 }
 static int64_t tur_none(void) __attribute__((unused));
 static int64_t tur_none(void) {
-    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));
-    __o->tag = 0; __o->as.value = 0;
-    return (int64_t)(intptr_t)__o;
+    return TUR_NONE;
 }
 static int64_t __tur_fatshim0(void *__e) {
     return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();
@@ -4018,9 +4016,7 @@ typedef struct tur_adt_Option__fn1_int__int {
 #ifndef TUR_FN_tur_adt_Option__fn1_int__int
 #define TUR_FN_tur_adt_Option__fn1_int__int
 static int64_t ctor_None__fn1_int__int() {
-    tur_adt_Option__fn1_int__int *__r = (tur_adt_Option__fn1_int__int *)malloc(sizeof(tur_adt_Option__fn1_int__int));
-    __r->tag = 0;
-    return (int64_t)(intptr_t)__r;
+    return 0;
 }
 
 static int64_t ctor_Some__fn1_int__int(void * _0) {
@@ -4061,9 +4057,7 @@ typedef struct tur_adt_Option__Zipper__struct {
 #ifndef TUR_FN_tur_adt_Option__Zipper__struct
 #define TUR_FN_tur_adt_Option__Zipper__struct
 static int64_t ctor_None__Zipper__struct() {
-    tur_adt_Option__Zipper__struct *__r = (tur_adt_Option__Zipper__struct *)malloc(sizeof(tur_adt_Option__Zipper__struct));
-    __r->tag = 0;
-    return (int64_t)(intptr_t)__r;
+    return 0;
 }
 
 static int64_t ctor_Some__Zipper__struct(int64_t _0) {

@@ -7100,6 +7100,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
                 free(mp);
             }
             buf_printf(out, "    return __r;\n");
+        } else if (adt_ctor_is_null_none(def, ctor)) {
+            /* SR3 slice A: the carrier None IS the null pointer (see the
+             * monomorph twin in types.c emit_registered_adt_app_rec). */
+            buf_printf(out, "    return 0;\n");
         } else {
             /* Slab only when nothing will ever free this box: a def with drop
              * glue is released by drop_glue_*'s trailing free(ptr), and slab
@@ -7371,9 +7375,10 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * result builders and both option builders construct the same canonical
      * tur_result_box_t / tur_option_t layout as tur_box_*, so values built here
      * flow transparently into the stdlib accessors (ok?/ok-val/err-val and
-     * some?/opt-val) and vice versa.  tur_none() builds a real None record
-     * (SR2b: the canonical empty option is a tagged value now, not NULL --
-     * TUR_NONE stays for the read-side compatibility described above).  The
+     * some?/opt-val) and vice versa.  tur_none() IS the null carrier (SR3
+     * slice A: every reader treats NULL as tag 0 / None, so a tagged None box
+     * was pure allocation; the tagged form remains valid on the read side).
+     * The
      * _Static_assert pair pins the byte layout these depend on -- it must
      * match the tagged monomorph typedefs, and trips the build at the source
      * if either struct's size drifts. */
@@ -7398,9 +7403,7 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "    return tur_box_some((int64_t)(intptr_t)__p);\n}\n");
     buf_puts(out, "static int64_t tur_none(void) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_none(void) {\n");
-    buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
-    buf_puts(out, "    __o->tag = 0; __o->as.value = 0;\n");
-    buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
+    buf_puts(out, "    return TUR_NONE;\n}\n");
     /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
      * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
      * fn passed to a ^fat parameter is invoked through the standard fat-closure

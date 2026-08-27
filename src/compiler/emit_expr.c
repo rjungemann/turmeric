@@ -11912,10 +11912,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * aggregate itself rather than a carrier pointer, so the
                          * tag test reads with `.` -- the same accessor the field
                          * binds below already use.  Before SR1 a tagged scrutinee
-                         * was always a pointer, so this site could hardcode `->`. */
-                        buf_printf(body, "if (__scrut%stag == %u) {\n",
-                                   (adt_byval && !adt_byval_pbp) ? "." : "->",
-                                   pat->ctor->tag);
+                         * was always a pointer, so this site could hardcode `->`.
+                         * SR3 slice A: the CARRIER scrutinee can be NULL (the
+                         * null-None Option, and any historical none-as-NULL
+                         * producer) -- read it as tag 0, mirroring the switch
+                         * path's guard.  The by-value/pbp forms are an aggregate
+                         * or a param pointer and keep the direct read. */
+                        if (adt_byval && !adt_byval_pbp)
+                            buf_printf(body, "if (__scrut.tag == %u) {\n",
+                                       pat->ctor->tag);
+                        else if (adt_byval_pbp)
+                            buf_printf(body, "if (__scrut->tag == %u) {\n",
+                                       pat->ctor->tag);
+                        else
+                            buf_printf(body,
+                                "if ((__scrut ? __scrut->tag : 0) == %u) {\n",
+                                pat->ctor->tag);
                     }
                     ctx->indent += 4;
 

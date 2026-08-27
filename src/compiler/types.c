@@ -1400,6 +1400,18 @@ Type substitute_adt_app_type_owned(const Type *t, const AdtDef *def,
  * precedence over the B4 wide-by-value-element int64 box (`type_is_wide_byval_adt`)
  * for these fields, which would otherwise pick a conflicting int64 slot for a wide
  * (>8-byte) record-ADT payload like `User`. */
+/* SR3 slice A (null-None).  Keyed by name like adt_field_is_ros_pointer_box
+ * above, with the shape pinned down (2 ctors, nullary tag 0 named None) so a
+ * user ADT that happens to be called Option but is shaped differently never
+ * takes the niche.  A same-shaped user Option does -- and gets the same
+ * semantics, since the readers treat NULL as tag 0 uniformly. */
+bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
+    return def && ctor && def->name && ctor->name &&
+           strcmp(def->name, "Option") == 0 && def->n_ctors == 2 &&
+           ctor->tag == 0 && ctor->n_fields == 0 &&
+           strcmp(ctor->name, "None") == 0;
+}
+
 bool adt_field_is_ros_pointer_box(const AdtDef *owner, const Type *resolved) {
     if (!owner || !owner->name || !resolved) return false;
     if (strcmp(owner->name, "Result") != 0 && strcmp(owner->name, "Option") != 0)
@@ -1920,6 +1932,12 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 free(mp);
             }
             buf_printf(out, "    return __r;\n");
+        } else if (adt_ctor_is_null_none(def, ctor)) {
+            /* SR3 slice A: the carrier None IS the null pointer.  Every reader
+             * already accepts it (tur_is_some(0) is false; a carrier match
+             * reads a NULL scrutinee as tag 0), so the box whose only content
+             * was `tag = 0` is pure allocation. */
+            buf_printf(out, "    return 0;\n");
         } else {
             buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name, adt_inst_name);

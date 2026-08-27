@@ -1798,6 +1798,12 @@ bool         adt_app_is_byvalue_product(Type t);
  * Takes precedence over the B4 wide-element int64 box. */
 bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
                                           const Type *resolved);
+/* SR3 slice A (null-None): true when `ctor` is the stdlib Option's nullary
+ * tag-0 `None` -- the one constructor whose CARRIER form is the null pointer
+ * (the historical none-as-NULL every reader already accepts), so its carrier
+ * ctors return 0 instead of mallocing a box whose only content is tag 0. */
+bool         adt_ctor_is_null_none(const struct AdtDef *def,
+                                   const struct CtorDef *ctor);
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);

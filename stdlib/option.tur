@@ -38,8 +38,9 @@
 ;;; none -- return the none Option[A].
 ;;;
 ;;; Returns:
-;;;   The None variant.  (The historical none-as-NULL carrier value is still
-;;;   accepted by the inline-C readers -- tur_is_some treats 0 as none.)
+;;;   The None variant.  (SR3 slice A: on the carrier path None IS the null
+;;;   carrier -- construction allocates nothing, and every reader treats 0 as
+;;;   none.  A tagged None box remains valid on the read side.)
 ;;;
 ;;; Example:
 ;;;   (none)  ; => none
