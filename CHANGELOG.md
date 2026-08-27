@@ -6,6 +6,12 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`--enable=parametric-sum-byvalue` (beta).** Parametric sum monomorphs
+  (`(Option int)`, `(Result float cstr)`, ...) flow by value with no per-ctor
+  malloc, instead of riding the int64 heap carrier. The default path is
+  unchanged; the experiment is the staging ground for making by-value the
+  default (SR2 graduation). Plan: `docs/upcoming/sr2-gate-results.md`.
+
 - **Lazy solution streams in `stdlib/logic.tur`.** `Stream` gained the immature
   constructor `(StInc :StThunk)` plus `st-force` / `st-pull`, so `run-logic n`
   now costs n solutions instead of running the whole search and truncating the
@@ -47,6 +53,25 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **`Option` and `Result` are real sums now** (SR2b,
+  `docs/upcoming/sum-representation-plan.md`). `(defdata Option :copy [A]
+  (None) (Some A))` and `(defdata Result :copy [A B] (Ok A) (Err B))` replace
+  the discriminated records; every stdlib accessor and instance is
+  match-based, and you can `match` the variants directly. The runtime layout
+  is the tagged monomorph `{ int tag; union { ... } as; }` -- 16 bytes for
+  both (`Result` down from 24), tags in declaration order, payload at offset
+  8. The dead-arm write is gone, so an error type no longer needs a zero
+  value. **Inline-C contract:** hand-rolled `{ bool is_ok; ... }` /
+  `{ bool is_some; ... }` structs read the wrong bytes now -- build and read
+  through the preamble helpers (`tur_box_ok` / `tur_is_ok` / `tur_box_some` /
+  `tur_is_some` / ...), which carry the canonical layout and a
+  `_Static_assert` pinning it. The interpreter builds and matches the same
+  constructors, with the legacy box shapes still readable.
+- **`(none)` allocates nothing** (SR3 slice A). The carrier `None` is the
+  null pointer -- every reader already treated NULL as none, so the tagged
+  box whose only content was `tag = 0` was pure allocation. A 2e6-iteration
+  `(none)` loop peaks at 10.3 MB RSS where the still-boxing `(some i)` twin
+  peaks at 64 MB. A tagged None box remains valid on the read side.
 - **`Option` and `Result` monomorphs lower by value when a type argument is
   itself a monomorph.** `option<list<int>>`, `result<vec<T>, cstr>` and
   `option<(Pair a b)>` previously fell back to the heap carrier -- a silent
@@ -63,6 +88,11 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`vec-of` over a parametric sum monomorph no longer ICEs.**
+  `(vec-of (Yep 8) ...)` over a two-variant sum died at the let binder on the
+  default path (the Vec registration and the binder disagreed about the
+  element's representation); `vec<option<T>>` is that shape. Fixed by the
+  SR2b representation predicates; the report is archived.
 - **`rc/of` did not release a multi-variant ADT payload.** It allocated a second
   box for the carrier word and freed only that wrapper, so the payload leaked --
   code doing exactly the documented thing lost 16 bytes per value.

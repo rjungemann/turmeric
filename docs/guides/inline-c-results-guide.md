@@ -144,7 +144,10 @@ through spices (see
 - **Re-declaring the struct in raw C** -- `struct { bool is_ok; int64_t
   ok_val; int64_t err_val; } *r = malloc(...)` returned as `:ptr<void>`.
   This duplicates the layout, drifts silently if the canonical layout ever
-  changes, and discards the `Result` type. The preamble carries a
+  changes, and discards the `Result` type. **The drift is no longer
+  hypothetical: SR2b changed the canonical layout to the tagged sum
+  `{ int tag; union { ... } as; }`, so any surviving hand-rolled copy of the
+  struct above is now reading the wrong bytes.** The preamble carries a
   `_Static_assert` pinning `tur_option_t` / `tur_result_box_t` to their
   byte layout precisely so the *helper* path cannot drift; a hand-rolled
   copy gets no such guard.
