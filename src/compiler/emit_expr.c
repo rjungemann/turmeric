@@ -3586,6 +3586,36 @@ static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
     return type_adt_app_ctor_suffix(sret);
 }
 
+/* M7 by-value HKT, the result-type twin of emit_hkt_spec_ctor_suffix.
+ *
+ * The same erasure that costs a ctor call its `__bool` suffix costs the
+ * enclosing `match` its result TYPE: inside `__inst_Functor_fmap_ReF__spec__
+ * tur_adt_ReF__bool_...` the match's `e->type` is the bare parametric base
+ * `ReF` (TY_ADT, `type_c_name` -> `int64_t`), while every arm constructs the
+ * concrete `ctor_*__bool` monomorph.  Declaring the result temp from the erased
+ * type spells `int64_t` and each arm's store is "incompatible types when
+ * assigning to type 'int64_t' from type 'tur_adt_ReF__bool'".
+ *
+ * Recover it the same way the ctor suffix is recovered -- from the ACTIVE
+ * spec's result family -- and gate it the same way: the spec's result must be a
+ * concrete app OF THE SAME AdtDef the erased type names, so this can only ever
+ * ground `ReF` to `(ReF bool)`, never retype a match to an unrelated family.
+ * The arms consult the identical source, which is what keeps the temp and its
+ * stores in lockstep.  Returns false when not applicable; `*out` untouched. */
+static bool emit_hkt_spec_app_result(EmitCtx *ctx, Type erased, Type *out) {
+    if (!ctx || !ctx->current_abi_specialization || !out) return false;
+    AdtDef *want = (erased.kind == TY_ADT)   ? erased.as.adt_.def
+                 : (erased.kind == TY_APP)   ? type_adt_app_def(&erased)
+                                             : NULL;
+    if (!want) return false;
+    Type sret = emit_resolve_type(ctx, ctx->current_abi_specialization->result_type);
+    if (sret.kind != TY_APP) return false;
+    if (type_adt_app_def(&sret) != want) return false;
+    if (!type_app_is_concrete_adt(&sret)) return false;
+    *out = sret;
+    return true;
+}
+
 /* Emit the propagation check that returns a zero of the enclosing function's C
  * return type when a panic signal is pending (panic-return-signal, always-on). */
 static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
@@ -11439,14 +11469,42 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                      : e->as.match_.scrutinee->type.as.adt_.def;
             }
             char adt_c_name[256];
+            /* M7: the scrutinee's STATIC type is the generic `(ReF a)` inside a
+             * specialised instance-method body (`__inst_Functor_fmap_ReF__spec__
+             * tur_adt_ReF__bool_...`), whose parameter is nonetheless emitted as
+             * the concrete `tur_adt_ReF__int`.  The element binding that makes it
+             * concrete lives in ctx, not in the expression, so read the app off
+             * the RESOLVED type when the static one is not already a concrete
+             * monomorph.  Everything below -- the typedef name, the by-value
+             * decision, the inline-vs-deref field read -- keys off this one
+             * answer, so resolving it here is what keeps them in lockstep.
+             * Narrow on purpose, in TWO ways.  Resolution only ever UPGRADES a
+             * non-concrete app to a concrete one, so a scrutinee that was
+             * already concrete, or that is not an app at all, behaves exactly
+             * as before.  And the upgrade is taken only when the monomorph is
+             * BY VALUE: `(ExprF Expr)` and the other B4 recursive-carrier
+             * wrapper apps resolve concretely while the value in hand is still
+             * an int64 carrier word (`__inst_Functor_fmap_ExprF__spec__int64_t
+             * _int64_t_int64_t` takes `int64_t c`), and naming the monomorph
+             * typedef there lays the variant fields out inline -- so the
+             * carrier field reads below become `(int64_t)` casts of an
+             * aggregate.  The representation question is "is this by value",
+             * never "does this app have a name". */
+            Type scrut_ty = e->as.match_.scrutinee->type;
+            if (!(scrut_ty.kind == TY_APP && type_app_is_concrete_adt(&scrut_ty))) {
+                Type _rs = emit_resolve_type(ctx, scrut_ty);
+                if (_rs.kind == TY_APP && type_app_is_concrete_adt(&_rs) &&
+                    adt_app_is_byvalue_product(_rs))
+                    scrut_ty = _rs;
+            }
             /* TS4P3: Use the monomorphised struct name when the scrutinee is
              * a concrete ADT app (e.g. tur_adt_Maybe__float instead of tur_adt_Maybe).
              * nested-carrier-match: scrut_is_app_monomorph also gates the
              * inline-vs-deref field read below -- only a monomorph-app scrutinee
              * lays a non-wide by-value ADT field out INLINE; the base carrier /
              * GADT representation always stores it as an int64 box (deref). */
-            const char *inst_name = (e->as.match_.scrutinee->type.kind == TY_APP)
-                ? type_register_adt_app(e->as.match_.scrutinee->type) : NULL;
+            const char *inst_name = (scrut_ty.kind == TY_APP)
+                ? type_register_adt_app(scrut_ty) : NULL;
             bool scrut_is_app_monomorph = (inst_name != NULL);
             {
                 if (inst_name) {
@@ -11461,16 +11519,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool nil_result = (e->type.kind == TY_NIL);
             char *tmp = NULL;
             if (!nil_result) {
+                /* M7: the RESULT temp needs the same resolution the scrutinee
+                 * just got, for the same reason -- in a specialised
+                 * instance-method body the match's static result type is the
+                 * generic `(ReF b)` while every arm constructs the concrete
+                 * `ctor_*__bool` monomorph, so declaring the temp from the
+                 * static type spells `int64_t` and each arm's store is
+                 * "incompatible types when assigning to type 'int64_t'".
+                 * Same narrowing: resolution only upgrades a non-concrete app. */
+                Type res_ty = e->type;
+                if (!(res_ty.kind == TY_APP && type_app_is_concrete_adt(&res_ty))) {
+                    Type _rr = emit_resolve_type(ctx, res_ty);
+                    if (_rr.kind == TY_APP && type_app_is_concrete_adt(&_rr))
+                        res_ty = _rr;
+                    else
+                        /* Still erased -- inside a by-value HKT instance-method
+                         * spec the match's result type is the bare parametric
+                         * base while the arms build the monomorph.  Ground it
+                         * from the same active spec the arms' ctor suffix comes
+                         * from. */
+                        (void)emit_hkt_spec_app_result(ctx, _rr, &res_ty);
+                }
                 tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 /* Initialize to zero to silence -Wsometimes-uninitialized; exhaustiveness
                  * is guaranteed by the elaborator so the default branch is unreachable.
                  * CONV-S1/B3: a by-value ADT result is a C aggregate -- it cannot be
                  * scalar-initialised with `0` (invalid initializer), so use `{0}`. */
-                if (type_is_byvalue_adt_product(e->type))
-                    buf_printf(body, "%s %s = {0};\n", type_c_name(e->type), tmp);
+                if (type_is_byvalue_adt_product(res_ty) ||
+                    adt_app_is_byvalue_product(res_ty))
+                    buf_printf(body, "%s %s = {0};\n", type_c_name(res_ty), tmp);
                 else
-                    buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+                    buf_printf(body, "%s %s = 0;\n", type_c_name(res_ty), tmp);
             }
 
             /* Emit scrutinee */
@@ -11498,7 +11578,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * parametric (adt_is_byvalue_product is false for n_type_params!=0).
              * Widen the by-value decision to the app-aware predicate keyed on the
              * scrutinee's concrete type. */
-            Type scrut_ty = e->as.match_.scrutinee->type;
             /* seam 3: a :heap ADT scrutinee is a typed pointer, never a by-value
              * aggregate -- it falls to the carrier branch below (bind as a
              * pointer, read fields with `->`), exactly as a carrier ADT does. */
