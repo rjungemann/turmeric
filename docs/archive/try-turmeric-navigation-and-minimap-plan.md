@@ -1,10 +1,10 @@
 # Try Turmeric: minimap, outline, and navigable definitions
 
-> **Status:** Executed (2026-08-28) -- M0-M5 and F1 landed. Two items cannot be
-> closed in the execution environment (one spec needs a WASM bundle no `emcc`
-> here can build; the C-interpreter host is behind an egress policy that denies
-> `*.turmeric-lang.com`); see
-> [§10 Execution record](#10-execution-record-2026-08-28).
+> **Status:** Executed (2026-08-28) -- M0-M5 and F1 landed, and verified in CI
+> on rjungemann/turmeric#787. One item cannot be closed here: the C-interpreter
+> host is behind an egress policy that denies `*.turmeric-lang.com`. See
+> [§10 Execution record](#10-execution-record-2026-08-28), including §10.5 on
+> two spec suites that were passing by not running.
 > **Type:** Web playground / Monaco / `src/lsp`
 > **Related:** [`try-turmeric-lsp-plan.md`](../archive/try-turmeric-lsp-plan.md)
 > (executed 2026-07-29),
@@ -764,7 +764,15 @@ Browser side, with one caveat below:
   `lang-picker.spec.js` (7), `mobile.tabs.spec.js` +
   `mobile.tabs-migration.spec.js` (9). All passed.
 
-**The caveat.** `web/public/turmeric.{js,wasm}` and
+And then for real, in CI on #787, against a bundle the job builds with `emcc`:
+the desktop suite went from 51 tests to 87 once these specs were named in it
+(see §10.5), with the same single pre-existing failure in both runs
+(`smoke.spec.js` "Force update", a `Cannot redefine property: reload` that
+newer Chromium rejects). **All 36 added tests passed**, including the
+`LSP integration — providers` describe, which until then had skipped itself on
+every run because the committed wasm had no LSP exports.
+
+**The caveat, which applied locally.** `web/public/turmeric.{js,wasm}` and
 `web/public/doc-names.json` are gitignored build outputs, absent from a fresh
 clone, and this container has no `emcc` to regenerate them -- so every spec
 that waits on `#wasm-status-text` reaching "Ready" would hang. The runs above
@@ -791,11 +799,13 @@ Three defects were found this way and fixed, all of which would have shipped:
   is most wanted and permanently inert when that boot failed. It is now also
   kicked when the language server starts.
 
-### 10.4 Not verified here, and why
+### 10.4 Not verified, and why
 
-- **The one evaluation-dependent spec.** `minimap.spec.js`'s "nothing about
-  the strip breaks evaluation" runs `(+ 20 22)` through the eval worker, which
-  needs the bundle above. It will run wherever the rest of the suite does.
+- **`mobile.minimap.spec.js` has not actually run anywhere.** Locally it was
+  driven on Chromium at a phone viewport, because this container ships no
+  WebKit. In CI it did not run either -- see §10.5. The width gate it asserts
+  is engine-independent, so the local run is meaningful, but it is not the
+  same thing as the spec passing on the engine its project names.
 - **`https://c.turmeric-lang.com` was not fetched** (§7.5). This container's
   egress proxy denies CONNECT to `turmeric-lang.com` and every subdomain of
   it, including `spices.turmeric-lang.com`, which the footer already links --
@@ -803,7 +813,36 @@ Three defects were found this way and fixed, all of which would have shipped:
   network access should load it before this reaches the marketing pages: a
   404 in the footer of every page is worse than no link.
 
-### 10.5 Before shipping
+### 10.5 Two specs that were passing by not running
+
+Both found by reading the CI logs on #787 rather than trusting the job's
+green, and both the same defect one level up from the one
+`docs-offline.spec.js` already carries a note about.
+
+- **The desktop step runs a hardcoded list of spec paths.** Playwright only
+  picks up what is named there, so `minimap.spec.js`, `footer.spec.js` and
+  `lsp.spec.js` -- the last of which had never been on it at all -- went
+  green by never being invoked. Named now; the list went from 51 tests to 87.
+
+- **The mobile project is WebKit, and only Chromium was installed.** All 32
+  mobile tests died at `browserType.launch: Executable doesn't exist at
+  .../webkit-*/pw_run.sh` before any test body ran, and the step's
+  `continue-on-error` hid it. That is the whole mobile suite -- tabs, project
+  load and download, the split handle, the PWA manifest, mobile LSP --
+  asserting nothing, for as long as the runner image has shipped without it.
+  A non-blocking `playwright install webkit` step now precedes it: the job's
+  gate is `deploy-gate.spec.js` on Chromium, and a WebKit download that fails
+  on some runner must leave the mobile suite as unrun as it is today rather
+  than redden a job that was going to pass.
+
+One pre-existing desktop failure is left alone, deliberately:
+`smoke.spec.js` "Force update clears caches and reloads" throws
+`TypeError: Cannot redefine property: reload` from its own `page.evaluate`,
+before it reaches any application code. Newer Chromium makes
+`window.location.reload` non-configurable. It fails identically on the head
+before this work and is unrelated to it, so it belongs in its own change.
+
+### 10.6 Before shipping
 
 §6 stands and now applies: M4 and M5 change `src/`, so
 `web/public/turmeric.{js,wasm}` must be regenerated and a release cut, or a
