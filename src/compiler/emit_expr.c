@@ -4231,6 +4231,74 @@ static void ce0_trace_elem_store(EmitCtx *ctx, const Expr *e, uint32_t i,
             fname);
 }
 
+/* CE0, read half.  The exact mirror of ce0_trace_elem_store: a container
+ * element READ is a call whose DECLARED RESULT is the element tyvar of a
+ * declared container parameter -- `vec-get [A] [v : (Vec A) i : int] : A`,
+ * `vec-pop! [A] [v : (Vec A)] : A`, `vec-get-byval [A] ... : A`.  Keying on
+ * the declared signature (not the resolved result) is what keeps
+ * `vec-len [A] [v : (Vec A)] : int` out of the census, for the same reason
+ * the store half does it: at a `(Vec int)` call site a resolved `:int` result
+ * and a resolved `:int` element are indistinguishable.
+ *
+ * Emitted as `repr-trace elem-read` with the same class/form/niche columns,
+ * so a sweep can check the two halves agree per element monomorph -- which is
+ * the property CE2 has to preserve when it lands store and read in one
+ * commit.  Trace only. */
+static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
+                                const Binding *fn_binding) {
+    if (!g_emit_abi_trace || !e || e->kind != EX_CALL) return;
+    if (!fn_binding || fn_binding->type.kind != TY_FN) return;
+    Type **decl = fn_binding->type.as.fn.arg_full_types;
+    Type *res = fn_binding->type.as.fn.result_full_type;
+    if (!decl || !res) return;
+    if (res->kind != TY_TYVAR || !res->as.tyvar_.name) return;
+    uint32_t arity = fn_binding->type.as.fn.arity;
+
+    uint32_t cont_param = UINT32_MAX;
+    const char *cont_name = "?";
+    for (uint32_t j = 0; j < arity && cont_param == UINT32_MAX; j++) {
+        if (!decl[j]) continue;
+        AdtDef *cdef = NULL;
+        Type cargs[16];
+        uint8_t cn = 0;
+        Type cj = *decl[j];
+        if (!type_extract_adt_app(&cj, &cdef, cargs, &cn) || !cdef || !cdef->name)
+            continue;
+        if (cn == 0) continue;
+        Type ce = cargs[cn - 1];
+        if (ce.kind != TY_TYVAR || !ce.as.tyvar_.name) continue;
+        /* The result must be the SAME tyvar the receiver is applied to. */
+        if (strcmp(ce.as.tyvar_.name, res->as.tyvar_.name) != 0) continue;
+        cont_param = j;
+        cont_name = cdef->name;
+    }
+    if (cont_param == UINT32_MAX) return;
+    if (cont_param >= e->as.call_.n_args || !e->as.call_.args[cont_param]) return;
+
+    Type cont = emit_resolve_type(ctx, e->as.call_.args[cont_param]->type);
+    if (cont.kind != TY_APP || !cont.as.app.arg) return;
+    Type elem = emit_resolve_type(ctx, *cont.as.app.arg);
+
+    int cls;
+    if (elem.kind == TY_TYVAR || elem.kind == TY_UNKNOWN || elem.kind == TY_EXISTS)
+        cls = 3;
+    else
+        cls = ctx->current_abi_specialization ? 2 : 1;
+
+    bool niche = adt_app_is_niche_option(elem);
+    const char *form =
+        (repr_of(&elem, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG) ? "box"
+                                                                    : "word";
+    const char *fname = (fn_binding->name && fn_binding->name->name)
+                            ? fn_binding->name->name : "?";
+
+    fprintf(stderr,
+            "repr-trace elem-read class=%d form=%s niche=%s cont=%s elem=%s "
+            "fn=%s\n",
+            cls, form, niche ? "yes" : "no", cont_name, type_name(elem),
+            fname);
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
@@ -7145,6 +7213,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             FnDef *reresolved_callee = emit_reresolve_method_fndef(ctx, e);
             char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+            /* CE0 census, read half: once per call, not per argument. */
+            ce0_trace_elem_read(ctx, e, fn_binding);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *arg_expr = e->as.call_.args[i];
                 /* CE0 census (trace only, no behavior change). */
