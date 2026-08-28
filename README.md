@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.38.0` -- `jit-ffi` graduates: `call-ptr` and `callback-ptr` need no `--enable`, and dynamic FFI now carries by-value records in every direction; plus a fixed `any` cast that reinterpreted unrelated structs, nested `match` patterns, and a panic boundary around every async task.
+**Latest release:** `v0.39.0` -- `Option` and `Result` are real `defdata` sums that flow by value and `(none)` allocates nothing, Try Turmeric gained a precached offline docs browser alongside `tur docs --open`, and a high-severity miscompile that deleted discarded parametric calls in statement position is fixed.
 
 ## What
 
