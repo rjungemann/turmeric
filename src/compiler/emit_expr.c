@@ -3558,6 +3558,110 @@ bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
     return false;
 }
 
+/* SR2a graduation: true when `e` names a PARAMETER whose SIGNATURE SLOT is the
+ * int64 carrier while its elaborated type is a by-value aggregate -- the
+ * `emit_carrier_holds_byval` shape emit_fns.c flags at signature emission.
+ * `ff : (Option (fn [a] b))` in the GENERIC BASE of an instance method is one:
+ * the base is what the dict slot (`int64_t (*ap)(int64_t, int64_t)`) points at
+ * and every instantiation shares it, so the param is int64 whatever element
+ * resolution grounds the type argument to.
+ *
+ * The two questions only came apart when SR2a went default.  While a
+ * parametric sum monomorph rode the carrier, grounding `(Option (fn [a] b))`
+ * to `(Option (fn [int] int))` changed nothing -- both spell `int64_t`.  By
+ * value the grounded form spells `tur_adt_Option__fn1_int__int`, and binding a
+ * match scrutinee of that type from the int64 param is "initializing ... with
+ * an expression of incompatible type", which is how
+ * hkt-stdlib-option-result-instances failed.
+ *
+ * Carries the same stale-flag guard the field-read consumer does: the flag is
+ * set while emitting the carrier base and PERSISTS on the shared binding into
+ * a by-value spec emission, where the param genuinely is the aggregate. */
+static bool expr_is_erased_carrier_param(EmitCtx *ctx, const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_VAR) return false;
+    Binding *b = e->as.var.binding;
+    if (!b || !b->is_param || !b->emit_carrier_holds_byval) return false;
+    Type spec_t;
+    if (ctx && emit_spec_arg_type_for_binding(ctx, b, &spec_t) &&
+        type_is_byvalue_adt_product(emit_resolve_type(ctx, spec_t)))
+        return false;
+    return true;
+}
+
+/* SR2a graduation: the type an argument must be SPILLED at on its way to a
+ * carrier sink.  emit_carrier_bridge derives the spill temp's C type from the
+ * type it is handed, and the call sites hand it the argument's STATIC type --
+ * `(Option A)` for a parameter of a constrained instance body, which c-names to
+ * `int64_t`.  Inside a SPECIALIZATION that same parameter is the concrete
+ * aggregate (`tur_adt_Option__int x`), so spilling at the static type emits
+ * `int64_t __t = x;` on an aggregate and then takes its address.
+ *
+ * The disagreement is new at graduation, and it is the one the repr shadow ICEs
+ * on ("a representation decision disagrees with repr_of at arg-bridge",
+ * constrained-instance-element-dispatch): while `(Option A)` and `(Option int)`
+ * both spelled `int64_t`, the spec body passed `x` straight through and no
+ * spill was needed at all.  Answering with the spec's own arg type keeps the
+ * carrier-path design intact -- the generic base still reads tag and payload
+ * through `tur_adt_Option *`, now pointed at a stack copy instead of a heap
+ * box.  Narrows only to a by-value monomorph; anything else keeps the
+ * caller's type. */
+static Type call_arg_spill_type(EmitCtx *ctx, const Expr *arg, Type fallback) {
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    Type st;
+    if (ctx && arg && arg->kind == EX_VAR && arg->as.var.binding &&
+        emit_spec_arg_type_for_binding(ctx, arg->as.var.binding, &st)) {
+        Type r = emit_resolve_type(ctx, st);
+        if (type_is_byvalue_adt_product(r)) return r;
+    }
+    return fallback;
+}
+
+/* The predicate half of call_arg_spill_type: this argument IS a parameter the
+ * active specialization passes as a concrete by-value monomorph. */
+static bool arg_is_spec_byvalue_param(EmitCtx *ctx, const Expr *arg) {
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    Type st;
+    return ctx && arg && arg->kind == EX_VAR && arg->as.var.binding &&
+           emit_spec_arg_type_for_binding(ctx, arg->as.var.binding, &st) &&
+           type_is_byvalue_adt_product(emit_resolve_type(ctx, st));
+}
+
+/* True when the callee's i-th parameter SLOT is the int64 carrier -- read off
+ * the recorded signature when the callee has already been emitted, else off its
+ * declared param type.  The question is about the C signature, not the Turmeric
+ * type: `some?` declares `o : (Option A)` and its generic base still lowers
+ * that slot to `int64_t`. */
+static bool callee_param_ctype_is_carrier(EmitCtx *ctx, const Binding *fn_binding,
+                                          const char *fn_name, uint32_t i) {
+    const char *pc = fn_name ? emit_sig_lookup_param_ctype(fn_name, i) : NULL;
+    if (!pc && fn_binding && fn_binding->type.kind == TY_FN &&
+        i < fn_binding->type.as.fn.arity &&
+        fn_binding->type.as.fn.arg_full_types &&
+        fn_binding->type.as.fn.arg_full_types[i])
+        pc = emit_type_c_name(ctx, emit_resolve_type(ctx,
+                 *fn_binding->type.as.fn.arg_full_types[i]));
+    return pc && strcmp(pc, "int64_t") == 0;
+}
+
+/* CONV-S1 seam 4 + SR2a: true when this Option/Result payload occupies the
+ * POINTER-BOX slot -- `adt_field_is_ros_pointer_box`, the rule that stores a
+ * non-parametric by-value ADT payload as `tur_adt_T *` so the monomorph typedef
+ * references T only by pointer.  The typedef, the ctor param and the field read
+ * all agree on that slot, so a match binder has to DEREF it.
+ *
+ * It only started mattering when SR2a went default.  While `(Result Rational
+ * ArithError)` rode the carrier its binder reached the B3 branch, which derefs
+ * anyway; by value `adt_field_is_inline_byval` calls the field inline and the
+ * raw read binds a `tur_adt_ArithError *` into a `tur_adt_ArithError`
+ * (rational-overflow, nested-construct-byvalue-decode). */
+static bool match_field_is_ros_pointer_box(EmitCtx *ctx, const CtorDef *ctor,
+                                           const Binding *fb) {
+    if (!ctor || !ctor->adt || !fb) return false;
+    Type rfb = emit_resolve_type(ctx, fb->type);
+    return adt_field_is_ros_pointer_box(ctor->adt, &rfb);
+}
+
 static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
                                    Type *out) {
     if (!ctx || !var_expr || var_expr->kind != EX_VAR) return false;
@@ -7506,7 +7610,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * its receiver by value reads the same at this site, but its
                  * argument was already unboxed by the rule that owns that
                  * crossing -- bridging again double-derefs). */
+                /* SR2a graduation: and the same "already unboxed by the rule
+                 * that owns this crossing" exclusion the paragraph above draws
+                 * for by-value PRODUCTS now has a second member.  A
+                 * poly-wrapper's inner-call arg marked by `poly_agg_arg_mask`
+                 * was deref'd back to the aggregate a few hundred lines up
+                 * (emit_agg_unbox, Slice 3), and `(Option int)` is a by-value
+                 * SUM since SR2b -- so this rule started firing on top of it
+                 * and emitted `*(T *)(intptr_t)(*(T *)(intptr_t)(x))`, an
+                 * aggregate deref'd as a pointer (hrt-hkt-aggregate-container).
+                 * The two never overlapped while Option rode the carrier. */
                 if (g_sr1_sum_byvalue && !needs_fn_cast && !matched_spec &&
+                    !(e->as.call_.poly_agg_arg_mask & ARG_IDX_BIT(i)) &&
                     emit_arg && fn_binding->source_fn_def) {
                     const FnDef *fd = fn_binding->source_fn_def;
                     TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
@@ -8057,7 +8172,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CONCRETE, CK_CARRIER,
-                                             e->as.call_.args[i]->type);
+                                             call_arg_spill_type(ctx, emit_arg,
+                                                 e->as.call_.args[i]->type));
                 }
                 /* option-consumers-typed-as-int-carrier: the same
                  * concrete->carrier bridge, but for an ordinary *direct* call
@@ -8109,7 +8225,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                "int64_t") == 0))) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CONCRETE, CK_CARRIER,
-                                             e->as.call_.args[i]->type);
+                                             call_arg_spill_type(ctx, emit_arg,
+                                                 e->as.call_.args[i]->type));
                 }
                 /* inline-c-option-byvalue-carrier-straddle: the FORWARD mirror of
                  * the concrete->carrier spill above.  The argument is a carrier
@@ -8150,6 +8267,35 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                       arg_bv);
                         }
                     }
+                }
+                /* SR2a graduation: the last arm of the same family, for the one
+                 * shape none of the tests above recognise -- a SPEC PARAM that
+                 * is a by-value monomorph (`tur_adt_Option__int x` in a
+                 * specialized `(definstance Enc [Option] [(Enc A)] ...)` body)
+                 * feeding a generic base declared on the historical `:int`
+                 * carrier (`some?`, `unwrap`).  The branches above ask whether
+                 * the argument's TYPE is carrier-ABI, and for this parameter it
+                 * is not: the spec made it the aggregate, which is the whole
+                 * point of SR2a.  Before graduation the spec param was int64
+                 * too and the call passed straight through, so no arm had to
+                 * fire at all (constrained-instance-dispatch-parametric-
+                 * container-element, constrained-loop-vec-push-byvalue-result-
+                 * element).  Keyed on the spec arg type, not on the argument
+                 * expression's static type, and gated by the callee's slot
+                 * actually being the int64 carrier -- so a monomorphic by-value
+                 * sink is never spuriously spilled. */
+                else if (!needs_fn_cast && !matched_spec &&
+                         !callee_param_is_typed_heap_ptr &&
+                         emit_arg &&
+                         arg_is_spec_byvalue_param(ctx, emit_arg) &&
+                         fn_binding->type.kind == TY_FN &&
+                         i < fn_binding->type.as.fn.arity &&
+                         callee_param_ctype_is_carrier(ctx, fn_binding,
+                                                       fn_name, i)) {
+                    raw = emit_carrier_bridge(ctx, body, raw,
+                                             CK_CONCRETE, CK_CARRIER,
+                                             call_arg_spill_type(ctx, emit_arg,
+                                                 e->as.call_.args[i]->type));
                 }
                 /* M4c Path A (RETIRED -- M5 D.4, end-to-end-monomorphization
                  * plan): a by-value spec body that called an int64-carrier-sink
@@ -11743,6 +11889,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     adt_app_is_byvalue_product(_rs))
                     scrut_ty = _rs;
             }
+            /* SR2a graduation: inside a SPECIALIZED body the scrutinee param's
+             * representation is the spec's own arg type, and that is the
+             * authoritative answer -- resolution above can ground the element
+             * from a DIFFERENT instantiation of the same generic (`ap`'s `ff`
+             * resolving to `(Option (fn int int))` in the body the spec passes
+             * `tur_adt_Option__fn1_float__float` to).  Both spellings were
+             * `int64_t` while a parametric sum monomorph rode the carrier, so
+             * the disagreement was invisible; by value it is "initializing ...
+             * with an expression of incompatible type" (hkt-ap-fn-in-container,
+             * conv-defstruct-option-fn-element).  Only ever narrows to a
+             * concrete by-value monomorph, so a carrier-slot param is
+             * untouched. */
+            {
+                const Expr *_sv = e->as.match_.scrutinee;
+                while (_sv->kind == EX_ASCRIBE) _sv = _sv->as.ascribe_.inner;
+                Type _spec_t;
+                if (_sv->kind == EX_VAR && _sv->as.var.binding &&
+                    emit_spec_arg_type_for_binding(ctx, _sv->as.var.binding,
+                                                   &_spec_t)) {
+                    Type _rspec = emit_resolve_type(ctx, _spec_t);
+                    if (_rspec.kind == TY_APP &&
+                        type_app_is_concrete_adt(&_rspec) &&
+                        adt_app_is_byvalue_product(_rspec))
+                        scrut_ty = _rspec;
+                }
+            }
             /* TS4P3: Use the monomorphised struct name when the scrutinee is
              * a concrete ADT app (e.g. tur_adt_Maybe__float instead of tur_adt_Maybe).
              * nested-carrier-match: scrut_is_app_monomorph also gates the
@@ -11860,9 +12032,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool scrut_is_carrier_word =
                 rscrut_ty.kind == TY_INT || rscrut_ty.kind == TY_INT64 ||
                 rscrut_ty.kind == TY_UINT64 || rscrut_ty.kind == TY_PTR_VOID;
+            /* SR2a graduation: the same "value in hand is a carrier word"
+             * exception, one level subtler.  `scrut_is_carrier_word` catches
+             * the `:int`-as-type-eraser spelling, where the STATIC type says
+             * carrier.  A generic instance-method base says it in the
+             * SIGNATURE instead: `ap`'s `ff : (Option (fn [a] b))` is a
+             * concrete by-value monomorph by the time resolution is done, but
+             * the base's param slot is int64 because the dict slot it backs is
+             * (`int64_t (*ap)(int64_t, int64_t)`).  Binding an aggregate
+             * scrutinee from it is "incompatible type", not a coercion.  Both
+             * were invisible while a parametric sum monomorph rode the
+             * carrier -- the two spellings agreed. */
             bool adt_byval = (adt_is_byvalue_product(adt) ||
                               adt_app_is_byvalue_product(scrut_ty)) &&
                              !scrut_is_carrier_word &&
+                             !expr_is_erased_carrier_param(ctx,
+                                 e->as.match_.scrutinee) &&
                              !type_is_heap_adt(scrut_ty) &&
                              !(adt && adt->is_heap);
             /* Slice 3: a large by-value ADT scrutinee that is a pass-by-pointer
@@ -11972,7 +12157,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * and no carrier unbox. */
                             bool inline_byval = adt_byval && bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
-                            if (inline_byval) {
+                            if (adt_byval &&
+                                match_field_is_ros_pointer_box(ctx, pat->ctor, fb)) {
+                                /* Pointer-box payload slot -- deref, never bind
+                                 * the pointer as the value. */
+                                buf_printf(body,
+                                    "%s %s = *(%s *)(intptr_t)(__scrut%s%s);\n",
+                                    ctype, bname, ctype, acc, mp);
+                            } else if (inline_byval) {
                                 buf_printf(body, "%s %s = __scrut%s%s;\n",
                                            ctype, bname, acc, mp);
                             } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
@@ -12322,7 +12514,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             /* CONV-S1/B3: a by-value ADT field is stored boxed
                              * (int64 heap pointer) in the carrier tagged union;
                              * unbox it by deref. */
-                            if (inline_byval) {
+                            if (adt_byval &&
+                                match_field_is_ros_pointer_box(ctx, pat->ctor, fb)) {
+                                /* Pointer-box payload slot -- deref, never bind
+                                 * the pointer as the value. */
+                                buf_printf(body,
+                                    "%s %s = *(%s *)(intptr_t)(__scrut->%s);\n",
+                                    ctype, bname, ctype, mp);
+                            } else if (inline_byval) {
                                 buf_printf(body, "%s %s = __scrut->%s;\n",
                                            ctype, bname, mp);
                             } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||

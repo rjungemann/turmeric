@@ -2777,6 +2777,22 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
             gs.mem_entry_tag[m] = 1 + m;
             gs.mem_ret[m] = group[m]->return_type.kind;
             gs.mem_retctype[m] = emit_type_c_name(ctx, group[m]->return_type);
+            /* AR: is THIS member's return a by-value aggregate?  The
+             * single-function path (emit_stackless_general_body) has always set
+             * this for its one member; the group path left the whole array at
+             * its memset-0, so every member's suspension temp was declared
+             * `T __t = 0` and saved with `(int64_t)(intptr_t)(__t)` -- an
+             * aggregate cast as a scalar.  Nothing in the group population
+             * returned a by-value aggregate until SR2a went default and
+             * `(Result int int)` became one
+             * (stackless-catch-unwind-byref-aggregate-reader-transitive-escape-bail,
+             * whose `leak` returns its Result param). */
+            {
+                TypeKind mrk; const char *mrct; bool mraggr; bool mrref;
+                gs.mem_ret_aggr[m] =
+                    gs_param_class(ctx, group[m]->return_type,
+                                   &mrk, &mrct, &mraggr, &mrref) && mraggr;
+            }
             if (group[m]->n_params > maxar) maxar = group[m]->n_params;
         }
         gs.next_tag = ng + 1;

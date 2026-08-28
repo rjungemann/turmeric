@@ -2,6 +2,43 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **Parametric sum monomorphs flow by value by default (SR2a graduated).**
+  `--enable=parametric-sum-byvalue` is retired -- `(Option int)`,
+  `(Result float cstr)` and every other concrete parametric sum monomorph are
+  aggregates with no per-ctor malloc, where they used to ride the int64 heap
+  carrier. Measured on the seam: 3.6x faster and 71x less peak RSS on a
+  narrow-sum loop, 3.2x/145x on a wide one, and one leaked allocation per
+  construction eliminated. Shapes the predicate declines (self-recursive,
+  `:heap`, GADT, fixpoint partners) and erased generic bases still use the
+  carrier. `--enable=parametric-sum-byvalue` remains accepted as a TUR-W0063
+  no-op for one minor line; `TUR_SR2_APP_SUM_BYVALUE=0` restores the carrier
+  for bisection. Plan: `docs/upcoming/sum-representation-plan.md` (SR2c).
+
+- **`ok?` and `err?` take `(Result A B)`, not `:int`.** They were the last
+  carrier-typed Result accessors; `some?`, `ok-val` and `err-val` were already
+  parametric. An `:int` parameter stops being a harmless erasure once the value
+  flows by value, so inline-C code that hands back a carrier value declared
+  `: int` now names its type at the boundary -- `(ok? (:: r (Result int int)))`
+  -- exactly as it already did for `some?`.
+
+### Fixed
+
+- **Seven representation-crossing defects** the by-value default exposed, each
+  one a place where two spellings agreed only because a parametric sum monomorph
+  and a type variable both c-named to `int64_t`. The sharpest: the
+  carrier-to-by-value readback's NULL guard lived in the pre-sum record branch,
+  so reading a `(none)` built by inline-C dereferenced the null carrier. Also a
+  match on an erased instance base's parameter binding an aggregate from an
+  `int64_t` slot, a match resolving its element from a different instantiation
+  than the active specialization, an Option/Result pointer-box payload bound as
+  a value, an argument spilled to a carrier sink at its static rather than its
+  specialized type, a poly-wrapper argument unboxed twice, and the catch-unwind
+  group trampoline saving an aggregate-returning member through a scalar cast.
+
 ## [0.39.0] -- 2026-08-27
 
 ### Added

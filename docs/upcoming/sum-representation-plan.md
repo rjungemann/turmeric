@@ -329,17 +329,14 @@ process / future / weak / refined / args / typeclass-show), and the fixture
 population -- speaks the tagged monomorph layout `{ int tag; union { ... }
 as; }` (16 bytes for both types; `Result` down from 24, the dead arm gone).
 The historical none-as-NULL is still accepted on the READ side (`tur_is_some(0)`
-is false, and a carrier match reads a NULL scrutinee as tag 0).  On the
-default path values ride the int64 carrier; under
-`--enable=parametric-sum-byvalue` (the SR2c experiment row) / the
-`TUR_SR2_APP_SUM_BYVALUE=1` seam they flow by value.  The tree-walking
-interpreter builds and matches ctor-named values ("Some"/"None"/"Ok"/"Err")
-with the legacy box shapes still readable.  Validation at landing: full
-compiled suite 2712/0, interpreter suite 1867/0, sr2-seam 12/12, sr4-seam
-24/24.  Known cost, filed not hidden: carrier-riding sum boxes have no
-automatic owner
-([reported](../reported/carrier-sum-option-boxes-have-no-owner.md)) --
-byvalue graduation is the ending that removes the box entirely.
+is false, and a carrier match reads a NULL scrutinee as tag 0).  **Concrete
+monomorphs now flow BY VALUE by default** -- SR2a graduated 2026-08-27, see
+SR2c below; a shape the by-value predicate declines (self-recursive, `:heap`,
+GADT, fixpoint partner) or an erased generic base still rides the int64
+carrier.  The tree-walking interpreter builds and matches ctor-named values
+("Some"/"None"/"Ok"/"Err") with the legacy box shapes still readable.
+Validation at landing: full compiled suite 2712/0, interpreter suite 1867/0,
+sr2-seam 12/12, sr4-seam 24/24.
 
 The payoff phase, and the reason SR1 is worth doing.
 
@@ -380,6 +377,54 @@ work, and `vec<option<T>>` is that shape).
 `CLAUDE.md` it wants an `EXPERIMENTS[]` row with every descriptor field
 populated, `experiment_warn_if_used` at the elaboration entry point, and
 `plan_path` pointing here.
+
+### SR2c -- the experiment row -- **GRADUATED 2026-08-27**
+
+`--enable=parametric-sum-byvalue` is retired.  `sr2_app_sum_byvalue()` reads a
+default-`true` `g_sr2_app_sum_byvalue`; `TUR_SR2_APP_SUM_BYVALUE=0` restores the
+carrier for bisection, read once in `main.c` exactly as SR1's is.  The name is
+in `GRADUATED[]`, so a lingering `--enable` is a TUR-W0063 no-op for one minor
+line.  `tests/run-sr2-seam.sh` and its `tur_sr2_seam` ctest target are retired
+with it: the harness existed because nothing in CI compiled a parametric sum by
+value, and now every `bash tests/run.sh` compiles all eleven of its fixtures
+that way.
+
+**The row's soak had exactly one job** -- do not fix the ABI before SR2b, its
+heaviest client, exists -- and SR2b landed in-tree, then across the spices
+(`turmeric-spices` #59, "migrate every spice off the pre-sum Option/Result
+layout").  `expires_at` was 0.42.0 and nowhere near; graduating early is the
+routine case, not the exception.
+
+**The flip cost 21 fixtures, and the gate document could not have predicted
+them.** Its "2711/0 under the seam" was measured *before* SR2b, when Option and
+Result were still discriminated records -- so the seam only moved user ADTs.
+Once the two most-used types in the language are the population, seven distinct
+defects surfaced, every one a place where two spellings agreed only because a
+parametric sum monomorph rode the carrier and both c-named to `int64_t`:
+
+| defect | where |
+|---|---|
+| the carrier->by-value readback's NULL guard lived in the pre-SR2b single-ctor RECORD branch, so `(some? (:: (lookup 3) (Option int)))` deref'd `TUR_NONE` | `emit_carrier_bridge`, emit_core.c |
+| a match on an erased instance base's param bound the aggregate from an `int64_t` slot (`ap`'s `ff : (Option (fn [a] b))`) | match scrutinee, emit_expr.c |
+| the same match resolving its element from a DIFFERENT instantiation than the active spec passes | match scrutinee, emit_expr.c |
+| an Option/Result pointer-box payload slot (`tur_adt_ArithError *`) bound as a value | match field binder, emit_expr.c |
+| a by-value spec param spilled to a carrier sink at its STATIC type -- the repr-shadow ICE at `arg-bridge` | call arg bridge, emit_expr.c |
+| SR1's carrier->by-value-sum arg rule stacking on the poly-wrapper's own unbox, double-deref'ing | call arg bridge, emit_expr.c |
+| the catch-unwind GROUP trampoline never set `mem_ret_aggr[]` past member 0, so an aggregate-returning member saved through a scalar cast | `gs_build` caller, emit_fns.c |
+
+Two source-side changes came with it, both of them the CLAUDE.md `:int`
+stand-in rule catching up with the representation:
+
+- **`ok?` / `err?` are now `[A B] [r : (Result A B)]`**, match-bodied, like
+  `some?` / `ok-val` / `err-val` before them.  They were the last carrier-typed
+  Result accessors, and an `:int` parameter stops being a harmless erasure the
+  moment the value flows by value -- it becomes a straddle every caller has to
+  spill across.  Inline-C carrier producers name their type at the boundary now
+  (`(ok? (:: (safe-div 10 2) (Result int int)))`), exactly as they already did
+  for `some?`.
+- **`arc-weak-upgrade` dropped its manual `option-free` calls.** They were
+  added under SR2b to release the carrier box; by value there is no box, and
+  the call is a `free()` of a stack slot.
 
 ### SR3 -- niche filling -- GATE RUN 2026-08-27; slice A SHIPPED, slice B held
 

@@ -6,7 +6,7 @@
 #include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
 #include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
 #include "mangle.h"
-#include "runtime/experiments.h"  /* SR2a: parametric-sum-byvalue lifecycle warning */  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
+/* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -3544,33 +3544,23 @@ bool type_is_byvalue_adt_product(Type t) {
  * predicate, so this never touches that machinery (B4 remains separate). */
 static const bool g_adt_app_byvalue = true;
 
-/* SR2 prototype gate (docs/upcoming/sum-representation-plan.md SR2):
- * TUR_SR2_APP_SUM_BYVALUE=1 admits a MULTI-VARIANT parametric sum monomorph
- * (`(Opt2 int)`) to the by-value path -- the app-side sibling of SR1's
- * adt_sr1_sum_candidate, and the actual prerequisite for converting Option and
- * Result to real sums: without it the conversion takes the two most-used types
- * from by-value to heap-boxed-and-leaked, the exact regression the plan's
+/* SR2a (docs/upcoming/sum-representation-plan.md SR2): a MULTI-VARIANT
+ * parametric sum monomorph (`(Opt2 int)`, and above all `(Option int)` /
+ * `(Result int cstr)`) flows by value -- the app-side sibling of SR1's
+ * adt_sr1_sum_candidate, and the prerequisite SR2b's stdlib conversion is
+ * built on: on the carrier, the conversion takes the two most-used types in
+ * the language to heap-boxed-and-leaked, the exact regression the plan's
  * section 5 warns about (SR1 as shipped covers non-parametric sums only).
  * Same exclusions as the SR1 gate: non-GADT, non-heap, and not self-recursive
  * (`(Cons2 a (Cons2 a))` stays on the carrier -- SR4's population, measured
- * and declined there). */
+ * and declined there).
+ *
+ * GRADUATED 2026-08-27 out of `--enable=parametric-sum-byvalue`: the row's
+ * soak existed so the representation would not be fixed against SR2b, and
+ * SR2b has landed (in-tree and across the spices).  `TUR_SR2_APP_SUM_BYVALUE=0`
+ * is the bisection escape hatch, read once in main.c the way SR1's is. */
 static bool sr2_app_sum_byvalue(void) {
-    static int cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("TUR_SR2_APP_SUM_BYVALUE");
-        cached = (e && e[0] == '1') ? 1 : 0;
-    }
-    if (cached == 1) return true;
-    /* --enable=parametric-sum-byvalue (the EXPERIMENTS[] row).  The env seam
-     * above is the harness/measurement channel and carries no lifecycle
-     * warning; an experiment enable is a user opting in, so it gets the
-     * TUR-W0061 beta notice, once per compile, at the moment the gate first
-     * decides anything. */
-    if (g_opt_parametric_sum_byvalue) {
-        experiment_warn_if_used("parametric-sum-byvalue");
-        return true;
-    }
-    return false;
+    return g_sr2_app_sum_byvalue;
 }
 
 bool adt_app_is_byvalue_product(Type t) {

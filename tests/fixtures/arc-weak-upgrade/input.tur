@@ -24,16 +24,18 @@
       (println (arc-strong-count a))         ; 1
 
       ;; upgrade while the value is alive -> some, and it is a REAL strong ref.
-      ;; SR2b: the Option rides the carrier as a heap box the caller owns --
-      ;; release it once the payload has been read out.
+      ;; SR2a graduation: `(Option Arc)` is a by-value monomorph -- there is no
+      ;; heap box, so there is nothing to release.  The `(option-free (:: u
+      ;; :int))` this fixture carried under SR2b is now a free() of a stack
+      ;; slot, which is what LeakSanitizer's sibling check reports as a bad
+      ;; free.  The leak the frees existed to answer is gone with the box.
       (let [u (arc-upgrade w)]
         (if (some? u)
           (let [b (unwrap u)]
             (println (arc-get b))            ; 42
             (println (arc-strong-count b))   ; 2  -- upgrade took a reference
             (arc-drop b))
-          (println -1))
-        (option-free (:: u :int)))
+          (println -1)))
       (println (arc-strong-count a))         ; 1  -- back down after the drop
 
       ;; drop the last strong reference; the weak handle survives it
@@ -41,8 +43,7 @@
 
       ;; upgrade after the value is gone -> none, not a dangling handle
       (let [u2 (arc-upgrade w)]
-        (println (if (some? u2) 1 -1))       ; -1
-        (option-free (:: u2 :int)))
+        (println (if (some? u2) 1 -1)))      ; -1
 
       ;; releasing the last weak handle frees the control block
       (arc-weak-drop w))

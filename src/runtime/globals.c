@@ -118,9 +118,9 @@ bool g_sized_types_enabled = true;
 bool g_dump_sizes = false;
 bool g_dump_refine_json = false;
 bool g_opt_backtrackable_state = false;
-bool g_opt_parametric_sum_byvalue = false;
 bool g_adt_slab = false;
 bool g_sr1_sum_byvalue = true;
+bool g_sr2_app_sum_byvalue = true;
 
 /* ER1: --strict-effects flag */
 bool g_strict_effects = false;

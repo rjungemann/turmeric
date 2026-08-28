@@ -21,6 +21,16 @@ and [`stdlib/result.tur`](https://github.com/rjungemann/turmeric/blob/main/stdli
 use -- so a value built in C flows straight into the stdlib accessors
 (`ok?`, `err?`, `ok-val`, `err-val`, `some?`, `unwrap`) and vice versa.
 
+The builders return the `int64_t` **carrier** -- a heap pointer to the
+canonical layout. That is still what an inline-C body should hand back, and
+nothing here changed when concrete monomorphs started flowing by value: the
+compiler bridges the carrier into the aggregate at the boundary, and a
+`(none)` carrier (the null pointer) survives the crossing. What the boundary
+needs is a real declared type on the C function -- `: (Result MidiIn int)`,
+not `: int`. A producer declared `: int` hands back a bare word the accessors
+cannot type, so its callers have to write `(ok? (:: r (Result int int)))` at
+every use site.
+
 ## The helpers
 
 The builders come in three flavours. Prefer the **typed** `_int` / `_ptr`

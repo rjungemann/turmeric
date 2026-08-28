@@ -147,8 +147,10 @@ static const AdtDef *slot_agg_def(const Type *t) {
  * refcount).  The def must be present: a bare surface annotation (e.g. a NULL
  * `return_type` def) is not enough -- callers pass the body/value Type, which
  * carries the real monomorphized def. */
-/* SR2b: a CONCRETE parametric monomorph that rides the int64 carrier --
- * `(Option int)` while the parametric-sum-byvalue experiment is off.  Its C
+/* SR2b: a CONCRETE parametric monomorph that rides the int64 carrier -- one
+ * the SR2a by-value predicate declines (self-recursive, :heap, GADT, a
+ * fixpoint partner's functor app), or any of them under the
+ * TUR_SR2_APP_SUM_BYVALUE=0 bisection hatch.  Its C
  * spelling IS int64_t (type_c_name's TY_APP arm answers the carrier), so it
  * crosses a DK slot exactly like a scalar: plain cast, no box, no drop
  * concern (the carrier ctor's box is process-lifetime today).  Before
@@ -301,8 +303,10 @@ static bool sig_slot_ok(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
     /* SR2b: a CONCRETE application whose C spelling IS the int64 carrier -- a
-     * sum monomorph like `(Option int)` while the parametric-sum-byvalue
-     * experiment is off -- crosses a DK slot as the plain word it already is.
+     * sum monomorph the SR2a by-value predicate declines (self-recursive,
+     * :heap, GADT, fixpoint partner), or any of them under
+     * TUR_SR2_APP_SUM_BYVALUE=0 -- crosses a DK slot as the plain word it
+     * already is.
      * CONCRETE only, deliberately: a tyvar-elemented app (`(Option A)`,
      * `(Map A B)`) must keep rejecting, because the whole mono-template /
      * island machinery is built on the generic BASE sig-rejecting (see the

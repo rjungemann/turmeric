@@ -9723,6 +9723,13 @@ int main(int argc, char **argv) {
         const char *__sr1 = getenv("TUR_SR1_SUM_BYVALUE");
         if (__sr1 && __sr1[0] == '0') g_sr1_sum_byvalue = false;
         else if (__sr1 && __sr1[0] == '1') g_sr1_sum_byvalue = true;
+        /* SR2a is ON by default too, since its graduation out of
+         * --enable=parametric-sum-byvalue.  Same two-way shape: `=0` restores
+         * the int64 carrier for a parametric sum monomorph, `=1` is the no-op
+         * that keeps the measurement harnesses' existing invocations working. */
+        const char *__sr2 = getenv("TUR_SR2_APP_SUM_BYVALUE");
+        if (__sr2 && __sr2[0] == '0') g_sr2_app_sum_byvalue = false;
+        else if (__sr2 && __sr2[0] == '1') g_sr2_app_sum_byvalue = true;
     }
 
 #ifdef _WIN32

@@ -4695,8 +4695,46 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                 }
             }
             if (!used_canonical) {
-                /* Pointer carrier: dereference the heap pointer. */
-                buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+                /* SR2b + SR3 slice A: Option and Result are real SUMS now, so
+                 * the canonical readback above (keyed on the pre-SR2b
+                 * single-ctor RECORD form) no longer fires for them -- and it
+                 * does not need to.  A carrier box for a sum monomorph IS that
+                 * monomorph's layout (`{ int tag; union { ... } as; }`, which
+                 * the preamble's tur_option_t / tur_result_box_t _Static_assert
+                 * pins), so the readback is a plain deref.
+                 *
+                 * What does NOT survive the change is the NULL guard the record
+                 * path carried.  The carrier None is the null pointer (slice A),
+                 * so an Option-shaped monomorph must test before dereferencing
+                 * and collapse to the zeroed aggregate -- tag 0 is None, the
+                 * same answer `tur_is_some(0)` and the carrier match path's
+                 * `__scrut ? __scrut->tag : 0` give.  Without it
+                 * `(some? (:: (lookup 3) (Option int)))` derefs NULL, which is
+                 * how the whole inline-C Option family crashed when SR2a went
+                 * default (option-result-c-abi, inline-c-result-builder,
+                 * inline-c-typed-result-option, inline-c-option-byval-param).
+                 * Keyed by adt_ctor_is_null_none, the same shape check slice A
+                 * uses on the producing side -- Result gets no guard because it
+                 * has no null value to produce. */
+                Type _rty = emit_resolve_type(ctx, concrete_ty);
+                AdtDef *_adt = (_rty.kind == TY_APP) ? type_adt_app_def(&_rty)
+                             : (_rty.kind == TY_ADT ? _rty.as.adt_.def : NULL);
+                if (_adt && _adt->ctors && _adt->ctors[0] &&
+                    adt_ctor_is_null_none(_adt, _adt->ctors[0])) {
+                    /* Bind the carrier once: src_str may be a call. */
+                    char *ctmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                               ctmp, src_str);
+                    char *z = emit_c_zero_of(cname);
+                    buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
+                               ctmp, cname, ctmp, z);
+                    free(z);
+                    free(ctmp);
+                } else {
+                    /* Pointer carrier: dereference the heap pointer. */
+                    buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+                }
             }
         }
     } else {
