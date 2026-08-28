@@ -1468,6 +1468,28 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
         }
         const char *nm = type_c_name(resolved);
         free_struct_app_type(resolved);
+        /* SR2b layout contract: a MULTI-VARIANT parametric monomorph's union
+         * payload lives at offset 8 in a 16-byte tagged aggregate -- that is
+         * what the generic base layout (`tur_adt_Option`'s int64 slot), the
+         * preamble helpers (tur_opt_value & co.), and every erased reader
+         * assume.  A sub-word scalar member (`bool _0;`) gives the union
+         * 1-byte alignment: the payload lands at offset 4 in an 8-byte
+         * aggregate, and a generic-layout read of offset 8 returns garbage --
+         * `(unwrap-or (some true) false)` was false whenever the producer was
+         * the `Option__bool` monomorph ctor and the consumer an erased spec
+         * (type-fuzz BUG_wrong_output-000010).  Widen sub-word INTEGER
+         * scalars to the int64 slot; the store zero/sign-extends and the
+         * typed binder reads cast back, so both the monomorph-typed and the
+         * generic-layout views agree.  Single-variant records keep exact
+         * member types (they have no generic-union twin), and float/double
+         * keep theirs (an implicit float->int64 store would VALUE-convert;
+         * double is already 8-aligned). */
+        if (owner && owner->n_ctors > 1 && nm &&
+            (strcmp(nm, "bool") == 0 ||
+             strcmp(nm, "int8_t") == 0 || strcmp(nm, "uint8_t") == 0 ||
+             strcmp(nm, "int16_t") == 0 || strcmp(nm, "uint16_t") == 0 ||
+             strcmp(nm, "int32_t") == 0 || strcmp(nm, "uint32_t") == 0))
+            return "int64_t";
         return nm;
     }
     switch (field->kind) {

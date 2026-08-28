@@ -34,12 +34,25 @@ def _scalar(val):
 
 
 class OptionPrinter:
-    """Option[A]  ->  (some <value>) | (none)."""
+    """Option[A]  ->  (some <value>) | (none).
+
+    SR2b: Option is a real sum -- the monomorph is the tagged union
+    `{ int tag; union { struct {} None; struct { A _0; } Some; } as; }`
+    with tag 0 = None, 1 = Some.  The retired record shape
+    ({ bool is_some; A value; }) is still read as a fallback so the
+    printer keeps working against an older binary."""
 
     def __init__(self, val):
         self.val = val
 
     def to_string(self):
+        try:
+            tag = int(self.val['tag'])
+            if tag == 1:
+                return "(some %s)" % _scalar(self.val['as']['Some']['_0'])
+            return "(none)"
+        except gdb.error:
+            pass
         try:
             is_some = bool(self.val['is_some'])
         except gdb.error:
@@ -50,12 +63,23 @@ class OptionPrinter:
 
 
 class ResultPrinter:
-    """Result[A B]  ->  (ok <ok_val>) | (err <err_val>)."""
+    """Result[A B]  ->  (ok <ok_val>) | (err <err_val>).
+
+    SR2b tagged layout: tag 0 = Ok, 1 = Err, payload in as.Ok._0 /
+    as.Err._0.  Retired record shape kept as a fallback (see
+    OptionPrinter)."""
 
     def __init__(self, val):
         self.val = val
 
     def to_string(self):
+        try:
+            tag = int(self.val['tag'])
+            if tag == 0:
+                return "(ok %s)" % _scalar(self.val['as']['Ok']['_0'])
+            return "(err %s)" % _scalar(self.val['as']['Err']['_0'])
+        except gdb.error:
+            pass
         try:
             is_ok = bool(self.val['is_ok'])
         except gdb.error:

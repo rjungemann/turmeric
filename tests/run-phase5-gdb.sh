@@ -4,14 +4,15 @@
 # pretty-printers).  Two halves keyed on the same fixture:
 #
 #   N1 (type names): `tur --debug build` produces a binary whose DWARF carries
-#       the deterministic by-value carrier type names a pretty-printer
-#       dispatches on -- Option__int{is_some,value} and Result{is_ok,ok_val,
-#       err_val}.  Asserted both in the emitted C (gdb-independent) and, when
-#       gdb is present, via `ptype` against the binary's DWARF.
+#       the deterministic monomorph type names a pretty-printer dispatches on
+#       -- the SR2b tagged sums tur_adt_Option__int / tur_adt_Result__int__cstr
+#       ({ int tag; union { ... } as; }).  Asserted both in the emitted C
+#       (gdb-independent) and, when gdb is present, via `ptype` against the
+#       binary's DWARF.
 #
 #   N2 (pretty-printers): with tools/debug/turmeric_gdb.py sourced, gdb renders
-#       a Result parameter as `(ok 14)` and the returned Option as `(some 42)`,
-#       not the raw C carrier.
+#       the deref'd Result carrier as `(ok 14)` and the deref'd returned Option
+#       as `(some 42)`, not the raw C aggregate.
 #
 # The gdb half is skipped (PASS) when gdb is unavailable, mirroring the Phase 4
 # harness.  The fixture carries requires.dedicated-runner so tests/run.sh leaves
@@ -62,10 +63,14 @@ expect() {
 
 # -- N1a) emit-c carries the discoverable carrier type names (no gdb needed) --
 emitted=$("$TUR" emit-c "$FIX" 2>/dev/null)
-expect "emit-c names the by-value Option carrier" "$emitted" \
-  "tur_adt_Option__int" "bool is_some" "int64_t value"
-expect "emit-c names the by-value Result carrier" "$emitted" \
-  "tur_adt_Result__int__cstr" "bool is_ok" "int64_t ok_val" "const char * err_val"
+# SR2b: Option/Result are real sums -- the monomorph is the tagged union
+# `{ int tag; union { ... } as; }`, not the retired {is_some/is_ok, ...}
+# record.  The discoverable spellings are the typedef name, the tag word,
+# and the per-variant payload members.
+expect "emit-c names the tagged Option monomorph" "$emitted" \
+  "tur_adt_Option__int" "int tag;" "struct { int64_t _0; } Some;"
+expect "emit-c names the tagged Result monomorph" "$emitted" \
+  "tur_adt_Result__int__cstr" "struct { int64_t _0; } Ok;" "struct { const char * _0; } Err;"
 
 # -- build the debug binary (shared by N1b + N2) -----------------------------
 BIN="$(mktemp -u "${TMPDIR:-/tmp}/tur-phase5-XXXXXX")"
@@ -88,27 +93,29 @@ else
   types=$(gdb -batch -nx \
     -ex "ptype tur_adt_Option__int" \
     -ex "ptype tur_adt_Result__int__cstr" "$BIN" 2>&1)
-  expect "DWARF carries tur_adt_Option__int{is_some,value}" "$types" \
-    "tur_adt_Option__int" "is_some" "value"
-  expect "DWARF carries tur_adt_Result__int__cstr{is_ok,ok_val,err_val}" "$types" \
-    "tur_adt_Result__int__cstr" "is_ok" "ok_val" "err_val"
+  # SR2b: the members a debugger sees are the tag word and the per-variant
+  # union payloads.
+  expect "DWARF carries the tagged tur_adt_Option__int" "$types" \
+    "tur_adt_Option__int" "tag" "Some"
+  expect "DWARF carries the tagged tur_adt_Result__int__cstr" "$types" \
+    "tur_adt_Result__int__cstr" "tag" "Ok" "Err"
 
   # -- N2) pretty-printers render Turmeric shapes ----------------------------
-  SYM=$(gdb -batch -nx -ex "info functions probe" "$BIN" 2>&1 \
-        | grep -oE "probe__spec__[A-Za-z0-9_]+" | head -1)
-  if [ -z "$SYM" ]; then
-    echo "FAIL phase5: could not locate the monomorphized probe symbol in DWARF"
-    fail=$((fail + 1))
-  else
-    pretty=$(gdb -batch -nx \
-      -ex "source $PP" \
-      -ex "break $SYM" \
-      -ex run \
-      -ex "print r" \
-      -ex "finish" "$BIN" 2>&1)
-    expect "gdb renders the Result parameter as (ok 14)"      "$pretty" "(ok 14)"
-    expect "gdb renders the returned Option as (some 42)"     "$pretty" "Value returned is" "(some 42)"
-  fi
+  # SR2b: Option/Result ride the int64 carrier on the default path, so `probe`
+  # keeps its plain symbol (no by-value ABI clone) and its params are carrier
+  # words.  The debugger inspection point is the DEREF'd tagged monomorph --
+  # `print *(tur_adt_Result__int__cstr *) r` -- which is also exactly how a
+  # user inspects a carrier value at a breakpoint.  The printers dispatch on
+  # the monomorph typedef name as before.
+  pretty=$(gdb -batch -nx \
+    -ex "source $PP" \
+    -ex "break probe" \
+    -ex run \
+    -ex "print *(tur_adt_Result__int__cstr *) r" \
+    -ex "finish" \
+    -ex 'print *(tur_adt_Option__int *) $' "$BIN" 2>&1)
+  expect "gdb renders the deref'd Result carrier as (ok 14)"  "$pretty" "(ok 14)"
+  expect "gdb renders the deref'd returned Option as (some 42)" "$pretty" "(some 42)"
 fi
 
 rm -f "$BIN"

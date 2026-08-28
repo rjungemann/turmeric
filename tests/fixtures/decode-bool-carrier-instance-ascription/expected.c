@@ -4049,7 +4049,7 @@ static int64_t ctor_Some__Zipper__struct(int64_t _0) {
 typedef struct tur_adt_Result__bool__cstr {
     int tag;
     union {
-        struct { bool _0; } Ok;
+        struct { int64_t _0; } Ok;
         struct { const char * _0; } Err;
     } as;
 } tur_adt_Result__bool__cstr;
@@ -4057,7 +4057,7 @@ typedef struct tur_adt_Result__bool__cstr {
 
 #ifndef TUR_FN_tur_adt_Result__bool__cstr
 #define TUR_FN_tur_adt_Result__bool__cstr
-static int64_t ctor_Ok__bool__cstr(bool _0) {
+static int64_t ctor_Ok__bool__cstr(int64_t _0) {
     tur_adt_Result__bool__cstr *__r = (tur_adt_Result__bool__cstr *)malloc(sizeof(tur_adt_Result__bool__cstr));
     __r->tag = 0;
     __r->as.Ok._0 = _0;
