@@ -652,6 +652,18 @@ ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
         if (resolved.kind == TY_FN) return REPR_FAT_HANDLE;
         if (type_is_heap_struct(resolved) || type_is_heap_adt(resolved))
             return REPR_HEAP_PTR;
+        /* opaque-pointer-c-spelling seam: an opaque over a pointer is a LEAF
+         * pointer -- `void *` is its own spelling, so the bits ARE the value.
+         * The `own_cty == cty` rule below would already say so for a BARE
+         * opaque, but a PARAMETRIC one (`(SChan P)`) has no concrete codegen
+         * layout, so it would fall through to HEAP_PTR and disagree with
+         * repr_of's scalar-bits.  Both opaque shapes answer here together. */
+        {
+            const AdtDef *odef = resolved.kind == TY_ADT ? resolved.as.adt_.def
+                               : resolved.kind == TY_APP ? type_adt_app_def(&resolved)
+                                                         : NULL;
+            if (adt_opaque_c_names_as_pointer(odef)) return REPR_SCALAR_BITS;
+        }
         /* A pointer that is the type's own scalar spelling (cstr, Sym,
          * ptr<T> leaves) is the value's bits; any other pointer decl is a
          * heap-object handle. */
@@ -10200,9 +10212,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * eff_fld_rcty / field_byval_unbox paths from re-introducing the
                  * truncating cast. */
                 if (fn_carrier_field) fld_rcty = "int64_t";
+                /* opaque-pointer-c-spelling seam: `!= "int64_t"` is being used
+                 * here as "is a by-value aggregate", which is only sound while
+                 * every non-heap TY_APP/TY_STRUCT spells either the carrier word
+                 * or a struct NAME.  An opaque over a pointer spells `void *`,
+                 * and the unbox then DEREFERENCES a handle: `(.snd p)` on
+                 * `(Pair int (SChan R))` emitted `*(void **)(pair->snd)` and
+                 * segfaulted (schan-roundtrip).  A pointer spelling is never a
+                 * by-value aggregate, so ask that directly -- and the guard is
+                 * inert with the seam off, where the only pointer-spelled field
+                 * types are the :heap ones the two clauses below already
+                 * exclude. */
                 bool field_byval_unbox =
                     cty && strcmp(cty, "int64_t") == 0 &&
                     fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
+                    strchr(fld_rcty, '*') == NULL &&
                     (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT) &&
                     !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty) &&
                     ctor && e->as.get_field_.field_idx < ctor->n_fields &&

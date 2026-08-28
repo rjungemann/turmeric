@@ -369,6 +369,14 @@ typedef struct AdtDef {
      * skip an opaque one -- it stays the int64 carrier with its name kept only
      * for nominal identity (typeclass dispatch, REPL type tags, mangling). */
     bool        is_opaque;
+    /* opaque-pointer-c-spelling gate (docs/upcoming/opaque-pointer-c-spelling-
+     * gate-results.md): true iff this opaque newtype's DECLARED base type is a
+     * pointer -- `(defopaque H :ptr<void>)`, `(defopaque H :ptr)`, `(defopaque
+     * H :ptr<T>)`.  Before this flag the base form was parsed for POSITION only
+     * (to find where the trailing attributes start) and then discarded, so the
+     * declared base was not recoverable anywhere downstream.  Read only by
+     * `adt_opaque_c_names_as_pointer` (types.c), which is seam-gated. */
+    bool        opaque_base_is_ptr;
     /* sealed-opaque (GRADUATED 2026-08-17, docs/archive/sealed-opaque-plan.md):
      * set by the `:sealed` attribute on a defopaque.  `::` is a COERCING cast,
      * so an ordinary opaque can always be unwrapped to its carrier and re-wrapped
@@ -1810,6 +1818,12 @@ bool         adt_ctor_is_null_none(const struct AdtDef *def,
  * payload types whose valid values exclude 0; see the definition for why
  * `:heap`-ness is not the condition and `Cons` fails it. */
 bool         adt_app_is_niche_option(Type t);
+/* opaque-pointer-c-spelling gate (TUR_OPAQUE_PTR_CNAME=1, default OFF): true
+ * when `def` is an opaque newtype declared over a pointer (`(defopaque String
+ * :ptr<void>)`), so type_c_name spells it `void *` instead of the `int64_t`
+ * carrier word -- making an opaque handle distinguishable from a tagged box at
+ * the emitter's `strcmp(cname, "int64_t")` sites. */
+bool         adt_opaque_c_names_as_pointer(const struct AdtDef *def);
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);

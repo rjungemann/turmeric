@@ -436,7 +436,17 @@ bool type_uses_carrier_abi(Type t) {
      * STRUCT rule below: carrier-ABI only when it carries phantom type params
      * (a parametric opaque application rides the int64 handle like any TY_APP). */
     if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
-        return t.as.adt_.def->n_type_params > 0;
+        return t.as.adt_.def->n_type_params > 0 &&
+               !adt_opaque_c_names_as_pointer(t.as.adt_.def);
+    /* opaque-pointer-c-spelling seam: a PARAMETRIC opaque over a pointer
+     * (`(Goal int)`, `(Parser cstr)`, `(SChan P)`) is a `void *` handle in
+     * exactly the sense a bare one is -- its phantom arguments are erased and
+     * the pointer IS the value.  Left on the carrier path it would be DECLARED
+     * `int64_t` at let-bindings while type_c_name spells it `void *`, which is
+     * the seam the repr shadow ICEs on (`(Goal int)`: want=scalar-bits
+     * got=carrier-i64 cty=int64_t own=void *). */
+    if (t.kind == TY_APP && adt_opaque_c_names_as_pointer(type_adt_app_def(&t)))
+        return false;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     return false;
 }
@@ -4591,6 +4601,29 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * carrier (e.g. the abstract `vec-new` base result feeding a `(Vec A)`
      * spec param) emitted `*(int64_t *)(intptr_t)(handle)` -- a wild deref of
      * the header's first word, segfaulting at runtime. */
+    /* opaque-pointer-c-spelling seam: an opaque newtype over a pointer is the
+     * same shape as the :heap case just described -- a one-word handle whose
+     * bit pattern IS the int64 carrier -- so its carrier crossing is a pure
+     * reinterpret too.  Without this arm the generic CK_CARRIER->CK_CONCRETE
+     * path below asks `carrier_is_inline(TY_APP)`, gets false, and emits a
+     * struct deref-copy: `schan-recv`'s `(Pair T (SChan R))` construction
+     * emitted `*(void **)(intptr_t)(chan)` and segfaulted (schan-roundtrip,
+     * schan-worker-pool).  Before the seam the type never reached the bridge at
+     * all -- it was carrier-ABI, so no crossing existed to get wrong. */
+    if (adt_opaque_c_names_as_pointer(
+            concrete_ty.kind == TY_ADT ? concrete_ty.as.adt_.def
+          : concrete_ty.kind == TY_APP ? type_adt_app_def(&concrete_ty)
+                                       : NULL)) {
+        if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+            buf_printf(&out, "(%s)(intptr_t)(%s)", cname, src_str);
+        else
+            buf_printf(&out, "(int64_t)(intptr_t)(%s)", src_str);
+        free(src_str);
+        char *result = strdup(out.data);
+        buf_free(&out);
+        return result;
+    }
+
     if (type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty)) {
         if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {
             /* If the concrete C type is a pointer (`Vec__int *`), cast to it;

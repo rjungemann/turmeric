@@ -1429,6 +1429,36 @@ static bool sr3_option_niche(void) {
     return cached == 1;
 }
 
+/* opaque-pointer-c-spelling gate (docs/upcoming/opaque-pointer-c-spelling-
+ * gate-results.md, follow-up (1) from the SR3 slice B gate):
+ * TUR_OPAQUE_PTR_CNAME=1 spells an opaque newtype declared over a POINTER
+ * (`(defopaque String :ptr<void>)`) as `void *` rather than as the `int64_t`
+ * carrier word.
+ *
+ * The motivation is not size -- both are 8 bytes -- it is DISTINGUISHABILITY.
+ * The emitter asks "is this the int64 carrier?" by string-comparing the C name
+ * (94 `strcmp(cname, "int64_t")` sites), so an opaque pointer handle currently
+ * aliases every other carrier value: a tagged ADT box, a closure handle, a
+ * boxed Option.  A pointer spelling is what would let those sites tell a
+ * handle apart from a box -- and it is the precondition the SR3 slice B gate
+ * identified for `(Option String)` niche filling.
+ *
+ * Default off, on the SR1/SR2/SR3/SR4 seam precedent. */
+static bool opaque_ptr_cname(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("TUR_OPAQUE_PTR_CNAME");
+        cached = (e && e[0] == '1') ? 1 : 0;
+    }
+    return cached == 1;
+}
+
+/* True when `def` is an opaque newtype whose declared base is a pointer AND the
+ * seam is on -- i.e. when type_c_name should spell it `void *`. */
+bool adt_opaque_c_names_as_pointer(const AdtDef *def) {
+    return def && def->is_opaque && def->opaque_base_is_ptr && opaque_ptr_cname();
+}
+
 /* The soundness condition for the niche is "P's valid values EXCLUDE 0",
  * because that is the bit pattern None claims.  Nothing in the type system
  * records non-nullness, so this is an explicit ALLOWLIST rather than an
@@ -1463,7 +1493,18 @@ static bool sr3_payload_is_nonnull_pointer(Type p) {
     }
     if (!nm) return false;
     static const char *const ALLOW[] = {
-        "Vec", "Map", "Set", "MutableMap", NULL
+        "Vec", "Map", "Set", "MutableMap",
+        /* opaque-pointer-c-spelling gate: `String` / `StringBuilder` are
+         * `(defopaque ... :ptr<void>)` over tur_string_from_bytes, which mallocs
+         * unconditionally and has no NULL return path -- non-null by
+         * construction, which is the soundness half.  They are listed
+         * unconditionally because the SECOND half of the rule below (the
+         * payload must c-name as a real POINTER) keeps them ineligible unless
+         * TUR_OPAQUE_PTR_CNAME is also on: with that seam off they still spell
+         * `int64_t` and fall out.  So this row is inert on its own and turns
+         * live exactly when the pointer spelling lands -- which is the
+         * dependency the SR3 slice B gate identified. */
+        "String", "StringBuilder", NULL
     };
     bool allowed = false;
     for (uint32_t i = 0; ALLOW[i] && !allowed; i++)
@@ -3892,6 +3933,11 @@ const char *type_c_name(Type t) {
             /* SC7: a lowered transparent int-newtype ADT is just its int64
              * payload (mirrors the TY_STRUCT / TY_APP arms above). */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* opaque-pointer-c-spelling seam: an opaque newtype declared over a
+             * pointer spells `void *`.  Asked before the by-value arm (which an
+             * opaque never reaches -- adt_is_byvalue_product is false for
+             * is_opaque) purely so the two opaque answers sit together. */
+            if (adt_opaque_c_names_as_pointer(t.as.adt_.def)) return "void *";
             if (adt_is_byvalue_product(t.as.adt_.def)) {
                 /* CONV-S1 seam 3: a :heap record ADT lowers to a typed pointer to
                  * its by-value header (the ADT analogue of a :heap struct's
@@ -3907,6 +3953,16 @@ const char *type_c_name(Type t) {
         case TY_APP: {
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* opaque-pointer-c-spelling seam: a PARAMETRIC opaque over a
+             * pointer -- `(defopaque Goal [A] :ptr<void>)`, `(defopaque Parser
+             * [A] :ptr<void>)`, `(defopaque SChan [P] :ptr<void>)` -- erases its
+             * type arguments to the same handle, so `(Goal int)` must spell
+             * exactly what bare `Goal` does or the two disagree at every
+             * instantiation boundary. */
+            {
+                AdtDef *odef = type_adt_app_def(&t);
+                if (adt_opaque_c_names_as_pointer(odef)) return "void *";
+            }
             /* Parametric-by-value (gated): a concrete flat-product ADT-app flows
              * as its by-value monomorph aggregate (`tur_adt_Pair2__int__float`),
              * not the int64 carrier.  Hard-off until the crossings are wired. */
@@ -5399,6 +5455,19 @@ static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
      * spec hole, not a site seam. */
     if (type_is_transparent_int_newtype(*t))
         return REPR_SCALAR_BITS;
+
+    /* opaque-pointer-c-spelling seam: an opaque newtype over a pointer is a
+     * LEAF pointer -- the same form `cstr` / `ptr<T>` take, not a heap handle:
+     * `void *` is the type's own spelling, so the bits ARE the value and
+     * repr_form_from_cty recovers SCALAR_BITS from the declaration.  Predicting
+     * the carrier here instead is what ICEs every `Arc` / `Mutex` / `String`
+     * let-binding the moment the spelling changes. */
+    {
+        const AdtDef *odef = t->kind == TY_ADT ? t->as.adt_.def
+                           : t->kind == TY_APP ? type_adt_app_def(t)
+                                               : NULL;
+        if (adt_opaque_c_names_as_pointer(odef)) return REPR_SCALAR_BITS;
+    }
 
     /* SR3 slice B: a niche-filled `(Option P)` IS P's pointer in every
      * position -- there is no aggregate, so the by-value-product arm below
