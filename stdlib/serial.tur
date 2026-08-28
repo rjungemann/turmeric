@@ -59,7 +59,7 @@
   if (!buf) { fprintf(stderr, "bytes-alloc: out of memory\n"); exit(1); }
   buf[0] = (int64_t)n;
   memset(buf + 1, 0, (size_t)n);
-  return (int64_t)(intptr_t)buf;
+  return (void *)(intptr_t)buf;
   ```)
 ;; Return the length of a bytes value.
 ;;; bytes-len -- return the number of data bytes stored in a bytes value.
@@ -131,7 +131,7 @@
   uint8_t *dst = (uint8_t*)(out + 1);
   if (la > 0) memcpy(dst, (int64_t*)a + 1, (size_t)la);
   if (lb > 0) memcpy(dst + la, (int64_t*)b + 1, (size_t)lb);
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)
 ;; ---------------------------------------------------------------------------
 ;; Serializable typeclass

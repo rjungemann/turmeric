@@ -35,7 +35,7 @@
   int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
   if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }
   __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
-  return (int64_t)(intptr_t)cell;
+  return (void *)(intptr_t)cell;
   ```)
 ;;; atomic-load -- atomically read the current value of the cell.
 ;;;

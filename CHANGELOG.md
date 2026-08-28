@@ -2,6 +2,51 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **A `defopaque` over a pointer c-names as `void *`, not `int64_t`.**
+  `(defopaque String :ptr<void>)` used to lower to the same `int64_t` carrier
+  word as every other handle, so an opaque handle was byte-indistinguishable
+  from a tagged carrier box at the emitter's ~94 `strcmp(cname, "int64_t")`
+  sites. It now says what it is. The declared base type had to start being
+  recorded for this: `defopaque` parsed it only to find where the trailing
+  `:linear` / `:affine` / `:sealed` attributes start, and then threw it away, so
+  `:ptr<void>` and `:int` were indistinguishable downstream.
+
+  **Breaking for inline-C over a pointer `defopaque`**, and deliberately loudly
+  so: a body that ends `return (int64_t)(intptr_t)p;` in a function returning
+  such a handle is now a `-Wint-conversion` (which the suite's ratchet fails on),
+  and a hand-written `extern` declaring the handle as `int64_t` is a hard
+  `conflicting types`. Both fixes are one line -- return `(void *)(intptr_t)p`,
+  declare the parameter `void *`. Stdlib took 66 such edits across 21 files;
+  `stdlib/string.tur` took none, because it was already written as
+  `(:: (tur_string_adopt_cstr s) String)` over `ptr<void>`-typed externs, which
+  is the pattern to copy. Gate results:
+  `docs/archive/opaque-pointer-c-spelling-gate-results.md`.
+
+- **SR3's Option niche is unshelved, as `--enable=option-niche`.** The
+  0.40.0 entry below shelved it because `String` -- the whole of the phase's
+  census -- could not take the niche while it c-named to `int64_t`. The change
+  above removes that, so `(Option String)` is carried as its payload pointer:
+  16 bytes to 8, `(none)` as NULL, no tag word, and no
+  `tur_adt_Option__String` typedef emitted at all. It stays behind a flag
+  because "this payload's valid values exclude 0" is a hand-maintained
+  allowlist rather than something the type system records; graduating it means
+  making non-nullness declarable. `Cons` remains ineligible for the reason the
+  0.40.0 entry gives. Plan: `docs/upcoming/sr3-option-niche-plan.md`.
+
+### Fixed
+
+- **An inline-C body that builds an `(Option T)` produced the wrong value under
+  the niche.** `tur_some_ptr` returns the carrier -- a pointer to a tagged box --
+  and a niche consumer read that word as the payload, so
+  `(string/to-cstr (unwrap o))` printed blank rather than the string. Silent,
+  not a crash. The let-binding and call-argument crossings now bridge through
+  `emit_carrier_bridge` like every other. Only reachable with
+  `--enable=option-niche`.
+
 ## [0.40.0] -- 2026-08-28
 
 ### Added

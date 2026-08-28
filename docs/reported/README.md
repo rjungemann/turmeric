@@ -285,7 +285,21 @@ not this file -- these each have a row there, and the guide carries the
 matrix, the structural note about which `TypeKind` switch is authoritative, and
 the plan links. File a new repr cell there as well as here.
 
-Both rows that were here are now archived (2026-08-21).
+| Report | Severity | One line |
+|---|---|---|
+| [inline-c-carrier-producer-byval-container-element](inline-c-carrier-producer-byval-container-element.md) | low-medium | On the DEFAULT path, an inline-C `(Option String)` producer passed directly as a `vec-of` element is a cc `incompatible types` error (carrier int64 into the by-value monomorph slot); binding it in a `let` first works, and under `--enable=option-niche` the same shape already works |
+
+`option-niche-inline-c-carrier-crossings-incomplete` was resolved 2026-08-28
+(same day it was filed) and moved to
+[docs/archive](../archive/option-niche-inline-c-carrier-crossings-incomplete.md):
+both named positions bridged, plus two more the audit found (`vec-of` first
+element heap-promoted to a `P **` cell; `vec-push!` double-boxing an
+already-carrier value), capture audited clean, rest args unreachable by the
+annotation grammar. Pinned by `tests/fixtures/option-niche-crossings`. The
+default-path row above is the one adjacent finding that stayed open.
+
+Both rows that were here before the consolidation campaign are archived
+(2026-08-21).
 
 `byvalue-product-tail-var-double-unboxed-nonparametric` was resolved
 2026-08-21 and moved to

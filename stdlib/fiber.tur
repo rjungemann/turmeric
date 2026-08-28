@@ -39,7 +39,7 @@
 
 (defn fiber-new [fn : ptr<void> stack-size : int] : FiberHandle
   ```c
-  return (int64_t)(intptr_t)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+  return (void *)(intptr_t)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 ;;; fiber-resume -- resume a suspended fiber, passing it a value, and return the yielded or final value.
 ;;;

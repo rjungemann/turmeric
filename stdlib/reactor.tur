@@ -147,7 +147,7 @@
   #fx{}
   : Reactor
   ```c
-  return (int64_t)(intptr_t)tur_reactor_new();
+  return (void *)(intptr_t)tur_reactor_new();
   ```)
 ;;; reactor-free -- free a reactor and unregister all attached sources.
 ;;;

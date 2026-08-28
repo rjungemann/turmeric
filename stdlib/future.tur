@@ -99,7 +99,7 @@
   cell->is_ok = false;
   cell->value = 0;
   cell->exn = 0;
-  return (int64_t)(intptr_t)cell;
+  return (void *)(intptr_t)cell;
   ```)
 ;; Free a FutureCell
 ;;; future-cell-free -- destroy the mutex/condvar and free a FutureCell.
@@ -187,7 +187,7 @@
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)p;
   __atomic_add_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL);
-  return (int64_t)(intptr_t)fc;
+  return (void *)(intptr_t)fc;
   ```)
 ;; Return a (Promise Future) pair from a cell.
 ;; Both elements are the same pointer but conceptually distinct types.
@@ -369,7 +369,7 @@
   cell->exn = 0;
   cell->is_set = true;
   cell->is_ok = true;
-  return (int64_t)(intptr_t)cell;
+  return (void *)(intptr_t)cell;
   ```)
 ;; Create a pre-rejected future with the given error code.
 ;;; future-error-of -- create a pre-rejected future with error code e.
@@ -394,7 +394,7 @@
   cell->exn = (int64_t)e;
   cell->is_set = true;
   cell->is_ok = false;
-  return (int64_t)(intptr_t)cell;
+  return (void *)(intptr_t)cell;
   ```)
 ;; Cancel a future: if not yet settled, settle it with error code -2 (cancelled sentinel).
 ;; If already settled, this is a no-op.
@@ -482,7 +482,7 @@
       out->exn   = exn;
       out->is_ok = false;
   }
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)
 ;; Flat-map: fn receives the fulfilled value and must return a new future (ptr<void>).
 ;; If the source future is rejected, propagates the error without calling fn.
@@ -514,11 +514,11 @@
       pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
       out->value = 0; out->exn = exn; out->is_set = true; out->is_ok = false;
-      return (int64_t)(intptr_t)out;
+      return (void *)(intptr_t)out;
   }
   /* Call fn(val) which returns a new FutureCell ptr<void>.
      fn is a fat closure box: slot 0 = thunk R(*)(void*env, int64_t). */
-  return (int64_t)(intptr_t)((int64_t (*)(void *, int64_t))(intptr_t)
+  return (void *)(intptr_t)((int64_t (*)(void *, int64_t))(intptr_t)
               ((int64_t *)(intptr_t)fn)[0])((void *)(intptr_t)fn, val);
   ```)
 ;; ---- AW-007: Multi-combinators ----
@@ -552,7 +552,7 @@
           pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
           out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
-          return (int64_t)(intptr_t)out;
+          return (void *)(intptr_t)out;
       }
       pthread_mutex_unlock(&a->lock);
       pthread_mutex_lock(&b->lock);
@@ -564,7 +564,7 @@
           pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
           out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
-          return (int64_t)(intptr_t)out;
+          return (void *)(intptr_t)out;
       }
       pthread_mutex_unlock(&b->lock);
       /* Brief yield to avoid 100% CPU spin */
@@ -607,7 +607,7 @@
   if (!ok_a) { out->is_ok = false; out->value = 0; out->exn = exn_a; }
   else if (!ok_b) { out->is_ok = false; out->value = 0; out->exn = exn_b; }
   else { out->is_ok = true; out->value = val_a; out->exn = 0; }
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)
 ;; Return the first future to be *fulfilled* (ignoring rejections until all reject).
 ;; With exactly two futures: if fa fulfills, return fa's value.
@@ -639,7 +639,7 @@
       pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
       out->is_set = true; out->is_ok = true; out->value = val_a; out->exn = 0;
-      return (int64_t)(intptr_t)out;
+      return (void *)(intptr_t)out;
   }
   /* fa rejected, try fb */
   pthread_mutex_lock(&b->lock);
@@ -652,7 +652,7 @@
   out->refcount = 1;
   out->is_set = true;
   out->is_ok = ok_b; out->value = val_b; out->exn = exn_b;
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)
 ;; ---- AW-006: Future combinators ----
 ;; Join two futures: await both and return a tuple (pair) of their values.
@@ -697,7 +697,7 @@
       tup->e1 = val_a; tup->e2 = val_b;
       out->is_ok = true; out->value = (int64_t)(intptr_t)tup; out->exn = 0;
   }
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)
 ;; Accessors for the tuple returned by future-join
 ;;; tuple-first -- read the first element of a Tuple2 returned by future-join.
@@ -778,7 +778,7 @@
           pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
           out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
-          return (int64_t)(intptr_t)out;
+          return (void *)(intptr_t)out;
       }
       pthread_mutex_unlock(&arr[i]->lock);
   }
@@ -796,7 +796,7 @@
               pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
               out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
-              return (int64_t)(intptr_t)out;
+              return (void *)(intptr_t)out;
           }
       }
       struct timespec ts = {0, 100000}; nanosleep(&ts, NULL);
@@ -835,7 +835,7 @@
   out->is_set = true;
   if (!all_ok) { out->is_ok = false; out->value = 0; out->exn = first_exn; }
   else { out->is_ok = true; out->value = 0; out->exn = 0; }
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)
 ;; Any of an array of futures.
 ;;; future-any-n -- return a future settled by the first successfully fulfilled future in the array.
@@ -865,7 +865,7 @@
           pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
           out->is_set = true; out->is_ok = true; out->value = val; out->exn = 0;
-          return (int64_t)(intptr_t)out;
+          return (void *)(intptr_t)out;
       }
       pthread_mutex_unlock(&arr[i]->lock);
   }
@@ -874,7 +874,7 @@
   pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
   out->is_set = true; out->is_ok = false; out->value = 0; out->exn = 0;
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)
 ;; ---- AW-008: Future timeout ---
 ;; Hoisted thread-fn helpers for future-timeout / future-with-timeout.
@@ -966,7 +966,7 @@
   pthread_attr_init(&attr); pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   pthread_create(&tid, &attr, (void *(*)(void *))future_hytimeout_hythread, arg);
   pthread_attr_destroy(&attr);
-  return (int64_t)(intptr_t)fc;
+  return (void *)(intptr_t)fc;
   ```)
 ;; Race a future against a timeout.
 ;;; future-with-timeout -- race a future against a timeout of ms milliseconds.
@@ -1011,5 +1011,5 @@
       pthread_t tid2; pthread_attr_t attr2; pthread_attr_init(&attr2); pthread_attr_setdetachstate(&attr2, PTHREAD_CREATE_DETACHED);
       pthread_create(&tid2, &attr2, (void *(*)(void *))future_hywith_hytimeout_hywfn, warg); pthread_attr_destroy(&attr2);
   }
-  return (int64_t)(intptr_t)out;
+  return (void *)(intptr_t)out;
   ```)

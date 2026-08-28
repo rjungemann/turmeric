@@ -426,7 +426,7 @@ stand-in rule catching up with the representation:
   added under SR2b to release the carrier box; by value there is no box, and
   the call is a `free()` of a stack slot.
 
-### SR3 -- niche filling -- slice A SHIPPED, slice B GATED AND SHELVED 2026-08-27
+### SR3 -- niche filling -- slice A SHIPPED, slice B UNSHELVED 2026-08-28 (`--enable=option-niche`)
 
 Once `Option` is a real sum, `None` can be represented as the null pointer for
 pointer-payload elements, taking `Option<ptr<T>>`, `option<Vec T>`,
@@ -467,10 +467,38 @@ to Some/Ok/Err constructions only.  Validation: full suite 2712/0, turi
 1867/0, sr2-seam 12/12, sr4-seam 24/24.
 
 **Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- GATE RUN
-2026-08-27, SHELVED.** Full results in
-[sr3-slice-b-gate-results.md](sr3-slice-b-gate-results.md); the seam is in the
-tree as `TUR_SR3_OPTION_NICHE=1`, default off and provably inert (suite green
-both ways).
+2026-08-27 and SHELVED; UNSHELVED 2026-08-28 as `--enable=option-niche`.**
+The phase now has its own plan --
+[sr3-option-niche-plan.md](sr3-option-niche-plan.md) -- and the original gate is
+archived at [sr3-slice-b-gate-results.md](../archive/sr3-slice-b-gate-results.md)
+with an errata header.  The env seam is gone; slice B is a registered
+`EXPERIMENTS[]` row (prototype, introduced 0.41.0), which is what an in-flight
+feature carrying a hand-maintained soundness allowlist should be.  Corpus 2712/0
+both with the experiment and without.
+
+**What reversed the shelving is exactly the follow-up the gate named.**
+`defopaque` over a pointer now c-names as `void *`
+([results](../archive/opaque-pointer-c-spelling-gate-results.md), graduated
+2026-08-28), so a niche value is distinguishable from a carrier box and
+`String` / `StringBuilder` join the eligibility allowlist -- which is the whole
+`(Option String)` census this section enumerates below.  Read the two
+disqualifications that follow with that in mind: the `String` one is gone, and
+the `Cons` one was assessed 2026-08-28 and stands PERMANENTLY -- declined, not
+deferred.  The tree-wide `option<Cons>` population is one fixture that never
+wraps an empty list, nil-is-0 is load-bearing in ~60 sites including the
+variadic-rest ABI (where moving it breaks user inline-C silently), and the
+per-payload-sentinel alternative makes the word 0 mean `Some(nil)` on one side
+of a carrier crossing and `None` on the other.  Full pricing in
+[sr3-option-niche-plan.md](sr3-option-niche-plan.md), What is left, item 3.
+
+**And it turned up one crossing the first gate could not have reached.** An
+inline-C body declared `: (Option String)` builds its result with
+`tur_some_ptr`, which returns the CARRIER; a niche consumer then reads the box
+pointer as the payload.  No `Vec`/`Map`/`Set` fixture builds an Option in
+inline-C -- `String` is the payload people actually do that with -- so the
+first gate's "the bridge is ONE chokepoint" was true only of the population it
+could see.  Two more rows now: the niche let-binding and the niche call
+argument, both routed through the same `emit_carrier_bridge`.
 
 **The recommendation below -- fold slice B into the graduation -- was followed,
 and it was half right.** The obstacle it names DID dissolve: after SR2a a
@@ -492,10 +520,12 @@ between them cover the entire census:
   the CARRIER form and every `strcmp(cname, "int64_t")` site would deref the
   payload as a box.
 
-That leaves `option<Vec T>` / `option<Map ...>` / `option<Set ...>`: **one file
-in the tree**. The actionable follow-up is not slice B -- it is giving
-`defopaque` over a pointer a pointer C spelling, which makes `String` eligible
-and is the whole census.
+That left `option<Vec T>` / `option<Map ...>` / `option<Set ...>`: **one file
+in the tree**, which is why the gate called the actionable follow-up "not slice
+B -- it is giving `defopaque` over a pointer a pointer C spelling, which makes
+`String` eligible and is the whole census."  That is what happened, and the
+`String` half of the paragraph above is now historical: it landed 2026-08-28
+and slice B came off the shelf with it.
 
 The original obstacle, as scoped before the gate: The compiled pipeline's default path is semi-erased:
 generic bases (`unwrap`, `some?`, every instance-method carrier base) receive

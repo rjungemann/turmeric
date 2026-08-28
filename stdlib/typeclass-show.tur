@@ -48,7 +48,7 @@
     : String
     ```c
     char buf[8]; snprintf(buf, 8, "%d", (int)x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [int16] -- owned decimal String.
 
@@ -57,7 +57,7 @@
     : String
     ```c
     char buf[8]; snprintf(buf, 8, "%d", (int)x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [int32] -- owned decimal String.
 
@@ -66,7 +66,7 @@
     : String
     ```c
     char buf[16]; snprintf(buf, 16, "%d", x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [uint8] -- owned decimal String.
 
@@ -75,7 +75,7 @@
     : String
     ```c
     char buf[8]; snprintf(buf, 8, "%u", (unsigned)x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [uint16] -- owned decimal String.
 
@@ -84,7 +84,7 @@
     : String
     ```c
     char buf[8]; snprintf(buf, 8, "%u", (unsigned)x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [uint32] -- owned decimal String.
 
@@ -93,7 +93,7 @@
     : String
     ```c
     char buf[16]; snprintf(buf, 16, "%u", x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [uint64] -- owned decimal String.
 
@@ -102,7 +102,7 @@
     : String
     ```c
     char buf[24]; snprintf(buf, 24, "%llu", (unsigned long long)x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [float] -- owned String rendering of a double.
 
@@ -111,7 +111,7 @@
     : String
     ```c
     char buf[32]; snprintf(buf, 32, "%g", (double)x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [float32] -- owned String rendering of a float32.
 
@@ -120,7 +120,7 @@
     : String
     ```c
     char buf[32]; snprintf(buf, 32, "%g", (double)x);
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;;; Show [String] -- O(1) retain (refcount++), a second owning handle.
 
@@ -137,14 +137,14 @@
     : String
     ```c
     struct { int tag; int64_t payload; } *res = (void*)x;
-    if (res == NULL) { return (int64_t)(intptr_t)tur_string_from_cstr("err"); }
+    if (res == NULL) { return (void *)(intptr_t)tur_string_from_cstr("err"); }
     char buf[48];
     if (res->tag == 0) {
         snprintf(buf, 48, "ok(%lld)", (long long)res->payload);
     } else {
         snprintf(buf, 48, "err(%lld)", (long long)res->payload);
     }
-    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
+    return (void *)(intptr_t)tur_string_from_cstr(buf);
     ```))
 ;; ---------------------------------------------------------------------------
 ;; Typed collections (Vec / Set / Map).

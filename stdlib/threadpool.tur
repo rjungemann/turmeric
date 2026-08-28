@@ -84,7 +84,7 @@
   q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
   if (!q->buf) { free(q); fprintf(stderr, "work-queue-new: buf oom\n"); abort(); }
   q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
-  return (int64_t)(intptr_t)q;
+  return (void *)(intptr_t)q;
   ```)
 ;;; work-queue-new-bounded -- create a new bounded work queue with a fixed capacity.
 ;;;
@@ -115,7 +115,7 @@
   q->buf = (int64_t *)malloc((size_t)cap * sizeof(int64_t));
   if (!q->buf) { free(q); fprintf(stderr, "work-queue-new-bounded: buf oom\n"); abort(); }
   q->head = 0; q->tail = 0; q->count = 0; q->cap = (int64_t)cap; q->alloc = (int64_t)cap; q->closed = 0;
-  return (int64_t)(intptr_t)q;
+  return (void *)(intptr_t)q;
   ```)
 ;;; work-queue-push -- push a value onto the work queue, blocking if the queue is bounded and full.
 ;;;
@@ -414,7 +414,7 @@
       }
   }
 
-  return (int64_t)(intptr_t)tp;
+  return (void *)(intptr_t)tp;
   ```)
 ;;; thread-pool-submit -- submit a task to the thread pool and return a Future.
 ;;;
@@ -496,7 +496,7 @@
   pthread_cond_signal(&q->not_empty);
   pthread_mutex_unlock(&q->lock);
 
-  return (int64_t)(intptr_t)fc;
+  return (void *)(intptr_t)fc;
   ```)
 ;;; thread-pool-shutdown -- signal all workers to stop and join them.
 ;;;
@@ -653,7 +653,7 @@
       }
   }
 
-  return (int64_t)(intptr_t)tp;
+  return (void *)(intptr_t)tp;
   ```)
 ;;; tp-dyn-worker -- internal worker thread function for a dynamic ThreadPool.
 ;;;
@@ -838,7 +838,7 @@
   pthread_cond_signal(&q->not_empty);
   pthread_mutex_unlock(&q->lock);
 
-  return (int64_t)(intptr_t)fc;
+  return (void *)(intptr_t)fc;
   ```)
 ;;; thread-pool-dynamic-shutdown -- signal all dynamic pool workers to stop and join them.
 ;;;

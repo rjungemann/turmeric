@@ -53,7 +53,7 @@
   /* TVar is a defopaque over :ptr, which lowers to int64_t -- returning the
      bare `void *` is an int-to-pointer conversion warning under the cc-warn
      ratchet. Surfaces only when stm.tur is explicitly (load ...)ed. */
-  return (int64_t)(intptr_t)tv;
+  return (void *)(intptr_t)tv;
   ```)
 ;;; tvar/read -- read the current value of a TVar within the active transaction.
 ;;;

@@ -12,7 +12,7 @@
   ```c
   int64_t *p = (int64_t *)malloc(16);
   p[1] = marker;
-  return (int64_t)(intptr_t)p;
+  return (void *)(intptr_t)p;
   ```)
 
 ;; Read the marker stashed in slot 1 of the raw cell.

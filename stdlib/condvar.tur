@@ -39,7 +39,7 @@
   pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
   if (!c) { fprintf(stderr, "condvar-new: out of memory\n"); abort(); }
   pthread_cond_init(c, NULL);
-  return (int64_t)(intptr_t)c;
+  return (void *)(intptr_t)c;
   ```)
 ;;; condvar-wait -- atomically release the mutex and wait for a signal on the condition variable.
 ;;;

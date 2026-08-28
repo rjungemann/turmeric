@@ -6487,7 +6487,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     _body_c && strcmp(_body_c, "int64_t") != 0 &&
                     type_uses_carrier_abi(fd->body->type) &&
                     fn_body_tail_is_carrier_producer(fd->body);
-                if (inst_method_app_body || body_is_carrier_producer) {
+                /* opaque-pointer-c-spelling: mirror emit_fns.c -- a pointer
+                 * opaque body does not override a declared carrier result, and
+                 * the prototype must not disagree with the definition. */
+                if (inst_method_app_body || body_is_carrier_producer ||
+                    emit_fn_body_is_opaque_ptr_over_carrier_result(fd, result)) {
                     buf_puts(out, "int64_t");
                 } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                     buf_puts(out, _body_c);
@@ -7374,6 +7378,24 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
     buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->as.value;\n}\n");
+    /* option-niche: the carrier->niche crossing's read.  A carrier box CAN
+     * hold Some(NULL) -- tur_some_ptr(0) in inline-C builds one -- and the
+     * unchecked read would hand the niche its 0 payload, silently turning a
+     * value `some?` calls true into `(none)`.  The niche Some ctor already
+     * aborts on a null payload; this is the same declaration enforced at the
+     * other door.  A hand-rolled tagged-None box (tag 0, non-null pointer --
+     * the historical layout the read side still accepts) maps to the niche
+     * null rather than reading its uninitialised payload word. */
+    buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
+    buf_puts(out, "    tur_option_t *__p = (tur_option_t *)(intptr_t)__o;\n");
+    buf_puts(out, "    if (__p->tag != 1) return 0;\n");
+    buf_puts(out, "    if (!__p->as.value) {\n");
+    buf_puts(out, "        fprintf(stderr, \"tur: a carrier Some with a NULL payload "
+                  "crossed into a niche-represented Option -- the payload type's "
+                  ":non-null declaration was violated (tur_some_ptr(0)?)\\n\");\n");
+    buf_puts(out, "        abort();\n    }\n");
+    buf_puts(out, "    return __p->as.value;\n}\n");
     buf_puts(out, "static int64_t tur_box_ok(int64_t __v) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_box_ok(int64_t __v) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");

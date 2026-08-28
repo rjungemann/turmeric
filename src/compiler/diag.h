@@ -107,6 +107,11 @@ typedef enum DiagCode {
     /* sealed-opaque (graduated 0.34.0): `::` between a `:sealed` defopaque and
      * its representation type, outside the module that declared it. */
     TUR_E0302_SEALED_OPAQUE_CAST,
+    /* option-niche: a literal 0 ascribed into a `:non-null` defopaque -- a
+     * statically provable violation of the declaration the niche's soundness
+     * rests on.  The runtime Some-ctor check covers what elaboration cannot
+     * see (inline-C, computed values); a violation it CAN see errors here. */
+    TUR_E0303_NON_NULL_OPAQUE_ZERO,
     /* IT3: Intersection type errors (-Xintersection-types) */
     TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */

@@ -59,7 +59,7 @@
 
 (defn file-stream-open [path : cstr mode : cstr] : FileStream
   ```c
-  return (int64_t)(intptr_t)fopen(path, mode);
+  return (void *)(intptr_t)fopen(path, mode);
   ```)
 ;;; file-stream-ok? -- return true if the FileStream wraps a real FILE*.
 ;;;
@@ -191,7 +191,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
   fs->write_file = __tur_io_fs_write_file;
   fs->delete     = __tur_io_fs_delete;
   fs->list       = __tur_io_fs_list;
-  return (int64_t)(intptr_t)fs;
+  return (void *)(intptr_t)fs;
   ```)
 ;;; Real-FileSystem-free -- release a FileSystem capability created by Real-FileSystem.
 ;;;
@@ -328,7 +328,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
   }
   entries[i] = NULL;
   closedir(d);
-  return (int64_t)(intptr_t)entries;
+  return (void *)(intptr_t)entries;
   ```)
 ;;; free-dir-listing -- free a directory listing returned by list-dir.
 ;;;

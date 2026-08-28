@@ -44,7 +44,7 @@
   pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   if (!m) { fprintf(stderr, "mutex-new: out of memory\n"); abort(); }
   pthread_mutex_init(m, NULL);
-  return (int64_t)(intptr_t)m;
+  return (void *)(intptr_t)m;
   ```)
 ;;; mutex-lock -- acquire the mutex, blocking until it is available.
 ;;;

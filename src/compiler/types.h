@@ -369,6 +369,28 @@ typedef struct AdtDef {
      * skip an opaque one -- it stays the int64 carrier with its name kept only
      * for nominal identity (typeclass dispatch, REPL type tags, mangling). */
     bool        is_opaque;
+    /* opaque-pointer-c-spelling (docs/archive/opaque-pointer-c-spelling-
+     * gate-results.md): true iff this opaque newtype's DECLARED base type is a
+     * pointer -- `(defopaque H :ptr<void>)`, `(defopaque H :ptr)`, `(defopaque
+     * H :ptr<T>)`.  Before this flag the base form was parsed for POSITION only
+     * (to find where the trailing attributes start) and then discarded, so the
+     * declared base was not recoverable anywhere downstream.  Read only by
+     * `adt_opaque_c_names_as_pointer` (types.c), which is seam-gated. */
+    bool        opaque_base_is_ptr;
+    /* option-niche: set by the `:non-null` attribute on a pointer-based
+     * defopaque -- `(defopaque String :ptr<void> :non-null)`.  A DECLARATION by
+     * the type's author that its valid values exclude the null pointer (every
+     * constructor allocates; no producer returns 0), which is the soundness
+     * condition for `(Option T)` niche filling.  This replaces the former
+     * hard-coded String/StringBuilder rows in the eligibility allowlist: the
+     * claim now lives at the definition site, next to the constructors it is a
+     * claim about.  It is a claim the compiler cannot prove -- inline-C or a
+     * coercing `::` can still smuggle a 0 -- so the niche `Some` ctor also
+     * checks it at construction and aborts loudly rather than letting
+     * `(some null)` silently read back as `(none)`.  Only legal on a pointer
+     * base (elab_defopaque rejects it elsewhere); read by
+     * `sr3_payload_is_nonnull_pointer` (types.c). */
+    bool        opaque_non_null;
     /* sealed-opaque (GRADUATED 2026-08-17, docs/archive/sealed-opaque-plan.md):
      * set by the `:sealed` attribute on a defopaque.  `::` is a COERCING cast,
      * so an ordinary opaque can always be unwrapped to its carrier and re-wrapped
@@ -1804,12 +1826,18 @@ bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
  * ctors return 0 instead of mallocing a box whose only content is tag 0. */
 bool         adt_ctor_is_null_none(const struct AdtDef *def,
                                    const struct CtorDef *ctor);
-/* SR3 slice B (option niche, TUR_SR3_OPTION_NICHE=1, default OFF): true when
+/* SR3 slice B (option niche, --enable=option-niche, default OFF): true when
  * `t` is an `(Option P)` monomorph carried AS its payload pointer -- 8 bytes,
  * `(none)` == NULL, no tag word.  Eligibility is an explicit allowlist of
  * payload types whose valid values exclude 0; see the definition for why
  * `:heap`-ness is not the condition and `Cons` fails it. */
 bool         adt_app_is_niche_option(Type t);
+/* opaque-pointer-c-spelling (GRADUATED 2026-08-28): true when `def` is an
+ * opaque newtype declared over a pointer (`(defopaque String :ptr<void>)`), so
+ * type_c_name spells it `void *` instead of the `int64_t` carrier word --
+ * making an opaque handle distinguishable from a tagged box at the emitter's
+ * `strcmp(cname, "int64_t")` sites. */
+bool         adt_opaque_c_names_as_pointer(const struct AdtDef *def);
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);

@@ -685,6 +685,17 @@ const char *emit_inst_fn_return_carrier(const FnDef *fd, const Type *rft);
 /* KB-021: arbiter of which struct-valued types may use the int64_t carrier ABI
  * (see emit_core.c). */
 bool type_uses_carrier_abi(Type t);
+/* opaque-pointer-c-spelling: true when a function's DECLARED result is the
+ * int64 carrier word while its BODY is an opaque newtype over a pointer.  The
+ * `_body_c` preference (emit_fns.c's definition emitter and emit_module.c's
+ * forward-decl mirror) exists so a by-value AGGREGATE body is not squeezed
+ * through the declared carrier word; a pointer opaque is not an aggregate, it
+ * is one word, and every CALLER sees the declared type.  Preferring the body's
+ * `void *` there declares a signature the function's own `return (int64_t)...`
+ * statements contradict.  Both emitters ask this so the prototype and the
+ * definition cannot disagree. */
+bool emit_fn_body_is_opaque_ptr_over_carrier_result(const FnDef *fd,
+                                                    TypeKind declared_result);
 /* catch-unwind-returned-err-box-payload-leak: true when the already-resolved
  * type is a `(Result A B)` whose err arm B is an inline scalar, so a caught
  * result box returned by value can take the full (payload-reclaiming) free

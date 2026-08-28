@@ -5,6 +5,7 @@
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
 #include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
 #include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
+#include "experiments.h" /* SR3 slice B: option-niche lifecycle warning */
 #include "mangle.h"
 /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
@@ -1412,73 +1413,108 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
            strcmp(ctor->name, "None") == 0;
 }
 
-/* SR3 slice B prototype gate (docs/upcoming/sum-representation-plan.md SR3):
- * TUR_SR3_OPTION_NICHE=1 represents an `(Option P)` monomorph whose payload is
- * a NON-NULLABLE pointer as the bare payload pointer -- 16 bytes down to 8,
- * with `(none)` as the null pointer.  Slice A already made the CARRIER None the
- * null pointer, so the two representations already agree about None; what this
- * adds is Some carried AS its payload, with no tag word anywhere.
+/* SR3 slice B (--enable=option-niche, docs/upcoming/sr3-option-niche-plan.md):
+ * represents an `(Option P)` monomorph whose payload is a NON-NULLABLE pointer
+ * as the bare payload pointer -- 16 bytes down to 8, with `(none)` as the null
+ * pointer.  Slice A already made the CARRIER None the null pointer, so the two
+ * representations already agree about None; what this adds is Some carried AS
+ * its payload, with no tag word anywhere.
  *
- * Default off, on the SR1/SR2/SR4 seam precedent. */
+ * A real experiment rather than an env seam (the CLAUDE.md rule for an
+ * in-flight feature): it carries a hand-maintained soundness allowlist, so a
+ * user who turns it on should get the TUR-W0060 lifecycle warning and a plan to
+ * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
+ * from this hot predicate costs one index lookup after the first. */
 static bool sr3_option_niche(void) {
-    static int cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("TUR_SR3_OPTION_NICHE");
-        cached = (e && e[0] == '1') ? 1 : 0;
-    }
-    return cached == 1;
+    if (!g_opt_option_niche) return false;
+    experiment_warn_if_used("option-niche");
+    return true;
+}
+
+/* opaque-pointer-c-spelling (GRADUATED 2026-08-28, docs/archive/opaque-pointer-
+ * c-spelling-gate-results.md): an opaque newtype declared over a POINTER
+ * (`(defopaque String :ptr<void>)`) c-names as `void *`, not as the `int64_t`
+ * carrier word.
+ *
+ * The motivation is not size -- both are 8 bytes -- it is DISTINGUISHABILITY.
+ * The emitter asks "is this the int64 carrier?" by string-comparing the C name
+ * (94 `strcmp(cname, "int64_t")` sites), so an opaque pointer handle used to
+ * alias every other carrier value: a tagged ADT box, a closure handle, a boxed
+ * Option.  A pointer spelling is what lets those sites tell a handle apart from
+ * a box -- and it is the precondition SR3 slice B needs for `(Option String)`
+ * niche filling, which is the whole of that phase's census.
+ *
+ * The declared base type reaches here through `AdtDef.opaque_base_is_ptr`; it
+ * was parsed for POSITION only and discarded before this landed, which is why
+ * `:ptr<void>` and `:int` were indistinguishable downstream. */
+bool adt_opaque_c_names_as_pointer(const AdtDef *def) {
+    return def && def->is_opaque && def->opaque_base_is_ptr;
 }
 
 /* The soundness condition for the niche is "P's valid values EXCLUDE 0",
  * because that is the bit pattern None claims.  Nothing in the type system
- * records non-nullness, so this is an explicit ALLOWLIST rather than an
- * inference -- and the polarity matters: an unrecognised payload merely misses
- * the optimisation, where a denylist that missed an entry would make
- * `(some x)` and `(none)` the same value.
+ * PROVES non-nullness, so eligibility rests on two claims of different
+ * strengths -- and the polarity matters throughout: an unrecognised payload
+ * merely misses the optimisation, where a denylist that missed an entry would
+ * make `(some x)` and `(none)` the same value.
  *
- * `:heap`-ness is NOT the condition, which is the finding that shrank this
- * phase.  `Cons` is a `:heap` record ADT whose EMPTY LIST is the null handle
- * ("At runtime, nil is 0" -- stdlib/list.tur, and `(defn tnil [] : int 0)`), so
- * `(Option (Cons T))` would read `(some (tnil))` as `(none)`.  `option<Cons ...>`
- * is one of the two shapes the SR3 census names as the motivation, so half the
- * motivating population is ineligible and invisibly so.
+ *   1. DECLARED (opaque newtypes): `(defopaque String :ptr<void> :non-null)`.
+ *      The type's author claims it at the definition site, next to the
+ *      constructors the claim is about.  The compiler cannot verify it --
+ *      inline-C or a coercing `::` can still smuggle a 0 -- so the niche
+ *      `Some` ctor enforces it at construction (emit_registered_adt_app_rec):
+ *      a null payload aborts with a message naming the type, instead of
+ *      silently reading back as `(none)`.
+ *   2. LISTED (compiler-lowered `:heap` collections): Vec / Map / Set /
+ *      MutableMap, whose constructors the compiler itself emits as
+ *      unconditional mallocs; an empty collection is a valid non-null header.
+ *      These stay a name list because they are defstruct-lowered heap ADTs,
+ *      not opaques -- there is no author-facing attribute slot for them yet --
+ *      and because the compiler emitting the ctor is a stronger warrant than
+ *      any annotation.
  *
- * What IS on the list, and why:
- *   Vec / Map / Set / MutableMap -- `:heap` collections whose constructors
- *     always malloc a header; an empty one is a valid non-null handle.
- *   String / StringBuilder      -- `defopaque ... :ptr<void>` over
- *     tur_string_from_bytes, which mallocs unconditionally and has no NULL
- *     return path.
- * A `:ptr<T>`, a `cstr`, or a bare closure handle is never eligible: null is a
- * value each of them can legitimately hold. */
+ * `:heap`-ness itself is NOT the condition, which is the finding that shrank
+ * this phase.  `Cons` is a `:heap` record ADT whose EMPTY LIST is the null
+ * handle ("At runtime, nil is 0" -- stdlib/list.tur, and `(defn tnil [] : int
+ * 0)`), so `(Option (Cons T))` would read `(some (tnil))` as `(none)`.  A
+ * `:ptr<T>`, a `cstr`, or a bare closure handle is never eligible: null is a
+ * value each of them can legitimately hold, and none of them has an author who
+ * can claim otherwise. */
 static bool sr3_payload_is_nonnull_pointer(Type p) {
-    const char *nm = NULL;
-    if (p.kind == TY_ADT && p.as.adt_.def) nm = p.as.adt_.def->name;
+    const AdtDef *pdef = NULL;
+    if (p.kind == TY_ADT && p.as.adt_.def) pdef = p.as.adt_.def;
     else {
-        AdtDef *pdef = NULL;
+        AdtDef *d = NULL;
         Type pargs[16];
         uint8_t pn = 0;
         Type pt = p;
-        if (type_extract_adt_app(&pt, &pdef, pargs, &pn) && pdef) nm = pdef->name;
+        if (type_extract_adt_app(&pt, &d, pargs, &pn)) pdef = d;
     }
-    if (!nm) return false;
-    static const char *const ALLOW[] = {
-        "Vec", "Map", "Set", "MutableMap", NULL
-    };
+    if (!pdef || !pdef->name) return false;
     bool allowed = false;
-    for (uint32_t i = 0; ALLOW[i] && !allowed; i++)
-        if (strcmp(nm, ALLOW[i]) == 0) allowed = true;
+    if (pdef->is_opaque) {
+        /* Claim 1: the declaration.  opaque_base_is_ptr is implied (the
+         * attribute is rejected on any other base) but asked anyway so a stale
+         * def can never widen eligibility. */
+        allowed = pdef->opaque_non_null && pdef->opaque_base_is_ptr;
+    } else {
+        static const char *const HEAP_ALLOW[] = {
+            "Vec", "Map", "Set", "MutableMap", NULL
+        };
+        for (uint32_t i = 0; HEAP_ALLOW[i] && !allowed; i++)
+            if (strcmp(pdef->name, HEAP_ALLOW[i]) == 0) allowed = true;
+    }
     if (!allowed) return false;
     /* And the payload's C spelling must be a real POINTER, not the int64
-     * carrier word.  This is the condition that rules `String` out, and it is
-     * about telling representations apart rather than about null: `(defopaque
-     * String :ptr<void>)` c-names to `int64_t`, so a niche `(Option String)`
-     * would be spelled `int64_t` -- byte-identical to the CARRIER form of the
-     * same type, which is a pointer to a tagged box.  Every `strcmp(cname,
-     * "int64_t")` test in the emitter (there are dozens) would then read a
-     * niche value as a carrier box and dereference the payload's first word as
-     * a tag.  A distinguishable spelling is what makes the niche safe to mix
-     * with the carrier at all. */
+     * carrier word.  This is about telling representations apart rather than
+     * about null: an `int64_t`-spelled niche `(Option P)` would be
+     * byte-identical to the CARRIER form of the same type, which is a pointer
+     * to a tagged box, and every `strcmp(cname, "int64_t")` test in the
+     * emitter (there are dozens) would read a niche value as a box and
+     * dereference the payload's first word as a tag.  This was the condition
+     * that ruled `String` out before `defopaque` over a pointer got its
+     * pointer C spelling; it is now a tautology for the opaque arm above (a
+     * `:non-null` opaque spells `void *`) and load-bearing only as a backstop. */
     const char *pc = type_c_name(p);
     return pc && strchr(pc, '*') != NULL;
 }
@@ -2014,8 +2050,25 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             if (ctor->n_fields == 1)
                 buf_printf(out, "%s _0", niche_ctype);
             buf_printf(out, ") {\n");
-            if (ctor->n_fields == 1) buf_printf(out, "    return _0;\n");
-            else                     buf_printf(out, "    return (%s)0;\n", niche_ctype);
+            if (ctor->n_fields == 1) {
+                /* option-niche: the eligibility claim ("this payload's valid
+                 * values exclude 0") is DECLARED, not proven -- inline-C or a
+                 * coercing `::` can still hand `some` a null.  Under the niche
+                 * that null IS `(none)`, so an unchecked identity ctor turns
+                 * the violation into a silent wrong answer downstream.  Check
+                 * it here, at the one point every niche Some passes through,
+                 * and die loudly naming the type.  Cost: one compare on a path
+                 * that exists to remove a malloc. */
+                buf_printf(out,
+                    "    if (!_0) { fprintf(stderr, \"tur: (some x) with a "
+                    "NULL payload for niche-represented %s -- the payload "
+                    "type's :non-null declaration was violated (a null here "
+                    "would silently read back as (none))\\n\"); abort(); }\n",
+                    adt_inst_name);
+                buf_printf(out, "    return _0;\n");
+            } else {
+                buf_printf(out, "    return (%s)0;\n", niche_ctype);
+            }
             buf_printf(out, "}\n\n");
             free(wide_box); free(val_ctype); free(mctor);
             continue;
@@ -3892,6 +3945,11 @@ const char *type_c_name(Type t) {
             /* SC7: a lowered transparent int-newtype ADT is just its int64
              * payload (mirrors the TY_STRUCT / TY_APP arms above). */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* opaque-pointer-c-spelling: an opaque newtype declared over a
+             * pointer spells `void *`.  Asked before the by-value arm (which an
+             * opaque never reaches -- adt_is_byvalue_product is false for
+             * is_opaque) purely so the two opaque answers sit together. */
+            if (adt_opaque_c_names_as_pointer(t.as.adt_.def)) return "void *";
             if (adt_is_byvalue_product(t.as.adt_.def)) {
                 /* CONV-S1 seam 3: a :heap record ADT lowers to a typed pointer to
                  * its by-value header (the ADT analogue of a :heap struct's
@@ -3907,6 +3965,16 @@ const char *type_c_name(Type t) {
         case TY_APP: {
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* opaque-pointer-c-spelling: a PARAMETRIC opaque over a
+             * pointer -- `(defopaque Goal [A] :ptr<void>)`, `(defopaque Parser
+             * [A] :ptr<void>)`, `(defopaque SChan [P] :ptr<void>)` -- erases its
+             * type arguments to the same handle, so `(Goal int)` must spell
+             * exactly what bare `Goal` does or the two disagree at every
+             * instantiation boundary. */
+            {
+                AdtDef *odef = type_adt_app_def(&t);
+                if (adt_opaque_c_names_as_pointer(odef)) return "void *";
+            }
             /* Parametric-by-value (gated): a concrete flat-product ADT-app flows
              * as its by-value monomorph aggregate (`tur_adt_Pair2__int__float`),
              * not the int64 carrier.  Hard-off until the crossings are wired. */
@@ -5399,6 +5467,19 @@ static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
      * spec hole, not a site seam. */
     if (type_is_transparent_int_newtype(*t))
         return REPR_SCALAR_BITS;
+
+    /* opaque-pointer-c-spelling: an opaque newtype over a pointer is a
+     * LEAF pointer -- the same form `cstr` / `ptr<T>` take, not a heap handle:
+     * `void *` is the type's own spelling, so the bits ARE the value and
+     * repr_form_from_cty recovers SCALAR_BITS from the declaration.  Predicting
+     * the carrier here instead is what ICEs every `Arc` / `Mutex` / `String`
+     * let-binding the moment the spelling changes. */
+    {
+        const AdtDef *odef = t->kind == TY_ADT ? t->as.adt_.def
+                           : t->kind == TY_APP ? type_adt_app_def(t)
+                                               : NULL;
+        if (adt_opaque_c_names_as_pointer(odef)) return REPR_SCALAR_BITS;
+    }
 
     /* SR3 slice B: a niche-filled `(Option P)` IS P's pointer in every
      * position -- there is no aggregate, so the by-value-product arm below

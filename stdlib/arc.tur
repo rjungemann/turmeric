@@ -88,7 +88,7 @@
     ArcControlBlock *cb = arc_cb_alloc(sizeof(int64_t), 0, NULL);
     if (!cb) { fprintf(stderr, "arc-new: out of memory\n"); abort(); }
     *(int64_t *)cb->value = (int64_t)v;
-    return (int64_t)(intptr_t)cb;
+    return (void *)(intptr_t)cb;
     ```)
   ;;; arc-clone -- add a strong reference.
   ;;;
@@ -105,7 +105,7 @@
   ;;; Since: 2026-08-20
   (defn arc-clone [^borrow a : Arc] : Arc
     ```c
-    return (int64_t)(intptr_t)arc_strong_increment((ArcControlBlock *)(intptr_t)a);
+    return (void *)(intptr_t)arc_strong_increment((ArcControlBlock *)(intptr_t)a);
     ```)
   ;;; arc-get -- read the shared value.
   ;;;
@@ -215,7 +215,7 @@
   ;;; Since: 2026-08-20
   (defn arc-downgrade [^borrow a : Arc] : ArcWeak
     ```c
-    return (int64_t)(intptr_t)arc_weak_increment((ArcControlBlock *)(intptr_t)a);
+    return (void *)(intptr_t)arc_weak_increment((ArcControlBlock *)(intptr_t)a);
     ```)
   ;;; arc-upgrade -- try to get a strong Arc back from a weak handle.
   ;;;
@@ -249,7 +249,7 @@
   ;;; makes the strong reading legitimate.
   (defn arc-weak->arc [^borrow w : ArcWeak] : Arc
     ```c
-    return (int64_t)w;
+    return (void *)(intptr_t)w;
     ```)
   ;; The Option is built in ordinary Turmeric, not with tur_some_ptr in the
   ;; inline-C body.  A `some` constructed inside inline C allocates a box the

@@ -273,6 +273,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0300_UNION_TYPE_MISMATCH:        return "TUR-E0300";
         case TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH: return "TUR-E0301";
         case TUR_E0302_SEALED_OPAQUE_CAST:         return "TUR-E0302";
+        case TUR_E0303_NON_NULL_OPAQUE_ZERO:       return "TUR-E0303";
         /* IT3: Intersection type errors */
         case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
         case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
@@ -434,6 +435,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0300") == 0) return TUR_E0300_UNION_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0301") == 0) return TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH;
     if (strcmp(s, "TUR-E0302") == 0) return TUR_E0302_SEALED_OPAQUE_CAST;
+    if (strcmp(s, "TUR-E0303") == 0) return TUR_E0303_NON_NULL_OPAQUE_ZERO;
     /* IT3: Intersection type errors */
     if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
     if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
@@ -1278,6 +1280,29 @@ static const DiagExplanation diag_explanations_[] = {
       "`(:: v :any)` (or just passing v where an `any` is expected) heap-boxes it\n"
       "as a one-word handle; `(cast h T)` reads it back as T.  See\n"
       "docs/archive/byvalue-adt-int-cast-plan.md.\n",
+    },
+    { TUR_E0303_NON_NULL_OPAQUE_ZERO,
+      "TUR-E0303: Cannot ascribe the literal 0 into a :non-null opaque\n"
+      "\n"
+      "`(defopaque String :ptr<void> :non-null)` is the type author's claim\n"
+      "that the handle's valid values exclude the null pointer -- no producer\n"
+      "returns 0.  Ascribing the literal 0 into such a type is a provable\n"
+      "violation of that claim, so it is rejected at compile time:\n"
+      "\n"
+      "  (:: 0 :String)                 ; error\n"
+      "  (:: (:: 0 :ptr<void>) String)  ; error -- peeled through the relabel\n"
+      "\n"
+      "Why this matters: under `--enable=option-niche`, an `(Option T)` over a\n"
+      ":non-null T is carried AS the payload pointer with `(none)` as NULL.  A\n"
+      "null smuggled into T makes `(some x)` and `(none)` the same value.  The\n"
+      "niche `Some` constructor also checks at runtime (a null there aborts\n"
+      "with a message naming the type) for the paths elaboration cannot see --\n"
+      "inline-C bodies and computed values -- but a violation visible in the\n"
+      "source should not wait for runtime.\n"
+      "\n"
+      "Fix: express absence as `(none)` / `option<T>`, or construct the value\n"
+      "through the type's real constructors.  If the type genuinely has a null\n"
+      "state, its declaration should not say :non-null.\n",
     },
     { TUR_E0302_SEALED_OPAQUE_CAST,
       "TUR-E0302: Cannot cast across a sealed opaque's representation boundary\n"

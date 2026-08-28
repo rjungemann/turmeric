@@ -63,7 +63,7 @@
   b->count = 0;
   b->threshold = (int64_t)n;
   b->generation = 0;
-  return (int64_t)(intptr_t)b;
+  return (void *)(intptr_t)b;
   ```)
 ;;; barrier-wait -- block until n threads have arrived, then release them all.
 ;;;

@@ -2871,6 +2871,45 @@ static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
  * both the unwrap (`(:: w :int)`) and the fabricate (`(:: n H)`) directions are
  * refused.  Sealing BOTH directions is what makes the representation private
  * rather than merely hard to rebuild -- see the plan's "why both directions". */
+/* option-niche static :non-null enforcement: the AdtDef behind a `:non-null`
+ * defopaque, or NULL.  Descends a parameterised head, mirroring
+ * ascribe_sealed_opaque_def above. */
+static const AdtDef *ascribe_non_null_opaque_def(const Type *t) {
+    if (!t) return NULL;
+    while (t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
+    if (t->kind != TY_ADT) return NULL;
+    const AdtDef *def = t->as.adt_.def;
+    return (def && def->is_opaque && def->opaque_non_null) ? def : NULL;
+}
+
+/* Reject `(:: 0 T)` where T is a `:non-null` opaque -- a statically PROVABLE
+ * violation of the declaration.  The literal is peeled through nested
+ * ascriptions/reinterprets so the two spellings of the same forge --
+ * `(:: 0 :String)` and `(:: (:: 0 :ptr<void>) String)` -- are both caught.
+ * Deliberately literal-0-only: a computed zero is not provable here and stays
+ * the runtime Some-ctor check's job (as does inline-C, which no static check
+ * can reach).  Returns true if a diagnostic was emitted. */
+static bool ascribe_check_non_null_zero(const Form *call,
+                                        const Expr *inner, const Type *to) {
+    const AdtDef *nn = ascribe_non_null_opaque_def(to);
+    if (!nn) return false;
+    const Expr *v = inner;
+    while (v && (v->kind == EX_ASCRIBE || v->kind == EX_REINTERPRET))
+        v = v->kind == EX_ASCRIBE ? v->as.ascribe_.inner
+                                  : v->as.reinterpret_.expr;
+    if (!v || v->kind != EX_INT_LIT || v->as.i != 0) return false;
+    diag_emit_with_code(
+        DIAG_ERROR, call->span, TUR_E0303_NON_NULL_OPAQUE_ZERO,
+        "cannot ascribe the literal 0 into '%s' -- its :non-null declaration "
+        "says the handle's valid values exclude the null pointer. Express "
+        "absence as (none) / option<%s>, or build the value through '%s's "
+        "real constructors",
+        nn->name ? nn->name : "<opaque>",
+        nn->name ? nn->name : "T",
+        nn->name ? nn->name : "<opaque>");
+    return true;
+}
+
 static bool ascribe_check_sealed(Elab *e, const Form *call,
                                  const Type *from, const Type *to) {
     const AdtDef *sf = ascribe_sealed_opaque_def(from);
@@ -2959,6 +2998,13 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * whether the cast would LOWER soundly is beside the point if the caller is
      * not allowed to express it. */
     if (ascribe_check_sealed(e, call, &inner->type, ascribed)) return NULL;
+
+    /* option-niche: a literal 0 into a :non-null opaque is a provable
+     * violation of the declaration -- error here instead of aborting at the
+     * niche Some ctor at runtime.  Placed with the sealed check because it is
+     * the same kind of question (is this coercion allowed to be EXPRESSED),
+     * not a representation-lowering one. */
+    if (ascribe_check_non_null_zero(call, inner, ascribed)) return NULL;
 
     /* fn-value-carrier-fat-seam-residuals (ascribed-alias variant): ascribing
      * a CARRIER (tur_poly_fn_t) fn param to a fn type -- `(:: v (fn [] int))`

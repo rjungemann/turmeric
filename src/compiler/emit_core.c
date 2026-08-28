@@ -436,9 +436,31 @@ bool type_uses_carrier_abi(Type t) {
      * STRUCT rule below: carrier-ABI only when it carries phantom type params
      * (a parametric opaque application rides the int64 handle like any TY_APP). */
     if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
-        return t.as.adt_.def->n_type_params > 0;
+        return t.as.adt_.def->n_type_params > 0 &&
+               !adt_opaque_c_names_as_pointer(t.as.adt_.def);
+    /* opaque-pointer-c-spelling: a PARAMETRIC opaque over a pointer
+     * (`(Goal int)`, `(Parser cstr)`, `(SChan P)`) is a `void *` handle in
+     * exactly the sense a bare one is -- its phantom arguments are erased and
+     * the pointer IS the value.  Left on the carrier path it would be DECLARED
+     * `int64_t` at let-bindings while type_c_name spells it `void *`, which is
+     * the seam the repr shadow ICEs on (`(Goal int)`: want=scalar-bits
+     * got=carrier-i64 cty=int64_t own=void *). */
+    if (t.kind == TY_APP && adt_opaque_c_names_as_pointer(type_adt_app_def(&t)))
+        return false;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     return false;
+}
+
+bool emit_fn_body_is_opaque_ptr_over_carrier_result(const FnDef *fd,
+                                                    TypeKind declared_result) {
+    if (!fd || !fd->body) return false;
+    Type bt = fd->body->type;
+    const AdtDef *def = bt.kind == TY_ADT ? bt.as.adt_.def
+                      : bt.kind == TY_APP ? type_adt_app_def(&bt)
+                                          : NULL;
+    if (!adt_opaque_c_names_as_pointer(def)) return false;
+    const char *dc = type_c_name(emit_type_from_kind(declared_result));
+    return dc && strcmp(dc, "int64_t") == 0;
 }
 
 /* structdef-retirement DS-C: emit_carrier_return_override (RT/SC5) is deleted.
@@ -4562,6 +4584,26 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * `false` for two equal `(some v)` -- which is the failure class this whole
      * family ships and the reason the gate asserts values, not builds. */
     if (adt_app_is_niche_option(concrete_ty)) {
+        /* Inline-C carrier producer feeding a carrier sink: the "concrete"
+         * source is a bare temp whose RECORDED emitted spelling is already the
+         * int64 carrier word (`(vec-push! v (mk-c 1))` -- mk-c's inline-C body
+         * returns tur_some_ptr's box).  Its TYPE is the niche, which is what
+         * routed the call here, but the VALUE never took the niche form, so
+         * "materialize the carrier from the niche" would wrap the box in a
+         * second box (`tur_box_some(box)`) and the reader would unwrap one
+         * layer and hand the inner box to the consumer as the payload.  The
+         * value is already exactly what the carrier sink wants: pass it
+         * through.  Same key as every other inline-C-producer bridge (the
+         * localvar side table), so a genuine niche value -- whose recorded
+         * spelling is the payload's pointer type -- still materializes. */
+        if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER &&
+            emit_str_is_bare_ident(src_str)) {
+            const char *rec = emit_localvar_lookup_ctype(src_str);
+            if (rec && strcmp(rec, "int64_t") == 0) {
+                buf_free(&out);
+                return src_str;
+            }
+        }
         char *ntmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER) {
@@ -4572,7 +4614,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         } else {
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                        ntmp, src_str);
-            buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value(%s) : (%s)0)",
+            /* The CHECKED read: a carrier box can hold Some(NULL)
+             * (tur_some_ptr(0)), and the unchecked tur_opt_value would hand
+             * the niche its 0 payload -- silently turning a value `some?`
+             * calls true into `(none)`.  Same declaration the niche Some ctor
+             * enforces, at the other door. */
+            buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value_checked(%s) : (%s)0)",
                        ntmp, cname, ntmp, cname);
         }
         free(ntmp);
@@ -4591,6 +4638,29 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * carrier (e.g. the abstract `vec-new` base result feeding a `(Vec A)`
      * spec param) emitted `*(int64_t *)(intptr_t)(handle)` -- a wild deref of
      * the header's first word, segfaulting at runtime. */
+    /* opaque-pointer-c-spelling: an opaque newtype over a pointer is the
+     * same shape as the :heap case just described -- a one-word handle whose
+     * bit pattern IS the int64 carrier -- so its carrier crossing is a pure
+     * reinterpret too.  Without this arm the generic CK_CARRIER->CK_CONCRETE
+     * path below asks `carrier_is_inline(TY_APP)`, gets false, and emits a
+     * struct deref-copy: `schan-recv`'s `(Pair T (SChan R))` construction
+     * emitted `*(void **)(intptr_t)(chan)` and segfaulted (schan-roundtrip,
+     * schan-worker-pool).  Before the seam the type never reached the bridge at
+     * all -- it was carrier-ABI, so no crossing existed to get wrong. */
+    if (adt_opaque_c_names_as_pointer(
+            concrete_ty.kind == TY_ADT ? concrete_ty.as.adt_.def
+          : concrete_ty.kind == TY_APP ? type_adt_app_def(&concrete_ty)
+                                       : NULL)) {
+        if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+            buf_printf(&out, "(%s)(intptr_t)(%s)", cname, src_str);
+        else
+            buf_printf(&out, "(int64_t)(intptr_t)(%s)", src_str);
+        free(src_str);
+        char *result = strdup(out.data);
+        buf_free(&out);
+        return result;
+    }
+
     if (type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty)) {
         if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {
             /* If the concrete C type is a pointer (`Vec__int *`), cast to it;
@@ -4810,9 +4880,18 @@ char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
      *    the aggregate heap-promote below and boxes the pointer into a `T **`.
      *  - inline scalar: a union reinterpret, no address taken.
      *  - pointer-sized leaf (cstr/ptr<void>/int*): already int64-compatible,
-     *    no address taken. */
+     *    no address taken.
+     *  - niche `(Option P)`: the value IS a payload pointer, and the standard
+     *    bridge's niche row (`p ? tur_box_some(p) : 0`) already heap-allocates
+     *    the carrier box it hands back, so it escapes safely.  Falling into
+     *    the aggregate heap-promote below instead boxed the payload pointer
+     *    into a bare `P **` cell -- which the carrier->concrete reader then
+     *    read as a tagged Option box, so the FIRST element of
+     *    `(vec-of (some s) ...)` came back `(none)` while the second (routed
+     *    through the standard bridge at a different site) was correct. */
     if (src_ck != CK_CONCRETE || sink_ck != CK_CARRIER ||
         type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty) ||
+        adt_app_is_niche_option(concrete_ty) ||
         carrier_is_inline(concrete_ty.kind)) {
         return emit_carrier_bridge(ctx, body, src_str, src_ck, sink_ck,
                                    concrete_ty);
