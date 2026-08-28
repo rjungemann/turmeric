@@ -327,7 +327,7 @@ static bool inline_c_emit_block_deduped(Buf *buf, InlineCDedup *d,
     return any_emitted;
 }
 
-static bool thunk_type_has_concrete_c_abi(Type t) {
+static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
     switch (t.kind) {
         case TY_NIL:
         case TY_BOOL:
@@ -386,17 +386,43 @@ static bool thunk_type_has_concrete_c_abi(Type t) {
              * `type_has_concrete_codegen_layout` -- the latter answers false
              * for every TY_APP by design (its struct-app branch defers to
              * `type_extract_struct_app`), so gating on it reads as "no
-             * parametric app ever has a C ABI" and reinstates the bug. */
-            return type_app_is_concrete_adt(&t);
+             * parametric app ever has a C ABI" and reinstates the bug.
+             *
+             * Admitted only PAST the 16-byte sret threshold
+             * (adt_app_byval_pass_by_ptr), for the mirror-image reason.  A
+             * rank-2 erased consumer (a dict clone's `(g s)`) always calls
+             * slot 0 through the generic `int64_t (*)(void *, int64_t...)`
+             * cast -- it cannot know the element type.  For a <= 16 byte
+             * monomorph both conventions are served by the generic forwarding
+             * shim (register-returned aggregates pass through the tail-call
+             * untouched -- the "luck" above, which SysV makes reliable at this
+             * width), but a TYPED aggregate-returning shim in slot 0 is UB
+             * under the erased cast, and c2mir turns that UB into a real
+             * wrong-sret crash (van-laarhoven-lens-wide-functor-show under
+             * the MIR JIT; cc on x86-64 happened to agree register-wise).
+             * Past 16 bytes the generic shim is the thing that crashes, no
+             * erased consumer ever worked there, and the typed shim + typed
+             * call-site cast pair is required -- exactly the case above.
+             *
+             * PARAMETER position keeps the full admission: the by-value seam's
+             * monomorphized thunks pass a <= 16 byte monomorph (`(ReF bool)`)
+             * as the aggregate, and demoting the param to the erased int64
+             * cast breaks that producer/consumer agreement the other way
+             * (hkt-cata-fmap-byvalue-carrier under TUR_SR2_APP_SUM_BYVALUE).
+             * Only the RESULT is the erased-consumer hazard. */
+            return type_app_is_concrete_adt(&t) &&
+                   (!result_pos || adt_app_byval_pass_by_ptr(t));
         default:
             return false;
     }
 }
 
 bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params) {
-    if (!thunk_type_has_concrete_c_abi(result_type)) return false;
+    if (!thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/true))
+        return false;
     for (uint32_t i = 0; i < n_params; i++) {
-        if (!thunk_type_has_concrete_c_abi(param_types[i])) return false;
+        if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
+            return false;
     }
     return true;
 }

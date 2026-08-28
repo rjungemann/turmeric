@@ -4165,8 +4165,6 @@ static void __tur_fatbox_keep(void *__e) { (void)__e; }
 static union { void *__a; int64_t __b;
                char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
     __tur_fatbox_0 = { .__a = (void *)__tur_fatbox_keep };
-typedef tur_adt_Identity__int (*tur_thunk_tur_adt_Identity__int_int64_t_t)(void *, int64_t);
-typedef tur_adt_Identity__Point (*tur_thunk_tur_adt_Identity__Point_tur_adt_Point___t)(void *, tur_adt_Point *);
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
@@ -8435,7 +8433,7 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
   
 }
 
-struct __env_1435__spec__tur_adt_Identity__int { tur_thunk_tur_adt_Identity__int_int64_t_t __fn; int64_t h; };
+struct __env_1435__spec__tur_adt_Identity__int { int64_t __fn; int64_t h; };
 static void drop_glue___env_1435__spec__tur_adt_Identity__int(void *__p) {
     struct __env_1435__spec__tur_adt_Identity__int *__e = (struct __env_1435__spec__tur_adt_Identity__int *)__p; (void)__e;
     free((void *)((char *)__p - sizeof(void *)));
@@ -8453,7 +8451,7 @@ static int64_t over__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64
         void *__t243 = malloc(sizeof(void *) + sizeof(struct __env_1435__spec__tur_adt_Identity__int));
         *(void (**)(void *))__t243 = drop_glue___env_1435__spec__tur_adt_Identity__int;
         struct __env_1435__spec__tur_adt_Identity__int *__t242 = (struct __env_1435__spec__tur_adt_Identity__int *)((char *)__t243 + sizeof(void *));
-        __t242->__fn = (tur_thunk_tur_adt_Identity__int_int64_t_t)__fn_1433__spec__tur_adt_Identity__int_void___int64_t;
+        __t242->__fn = (int64_t)(intptr_t)__fn_1433__spec__tur_adt_Identity__int_void___int64_t;
         __t242->h = h;
         void *__t244 = __t242;
         tur_adt_Identity__Line __ps_245 = (line_a_x__mono_19a433877f08106f((int64_t)(intptr_t)(__t244), (int64_t)(intptr_t)(s)));
@@ -8473,7 +8471,7 @@ static int64_t run_id__spec__int64_t_tur_adt_Identity__Line(tur_adt_Identity__Li
         return (int64_t)(intptr_t)(int64_t)(i).wrapped;
 }
 
-struct __env_1444__spec__tur_adt_Identity__int { tur_thunk_tur_adt_Identity__int_int64_t_t __fn; int64_t b; };
+struct __env_1444__spec__tur_adt_Identity__int { int64_t __fn; int64_t b; };
 static void drop_glue___env_1444__spec__tur_adt_Identity__int(void *__p) {
     struct __env_1444__spec__tur_adt_Identity__int *__e = (struct __env_1444__spec__tur_adt_Identity__int *)__p; (void)__e;
     free((void *)((char *)__p - sizeof(void *)));
@@ -8489,7 +8487,7 @@ static int64_t set__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64_
         void *__t250 = malloc(sizeof(void *) + sizeof(struct __env_1444__spec__tur_adt_Identity__int));
         *(void (**)(void *))__t250 = drop_glue___env_1444__spec__tur_adt_Identity__int;
         struct __env_1444__spec__tur_adt_Identity__int *__t249 = (struct __env_1444__spec__tur_adt_Identity__int *)((char *)__t250 + sizeof(void *));
-        __t249->__fn = (tur_thunk_tur_adt_Identity__int_int64_t_t)__fn_1442__spec__tur_adt_Identity__int_void___int64_t;
+        __t249->__fn = (int64_t)(intptr_t)__fn_1442__spec__tur_adt_Identity__int_void___int64_t;
         __t249->b = b;
         void *__t251 = __t249;
         tur_adt_Identity__Line __ps_252 = (line_a_x__mono_19a433877f08106f((int64_t)(intptr_t)(__t251), (int64_t)(intptr_t)(s)));
@@ -8520,7 +8518,7 @@ static int64_t run_id__spec__int64_t_tur_adt_Identity__Point(tur_adt_Identity__P
 }
 
 static tur_adt_Identity__Line line_a__mono_26f1991df1b6def6(int64_t g, int64_t s) {
-        tur_adt_Identity__Point __ps_258 = ((*( tur_thunk_tur_adt_Identity__Point_tur_adt_Point___t *)((void *)(intptr_t)(g)))((void *)(intptr_t)(g), (tur_adt_Point *)((tur_adt_Line *)(intptr_t)(s))->a));
+        tur_adt_Identity__Point __ps_258 = (((tur_adt_Identity__Point (*)(void*, tur_adt_Point *))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (tur_adt_Point *)((tur_adt_Line *)(intptr_t)(s))->a));
         if (tur_panicking) return (tur_adt_Identity__Line){0};
         void *__t260 = malloc(sizeof(void *) + sizeof(struct __env_1404));
         *(void (**)(void *))__t260 = drop_glue___env_1404;
@@ -8555,7 +8553,7 @@ static int64_t run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int
 }
 
 static tur_adt_Identity__Point point_x__mono_bf0bbff5d9363c63(int64_t g, int64_t s) {
-        tur_adt_Identity__int __ps_268 = ((*( tur_thunk_tur_adt_Identity__int_int64_t_t *)((void *)(intptr_t)(g)))((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x));
+        tur_adt_Identity__int __ps_268 = (((tur_adt_Identity__int (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
         void *__t270 = malloc(sizeof(void *) + sizeof(struct __env_1395));
         *(void (**)(void *))__t270 = drop_glue___env_1395;
