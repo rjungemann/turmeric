@@ -40,13 +40,11 @@
 <main class="ci-page">
 
   <header class="ci-head">
-    <div class="section-label">Continuous Integration</div>
-    <h1 class="ci-title">Suite <em>timings</em></h1>
+    <h1 class="ci-title">Suite timings</h1>
     <p class="section-desc">
       Every push to <code>main</code> publishes each ctest suite's wall time to the
       <a href="https://github.com/rjungemann/turmeric/tree/ci-metrics" class="ci-link">ci-metrics</a>
-      branch. Timings are only comparable within one build environment, so pick
-      one below -- every view on this page reads that slice alone.
+      branch.
     </p>
     <div class="ci-provenance" id="ci-provenance"></div>
   </header>
@@ -87,7 +85,7 @@
           <h2 class="ci-panel-title">All suites</h2>
           <p class="ci-panel-sub">
             One sparkline per suite, largest first. Each has its own vertical
-            scale -- read the shape, not the height. Click to chart it above.
+            scale. Click to chart it above.
           </p>
         </div>
         <input type="search" class="ci-input" id="ci-spark-search"
@@ -116,8 +114,7 @@
         <div>
           <h2 class="ci-panel-title">Skip ledger</h2>
           <p class="ci-panel-sub">
-            Suites that did not fully run in the latest build. A suite skipping
-            for weeks is a coverage hole, not a green check.
+            Suites that did not fully run in the latest build.
           </p>
         </div>
       </div>
