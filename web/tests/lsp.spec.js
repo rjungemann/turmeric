@@ -192,12 +192,38 @@ test.describe('LSP integration — providers', () => {
 // the C tests assert the real one produces.
 // ---------------------------------------------------------------------------
 
+// The stdlib file the scripted server points go-to-definition at, and that
+// the scripted read-file export hands back. Short on purpose: the assertions
+// are about which buffer opened and whether it can be typed into, not about
+// what is in it.
+const STDLIB_LIST_SRC =
+    ';;; stdlib/list -- scripted stand-in.\n' +
+    '(defn stdmap [f : int xs : int] : int xs)\n';
+
 const SCRIPTED_WORKER = `
+const STDLIB_LIST_SRC = ${JSON.stringify(STDLIB_LIST_SRC)};
+
+// Last text seen per uri. The real server holds documents; a script that
+// answers documentSymbol identically for an empty buffer and a full one
+// cannot be used to tell an empty outline from a broken one.
+const docs = new Map();
+
 self.addEventListener('message', function (e) {
     const msg = e.data;
     if (msg.type === 'init') { self.postMessage({ type: 'ready' }); return; }
     if (msg.type === 'lsp-reset' || msg.type === 'lsp-flush') {
         self.postMessage({ type: 'lsp-result', id: msg.id, messages: [] });
+        return;
+    }
+    if (msg.type === 'read-file') {
+        // Mirrors turi_wasm_read_file: .tur files under /stdlib and nothing
+        // else, with a null for every kind of refusal. The page must treat
+        // "not allowed" and "not there" the same way, so the script does too.
+        const ok = /^\\/stdlib\\/[^.][^/]*\\.tur$/.test(msg.path || '');
+        self.postMessage({
+            type: 'lsp-result', id: msg.id, messages: [],
+            text: ok ? STDLIB_LIST_SRC : null,
+        });
         return;
     }
     if (msg.type !== 'lsp') return;
@@ -216,6 +242,7 @@ self.addEventListener('message', function (e) {
         const text = req.method === 'textDocument/didOpen'
             ? p.textDocument.text
             : p.contentChanges[p.contentChanges.length - 1].text;
+        docs.set(uri, text);
         const idx = text.indexOf('no-such-function');
         const diagnostics = [];
         if (idx >= 0) {
@@ -244,7 +271,12 @@ self.addEventListener('message', function (e) {
         ]});
 
     } else if (req.method === 'textDocument/hover') {
-        respond({ contents: { kind: 'markdown',
+        // The word under the cursor is not on the wire, so the position is
+        // the proxy: line 3 is where the specs put a name the real server has
+        // nothing to say about, which is what makes the client fall through
+        // to the documentation table.
+        if (p.position && p.position.line === 3) respond({ contents: '' });
+        else respond({ contents: { kind: 'markdown',
                               value: '\`\`\`\\n(twice : (fn [int] : int))\\n\`\`\`' } });
 
     } else if (req.method === 'textDocument/signatureHelp') {
@@ -253,16 +285,49 @@ self.addEventListener('message', function (e) {
                   activeSignature: 0, activeParameter: 1 });
 
     } else if (req.method === 'textDocument/documentSymbol') {
-        respond([{ name: 'twice', kind: 12,
-                   range: { start: { line: 0, character: 6 },
-                            end: { line: 0, character: 11 } },
-                   selectionRange: { start: { line: 0, character: 6 },
-                                     end: { line: 0, character: 11 } } }]);
+        // Deliberately out of position order and carrying three different
+        // kinds: the outline sorts, and labels each row by kind. One entry
+        // per kind the collector can now produce (Function / Struct /
+        // Variable), so a mapping that collapses back to function-or-not
+        // shows up as two rows saying the same word.
+        respond(!(docs.get(uri) || '').trim() ? [] : [
+            { name: 'eight', kind: 13,
+              range: { start: { line: 2, character: 0 },
+                       end: { line: 2, character: 13 } },
+              selectionRange: { start: { line: 2, character: 5 },
+                                end: { line: 2, character: 10 } } },
+            { name: 'twice', kind: 12,
+              range: { start: { line: 0, character: 0 },
+                       end: { line: 0, character: 36 } },
+              selectionRange: { start: { line: 0, character: 6 },
+                                end: { line: 0, character: 11 } } },
+            { name: 'Point', kind: 23,
+              range: { start: { line: 1, character: 0 },
+                       end: { line: 1, character: 34 } },
+              selectionRange: { start: { line: 1, character: 11 },
+                                end: { line: 1, character: 16 } } },
+        ]);
+
+    } else if (req.method === 'textDocument/documentHighlight') {
+        respond([
+            { range: { start: { line: 0, character: 6 },
+                       end: { line: 0, character: 11 } }, kind: 3 },
+            { range: { start: { line: 1, character: 1 },
+                       end: { line: 1, character: 6 } }, kind: 1 },
+        ]);
 
     } else if (req.method === 'textDocument/definition') {
-        respond({ uri: 'file:///project/helper.tur',
-                  range: { start: { line: 0, character: 6 },
-                           end: { line: 0, character: 12 } } });
+        // Line 2 stands for a name whose definition is in the stdlib -- off
+        // the tab strip entirely, which before M4 was an early return.
+        if (p.position && p.position.line === 2) {
+            respond({ uri: 'file:///stdlib/list.tur',
+                      range: { start: { line: 1, character: 6 },
+                               end: { line: 1, character: 12 } } });
+        } else {
+            respond({ uri: 'file:///project/helper.tur',
+                      range: { start: { line: 0, character: 6 },
+                               end: { line: 0, character: 12 } } });
+        }
 
     } else if (req.id !== undefined) {
         out.push({ jsonrpc: '2.0', id: req.id,
@@ -402,5 +467,328 @@ test.describe('LSP integration — adapter against a scripted server', () => {
             const active = tabs.find(t => t.id === activeId);
             return active ? active.name : null;
         }, { timeout: 15_000 }).toBe('helper.tur');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Navigation surfaces (try-turmeric-navigation-and-minimap-plan)
+//
+// Same scripted server as above, for the same reason: these exercise the
+// outline, the hover fallback, read-only stdlib buffers, and the jump-back
+// stack, none of which can run against the shipped wasm until someone
+// rebuilds it. The scripted answers are copied from what the real server was
+// measured to produce (plan §4.1).
+// ---------------------------------------------------------------------------
+
+/** Serve a known documentation table so the hover fallback has something to
+ *  find. doc-names.json is generated by `tur run docs` and may not exist in a
+ *  fresh checkout; routing it makes the assertion about the fallback rather
+ *  than about whether someone ran the generator. */
+async function routeDocNames(context, entries) {
+    await context.route('**/doc-names.json', route => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(entries),
+    }));
+}
+
+test.describe('Navigation — outline, hover fallback, stdlib definitions', () => {
+    test.beforeEach(async ({ page, context }) => {
+        await context.route('**/lsp-worker.js', route => route.fulfill({
+            status: 200,
+            contentType: 'application/javascript',
+            headers: {
+                'Cross-Origin-Resource-Policy': 'same-origin',
+                'Cross-Origin-Embedder-Policy': 'require-corp',
+            },
+            body: SCRIPTED_WORKER,
+        }));
+        await routeDocNames(context, [
+            { name: 'println', summary: 'println -- print a value and a newline.',
+              kind: 'defn' },
+        ]);
+        await page.goto('/try/');
+        await waitForReady(page);
+        const available = await bootLsp(page);
+        expect(available).toBe(true);
+    });
+
+    // -- M2: the outline ---------------------------------------------------
+
+    test('the Symbols menu lists the buffer\'s definitions, in file order',
+         async ({ page }) => {
+        await setCode(page,
+            '(defn twice [x : int] : int (* x 2))\n' +
+            '(defstruct Point [x : int y : int])\n' +
+            '(def eight 8)\n');
+
+        await page.evaluate(() => window._turiOutline.open());
+        await expect.poll(() => page.evaluate(() => window._turiOutline.rows().length),
+                          { timeout: 15_000 }).toBe(3);
+
+        const rows = await page.evaluate(() => window._turiOutline.rows());
+        // The server answered out of order; the list is sorted by position,
+        // because an outline that does not match the file it describes is
+        // harder to use than no outline.
+        expect(rows.map(r => r.name)).toEqual(['twice', 'Point', 'eight']);
+        // And the kinds are distinguishable -- the whole point of M5's kind
+        // field. Before it, Point and eight were the same word.
+        expect(rows.map(r => r.kind)).toEqual(['function', 'type', 'value']);
+    });
+
+    test('the outline marks the entry containing the caret', async ({ page }) => {
+        await setCode(page,
+            '(defn twice [x : int] : int (* x 2))\n' +
+            '(defstruct Point [x : int y : int])\n' +
+            '(def eight 8)\n');
+
+        // Mid-body, not on the name: someone editing the middle of a function
+        // is not sitting on its name, and "where am I" is what the marker is
+        // for. The smallest containing range wins.
+        await page.evaluate(() => {
+            window._turiEditor.setPosition({ lineNumber: 1, column: 30 });
+        });
+        await page.evaluate(() => window._turiOutline.open());
+        await expect.poll(() => page.evaluate(
+            () => window._turiOutline.rows().filter(r => r.current).map(r => r.name)),
+            { timeout: 15_000 }).toEqual(['twice']);
+
+        await page.evaluate(() => window._turiOutline.close());
+        await page.evaluate(() => {
+            window._turiEditor.setPosition({ lineNumber: 3, column: 7 });
+        });
+        await page.evaluate(() => window._turiOutline.open());
+        await expect.poll(() => page.evaluate(
+            () => window._turiOutline.rows().filter(r => r.current).map(r => r.name)),
+            { timeout: 15_000 }).toEqual(['eight']);
+    });
+
+    test('clicking an outline row moves the caret', async ({ page }) => {
+        await setCode(page,
+            '(defn twice [x : int] : int (* x 2))\n' +
+            '(defstruct Point [x : int y : int])\n' +
+            '(def eight 8)\n');
+        await page.evaluate(() => window._turiEditor.setPosition({ lineNumber: 1, column: 1 }));
+
+        await page.evaluate(() => window._turiOutline.open());
+        await expect.poll(() => page.evaluate(() => window._turiOutline.rows().length),
+                          { timeout: 15_000 }).toBe(3);
+        await page.locator('#symbols-list .symbol-item', { hasText: 'eight' }).click();
+
+        const pos = await page.evaluate(() => window._turiEditor.getPosition());
+        expect(pos.lineNumber).toBe(3);
+    });
+
+    // Paired with the test in the describe below. An empty outline shown
+    // because analysis is down would say "this file defines nothing" -- a
+    // claim about the user's code made from a fact about our worker -- so the
+    // two states must not share a sentence. They are separate tests because
+    // they need separate *contexts*: /try/ registers a service worker with a
+    // cache-first precache, so a second navigation inside one test serves the
+    // already-cached lsp-worker.js and Playwright's route never sees the
+    // request.
+    test('an empty buffer says nothing is defined', async ({ page }) => {
+        await setCode(page, '\n');
+        await page.evaluate(() => window._turiOutline.open());
+        await expect.poll(() => page.evaluate(() => window._turiOutline.state()),
+                          { timeout: 15_000 }).toContain('Nothing defined');
+        expect(await page.evaluate(() => window._turiOutline.state()))
+            .not.toContain('unavailable');
+    });
+
+    // -- M3: the hover fallback -------------------------------------------
+
+    test('hover falls back to the docs table, and says that it did',
+         async ({ page }) => {
+        await setCode(page, '(defn f [] : int 1)\n\n\n(println 1)\n');
+        await page.evaluate(() => {
+            window._turiEditor.focus();
+            // Line 4 (0-based 3) is where the scripted server answers with an
+            // empty hover, standing in for a compiler builtin -- a name with
+            // no Binding, which is the hole plan §4.1 measured.
+            window._turiEditor.setPosition({ lineNumber: 4, column: 3 });
+            window._turiEditor.trigger('test', 'editor.action.showHover', {});
+        });
+        const hover = page.locator('.monaco-hover');
+        await expect(hover).toContainText('print a value', { timeout: 15_000 });
+        // Marked as documentation, not analysis. A hover that silently mixes
+        // "the checker says this" with "the manual says this" is worse than
+        // either -- they can disagree.
+        await expect(hover).toContainText('stdlib docs');
+    });
+
+    // -- M4: read-only stdlib buffers -------------------------------------
+
+    test('go-to-definition opens a read-only stdlib tab', async ({ page }) => {
+        await setCode(page, '(defn f [] : int 1)\n\n(stdmap f 0)\n');
+        await page.evaluate(() => {
+            window._turiEditor.focus();
+            window._turiEditor.setPosition({ lineNumber: 3, column: 3 });
+            window._turiEditor.trigger('test', 'editor.action.revealDefinition', {});
+        });
+
+        await expect.poll(() => page.evaluate(
+            () => window._turiNav.readOnlyTabs().map(t => t.name)),
+            { timeout: 15_000 }).toEqual(['list.tur']);
+
+        // Focused, and refusing input. Read-only that is only a tab flag is
+        // read-only the editor does not enforce.
+        await expect.poll(() => page.evaluate(async () => {
+            const id = window._turiTabs.activeId();
+            const tab = window._turiTabs.tabs().find(t => t.id === id);
+            return tab ? tab.name : null;
+        }), { timeout: 10_000 }).toBe('list.tur');
+        expect(await page.evaluate(() => window._turiNav.isReadOnly())).toBe(true);
+
+        // And the tab strip says so before a keystroke is wasted on it.
+        await expect(page.locator('.tab-button.read-only .tab-lock')).toHaveCount(1);
+    });
+
+    test('a stdlib tab never reaches a downloaded project', async ({ page }) => {
+        await setCode(page, '(defn f [] : int 1)\n\n(stdmap f 0)\n');
+        await page.evaluate(() => {
+            window._turiEditor.focus();
+            window._turiEditor.setPosition({ lineNumber: 3, column: 3 });
+            window._turiEditor.trigger('test', 'editor.action.revealDefinition', {});
+        });
+        await expect.poll(() => page.evaluate(
+            () => window._turiNav.readOnlyTabs().length), { timeout: 15_000 }).toBe(1);
+
+        const paths = await page.evaluate(
+            () => window._turiTabs.projectEntries().map(e => e.path));
+        expect(paths.some(p => p.includes('list.tur'))).toBe(false);
+        // The build manifest must not name it either -- an entry-less :src
+        // reference is a project that does not build.
+        const manifest = await page.evaluate(() => window._turiTabs.projectEntries()
+            .find(e => e.path === 'build.tur').content);
+        expect(manifest).not.toContain('list.tur');
+    });
+
+    test('a reload does not bring the stdlib tab back', async ({ page }) => {
+        await setCode(page, '(defn f [] : int 1)\n\n(stdmap f 0)\n');
+        await page.evaluate(() => {
+            window._turiEditor.focus();
+            window._turiEditor.setPosition({ lineNumber: 3, column: 3 });
+            window._turiEditor.trigger('test', 'editor.action.revealDefinition', {});
+        });
+        await expect.poll(() => page.evaluate(
+            () => window._turiNav.readOnlyTabs().length), { timeout: 15_000 }).toBe(1);
+        // Persistence is debounced; give it a window to write the wrong thing
+        // if it is going to.
+        await page.waitForTimeout(800);
+
+        await page.reload();
+        await waitForReady(page);
+        const names = await page.evaluate(() => window._turiTabs.tabs().map(t => t.name));
+        expect(names).not.toContain('list.tur');
+    });
+
+    test('opening the same stdlib file twice reuses its tab', async ({ page }) => {
+        await setCode(page, '(defn f [] : int 1)\n\n(stdmap f 0)\n');
+        const jump = async () => {
+            await page.evaluate(() => {
+                window._turiEditor.focus();
+                window._turiEditor.setPosition({ lineNumber: 3, column: 3 });
+                window._turiEditor.trigger('test', 'editor.action.revealDefinition', {});
+            });
+        };
+        await jump();
+        await expect.poll(() => page.evaluate(
+            () => window._turiNav.readOnlyTabs().length), { timeout: 15_000 }).toBe(1);
+
+        // Back to the origin, then jump again. A reading session that stacks
+        // six copies of list.tur has made the tab strip useless.
+        await page.evaluate(() => window._turiNav.back());
+        await jump();
+        await page.waitForTimeout(500);
+        expect(await page.evaluate(
+            () => window._turiNav.readOnlyTabs().length)).toBe(1);
+    });
+
+    test('jump-back returns to where the jump started', async ({ page }) => {
+        await page.evaluate(() => window._turiTabs.create({
+            name: 'helper.tur',
+            content: '(defn helper [] : int 7)\n',
+            activate: false,
+        }));
+        await page.waitForTimeout(300);
+
+        const originId = await page.evaluate(() => window._turiTabs.activeId());
+        await setCode(page, '(helper)\n');
+        await page.evaluate(() => {
+            window._turiEditor.focus();
+            window._turiEditor.setPosition({ lineNumber: 1, column: 3 });
+            window._turiEditor.trigger('test', 'editor.action.revealDefinition', {});
+        });
+        await expect.poll(() => page.evaluate(() => window._turiTabs.activeId()),
+                          { timeout: 15_000 }).not.toBe(originId);
+
+        // The Back button is the discoverable half: an undiscoverable
+        // jump-back is the same as none.
+        await expect(page.locator('#jump-back-btn')).toBeVisible();
+        await page.click('#jump-back-btn');
+
+        await expect.poll(() => page.evaluate(() => window._turiTabs.activeId()),
+                          { timeout: 10_000 }).toBe(originId);
+        const pos = await page.evaluate(() => window._turiEditor.getPosition());
+        expect(pos).toMatchObject({ lineNumber: 1, column: 3 });
+        // Stack drained, button gone.
+        await expect(page.locator('#jump-back-btn')).toBeHidden();
+    });
+
+    // -- M5: occurrence highlight -----------------------------------------
+
+    test('occurrence highlight comes from the server, not from a word match',
+         async ({ page }) => {
+        await setCode(page,
+            '(defn twice [x : int] : int (* x 2))\n' +
+            '(twice 21) ; twice in a comment\n');
+        await page.evaluate(() => {
+            window._turiEditor.focus();
+            window._turiEditor.setPosition({ lineNumber: 1, column: 8 });
+        });
+
+        // Assert the provider's own answer rather than Monaco's rendering of
+        // it: the rendering is a decoration whose CSS class name is Monaco's
+        // internal business and changes between versions, and a spec that
+        // silently matches zero of them asserts nothing.
+        const highlights = await page.evaluate(() => window._turiLsp.highlights());
+        expect(highlights).toHaveLength(2);
+        // Ranges are converted, and the one in the comment is not among them
+        // -- the whole reason for a server-side provider over Monaco's textual
+        // fallback.
+        expect(highlights.map(h => h.range.startLineNumber).sort()).toEqual([1, 2]);
+        expect(highlights.some(h => h.range.startLineNumber === 2 &&
+                                    h.range.startColumn > 12)).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// The outline with no server at all
+//
+// A separate describe rather than a second navigation inside the one above:
+// /try/ registers a service worker whose precache is cache-first, so once a
+// context has loaded the page, a later request for lsp-worker.js is answered
+// from that cache and never reaches Playwright's route. Each test gets a fresh
+// context, so routing from the first navigation is the only reliable way to
+// have the worker fail.
+// ---------------------------------------------------------------------------
+
+test.describe('Navigation — the outline when analysis never boots', () => {
+    test('says analysis is unavailable, not that the file is empty',
+         async ({ page, context }) => {
+        await context.route('**/lsp-worker.js', route => route.fulfill({
+            status: 500, contentType: 'text/plain', body: 'nope',
+        }));
+        await page.goto('/try/');
+        await waitForReady(page);
+        expect(await bootLsp(page)).toBe(false);
+
+        await page.evaluate(() => window._turiOutline.open());
+        const state = await page.evaluate(() => window._turiOutline.state());
+        expect(state).toContain('unavailable');
+        // The pairing that matters: this sentence must not be the one an
+        // empty file gets.
+        expect(state).not.toContain('Nothing defined');
     });
 });

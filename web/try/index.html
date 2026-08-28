@@ -52,6 +52,18 @@
                                     <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
                                 </svg>
                             </button>
+                            <!-- Back from a go-to-definition jump. Hidden
+                                 until there is somewhere to go back to --
+                                 Monaco standalone ships no navigation history,
+                                 so an undiscoverable binding would be the same
+                                 as none (renderJumpBack() in main.js). -->
+                            <button class="btn btn-icon" id="jump-back-btn" hidden
+                                    title="Back from definition (Ctrl/Cmd + Alt + -)"
+                                    aria-label="Back from definition">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+                                </svg>
+                            </button>
                             <button class="btn btn-icon" id="clear-btn" title="Clear (Shift+Click resets the whole workspace)" aria-label="Clear">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
@@ -129,6 +141,36 @@
                                     <button class="more-item" role="menuitem" data-example="sweet">Sweet-exp Syntax</button>
                                 </div>
                             </div>
+                            <!-- Symbols: the outline. The list is filled from
+                                 the language server's documentSymbol answer
+                                 when the popover opens, not kept in sync --
+                                 the buffer changes on every keystroke and this
+                                 is read once in a while. Rows are rendered by
+                                 renderSymbolsMenu() in main.js. -->
+                            <div class="symbols-wrap">
+                                <button class="btn btn-icon" id="symbols-btn"
+                                        aria-haspopup="true" aria-expanded="false"
+                                        aria-controls="symbols-menu"
+                                        title="Symbols in this file (Ctrl/Cmd + Shift + O)"
+                                        aria-label="Symbols">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                        <path d="M4 5h4v2H4zm6 0h10v2H10zM4 11h4v2H4zm6 0h10v2H10zM4 17h4v2H4zm6 0h10v2H10z"/>
+                                    </svg>
+                                </button>
+                                <div class="more-menu symbols-menu" id="symbols-menu" role="menu" hidden>
+                                    <div class="more-label">Symbols</div>
+                                    <div class="symbols-list" id="symbols-list"></div>
+                                    <!-- Monaco's own quick-outline is a
+                                         filterable palette and has been
+                                         registered in this bundle all along;
+                                         it was simply undiscoverable. This row
+                                         is the discovery. -->
+                                    <button class="more-item symbols-filter" role="menuitem"
+                                            id="symbols-filter">Filter symbols...
+                                        <span class="symbols-filter-key">Ctrl/Cmd + Shift + O</span>
+                                    </button>
+                                </div>
+                            </div>
                             <!-- Docs: opens the in-app docs browser over the REPL
                                  (never navigates away). Also reachable as `:docs`
                                  and via the #doc= URL hash. -->
@@ -158,6 +200,16 @@
                                     <button class="more-item" role="menuitem" data-cmd="docs-btn">Documentation</button>
                                     <button class="more-item" role="menuitem" data-cmd="download-btn">Download project</button>
                                     <button class="more-item" role="menuitem" data-cmd="open-btn">Open project...</button>
+                                    <div class="more-sep" role="separator"></div>
+                                    <!-- View. The minimap row is a checkbox
+                                         rather than a command: its label
+                                         reports the current state, and picking
+                                         it pins an explicit choice that from
+                                         then on beats the narrow-pane width
+                                         gate (see applyMinimapPreference). -->
+                                    <button class="more-item" role="menuitem" data-cmd="symbols-btn">Symbols...</button>
+                                    <button class="more-item" role="menuitemcheckbox" aria-checked="false"
+                                            data-action="toggle-minimap">Show minimap</button>
                                     <div class="more-sep" role="separator"></div>
                                     <button class="more-item" role="menuitem" data-action="force-update" title="Clear cached assets and reload the latest version">Force update</button>
                                     <div class="more-sep" role="separator"></div>
@@ -403,7 +455,13 @@
         <!-- Footer -->
         <footer class="footer">
             <div class="footer-content">
-                <p>Try Turmeric &mdash; A web-based REPL for the <a href="https://github.com/turmeric-lang/turmeric">Turmeric language</a></p>
+                <!-- /try does not place <site-footer>; this is its own. The
+                     C-interpreter link belongs in both: the marketing footer
+                     is where a visitor browsing the site finds it, and this is
+                     where someone already in a playground finds the other
+                     playground. Prose here, so the verb reads naturally. -->
+                <p>Try Turmeric &mdash; A web-based REPL for the <a href="https://github.com/turmeric-lang/turmeric">Turmeric language</a>
+                   &mdash; also try our <a href="https://c.turmeric-lang.com">C interpreter</a>.</p>
             </div>
         </footer>
     </div>

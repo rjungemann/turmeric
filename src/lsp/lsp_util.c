@@ -243,3 +243,90 @@ char *lsp_path_to_uri(const char *path, char *dest, size_t dest_cap) {
     dest[di] = '\0';
     return dest;
 }
+
+/* -------------------------------------------------------------------------
+ * Occurrence scan (try-turmeric-navigation-and-minimap-plan, M5)
+ * --------------------------------------------------------------------- */
+
+void lsp_scan_occurrences(const char *text, size_t text_len,
+                          const char *name,
+                          LspOccurrenceFn fn, void *user) {
+    if (!text || text_len == 0 || !name || !*name || !fn) return;
+    size_t nlen = strlen(name);
+    if (nlen == 0 || nlen > text_len) return;
+
+    int    line0      = 0;
+    size_t line_start = 0;
+    size_t i          = 0;
+
+    /* Advance one byte, keeping the line counter honest. Every skip below
+     * goes through here rather than doing `i++`, because a comment or a
+     * string can span lines and a lost newline shifts every position after
+     * it -- silently, in the direction that makes a highlight land on the
+     * wrong row. */
+    #define ADVANCE() do { \
+        if (text[i] == '\n') { line0++; line_start = i + 1; } \
+        i++; \
+    } while (0)
+
+    while (i < text_len) {
+        char c = text[i];
+
+        if (c == ';') {                       /* line comment */
+            while (i < text_len && text[i] != '\n') i++;
+            continue;                          /* the '\n' itself falls through */
+        }
+        if (c == '"') {                       /* string literal */
+            ADVANCE();
+            while (i < text_len && text[i] != '"') {
+                if (text[i] == '\\' && i + 1 < text_len) ADVANCE();
+                ADVANCE();
+            }
+            if (i < text_len) ADVANCE();       /* closing quote */
+            continue;
+        }
+        if (c == '#' && i + 1 < text_len && text[i + 1] == '|') {
+            int depth = 0;                     /* block comment, nesting */
+            while (i < text_len) {
+                if (text[i] == '#' && i + 1 < text_len && text[i + 1] == '|') {
+                    depth++;
+                    ADVANCE(); ADVANCE();
+                    continue;
+                }
+                if (text[i] == '|' && i + 1 < text_len && text[i + 1] == '#') {
+                    depth--;
+                    ADVANCE(); ADVANCE();
+                    if (depth <= 0) break;
+                    continue;
+                }
+                ADVANCE();
+            }
+            continue;
+        }
+        if (c == '`' && i + 2 < text_len &&
+            text[i + 1] == '`' && text[i + 2] == '`') {
+            ADVANCE(); ADVANCE(); ADVANCE();   /* opening fence */
+            while (i + 2 < text_len &&
+                   !(text[i] == '`' && text[i + 1] == '`' && text[i + 2] == '`')) {
+                ADVANCE();
+            }
+            if (i + 2 < text_len) { ADVANCE(); ADVANCE(); ADVANCE(); }
+            else { while (i < text_len) ADVANCE(); }
+            continue;
+        }
+
+        if (!is_ident_char(c)) { ADVANCE(); continue; }
+
+        /* On an identifier. Consume the whole of it, then compare -- a
+         * substring match inside a longer name is not an occurrence, and
+         * testing the boundary after a memcmp would still have to find the
+         * end to know where to resume. */
+        size_t start = i;
+        while (i < text_len && is_ident_char(text[i])) i++;
+        size_t len = i - start;
+        if (len == nlen && memcmp(text + start, name, nlen) == 0) {
+            fn(line0, (int)(start - line_start), (int)nlen, user);
+        }
+    }
+    #undef ADVANCE
+}

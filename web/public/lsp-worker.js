@@ -71,6 +71,35 @@ function handleMessage(msg) {
         } else if (msg.type === 'lsp-reset') {
             mod._turi_wasm_lsp_reset();
             self.postMessage({ type: 'lsp-result', id, messages: [] });
+
+        } else if (msg.type === 'read-file') {
+            // Stdlib source, for a go-to-definition that lands outside the tab
+            // strip. The export refuses anything that is not a .tur file under
+            // the stdlib mount, so `text: null` covers "not allowed", "not
+            // there", and "could not read" alike -- the page's answer to all
+            // three is the same, and telling them apart would only report
+            // which paths exist.
+            //
+            // Not routed through callStringToString: that helper substitutes
+            // '[]' for a null return, which is exactly the distinction that
+            // matters here.
+            let text = null;
+            if (typeof mod._turi_wasm_read_file === 'function') {
+                const len = mod.lengthBytesUTF8(msg.path) + 1;
+                const ptr = mod._malloc(len);
+                mod.stringToUTF8(msg.path, ptr, len);
+                let outPtr = 0;
+                try {
+                    outPtr = mod._turi_wasm_read_file(ptr);
+                } finally {
+                    mod._free(ptr);
+                }
+                if (outPtr) {
+                    text = mod.UTF8ToString(outPtr);
+                    mod._free(outPtr);
+                }
+            }
+            self.postMessage({ type: 'lsp-result', id, messages: [], text });
         }
     } catch (err) {
         self.postMessage({ type: 'lsp-error', id, error: String(err) });

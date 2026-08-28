@@ -53,7 +53,8 @@ static int stub_emit_error = 0;
 static int stub_yield_nothing = 0;
 
 static void stub_sym(LspSymbol *s, const char *name, const char *type,
-                     const char *file, int line, int c0, int c1) {
+                     const char *file, int line, int c0, int c1,
+                     LspSymKind kind) {
     memset(s, 0, sizeof(*s));
     snprintf(s->name, sizeof(s->name), "%s", name);
     snprintf(s->type_str, sizeof(s->type_str), "%s", type);
@@ -61,6 +62,7 @@ static void stub_sym(LspSymbol *s, const char *name, const char *type,
     s->line = line;
     s->col_start = c0;
     s->col_end = c1;
+    s->kind = kind;
 }
 
 int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
@@ -75,7 +77,8 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
     if (is_prime) {
         if (cap >= 1)
             stub_sym(&out[(*count_out)++], "cons", "(fn [int int] : int)",
-                     STUB_STDLIB_DIR "/list.tur", 12, 7, 11);
+                     STUB_STDLIB_DIR "/list.tur", 12, 7, 11,
+                     LSP_KIND_FUNCTION);
         return 0;
     }
 
@@ -83,10 +86,18 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
 
     if (cap >= 1)
         stub_sym(&out[(*count_out)++], "local-fn", "(fn [int int] : int)",
-                 source_path, 3, 7, 15);
+                 source_path, 3, 7, 15, LSP_KIND_FUNCTION);
     if (cap >= 2)
         stub_sym(&out[(*count_out)++], "cons", "(fn [int int] : int)",
-                 STUB_STDLIB_DIR "/list.tur", 12, 7, 11);
+                 STUB_STDLIB_DIR "/list.tur", 12, 7, 11, LSP_KIND_FUNCTION);
+    /* A record type, so the kind mapping has something to get wrong. Its
+     * type_str is deliberately not a function type *and* not a struct-shaped
+     * one: before the kind field, this and a plain `def` were the same entry,
+     * because the only question anyone could ask was "does the rendered type
+     * start with (fn". */
+    if (cap >= 3)
+        stub_sym(&out[(*count_out)++], "Point", "Point",
+                 source_path, 5, 12, 17, LSP_KIND_STRUCT);
 
     if (stub_emit_error) {
         /* Diagnostics are reported against the temp file the server wrote, and
@@ -334,6 +345,154 @@ static void test_document_symbol_is_file_scoped(void) {
           "documentSymbol lists the document's definitions");
     CHECK(!contains(&out, "\"name\":\"cons\""),
           "documentSymbol excludes symbols defined elsewhere");
+    buf_free(&out);
+}
+
+/* -------------------------------------------------------------------------
+ * Symbol kinds, documentHighlight, builtin fallback
+ * (try-turmeric-navigation-and-minimap-plan, M5)
+ * --------------------------------------------------------------------- */
+
+static void test_document_symbol_reports_real_kinds(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(defn local-fn [a b] : int a)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/documentSymbol\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"}}}");
+
+    /* 12 = Function, 23 = Struct. The old mapping could only answer 12 or 13,
+     * so a defstruct and a def were indistinguishable in an outline -- which
+     * is most of what makes an outline scannable. */
+    CHECK(contains(&out, "\"name\":\"local-fn\",\"kind\":12"),
+          "a function reports SymbolKind.Function");
+    CHECK(contains(&out, "\"name\":\"Point\",\"kind\":23"),
+          "a record type reports SymbolKind.Struct, not Variable");
+    buf_free(&out);
+}
+
+static void test_completion_kind_follows_the_symbol_kind(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(P");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"textDocument/completion\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":2}}}");
+
+    /* CompletionItemKind is a *different* enum from SymbolKind for the same
+     * distinction: 22 = Struct here, not 23. */
+    CHECK(contains(&out, "\"label\":\"Point\",\"kind\":22"),
+          "a type completes with a type icon, not a variable one");
+    buf_free(&out);
+}
+
+static void test_document_highlight_skips_comments_and_strings(void) {
+    fresh_session();
+    /* Four textual occurrences of `local-fn`, two of them real. The other two
+     * -- one in a comment, one inside a string literal -- are the exact cases
+     * a regular expression over the source cannot tell apart from a use.
+     *
+     * The definition sits at 0-based line 2, column 6, which is where the stub
+     * collector claims it is (line 3, col_start 7, both 1-based). That
+     * agreement is what the Write/Text distinction is keyed on. */
+    session_open("file:///project/main.tur",
+                 "(local-fn 1 2) ; local-fn again\\n"
+                 "(def s \\\"local-fn\\\")\\n"
+                 "(defn local-fn [a b] : int a)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/documentHighlight\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":2}}}");
+
+    CHECK(contains(&out, "\"range\""), "documentHighlight answers ranges");
+    /* Exactly two ranges: count the range objects. */
+    int n = 0;
+    for (const char *p = out.data; (p = strstr(p, "\"range\":")) != NULL; p++) n++;
+    CHECK(n == 2, "the comment and the string literal are not occurrences");
+    CHECK(contains(&out,
+        "{\"start\":{\"line\":0,\"character\":1},"
+         "\"end\":{\"line\":0,\"character\":9}},\"kind\":1}"),
+          "a use is reported as text");
+    /* The definition is Write, not Text -- "which of these is the definition"
+     * is the question a reader scanning a column of marks actually has. */
+    CHECK(contains(&out,
+        "{\"start\":{\"line\":2,\"character\":6},"
+         "\"end\":{\"line\":2,\"character\":14}},\"kind\":3}"),
+          "the defining occurrence is reported as a write");
+    buf_free(&out);
+}
+
+static void test_document_highlight_off_a_word_is_null(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(local-fn 1 2)   ");
+
+    /* Character 15 is a space with a space after it. Not 9, the space before
+     * `1`: lsp_word_at_pos steps one character right when the cursor is not on
+     * an identifier, and a digit is an identifier character -- so that
+     * position resolves to the word "1", which is a different test. */
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"textDocument/documentHighlight\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":15}}}");
+
+    /* `null` rather than `[]` so a client keeps what it was showing instead of
+     * flickering as the caret crosses whitespace. */
+    CHECK(contains(&out, "\"result\":null"),
+          "a position that is not on a word answers null");
+    buf_free(&out);
+}
+
+static void test_hover_falls_back_to_the_builtin_table(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(println 1)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"textDocument/hover\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":3}}}");
+
+    /* The index is built from Bindings and a compiler builtin has none, so
+     * this used to be `{"contents":""}` -- silent on the name a first-time
+     * visitor types first. */
+    CHECK(contains(&out, "(println : (fn [int] : nil))"),
+          "hover on a builtin renders its signature");
+    CHECK(contains(&out, "built-in operator"),
+          "hover says the answer came from the operator table, not analysis");
+    buf_free(&out);
+}
+
+static void test_signature_help_falls_back_to_the_builtin_table(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(println ");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"textDocument/signatureHelp\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":9}}}");
+
+    CHECK(contains(&out, "\"signatures\""),
+          "signatureHelp answers for a builtin callee");
+    CHECK(contains(&out, "(println : (fn [int] : nil))"),
+          "the builtin's signature reaches the label");
+    buf_free(&out);
+}
+
+static void test_definition_on_a_builtin_is_still_null(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(println 1)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"textDocument/definition\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":3}}}");
+
+    /* A builtin has no source location. Inventing one -- pointing at
+     * builtins.c, or at the call site -- would be worse than answering
+     * nothing, because the editor would actually go there. */
+    CHECK(contains(&out, "\"result\":null"),
+          "a builtin has nowhere to go to");
     buf_free(&out);
 }
 
@@ -631,6 +790,13 @@ int main(void) {
     test_hover();
     test_definition_reports_document_path();
     test_document_symbol_is_file_scoped();
+    test_document_symbol_reports_real_kinds();
+    test_completion_kind_follows_the_symbol_kind();
+    test_document_highlight_skips_comments_and_strings();
+    test_document_highlight_off_a_word_is_null();
+    test_hover_falls_back_to_the_builtin_table();
+    test_signature_help_falls_back_to_the_builtin_table();
+    test_definition_on_a_builtin_is_still_null();
     test_signature_help();
     test_did_change_republishes();
     test_stale_index_survives_unparseable_text();
