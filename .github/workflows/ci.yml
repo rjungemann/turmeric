@@ -865,13 +865,21 @@ jobs:
       # here it contributed three standing failures (two from being pointed at
       # localhost instead of production, one from a stale hardcoded guide list),
       # which this step's continue-on-error quietly absorbed.
+      # This list is the whole of what the desktop suite runs: Playwright only
+      # picks up the paths named here, so a spec file that is not on it passes
+      # by not running -- the same trap the docs-offline note above describes,
+      # one level up. lsp.spec.js and the navigation specs
+      # (try-turmeric-navigation-and-minimap-plan §8) were written against a
+      # bundle CI is the first place to actually build, so they are named here
+      # rather than left to be discovered.
       - name: Run broader smoke suite (desktop, non-blocking)
         working-directory: web
         continue-on-error: true
         run: npx playwright test --project=desktop
           tests/smoke.spec.js tests/diag.spec.js tests/guide-toggle.spec.js
           tests/meta-commands.spec.js tests/docs-pane.spec.js
-          tests/docs-offline.spec.js
+          tests/docs-offline.spec.js tests/lsp.spec.js
+          tests/minimap.spec.js tests/footer.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
         working-directory: web
