@@ -15,9 +15,7 @@
 ;;; Option -- parameterized optional value containing either some A or none.
 ;;;
 ;;; Since: Phase TC1
-(defdata Option :copy [A]
-  (None)
-  (Some A))
+(defdata Option :copy [A] (None) (Some A))
 ;;; some -- wrap a value of type A in a some Option[A].
 ;;;
 ;;; Parameters:
@@ -31,10 +29,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some [A] [x : A]
-  #fx{Construct}
-  : (Option A)
-  (Some x))
+(defn some [A] [x : A] #fx{Construct} : (Option A) (Some x))
 ;;; none -- return the none Option[A].
 ;;;
 ;;; Returns:
@@ -47,10 +42,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn none [A]
-  #fx{Construct}
-  : (Option A)
-  (None))
+(defn none [A] #fx{Construct} : (Option A) (None))
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:
@@ -65,10 +57,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some? [A] [o : (Option A)] : bool
-  (match o
-    (Some _) true
-    (None)   false))
+(defn some? [A] [o : (Option A)] : bool (match o (Some _) true (None) false))
 ;;; none? -- check whether an Option[A] is empty.
 ;;;
 ;;; The complement of `some?`. It existed in the compiler's pure-builtin list
@@ -91,10 +80,7 @@
 ;;;
 ;;; Since: 2026-08-20
 
-(defn none? [A] [o : (Option A)] : bool
-  (match o
-    (Some _) false
-    (None)   true))
+(defn none? [A] [o : (Option A)] : bool (match o (Some _) false (None) true))
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:
@@ -110,10 +96,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn unwrap [A] [o : (Option A)] :A
-  (match o
-    (Some v) v
-    (None)   (default-of A)))
+(defn unwrap [A] [o : (Option A)] :A (match o (Some v) v (None) (default-of A)))
 ;;; unwrap-or -- extract the value or return a default.
 ;;;
 ;;; Parameters:
@@ -130,9 +113,7 @@
 ;;; Since: Phase TC1
 
 (defn unwrap-or [A] [o : (Option A) dflt : A] : A
-  (match o
-    (Some v) v
-    (None)   dflt))
+  (match o (Some v) v (None) dflt))
 ;;; unwrap-or-carrier -- carrier-ABI shim for the Track A cascade: extract the
 ;;; value from the int64 carrier Option, or return dflt.  Temporary surface
 ;;; for producers that still return the carrier Option (e.g. zipper / kleisli);
@@ -182,9 +163,7 @@
 ;;; Since: Phase TC1
 
 (defn option-map [A B] [o : (Option A) ^fat f : (fn [A] B)] : (Option B)
-  (match o
-    (Some v) (some (f v))
-    (None)   (none)))
+  (match o (Some v) (some (f v)) (None) (none)))
 ;;; option-eq? -- compare two Option[A] values using a comparator.
 ;;;
 ;;; Parameters:
@@ -204,10 +183,10 @@
                       o2 : (Option A)
                       ^fat cmp-fn : (fn [A A] bool)] : bool
   (match o1
-    (Some v1) (match o2
-                (Some v2) (cmp-fn v1 v2)
-                (None)    false)
-    (None)    (none? o2)))
+    (Some v1)
+    (match o2 (Some v2) (cmp-fn v1 v2) (None) false)
+    (None)
+    (none? o2)))
 ;;; Eq [Option] -- equality using the inner type's Eq instance.
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
 ;; SR2b: match on the sum instead of reading record fields.
@@ -216,10 +195,10 @@
   [(Eq A)]
   (eq? [x y]
     (match x
-      (Some vx) (match y
-                  (Some vy) (eq? vx vy)
-                  (None)    false)
-      (None)    (none? y))))
+      (Some vx)
+      (match y (Some vy) (eq? vx vy) (None) false)
+      (None)
+      (none? y))))
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
 ;;
@@ -237,10 +216,7 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Functor [Option]
-  (fmap [container g]
-    (match container
-      (Some v) (some (g v))
-      (None)   (none))))
+  (fmap [container g] (match container (Some v) (some (g v)) (None) (none))))
 ;;; Applicative [Option] -- pure wraps in some; ap applies a some function to a
 ;;; some argument (none when either side is none).
 ;;;
@@ -253,10 +229,10 @@
   (pure [x] (some x))
   (ap [ff fa]
     (match ff
-      (Some f) (match fa
-                 (Some a) (some (f a))
-                 (None)   (none))
-      (None)   (none))))
+      (Some f)
+      (match fa (Some a) (some (f a)) (None) (none))
+      (None)
+      (none))))
 ;;; Monad [Option] -- bind sequences through some; short-circuits on none.
 ;;;
 ;;; Example:
@@ -265,10 +241,7 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Monad [Option]
-  (bind [ma k]
-    (match ma
-      (Some v) (k v)
-      (None)   (none))))
+  (bind [ma k] (match ma (Some v) (k v) (None) (none))))
 ;;; Alternative [Option] -- empty is none; alt-or picks the first some.
 ;;;
 ;;; Example:
@@ -278,7 +251,4 @@
 
 (definstance Alternative [Option]
   (empty [a] (none))
-  (alt-or [x y]
-    (match x
-      (Some _) x
-      (None)   y)))
+  (alt-or [x y] (match x (Some _) x (None) y)))

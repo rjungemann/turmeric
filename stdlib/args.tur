@@ -134,8 +134,10 @@
   ;; none is the "required" marker: the cell stores NULL, which is what the
   ;; default-injection pass and print-help both read as "no default".
   (match dflt
-    (Some d) (args/-spec-option-raw spec name type d)
-    (None)   (args/-spec-option-raw spec name type (args/-no-default))))
+    (Some d)
+    (args/-spec-option-raw spec name type d)
+    (None)
+    (args/-spec-option-raw spec name type (args/-no-default))))
 ;;; args/spec-subcommand -- register a nested subcommand.
 ;;;
 ;;; Parameters:

@@ -16,9 +16,7 @@
 ;;; Result -- parameterized result type with ok type A and err type B.
 ;;;
 ;;; Since: Phase TC1
-(defdata Result :copy [A B]
-  (Ok A)
-  (Err B))
+(defdata Result :copy [A B] (Ok A) (Err B))
 ;;; ok -- wrap a success value of type A in a Result[A B].
 ;;;
 ;;; Parameters:
@@ -37,10 +35,7 @@
 ;;;   converted to a sum constructor in SR2b -- the dead err arm, and the
 ;;;   `(default-of B)` zero it required, are gone).
 
-(defn ok [A B] [x : A]
-  #fx{Construct}
-  : (Result A B)
-  (Ok x))
+(defn ok [A B] [x : A] #fx{Construct} : (Result A B) (Ok x))
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
 ;;; Parameters:
@@ -58,10 +53,7 @@
 ;;; Since: Phase TC1 (made polymorphic as Prereq 3, 2026-06-12; sum
 ;;;   constructor since SR2b -- no more `(default-of A)` for the dead ok arm).
 
-(defn err [A B] [e : B]
-  #fx{Construct}
-  : (Result A B)
-  (Err e))
+(defn err [A B] [e : B] #fx{Construct} : (Result A B) (Err e))
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:
@@ -117,9 +109,7 @@
 ;;; Since: Phase TC1
 
 (defn ok-val [A B] [r : (Result A B)] :A
-  (match r
-    (Ok v)  v
-    (Err _) (default-of A)))
+  (match r (Ok v) v (Err _) (default-of A)))
 ;;; err-val -- extract the error value from a typed Result[A B].
 ;;;
 ;;; Parameters:
@@ -135,9 +125,7 @@
 ;;; Since: Phase TC1
 
 (defn err-val [A B] [r : (Result A B)] :B
-  (match r
-    (Ok _)  (default-of B)
-    (Err e) e))
+  (match r (Ok _) (default-of B) (Err e) e))
 ;;; result-free -- free a heap-allocated Result[A B].
 ;;;
 ;;; Parameters:
@@ -171,9 +159,7 @@
 ;;; Since: Phase TC1
 
 (defn result-map [A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)
-  (match r
-    (Ok v)  (ok (f v))
-    (Err e) (err e)))
+  (match r (Ok v) (ok (f v)) (Err e) (err e)))
 ;;; result-eq? -- compare two Result[A B] values.
 ;;;
 ;;; Parameters:
@@ -233,12 +219,10 @@
   [(Eq A) (Eq B)]
   (eq? [x y]
     (match x
-      (Ok vx)  (match y
-                 (Ok vy)  (eq? vx vy)
-                 (Err _)  false)
-      (Err ex) (match y
-                 (Ok _)   false
-                 (Err ey) (eq? ex ey)))))
+      (Ok vx)
+      (match y (Ok vy) (eq? vx vy) (Err _) false)
+      (Err ex)
+      (match y (Ok _) false (Err ey) (eq? ex ey)))))
 ;;; result-bimap -- map fn-left over the err arm and fn-right over the ok arm.
 ;;;
 ;;; Follows the Either convention: the err arm is the "left" side and the ok
@@ -295,9 +279,7 @@
 
 (definstance Bifunctor [Result]
   (bimap [container fn-left fn-right]
-    (match container
-      (Ok v)  (ok (fn-right v))
-      (Err e) (err (fn-left e)))))
+    (match container (Ok v) (ok (fn-right v)) (Err e) (err (fn-left e)))))
 ;; ---------------------------------------------------------------------------
 ;; Ok-biased kind-(* -> *) instances (stdlib-hkt-consolidation T4)
 ;;
@@ -315,10 +297,7 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Functor [(Result _ B)]
-  (fmap [container g]
-    (match container
-      (Ok v)  (ok (g v))
-      (Err e) (err e))))
+  (fmap [container g] (match container (Ok v) (ok (g v)) (Err e) (err e))))
 ;;; Monad [(Result _ B)] -- bind sequences through ok; short-circuits on err.
 ;;;
 ;;; Example:
@@ -327,10 +306,7 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Monad [(Result _ B)]
-  (bind [ma k]
-    (match ma
-      (Ok v)  (k v)
-      (Err e) (err e))))
+  (bind [ma k] (match ma (Ok v) (k v) (Err e) (err e))))
 ;;; MonadError [(Result _ B)] -- throw-error builds an err; catch-error runs a
 ;;; handler on the err payload (ok values pass through unchanged).
 ;;;

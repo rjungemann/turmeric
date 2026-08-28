@@ -20,7 +20,9 @@
 
 (defn env-or [name : cstr dflt : cstr] : cstr
   (let [v (env/get name)]
-    (if (.is-some v) (.value v) dflt)))
+    (match v
+      (Some s) s
+      (None)   dflt)))
 
 (defn main [] : void
   (println (str-concat "Environment variables: "
