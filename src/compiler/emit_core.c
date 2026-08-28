@@ -4584,6 +4584,26 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * `false` for two equal `(some v)` -- which is the failure class this whole
      * family ships and the reason the gate asserts values, not builds. */
     if (adt_app_is_niche_option(concrete_ty)) {
+        /* Inline-C carrier producer feeding a carrier sink: the "concrete"
+         * source is a bare temp whose RECORDED emitted spelling is already the
+         * int64 carrier word (`(vec-push! v (mk-c 1))` -- mk-c's inline-C body
+         * returns tur_some_ptr's box).  Its TYPE is the niche, which is what
+         * routed the call here, but the VALUE never took the niche form, so
+         * "materialize the carrier from the niche" would wrap the box in a
+         * second box (`tur_box_some(box)`) and the reader would unwrap one
+         * layer and hand the inner box to the consumer as the payload.  The
+         * value is already exactly what the carrier sink wants: pass it
+         * through.  Same key as every other inline-C-producer bridge (the
+         * localvar side table), so a genuine niche value -- whose recorded
+         * spelling is the payload's pointer type -- still materializes. */
+        if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER &&
+            emit_str_is_bare_ident(src_str)) {
+            const char *rec = emit_localvar_lookup_ctype(src_str);
+            if (rec && strcmp(rec, "int64_t") == 0) {
+                buf_free(&out);
+                return src_str;
+            }
+        }
         char *ntmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER) {
@@ -4855,9 +4875,18 @@ char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
      *    the aggregate heap-promote below and boxes the pointer into a `T **`.
      *  - inline scalar: a union reinterpret, no address taken.
      *  - pointer-sized leaf (cstr/ptr<void>/int*): already int64-compatible,
-     *    no address taken. */
+     *    no address taken.
+     *  - niche `(Option P)`: the value IS a payload pointer, and the standard
+     *    bridge's niche row (`p ? tur_box_some(p) : 0`) already heap-allocates
+     *    the carrier box it hands back, so it escapes safely.  Falling into
+     *    the aggregate heap-promote below instead boxed the payload pointer
+     *    into a bare `P **` cell -- which the carrier->concrete reader then
+     *    read as a tagged Option box, so the FIRST element of
+     *    `(vec-of (some s) ...)` came back `(none)` while the second (routed
+     *    through the standard bridge at a different site) was correct. */
     if (src_ck != CK_CONCRETE || sink_ck != CK_CARRIER ||
         type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty) ||
+        adt_app_is_niche_option(concrete_ty) ||
         carrier_is_inline(concrete_ty.kind)) {
         return emit_carrier_bridge(ctx, body, src_str, src_ck, sink_ck,
                                    concrete_ty);

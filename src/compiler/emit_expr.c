@@ -6841,6 +6841,56 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             free(tmp);
                         }
                     }
+                    /* SR3 slice B (inline-C carrier producer, ctor-argument
+                     * position): `(Holder (mk-opt 1))` where mk-opt's inline-C
+                     * body returns tur_some_ptr's CARRIER box and Holder's
+                     * field is a niche `(Option String)`.  Ctor calls never
+                     * pass through the generic arg loop, so the niche arm
+                     * added there cannot see them -- and the case-A straddle
+                     * below is a pure CAST, which for a niche crossing would
+                     * store the box pointer as the payload (silent wrong
+                     * answer; see docs/reported/option-niche-inline-c-carrier-
+                     * crossings-incomplete.md).  Same key as the other three
+                     * bridged positions: the field's resolved type takes the
+                     * niche and the argument's RECORDED emitted spelling is
+                     * the carrier word.  Placed BEFORE the straddle so the
+                     * bridge, not the cast, wins; the bridged spelling starts
+                     * with '(' so the straddle's bare-ident tests skip it. */
+                    {
+                        const CtorDef *_nctor = e->as.call_.ctor;
+                        if (_nctor && _nctor->fields && i < _nctor->n_fields &&
+                            arg_strs[i] && emit_str_is_bare_ident(arg_strs[i])) {
+                            /* Owned substitution + free after the bridge, the
+                             * accessor-site pattern: the plain
+                             * adt_field_type_for_app leaks its TY_APP spine,
+                             * which the compiler's own leak gate fails on. */
+                            Type _fty = {0};
+                            bool _fty_owned = false;
+                            if (have_family && _nctor->fields[i].full_type) {
+                                AdtDef *_fd = NULL;
+                                Type _fargs[16];
+                                uint8_t _fn = 0;
+                                if (type_extract_adt_app(&ctor_family, &_fd,
+                                                         _fargs, &_fn) && _fd) {
+                                    _fty = substitute_adt_app_type_owned(
+                                        _nctor->fields[i].full_type, _fd, _fargs);
+                                    _fty_owned = (_fty.kind == TY_APP);
+                                }
+                            } else if (_nctor->fields[i].full_type) {
+                                _fty = emit_resolve_type(
+                                    ctx, *_nctor->fields[i].full_type);
+                            }
+                            if (adt_app_is_niche_option(_fty)) {
+                                const char *aty =
+                                    emit_localvar_lookup_ctype(arg_strs[i]);
+                                if (aty && strcmp(aty, "int64_t") == 0)
+                                    arg_strs[i] = emit_carrier_bridge(
+                                        ctx, body, arg_strs[i],
+                                        CK_CARRIER, CK_CONCRETE, _fty);
+                            }
+                            if (_fty_owned) free_struct_app_type(_fty);
+                        }
+                    }
                     /* macos-int-conversion-carrier-pointer-straddles (case A):
                      * last word on the pointer<->carrier straddle at a
                      * monomorphized ctor's field slot.  Every cast above
@@ -12296,6 +12346,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_puts(body, "{\n");
                 ctx->indent += 4;
+
+                /* SR3 slice B (inline-C carrier producer, match-scrutinee
+                 * position): `(match (mk-opt 1) ...)` where mk-opt's inline-C
+                 * body returns tur_some_ptr's CARRIER box.  The niche bind
+                 * below assumes the scrutinee is already the payload pointer,
+                 * so without this the box pointer became `__scrut` and the
+                 * `Some` binder handed the tagged box to every arm body --
+                 * silent wrong answer (see docs/reported/option-niche-inline-c-
+                 * carrier-crossings-incomplete.md).  Same key as the let-bind
+                 * and call-arg bridges: the value's RECORDED emitted spelling
+                 * is the carrier word, so a niche-producing Turmeric scrutinee
+                 * (already the payload) is never double-bridged. */
+                if (adt_niche && emit_str_is_bare_ident(scrut_val)) {
+                    const char *svty = emit_localvar_lookup_ctype(scrut_val);
+                    if (svty && strcmp(svty, "int64_t") == 0)
+                        scrut_val = emit_carrier_bridge(ctx, body, scrut_val,
+                                                        CK_CARRIER, CK_CONCRETE,
+                                                        scrut_ty);
+                }
 
                 indent_buf(body, ctx->indent);
                 if (adt_byval_pbp) {

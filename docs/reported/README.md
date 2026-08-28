@@ -287,7 +287,16 @@ the plan links. File a new repr cell there as well as here.
 
 | Report | Severity | One line |
 |---|---|---|
-| [option-niche-inline-c-carrier-crossings-incomplete](option-niche-inline-c-carrier-crossings-incomplete.md) | medium | Under `--enable=option-niche`, an inline-C `tur_some_ptr` producer consumed directly as a match scrutinee or a constructor argument binds the carrier box as the payload -- silent wrong answer; let-binding, call-arg and return positions are bridged, container/capture/rest positions unaudited |
+| [inline-c-carrier-producer-byval-container-element](inline-c-carrier-producer-byval-container-element.md) | low-medium | On the DEFAULT path, an inline-C `(Option String)` producer passed directly as a `vec-of` element is a cc `incompatible types` error (carrier int64 into the by-value monomorph slot); binding it in a `let` first works, and under `--enable=option-niche` the same shape already works |
+
+`option-niche-inline-c-carrier-crossings-incomplete` was resolved 2026-08-28
+(same day it was filed) and moved to
+[docs/archive](../archive/option-niche-inline-c-carrier-crossings-incomplete.md):
+both named positions bridged, plus two more the audit found (`vec-of` first
+element heap-promoted to a `P **` cell; `vec-push!` double-boxing an
+already-carrier value), capture audited clean, rest args unreachable by the
+annotation grammar. Pinned by `tests/fixtures/option-niche-crossings`. The
+default-path row above is the one adjacent finding that stayed open.
 
 Both rows that were here before the consolidation campaign are archived
 (2026-08-21).

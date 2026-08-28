@@ -1,5 +1,41 @@
 # Inline-C Option carriers still cross unbridged into two niche positions
 
+> **RESOLVED 2026-08-28, same day.** Both open positions are bridged, and the
+> audit of the unaudited row found and fixed two more the filing did not know
+> about:
+>
+> - **Match scrutinee** -- bridged before the `__scrut` bind in the if-chain's
+>   niche arm (emit_expr.c), keyed on the value's recorded emitted spelling.
+> - **Constructor argument** -- the same bridge added to the ctor arm's arg
+>   loop, placed ahead of the case-A straddle cast so the value change, not a
+>   relabel, wins; field type recovered via the owned app substitution
+>   (the plain variant leaks its spine, which the compiler's own leak gate
+>   caught on the first suite run).
+> - **`vec-of` first element** (found by the audit): the escaping bridge
+>   variant heap-promoted the niche payload into a bare `P **` cell while the
+>   SECOND element's site went through the standard bridge's carrier box --
+>   two stores in one expression disagreeing with each other and the reader.
+>   `emit_carrier_bridge_escaping` now delegates niche options to the standard
+>   bridge, whose carrier box is heap-allocated and escapes safely.
+> - **`vec-push!` of an inline-C producer** (found by the audit): the
+>   concrete->carrier niche arm double-boxed a value that was ALREADY the
+>   carrier (`tur_box_some(box)`); the bridge now passes a
+>   recorded-carrier-spelled source through unchanged.
+> - **Closure capture**: audited clean (captures are variables, and the
+>   let-binding bridge has already normalized the value by then).
+> - **Variadic rest**: unreachable -- a rest annotation cannot be a type
+>   application (`& rest : (Option String)` is rejected by the checker), so no
+>   niche Option can enter the position.
+>
+> All pinned by `tests/fixtures/option-niche-crossings` (match, ctor field,
+> four-element mixed-producer `vec-of`, capture, mixed-producer `vec-push!`).
+> Suite 2716/0 with the experiment off and on; turi 1868/0.
+>
+> One adjacent finding was NOT this report's and stays open:
+> [inline-c-carrier-producer-byval-container-element](../reported/inline-c-carrier-producer-byval-container-element.md)
+> -- the same `(vec-of (mk-c 1))` shape fails on the DEFAULT path too, as a
+> loud compile error, and predates the niche entirely.
+
 **Severity: medium** (silent wrong answers, but only reachable under
 `--enable=option-niche`, a prototype experiment that is off by default).
 Filed 2026-08-28, the same day the experiment landed.

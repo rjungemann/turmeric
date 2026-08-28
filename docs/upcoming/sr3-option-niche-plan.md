@@ -1,7 +1,7 @@
 ---
 title: SR3 slice B -- Option niche filling (--enable=option-niche)
 category: Planning
-description: An `(Option P)` over a non-nullable pointer carried AS that pointer -- 16 bytes to 8, `(none)` as NULL, no tag word. Unshelved once a pointer `defopaque` got a pointer C spelling, which is what admits `(Option String)` and with it the whole census. The codegen is done and the corpus is green; eligibility is a `:non-null` declaration on the payload type (enforced at the Some ctor) for opaques plus a short compiler-warranted list for the heap collections; what keeps it a prototype is the unaudited inline-C crossings and that the declaration is runtime-checked, not proven.
+description: An `(Option P)` over a non-nullable pointer carried AS that pointer -- 16 bytes to 8, `(none)` as NULL, no tag word. Unshelved once a pointer `defopaque` got a pointer C spelling, which is what admits `(Option String)` and with it the whole census. The codegen is done and the corpus is green; eligibility is a `:non-null` declaration on the payload type (enforced at the Some ctor) for opaques plus a short compiler-warranted list for the heap collections; what keeps it a prototype is that the declaration is runtime-checked, not proven.
 ---
 
 # SR3 slice B -- Option niche filling
@@ -62,9 +62,21 @@ plus the crossings between a niche value and a carrier value:
 
 | crossing | site |
 |---|---|
-| Turmeric value <-> carrier | `emit_carrier_bridge` (emit_core.c): `p ? tur_box_some(p) : 0` out, `c ? tur_opt_value(c) : 0` back |
-| inline-C producer -> niche let-binding | emit_expr.c let/letrec (added 2026-08-28) |
-| inline-C producer -> niche call argument | emit_expr.c arg loop (added 2026-08-28) |
+| Turmeric value <-> carrier | `emit_carrier_bridge` (emit_core.c): `p ? tur_box_some(p) : 0` out, `c ? tur_opt_value(c) : 0` back -- and the CONCRETE->CARRIER direction passes a recorded-carrier-spelled source through unchanged, so an already-carrier inline-C value is never double-boxed |
+| inline-C producer -> niche let-binding | emit_expr.c let/letrec |
+| inline-C producer -> niche call argument | emit_expr.c arg loop |
+| inline-C producer -> match scrutinee | emit_expr.c if-chain niche arm, bridged before the `__scrut` bind |
+| inline-C producer -> constructor argument | emit_expr.c ctor arg loop, ahead of the case-A straddle cast |
+| niche value -> escaping container element | `emit_carrier_bridge_escaping` delegates a niche option to the standard bridge (its carrier box is heap-allocated, so it escapes safely) instead of heap-promoting the payload into a bare `P **` cell |
+
+Every row keys on the value's RECORDED emitted C spelling (the localvar side
+table), never on its type alone -- a niche-producing Turmeric value is already
+the payload and must not be double-bridged.  Audited clean with no change
+needed: closure captures (captures are variables; the let-binding bridge has
+normalized the value by then).  Unreachable: variadic rest (a rest annotation
+cannot be a type application, so the checker rejects `& rest : (Option
+String)` before codegen).  All pinned by
+`tests/fixtures/option-niche-crossings`.
 
 The last two are the hole the first gate could not have found. An inline-C body
 declared `: (Option String)` builds its result with the preamble's typed
@@ -145,13 +157,15 @@ output.
 
 ## What is left
 
-1. **The unbridged inline-C carrier crossings.** Filed as
-   [option-niche-inline-c-carrier-crossings-incomplete](../reported/option-niche-inline-c-carrier-crossings-incomplete.md):
-   a `tur_some_ptr` producer consumed directly as a match scrutinee or a
-   constructor argument still binds the carrier box as the payload (silent
-   wrong answer); let-binding, call-argument and return positions are bridged;
-   container elements, captures and rest args are unaudited. This is the
-   correctness blocker.
+1. ~~The unbridged inline-C carrier crossings~~ -- **closed 2026-08-28**
+   ([archived report](../archive/option-niche-inline-c-carrier-crossings-incomplete.md)):
+   match scrutinee and ctor argument bridged, and the audit found and fixed two
+   more (the `vec-of` first-element heap-promotion and the `vec-push!`
+   double-box); captures clean, rest args unreachable. One ADJACENT finding
+   stays open on the DEFAULT path --
+   [inline-c-carrier-producer-byval-container-element](../reported/inline-c-carrier-producer-byval-container-element.md)
+   (a loud compile error, not a wrong answer; the niche path already handles
+   the shape, which is the fix template).
 2. **Static enforcement of `:non-null`**, upgrading the runtime abort to a
    compile-time check where possible -- e.g. flag `(:: <literal 0> T)` into a
    non-null opaque as an error, or lean on `:sealed` to bound who can coerce at
