@@ -2,7 +2,27 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.40.0] -- 2026-08-28
+
+### Added
+
+- **Try Turmeric navigation (M0-M5, F1).** A minimap with blocks and a
+  three-lane overview ruler, gated on measured editor width with a persisted
+  override; a Symbols popover fed by the `documentSymbol` provider, sorted by
+  position, kind-labelled and caret-tracking; go-to-definition into the stdlib,
+  opening a read-only padlocked buffer excluded from downloads, persistence and
+  the server's document set, with F12, Cmd+click and a Back button that appears
+  only when there is somewhere to go; `documentHighlight` that skips comments,
+  strings and inline-C fences; hover that falls back to the documentation table
+  when the checker has nothing, marked as docs-sourced; and `builtin_describe`,
+  so `println`, `+`, `=` and `not` hover to something at all. A C-interpreter
+  link joins the site footer, the `/try` footer and the sidebar's Ecosystem
+  list.
+
+- **CI metrics page at `/ci`.** Every push to `main` publishes each ctest
+  suite's wall time to the `ci-metrics` branch; the page reads one build
+  environment at a time and shows duration trends, per-suite sparklines and the
+  skip ledger.
 
 ### Changed
 
@@ -25,6 +45,14 @@ All notable changes to Turmeric are documented here.
   `: int` now names its type at the boundary -- `(ok? (:: r (Result int int)))`
   -- exactly as it already did for `some?`.
 
+- **SR3's Option niche is shelved, not shipped.** The representation was gated
+  behind `TUR_SR3_OPTION_NICHE=1` (default off) and measured. It works, and one
+  erased-crossing bug it exposed is fixed regardless -- a typeclass `Eq`
+  dictionary read the low half of a spilled niche pointer as a tag and returned
+  a silent wrong answer for two equal `(some v)`. What shelves the phase is the
+  population: the niche claims `0` for `None`, so every payload that has already
+  spent its null (`Cons`'s `nil` *is* `0`) is ineligible.
+
 ### Fixed
 
 - **Seven representation-crossing defects** the by-value default exposed, each
@@ -38,6 +66,14 @@ All notable changes to Turmeric are documented here.
   a value, an argument spilled to a carrier sink at its static rather than its
   specialized type, a poly-wrapper argument unboxed twice, and the catch-unwind
   group trampoline saving an aggregate-returning member through a scalar cast.
+
+- **CI suites that were passing by not running.** The browser job's desktop step
+  runs a fixed spec list, so `minimap.spec.js`, `footer.spec.js` and
+  `lsp.spec.js` asserted nothing until they were named (51 tests -> 87). The
+  mobile project is WebKit but the job only installed Chromium, so all 32 of its
+  tests died at launch behind a `continue-on-error`. Also `tur fmt`'s canonical
+  one-line form for the retyped `ok?`/`err?`, and a `docs/reported/README.md`
+  row left pointing at an archived report.
 
 ## [0.39.0] -- 2026-08-27
 

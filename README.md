@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.39.0` -- `Option` and `Result` are real `defdata` sums that flow by value and `(none)` allocates nothing, Try Turmeric gained a precached offline docs browser alongside `tur docs --open`, and a high-severity miscompile that deleted discarded parametric calls in statement position is fixed.
+**Latest release:** `v0.40.0` -- parametric sum monomorphs flow by value by default now that SR2a has graduated, and Try Turmeric gained a minimap, a Symbols outline, and go-to-definition into the stdlib.
 
 ## What
 
