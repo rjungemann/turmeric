@@ -329,17 +329,14 @@ process / future / weak / refined / args / typeclass-show), and the fixture
 population -- speaks the tagged monomorph layout `{ int tag; union { ... }
 as; }` (16 bytes for both types; `Result` down from 24, the dead arm gone).
 The historical none-as-NULL is still accepted on the READ side (`tur_is_some(0)`
-is false, and a carrier match reads a NULL scrutinee as tag 0).  On the
-default path values ride the int64 carrier; under
-`--enable=parametric-sum-byvalue` (the SR2c experiment row) / the
-`TUR_SR2_APP_SUM_BYVALUE=1` seam they flow by value.  The tree-walking
-interpreter builds and matches ctor-named values ("Some"/"None"/"Ok"/"Err")
-with the legacy box shapes still readable.  Validation at landing: full
-compiled suite 2712/0, interpreter suite 1867/0, sr2-seam 12/12, sr4-seam
-24/24.  Known cost, filed not hidden: carrier-riding sum boxes have no
-automatic owner
-([reported](../reported/carrier-sum-option-boxes-have-no-owner.md)) --
-byvalue graduation is the ending that removes the box entirely.
+is false, and a carrier match reads a NULL scrutinee as tag 0).  **Concrete
+monomorphs now flow BY VALUE by default** -- SR2a graduated 2026-08-27, see
+SR2c below; a shape the by-value predicate declines (self-recursive, `:heap`,
+GADT, fixpoint partner) or an erased generic base still rides the int64
+carrier.  The tree-walking interpreter builds and matches ctor-named values
+("Some"/"None"/"Ok"/"Err") with the legacy box shapes still readable.
+Validation at landing: full compiled suite 2712/0, interpreter suite 1867/0,
+sr2-seam 12/12, sr4-seam 24/24.
 
 The payoff phase, and the reason SR1 is worth doing.
 
@@ -381,11 +378,64 @@ work, and `vec<option<T>>` is that shape).
 populated, `experiment_warn_if_used` at the elaboration entry point, and
 `plan_path` pointing here.
 
-### SR3 -- niche filling -- GATE RUN 2026-08-27; slice A SHIPPED, slice B held
+### SR2c -- the experiment row -- **GRADUATED 2026-08-27**
+
+`--enable=parametric-sum-byvalue` is retired.  `sr2_app_sum_byvalue()` reads a
+default-`true` `g_sr2_app_sum_byvalue`; `TUR_SR2_APP_SUM_BYVALUE=0` restores the
+carrier for bisection, read once in `main.c` exactly as SR1's is.  The name is
+in `GRADUATED[]`, so a lingering `--enable` is a TUR-W0063 no-op for one minor
+line.  `tests/run-sr2-seam.sh` and its `tur_sr2_seam` ctest target are retired
+with it: the harness existed because nothing in CI compiled a parametric sum by
+value, and now every `bash tests/run.sh` compiles all eleven of its fixtures
+that way.
+
+**The row's soak had exactly one job** -- do not fix the ABI before SR2b, its
+heaviest client, exists -- and SR2b landed in-tree, then across the spices
+(`turmeric-spices` #59, "migrate every spice off the pre-sum Option/Result
+layout").  `expires_at` was 0.42.0 and nowhere near; graduating early is the
+routine case, not the exception.
+
+**The flip cost 21 fixtures, and the gate document could not have predicted
+them.** Its "2711/0 under the seam" was measured *before* SR2b, when Option and
+Result were still discriminated records -- so the seam only moved user ADTs.
+Once the two most-used types in the language are the population, seven distinct
+defects surfaced, every one a place where two spellings agreed only because a
+parametric sum monomorph rode the carrier and both c-named to `int64_t`:
+
+| defect | where |
+|---|---|
+| the carrier->by-value readback's NULL guard lived in the pre-SR2b single-ctor RECORD branch, so `(some? (:: (lookup 3) (Option int)))` deref'd `TUR_NONE` | `emit_carrier_bridge`, emit_core.c |
+| a match on an erased instance base's param bound the aggregate from an `int64_t` slot (`ap`'s `ff : (Option (fn [a] b))`) | match scrutinee, emit_expr.c |
+| the same match resolving its element from a DIFFERENT instantiation than the active spec passes | match scrutinee, emit_expr.c |
+| an Option/Result pointer-box payload slot (`tur_adt_ArithError *`) bound as a value | match field binder, emit_expr.c |
+| a by-value spec param spilled to a carrier sink at its STATIC type -- the repr-shadow ICE at `arg-bridge` | call arg bridge, emit_expr.c |
+| SR1's carrier->by-value-sum arg rule stacking on the poly-wrapper's own unbox, double-deref'ing | call arg bridge, emit_expr.c |
+| the catch-unwind GROUP trampoline never set `mem_ret_aggr[]` past member 0, so an aggregate-returning member saved through a scalar cast | `gs_build` caller, emit_fns.c |
+
+Two source-side changes came with it, both of them the CLAUDE.md `:int`
+stand-in rule catching up with the representation:
+
+- **`ok?` / `err?` are now `[A B] [r : (Result A B)]`**, match-bodied, like
+  `some?` / `ok-val` / `err-val` before them.  They were the last carrier-typed
+  Result accessors, and an `:int` parameter stops being a harmless erasure the
+  moment the value flows by value -- it becomes a straddle every caller has to
+  spill across.  Inline-C carrier producers name their type at the boundary now
+  (`(ok? (:: (safe-div 10 2) (Result int int)))`), exactly as they already did
+  for `some?`.
+- **`arc-weak-upgrade` dropped its manual `option-free` calls.** They were
+  added under SR2b to release the carrier box; by value there is no box, and
+  the call is a `free()` of a stack slot.
+
+### SR3 -- niche filling -- slice A SHIPPED, slice B GATED AND SHELVED 2026-08-27
 
 Once `Option` is a real sum, `None` can be represented as the null pointer for
 pointer-payload elements, taking `Option<ptr<T>>`, `option<Vec T>`,
 `option<Cons T>` from 16 bytes to 8.
+
+**Two of those three examples are wrong, and the gate is how we found out.**
+`Option<ptr<T>>` cannot take the niche because a `:ptr<T>` may legitimately be
+null; `option<Cons T>` cannot because the empty list already IS 0. Slice B's
+section below has the detail.
 
 Plausibly the largest of the three size wins, given how common those shapes are
 -- `option<vec<...>>` and `option<Cons ...>` were exactly the shapes the
@@ -416,8 +466,38 @@ peaks at 64 MB.  It also shrinks the
 to Some/Ok/Err constructions only.  Validation: full suite 2712/0, turi
 1867/0, sr2-seam 12/12, sr4-seam 24/24.
 
-**Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- HELD, and
-here is the obstacle.** The compiled pipeline's default path is semi-erased:
+**Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- GATE RUN
+2026-08-27, SHELVED.** Full results in
+[sr3-slice-b-gate-results.md](sr3-slice-b-gate-results.md); the seam is in the
+tree as `TUR_SR3_OPTION_NICHE=1`, default off and provably inert (suite green
+both ways).
+
+**The recommendation below -- fold slice B into the graduation -- was followed,
+and it was half right.** The obstacle it names DID dissolve: after SR2a a
+concrete Option consumer specializes, so `some?`/`unwrap` compile against the
+niche representation directly and the bridge the plan feared as a long tail is
+ONE chokepoint (`emit_carrier_bridge`). The suite found exactly one erased
+crossing left -- a typeclass `Eq` dictionary -- and it was a silent wrong
+answer until that chokepoint was taught the crossing.
+
+**What shelves it is the population, which neither the plan nor its census
+checked for eligibility.** The niche claims 0 for `None`, so a payload type
+that has already spent its null cannot take it, and two disqualifications
+between them cover the entire census:
+
+- **`Cons`'s nil IS 0** ("At runtime, nil is 0" -- stdlib/list.tur; `(defn tnil
+  [] : int 0)`), so `(some (tnil))` would read as `(none)`.
+- **`String` c-names to `int64_t`**, as every `defopaque` does whatever its
+  declared `:ptr<void>`, so its niche form would be byte-indistinguishable from
+  the CARRIER form and every `strcmp(cname, "int64_t")` site would deref the
+  payload as a box.
+
+That leaves `option<Vec T>` / `option<Map ...>` / `option<Set ...>`: **one file
+in the tree**. The actionable follow-up is not slice B -- it is giving
+`defopaque` over a pointer a pointer C spelling, which makes `String` eligible
+and is the whole census.
+
+The original obstacle, as scoped before the gate: The compiled pipeline's default path is semi-erased:
 generic bases (`unwrap`, `some?`, every instance-method carrier base) receive
 `(Option A)` as one int64 for EVERY `A` and read `->tag` through one shared
 layout.  A niche-filled value entering such a base would have its "tag" read

@@ -3,10 +3,11 @@
 ;;; First-class parameterized optional value, as a REAL SUM (SR2b of
 ;;; docs/upcoming/sum-representation-plan.md): `(None)` or `(Some A)`.
 ;;; Runtime layout is the tagged monomorph -- { int tag; union { None; Some } }
-;;; -- 16 bytes, with no dead arm to zero-fill.  On the default path values
-;;; ride the int64 carrier (a heap pointer to that layout); under
-;;; `--enable=parametric-sum-byvalue` they flow by value with no per-ctor
-;;; allocation.  Tag values follow declaration order: None = 0, Some = 1.
+;;; -- 16 bytes, with no dead arm to zero-fill.  A concrete monomorph flows BY
+;;; VALUE with no per-ctor allocation (SR2a, default since 2026-08-27); an
+;;; erased generic base still rides the int64 carrier, a heap pointer to the
+;;; same layout, and `(none)` IS the null pointer there (SR3 slice A).
+;;; Tag values follow declaration order: None = 0, Some = 1.
 ;;; The inline-C helpers in the codegen preamble (tur_box_some / tur_is_some /
 ;;; tur_opt_value / tur_some_ptr / tur_none) build and read this exact layout;
 ;;; keep them in lockstep with this declaration.

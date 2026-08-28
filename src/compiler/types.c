@@ -6,7 +6,7 @@
 #include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
 #include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
 #include "mangle.h"
-#include "runtime/experiments.h"  /* SR2a: parametric-sum-byvalue lifecycle warning */  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
+/* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1412,6 +1412,96 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
            strcmp(ctor->name, "None") == 0;
 }
 
+/* SR3 slice B prototype gate (docs/upcoming/sum-representation-plan.md SR3):
+ * TUR_SR3_OPTION_NICHE=1 represents an `(Option P)` monomorph whose payload is
+ * a NON-NULLABLE pointer as the bare payload pointer -- 16 bytes down to 8,
+ * with `(none)` as the null pointer.  Slice A already made the CARRIER None the
+ * null pointer, so the two representations already agree about None; what this
+ * adds is Some carried AS its payload, with no tag word anywhere.
+ *
+ * Default off, on the SR1/SR2/SR4 seam precedent. */
+static bool sr3_option_niche(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("TUR_SR3_OPTION_NICHE");
+        cached = (e && e[0] == '1') ? 1 : 0;
+    }
+    return cached == 1;
+}
+
+/* The soundness condition for the niche is "P's valid values EXCLUDE 0",
+ * because that is the bit pattern None claims.  Nothing in the type system
+ * records non-nullness, so this is an explicit ALLOWLIST rather than an
+ * inference -- and the polarity matters: an unrecognised payload merely misses
+ * the optimisation, where a denylist that missed an entry would make
+ * `(some x)` and `(none)` the same value.
+ *
+ * `:heap`-ness is NOT the condition, which is the finding that shrank this
+ * phase.  `Cons` is a `:heap` record ADT whose EMPTY LIST is the null handle
+ * ("At runtime, nil is 0" -- stdlib/list.tur, and `(defn tnil [] : int 0)`), so
+ * `(Option (Cons T))` would read `(some (tnil))` as `(none)`.  `option<Cons ...>`
+ * is one of the two shapes the SR3 census names as the motivation, so half the
+ * motivating population is ineligible and invisibly so.
+ *
+ * What IS on the list, and why:
+ *   Vec / Map / Set / MutableMap -- `:heap` collections whose constructors
+ *     always malloc a header; an empty one is a valid non-null handle.
+ *   String / StringBuilder      -- `defopaque ... :ptr<void>` over
+ *     tur_string_from_bytes, which mallocs unconditionally and has no NULL
+ *     return path.
+ * A `:ptr<T>`, a `cstr`, or a bare closure handle is never eligible: null is a
+ * value each of them can legitimately hold. */
+static bool sr3_payload_is_nonnull_pointer(Type p) {
+    const char *nm = NULL;
+    if (p.kind == TY_ADT && p.as.adt_.def) nm = p.as.adt_.def->name;
+    else {
+        AdtDef *pdef = NULL;
+        Type pargs[16];
+        uint8_t pn = 0;
+        Type pt = p;
+        if (type_extract_adt_app(&pt, &pdef, pargs, &pn) && pdef) nm = pdef->name;
+    }
+    if (!nm) return false;
+    static const char *const ALLOW[] = {
+        "Vec", "Map", "Set", "MutableMap", NULL
+    };
+    bool allowed = false;
+    for (uint32_t i = 0; ALLOW[i] && !allowed; i++)
+        if (strcmp(nm, ALLOW[i]) == 0) allowed = true;
+    if (!allowed) return false;
+    /* And the payload's C spelling must be a real POINTER, not the int64
+     * carrier word.  This is the condition that rules `String` out, and it is
+     * about telling representations apart rather than about null: `(defopaque
+     * String :ptr<void>)` c-names to `int64_t`, so a niche `(Option String)`
+     * would be spelled `int64_t` -- byte-identical to the CARRIER form of the
+     * same type, which is a pointer to a tagged box.  Every `strcmp(cname,
+     * "int64_t")` test in the emitter (there are dozens) would then read a
+     * niche value as a carrier box and dereference the payload's first word as
+     * a tag.  A distinguishable spelling is what makes the niche safe to mix
+     * with the carrier at all. */
+    const char *pc = type_c_name(p);
+    return pc && strchr(pc, '*') != NULL;
+}
+
+/* True when `t` is an `(Option P)` monomorph eligible for the SR3 slice B
+ * niche.  Shape-pinned exactly as adt_ctor_is_null_none is (a user ADT that
+ * happens to be called Option but is shaped differently never takes it), plus
+ * the payload allowlist above. */
+bool adt_app_is_niche_option(Type t) {
+    if (!sr3_option_niche()) return false;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
+    if (n_args != 1 || def->n_ctors != 2 || !def->ctors) return false;
+    if (!def->ctors[0] || !def->ctors[1]) return false;
+    if (!adt_ctor_is_null_none(def, def->ctors[0])) return false;
+    if (def->ctors[1]->n_fields != 1 || !def->ctors[1]->name ||
+        strcmp(def->ctors[1]->name, "Some") != 0) return false;
+    if (!adt_app_type_arg_is_concrete(&args[0])) return false;
+    return sr3_payload_is_nonnull_pointer(args[0]);
+}
+
 bool adt_field_is_ros_pointer_box(const AdtDef *owner, const Type *resolved) {
     if (!owner || !owner->name || !resolved) return false;
     if (strcmp(owner->name, "Result") != 0 && strcmp(owner->name, "Option") != 0)
@@ -1578,7 +1668,14 @@ static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
     snprintf(ret_heap, sizeof ret_heap, "%s *", name.data);
     bool app_heap  = def->is_heap;
     bool app_byval = adt_app_is_byvalue_product(t);
-    const char *ctor_ret = app_heap ? ret_heap
+    /* SR3 slice B: a niche ctor returns the PAYLOAD's C type -- this table is
+     * what the call-site temp is declared from (`emit_sig_lookup_ret_ctype`),
+     * so recording the tagged monomorph name here spells a struct that has no
+     * definition.  Must stay in lockstep with emit_registered_adt_app_rec's
+     * `ctor_ret`, exactly as this function's header comment says. */
+    bool app_niche = adt_app_is_niche_option(t);
+    const char *ctor_ret = app_niche ? type_c_name(t)
+                         : app_heap ? ret_heap
                          : app_byval ? name.data : "int64_t";
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
@@ -1768,9 +1865,15 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
      * typedef for the same instantiation, a third TU including both fails
      * with `redefinition` (each anonymous-struct typedef makes a fresh tag).
      * Per-instantiation include guard keyed on the mangled name. */
+    bool flat = adt_is_flat_product(def);
+    /* SR3 slice B: a niche-filled `(Option P)` has no struct at all -- its C
+     * type IS P's, so there is no typedef to emit.  Emitting one anyway would
+     * define a `tur_adt_Option__String` nothing references, and `type_c_name`
+     * (which answers P's name for this type) would never spell it. */
+    bool app_niche = adt_app_is_niche_option(g_adt_apps[idx].type);
+    if (!app_niche) {
     buf_printf(out, "#ifndef TUR_TY_%s\n", adt_inst_name);
     buf_printf(out, "#define TUR_TY_%s\n", adt_inst_name);
-    bool flat = adt_is_flat_product(def);
     /* CONV-S1 seam 4 (keystone): a single-variant record monomorph carries the
      * record's real field names (`{ T data; ... }`) -- the parametric analogue
      * of the non-parametric named layout -- so inline-C that reads it by field
@@ -1838,6 +1941,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "} %s;\n", adt_inst_name);
     buf_printf(out, "#endif\n\n");
     }
+    }   /* !app_niche */
 
     /* Build the type-arg suffix (e.g. "__float"). */
     Buf suffix; buf_init(&suffix);
@@ -1895,8 +1999,27 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * :heap struct ctor.  Fields are stored INLINE by value in the header
          * (no int64 carrier box) -- the pointer indirection is the whole point. */
         bool app_heap = def->is_heap;
-        const char *ctor_ret = app_heap ? heap_ptr_c_name(adt_inst_name)
+        /* SR3 slice B: a niche ctor is the identity on the payload.  `Some`
+         * returns its argument unchanged and `None` returns that pointer type's
+         * null -- no struct, no tag, no zeroing prologue.  The C name of the
+         * whole type IS the payload's (type_c_name), so `ctor_ret` and the
+         * `Some` param spell the same thing. */
+        const char *niche_ctype = NULL;
+        if (app_niche) niche_ctype = type_c_name(g_adt_apps[idx].type);
+        const char *ctor_ret = app_niche ? niche_ctype
+                             : app_heap ? heap_ptr_c_name(adt_inst_name)
                              : app_byval ? adt_inst_name : "int64_t";
+        if (app_niche) {
+            buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
+            if (ctor->n_fields == 1)
+                buf_printf(out, "%s _0", niche_ctype);
+            buf_printf(out, ") {\n");
+            if (ctor->n_fields == 1) buf_printf(out, "    return _0;\n");
+            else                     buf_printf(out, "    return (%s)0;\n", niche_ctype);
+            buf_printf(out, "}\n\n");
+            free(wide_box); free(val_ctype); free(mctor);
+            continue;
+        }
         buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
@@ -3478,6 +3601,12 @@ bool type_is_boxed_container_elem(Type t) {
  * declaration order. */
 size_t adt_app_byval_value_size_bytes(Type t) {
     if (!adt_app_is_byvalue_product(t)) return 0;
+    /* SR3 slice B: a niche-filled Option IS one pointer -- 8 bytes, whatever
+     * the tagged layout its ctors describe would have measured.  Answering 16
+     * here would make it "wide" for the b4box closure-slot convention and get
+     * it heap-boxed as a carrier element, which is the allocation the niche
+     * exists to remove. */
+    if (adt_app_is_niche_option(t)) return 8;
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;
@@ -3544,33 +3673,23 @@ bool type_is_byvalue_adt_product(Type t) {
  * predicate, so this never touches that machinery (B4 remains separate). */
 static const bool g_adt_app_byvalue = true;
 
-/* SR2 prototype gate (docs/upcoming/sum-representation-plan.md SR2):
- * TUR_SR2_APP_SUM_BYVALUE=1 admits a MULTI-VARIANT parametric sum monomorph
- * (`(Opt2 int)`) to the by-value path -- the app-side sibling of SR1's
- * adt_sr1_sum_candidate, and the actual prerequisite for converting Option and
- * Result to real sums: without it the conversion takes the two most-used types
- * from by-value to heap-boxed-and-leaked, the exact regression the plan's
+/* SR2a (docs/upcoming/sum-representation-plan.md SR2): a MULTI-VARIANT
+ * parametric sum monomorph (`(Opt2 int)`, and above all `(Option int)` /
+ * `(Result int cstr)`) flows by value -- the app-side sibling of SR1's
+ * adt_sr1_sum_candidate, and the prerequisite SR2b's stdlib conversion is
+ * built on: on the carrier, the conversion takes the two most-used types in
+ * the language to heap-boxed-and-leaked, the exact regression the plan's
  * section 5 warns about (SR1 as shipped covers non-parametric sums only).
  * Same exclusions as the SR1 gate: non-GADT, non-heap, and not self-recursive
  * (`(Cons2 a (Cons2 a))` stays on the carrier -- SR4's population, measured
- * and declined there). */
+ * and declined there).
+ *
+ * GRADUATED 2026-08-27 out of `--enable=parametric-sum-byvalue`: the row's
+ * soak existed so the representation would not be fixed against SR2b, and
+ * SR2b has landed (in-tree and across the spices).  `TUR_SR2_APP_SUM_BYVALUE=0`
+ * is the bisection escape hatch, read once in main.c the way SR1's is. */
 static bool sr2_app_sum_byvalue(void) {
-    static int cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("TUR_SR2_APP_SUM_BYVALUE");
-        cached = (e && e[0] == '1') ? 1 : 0;
-    }
-    if (cached == 1) return true;
-    /* --enable=parametric-sum-byvalue (the EXPERIMENTS[] row).  The env seam
-     * above is the harness/measurement channel and carries no lifecycle
-     * warning; an experiment enable is a user opting in, so it gets the
-     * TUR-W0061 beta notice, once per compile, at the moment the gate first
-     * decides anything. */
-    if (g_opt_parametric_sum_byvalue) {
-        experiment_warn_if_used("parametric-sum-byvalue");
-        return true;
-    }
-    return false;
+    return g_sr2_app_sum_byvalue;
 }
 
 bool adt_app_is_byvalue_product(Type t) {
@@ -3791,6 +3910,18 @@ const char *type_c_name(Type t) {
             /* Parametric-by-value (gated): a concrete flat-product ADT-app flows
              * as its by-value monomorph aggregate (`tur_adt_Pair2__int__float`),
              * not the int64 carrier.  Hard-off until the crossings are wired. */
+            /* SR3 slice B: a niche-filled `(Option P)` IS its payload -- the
+             * C spelling is P's, there is no `tur_adt_Option__P` struct, and
+             * `(none)` is that pointer type's null.  Asked BEFORE the by-value
+             * arm below, which would otherwise mint the tagged monomorph name. */
+            if (adt_app_is_niche_option(t)) {
+                AdtDef *ndef = NULL;
+                Type nargs[16];
+                uint8_t nn = 0;
+                Type nt = t;
+                if (type_extract_adt_app(&nt, &ndef, nargs, &nn) && nn == 1)
+                    return type_c_name(nargs[0]);
+            }
             if (adt_app_is_byvalue_product(t)) {
                 const char *nm = type_register_adt_app(t);
                 if (nm) {
@@ -5268,6 +5399,14 @@ static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
      * spec hole, not a site seam. */
     if (type_is_transparent_int_newtype(*t))
         return REPR_SCALAR_BITS;
+
+    /* SR3 slice B: a niche-filled `(Option P)` IS P's pointer in every
+     * position -- there is no aggregate, so the by-value-product arm below
+     * would predict a form the type has no spelling for.  The eligibility rule
+     * requires P to c-name as a real pointer, which is what makes HEAP_PTR the
+     * right answer rather than the carrier word. */
+    if (t->kind == TY_APP && adt_app_is_niche_option(*t))
+        return REPR_HEAP_PTR;
 
     /* Non-heap by-value products (nominal ADT or concrete parametric app):
      * real aggregates in direct positions; boxed in container slots and

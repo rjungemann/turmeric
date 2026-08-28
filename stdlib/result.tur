@@ -5,9 +5,10 @@
 ;;; Runtime layout is the tagged monomorph -- { int tag; union { Ok; Err } } --
 ;;; 16 bytes (down from the record's 24), one payload slot, no dead arm to
 ;;; zero-fill, so `err` no longer needs a zero value for A nor `ok` one for B.
-;;; On the default path values ride the int64 carrier (a heap pointer to that
-;;; layout); under `--enable=parametric-sum-byvalue` they flow by value with no
-;;; per-ctor allocation.  Tag values follow declaration order: Ok = 0, Err = 1.
+;;; A concrete monomorph flows BY VALUE with no per-ctor allocation (SR2a,
+;;; default since 2026-08-27); an erased generic base still rides the int64
+;;; carrier, a heap pointer to the same layout.  Tag values follow declaration
+;;; order: Ok = 0, Err = 1.
 ;;; The inline-C helpers in the codegen preamble (tur_box_ok / tur_box_err /
 ;;; tur_is_ok / tur_ok_value / tur_err_value and the _int/_ptr builders) build
 ;;; and read this exact layout; keep them in lockstep with this declaration.
@@ -68,12 +69,13 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn ok? [r : int]
-  #fx{}
-  : bool
-  ```c
-  return tur_is_ok(r);
-  ```)
+;;; SR2a graduation: typed `(Result A B)`, not the `:int` carrier stand-in.
+;;; `ok-val` / `err-val` / `some?` were already parametric; these two were the
+;;; last carrier-typed Result accessors, and once a concrete `(Result A B)`
+;;; monomorph flows BY VALUE an `:int` parameter is a straddle the caller has to
+;;; spill across rather than a harmless erasure.  A match body specializes per
+;;; monomorph and still accepts a carrier value through the generic base.
+(defn ok? [A B] [r : (Result A B)] : bool (match r (Ok _) true (Err _) false))
 ;;; err? -- check whether a Result[A B] is err.
 ;;;
 ;;; Parameters:
@@ -87,12 +89,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn err? [r : int]
-  #fx{}
-  : bool
-  ```c
-  return !tur_is_ok(r);
-  ```)
+(defn err? [A B] [r : (Result A B)] : bool (match r (Ok _) false (Err _) true))
 ;;; ok-val -- extract the ok value from a typed Result[A B].
 ;;;
 ;;; Parameters:

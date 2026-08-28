@@ -39,9 +39,13 @@
     (println (opt-or (lookup 7) 0))          ;; 700
     (println (some? (:: (lookup 3) (Option int))))   ;; false
     (println (opt-or (lookup 3) -9))         ;; -9
-    ;; stdlib ok?/err? read a C-built Result
-    (println (ok? (safe-div 10 2)))          ;; true
+    ;; stdlib ok?/err? read a C-built Result.  The ascription is what tells the
+    ;; compiler this `:int` carrier IS a Result: since the SR2a graduation
+    ;; `ok?`/`err?` are typed `(Result A B)` like `some?`/`ok-val`, so a
+    ;; hand-rolled inline-C carrier producer names its type at the boundary
+    ;; exactly as the `some?` calls above do.
+    (println (ok? (:: (safe-div 10 2) (Result int int))))   ;; true
     (println (res-payload (safe-div 10 2)))  ;; 5
-    (println (err? (safe-div 10 0)))         ;; true
+    (println (err? (:: (safe-div 10 0) (Result int int))))  ;; true
     (println (res-payload (safe-div 10 0)))  ;; -1
     0))

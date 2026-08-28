@@ -33,12 +33,17 @@ precondition and postcondition checking built on top of `panic`.
 A result value is either `(ok value)` or `(err error)`. `Result` is a real sum
 (SR2b): the runtime representation is the tagged monomorph
 `{ int tag; union { A ok_val; B err_val; } as; }` -- 16 bytes, tag 0 = Ok,
-tag 1 = Err, payload at offset 8. On the default path a value rides the int64
-carrier as a heap pointer to that layout; under
-`--enable=parametric-sum-byvalue` it flows by value. Inline-C code should
+tag 1 = Err, payload at offset 8. A concrete monomorph such as
+`(Result int cstr)` flows by value; an erased generic base still rides the
+int64 carrier as a heap pointer to the same layout. Inline-C code should
 build and read these through the preamble helpers (`tur_box_ok` /
 `tur_is_ok` / `tur_ok_value` / ...) rather than spelling the struct by hand --
 see the [inline-C results guide](inline-c-results-guide.md).
+
+An inline-C function that hands back a carrier value declared `: int` needs an
+ascription at the boundary for the typed accessors to take it -- `(ok? (:: r
+(Result int cstr)))`, the same thing `some?` has always wanted. `ok?` and
+`err?` take `(Result A B)` rather than `:int` as of the by-value default.
 
 ### Constructors
 

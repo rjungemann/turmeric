@@ -244,15 +244,13 @@ value.  Pinned by `tests/fixtures/vec-of-parametric-sum-monomorph`, archived as
    **This is now the whole remaining cost, and it is the part the gate never
    measured** -- everything above was about whether the representation WORKS,
    and this is about moving the two most-used types onto it.
-5. **SR2c**: ~~the `EXPERIMENTS[]` row~~ -- **LANDED 2026-08-27** as
-   `--enable=parametric-sum-byvalue` (beta, expires 0.42.0), wired to the same
-   `sr2_app_sum_byvalue` gate the env seam drives, with the TUR-W0061 lifecycle
-   notice firing the first time the gate decides anything.  Exercised in the
-   ordinary suite by `tests/fixtures/parametric-sum-byvalue-enable` (per-fixture
-   `flags`), so every default run compiles a parametric sum by value through
-   the user-facing channel.  Still open in SR2c: docs, and the
-   `.value`-accessor API migration in `option.tur`/`result.tur` -- both of
-   which only make sense alongside SR2b.
+5. ~~**SR2c**: the `EXPERIMENTS[]` row~~ -- **GRADUATED 2026-08-27.**  It
+   landed the same day as `--enable=parametric-sum-byvalue` (beta, expires
+   0.42.0) and graduated once SR2b was in-tree and across the spices, which was
+   the only thing its soak was for.  The row is gone, the name is in
+   `GRADUATED[]` for one minor line, and
+   `tests/fixtures/parametric-sum-byvalue` asserts the same shapes with no
+   opt-in.
 
 ## What it costs -- measured
 
@@ -280,7 +278,27 @@ Note what this does NOT measure: recursive sums, which the seam excludes by
 design and which SR4 measured separately and declined.  The favorable result
 here is for the population the seam actually admits.
 
-## The open question: should the seam flip?
+## The open question, answered: the seam flipped 2026-08-27
+
+**SR2a graduated.** Both conditions the section below sets out were met --
+SR2b landed in-tree and then across the spices -- so `--enable=parametric-sum-
+byvalue` is retired, `sr2_app_sum_byvalue()` reads a default-`true` global, and
+`TUR_SR2_APP_SUM_BYVALUE=0` is the bisection hatch on SR1's pattern.
+`tests/run-sr2-seam.sh` is retired with the row; the ordinary suite now compiles
+its whole worklist by value.
+
+**And the graduation cost 21 fixtures this document's numbers do not cover.**
+The 2711/0 above was measured with the seam on but SR2b NOT yet landed -- so the
+seam moved user ADTs (`Opt2`, `PRes`, `ExprF`) and left `Option`/`Result`, still
+discriminated records, on the by-value product path they already had.  Once
+those two are the population, seven more defects surface; the full list is in
+the plan's SR2c section.  The lesson generalizes past this phase: **a gate
+measured before its heaviest client lands has measured a different
+population.**  It is the same shape as the flip's own headline finding, one
+level up -- the comparison was against a carrier that no longer existed by the
+time the decision was taken.
+
+## The open question as it stood before the flip: should the seam flip?
 
 The gate's job was to answer "what would SR2a cost", and the answer came out
 lower than the plan assumed -- on correctness (2710/0 both ways) and now on

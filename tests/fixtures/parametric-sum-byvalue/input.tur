@@ -1,9 +1,8 @@
-;; parametric-sum-byvalue-enable: the EXPERIMENTS[] row for SR2a, exercised
-;; through the ordinary suite via the per-fixture `flags` file -- so every
-;; default `bash tests/run.sh` compiles at least one parametric sum by value
-;; through the USER-FACING enable channel, not just the TUR_SR2_APP_SUM_BYVALUE
-;; env seam the sr2-seam harness drives.  If the row is renamed, retired, or
-;; stops reaching sr2_app_sum_byvalue, this fixture fails loudly.
+;; parametric-sum-byvalue: SR2a on the DEFAULT path.  It carried a `flags` file
+;; with `--enable=parametric-sum-byvalue` while the representation was an
+;; EXPERIMENTS[] row; the row graduated 2026-08-27, so the enable is gone and
+;; this asserts the same shapes with no opt-in at all.  If sr2_app_sum_byvalue
+;; ever stops answering true by default, this fixture fails loudly.
 ;;
 ;; The shape is deliberately the whole SR2a gauntlet in miniature: direct
 ;; construction and match (both variants), the sum as a by-value argument, and

@@ -4548,6 +4548,40 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     Buf out;
     buf_init(&out);
 
+    /* SR3 slice B: the niche crossing, and it is a real VALUE change -- not a
+     * spill, not a reinterpret.  A niche `(Option P)` IS the payload pointer; a
+     * CARRIER `(Option A)` is a pointer to a tagged box.  Both spell None as
+     * NULL (slice A), so only Some actually moves: box it on the way out,
+     * unbox it on the way back.
+     *
+     * Without this the concrete->carrier arm below spills the niche pointer to
+     * a stack temp and hands its ADDRESS to a base that reads `->tag`, so the
+     * base reads the low half of the payload pointer as the tag, matches
+     * neither 0 nor 1, and falls out of the switch with the result temp at its
+     * zero init.  That is a SILENT wrong answer -- `option-of-tvec-eq` printed
+     * `false` for two equal `(some v)` -- which is the failure class this whole
+     * family ships and the reason the gate asserts values, not builds. */
+    if (adt_app_is_niche_option(concrete_ty)) {
+        char *ntmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER) {
+            buf_printf(body, "%s %s = (%s);\n", cname, ntmp, src_str);
+            buf_printf(&out,
+                       "(%s ? tur_box_some((int64_t)(intptr_t)(%s)) : (int64_t)0)",
+                       ntmp, ntmp);
+        } else {
+            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                       ntmp, src_str);
+            buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value(%s) : (%s)0)",
+                       ntmp, cname, ntmp, cname);
+        }
+        free(ntmp);
+        free(src_str);
+        char *nres = strdup(out.data);
+        buf_free(&out);
+        return nres;
+    }
+
     /* end-to-end-monomorphization (C-3): a :heap-tagged type (Vec/Map/Set/...)
      * is represented as a typed pointer `T__A *` whose bit pattern IS the int64
      * carrier.  Crossing the carrier boundary is therefore a pure reinterpret
@@ -4695,8 +4729,46 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                 }
             }
             if (!used_canonical) {
-                /* Pointer carrier: dereference the heap pointer. */
-                buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+                /* SR2b + SR3 slice A: Option and Result are real SUMS now, so
+                 * the canonical readback above (keyed on the pre-SR2b
+                 * single-ctor RECORD form) no longer fires for them -- and it
+                 * does not need to.  A carrier box for a sum monomorph IS that
+                 * monomorph's layout (`{ int tag; union { ... } as; }`, which
+                 * the preamble's tur_option_t / tur_result_box_t _Static_assert
+                 * pins), so the readback is a plain deref.
+                 *
+                 * What does NOT survive the change is the NULL guard the record
+                 * path carried.  The carrier None is the null pointer (slice A),
+                 * so an Option-shaped monomorph must test before dereferencing
+                 * and collapse to the zeroed aggregate -- tag 0 is None, the
+                 * same answer `tur_is_some(0)` and the carrier match path's
+                 * `__scrut ? __scrut->tag : 0` give.  Without it
+                 * `(some? (:: (lookup 3) (Option int)))` derefs NULL, which is
+                 * how the whole inline-C Option family crashed when SR2a went
+                 * default (option-result-c-abi, inline-c-result-builder,
+                 * inline-c-typed-result-option, inline-c-option-byval-param).
+                 * Keyed by adt_ctor_is_null_none, the same shape check slice A
+                 * uses on the producing side -- Result gets no guard because it
+                 * has no null value to produce. */
+                Type _rty = emit_resolve_type(ctx, concrete_ty);
+                AdtDef *_adt = (_rty.kind == TY_APP) ? type_adt_app_def(&_rty)
+                             : (_rty.kind == TY_ADT ? _rty.as.adt_.def : NULL);
+                if (_adt && _adt->ctors && _adt->ctors[0] &&
+                    adt_ctor_is_null_none(_adt, _adt->ctors[0])) {
+                    /* Bind the carrier once: src_str may be a call. */
+                    char *ctmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                               ctmp, src_str);
+                    char *z = emit_c_zero_of(cname);
+                    buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
+                               ctmp, cname, ctmp, z);
+                    free(z);
+                    free(ctmp);
+                } else {
+                    /* Pointer carrier: dereference the heap pointer. */
+                    buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+                }
             }
         }
     } else {

@@ -7,6 +7,16 @@ Filed 2026-08-27 during SR2b.
 carrier None is the null pointer (`adt_ctor_is_null_none`, types.c).  The
 report now covers `(some x)` / `(ok x)` / `(err e)` boxes only.
 
+**Narrowed again 2026-08-27 (SR2a graduation), and this is most of it.** A
+CONCRETE `(Option T)` / `(Result T E)` monomorph now flows by value, so its
+constructor is a struct literal and there is no box to own.  What remains is
+the ERASED path only: a generic base (`some`, `ok`, an instance method's
+carrier base) whose element is still a type variable mallocs the tagged layout
+and hands back the pointer.  `arc-weak-upgrade`, the repro below, is by-value
+now -- its explicit `option-free` calls had to be REMOVED, because by value
+they free a stack slot.  The residue shrinks further with each site that
+monomorphizes; end-to-end monomorphization is where it reaches zero.
+
 ## Summary
 
 SR2b made stdlib Option/Result real sums.  On the default path a `(some x)` /
@@ -33,12 +43,13 @@ release machinery does not track sum ctor boxes the way it tracked the
 
 ## Fix directions
 
-Either teach the release pass to treat a carrier sum box like other
-compiler-owned temporaries (free at the end of the binding scope unless it
-escapes), or move the default path to by-value flow (SR2's
-`--enable=parametric-sum-byvalue` graduation) so the box never exists.  The
-second is where the track is already heading; this report exists so the
-interim leak is a known cost, not a surprise.
+The second of the two original directions -- move the default path to by-value
+flow so the box never exists -- is DONE for concrete monomorphs (the SR2a
+graduation, 2026-08-27).  For the erased residue the options are unchanged:
+teach the release pass to treat a carrier sum box like other compiler-owned
+temporaries (free at the end of the binding scope unless it escapes), or
+monomorphize the site so it stops being erased.  The second is where the track
+is already heading.
 
 ## Workaround
 

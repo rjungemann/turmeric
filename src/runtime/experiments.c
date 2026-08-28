@@ -326,33 +326,15 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * docs/archive/mir-aarch64-fp-aggregate-abi.md.  The name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
      * docs/archive/jit-ffi-c2mir-plan.md. */
-    /* SR2a (sum-representation-plan SR2): a multi-variant PARAMETRIC sum
-     * monomorph flows by value instead of riding the int64 heap-pointer
-     * carrier -- the prerequisite for Option/Result as real sums, whose
-     * carrier ctors malloc per construction and never free.
-     *
-     * Beta, not prototype: there is no surface to be in flux -- the feature is
-     * a representation change with no syntax -- and the open questions are
-     * answered.  Correctness: the full suite is green with the gate forced on
-     * (2711/0, tests/run-sr2-seam.sh keeps a fast subset armed in CI).
-     * Cost: measured 2026-08-27 -- 3.6x faster and 71x less peak RSS on a
-     * narrow-sum loop, 3.2x/145x on a wide one, ~4% compile-time cost -- the
-     * SR1-style numbers that justify a flip, against the SR4 precedent where
-     * the same measurement declined one.  What the soak is FOR: the stdlib
-     * conversion (SR2b, Option/Result themselves) has not landed, and
-     * graduating the representation before its heaviest client exists would
-     * fix the ABI against the one migration most likely to want it changed.
-     *
-     * The TUR_SR2_APP_SUM_BYVALUE=1 env seam predates this row and stays: it
-     * is how the measurement harnesses force the gate without the experiment
-     * machinery, and sr2_app_sum_byvalue() honours either. */
-    { "parametric-sum-byvalue",
-      "parametric sum monomorphs ((Opt2 int)) by value, no per-ctor malloc",
-      "docs/upcoming/sr2-gate-results.md",
-      "0.39.0",                  /* introduced */
-      "0.42.0",                  /* expires_at (soft deadline) */
-      XF_LIFECYCLE_BETA,
-      &g_opt_parametric_sum_byvalue },
+    /* parametric-sum-byvalue GRADUATED 2026-08-27 -- a multi-variant PARAMETRIC
+     * sum monomorph ((Opt2 int), and above all (Option int) / (Result int
+     * cstr)) now flows by value unconditionally; the gate lives in
+     * sr2_app_sum_byvalue (types.c), reading the default-true
+     * g_sr2_app_sum_byvalue with TUR_SR2_APP_SUM_BYVALUE=0 as the bisection
+     * escape hatch.  The row's soak had exactly one job -- do not fix the ABI
+     * before SR2b, its heaviest client, exists -- and SR2b landed in-tree and
+     * across the spices before the expiry was anywhere near.  See
+     * docs/upcoming/sr2-gate-results.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -408,6 +390,11 @@ static const char *const GRADUATED[] = {
      * Only `jit-ffi` stays.  It graduated in 0.38.0 -- this line -- so its
      * window has not opened yet; it becomes eligible at 0.39.0. */
     "jit-ffi",       /* graduated 2026-08-21; call-ptr / callback-ptr are ordinary `unsafe` forms (-DTUR_JIT=ON still gates the interpreter path) */
+    /* graduated 2026-08-27, in the 0.39 line.  A representation change with no
+     * syntax, so the population that could have written it into a build.tur is
+     * the narrow one the backend names above describe -- but it shipped as a
+     * user-facing `--enable` for a full release, so it keeps the window. */
+    "parametric-sum-byvalue",
     NULL,
 };
 
