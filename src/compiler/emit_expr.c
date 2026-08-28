@@ -11925,7 +11925,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ? type_register_adt_app(scrut_ty) : NULL;
             bool scrut_is_app_monomorph = (inst_name != NULL);
             {
-                if (inst_name) {
+                if (adt_app_is_niche_option(scrut_ty)) {
+                    /* SR3 slice B: the scrutinee's C type IS its payload's --
+                     * `tur_adt_Option__String` has no definition to name. */
+                    snprintf(adt_c_name, sizeof(adt_c_name), "%s",
+                             type_c_name(scrut_ty));
+                } else if (inst_name) {
                     snprintf(adt_c_name, sizeof(adt_c_name), "%s", inst_name);
                 } else {
                     char *_mn = mangle_field_name(adt->name);
@@ -12060,8 +12065,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     scrut_e = scrut_e->as.ascribe_.inner;
                 adt_byval_pbp = expr_is_pbp_param(ctx, scrut_e);
             }
+            /* SR3 slice B: a niche-filled `(Option P)` scrutinee is the payload
+             * POINTER, with no tag word to switch on -- so it takes the if-chain
+             * path (like a flat product) and each arm tests the pointer instead:
+             * `Some` is non-null, `None` is null.  Only fires when the scrutinee
+             * really is by value; an erased carrier word keeps the tagged read. */
+            bool adt_niche = adt_byval && !adt_byval_pbp &&
+                             adt_app_is_niche_option(scrut_ty);
 
-            if (has_any_guard || adt_flat) {
+            if (has_any_guard || adt_flat || adt_niche) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
                 char *end_label = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
@@ -12092,6 +12104,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         /* No tag word on a flat single-variant ADT: the sole
                          * constructor arm is entered unconditionally. */
                         buf_puts(body, "{\n");
+                    } else if (adt_niche) {
+                        /* SR3 slice B: the tag IS the null-ness of the payload
+                         * pointer.  Tag 0 (None) is null, tag 1 (Some) is not. */
+                        buf_printf(body, "if (__scrut %s 0) {\n",
+                                   pat->ctor->tag == 0 ? "==" : "!=");
                     } else {
                         /* SR1: a by-value sum HAS a tag, and `__scrut` is then the
                          * aggregate itself rather than a carrier pointer, so the
@@ -12157,7 +12174,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * and no carrier unbox. */
                             bool inline_byval = adt_byval && bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
-                            if (adt_byval &&
+                            if (adt_niche) {
+                                /* SR3 slice B: `Some`'s payload IS the
+                                 * scrutinee -- there is no member to read.
+                                 * Declared at the PAYLOAD's C type (which is
+                                 * what adt_c_name holds for a niche), not at
+                                 * `ctype`: this path spells the binder from the
+                                 * pattern binding's own type, which in a
+                                 * specialized `unwrap` body is still the erased
+                                 * `A`.  The switch path's substituted
+                                 * `_sub_ctype` is the equivalent correction. */
+                                buf_printf(body, "%s %s = __scrut;\n",
+                                           adt_c_name, bname);
+                            } else if (adt_byval &&
                                 match_field_is_ros_pointer_box(ctx, pat->ctor, fb)) {
                                 /* Pointer-box payload slot -- deref, never bind
                                  * the pointer as the value. */

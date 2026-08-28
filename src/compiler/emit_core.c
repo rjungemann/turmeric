@@ -4548,6 +4548,40 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     Buf out;
     buf_init(&out);
 
+    /* SR3 slice B: the niche crossing, and it is a real VALUE change -- not a
+     * spill, not a reinterpret.  A niche `(Option P)` IS the payload pointer; a
+     * CARRIER `(Option A)` is a pointer to a tagged box.  Both spell None as
+     * NULL (slice A), so only Some actually moves: box it on the way out,
+     * unbox it on the way back.
+     *
+     * Without this the concrete->carrier arm below spills the niche pointer to
+     * a stack temp and hands its ADDRESS to a base that reads `->tag`, so the
+     * base reads the low half of the payload pointer as the tag, matches
+     * neither 0 nor 1, and falls out of the switch with the result temp at its
+     * zero init.  That is a SILENT wrong answer -- `option-of-tvec-eq` printed
+     * `false` for two equal `(some v)` -- which is the failure class this whole
+     * family ships and the reason the gate asserts values, not builds. */
+    if (adt_app_is_niche_option(concrete_ty)) {
+        char *ntmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER) {
+            buf_printf(body, "%s %s = (%s);\n", cname, ntmp, src_str);
+            buf_printf(&out,
+                       "(%s ? tur_box_some((int64_t)(intptr_t)(%s)) : (int64_t)0)",
+                       ntmp, ntmp);
+        } else {
+            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                       ntmp, src_str);
+            buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value(%s) : (%s)0)",
+                       ntmp, cname, ntmp, cname);
+        }
+        free(ntmp);
+        free(src_str);
+        char *nres = strdup(out.data);
+        buf_free(&out);
+        return nres;
+    }
+
     /* end-to-end-monomorphization (C-3): a :heap-tagged type (Vec/Map/Set/...)
      * is represented as a typed pointer `T__A *` whose bit pattern IS the int64
      * carrier.  Crossing the carrier boundary is therefore a pure reinterpret

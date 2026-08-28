@@ -1804,6 +1804,12 @@ bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
  * ctors return 0 instead of mallocing a box whose only content is tag 0. */
 bool         adt_ctor_is_null_none(const struct AdtDef *def,
                                    const struct CtorDef *ctor);
+/* SR3 slice B (option niche, TUR_SR3_OPTION_NICHE=1, default OFF): true when
+ * `t` is an `(Option P)` monomorph carried AS its payload pointer -- 8 bytes,
+ * `(none)` == NULL, no tag word.  Eligibility is an explicit allowlist of
+ * payload types whose valid values exclude 0; see the definition for why
+ * `:heap`-ness is not the condition and `Cons` fails it. */
+bool         adt_app_is_niche_option(Type t);
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);

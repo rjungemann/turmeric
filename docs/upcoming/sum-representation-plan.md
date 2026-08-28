@@ -426,11 +426,16 @@ stand-in rule catching up with the representation:
   added under SR2b to release the carrier box; by value there is no box, and
   the call is a `free()` of a stack slot.
 
-### SR3 -- niche filling -- GATE RUN 2026-08-27; slice A SHIPPED, slice B held
+### SR3 -- niche filling -- slice A SHIPPED, slice B GATED AND SHELVED 2026-08-27
 
 Once `Option` is a real sum, `None` can be represented as the null pointer for
 pointer-payload elements, taking `Option<ptr<T>>`, `option<Vec T>`,
 `option<Cons T>` from 16 bytes to 8.
+
+**Two of those three examples are wrong, and the gate is how we found out.**
+`Option<ptr<T>>` cannot take the niche because a `:ptr<T>` may legitimately be
+null; `option<Cons T>` cannot because the empty list already IS 0. Slice B's
+section below has the detail.
 
 Plausibly the largest of the three size wins, given how common those shapes are
 -- `option<vec<...>>` and `option<Cons ...>` were exactly the shapes the
@@ -461,8 +466,38 @@ peaks at 64 MB.  It also shrinks the
 to Some/Ok/Err constructions only.  Validation: full suite 2712/0, turi
 1867/0, sr2-seam 12/12, sr4-seam 24/24.
 
-**Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- HELD, and
-here is the obstacle.** The compiled pipeline's default path is semi-erased:
+**Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- GATE RUN
+2026-08-27, SHELVED.** Full results in
+[sr3-slice-b-gate-results.md](sr3-slice-b-gate-results.md); the seam is in the
+tree as `TUR_SR3_OPTION_NICHE=1`, default off and provably inert (suite green
+both ways).
+
+**The recommendation below -- fold slice B into the graduation -- was followed,
+and it was half right.** The obstacle it names DID dissolve: after SR2a a
+concrete Option consumer specializes, so `some?`/`unwrap` compile against the
+niche representation directly and the bridge the plan feared as a long tail is
+ONE chokepoint (`emit_carrier_bridge`). The suite found exactly one erased
+crossing left -- a typeclass `Eq` dictionary -- and it was a silent wrong
+answer until that chokepoint was taught the crossing.
+
+**What shelves it is the population, which neither the plan nor its census
+checked for eligibility.** The niche claims 0 for `None`, so a payload type
+that has already spent its null cannot take it, and two disqualifications
+between them cover the entire census:
+
+- **`Cons`'s nil IS 0** ("At runtime, nil is 0" -- stdlib/list.tur; `(defn tnil
+  [] : int 0)`), so `(some (tnil))` would read as `(none)`.
+- **`String` c-names to `int64_t`**, as every `defopaque` does whatever its
+  declared `:ptr<void>`, so its niche form would be byte-indistinguishable from
+  the CARRIER form and every `strcmp(cname, "int64_t")` site would deref the
+  payload as a box.
+
+That leaves `option<Vec T>` / `option<Map ...>` / `option<Set ...>`: **one file
+in the tree**. The actionable follow-up is not slice B -- it is giving
+`defopaque` over a pointer a pointer C spelling, which makes `String` eligible
+and is the whole census.
+
+The original obstacle, as scoped before the gate: The compiled pipeline's default path is semi-erased:
 generic bases (`unwrap`, `some?`, every instance-method carrier base) receive
 `(Option A)` as one int64 for EVERY `A` and read `->tag` through one shared
 layout.  A niche-filled value entering such a base would have its "tag" read
