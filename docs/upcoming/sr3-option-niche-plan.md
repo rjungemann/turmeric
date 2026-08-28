@@ -218,6 +218,70 @@ container elements stop boxing under EITHER representation, at which point the
 niche's 8-byte word is what lands in the slot and the container row stops
 being parity.  `expires_at` 0.44.0 leaves room for exactly that sequence.
 
+## The container-boxing story -- sketched 2026-08-28
+
+What "container elements stop boxing" would actually take, mapped so the
+sentence above is a design constraint rather than a hope.
+
+**Why the box exists.** Not because Vec wants it -- `vec-push!` / `vec-get`
+move an opaque int64 word and never interpret it.  The box is the ERASED
+BOUNDARY's convention: an element enters through `vec-push!`'s `val : A`
+carrier param, and the concrete->carrier crossing materializes the one form
+every erased consumer agrees on (the tagged carrier box).  The read side
+undoes it (`tur_opt_value_checked` at the `(:: (vec-get v i) T)` ascription).
+Both representations pay the same box because both cross the same boundary --
+which is exactly why the graduation measurement showed parity.
+
+**Why "just put the word in the slot" is unsound as an interim step.** The
+slot convention must be decidable at EVERY site that touches the slot, and
+two classes of site cannot decide it:
+
+1. **Erased stores.** A generic body (`(defn push-it [A] [v : (Vec A) x : A]
+   (vec-push! v x))`) receives `x` already boxed -- the CALLER boxed it at
+   the erased call boundary, before any container was in sight.  If concrete
+   stores put bare niche words in the slot while generic-body stores put
+   boxes in the SAME vec, one vec holds two conventions and no reader can
+   tell them apart.  The compiler cannot see, at the erased call boundary,
+   that a value is headed for a container.
+2. **Inline-C higher-order bases.** `vec-eq?` (stdlib/vec.tur:513) hands raw
+   slot words to its comparator closure from INSIDE its C loop
+   (`cmp(a->data[i], b->data[i])`) -- there is no per-element site where a
+   compiler bridge could normalize.  The callback's convention IS the slot's
+   convention, decided at closure-creation time, possibly in another
+   function.
+
+And the convention cannot be carried at runtime instead: the homogeneity
+machinery (`tur-vec-homog__`) is a compile-time no-op, and the wide/rc
+element predicates are per-monomorph constants baked into emitted glue.  A
+per-vec "element form" header flag would be new libturi ABI, a branch in
+every push/get/free/eq native, and a second source of truth for a fact the
+type system already holds.  Priced and declined.
+
+**So the story is a corollary of end-to-end monomorphization, not a niche
+feature.** The invariant -- every site that touches the slot must know the
+element form -- is satisfied exactly when every base the element crosses is a
+per-monomorph spec: a `vec-push` spec for `(Vec (Option String))` takes
+`void *` and stores the word, the `vec-get` spec returns it, and the
+comparator handed to `vec-eq?` is compiled against the same monomorph.  The
+pieces visibly exist today: SR2a already mints
+`some___spec__bool_void__(void *)` / `unwrap__spec__void___void__(void *)`
+against the niche form, and the by-value twin redirect (Option C,
+emit_module.c) already retargets carrier-helper calls to `*-byval` twins at
+call boundaries.  What is missing is the container bases themselves
+monomorphizing their STORAGE, which is the end-to-end-monomorphization
+program's root-2 work, not this plan's.
+
+**What the niche contributes when that lands:** nothing extra to build.  The
+niche monomorph's slot form is already the 8-byte word (repr, ctor sigs, and
+specs all say so); the moment container storage is per-monomorph, niche
+elements are word-in-slot for free and the measurement's container row stops
+being parity -- 8 bytes inline against the default's 16-byte aggregate (or
+its box, for wide elements).  That is the point at which the graduation
+calculus changes, and it is also why nothing container-shaped should be
+built inside this experiment in the meantime: the interim designs are either
+unsound (mixed conventions) or new ABI for a fact monomorphization makes
+free.
+
 ## What is left
 
 1. ~~The unbridged inline-C carrier crossings~~ -- **closed 2026-08-28**
