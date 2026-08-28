@@ -1,5 +1,10 @@
 # (spice repo) Spices still speak the pre-sum Option/Result layout
 
+**RESOLVED 2026-08-27** in `rjungemann/turmeric-spices` --
+"migrate every spice off the pre-sum Option/Result layout"
+(branch `claude/sum-option-result-layout`).  See
+[Resolution](#resolution) at the bottom.
+
 **Severity: high for the spice repo (46 files across 12 spices), invisible to
 this repo's CI.**  Filed 2026-08-27 at the SR2b/SR3 landing, from a read-only
 sweep of `rjungemann/turmeric-spices` at its current head.
@@ -60,3 +65,43 @@ Clone the spices next to this repo
 (`git clone https://github.com/rjungemann/turmeric-spices ../turmeric-spices`)
 and run `bash tests/run.sh` so the `requires.spices` fixtures stop skipping;
 then each spice's own test suite.
+
+## Resolution
+
+Both failure modes are migrated across the spices repo; nothing in this repo
+needed to change.
+
+**The corruption was real and was reproduced before fixing.** Building a
+smoke program against the unmigrated `test/assert` with a current `tur`:
+`assert-ok` on a genuine `(ok 7)` printed *"expected ok, got err"*,
+`assert-err` on `(err 41)` printed the inverse, and `result-err` on that
+same err returned `7` -- reading offset 16, past the end of the 16-byte
+box. After the migration the same program prints `ok-ok / err-err /
+some-some / none-none / 7 / 41`.
+
+- **131 inline-C sites in 47 files** now build and inspect through the
+  emitted preamble (`tur_box_ok` / `tur_err_ptr` / `tur_ok_int` /
+  `tur_is_ok` / `tur_ok_value` / `tur_err_value`, `tur_some_int` /
+  `tur_is_some` / `tur_opt_value` / `TUR_NONE`). No hand-rolled
+  `{ bool is_ok; ... }` / `{ bool is_some; ... }` struct remains.
+- **43 record-accessor reads** (`.is-ok` / `.ok-val` / `.err-val` /
+  `.is-some` / `.value`) became the stdlib accessors `ok?` / `ok-val` /
+  `err-val` / `some?` / `unwrap`.
+- **Four `(struct tur__option__Option *)` casts** in the tourist fixtures
+  also had to go: `(Option Response)` lowers to the `int64_t` carrier, so
+  the monomorph struct-pointer spelling no longer compiles.
+
+`plot/core.tur` was the sharpest case -- half migrated. Its `__ok?` /
+`__ok-val` readers already went through the preamble while
+`__surface-create`, `__canvas-create`, `__surface-write-png` and both
+`RETURN_OK`/`RETURN_ERR` macro pairs still *wrote* the retired struct, so
+the module was misreading its own writes.
+
+**Measured:** every spice suite that runs without external C deps, before
+and after -- 102 failing test files -> 75, **zero regressions**, 27 fixed
+(all 22 `json` suites, 6 of 10 `tourist-session`). The remaining 75 fail
+identically on an unmodified tree for unrelated reasons: missing cmake
+deps, a pre-existing `cstr`-return `-Wint-conversion` in four tourist
+fixtures, and mbedTLS headers being `#include`d inside a function body in
+`http/client.tur` (which only trips when a sibling checkout has them
+fetched). Those three are separate defects, not part of this migration.
