@@ -40,8 +40,8 @@ as `void *` ([gate results](../archive/opaque-pointer-c-spelling-gate-results.md
 graduated 2026-08-28), so `String` and `StringBuilder` are eligible and the
 `(Option String)` census the plan named -- `env` (5 spellings), `httpd-string`
 (5), `args` (2), `re` (2), `docstrings` (2) -- is in scope. The first
-disqualification stands; `Cons` is still ineligible and is item (2) of the
-original recommendation, untouched.
+disqualification stands; `Cons` is still ineligible -- and item (2) of the
+original recommendation is now closed as DECLINED (see What is left, item 3).
 
 ## What the phase is
 
@@ -241,9 +241,44 @@ being parity.  `expires_at` 0.44.0 leaves room for exactly that sequence.
    through a `(zero)` call to pin exactly that split. The literal form is
    pinned by `tests/fixtures/errors/ascribe-zero-into-non-null-opaque`, and
    `tur explain TUR-E0303` carries the full rationale.
-3. **`Cons` eligibility** -- item (2) of the original SR3 recommendation. It
-   costs the inline-C walk convention that depends on nil being 0, which is a
-   real price; nothing here changes that calculus.
+3. ~~`Cons` eligibility~~ -- **assessed 2026-08-28: DECLINED, permanently.**
+   Item (2) of the original SR3 recommendation, closed by measuring both sides
+   of its own trade:
+
+   **The population is one fixture.** A tree-wide census found exactly one
+   `(Option (Cons T))` user (`constrained-instance-dispatch-nested-parametric-
+   element`, which never wraps an EMPTY list), zero `option<Cons>` APIs in
+   `stdlib/list.tur`, and nothing in examples or benchmarks. The original
+   census listed `option<Cons ...>` as one of two motivating shapes; the other
+   (`(Option String)`) is served, and this one turned out not to exist.
+
+   **The convention is everywhere.** nil-is-0 is load-bearing in ~22 stdlib
+   inline-C cons-walker references, ~22 stdlib zero-test sites
+   (`tnil?` IS `(= l 0)`), 11 fixtures with hand-written walks, 7
+   compiler-emitted conventions (`__tur_cons_cell`, `rest = 0`,
+   `g_tur_args = 0`), and the variadic-rest ABI ("nil when absent -- rest =
+   0") documented in CLAUDE.md's own arity guide. Moving nil to a non-null
+   singleton breaks every user inline-C walker SILENTLY -- `while (p)` derefs
+   the sentinel instead of stopping -- which is the mis-run kind of break, not
+   the loud compile-error kind the pointer-spelling migration was.
+
+   **The third option -- a per-payload sentinel `None` (`(Cons *)1`) -- was
+   priced and is worse than it looks.** It is coherent in isolation, but the
+   carrier `None` is NULL (slice A, default-on), so under a sentinel niche the
+   word 0 would mean `Some(nil)` on one side of a crossing and `None` on the
+   other. Every crossing defect this phase fixed was a case of two sites
+   disagreeing about what one word means; a representation where that
+   disagreement is BY DESIGN re-introduces the silent-wrong-answer class the
+   phase exists to close, and `tur_opt_value_checked` (which aborts on a
+   tag-Some/payload-0 box) would need per-payload-class parameterization since
+   `Some(nil)` legitimately carries payload 0 at the carrier boundary.
+
+   The exclusion is already structurally safe: `Cons` is neither opaque nor on
+   the heap-collection list, so it can never accidentally take the niche, and
+   the polarity means it merely misses an optimisation worth 8 bytes per value
+   on a population of approximately zero. Verified both ways:
+   `(some (tnil))` is a legal, distinguishable value with the experiment on
+   and off, and the one census fixture is bit-identical under the flag.
 4. **A size measurement worth the name.** The gate measured correctness, not
    bytes. The claim is 16 -> 8 per value on the eligible population; nobody has
    run SR0(a)'s instrument over it since the population changed.

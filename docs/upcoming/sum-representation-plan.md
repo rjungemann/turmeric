@@ -482,8 +482,14 @@ both with the experiment and without.
 2026-08-28), so a niche value is distinguishable from a carrier box and
 `String` / `StringBuilder` join the eligibility allowlist -- which is the whole
 `(Option String)` census this section enumerates below.  Read the two
-disqualifications that follow with that in mind: the `Cons` one stands, the
-`String` one is gone.
+disqualifications that follow with that in mind: the `String` one is gone, and
+the `Cons` one was assessed 2026-08-28 and stands PERMANENTLY -- declined, not
+deferred.  The tree-wide `option<Cons>` population is one fixture that never
+wraps an empty list, nil-is-0 is load-bearing in ~60 sites including the
+variadic-rest ABI (where moving it breaks user inline-C silently), and the
+per-payload-sentinel alternative makes the word 0 mean `Some(nil)` on one side
+of a carrier crossing and `None` on the other.  Full pricing in
+[sr3-option-niche-plan.md](sr3-option-niche-plan.md), What is left, item 3.
 
 **And it turned up one crossing the first gate could not have reached.** An
 inline-C body declared `: (Option String)` builds its result with

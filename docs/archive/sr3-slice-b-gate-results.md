@@ -27,7 +27,16 @@ description: What happened when `(Option P)` was carried as its bare payload poi
 >   once `String` (the payload people actually construct in inline-C) came into
 >   scope. Two more rows: the niche let-binding and the niche call argument.
 >
-> The `Cons` disqualification stands unchanged.
+> The `Cons` disqualification stands unchanged -- and recommendation (2) below
+> (decide a `:heap` collection's empty value) was assessed 2026-08-28 and
+> DECLINED permanently: the tree-wide `option<Cons>` population is one fixture
+> that never wraps an empty list, while nil-is-0 is load-bearing in ~60 sites
+> including the variadic-rest ABI and every user inline-C walker (where moving
+> it breaks silently, not loudly). A per-payload sentinel `None` was also
+> priced and rejected: with the carrier `None` being NULL, the word 0 would
+> mean `Some(nil)` on one side of a crossing and `None` on the other -- the
+> silent-wrong-answer class by design. Full pricing in
+> [sr3-option-niche-plan.md](../upcoming/sr3-option-niche-plan.md).
 
 The gate for [sum-representation-plan.md](sum-representation-plan.md) SR3
 slice B (`some(p)` carried AS the payload pointer, 16 bytes to 8), run
