@@ -6,6 +6,31 @@ description: What happened when `(defopaque T :ptr<void>)` c-named as `void *` i
 
 # `defopaque` over a pointer -- a pointer C spelling: gate results
 
+> **GRADUATED 2026-08-28, the same day.** The recommendation at the bottom was
+> followed exactly: the seam landed first (default off, corpus green both ways),
+> then the migration landed and the default flipped, and the seam is gone --
+> `adt_opaque_c_names_as_pointer` is now unconditional. Suite 2712/0.
+>
+> The migration came in at **66** inline-C returns rather than the ~61 estimated
+> here, across the same 21 files, plus `panic.tur`'s conditional return and four
+> fixtures. `stdlib/string.tur` needed nothing, as predicted.
+>
+> **What the estimate missed, and it is the interesting part: six EMITTER sites,
+> not zero.** "Compiler: done" was true of the seam and wrong about graduation.
+> Once the spelling is real for every pointer opaque -- not just the ones a
+> default-off probe reached -- a producer and a consumer can disagree about
+> which name the word goes by, and six places had to be taught the relabel:
+> ascription, the function signature (definition and its forward-decl mirror),
+> call arguments, the generic-base ctor slot, the spec field read, and the CPS
+> clone-frame env shim. Each is one cast; none was visible from the seam-on
+> corpus, because the seam only exercised the subset of pointer opaques the
+> fixtures happened to route that way.
+>
+> Step (3) -- re-run the SR3 slice B gate -- was also done, and the
+> inline-C carrier-builder hole this document predicted is exactly what it
+> found. Slice B is unshelved as `--enable=option-niche`; see
+> [sr3-option-niche-plan.md](../upcoming/sr3-option-niche-plan.md).
+
 Follow-up (1) from
 [sr3-slice-b-gate-results.md](sr3-slice-b-gate-results.md), which shelved SR3
 slice B and named this as the better lever:

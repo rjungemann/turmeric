@@ -284,6 +284,17 @@ extern bool g_adt_slab;
  * carrier (see AdtDef.is_self_recursive for why, and what blocks them). */
 extern bool g_sr1_sum_byvalue;
 extern bool g_opt_backtrackable_state;
+/* SR3 slice B (--enable=option-niche, docs/upcoming/sr3-option-niche-plan.md):
+ * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that
+ * pointer -- 16 bytes down to 8, `(none)` as NULL, no tag word anywhere.
+ *
+ * Behind an experiment rather than on, because the soundness condition ("P's
+ * valid values exclude 0") is not something the type system records: it is a
+ * hand-maintained allowlist in `sr3_payload_is_nonnull_pointer` (types.c), and
+ * an entry added in error makes `(some x)` and `(none)` the same value.  The
+ * polarity is deliberate -- an unrecognised payload merely misses the
+ * optimisation. */
+extern bool g_opt_option_niche;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
  * instead of riding the int64 heap-pointer carrier.  The parametric sibling of

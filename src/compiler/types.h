@@ -1812,7 +1812,7 @@ bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
  * ctors return 0 instead of mallocing a box whose only content is tag 0. */
 bool         adt_ctor_is_null_none(const struct AdtDef *def,
                                    const struct CtorDef *ctor);
-/* SR3 slice B (option niche, TUR_SR3_OPTION_NICHE=1, default OFF): true when
+/* SR3 slice B (option niche, --enable=option-niche, default OFF): true when
  * `t` is an `(Option P)` monomorph carried AS its payload pointer -- 8 bytes,
  * `(none)` == NULL, no tag word.  Eligibility is an explicit allowlist of
  * payload types whose valid values exclude 0; see the definition for why

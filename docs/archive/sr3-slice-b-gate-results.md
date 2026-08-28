@@ -6,6 +6,29 @@ description: What happened when `(Option P)` was carried as its bare payload poi
 
 # SR3 slice B -- gate results
 
+> **RESOLVED 2026-08-28 -- the shelving was reversed, by the route this
+> document named.** Follow-up (1) below (give `defopaque` over a pointer a
+> pointer C spelling) was gated, landed and graduated the next day
+> ([results](opaque-pointer-c-spelling-gate-results.md)), which removed the
+> `String` disqualification and with it the reason to shelve. Slice B is now
+> `--enable=option-niche`, a real experiment rather than the env seam described
+> here; see [sr3-option-niche-plan.md](../upcoming/sr3-option-niche-plan.md).
+>
+> Two things below did not survive the follow-up, and are worth reading as
+> errata rather than as fact:
+>
+> - **"Slice B as built buys 8 bytes per value on a single fixture."** True of
+>   the population as it stood; false once `String` became eligible, which is
+>   the whole `(Option String)` census this document itself enumerates.
+> - **The crossing table is incomplete.** It lists `emit_carrier_bridge` as the
+>   one crossing, and that was right for every payload reachable at the time. An
+>   inline-C body that BUILDS an Option with `tur_some_ptr` produces the carrier
+>   at a `return`, and nothing bridged it -- a silent wrong answer, found only
+>   once `String` (the payload people actually construct in inline-C) came into
+>   scope. Two more rows: the niche let-binding and the niche call argument.
+>
+> The `Cons` disqualification stands unchanged.
+
 The gate for [sum-representation-plan.md](sum-representation-plan.md) SR3
 slice B (`some(p)` carried AS the payload pointer, 16 bytes to 8), run
 2026-08-27 immediately after the SR2a graduation, following the method SR1,

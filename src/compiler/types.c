@@ -5,6 +5,7 @@
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
 #include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
 #include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
+#include "experiments.h" /* SR3 slice B: option-niche lifecycle warning */
 #include "mangle.h"
 /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
@@ -1412,21 +1413,22 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
            strcmp(ctor->name, "None") == 0;
 }
 
-/* SR3 slice B prototype gate (docs/upcoming/sum-representation-plan.md SR3):
- * TUR_SR3_OPTION_NICHE=1 represents an `(Option P)` monomorph whose payload is
- * a NON-NULLABLE pointer as the bare payload pointer -- 16 bytes down to 8,
- * with `(none)` as the null pointer.  Slice A already made the CARRIER None the
- * null pointer, so the two representations already agree about None; what this
- * adds is Some carried AS its payload, with no tag word anywhere.
+/* SR3 slice B (--enable=option-niche, docs/upcoming/sr3-option-niche-plan.md):
+ * represents an `(Option P)` monomorph whose payload is a NON-NULLABLE pointer
+ * as the bare payload pointer -- 16 bytes down to 8, with `(none)` as the null
+ * pointer.  Slice A already made the CARRIER None the null pointer, so the two
+ * representations already agree about None; what this adds is Some carried AS
+ * its payload, with no tag word anywhere.
  *
- * Default off, on the SR1/SR2/SR4 seam precedent. */
+ * A real experiment rather than an env seam (the CLAUDE.md rule for an
+ * in-flight feature): it carries a hand-maintained soundness allowlist, so a
+ * user who turns it on should get the TUR-W0060 lifecycle warning and a plan to
+ * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
+ * from this hot predicate costs one index lookup after the first. */
 static bool sr3_option_niche(void) {
-    static int cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("TUR_SR3_OPTION_NICHE");
-        cached = (e && e[0] == '1') ? 1 : 0;
-    }
-    return cached == 1;
+    if (!g_opt_option_niche) return false;
+    experiment_warn_if_used("option-niche");
+    return true;
 }
 
 /* opaque-pointer-c-spelling (GRADUATED 2026-08-28, docs/archive/opaque-pointer-
@@ -1488,12 +1490,11 @@ static bool sr3_payload_is_nonnull_pointer(Type p) {
          * `(defopaque ... :ptr<void>)` over tur_string_from_bytes, which mallocs
          * unconditionally and has no NULL return path -- non-null by
          * construction, which is the soundness half.  They are listed
-         * unconditionally because the SECOND half of the rule below (the
-         * payload must c-name as a real POINTER) keeps them ineligible unless
-         * TUR_OPAQUE_PTR_CNAME is also on: with that seam off they still spell
-         * `int64_t` and fall out.  So this row is inert on its own and turns
-         * live exactly when the pointer spelling lands -- which is the
-         * dependency the SR3 slice B gate identified. */
+         * eligible by the SECOND half of the rule below (the payload must
+         * c-name as a real POINTER) only because `defopaque` over a pointer now
+         * spells `void *`; before that graduation they spelled `int64_t` and
+         * fell out, which is the dependency the SR3 slice B gate identified and
+         * the reason the phase was shelved for a day. */
         "String", "StringBuilder", NULL
     };
     bool allowed = false;

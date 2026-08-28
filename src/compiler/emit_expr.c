@@ -2587,7 +2587,27 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 !init_val_recorded_byval_agg &&
                 !fn_body_tail_emits_byvalue_carrier_abi(
                     ctx, e->as.let_.bindings[i].init);
-            if (init_is_pbp && !bind_is_ptr_repr &&
+            /* SR3 slice B (inline-C carrier producer): an inline-C body declared
+             * `: (Option String)` builds its result with the preamble's typed
+             * builders (`tur_some_ptr`), which return the CARRIER -- a pointer to
+             * a tagged box -- and its C signature is `int64_t` accordingly.  A
+             * niche binding IS the payload pointer, so binding the carrier
+             * straight into it makes every reader treat the box as the String:
+             * `(let [o (mk-opt 1)] (string/to-cstr (unwrap o)))` printed blank.
+             * The arms below cannot see this -- a niche Option is not a by-value
+             * aggregate, so `init_carrier_to_byval` is false and the plain
+             * pointer relabel wins.  Keyed on the RECORDED emitted spelling, so
+             * it fires only for a producer that really handed back the carrier
+             * word; a niche-returning Turmeric function is already the payload. */
+            bool init_niche_from_carrier =
+                init_val_recorded_i64 && adt_app_is_niche_option(init_ty_r);
+            if (init_niche_from_carrier) {
+                char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                    CK_CARRIER, CK_CONCRETE, init_ty_r);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+                iv = bridged;  /* emit_carrier_bridge freed the old iv */
+            } else if (init_is_pbp && !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0) {
                 buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
             } else if (init_carrier_to_byval) {
@@ -2927,7 +2947,27 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 !init_val_recorded_byval_agg &&
                 !fn_body_tail_emits_byvalue_carrier_abi(
                     ctx, e->as.let_.bindings[i].init);
-            if (init_is_pbp && !bind_is_ptr_repr &&
+            /* SR3 slice B (inline-C carrier producer): an inline-C body declared
+             * `: (Option String)` builds its result with the preamble's typed
+             * builders (`tur_some_ptr`), which return the CARRIER -- a pointer to
+             * a tagged box -- and its C signature is `int64_t` accordingly.  A
+             * niche binding IS the payload pointer, so binding the carrier
+             * straight into it makes every reader treat the box as the String:
+             * `(let [o (mk-opt 1)] (string/to-cstr (unwrap o)))` printed blank.
+             * The arms below cannot see this -- a niche Option is not a by-value
+             * aggregate, so `init_carrier_to_byval` is false and the plain
+             * pointer relabel wins.  Keyed on the RECORDED emitted spelling, so
+             * it fires only for a producer that really handed back the carrier
+             * word; a niche-returning Turmeric function is already the payload. */
+            bool init_niche_from_carrier =
+                init_val_recorded_i64 && adt_app_is_niche_option(init_ty_r);
+            if (init_niche_from_carrier) {
+                char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                    CK_CARRIER, CK_CONCRETE, init_ty_r);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+                iv = bridged;  /* emit_carrier_bridge freed the old iv */
+            } else if (init_is_pbp && !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0) {
                 buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
             } else if (init_carrier_to_byval) {
@@ -8720,6 +8760,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(raw);
                         raw = strdup(_ob.data);
                         buf_free(&_ob);
+                    }
+                    /* SR3 slice B (inline-C carrier producer), the call-argument
+                     * half of the let-bind bridge above: `(show-opt (mk-opt 1))`
+                     * where `mk-opt`'s inline-C body returns `tur_some_ptr`'s
+                     * carrier box and `show-opt`'s parameter is the niche.  This
+                     * is a real VALUE change, not a relabel, so unlike the arms
+                     * above it is keyed on the argument's emitted spelling really
+                     * being the carrier word -- a niche-producing Turmeric call
+                     * already hands over the payload. */
+                    else if (_have_oft && adt_app_is_niche_option(_oft) &&
+                             arg_emitted_cty[0] &&
+                             strcmp(arg_emitted_cty, "int64_t") == 0) {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CARRIER, CK_CONCRETE, _oft);
                     }
                 }
                 /* SR2b: retargeted element-dispatch bridge.  When the
