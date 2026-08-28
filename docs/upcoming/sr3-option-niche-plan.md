@@ -278,9 +278,18 @@ elements are word-in-slot for free and the measurement's container row stops
 being parity -- 8 bytes inline against the default's 16-byte aggregate (or
 its box, for wide elements).  That is the point at which the graduation
 calculus changes, and it is also why nothing container-shaped should be
-built inside this experiment in the meantime: the interim designs are either
+built inside this experiment on its own: the interim designs are either
 unsound (mixed conventions) or new ABI for a fact monomorphization makes
 free.
+
+**Refined into a concrete plan 2026-08-28:**
+[container-element-form-plan.md](container-element-form-plan.md) (CE) --
+the invariant made enforceable (census the undecidable sites first, then a
+loud diagnostic on the residue, never a guess), one chokepoint
+(`container_elem_form` beside `repr_of`), Vec-only, scoped INSIDE
+`--enable=option-niche` since the form only diverges for niche elements.
+Its exit gate is exactly this section's condition: the measurement's
+container parity row breaking.
 
 ## What is left
 
