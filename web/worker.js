@@ -23,6 +23,9 @@ echo "Done! Run 'tur --help' to get started."
 echo "Try the online playground at https://turmeric-lang.com/try"
 `;
 
+const TIMINGS_BASE =
+  'https://raw.githubusercontent.com/rjungemann/turmeric/ci-metrics';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -34,6 +37,41 @@ export default {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache',
         },
+      });
+    }
+
+    // CI suite timings, proxied from the `ci-metrics` orphan branch so the
+    // browser stays same-origin and the payload has one place to be shrunk.
+    // The file is append-only NDJSON, year-partitioned by publish-timings.sh.
+    // TODO: once suite-timings-<year>.jsonl passes ~5 MB, aggregate here
+    // (group by run x suite, drop the raw rows) instead of streaming it whole.
+    if (pathname === '/api/ci-timings') {
+      const asked = url.searchParams.get('year') ?? '';
+      const year = /^\d{4}$/.test(asked)
+        ? asked
+        : String(new Date().getUTCFullYear());
+
+      // On Jan 1 the current year's file does not exist until the first push
+      // to main lands, so fall back to the previous year rather than 502ing.
+      for (const y of [year, String(Number(year) - 1)]) {
+        const upstream = `${TIMINGS_BASE}/suite-timings-${y}.jsonl`;
+        const res = await fetch(upstream, {
+          cf: { cacheTtl: 300, cacheEverything: true },
+        });
+        if (res.ok) {
+          return new Response(res.body, {
+            headers: {
+              'Content-Type': 'application/x-ndjson; charset=utf-8',
+              'Cache-Control': 'public, max-age=300',
+              'X-Timings-Year': y,
+            },
+          });
+        }
+      }
+
+      return new Response('no timings available\n', {
+        status: 502,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 

@@ -166,6 +166,7 @@ class SiteFooter extends HTMLElement {
           <div class="footer-col">
             <div class="footer-col-title">Community</div>
             <a href="https://github.com/rjungemann/turmeric">GitHub</a>
+            <a href="/ci">CI Metrics</a>
           </div>
         </div>
         <div class="footer-bottom">
@@ -205,6 +206,7 @@ class SiteSidebar extends HTMLElement {
       <h3>Community</h3>
       <ul>
         <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+        <li><a href="/ci">CI Metrics</a></li>
       </ul>`;
   }
 }

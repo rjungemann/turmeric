@@ -69,6 +69,7 @@ export default defineConfig({
             try: resolve(__dirname, 'try/index.html'),
             tour: resolve(__dirname, 'tour/index.html'),
             trowel: resolve(__dirname, 'trowel/index.html'),
+            ci: resolve(__dirname, 'ci/index.html'),
           },
         },
       },
