@@ -3388,7 +3388,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 _body_c && strcmp(_body_c, "int64_t") != 0 &&
                 type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type)) &&
                 fn_body_tail_is_carrier_producer(fd->body);
-            if (inst_method_struct_body || body_is_carrier_producer) {
+            /* opaque-pointer-c-spelling: a pointer opaque body does NOT override
+             * a declared carrier result -- see the helper's comment.  `(defn
+             * two-sum [] : int ...)` over a `(Parser int)` body emitted `static
+             * void * two_hysum()` whose every `return` was `(int64_t)...`. */
+            bool body_is_opaque_ptr =
+                emit_fn_body_is_opaque_ptr_over_carrier_result(fd, result);
+            if (inst_method_struct_body || body_is_carrier_producer ||
+                body_is_opaque_ptr) {
                 buf_puts(file, "int64_t");
             } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                 buf_puts(file, _body_c);

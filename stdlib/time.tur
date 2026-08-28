@@ -96,7 +96,7 @@
     __tur_time_cap *cap = (__tur_time_cap *)malloc(sizeof(*cap));
     cap->now = __tur_real_time_now;
     cap->sleep = __tur_real_time_sleep;
-    return (int64_t)(intptr_t)cap;
+    return (void *)(intptr_t)cap;
     ```)
   ;;; Real-Time-free -- release a Time capability created by Real-Time.
   ;;;
@@ -132,7 +132,7 @@
     __tur_time_cap *cap = (__tur_time_cap *)malloc(sizeof(*cap));
     cap->now = __tur_hires_time_now;
     cap->sleep = __tur_hires_time_sleep;
-    return (int64_t)(intptr_t)cap;
+    return (void *)(intptr_t)cap;
     ```)
   ;;; HighRes-Time-free -- release a Time capability created by HighRes-Time.
   ;;;
@@ -172,7 +172,7 @@
     cap->sleep = __tur_mock_time_sleep;
     cap->current_time = 0;
     __tur_mock_time_singleton = cap;
-    return (int64_t)(intptr_t)cap;
+    return (void *)(intptr_t)cap;
     ```)
   ;;; Mock-Time-free -- release a Time capability created by Mock-Time.
   ;;;

@@ -62,8 +62,9 @@
   /* barrier-wait returns :bool, which lowers to C `bool` -- declaring it
      int64_t here is a conflicting-types error, and getting that wrong on a
      function whose whole job is a boolean signal would be a quiet miscompile
-     rather than a loud one. */
-  extern bool barrier_hywait(int64_t);
+     rather than a loud one.  Its Barrier parameter is a `defopaque` over a
+     pointer, so the slot is `void *`, not the int64 carrier. */
+  extern bool barrier_hywait(void *);
   Shared *s = (Shared *)arg;
 
   /* phase 1 */
@@ -71,7 +72,7 @@
   s->phase1_done++;
   pthread_mutex_unlock(&s->m);
 
-  if (barrier_hywait(s->bar)) {
+  if (barrier_hywait((void *)(intptr_t)s->bar)) {
       pthread_mutex_lock(&s->m); s->serial_hits++; pthread_mutex_unlock(&s->m);
   }
 
@@ -80,7 +81,7 @@
   if (s->phase1_done < 3) s->early++;
   pthread_mutex_unlock(&s->m);
 
-  if (barrier_hywait(s->bar)) {
+  if (barrier_hywait((void *)(intptr_t)s->bar)) {
       pthread_mutex_lock(&s->m); s->serial_hits++; pthread_mutex_unlock(&s->m);
   }
   return NULL;

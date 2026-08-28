@@ -438,7 +438,7 @@ bool type_uses_carrier_abi(Type t) {
     if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
         return t.as.adt_.def->n_type_params > 0 &&
                !adt_opaque_c_names_as_pointer(t.as.adt_.def);
-    /* opaque-pointer-c-spelling seam: a PARAMETRIC opaque over a pointer
+    /* opaque-pointer-c-spelling: a PARAMETRIC opaque over a pointer
      * (`(Goal int)`, `(Parser cstr)`, `(SChan P)`) is a `void *` handle in
      * exactly the sense a bare one is -- its phantom arguments are erased and
      * the pointer IS the value.  Left on the carrier path it would be DECLARED
@@ -449,6 +449,18 @@ bool type_uses_carrier_abi(Type t) {
         return false;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     return false;
+}
+
+bool emit_fn_body_is_opaque_ptr_over_carrier_result(const FnDef *fd,
+                                                    TypeKind declared_result) {
+    if (!fd || !fd->body) return false;
+    Type bt = fd->body->type;
+    const AdtDef *def = bt.kind == TY_ADT ? bt.as.adt_.def
+                      : bt.kind == TY_APP ? type_adt_app_def(&bt)
+                                          : NULL;
+    if (!adt_opaque_c_names_as_pointer(def)) return false;
+    const char *dc = type_c_name(emit_type_from_kind(declared_result));
+    return dc && strcmp(dc, "int64_t") == 0;
 }
 
 /* structdef-retirement DS-C: emit_carrier_return_override (RT/SC5) is deleted.
@@ -4601,7 +4613,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * carrier (e.g. the abstract `vec-new` base result feeding a `(Vec A)`
      * spec param) emitted `*(int64_t *)(intptr_t)(handle)` -- a wild deref of
      * the header's first word, segfaulting at runtime. */
-    /* opaque-pointer-c-spelling seam: an opaque newtype over a pointer is the
+    /* opaque-pointer-c-spelling: an opaque newtype over a pointer is the
      * same shape as the :heap case just described -- a one-word handle whose
      * bit pattern IS the int64 carrier -- so its carrier crossing is a pure
      * reinterpret too.  Without this arm the generic CK_CARRIER->CK_CONCRETE

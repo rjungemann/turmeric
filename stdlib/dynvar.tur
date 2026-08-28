@@ -82,5 +82,5 @@
   #fx{Unsafe}
   : ThreadHandle
   ```c
-  return (int64_t)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
+  return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
   ```)

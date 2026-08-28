@@ -93,7 +93,7 @@
   g->cancelled = false;
   g->done = false;
   g->cancel_reason = 0;
-  return (int64_t)(intptr_t)g;
+  return (void *)(intptr_t)g;
   ```)
 ;;; fiber-cancelled? -- check whether the current fiber has been cancelled.
 ;;;
@@ -474,7 +474,7 @@
   ((FiberBlock *)fiber)->task_group = (void *)g;
   ((FiberBlock *)fiber)->cancelled = g->cancelled;
 
-  return (int64_t)(intptr_t)fiber;
+  return (void *)(intptr_t)fiber;
   ```)
 ;;; task-group-join -- wait for a specific spawned fiber to complete.
 ;;;

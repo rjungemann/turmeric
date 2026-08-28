@@ -652,7 +652,7 @@ ReprForm repr_form_from_cty(Type resolved, const char *own_cty,
         if (resolved.kind == TY_FN) return REPR_FAT_HANDLE;
         if (type_is_heap_struct(resolved) || type_is_heap_adt(resolved))
             return REPR_HEAP_PTR;
-        /* opaque-pointer-c-spelling seam: an opaque over a pointer is a LEAF
+        /* opaque-pointer-c-spelling: an opaque over a pointer is a LEAF
          * pointer -- `void *` is its own spelling, so the bits ARE the value.
          * The `own_cty == cty` rule below would already say so for a BARE
          * opaque, but a PARAMETRIC one (`(SChan P)`) has no concrete codegen
@@ -6825,6 +6825,27 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * over rather than fix it (see data-literal-nested). */
                     const char *slot_cty =
                         emit_sig_lookup_param_ctype(ctor_cname, i);
+                    /* opaque-pointer-c-spelling: the GENERIC base ctor
+                     * (`ctor_Pair`, no monomorph suffix) is not in the ctor
+                     * signature side table -- that table records monomorph
+                     * prototypes -- so a straddle at its slot had no slot_cty to
+                     * compare against and passed through bare.  It never
+                     * mattered before, because a base ctor's slots and every
+                     * possible argument were both the int64 carrier.  A pointer
+                     * opaque argument is the first value that is one word
+                     * spelled differently, so name the base ctor's slot for
+                     * exactly that case: `pair__spec__int64_t_int64_t_void__`
+                     * passed its `void *` SChan straight into `ctor_Pair(...,
+                     * int64_t)`. */
+                    if (!slot_cty && !suffix && arg && arg->kind == EX_VAR) {
+                        Type _sp;
+                        if (emit_var_spec_arg_type(ctx, arg, &_sp) &&
+                            adt_opaque_c_names_as_pointer(
+                                _sp.kind == TY_ADT ? _sp.as.adt_.def
+                              : _sp.kind == TY_APP ? type_adt_app_def(&_sp)
+                                                   : NULL))
+                            slot_cty = "int64_t";
+                    }
                     if (slot_cty && arg_strs[i]) {
                         const char *av = arg_strs[i];
                         const char *arg_cty = NULL;
@@ -8629,6 +8650,78 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_free(&_ab);
                     }
                 }
+                /* opaque-pointer-c-spelling: the same last-resort idea for the
+                 * one pair of spellings the arm above cannot see, in BOTH
+                 * directions.  A pointer opaque and the int64 carrier are the
+                 * same word -- crossing between them is a pure relabel, never a
+                 * spill, a box or a deref -- but a formal and an argument can
+                 * now disagree about which name that word goes by:
+                 *
+                 *   apply_goal(void *)      <- a poly thunk's int64 result
+                 *   run_parser_full(void *) <- a `: int`-declared producer
+                 *   ctor_Pair(int64_t)      <- a `(SChan R)` spec param
+                 *
+                 * Keyed on one side actually being a pointer OPAQUE (not merely
+                 * on the `void *` spelling, which `ptr<void>` shares), so this
+                 * cannot fire for any pre-existing pointer formal, and only
+                 * over a bare value -- an earlier arm that already coerced left
+                 * a '('- or '*'-leading spelling, and re-casting that would
+                 * undo a deref. */
+                if (raw && raw[0] != '(' && raw[0] != '*') {
+                    const char *_opc = emit_sig_lookup_param_ctype(fn_name, i);
+                    Type _oft = {0};
+                    bool _have_oft = false;
+                    if (matched_spec && i < matched_spec->n_args) {
+                        _oft = emit_resolve_type(ctx,
+                            ((EmitAbiSpecialization *)matched_spec)->arg_types[i]);
+                        _have_oft = true;
+                    } else if (fn_binding && fn_binding->type.kind == TY_FN &&
+                               i < fn_binding->type.as.fn.arity &&
+                               fn_binding->type.as.fn.arg_full_types &&
+                               fn_binding->type.as.fn.arg_full_types[i]) {
+                        _oft = emit_resolve_type(ctx,
+                            *fn_binding->type.as.fn.arg_full_types[i]);
+                        _have_oft = true;
+                    }
+                    if ((!_opc || !*_opc) && _have_oft)
+                        _opc = emit_type_c_name(ctx, _oft);
+                    Type _oat;
+                    if (!emit_var_spec_arg_type(ctx, e->as.call_.args[i], &_oat))
+                        _oat = emit_resolve_type(ctx, e->as.call_.args[i]->type);
+                    bool _arg_is_opq_ptr = adt_opaque_c_names_as_pointer(
+                        _oat.kind == TY_ADT ? _oat.as.adt_.def
+                      : _oat.kind == TY_APP ? type_adt_app_def(&_oat) : NULL);
+                    bool _formal_is_opq_ptr = _have_oft &&
+                        adt_opaque_c_names_as_pointer(
+                            _oft.kind == TY_ADT ? _oft.as.adt_.def
+                          : _oft.kind == TY_APP ? type_adt_app_def(&_oft) : NULL);
+                    /* Applied UNCONDITIONALLY on the formal, not gated on the
+                     * argument's spelling.  There is no reliable way to ask what
+                     * C type a given argument's emission produced -- an
+                     * ascription is stripped before emission (`(:: (two-sum)
+                     * (Parser int))`), and a dict-ABI instance-method parameter
+                     * is DECLARED `int64_t` while its elab type resolves to the
+                     * pointer opaque -- so both directions of the disagreement
+                     * are invisible from here.  They do not need to be visible:
+                     * a pointer opaque and the carrier are the same word, and
+                     * `(void *)(intptr_t)p` round-trips a pointer exactly as it
+                     * relabels an integer.  A redundant cast is the price of not
+                     * guessing. */
+                    const char *_relabel = NULL;
+                    if (_formal_is_opq_ptr && _opc && strchr(_opc, '*'))
+                        _relabel = "void *";
+                    else if (_arg_is_opq_ptr && _opc &&
+                             strcmp(_opc, "int64_t") == 0)
+                        _relabel = "int64_t";
+                    if (_relabel) {
+                        Buf _ob; buf_init(&_ob);
+                        buf_printf(&_ob, "(%s)(intptr_t)(%s)", _relabel, raw);
+                        buf_putc(&_ob, '\0');
+                        free(raw);
+                        raw = strdup(_ob.data);
+                        buf_free(&_ob);
+                    }
+                }
                 /* SR2b: retargeted element-dispatch bridge.  When the
                  * re-resolver swaps a constrained-instance inner call onto a
                  * concrete element instance (`__inst_Enc_enc_float(double)` /
@@ -10212,16 +10305,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * eff_fld_rcty / field_byval_unbox paths from re-introducing the
                  * truncating cast. */
                 if (fn_carrier_field) fld_rcty = "int64_t";
-                /* opaque-pointer-c-spelling seam: `!= "int64_t"` is being used
+                /* opaque-pointer-c-spelling: `!= "int64_t"` is being used
                  * here as "is a by-value aggregate", which is only sound while
                  * every non-heap TY_APP/TY_STRUCT spells either the carrier word
                  * or a struct NAME.  An opaque over a pointer spells `void *`,
                  * and the unbox then DEREFERENCES a handle: `(.snd p)` on
                  * `(Pair int (SChan R))` emitted `*(void **)(pair->snd)` and
                  * segfaulted (schan-roundtrip).  A pointer spelling is never a
-                 * by-value aggregate, so ask that directly -- and the guard is
-                 * inert with the seam off, where the only pointer-spelled field
-                 * types are the :heap ones the two clauses below already
+                 * by-value aggregate, so ask that directly -- and the guard was
+                 * inert before this landed, when the only pointer-spelled field
+                 * types were the :heap ones the two clauses below already
                  * exclude. */
                 bool field_byval_unbox =
                     cty && strcmp(cty, "int64_t") == 0 &&
@@ -10496,6 +10589,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&hb,
                         "((union { int64_t s; %s d; }){.s = ((tur_adt_%s *)(intptr_t)(%s))->%s}).d",
                         fld_rcty, adt_mn, sv, mp);
+                } else if (cty && strcmp(cty, "int64_t") == 0 &&
+                           adt_opaque_c_names_as_pointer(
+                               fld_rty.kind == TY_ADT ? fld_rty.as.adt_.def
+                             : fld_rty.kind == TY_APP ? type_adt_app_def(&fld_rty)
+                                                      : NULL)) {
+                    /* opaque-pointer-c-spelling: the same shape as the float
+                     * case above -- the erased carrier field declares `int64_t`
+                     * while the SPEC resolves the element to a pointer opaque.
+                     * Unlike float this needs no reinterpret union, only the
+                     * pointer spelling: the word is already the handle, and
+                     * casting it to the erased `cty` made `pair-snd`'s spec
+                     * return an int64 from a `void *` function. */
+                    buf_printf(&hb, "(%s)(intptr_t)((tur_adt_%s *)(intptr_t)(%s))->%s",
+                               fld_rcty, adt_mn, sv, mp);
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                cty, adt_mn, sv, mp);
@@ -11124,11 +11231,43 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * opaque keeps its declared pointer carrier and is left untouched. */
             if (e->type.kind == TY_ADT && e->type.as.adt_.def &&
                 e->type.as.adt_.def->is_opaque &&
-                e->type.as.adt_.def->n_type_params > 0) {
+                e->type.as.adt_.def->n_type_params > 0 &&
+                /* opaque-pointer-c-spelling: this reinterpret exists because the
+                 * parametric opaque's applied positions were the int64 carrier
+                 * while `(:: (fn ...) :Goal)` produced a pointer.  Once the
+                 * newtype c-names as a pointer the two AGREE, and forcing the
+                 * int64 direction re-creates the very mismatch this arm was
+                 * written to remove -- now at the `void *` return instead. */
+                !adt_opaque_c_names_as_pointer(e->type.as.adt_.def)) {
                 const char *icty = emit_type_c_name(ctx, e->as.ascribe_.inner->type);
                 size_t iL = icty ? strlen(icty) : 0;
                 if (icty && iL >= 1 && icty[iL - 1] == '*') {
                     inner_val = emit_carrier_reinterpret(ctx, inner_val, NULL, "closure-capture");
+                }
+            }
+            /* opaque-pointer-c-spelling: the other direction of the same
+             * relabel.  `(:: <int64 handle> :Chan)` / `(:: (item-raw) :Parser)`
+             * flows a carrier word into a slot the newtype now spells `void *`.
+             * The ascription is a pure reinterpret -- ascribe_to_opaque above
+             * deliberately refuses the by-value carrier bridge for exactly this
+             * shape -- so all it needs is the pointer cast that makes the C
+             * agree with the value that was already correct. */
+            {
+                const AdtDef *odef =
+                    e->type.kind == TY_ADT ? e->type.as.adt_.def
+                  : e->type.kind == TY_APP ? type_adt_app_def(&e->type)
+                                           : NULL;
+                if (adt_opaque_c_names_as_pointer(odef)) {
+                    const char *icty =
+                        emit_type_c_name(ctx, e->as.ascribe_.inner->type);
+                    if (icty && strchr(icty, '*') == NULL) {
+                        Buf pb; buf_init(&pb);
+                        buf_printf(&pb, "(void *)(intptr_t)(%s)", inner_val);
+                        buf_putc(&pb, '\0');
+                        free(inner_val);
+                        inner_val = strdup(pb.data);
+                        buf_free(&pb);
+                    }
                 }
             }
             return inner_val;

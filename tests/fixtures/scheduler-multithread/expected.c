@@ -4374,31 +4374,31 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
-static int64_t fiber_hynew(void *, int64_t);
-static int64_t fiber_hyresume(int64_t, int64_t);
+static void * fiber_hynew(void *, int64_t);
+static int64_t fiber_hyresume(void *, int64_t);
 static void fiber_hyyield(int64_t);
-static int64_t fiber_hydone_qu(int64_t);
-static int64_t fiber_hyarg(int64_t);
-static void fiber_hyfree(int64_t);
-static int64_t fiber_hylocal_hyget(int64_t, int64_t);
-static void fiber_hylocal_hyset_ex(int64_t, int64_t, int64_t);
+static int64_t fiber_hydone_qu(void *);
+static int64_t fiber_hyarg(void *);
+static void fiber_hyfree(void *);
+static int64_t fiber_hylocal_hyget(void *, int64_t);
+static void fiber_hylocal_hyset_ex(void *, int64_t, int64_t);
 static int64_t fiber_hylocal_hycurrent_hyget(int64_t);
 static void fiber_hylocal_hycurrent_hyset_ex(int64_t, int64_t);
 static void scheduler_hyyield_ex();
 static void scheduler_hypark_ex();
-static void scheduler_hyunpark_ex(int64_t);
+static void scheduler_hyunpark_ex(void *);
 static void async_hysleep(int64_t);
 static int64_t fiber_hythread_hyid();
 static void * scheduler_hymt_hynew(int64_t);
 static void scheduler_hymt_hyfree(void *);
-static void scheduler_hymt_hyspawn(void *, int64_t);
+static void scheduler_hymt_hyspawn(void *, void *);
 static void scheduler_hymt_hyrun(void *);
 static int64_t scheduler_hymt_hythread_hyid();
 static void scheduler_hymt_hyset_hycurrent(void *);
 static void * scheduler_hymt_hycurrent();
 static void scheduler_hymt_hyyield();
 static void scheduler_hymt_hypark();
-static void scheduler_hymt_hyunpark(int64_t);
+static void scheduler_hymt_hyunpark(void *);
 static void fiber_hya();
 static void fiber_hyb();
 static void thread_hysleep(int64_t);
@@ -7929,12 +7929,12 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static int64_t fiber_hynew(void * fn, int64_t stack_size) {
-        return (int64_t)(intptr_t)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+static void * fiber_hynew(void * fn, int64_t stack_size) {
+        return (void *)(intptr_t)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   
 }
 
-static int64_t fiber_hyresume(int64_t f, int64_t arg) {
+static int64_t fiber_hyresume(void * f, int64_t arg) {
         return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   
 }
@@ -7944,29 +7944,29 @@ static void fiber_hyyield(int64_t value) {
   
 }
 
-static int64_t fiber_hydone_qu(int64_t f) {
+static int64_t fiber_hydone_qu(void * f) {
         FiberBlock *fb = (FiberBlock *)f;
   return fb ? (int64_t)fb->done : 1;
   
 }
 
-static int64_t fiber_hyarg(int64_t f) {
+static int64_t fiber_hyarg(void * f) {
         FiberBlock *fb = (FiberBlock *)f;
   return fb ? fb->arg : 0;
   
 }
 
-static void fiber_hyfree(int64_t f) {
+static void fiber_hyfree(void * f) {
         tur_fiber_block_free((FiberBlock *)f);
   
 }
 
-static int64_t fiber_hylocal_hyget(int64_t f, int64_t key) {
+static int64_t fiber_hylocal_hyget(void * f, int64_t key) {
         return tur_fiber_local_get((FiberBlock *)f, (int64_t)key);
   
 }
 
-static void fiber_hylocal_hyset_ex(int64_t f, int64_t key, int64_t value) {
+static void fiber_hylocal_hyset_ex(void * f, int64_t key, int64_t value) {
         tur_fiber_local_set((FiberBlock *)f, (int64_t)key, (int64_t)value);
   
 }
@@ -7991,7 +7991,7 @@ static void scheduler_hypark_ex() {
   
 }
 
-static void scheduler_hyunpark_ex(int64_t f) {
+static void scheduler_hyunpark_ex(void * f) {
         tur_scheduler_unpark((FiberBlock *)f);
   
 }
@@ -8034,7 +8034,7 @@ static void scheduler_hymt_hyfree(void * sched) {
   
 }
 
-static void scheduler_hymt_hyspawn(void * sched, int64_t fiber) {
+static void scheduler_hymt_hyspawn(void * sched, void * fiber) {
         tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
   
 }
@@ -8069,7 +8069,7 @@ static void scheduler_hymt_hypark() {
   
 }
 
-static void scheduler_hymt_hyunpark(int64_t fiber) {
+static void scheduler_hymt_hyunpark(void * fiber) {
         tur_scheduler_mt_unpark((FiberBlock *)fiber);
   
 }
@@ -8108,21 +8108,21 @@ int main(int argc, char **argv) {
             void * sched_1420 = __ps_166;
             (void)sched_1420;
             {
-                int64_t __ps_167 = (fiber_hynew((void *)(intptr_t)(fiber_hya), INT64_C(0)));
+                void * __ps_167 = (fiber_hynew((void *)(intptr_t)(fiber_hya), INT64_C(0)));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                int64_t fa_1421 = __ps_167;
+                void * fa_1421 = __ps_167;
                 (void)fa_1421;
                 {
-                    int64_t __ps_168 = (fiber_hynew((void *)(intptr_t)(fiber_hyb), INT64_C(0)));
+                    void * __ps_168 = (fiber_hynew((void *)(intptr_t)(fiber_hyb), INT64_C(0)));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    int64_t fb_1422 = __ps_168;
+                    void * fb_1422 = __ps_168;
                     (void)fb_1422;
-                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_1420), fa_1421);
-                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_1420), fb_1422);
+                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_1420), (void *)(intptr_t)(fa_1421));
+                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_1420), (void *)(intptr_t)(fb_1422));
                     thread_hysleep(INT64_C(100));
                     scheduler_hymt_hyfree((void *)(intptr_t)(sched_1420));
-                    fiber_hyfree(fa_1421);
-                    fiber_hyfree(fb_1422);
+                    fiber_hyfree((void *)(intptr_t)(fa_1421));
+                    fiber_hyfree((void *)(intptr_t)(fb_1422));
                 }
             }
             int64_t __t169;

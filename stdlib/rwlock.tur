@@ -37,7 +37,7 @@
   pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
   if (!rw) { fprintf(stderr, "rwlock-new: out of memory\n"); abort(); }
   pthread_rwlock_init(rw, NULL);
-  return (int64_t)(intptr_t)rw;
+  return (void *)(intptr_t)rw;
   ```)
 ;;; rwlock-rdlock -- acquire a shared read lock, blocking until available.
 ;;;

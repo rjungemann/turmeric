@@ -1429,34 +1429,24 @@ static bool sr3_option_niche(void) {
     return cached == 1;
 }
 
-/* opaque-pointer-c-spelling gate (docs/upcoming/opaque-pointer-c-spelling-
- * gate-results.md, follow-up (1) from the SR3 slice B gate):
- * TUR_OPAQUE_PTR_CNAME=1 spells an opaque newtype declared over a POINTER
- * (`(defopaque String :ptr<void>)`) as `void *` rather than as the `int64_t`
+/* opaque-pointer-c-spelling (GRADUATED 2026-08-28, docs/archive/opaque-pointer-
+ * c-spelling-gate-results.md): an opaque newtype declared over a POINTER
+ * (`(defopaque String :ptr<void>)`) c-names as `void *`, not as the `int64_t`
  * carrier word.
  *
  * The motivation is not size -- both are 8 bytes -- it is DISTINGUISHABILITY.
  * The emitter asks "is this the int64 carrier?" by string-comparing the C name
- * (94 `strcmp(cname, "int64_t")` sites), so an opaque pointer handle currently
- * aliases every other carrier value: a tagged ADT box, a closure handle, a
- * boxed Option.  A pointer spelling is what would let those sites tell a
- * handle apart from a box -- and it is the precondition the SR3 slice B gate
- * identified for `(Option String)` niche filling.
+ * (94 `strcmp(cname, "int64_t")` sites), so an opaque pointer handle used to
+ * alias every other carrier value: a tagged ADT box, a closure handle, a boxed
+ * Option.  A pointer spelling is what lets those sites tell a handle apart from
+ * a box -- and it is the precondition SR3 slice B needs for `(Option String)`
+ * niche filling, which is the whole of that phase's census.
  *
- * Default off, on the SR1/SR2/SR3/SR4 seam precedent. */
-static bool opaque_ptr_cname(void) {
-    static int cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("TUR_OPAQUE_PTR_CNAME");
-        cached = (e && e[0] == '1') ? 1 : 0;
-    }
-    return cached == 1;
-}
-
-/* True when `def` is an opaque newtype whose declared base is a pointer AND the
- * seam is on -- i.e. when type_c_name should spell it `void *`. */
+ * The declared base type reaches here through `AdtDef.opaque_base_is_ptr`; it
+ * was parsed for POSITION only and discarded before this landed, which is why
+ * `:ptr<void>` and `:int` were indistinguishable downstream. */
 bool adt_opaque_c_names_as_pointer(const AdtDef *def) {
-    return def && def->is_opaque && def->opaque_base_is_ptr && opaque_ptr_cname();
+    return def && def->is_opaque && def->opaque_base_is_ptr;
 }
 
 /* The soundness condition for the niche is "P's valid values EXCLUDE 0",
@@ -3933,7 +3923,7 @@ const char *type_c_name(Type t) {
             /* SC7: a lowered transparent int-newtype ADT is just its int64
              * payload (mirrors the TY_STRUCT / TY_APP arms above). */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
-            /* opaque-pointer-c-spelling seam: an opaque newtype declared over a
+            /* opaque-pointer-c-spelling: an opaque newtype declared over a
              * pointer spells `void *`.  Asked before the by-value arm (which an
              * opaque never reaches -- adt_is_byvalue_product is false for
              * is_opaque) purely so the two opaque answers sit together. */
@@ -3953,7 +3943,7 @@ const char *type_c_name(Type t) {
         case TY_APP: {
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
-            /* opaque-pointer-c-spelling seam: a PARAMETRIC opaque over a
+            /* opaque-pointer-c-spelling: a PARAMETRIC opaque over a
              * pointer -- `(defopaque Goal [A] :ptr<void>)`, `(defopaque Parser
              * [A] :ptr<void>)`, `(defopaque SChan [P] :ptr<void>)` -- erases its
              * type arguments to the same handle, so `(Goal int)` must spell
@@ -5456,7 +5446,7 @@ static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
     if (type_is_transparent_int_newtype(*t))
         return REPR_SCALAR_BITS;
 
-    /* opaque-pointer-c-spelling seam: an opaque newtype over a pointer is a
+    /* opaque-pointer-c-spelling: an opaque newtype over a pointer is a
      * LEAF pointer -- the same form `cstr` / `ptr<T>` take, not a heap handle:
      * `void *` is the type's own spelling, so the bits ARE the value and
      * repr_form_from_cty recovers SCALAR_BITS from the declaration.  Predicting

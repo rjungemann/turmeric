@@ -6487,7 +6487,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     _body_c && strcmp(_body_c, "int64_t") != 0 &&
                     type_uses_carrier_abi(fd->body->type) &&
                     fn_body_tail_is_carrier_producer(fd->body);
-                if (inst_method_app_body || body_is_carrier_producer) {
+                /* opaque-pointer-c-spelling: mirror emit_fns.c -- a pointer
+                 * opaque body does not override a declared carrier result, and
+                 * the prototype must not disagree with the definition. */
+                if (inst_method_app_body || body_is_carrier_producer ||
+                    emit_fn_body_is_opaque_ptr_over_carrier_result(fd, result)) {
                     buf_puts(out, "int64_t");
                 } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                     buf_puts(out, _body_c);

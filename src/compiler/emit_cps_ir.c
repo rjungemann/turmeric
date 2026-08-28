@@ -7630,10 +7630,22 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ce->fn_cn, id, i, cfn);
                 side = "$0";
             } else if (env1) {
-                /* Run f(cap) on resume, ignoring the resumed value; cap = the env. */
+                /* Run f(cap) on resume, ignoring the resumed value; cap = the env.
+                 * opaque-pointer-c-spelling: the env cast used to be `ecast`
+                 * alone -- the marshaller's codec kind -- while the two- and
+                 * one-hole branches beside it ask `cc_cast_for_param`, which
+                 * knows the difference between "this is how the env was
+                 * marshalled" and "this is what the callee's slot is spelled".
+                 * They only diverge once a param can be a pointer that the
+                 * default carrier cast straddles: a `(defopaque Rec :ptr<void>)`
+                 * env deserialized through its Serializable instance reached
+                 * `run_loop(void *)` as `(int64_t)env`.  Keep the explicit cstr
+                 * codec cast, which is already the right pointer. */
+                char esc[192];
+                cc_cast_for_param(ce, fr->call_fn, 0, esc, sizeof esc);
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)value; return (intptr_t)%s(%senv); }\n",
-                    ce->fn_cn, id, i, cfn, ecast);
+                    ce->fn_cn, id, i, cfn, ekc == 1 ? ecast : esc);
                 side = "$E";
             } else if (two_arg) {
                 const char *a0 = fr->hole_left ? "value" : "env";
