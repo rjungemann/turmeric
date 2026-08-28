@@ -1,0 +1,11 @@
+;; option-niche: a null payload smuggled into (some x) via the coercing cast
+;; violates String's :non-null declaration. Under the niche that null IS the
+;; (none) bit pattern, so the unchecked identity ctor would return a silent
+;; wrong answer; the checked ctor must abort before any output.
+(load "stdlib/string.tur")
+
+(defn main [] : int
+  (let [bad (:: (:: 0 :ptr<void>) String)
+        o   (some bad)]
+    (if (some? o) (println "some") (println "none"))
+    0))

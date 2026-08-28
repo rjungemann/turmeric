@@ -285,7 +285,12 @@ not this file -- these each have a row there, and the guide carries the
 matrix, the structural note about which `TypeKind` switch is authoritative, and
 the plan links. File a new repr cell there as well as here.
 
-Both rows that were here are now archived (2026-08-21).
+| Report | Severity | One line |
+|---|---|---|
+| [option-niche-inline-c-carrier-crossings-incomplete](option-niche-inline-c-carrier-crossings-incomplete.md) | medium | Under `--enable=option-niche`, an inline-C `tur_some_ptr` producer consumed directly as a match scrutinee or a constructor argument binds the carrier box as the payload -- silent wrong answer; let-binding, call-arg and return positions are bridged, container/capture/rest positions unaudited |
+
+Both rows that were here before the consolidation campaign are archived
+(2026-08-21).
 
 `byvalue-product-tail-var-double-unboxed-nonparametric` was resolved
 2026-08-21 and moved to

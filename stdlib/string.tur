@@ -25,9 +25,13 @@
 ;; String lowers to :ptr<void> in the C ABI (a pointer to the refcounted
 ;; payload); the newtype keeps it nominally distinct so the checker rejects
 ;; passing an unrelated handle where a String is expected.
-(defopaque String :ptr<void>)
+;; :non-null -- the author's claim that a String handle is never the null
+;; pointer (tur_string_from_bytes mallocs unconditionally; no producer returns
+;; 0).  This is what makes (Option String) eligible for the option-niche
+;; representation; the niche Some ctor enforces it at construction.
+(defopaque String :ptr<void> :non-null)
 
-(defopaque StringBuilder :ptr<void>)
+(defopaque StringBuilder :ptr<void> :non-null)
 ;; ---- Runtime primitives (src/runtime/tur_string.c) -------------------------
 ;; Declared raw (:ptr / :cstr / :int / :bool); the public ops below wrap them
 ;; with the String / StringBuilder newtypes.  The interpreter registers a native

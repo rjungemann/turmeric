@@ -1197,6 +1197,7 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     bool opaque_linear = false;
     bool opaque_affine = false;
     bool opaque_sealed = false;
+    bool opaque_non_null = false;
     for (uint32_t ai = base_idx + 1; ai < call->as.list.len; ai++) {
         Form *attr = call->as.list.items[ai];
         if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
@@ -1205,10 +1206,12 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             opaque_affine = true;
         } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_sealed) {
             opaque_sealed = true;
+        } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_non_null) {
+            opaque_non_null = true;
         } else {
             diag_emit(DIAG_ERROR, attr->span,
                       "defopaque: unexpected attribute -- expected :linear, "
-                      ":affine or :sealed");
+                      ":affine, :sealed or :non-null");
             return NULL;
         }
     }
@@ -1260,6 +1263,18 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
                  strncmp(bn, "ptr<", 4) == 0);
         }
     }
+    /* option-niche: `:non-null` declares "this handle's valid values exclude
+     * the null pointer", which only means anything over a pointer base -- on an
+     * int newtype 0 is just a number, and accepting the attribute there would
+     * let a later base-type edit silently keep a stale claim. */
+    if (opaque_non_null && !def->opaque_base_is_ptr) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defopaque: :non-null requires a pointer base type "
+                  "(:ptr or :ptr<...>) -- it declares that the handle's valid "
+                  "values exclude the null pointer");
+        return NULL;
+    }
+    def->opaque_non_null = opaque_non_null;
     /* sealed-opaque: assigned UNCONDITIONALLY, like the flags above -- the
      * forward-declared-stub path reuses an existing def rather than the
      * freshly memset one, so a conditional assignment would silently leave a

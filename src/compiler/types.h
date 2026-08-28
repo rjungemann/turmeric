@@ -377,6 +377,20 @@ typedef struct AdtDef {
      * declared base was not recoverable anywhere downstream.  Read only by
      * `adt_opaque_c_names_as_pointer` (types.c), which is seam-gated. */
     bool        opaque_base_is_ptr;
+    /* option-niche: set by the `:non-null` attribute on a pointer-based
+     * defopaque -- `(defopaque String :ptr<void> :non-null)`.  A DECLARATION by
+     * the type's author that its valid values exclude the null pointer (every
+     * constructor allocates; no producer returns 0), which is the soundness
+     * condition for `(Option T)` niche filling.  This replaces the former
+     * hard-coded String/StringBuilder rows in the eligibility allowlist: the
+     * claim now lives at the definition site, next to the constructors it is a
+     * claim about.  It is a claim the compiler cannot prove -- inline-C or a
+     * coercing `::` can still smuggle a 0 -- so the niche `Some` ctor also
+     * checks it at construction and aborts loudly rather than letting
+     * `(some null)` silently read back as `(none)`.  Only legal on a pointer
+     * base (elab_defopaque rejects it elsewhere); read by
+     * `sr3_payload_is_nonnull_pointer` (types.c). */
+    bool        opaque_non_null;
     /* sealed-opaque (GRADUATED 2026-08-17, docs/archive/sealed-opaque-plan.md):
      * set by the `:sealed` attribute on a defopaque.  `::` is a COERCING cast,
      * so an ordinary opaque can always be unwrapped to its carrier and re-wrapped

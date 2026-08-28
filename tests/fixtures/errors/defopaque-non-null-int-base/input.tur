@@ -1,0 +1,3 @@
+(defopaque UserId :int :non-null)
+
+(defn main [] : int 0)

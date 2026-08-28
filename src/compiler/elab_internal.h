@@ -355,6 +355,9 @@ typedef struct Elab {
     const Symbol *kw_move;        /* :move keyword for defstruct */
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     const Symbol *kw_affine;      /* :affine keyword for defopaque (at-most-once) */
+    const Symbol *kw_non_null;    /* :non-null keyword for defopaque -- the author
+                                   * declares the handle's valid values exclude 0,
+                                   * which is the Option-niche soundness condition */
     const Symbol *kw_sealed;      /* :sealed keyword for defopaque -- `::` cannot
                                    * cross the type/representation boundary
                                    * outside the declaring module */
