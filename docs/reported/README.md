@@ -53,12 +53,25 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
-| [spices-carry-pre-sum-option-result-layout](spices-carry-pre-sum-option-result-layout.md) | high | (spice repo) 46 files across 12 spices still speak the pre-SR2b Option/Result layout: 126 hand-rolled inline-C struct sites read silently wrong bytes (old `is_ok = true` reads as `tag == 1` = Err), 35 `.is-some`/`.value`/`.ok-val` reads are elaboration errors. Invisible to this repo's CI -- `requires.spices` fixtures auto-skip without the sibling checkout. Worked example for the migration: commit `5acef8b0` |
+| [type-fuzz-src-red-on-clang-21](type-fuzz-src-red-on-clang-21.md) | medium | `tur_type_fuzz_src` reports 15/40 BUG on Apple clang 21 and passes in CI on both ubuntu-latest and macos-latest (older clang). All 15 are Result shapes (`res`/`res_box`/`res_bind`). Identical case set on the v0.39.0 compiler, so it predates the SR2a graduation. Trap: a saved case does NOT reproduce when compiled by hand |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+
+`spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 and moved
+to [docs/archive](../archive/spices-carry-pre-sum-option-result-layout.md).
+Every spice is migrated (`turmeric-spices` #59): 131 inline-C sites in 47 files
+build and inspect through the emitted preamble helpers, 43 record-accessor
+reads became the stdlib accessors, and nothing in THIS repo had to change. The
+corruption was reproduced before it was fixed -- `assert-ok` on a genuine
+`(ok 7)` printed "expected ok, got err", because the retired layout's
+`is_ok = true` byte reads back as `tag == 1`, which is Err. Measured across
+every spice suite that runs without external C deps: 102 failing test files ->
+75, zero regressions. That migration is what unblocked the
+`parametric-sum-byvalue` graduation, whose soak existed to avoid fixing the
+ABI before its heaviest client existed.
 
 `args-api-int-erased-handles` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/args-api-int-erased-handles.md). `ArgSpec` /
