@@ -1293,11 +1293,33 @@ void elab_register_adt_def(Elab *e, AdtDef *def) {
  * Shared by positional-style variants (`(Just :int)`) and record-style variants
  * (`(Circle [radius : float])`); the record path also sets ctor->fields[fi].name.
  * Returns false (diag already emitted) on an unresolvable field type. */
+/* SR1: does this field-type form name `def` itself?  See AdtDef.is_self_recursive
+ * -- a recursive field's resolved full_type is deliberately NULL, so the only
+ * place the fact is observable is here, against the form the user wrote.  Walks
+ * a compound form (`(Vec Term)`, `(Pair Term int)`) so a self-reference nested
+ * inside a type application counts too. */
+static bool ctor_field_form_names_adt(const Form *ft_form, const char *adt_name) {
+    if (!ft_form || !adt_name) return false;
+    if (ft_form->tag == F_SYM || ft_form->tag == F_KEYWORD) {
+        const Symbol *s = ft_form->as.sym;
+        return s && s->name && strlen(adt_name) == s->len &&
+               memcmp(s->name, adt_name, s->len) == 0;
+    }
+    if (ft_form->tag == F_LIST) {
+        for (uint32_t i = 0; i < ft_form->as.list.len; i++)
+            if (ctor_field_form_names_adt(ft_form->as.list.items[i], adt_name))
+                return true;
+    }
+    return false;
+}
+
 static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                                Form *ft_form, const Symbol **tp_syms,
                                uint32_t n_type_params, bool record_style) {
     ctor->fields[fi].full_type = NULL;
     if (ctor->field_forms) ctor->field_forms[fi] = NULL;
+    if (ctor_field_form_names_adt(ft_form, def->name))
+        def->is_self_recursive = true;
 
     /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
      * E.g. `a` in `(defdata Opt2 [a] (Yep a))`. */
@@ -1670,6 +1692,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def = adt_binding->type.as.adt_.def;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
         def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
@@ -1705,6 +1734,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
         def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
@@ -2470,6 +2506,13 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def = adt_binding->type.as.adt_.def;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->needs_drop_glue = false;
         def->is_gadt = true;
@@ -2500,6 +2543,13 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_gadt = true;
         def->type_params = type_params;
@@ -2929,6 +2979,25 @@ static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
              * spines, grounding any method-level tyvar against its concrete
              * peer.  See arm_arg_join above. */
             return arm_arg_join(e, a, b, out);
+        }
+    }
+    /* SR2b: one arm's type is an application headed by an UNGROUNDED tyvar --
+     * `(m b)` from `(k v)` in a Monad bind's Some arm -- and the peer is a
+     * concrete ADT application (`(Option A)` from the None arm's `(none)`).
+     * The class variable `m` is grounded by the INSTANCE, not by this join,
+     * so the abstract head can never win here: take the concrete side.  This
+     * is the class-method-hkt-tyvar-grounding rule one level up -- that fix
+     * grounds a method tyvar BELOW a shared concrete head (arm_arg_join);
+     * this grounds the head itself.  Reachable once Option/Result are sums,
+     * because a sum's empty arm is a bare constructor call rather than an
+     * accessor whose type the record head already fixed. */
+    if (a.kind == TY_APP && b.kind == TY_APP && (ad != NULL) != (bd != NULL)) {
+        const Type *abs = ad ? &b : &a;
+        const Type *spine = abs;
+        while (spine->kind == TY_APP && spine->as.app.fn) spine = spine->as.app.fn;
+        if (spine->kind == TY_TYVAR) {
+            *out = ad ? a : b;
+            return true;
         }
     }
     return false;
@@ -4413,7 +4482,23 @@ Expr *elab_match(Elab *e, const Form *call) {
                 move_state_restore(match_move_bindings, match_move_before, n_match_move);
             }
             bool _s_ctor = e->in_match_arm; e->in_match_arm = true;
+            /* SR2b: sibling-arm bidirectional inference, the match twin of the
+             * if-form's have_sibling_ty push (elab_forms.c).  Once an earlier
+             * arm established a concrete parametric-app result -- `(k v)` in a
+             * Monad bind grounding `(Option b)` -- push it as the expected type
+             * so a later arm that is a bare parametric constructor (`(none)`,
+             * `(err e)`) selects its monomorph from the join instead of
+             * failing it with an ungrounded fresh tyvar.  Narrowed to a TY_APP
+             * join so every non-app match elaborates exactly as before, and
+             * restored immediately. */
+            Type *_arm_saved_expected = e->expected_type;
+            bool  _arm_pushed = false;
+            if (result_type.kind == TY_APP && !e->expected_type) {
+                e->expected_type = &result_type;
+                _arm_pushed = true;
+            }
             Expr *body = elab_form(e, body_form);
+            if (_arm_pushed) e->expected_type = _arm_saved_expected;
             e->in_match_arm = _s_ctor;
 
             /* Phase G4: Elaborate optional when-guard while arm scope is still live */

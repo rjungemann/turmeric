@@ -29,19 +29,19 @@
 ;; if-value bound in a let and consumed by field access in the same fn
 (defn opt-consume [b : bool] : int
   (let [o (if b (some 11) (none))]
-    (if (.is-some o) (.value o) 0)))
+    (if (some? o) (unwrap o) 0)))
 
 ;; if-value fed to a carrier-ABI consumer (some?)
 (defn opt-pred [b : bool] : bool
   (some? (if b (some 1) (none))))
 
 (defn res-ok [r : (Result int cstr)] : int
-  (if (.is-ok r) (.ok-val r) (- 0 1)))
+  (if (ok? r) (ok-val r) (- 0 1)))
 
-(println (.value (opt-if true)))
-(println (.is-some (opt-if false)))
-(println (.value (opt-let true)))
-(println (.value (opt-do true)))
+(println (unwrap (opt-if true)))
+(println (some? (opt-if false)))
+(println (unwrap (opt-let true)))
+(println (unwrap (opt-do true)))
 (println (res-ok (res-if true)))
 (println (res-ok (res-if false)))
 (println (opt-consume true))

@@ -1,9 +1,17 @@
 ;; CONV-S2 (struct/ADT convergence): a multi-variant ADT keeps its tagged-union
-;; representation -- `int tag` in the typedef, a `__r->tag = N` store in each
+;; representation -- `int tag` in the typedef, a `__r.tag = N` store in each
 ;; constructor, and a `switch (__scrut->tag)` in `match`.  Only the
 ;; single-variant case (conv-single-variant-flat) drops the tag.  The
 ;; expected.c snapshot guards that the tag layout for multi-variant ADTs is
 ;; unchanged by the single-variant flattening.
+;;
+;; SR1 (2026-08-26) moved the ABI and not the layout, which is exactly what this
+;; fixture is here to notice.  The constructor now returns `tur_adt_Shape` by
+;; value instead of an int64 handle to a malloc'd box, and `match` binds a local
+;; copy to point at -- but the tag word, the tag store and the tag test are all
+;; still there.  "Flows by value" and "has no tag" used to be the same question;
+;; separating them is the whole of SR1, and the snapshot below is the proof that
+;; only the first half changed.
 
 (defdata Shape
   (Circle [radius : int])

@@ -11,13 +11,13 @@
   (export array-get array-set array-slice with-c-string from-c-string box unbox)
   (defn array-get [arr : ptr<void> idx : int] : ptr
     ```c
-    struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+    struct __array_get_result { int tag; int64_t value; } *opt = malloc(sizeof(*opt));
   int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
-    opt->is_some = true;
+    opt->tag = 1;
     opt->value = array[idx];
   } else {
-    opt->is_some = false;
+    opt->tag = 0;
     opt->value = 0;
   }
   return opt;

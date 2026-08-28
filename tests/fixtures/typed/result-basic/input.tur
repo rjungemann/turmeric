@@ -11,10 +11,10 @@
   (err? (err 5)))
 
 (defn test-ok-val [] : int
-  (ok-val (make-struct Result true 42 0)))
+  (ok-val (ok 42)))
 
 (defn test-err-val [] : int
-  (err-val (make-struct Result false 0 404)))
+  (err-val (err 404)))
 
 (defn test-result-eq-ok [] : bool
   (let [eq (fn [a b] (= a b))]

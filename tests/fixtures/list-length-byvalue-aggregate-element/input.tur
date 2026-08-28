@@ -22,7 +22,7 @@
 ;; correct too.
 
 (defn opt-or [o : (Option int) d : int] : int
-  (if (.is-some o) (.value o) d))
+  (if (some? o) (unwrap o) d))
 
 (defn main [] : int
   ;; Aggregate element: (Cons (Option int)). The carrier `list-length` segfaulted

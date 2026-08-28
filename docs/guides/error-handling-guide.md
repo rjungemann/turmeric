@@ -30,10 +30,15 @@ precondition and postcondition checking built on top of `panic`.
 
 ## `Result`
 
-A result value is either `(ok value)` or `(err error)`. The runtime representation
-is a heap-allocated struct `{ bool is_ok; int64_t ok_val; int64_t err_val; }` returned
-as `ptr<void>`. Both the ok and err fields are `int64_t` in v1; typed generics are a
-future follow-on.
+A result value is either `(ok value)` or `(err error)`. `Result` is a real sum
+(SR2b): the runtime representation is the tagged monomorph
+`{ int tag; union { A ok_val; B err_val; } as; }` -- 16 bytes, tag 0 = Ok,
+tag 1 = Err, payload at offset 8. On the default path a value rides the int64
+carrier as a heap pointer to that layout; under
+`--enable=parametric-sum-byvalue` it flows by value. Inline-C code should
+build and read these through the preamble helpers (`tur_box_ok` /
+`tur_is_ok` / `tur_ok_value` / ...) rather than spelling the struct by hand --
+see the [inline-C results guide](inline-c-results-guide.md).
 
 ### Constructors
 

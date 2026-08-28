@@ -13,12 +13,12 @@
 
 (defn double-if-ok [r : int] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *res = (void*)(intptr_t)r;
   if (!res) return 0;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok = res->is_ok;
-  out->ok_val = res->is_ok ? res->ok_val * 2 : 0;
-  out->err_val = res->is_ok ? 0 : res->err_val;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *out = malloc(sizeof(*out));
+  out->tag = res->tag;
+  if (res->tag == 0) out->as.ok_val = res->as.ok_val * 2;
+  else               out->as.err_val = res->as.err_val;
   return (int64_t)(intptr_t)out;
   ```)
 

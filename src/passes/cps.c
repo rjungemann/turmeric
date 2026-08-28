@@ -152,6 +152,120 @@ bool cps_fn_needs_transform(const FnDef *fd) {
     return cps_expr_contains_shift(fd->body);
 }
 
+/* SR2b: does this expression contain an actual SUSPENSION op -- a shift /
+ * shift0 (any flavor), perform, or await?  Unlike cps_expr_contains_shift,
+ * a `handle` or `reset` whose body is effect-free does NOT count, and a
+ * handler case's own `resume` does not either (it only runs if the body
+ * performs).  `(unsafe ...)` desugars to exactly such a handle -- a
+ * discharge whose case is `(resume k nil)` -- and classifying every
+ * unsafe-bodied fn as effectful minted ABI clones for plain inline-C
+ * instance methods (typeclass-unsafe-passbyptr-struct-arg broke on the
+ * clone's by-value param vs the body's pass-by-pointer reads).  Read by
+ * emit_cps_ir_colored_fn_needs_mono, which wants "this fn's own body
+ * suspends", not "this fn touches the effect system". */
+bool cps_expr_contains_effect_op(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_SHIFT:
+        case EX_SHIFT0:
+        case EX_SERIAL_SHIFT:
+        case EX_CLONEABLE_SHIFT:
+        case EX_PERFORM:
+        case EX_AWAIT:
+            return true;
+        case EX_RESET:
+            return cps_expr_contains_effect_op(e->as.reset_.body);
+        case EX_SERIAL_RESET:
+            return cps_expr_contains_effect_op(e->as.serial_reset_.body);
+        case EX_CLONEABLE_RESET:
+            return cps_expr_contains_effect_op(e->as.cloneable_reset_.body);
+        case EX_HANDLE:
+            if (cps_expr_contains_effect_op(e->as.handle_.handle->body)) return true;
+            for (uint8_t i = 0; i < e->as.handle_.handle->n_cases; i++) {
+                if (cps_expr_contains_effect_op(e->as.handle_.handle->cases[i].body)) return true;
+            }
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                if (cps_expr_contains_effect_op(e->as.let_.bindings[i].init)) return true;
+            }
+            return cps_expr_contains_effect_op(e->as.let_.body);
+        case EX_IF:
+            return cps_expr_contains_effect_op(e->as.if_.cond) ||
+                   cps_expr_contains_effect_op(e->as.if_.then_) ||
+                   (e->as.if_.else_or_null &&
+                    cps_expr_contains_effect_op(e->as.if_.else_or_null));
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                if (cps_expr_contains_effect_op(e->as.do_.items[i])) return true;
+            }
+            return false;
+        case EX_WHILE:
+            return cps_expr_contains_effect_op(e->as.while_.cond) ||
+                   cps_expr_contains_effect_op(e->as.while_.body);
+        case EX_SET:
+            return cps_expr_contains_effect_op(e->as.set_.value);
+        case EX_DEF:
+            return e->as.def_.init && cps_expr_contains_effect_op(e->as.def_.init);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                if (cps_expr_contains_effect_op(e->as.builtin.args[i])) return true;
+            }
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn &&
+                   cps_expr_contains_effect_op(e->as.fn_def_.fn->body);
+        case EX_FN:
+            return e->as.fn_.fn && cps_expr_contains_effect_op(e->as.fn_.fn->body);
+        case EX_CLOSURE:
+            return e->as.closure_.closure->fn &&
+                   cps_expr_contains_effect_op(e->as.closure_.closure->fn->body);
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                if (cps_expr_contains_effect_op(e->as.call_.args[i])) return true;
+            }
+            return false;
+        case EX_DEFER:
+            return cps_expr_contains_effect_op(e->as.defer_.body);
+        case EX_RETURN:
+            return e->as.return_.value &&
+                   cps_expr_contains_effect_op(e->as.return_.value);
+        case EX_CALLCC:
+            return cps_expr_contains_effect_op(e->as.callcc_.fn);
+        case EX_PANIC:
+            return cps_expr_contains_effect_op(e->as.panic_.payload);
+        case EX_PANIC_WITH:
+            return cps_expr_contains_effect_op(e->as.panic_with_.payload);
+        case EX_CATCH_UNWIND:
+            return cps_expr_contains_effect_op(e->as.catch_unwind_.thunk);
+        case EX_CATCH_PANIC_OF:
+            return cps_expr_contains_effect_op(e->as.catch_panic_of_.thunk);
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+            return cps_expr_contains_effect_op(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_DOWNS:
+            return cps_expr_contains_effect_op(e->as.panic_payload_downs_.payload);
+        case EX_DYNVAR_BINDING:
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++) {
+                if (cps_expr_contains_effect_op(
+                        e->as.dynvar_binding_.pairs[i].override_expr))
+                    return true;
+            }
+            return cps_expr_contains_effect_op(e->as.dynvar_binding_.body);
+        case EX_RESUME:
+        case EX_DISCONTINUE:
+            /* Only reachable inside a handler case; the case runs only when
+             * the handle's body suspends, which the body walk above finds. */
+            return false;
+        case EX_ASCRIBE:
+            return cps_expr_contains_effect_op(e->as.ascribe_.inner);
+        default:
+            return false;
+    }
+}
+
 /* Phase B2: Check if an expression contains cloneable-shift or cloneable-reset. */
 bool cps_expr_contains_cloneable_shift(const Expr *e) {
     if (!e) return false;

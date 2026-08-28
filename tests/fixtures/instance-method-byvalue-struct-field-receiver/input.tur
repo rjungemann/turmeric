@@ -20,7 +20,7 @@
 (defclass Enc [a] (enc [x] : cstr))
 
 (definstance Enc [(Option cstr)]
-  (enc [x] : cstr (if (.is-some x) "s" "n")))
+  (enc [x] : cstr (if (some? x) "s" "n")))
 
 (defstruct Rec [nick : (Option cstr)])
 

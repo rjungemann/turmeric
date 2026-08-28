@@ -45,4 +45,4 @@
 
 (defn main [] : int
   (let [res (probe (some (seed)) (parse 7))]
-    (.value res)))
+    (unwrap res)))

@@ -314,6 +314,22 @@ typedef struct AdtDef {
     bool        is_heap;
     /* Phase G1: GADT flag and type parameters */
     bool        is_gadt;         /* true for defgadt, false for defdata */
+    /* SR1 (sum-representation-plan): a constructor field names this ADT, so the
+     * type is self-recursive -- `(TPair :Term :Term)`, `(SBind :int :Term
+     * :Subst)`, `(StCons :Subst :Stream)`.
+     *
+     * Recorded at declaration time because it cannot be recovered afterwards: a
+     * recursive field rides the int64 carrier and its CtorField.full_type is
+     * deliberately left NULL (recording a carrier-ADT full_type would
+     * misclassify the field READ), so nothing downstream can tell `(SBind :int
+     * :Term :Subst)` from `(SBind :int :int :int)`.
+     *
+     * The layout is finite either way -- the carrier field is one word -- so
+     * this is not a soundness gate; adt_graph_reaches is.  It is the SR1/SR4
+     * phase boundary: SR1 covers non-recursive sums, and the recursive ones are
+     * SR4, which is blocked on library source that ascribes carrier-erased
+     * results back to a sum type (stdlib/logic.tur). */
+    bool        is_self_recursive;
     const char **type_params;    /* arena-allocated array of type param names (interned) */
     uint8_t     n_type_params;
     /* TP1/TP2: arena-alloc'd Kind array, one per type_params entry.
@@ -436,6 +452,9 @@ bool adt_is_byvalue_product(const AdtDef *def);
  * reinterpreting the carrier (no heap box, no deref).  (B4 graduated; always
  * active.) */
 bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def);
+/* `arg_def` and `functor_def` form a fixpoint pair (Expr/ExprF, Re/ReF): their C
+ * typedefs are mutually recursive and only the carrier breaks the cycle. */
+bool adt_is_fixpoint_partner_of(const AdtDef *arg_def, const AdtDef *functor_def);
 /* CONV-S1 (slice 3): true when a by-value ADT product is large enough (>16
  * bytes) to use the struct-style `const tur_adt_<Name> *` pass-by-pointer ABI. */
 bool adt_byval_pass_by_ptr(const AdtDef *def);
@@ -1779,6 +1798,12 @@ bool         adt_app_is_byvalue_product(Type t);
  * Takes precedence over the B4 wide-element int64 box. */
 bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
                                           const Type *resolved);
+/* SR3 slice A (null-None): true when `ctor` is the stdlib Option's nullary
+ * tag-0 `None` -- the one constructor whose CARRIER form is the null pointer
+ * (the historical none-as-NULL every reader already accepts), so its carrier
+ * ctors return 0 instead of mallocing a box whose only content is tag 0. */
+bool         adt_ctor_is_null_none(const struct AdtDef *def,
+                                   const struct CtorDef *ctor);
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);
@@ -1854,6 +1879,14 @@ void         repr_shadow_disagree(const char *site, bool known,
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the
  * >16-byte pass-by-pointer size gate and the by-value-product representation
  * decision (the latter covering both the non-parametric ADT and the app). */
+/* Size of a by-value parametric monomorph: tag word (sums only) + widest
+ * substituted variant.  0 when `t` is not a by-value monomorph.  The single
+ * source for every width threshold on such a value -- pbp (> 16) and the b4box
+ * closure slot (> 8). */
+size_t       adt_app_byval_value_size_bytes(Type t);
+/* b4box closure-slot width -- see the definition's comment for why this is
+ * separate from type_is_wide_byval_adt (which also drives ADT field layout). */
+bool         type_is_b4box_closure_slot(Type t);
 bool         adt_app_byval_pass_by_ptr(Type t);
 bool         type_is_byvalue_adt_product(Type t);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */

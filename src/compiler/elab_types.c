@@ -3261,6 +3261,29 @@ Expr *elab_default_of(Elab *e, const Form *call) {
         return NULL;
     }
     Form *type_form = call->as.list.items[1];
+    /* SR2b: an enclosing signature's type PARAMETER shadows a same-named
+     * registered type.  `(default-of A)` inside `unwrap [A] [...] :A` means
+     * the method tyvar, and resolving it through type_expr_from_form with no
+     * type-param scope let a program's own `(defopaque A :int)` capture the
+     * name -- the match arm then typed as that concrete ADT and failed the
+     * join against the `Some` arm's genuine tyvar (positional-opaque-ok).
+     * The signature's tyvars are already collected in e->sig_tyvars for
+     * exactly this body-elaboration window; consult them first, the same
+     * shadowing rule a declared type param has everywhere else. */
+    if (type_form->tag == F_SYM) {
+        const Symbol *ts = type_form->as.sym;
+        for (uint8_t si = 0; si < e->n_sig_tyvars; si++) {
+            if (e->sig_tyvars[si] &&
+                strcmp(e->sig_tyvars[si], ts->name) == 0) {
+                Type tv = type_tyvar_named(ts->name);
+                tv.copy_kind = CK_COPY;
+                if (e->sig_tyvar_kinds[si] != KIND_STAR)
+                    tv.hkt_kind = e->sig_tyvar_kinds[si];
+                Expr *tout = expr_new(e->arena, EX_DEFAULT_OF, tv, call->span);
+                return tout;
+            }
+        }
+    }
     Type *t = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
     if (!t) return NULL;
     Expr *out = expr_new(e->arena, EX_DEFAULT_OF, *t, call->span);

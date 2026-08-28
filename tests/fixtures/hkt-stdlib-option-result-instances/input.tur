@@ -9,19 +9,19 @@
 
 ;; int-carrier extractors (Option = { bool is_some; int64_t value; })
 (defn opt-val [o : int] : int
-  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
-       return (p && p->is_some) ? p->value : -999; ```)
+  ```c struct { int tag; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->tag == 1) ? p->value : -999; ```)
 (defn opt-some? [o : int] : int
-  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
-       return (p && p->is_some) ? 1 : 0; ```)
+  ```c struct { int tag; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->tag == 1) ? 1 : 0; ```)
 
 ;; int-carrier extractors (Result = { bool is_ok; int64_t ok_val; int64_t err_val; })
 (defn res-ok  [r : int] : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
-       return p->ok_val; ```)
+  ```c struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *p = (void*)(intptr_t)r;
+       return p->as.ok_val; ```)
 (defn res-err [r : int] : int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p = (void*)(intptr_t)r;
-       return p->err_val; ```)
+  ```c struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *p = (void*)(intptr_t)r;
+       return p->as.err_val; ```)
 
 (defn main [] : int
   ;; Functor [Option]: fmap over some, none unchanged

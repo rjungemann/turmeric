@@ -303,6 +303,62 @@ static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
 
 /* ---- special forms ---- */
 
+/* The parametric ADT a form constructs, when the form is literally a
+ * constructor call of one -- `(Empty)`, `(none)`, `(Some x)`.  NULL otherwise. */
+static const AdtDef *ctor_call_parametric_adt(Elab *e, const Form *f) {
+    if (!e || !f || f->tag != F_LIST || f->as.list.len < 1) return NULL;
+    if (f->as.list.items[0]->tag != F_SYM) return NULL;
+    CtorDef *c = elab_lookup_ctor(e, f->as.list.items[0]->as.sym);
+    if (!c || !c->adt || c->adt->n_type_params == 0) return NULL;
+    return c->adt;
+}
+
+/* Use-site look-ahead for an UNANNOTATED let binding whose initializer is a
+ * bare parametric constructor.
+ *
+ * `(let [e (Empty)] ... (getv e))` against `getv [b : (Box int)]` has no
+ * expected type at the initializer and no annotation to supply one, so
+ * `(Empty)` defaults to the bare TY_ADT and emits the carrier `ctor_Empty()`
+ * while every consumer reads the `(Box int)` monomorph.  Annotating the binding
+ * already fixes it; this finds the same answer without the annotation.
+ *
+ * Search `f` for a call that passes `name` in a parameter slot declared as a
+ * concrete application of `adt`, and return that parameter's type.  Bounded on
+ * purpose: syntactic, depth-capped, confined to the let's own text, and gated
+ * on the ADT matching, so the type it finds can only ground the constructor to
+ * a family it already belongs to.  Same shape as the sibling-argument
+ * look-ahead in elab_call.c (poly-hof-constrained-arg-baked-carrier), which
+ * resolves a param's tyvars by elaborating siblings early. */
+static const Type *let_use_site_app_type(Elab *e, const Form *f,
+                                         const Symbol *name, const AdtDef *adt,
+                                         uint32_t depth) {
+    if (!f || depth == 0) return NULL;
+    if (f->tag == F_LIST && f->as.list.len >= 1 &&
+        f->as.list.items[0]->tag == F_SYM) {
+        Binding *fb = scope_lookup(e->scope, f->as.list.items[0]->as.sym);
+        if (fb && fb->type.kind == TY_FN && fb->type.as.fn.arg_full_types) {
+            for (uint32_t k = 0; k + 1 < f->as.list.len; k++) {
+                const Form *a = f->as.list.items[k + 1];
+                if (a->tag != F_SYM || a->as.sym != name) continue;
+                uint32_t idx = fb->closure_fn_binding ? k + 1 : k;
+                if (idx >= fb->type.as.fn.arity) continue;
+                const Type *pt = fb->type.as.fn.arg_full_types[idx];
+                if (pt && pt->kind == TY_APP && type_adt_app_def(pt) == adt &&
+                    type_app_is_concrete_adt(pt))
+                    return pt;
+            }
+        }
+    }
+    if (f->tag == F_LIST || f->tag == F_VEC) {
+        for (uint32_t k = 0; k < f->as.list.len; k++) {
+            const Type *r = let_use_site_app_type(e, f->as.list.items[k], name,
+                                                  adt, depth - 1);
+            if (r) return r;
+        }
+    }
+    return NULL;
+}
+
 Expr *elab_let(Elab *e, const Form *call) {
     /* (let [b1 i1 b2 i2 ...] body...)
      * Named-let: (let name [p1 v1 ...] body...) -- desugar to letrec */
@@ -693,6 +749,22 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (type_ann_form && !is_fat_ann) {
             let_init_expected = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
             if (let_init_expected) e->expected_type = let_init_expected;
+        }
+        /* No annotation, and the initializer is a bare parametric constructor:
+         * look ahead to a use in this let's own text for the family.  See
+         * let_use_site_app_type. */
+        if (!let_init_expected && !is_fat_ann) {
+            const AdtDef *cadt = ctor_call_parametric_adt(e, init_form);
+            if (cadt) {
+                const Type *found = NULL;
+                for (uint32_t bi = i; !found && bi < bindings_form->as.list.len; bi++)
+                    found = let_use_site_app_type(e, bindings_form->as.list.items[bi],
+                                                  name, cadt, 8);
+                for (uint32_t bi = 2; !found && bi < call->as.list.len; bi++)
+                    found = let_use_site_app_type(e, call->as.list.items[bi],
+                                                  name, cadt, 8);
+                if (found) e->expected_type = (Type *)found;
+            }
         }
         Expr *init = elab_form(e, init_form);
         e->expected_type = prev_expected;

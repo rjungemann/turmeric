@@ -19,7 +19,7 @@
 ;; through the typed accessors.
 
 (defn opt-or [o : (Option int) d : int] : int
-  (if (.is-some o) (.value o) d))
+  (if (some? o) (unwrap o) d))
 
 (defn main [] : int
   (let [xs (:: (list (some 42) (some 7) (some 100)) (Cons (Option int)))]

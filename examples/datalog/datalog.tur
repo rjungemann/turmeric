@@ -16,7 +16,11 @@
 ;; Value ADT
 ;; ============================================================
 
-(defdata Value :copy
+;; `:heap` is load-bearing, not decoration: a datum is a raw `int64_t[4]`
+;; built in inline-C, so the value it stores has to be ONE WORD.  A :heap ADT
+;; is a typed pointer (`tur_adt_Value *`), which fits; a plain multi-variant
+;; sum now flows BY VALUE as a tag+union aggregate (SR1) and does not.
+(defdata Value :copy :heap
   (LongVal :int)
   (StrVal :int)
   (EntityVal :int))
@@ -169,7 +173,11 @@
 ;;   Wild -- matches anything; binds nothing
 ;; ============================================================
 
-(defdata Term
+;; `:heap` is load-bearing, not decoration: a datum is a raw `int64_t[4]`
+;; built in inline-C, so the value it stores has to be ONE WORD.  A :heap ADT
+;; is a typed pointer (`tur_adt_Value *`), which fits; a plain multi-variant
+;; sum now flows BY VALUE as a tag+union aggregate (SR1) and does not.
+(defdata Term :heap
   (Var :int)   ;; variable name as cstr ptr
   (Lit :int)   ;; Value ADT pointer (as int)
   (Wild))      ;; match anything, bind nothing

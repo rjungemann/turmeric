@@ -38,20 +38,28 @@ cat > "$tmp/probe.tur" <<'EOF'
   0)
 EOF
 
-# Value-position bridges: a Vec of by-value (Option int) elements crosses
-# concrete->carrier on push (heap reinterpret of the Vec handle) and
+# Value-position bridges: a Vec of by-value parametric-monomorph elements
+# crosses concrete->carrier on push (heap reinterpret of the Vec handle) and
 # carrier->concrete on the ascribed vec-get read (aggregate).  A by-value
 # aggregate through a bare `:fn` poly-carrier param heap-boxes on the way
 # in (agg-box) and derefs back on the way out (agg-unbox).
+#
+# SR2b: this probe used `(Option int)` while Option was a by-value record
+# product.  Option is a real sum now and rides the int64 carrier on the
+# default path, so it no longer exercises ANY of these bridges; a local
+# parametric `:copy` product (`(Q2 int)`, the same 16-byte two-field shape)
+# is the by-value monomorph that still does.
 cat > "$tmp/vprobe.tur" <<'EOF'
-(defn opt-get [o : (Option int)] : int (unwrap-or o -1))
-(defn call-it [f : fn x : (Option int)] : int (f x))
+(defstruct Q2 :copy [A] [a : A b : A])
+(defn q-get [o : (Q2 int)] : int (.a o))
+(defn call-it [f : fn x : (Q2 int)] : int (f x))
+(defn mk [n : int] : (Q2 int) (make-struct Q2 n (+ n 1)))
 (defn main [] : int
-  (let [vo (:: (vec-new) (Vec (Option int)))]
-    (vec-push! vo (:: (some 5) (Option int)))
-    (let [a (:: (vec-get vo 0) (Option int))]
-      (println (unwrap-or a -1))))
-  (println (call-it opt-get (some 7)))
+  (let [vo (:: (vec-new) (Vec (Q2 int)))]
+    (vec-push! vo (mk 5))
+    (let [a (:: (vec-get vo 0) (Q2 int))]
+      (println (.a a))))
+  (println (call-it q-get (mk 7)))
   0)
 EOF
 
@@ -88,9 +96,9 @@ vcheck() {
   fi
 }
 vcheck "heap reinterpret crossing traced" "^repr-trace bridge concrete->carrier heap-reinterpret "
-vcheck "aggregate crossing traced"        "^repr-trace bridge carrier->concrete aggregate \(type-app Option int\)$"
-vcheck "agg-box traced"                   "^repr-trace bridge agg-box tur_adt_Option__int$"
-vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_Option__int$"
+vcheck "aggregate crossing traced"        "^repr-trace bridge carrier->concrete aggregate \(type-app Q2 int\)$"
+vcheck "agg-box traced"                   "^repr-trace bridge agg-box tur_adt_Q2__int$"
+vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_Q2__int$"
 
 # Increment 4 stage 2/3: the repr_of shadow log.  Two smokes: (a) a known
 # UNMIGRATED shape fires a `repr-shadow` disagreement line -- proving the

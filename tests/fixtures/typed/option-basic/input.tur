@@ -8,7 +8,7 @@
   (some? (none)))
 
 (defn test-unwrap [] : int
-  (unwrap (make-struct Option true 99)))
+  (unwrap (some 99)))
 
 (defn test-unwrap-or-some [] : int
   (unwrap-or (some 7) 0))

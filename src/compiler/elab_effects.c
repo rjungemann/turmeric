@@ -812,6 +812,12 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
     if (!hbody) return body_B;
 
     HandleCase *cases = (HandleCase *)arena_alloc(e->arena, sizeof(HandleCase));
+    /* Arena memory is not zeroed, and cps_ir.c copies every HandleCase field
+     * unconditionally (`cs[ci].resumable_payload = c->resumable_payload` was
+     * UBSan's "load of value N, which is not a valid value for type '_Bool'"
+     * on the macOS sanitizer gate).  Zero first, then set what this site
+     * means -- the same rule as the HandleExpr below. */
+    memset(cases, 0, sizeof(HandleCase));
     cases[0].effect_name    = sheff->name;
     cases[0].n_params       = 1;
     cases[0].param_names    = (const Symbol **)arena_alloc(e->arena, sizeof(const Symbol *));

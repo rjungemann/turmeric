@@ -3062,13 +3062,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             uint32_t thunk_arity = fd->n_params > 0 ? (uint32_t)(fd->n_params - 1) : 0;
             char *thunk_typedef = ensure_typed_thunk_typedef(ctx, file, thunk_result, thunk_params, thunk_arity);
-            if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
-                ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
-                ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
-                    ctx->cap_env_struct_names * sizeof(const Symbol *));
-            }
-            ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
-            
+            emit_env_struct_register(ctx, env_name, thunk_typedef);
+
+
             /* Phase HKT §5: fat closure layout — __fn (int64_t) first, then
              * captures.  The fat pointer doubles as the env ptr for the thunk:
              * thunk receives fat_ptr as self, accesses captures via ->field
@@ -3437,7 +3433,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * field's by-value typed thunk, so its wide by-value ADT params cross by
      * value -- suppress B4 b4box boxing (it would disagree with the typed thunk
      * + call site and corrupt the arg). */
-    if (fd->closure && !fd->byval_fn_field_closure) {
+    /* SR-fat-abi: the byval_fn_field_closure suppression is retired -- the
+     * typed-thunk typedef now spells a wide by-value param slot as int64_t
+     * (see thunk_param_slot_c_name), so a fn-field closure b4boxes exactly
+     * like every other closure and the field dispatch passes the box. */
+    if (fd->closure) {
         for (uint32_t i = 0; i < fd->n_params; i++) {
             if (fd->params[i]->is_poly_fn ||
                 fd->param_types[i].kind == TY_FN) continue;
@@ -3445,7 +3445,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 ? ctx->current_abi_specialization->arg_types[i]
                 : ((e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
                        ? *e->type.as.fn.arg_full_types[i] : fd->param_types[i]);
-            if (type_is_wide_byval_adt(emit_resolve_type(ctx, pty)))
+            if (type_is_b4box_closure_slot(emit_resolve_type(ctx, pty)))
                 needs_box_load[i] = true;
         }
     }

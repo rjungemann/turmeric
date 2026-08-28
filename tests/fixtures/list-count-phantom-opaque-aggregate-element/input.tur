@@ -16,7 +16,7 @@
 ;; layout. Scalar/pointer elements keep the carrier layout (no spec, no churn).
 
 (defn opt-or [o : (Option int) d : int] : int
-  (if (.is-some o) (.value o) d))
+  (if (some? o) (unwrap o) d))
 
 (load "stdlib/list-typed.tur")
 

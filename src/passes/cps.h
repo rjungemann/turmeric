@@ -16,6 +16,7 @@ Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env);
 
 /* Check if an expression contains shift or shift0 */
 bool cps_expr_contains_shift(const Expr *e);
+bool cps_expr_contains_effect_op(const Expr *e);
 
 /* Check if a function definition needs (one-shot) CPS transformation */
 bool cps_fn_needs_transform(const FnDef *fd);

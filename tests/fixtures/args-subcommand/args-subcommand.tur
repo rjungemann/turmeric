@@ -19,8 +19,8 @@
   (let [res (args/parse spec *args*)]
     (print-cstr (args/subcommand res))
     (let [sr (args/sub-result res)]
-      (if (.is-some sr)
-        (print-bool (args/get-bool (.value sr) "release"))
+      (if (some? sr)
+        (print-bool (args/get-bool (unwrap sr) "release"))
         (print-cstr "no subcommand")))
     (args/result-free res))
   (args/spec-free sub)

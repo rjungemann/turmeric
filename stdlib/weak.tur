@@ -119,7 +119,11 @@
 ;;;
 ;;; Since: stdlib-weak-ref-audit WR1
 
-(defn weak/unwrap [A] [o : (Option rc<A>)] : rc<A> (.value o))
+(defn weak/unwrap [A] [o : (Option rc<A>)] : rc<A>
+  ;; SR2b: match in place rather than delegating to the generic `unwrap` --
+  ;; its element slot rejects an owning rc payload (the collection-element
+  ;; ownership check), while a direct match borrows nothing.
+  (match o (Some s) s (None) (:: 0 rc<A>)))
 ;;; weak/alive? -- is the weak's referent still alive?
 ;;;
 ;;; A peek that mints nothing: unlike `weak/upgrade` it creates no strong

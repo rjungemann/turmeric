@@ -2,9 +2,9 @@
 ;;; panic message round-trips through the boxed payload.
 (defn panic-msg [r : int] : cstr
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res || res->is_ok) return "(ok)";
-  tur_panic_payload *p = (tur_panic_payload*)(intptr_t)res->err_val;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *res = (void*)(intptr_t)r;
+  if (!res || res->tag == 0) return "(ok)";
+  tur_panic_payload *p = (tur_panic_payload*)(intptr_t)res->as.err_val;
   return p ? (const char*)tur_panic_payload_value(p) : "(null)";
   ```)
 

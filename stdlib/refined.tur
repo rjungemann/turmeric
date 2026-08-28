@@ -180,9 +180,9 @@
 ;;; Since: R1
 
 (defn ne-unwrap [A] [o : (Option (NonEmpty A))] : (NonEmpty A)
-  ;; By-value (Option (NonEmpty A)): read .value directly (it is the NonEmpty
-  ;; payload).  none-case returns the zero NonEmpty -- callers gate on some?.
-  (if (some? o) (.value o) (:: 0 (NonEmpty A))))
+  ;; SR2b: match the sum.  none-case returns the zero NonEmpty -- callers
+  ;; gate on some?.
+  (match o (Some v) v (None) (:: 0 (NonEmpty A))))
 ;; ===================================================================
 ;; R2: BoundedIdx -- an index proven to be in range for some length.
 ;; ===================================================================
@@ -250,9 +250,9 @@
 ;;; Since: R2
 
 (defn bidx-unwrap [o : (Option BoundedIdx)] : BoundedIdx
-  ;; By-value (Option BoundedIdx): read .value directly (it is the BoundedIdx
-  ;; payload).  none-case returns the zero BoundedIdx -- callers gate on some?.
-  (if (some? o) (.value o) (:: 0 :BoundedIdx)))
+  ;; SR2b: match the sum.  none-case returns the zero BoundedIdx -- callers
+  ;; gate on some?.
+  (match o (Some v) v (None) (:: 0 :BoundedIdx)))
 ;;; vec-get-checked -- index a Vec with a proven-in-range BoundedIdx (total).
 ;;;
 ;;; Because the BoundedIdx was validated against the vector's length by

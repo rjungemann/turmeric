@@ -655,13 +655,13 @@
   (display [x]
     : cstr
     ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    struct { int tag; int64_t payload; } *res = (void*)x;
     if (res == NULL) return "err";
     char *buf = (char *)malloc(48);
-    if (res->is_ok) {
-        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
+    if (res->tag == 0) {
+        snprintf(buf, 48, "ok(%lld)", (long long)res->payload);
     } else {
-        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
+        snprintf(buf, 48, "err(%lld)", (long long)res->payload);
     }
     return (const char *)buf;
     ```))
@@ -671,13 +671,13 @@
   (debug [x]
     : cstr
     ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    struct { int tag; int64_t payload; } *res = (void*)x;
     if (res == NULL) return "Result::err";
     char *buf = (char *)malloc(64);
-    if (res->is_ok) {
-        snprintf(buf, 64, "Result::ok(%lld)", (long long)res->ok_val);
+    if (res->tag == 0) {
+        snprintf(buf, 64, "Result::ok(%lld)", (long long)res->payload);
     } else {
-        snprintf(buf, 64, "Result::err(%lld)", (long long)res->err_val);
+        snprintf(buf, 64, "Result::err(%lld)", (long long)res->payload);
     }
     return (const char *)buf;
     ```))
@@ -689,8 +689,8 @@
   (error-message [x]
     : cstr
     ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
-    if (res == NULL || res->is_ok) {
+    struct { int tag; int64_t payload; } *res = (void*)x;
+    if (res == NULL || res->tag == 0) {
         return "not an error";
     } else {
         /* err_val is an int code in v1, convert to string */

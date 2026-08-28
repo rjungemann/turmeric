@@ -29,6 +29,35 @@ static Type emit_fn_result_type_from_type(Type fn_type);
  * capturing callback lands earlier in the file than its construction site.
  * `resolve_spec_params` mirrors the inner-closure-spec path (thunk param types
  * resolved under the active spec); the CPS pre-pass passes false. */
+/* Record that `env_name`'s struct was emitted with `typedef_name` as its `__fn`
+ * field type (NULL = the field is a plain `int64_t`).  The string is copied.
+ * Both env-struct emit sites -- here and the emit_fns.c pre-pass twin -- go
+ * through this, so the registry and the declarations cannot drift. */
+void emit_env_struct_register(EmitCtx *ctx, const Symbol *env_name,
+                              const char *typedef_name) {
+    if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
+        ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
+        ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
+            ctx->cap_env_struct_names * sizeof(const Symbol *));
+        ctx->env_struct_fn_typedefs = (char **)realloc(ctx->env_struct_fn_typedefs,
+            ctx->cap_env_struct_names * sizeof(char *));
+    }
+    ctx->env_struct_fn_typedefs[ctx->n_env_struct_names] =
+        typedef_name ? strdup(typedef_name) : NULL;
+    ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+}
+
+/* The `__fn` field spelling `env_name`'s struct was declared with, or NULL when
+ * that field is an `int64_t` (or the struct has not been registered).  Borrowed
+ * -- the registry owns it. */
+const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name) {
+    if (!ctx->env_struct_names || !ctx->env_struct_fn_typedefs) return NULL;
+    for (uint8_t i = 0; i < ctx->n_env_struct_names; i++)
+        if (ctx->env_struct_names[i] == env_name)
+            return ctx->env_struct_fn_typedefs[i];
+    return NULL;
+}
+
 void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                                       struct Closure *closure,
                                       const Symbol *env_name,
@@ -53,13 +82,8 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
         thunk_params = _rtp;
     }
     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, out, thunk_result, thunk_params, thunk_arity);
-    /* Track this env struct */
-    if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
-        ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
-        ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
-            ctx->cap_env_struct_names * sizeof(const Symbol *));
-    }
-    ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+    /* Track this env struct, and the `__fn` spelling it is about to get. */
+    emit_env_struct_register(ctx, env_name, thunk_typedef);
 
     /* Phase HKT §5: fat closure struct -- __fn first, then captures. */
     if (thunk_typedef) {
@@ -898,6 +922,26 @@ static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
         return adt_app_is_byvalue_product(r);
     }
     return false;
+}
+
+/* SR1: true when `t` resolves to a by-value MULTI-VARIANT sum -- the population
+ * SR1 moves onto the by-value ABI, and nothing else.
+ *
+ * The crossings SR1 adds all key off this rather than emit_type_is_byvalue_adt,
+ * and the distinction is load-bearing, not tidiness.  Single-variant by-value
+ * products (a lowered struct, an `Option`/`Result` monomorph, a `(Pair2 int
+ * int)`) have ridden the by-value ABI since B3, and every carrier crossing they
+ * make is already handled -- often by a more specific rule that knows whether
+ * the value escapes into a heap container.  A second, blunter bridge layered on
+ * top double-boxes them: keyed on emit_type_is_byvalue_adt these rules broke 27
+ * vec/map/inline-C fixtures that have no sum in them at all. */
+static bool emit_type_is_byvalue_sum(EmitCtx *ctx, Type t) {
+    if (!emit_type_is_byvalue_adt(ctx, t)) return false;
+    Type r = emit_resolve_type(ctx, t);
+    const AdtDef *d = (r.kind == TY_ADT) ? r.as.adt_.def
+                    : (r.kind == TY_APP) ? type_adt_app_def(&r)
+                                         : NULL;
+    return d && d->n_ctors > 1;
 }
 
 /* catch-unwind-aggregate-return-miscompiled: when a catch boundary's thunk
@@ -1968,6 +2012,87 @@ static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
            strcmp(lv, "int64_t") != 0 && strchr(lv, '*') == NULL;
 }
 
+/* SR1 companion to emit_arm_is_recorded_byval_agg: the arm is a bare VARIABLE
+ * that already holds the by-value aggregate.
+ *
+ * The recorded-local check above answers this from the local-var side table,
+ * which records locals -- a PARAMETER is never in it.  That was sufficient while
+ * a by-value ADT could only be a single-variant product: a sum-typed parameter
+ * was always the int64 carrier, so a by-value aggregate parameter never reached
+ * a control-form merge.  `(defn re-repeat-n [atom : Regex n : int] ...)`
+ * returning `atom` from one `if` arm is exactly that case now, and bridging it
+ * carrier->concrete derefs a value that is not a pointer.
+ *
+ * A pass-by-pointer parameter is excluded: it really is held as `const T *`, and
+ * the caller's own `then_is_byptr_param` branch derefs it. */
+static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
+static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
+    if (!g_sr1_sum_byvalue) return false;
+    if (!arm || bv.kind == TY_UNKNOWN) return false;
+    while (arm->kind == EX_ASCRIBE && arm->as.ascribe_.inner)
+        arm = arm->as.ascribe_.inner;
+    if (arm->kind != EX_VAR || !arm->as.var.binding) return false;
+    if (expr_is_pbp_param(ctx, arm)) return false;
+    Type at = emit_resolve_type(ctx, arm->as.var.binding->type);
+    if (!emit_type_is_byvalue_sum(ctx, at)) return false;
+    /* Both names are interned for the whole compilation (type_c_name ->
+     * intern_type_name), so holding the first across the second call is safe --
+     * unlike adt_field_c_type's pointer-box spelling, which is a shared buffer
+     * and must be copied.  See the report on that distinction. */
+    const char *have = emit_type_c_name(ctx, at);
+    const char *want = emit_type_c_name(ctx, bv);
+    return have && want && strcmp(have, want) == 0;
+}
+
+/* RSP1, match-arm edition: an arm body that is a bare pass-by-pointer PARAM
+ * (`const T *`) assigned into the match's by-value result temp (`T`) must be
+ * deref-copied, exactly as emit_if_value's then/else branches already do.
+ * Reachable once a sum can be pbp (its widest variant + tag > 16): `(match s
+ * (Circle r) s ...)` returns the param from an arm.  Returns a replacement for
+ * `bv` (caller frees); a pointer-typed temp or a non-pbp body passes through. */
+static char *match_arm_pbp_deref(EmitCtx *ctx, const Expr *arm_body,
+                                 Type result_ty, char *bv) {
+    const char *tc = type_c_name(result_ty);
+    size_t tl = tc ? strlen(tc) : 0;
+    bool temp_is_ptr = tl > 0 && tc[tl - 1] == '*';
+    if (temp_is_ptr || !expr_is_pbp_param(ctx, arm_body)) return bv;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "*(%s)", bv);
+    buf_putc(&b, '\0');
+    free(bv);
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
+}
+
+/* SR-fat-abi: convert one fat-dispatch ARGUMENT into the int64 box-pointer
+ * slot the typed-thunk typedef now spells for a wide by-value aggregate param
+ * (thunk_param_slot_c_name).  A pass-by-pointer param is already a pointer to
+ * the aggregate -- retype it.  A by-value expression spills to a local and
+ * passes its address: the callee (a b4box thunk or a typed fatshim) copies at
+ * entry, and the call is synchronous, so the frame outlives the read.  Returns
+ * a replacement for `raw` (caller frees); a non-wide slot passes through. */
+static char *fat_dispatch_box_arg(EmitCtx *ctx, Buf *body, const Expr *arg,
+                                  Type slot_ty, char *raw) {
+    if (!type_is_b4box_closure_slot(emit_resolve_type(ctx, slot_ty))) return raw;
+    Buf b; buf_init(&b);
+    if (arg && expr_is_pbp_param(ctx, arg)) {
+        buf_printf(&b, "(int64_t)(intptr_t)(%s)", raw);
+    } else {
+        const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, slot_ty));
+        char *tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = (%s);\n", cn, tmp, raw);
+        buf_printf(&b, "(int64_t)(intptr_t)(&%s)", tmp);
+        free(tmp);
+    }
+    buf_putc(&b, '\0');
+    free(raw);
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
+}
+
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
  * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
  * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
@@ -2937,7 +3062,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         bool then_is_byptr_param = expr_is_pbp_param(ctx, th) && !temp_is_ptr;
         if (if_bv.kind != TY_UNKNOWN &&
             !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_) &&
-            !emit_arm_is_recorded_byval_agg(ctx, t, if_bv)) {
+            !emit_arm_is_recorded_byval_agg(ctx, t, if_bv) &&
+            !emit_arm_is_byval_agg_var(ctx, e->as.if_.then_, if_bv)) {
             /* by-value merge temp, carrier-producing arm: bridge to concrete */
             t = emit_carrier_bridge(ctx, body, t, CK_CARRIER, CK_CONCRETE, if_bv);
             indent_buf(body, ctx->indent);
@@ -2980,7 +3106,8 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool else_is_byptr_param = expr_is_pbp_param(ctx, eb) && !temp_is_ptr2;
             if (if_bv.kind != TY_UNKNOWN &&
                 !fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null) &&
-                !emit_arm_is_recorded_byval_agg(ctx, el, if_bv)) {
+                !emit_arm_is_recorded_byval_agg(ctx, el, if_bv) &&
+                !emit_arm_is_byval_agg_var(ctx, e->as.if_.else_or_null, if_bv)) {
                 el = emit_carrier_bridge(ctx, body, el, CK_CARRIER, CK_CONCRETE, if_bv);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", tmp, el);
@@ -3448,15 +3575,86 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
  * concrete result element (`(ReF bool)`) names the right ctor variant.  Returns a
  * malloc'd suffix (caller frees) or NULL when not applicable. */
 static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
-    if (!ctx || !ctx->current_abi_specialization || !e ||
-        e->kind != EX_CALL || !e->as.call_.ctor || !e->as.call_.ctor->adt)
+    if (!ctx || !e || e->kind != EX_CALL || !e->as.call_.ctor ||
+        !e->as.call_.ctor->adt)
         return NULL;
+    /* A ctor call in ARGUMENT position of another ctor answers to the enclosing
+     * ctor's field type, not to the spec's result: `(Some (None))` in a `trav`
+     * body has the spec result `(Opt (Opt int))`, and handing that to the INNER
+     * `(None)` emits `ctor_None__Opt__int` where `ctor_Some__Opt__int` wants a
+     * `tur_adt_Opt__int`.  Checked first, and gated on the same ADT identity as
+     * the spec path below, so it can only ever pick a different MONOMORPH of the
+     * family the constructor already belongs to. */
+    if (ctx->pending_ctor_field_ty) {
+        Type ft = emit_resolve_type(ctx, *ctx->pending_ctor_field_ty);
+        if (ft.kind == TY_APP && type_app_is_concrete_adt(&ft) &&
+            type_adt_app_def(&ft) == e->as.call_.ctor->adt)
+            return type_adt_app_ctor_suffix(ft);
+    }
+    if (!ctx->current_abi_specialization) return NULL;
     Type sret = emit_resolve_type(ctx, ctx->current_abi_specialization->result_type);
     if (sret.kind != TY_APP) return NULL;
     AdtDef *sdef = type_adt_app_def(&sret);
     if (!sdef || sdef != e->as.call_.ctor->adt) return NULL;
     if (!type_app_is_concrete_adt(&sret)) return NULL;
     return type_adt_app_ctor_suffix(sret);
+}
+
+/* M7 by-value HKT, the result-type twin of emit_hkt_spec_ctor_suffix.
+ *
+ * The same erasure that costs a ctor call its `__bool` suffix costs the
+ * enclosing `match` its result TYPE: inside `__inst_Functor_fmap_ReF__spec__
+ * tur_adt_ReF__bool_...` the match's `e->type` is the bare parametric base
+ * `ReF` (TY_ADT, `type_c_name` -> `int64_t`), while every arm constructs the
+ * concrete `ctor_*__bool` monomorph.  Declaring the result temp from the erased
+ * type spells `int64_t` and each arm's store is "incompatible types when
+ * assigning to type 'int64_t' from type 'tur_adt_ReF__bool'".
+ *
+ * Recover it the same way the ctor suffix is recovered -- from the ACTIVE
+ * spec's result family -- and gate it the same way: the spec's result must be a
+ * concrete app OF THE SAME AdtDef the erased type names, so this can only ever
+ * ground `ReF` to `(ReF bool)`, never retype a match to an unrelated family.
+ * The arms consult the identical source, which is what keeps the temp and its
+ * stores in lockstep.  Returns false when not applicable; `*out` untouched. */
+static bool emit_hkt_spec_app_result(EmitCtx *ctx, Type erased, Type *out) {
+    if (!ctx || !ctx->current_abi_specialization || !out) return false;
+    AdtDef *want = (erased.kind == TY_ADT)   ? erased.as.adt_.def
+                 : (erased.kind == TY_APP)   ? type_adt_app_def(&erased)
+                                             : NULL;
+    if (!want) return false;
+    Type sret = emit_resolve_type(ctx, ctx->current_abi_specialization->result_type);
+    if (sret.kind != TY_APP) return false;
+    if (type_adt_app_def(&sret) != want) return false;
+    if (!type_app_is_concrete_adt(&sret)) return false;
+    *out = sret;
+    return true;
+}
+
+/* SR2b: does the ACTIVE spec clone's own ABI -- its result or any argument,
+ * resolved through the spec's bindings -- spell exactly this C type?  The
+ * match-binder tyvar-substitution legs key on this: a clone's params and
+ * return are DECLARED from these resolved spellings, so a binder may only be
+ * grounded to a concrete spelling the clone ABI itself carries.  Inside
+ * `ok_val__spec__tur_adt_Point_int64_t` the result spells `tur_adt_Point`, so
+ * the `(Ok v)` binder becomes the aggregate the return needs; inside
+ * `__inst_Functor_fmap_ExprF__spec__int64_t_int64_t_int64_t` the spec BINDS
+ * A = Expr but every ABI slot spells the erased carrier (the container rides
+ * `(ExprF A)` and the fn is a poly closure), so the binder must STAY the
+ * int64 word its consumers -- `g.fn(g.env, x)` cast to int64 formals -- are
+ * emitted against (hkt-cata-wide-byvalue-carrier broke on the deref). */
+static bool spec_abi_spells_ctype(EmitCtx *ctx, const char *cty) {
+    const EmitAbiSpecialization *sp =
+        ctx ? ctx->current_abi_specialization : NULL;
+    if (!sp || !cty) return false;
+    const char *rc =
+        emit_type_c_name(ctx, emit_resolve_type(ctx, sp->result_type));
+    if (rc && strcmp(rc, cty) == 0) return true;
+    for (uint8_t i = 0; i < sp->n_args; i++) {
+        const char *ac =
+            emit_type_c_name(ctx, emit_resolve_type(ctx, sp->arg_types[i]));
+        if (ac && strcmp(ac, cty) == 0) return true;
+    }
+    return false;
 }
 
 /* Emit the propagation check that returns a zero of the enclosing function's C
@@ -3641,6 +3839,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_printf(body, "%s %s = (%s);\n", ret_ct, tmp, v);
     else
         buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    /* SR2b: the RETURNED string is now just `tmp`, so the caller can no longer
+     * read the value's emitted C type off the text.  Leave the note set to the
+     * temp's declared type: an ARGUMENT emission that cleared the note before
+     * calling here reads back exactly what its value was declared as (the
+     * pointer-into-int64-formal bridge in the call arg loop keys on this), and
+     * no unrelated later call can be polluted, because every such consumer
+     * clears first -- the leak the capture-and-clear above guards against was
+     * notes surviving ACROSS argument emissions, not within one. */
+    if (ret_ct)
+        note_call_ret(ctx, ret_ct);
     /* A constructor call (`ctor_X(...)`) always returns the concrete heap pointer
      * `tur_adt_X *`, even though its `(X ..)` type c-names to the int64 carrier
      * under emit_binding_repr_c_name.  Capture that before freeing v so the temp
@@ -4683,13 +4891,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Collect the declared C arg types first: whether any of
                      * them is an aggregate decides how this call is spelled. */
                     const char *arg_ct[4] = {NULL, NULL, NULL, NULL};
+                    Type arg_slot_ty[4];
+                    bool slot_is_wide[4] = {false, false, false, false};
                     bool any_aggregate = false;
                     for (uint32_t i = 0; i < n && i < 4; i++) {
                         Type at = (gf->type.as.fn.arg_full_types &&
                                    gf->type.as.fn.arg_full_types[i])
                                       ? *gf->type.as.fn.arg_full_types[i]
                                       : emit_type_from_kind(gf->type.as.fn.arg_kinds[i]);
-                        arg_ct[i] = emit_type_c_name(ctx, at);
+                        arg_slot_ty[i] = emit_resolve_type(ctx, at);
+                        /* SR-fat-abi: a WIDE by-value aggregate slot is an int64
+                         * box pointer -- the same convention the typed-thunk
+                         * typedef, the b4box thunk bodies and the typed fatshims
+                         * all speak now.  Spelling the aggregate here called a
+                         * shim that derefs a0 with the aggregate VALUE in the
+                         * register -- a SIGSEGV, not a type error, because this
+                         * cast is exactly what hid the disagreement. */
+                        slot_is_wide[i] = type_is_wide_byval_adt(arg_slot_ty[i]);
+                        arg_ct[i] = slot_is_wide[i]
+                                        ? "int64_t"
+                                        : emit_type_c_name(ctx, arg_slot_ty[i]);
                         if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
                     }
                     Buf out; buf_init(&out);
@@ -4700,6 +4921,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(&out, ", %s", fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
                             char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            if (slot_is_wide[i])
+                                av = fat_dispatch_box_arg(ctx, body,
+                                    e->as.call_.args[i], arg_slot_ty[i], av);
                             buf_printf(&out, ", %s", av);
                             free(av);
                         }
@@ -4733,7 +4957,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    fn_ptr_val, fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
                             char *av = emit_value(ctx, body, e->as.call_.args[i]);
-                            if (emit_c_type_is_scalar(arg_ct[i]))
+                            if (slot_is_wide[i]) {
+                                av = fat_dispatch_box_arg(ctx, body,
+                                    e->as.call_.args[i], arg_slot_ty[i], av);
+                                buf_printf(&out, ", (int64_t)(%s)", av);
+                            } else if (emit_c_type_is_scalar(arg_ct[i]))
                                 buf_printf(&out, ", (%s)(%s)", arg_ct[i], av);
                             else
                                 buf_printf(&out, ", (%s)", av);
@@ -5025,8 +5253,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * NOT byvalue aggregates, so they pass through untouched. */
                     if (!phase_f_concrete &&
                         emit_type_is_byvalue_adt(ctx, e->as.call_.args[i]->type)) {
-                        char *boxed = emit_agg_box(ctx, e->as.call_.args[i]->type, raw);
-                        free(raw);
+                        /* A pass-by-pointer parameter is held as `const T *`, so
+                         * the box copy `*__tur_pbox = (v)` would assign a pointer
+                         * to a struct.  Copy through it.  Reachable since a wide
+                         * by-value aggregate can be both a pbp param and a poly
+                         * carrier arg (the fat-dispatch-wide-byvalue-aggregate-
+                         * argument fixture's apply-un leg). */
+                        char *src = raw;
+                        if (expr_is_pbp_param(ctx, e->as.call_.args[i])) {
+                            Buf d; buf_init(&d);
+                            buf_printf(&d, "*(%s)", raw);
+                            buf_putc(&d, '\0');
+                            src = strdup(d.data);
+                            buf_free(&d);
+                            free(raw);
+                        }
+                        char *boxed = emit_agg_box(ctx, e->as.call_.args[i]->type, src);
+                        free(src);
                         raw = boxed;
                     }
                     /* B4 (byvalue-recursive-carrier): a single-carrier recursive
@@ -5368,6 +5611,34 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
+                /* SR2a: the readback half of the fn-carrier crossing, for a
+                 * DIRECT thunk call.  A closure lifted out of a POLYMORPHIC
+                 * combinator keeps that combinator's ungrounded result -- the
+                 * `(fn [xs : int] : (PRes A))` inside `or-parser` -- so its
+                 * lifted thunk is declared to return the int64 carrier and
+                 * boxes into it.  This call site, though, has the GROUNDED
+                 * `(PRes cstr)`, which is an aggregate once parametric sums go
+                 * by value, and binding the carrier word straight into it is
+                 * "invalid initializer" at the match below.  Deref what the
+                 * producing side stored, exactly as the named-fn `:int`-carrier
+                 * bridge does at its own return site.
+                 *
+                 * Keyed on the THUNK's emitted return spelling, not on its
+                 * declared kind: a thunk whose result was already grounded
+                 * returns the aggregate itself, and derefing that would read
+                 * through a value rather than a pointer. */
+                if (emit_type_is_byvalue_sum(ctx, e->type) &&
+                    !type_is_transparent_int_newtype(emit_resolve_type(ctx, e->type))) {
+                    const char *rct = emit_sig_lookup_ret_ctype(thunk_name);
+                    if (rct && *rct && strcmp(rct, "int64_t") == 0) {
+                        char *ub = emit_agg_unbox(ctx, e->type, result);
+                        free(result);
+                        result = ub;
+                        /* Re-note: the unbox retypes the expression, and the
+                         * panic-hoist types its `__ps_N` temp from this note. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
+                    }
+                }
                 for (uint32_t i = 0; i <= e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
                 free(thunk_name);
@@ -5413,6 +5684,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) {
                         arg_types[i] = emit_resolve_type(ctx, e->as.call_.args[i]->type);
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                        /* SR-fat-abi: a wide by-value aggregate slot is int64
+                         * (box pointer) in the typedef now -- convert. */
+                        arg_strs[i] = fat_dispatch_box_arg(ctx, body,
+                            e->as.call_.args[i], arg_types[i], arg_strs[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         _disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
@@ -5424,7 +5699,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         /* Legacy fallback: polymorphic fat closures still store __fn as int64_t. */
                         buf_printf(&out, "((%s (*)(void*", ret_c);
                         for (uint32_t i = 0; i < n; i++) {
-                            buf_printf(&out, ", %s", type_c_name(arg_types[i]));
+                            /* SR-fat-abi: same slot convention as the typed
+                             * typedef -- a wide by-value aggregate crosses as
+                             * an int64 box pointer, and fat_dispatch_box_arg
+                             * above already converted the argument. */
+                            buf_printf(&out, ", %s",
+                                type_is_b4box_closure_slot(arg_types[i])
+                                    ? "int64_t" : type_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -5583,6 +5864,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             arg_types[i] = e->as.call_.args[i]->type;
                         }
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                        /* SR-fat-abi: see the CY2 twin above. */
+                        arg_strs[i] = fat_dispatch_box_arg(ctx, body,
+                            e->as.call_.args[i], arg_types[i], arg_strs[i]);
                     }
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
@@ -5593,7 +5877,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else {
                         buf_printf(&out, "((%s (*)(void*", ret_c);
                         for (uint32_t i = 0; i < n; i++) {
-                            buf_printf(&out, ", %s", type_c_name(arg_types[i]));
+                            /* SR-fat-abi: see the CY2 twin above. */
+                            buf_printf(&out, ", %s",
+                                type_is_b4box_closure_slot(emit_resolve_type(ctx, arg_types[i]))
+                                    ? "int64_t" : type_c_name(arg_types[i]));
                         }
                         buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
@@ -5761,10 +6048,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * element bindings -- without this the carrier `ctor_EmptyF` is
                  * emitted where the consumer reads the by-value `tur_adt_ReF__bool`. */
                 Type rty = emit_resolve_type(ctx, e->type);
-                char *suffix = (rty.kind == TY_APP)
+                /* Same concreteness gate as the n-arg branch below: a spine
+                 * still carrying an unresolved METHOD-level tyvar -- the inner
+                 * `(ONone)` arm of class-method-hkt-tyvar-grounding types as
+                 * `(Opt (Opt b))` with `b` ungrounded -- would suffix as the
+                 * partial `__Opt` and name a carrier ctor where the match temp
+                 * is the by-value `tur_adt_Opt__Opt__int` (seam build error).
+                 * The HKT-spec fallback grounds it from the active spec's
+                 * result family instead. */
+                char *suffix = (rty.kind == TY_APP && type_app_is_concrete_adt(&rty))
                     ? type_adt_app_ctor_suffix(rty) : NULL;
                 if (!suffix)
                     suffix = emit_hkt_spec_ctor_suffix(ctx, e);
+                if (!suffix && rty.kind == TY_APP)
+                    suffix = type_adt_app_ctor_suffix(rty);  /* last resort: prior behaviour */
                 Buf out; buf_init(&out);
                 if (suffix) {
                     buf_printf(&out, "ctor_%s%s()", _mc, suffix);
@@ -5845,10 +6142,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * `none__spec__tur_adt_Option__int` body emits `ctor_Option__int`. */
                 char *suffix = (rty.kind == TY_APP && type_app_is_concrete_adt(&rty))
                     ? type_adt_app_ctor_suffix(rty) : NULL;
-                if (!suffix)
+                /* The FAMILY this call constructs, kept alongside the suffix so
+                 * the argument loop can hand each nested ctor its own field
+                 * type.  Concrete `rty` names it directly; otherwise the active
+                 * spec's result does (same source as the suffix, so the two
+                 * cannot disagree). */
+                Type ctor_family = rty;
+                bool have_family = (suffix != NULL);
+                if (!suffix) {
                     suffix = emit_hkt_spec_ctor_suffix(ctx, e);
-                if (!suffix && rty.kind == TY_APP)
+                    if (suffix)
+                        have_family = emit_hkt_spec_app_result(ctx, rty, &ctor_family);
+                }
+                if (!suffix && rty.kind == TY_APP) {
                     suffix = type_adt_app_ctor_suffix(rty);  /* last resort: prior behaviour */
+                    have_family = (suffix != NULL);
+                }
                 /* macos-int-conversion-carrier-pointer-straddles (case A):
                  * the emitted C name of the ctor being called, for the
                  * signature-table lookup at the end of the arg loop. */
@@ -5874,7 +6183,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg->as.reinterpret_.expr) {
                         arg = arg->as.reinterpret_.expr;
                     }
+                    /* Hand a nested bare ctor the field type it is filling --
+                     * see pending_ctor_field_ty in emit_internal.h.  Substituted
+                     * against THIS call's family, so `(Some (None))` gives the
+                     * inner `(None)` its `(Opt int)` rather than the outer
+                     * `(Opt (Opt int))`. */
+                    Type _fld_ty;
+                    bool _have_fld = false;
+                    const Type *_saved_fld = ctx->pending_ctor_field_ty;
+                    if (have_family && ctor_family.kind == TY_APP &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].full_type) {
+                        AdtDef *_fd = NULL;
+                        Type _fargs[16];
+                        uint8_t _fn_args = 0;
+                        if (type_extract_adt_app(&ctor_family, &_fd, _fargs, &_fn_args) && _fd) {
+                            _fld_ty = substitute_adt_app_type_owned(
+                                e->as.call_.ctor->fields[i].full_type, _fd, _fargs);
+                            _have_fld = true;
+                            ctx->pending_ctor_field_ty = &_fld_ty;
+                        }
+                    }
+                    if (!_have_fld) ctx->pending_ctor_field_ty = NULL;
                     arg_strs[i] = emit_value(ctx, body, arg);
+                    ctx->pending_ctor_field_ty = _saved_fld;
+                    if (_have_fld) free_struct_app_type(_fld_ty);
                     /* CONV-S1 (seam 2): a `(default-of T)` argument to a
                      * monomorphised ctor whose field type is heterogeneous --
                      * `(ok v) : (Result int cstr)` passes `(default-of B)` for the
@@ -5962,6 +6295,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                         }
                     }
+                    /* pbp-param-into-ctor: a pass-by-pointer PARAMETER
+                     * (`const T *`, any by-value aggregate whose def crossed the
+                     * adt_byval_pass_by_ptr threshold) consumed by a constructor
+                     * is consumed as a VALUE: an inline by-value field takes the
+                     * aggregate directly, and a carrier field's box spill copies
+                     * from it (`*tmp = (x)`).  Both received the raw pointer --
+                     * `ctor_H(tur_adt_Big)` fed a `const tur_adt_Big *` is a hard
+                     * cc error.  Deref once, up front, so every downstream
+                     * consumer in this loop sees the value.  Pre-existing for
+                     * wide products (pbp since long before SR1) but unreachable
+                     * in the suite until a fixture passed one straight to a
+                     * ctor; sums made it ordinary. */
+                    if (arg && expr_is_pbp_param(ctx, arg) &&
+                        emit_type_is_byvalue_adt(ctx, arg->type)) {
+                        Type prt = emit_resolve_type(ctx, arg->type);
+                        const AdtDef *prd = (prt.kind == TY_ADT)
+                                                ? prt.as.adt_.def : NULL;
+                        if (prd && adt_byval_pass_by_ptr(prd)) {
+                            Buf d; buf_init(&d);
+                            buf_printf(&d, "(*(%s))", arg_strs[i]);
+                            buf_putc(&d, '\0');
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(d.data);
+                            buf_free(&d);
+                        }
+                    }
                     /* hkt-cata-function-carrier: an EX_FN_TO_FAT shim (a thin fn
                      * boxed into a fat closure for a parametric ADT field, see
                      * elab_call.c) emits a `void *` box.  The constructor lowers
@@ -5982,10 +6341,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (rt.kind == TY_ADT && rt.as.adt_.def &&
                             adt_is_byvalue_product(rt.as.adt_.def)) {
                             const AdtDef *od = rt.as.adt_.def;
-                            if (od->n_ctors == 1 && i < od->ctors[0]->n_fields) {
-                                field_inline = adt_field_is_inline_byval(
-                                    &od->ctors[0]->fields[i]);
-                                field_is_fn = od->ctors[0]->fields[i].kind == TY_FN;
+                            /* SR1: a by-value owner may now be MULTI-variant, so
+                             * the field being stored belongs to the constructor
+                             * being applied -- reading `ctors[0]` would answer for
+                             * the wrong arm (or index out of it).  Fall back to
+                             * `ctors[0]` only for the single-variant case this was
+                             * written for, where the two are the same ctor. */
+                            const CtorDef *oc =
+                                (e->as.call_.ctor && e->as.call_.ctor->adt == od)
+                                    ? e->as.call_.ctor
+                                    : (od->n_ctors == 1 ? od->ctors[0] : NULL);
+                            if (oc && i < oc->n_fields) {
+                                field_inline = adt_field_is_inline_byval(&oc->fields[i]);
+                                field_is_fn = oc->fields[i].kind == TY_FN;
                             }
                         }
                     }
@@ -6529,8 +6897,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         fn_binding->type.as.fn.result_full_type)) {
                     ctx->poly_wrap_callee_carrier = true;
                 }
+                ctx->call_ret_note[0] = '\0';
                 char *raw = emit_value(ctx, body, emit_arg);
                 ctx->poly_wrap_callee_carrier = saved_pwc;
+                /* SR2b: the C spelling this argument's emission actually
+                 * produced (the panic-hoist temp's declared type), captured
+                 * before any later emission overwrites the note.  Consulted at
+                 * the end of the coercion chain: a POINTER-spelled value --
+                 * `ok_val__spec__const_char___int64_t`'s result bound as
+                 * `const char *__ps_N` -- flowing into an int64 formal needs
+                 * the (int64_t)(intptr_t) bridge even though both ELAB types
+                 * are the erased carrier and every type-keyed rule above
+                 * therefore passes it through bare. */
+                char arg_emitted_cty[256];
+                snprintf(arg_emitted_cty, sizeof arg_emitted_cty, "%s",
+                         ctx->call_ret_note);
                 /* byvalue-result-param-ok-predicate-materialize-bad-cast: set
                  * once a pass-by-pointer struct *parameter* argument has been
                  * converted to the int64 carrier by a pointer cast (its C value
@@ -6812,6 +7193,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 Type spec_byval_ty = type_simple(TY_UNKNOWN, CK_COPY);
                 bool spec_byval =
                     call_spec_result_byvalue_app(ctx, emit_arg, &spec_byval_ty);
+                /* SR2a: set once this argument has been bridged to the carrier,
+                 * so the by-value-APP seam below does not bridge it a SECOND
+                 * time.  The two blocks were written to divide by the param's
+                 * nominal kind -- that block's own comment says "when `A`
+                 * resolves to a by-value parametric app the param kind here is
+                 * TY_APP, so this seam handles it instead" -- but its guard
+                 * admits a TY_TYVAR param too, and the split only held because
+                 * `adt_app_is_byvalue_product` answered false for a multi-variant
+                 * sum.  Once it answers true, `vec-push!`'s `val : A` satisfies
+                 * both, and the second box stores the FIRST box's pointer into a
+                 * fresh aggregate slot: "incompatible types when assigning to
+                 * type 'tur_adt_Opt2__int' from type 'long int'". */
+                bool arg_carrier_boxed = false;
                 if (!needs_fn_cast && fn_binding->type.kind == TY_FN && emit_arg &&
                     (expr_emits_byvalue_carrier_abi(ctx, emit_arg) || spec_byval)) {
                     uint32_t n_fnparams = fn_binding->type.as.fn.arity;
@@ -6843,6 +7237,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,
                                                            bridge_ty);
+                        arg_carrier_boxed = true;
                     }
                 }
                 /* CONV-S1: a by-value parametric ADT-app argument
@@ -6859,7 +7254,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * concrete-aggregate param (which already takes the value by value).
                  * A matched concrete spec resolves the param to the real C type and
                  * carries its own bridges, so it is excluded. */
-                if (!needs_fn_cast && !matched_spec &&
+                if (!needs_fn_cast && !matched_spec && !arg_carrier_boxed &&
                     fn_binding->type.kind == TY_FN && emit_arg &&
                     emit_arg->type.kind == TY_APP &&
                     adt_app_is_byvalue_product(emit_arg->type)) {
@@ -7002,7 +7397,40 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
                             : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                         TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
-                        if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
+                        /* SR1: an explicitly `:int`-typed parameter is a carrier
+                         * slot too, and a by-value aggregate has to be boxed into
+                         * it exactly as it is into a tyvar slot.  This is the
+                         * `:int`-as-type-eraser shape CLAUDE.md warns about, and
+                         * `stdlib/fix.tur` is built on it -- `(defn roll [layer :
+                         * int] ...)` takes any functor layer, so `(roll (Stop 0))`
+                         * hands a `CountF` to an `int64_t` formal.  While every sum
+                         * rode the carrier that was a no-op; now it is a hard C
+                         * error ("incompatible type for argument 1 of 'roll'").
+                         * The value is stored into the Fix cell and outlives the
+                         * call, so it takes the ESCAPING bridge -- a stack spill
+                         * would hand out an address that dangles on return.
+                         * (`emit_carrier_bridge` short-circuits a transparent int
+                         * newtype to the identity, so a real int-shaped value that
+                         * merely wears an ADT name is not boxed.) */
+                        /* Prefer the callee's EMITTED parameter type over its
+                         * declared kind.  The two disagree exactly where this
+                         * matters: `(defn eval-node [n : int] ...)` whose body
+                         * matches `n` against `ExprNode` patterns has its
+                         * parameter refined to the ADT, so the emitted signature
+                         * takes the aggregate by value while `arg_kinds[]` still
+                         * reads TY_INT.  Boxing into that is the mirror-image
+                         * mismatch of not boxing into a real carrier slot. */
+                        const char *pct = emit_sig_lookup_param_ctype(fn_name, i);
+                        bool int_carrier_param =
+                            (pct && *pct)
+                                ? (strcmp(pct, "int64_t") == 0)
+                                : (pk == TY_INT || pk == TY_INT64 ||
+                                   pk == TY_UINT64 || pk == TY_PTR_VOID);
+                        if (g_sr1_sum_byvalue && int_carrier_param &&
+                            !matched_spec && emit_type_is_byvalue_sum(ctx, rarg)) {
+                            raw = emit_carrier_bridge_escaping(
+                                      ctx, body, raw, CK_CONCRETE, CK_CARRIER, rarg);
+                        } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
                             (fn_binding->body_is_inline_c || !matched_spec)) {
                             /* multiword-element-boxing: a WIDE (> 8 byte) by-value
                              * ADT stored into a heap container through an inline-C
@@ -7055,6 +7483,63 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 raw = emit_carrier_bridge(ctx, body, raw,
                                                           CK_CONCRETE, CK_CARRIER,
                                                           rarg);
+                        }
+                    }
+                }
+                /* SR1, the other direction: a CARRIER argument reaching a
+                 * parameter the callee emits as a by-value SUM.  A `:int`-declared
+                 * parameter whose body matches it against constructors is refined
+                 * to that ADT, so the emitted signature takes the aggregate --
+                 * `(defn run-calc-op [op : int] ...)` becomes
+                 * `run_calc_op(tur_adt_CalcOp)`.  Callers that honour the
+                 * DECLARATION still hand over an int64 carrier word: here the
+                 * lifted `(fn [op] (run-calc-op op))`, whose own `op` is an
+                 * untyped carrier param.  Deref the box back to the aggregate.
+                 * While every sum rode the carrier the refinement was invisible
+                 * and both sides were int64.
+                 *
+                 * Keyed on the callee's REFINED parameter type (FnDef.param_types),
+                 * which is the only place the refinement is visible -- the callee's
+                 * declared TY_FN still says `:int`, and its emitted C parameter
+                 * type is just a name.  Restricted to a by-value SUM so it cannot
+                 * fire on a by-value product parameter (a typeclass method taking
+                 * its receiver by value reads the same at this site, but its
+                 * argument was already unboxed by the rule that owns that
+                 * crossing -- bridging again double-derefs). */
+                if (g_sr1_sum_byvalue && !needs_fn_cast && !matched_spec &&
+                    emit_arg && fn_binding->source_fn_def) {
+                    const FnDef *fd = fn_binding->source_fn_def;
+                    TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
+                    /* This bridge and the return-side unbox below cannot stack
+                     * on one node: this one requires the arg's e->type to be a
+                     * carrier word, that one requires the call's e->type to be
+                     * the sum, and a node has one type.  (Probed with the
+                     * composed eraser `(eat (unwrap2 ...))` -- exactly one
+                     * fires.) */
+                    if (i < fd->n_params && fd->param_types &&
+                        emit_type_is_byvalue_sum(ctx, fd->param_types[i]) &&
+                        (ak == TY_INT || ak == TY_INT64 || ak == TY_UINT64 ||
+                         ak == TY_PTR_VOID)) {
+                        Type rpt = emit_resolve_type(ctx, fd->param_types[i]);
+                        const AdtDef *rpd = (rpt.kind == TY_ADT)
+                                                ? rpt.as.adt_.def : NULL;
+                        if (rpd && adt_byval_pass_by_ptr(rpd)) {
+                            /* The param is pass-by-pointer (`const T *`), and
+                             * the carrier word already IS a pointer to the
+                             * aggregate (the caller's box).  Deref'ing to a
+                             * value here hands an aggregate to a pointer slot;
+                             * just retype the word. */
+                            Buf c; buf_init(&c);
+                            buf_printf(&c, "((const %s *)(intptr_t)(%s))",
+                                       emit_type_c_name(ctx, rpt), raw);
+                            buf_putc(&c, '\0');
+                            free(raw);
+                            raw = strdup(c.data);
+                            buf_free(&c);
+                        } else {
+                            char *ub = emit_agg_unbox(ctx, fd->param_types[i], raw);
+                            free(raw);
+                            raw = ub;
                         }
                     }
                 }
@@ -7955,6 +8440,96 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                 }
+                /* SR2b (see arg_emitted_cty above): last-resort carrier
+                 * bridge for a pointer-spelled value entering an int64 formal.
+                 * Keyed on the EMITTED spellings on both sides -- the formal's
+                 * recorded C param type and the argument's noted C value type
+                 * -- so it fires only where cc would otherwise warn
+                 * -Wint-conversion, and never touches an argument some earlier
+                 * rule already coerced (raw no longer starts with the bare
+                 * temp/identifier the note described once a cast wrapped it,
+                 * but a second (int64_t)(intptr_t) over a cast would be
+                 * harmless anyway; the cheap guard is the formal test). */
+                if (arg_emitted_cty[0] &&
+                    strchr(arg_emitted_cty, '*') != NULL &&
+                    raw && raw[0] != '(') {
+                    /* Formal slot spelling: the sig table when the emitted
+                     * callee recorded one, else the matched spec's own arg
+                     * type (a defn clone is not in the sig table). */
+                    const char *_pct2 = emit_sig_lookup_param_ctype(fn_name, i);
+                    if ((!_pct2 || !*_pct2) && matched_spec &&
+                        i < matched_spec->n_args)
+                        _pct2 = emit_type_c_name(
+                            ctx, emit_resolve_type(
+                                ctx, ((EmitAbiSpecialization *)matched_spec)->arg_types[i]));
+                    if (_pct2 && strcmp(_pct2, "int64_t") == 0) {
+                        Buf _ab; buf_init(&_ab);
+                        buf_printf(&_ab, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&_ab, '\0');
+                        free(raw);
+                        raw = strdup(_ab.data);
+                        buf_free(&_ab);
+                    }
+                }
+                /* SR2b: retargeted element-dispatch bridge.  When the
+                 * re-resolver swaps a constrained-instance inner call onto a
+                 * concrete element instance (`__inst_Enc_enc_float(double)` /
+                 * `__inst_Enc_enc_Box(tur_adt_Box)`) but the element itself was
+                 * read through an erased carrier accessor (`(unwrap x)` ->
+                 * int64), the value in hand is the payload's raw WORD: a
+                 * double's bits, an inline (<= 8 byte) aggregate's bits, or a
+                 * wide aggregate's heap-box pointer.  Bit-reinterpret / deref
+                 * to the retargeted param's actual type; a numeric or plain
+                 * cast would convert the bits (1.5 -> 4.6e18) or fail to
+                 * compile at all. */
+                if (reresolved_callee && raw &&
+                    /* Still the bare panic-hoist temp: an earlier rule in the
+                     * coercion chain that already wrapped it (a deref, a cast)
+                     * produced a '('-leading spelling, and bridging again
+                     * double-derefs (vec-multiword-struct-element). */
+                    raw[0] != '(' && raw[0] != '*' &&
+                    i < reresolved_callee->n_params &&
+                    reresolved_callee->param_types &&
+                    arg_emitted_cty[0] &&
+                    strcmp(arg_emitted_cty, "int64_t") == 0) {
+                    Type _rpt = emit_resolve_type(
+                        ctx, reresolved_callee->param_types[i]);
+                    const char *_rpc = emit_type_c_name(ctx, _rpt);
+                    Buf _rb; buf_init(&_rb);
+                    bool _bridged = false;
+                    if (_rpt.kind == TY_FLOAT || _rpt.kind == TY_FLOAT64) {
+                        buf_printf(&_rb,
+                            "(((union { double d; int64_t i; })"
+                            "{ .i = (int64_t)(%s) }).d)", raw);
+                        _bridged = true;
+                    } else if (_rpc && strcmp(_rpc, "int64_t") != 0 &&
+                               strchr(_rpc, '*') == NULL &&
+                               (_rpt.kind == TY_ADT || _rpt.kind == TY_APP) &&
+                               emit_type_is_byvalue_adt(ctx, _rpt)) {
+                        /* Storage convention mirrors adt_field_c_type: a plain
+                         * TY_ADT payload is stored as a typed heap-box POINTER
+                         * (`tur_adt_Box *` union member) whatever its size, and
+                         * a wide payload of either kind as an int64 box -- both
+                         * deref.  Only a NON-wide TY_APP monomorph payload
+                         * (`tur_adt_Q__int`) is laid INLINE in the slot, so
+                         * only that one reinterprets the word's own bits. */
+                        if (_rpt.kind == TY_APP &&
+                            !emit_type_is_wide_byval_adt(ctx, _rpt))
+                            buf_printf(&_rb,
+                                "(*(%s *)&(int64_t){ (int64_t)(%s) })",
+                                _rpc, raw);
+                        else
+                            buf_printf(&_rb, "(*(%s *)(intptr_t)(%s))",
+                                       _rpc, raw);
+                        _bridged = true;
+                    }
+                    if (_bridged) {
+                        buf_putc(&_rb, '\0');
+                        free(raw);
+                        raw = strdup(_rb.data);
+                    }
+                    buf_free(&_rb);
+                }
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
@@ -7967,6 +8542,52 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_putc(&out, '\0');
             char *result = strdup(out.data);
             buf_free(&out);
+            /* SR1: the readback half of the `:int`-carrier-parameter bridge.  A
+             * callee declared `: int` that really hands back a sum -- `(defn
+             * unroll [fix : int] : int ...)` in stdlib/fix.tur -- returns the
+             * int64 carrier, while the caller's expression type is the by-value
+             * ADT the patterns name.  Deref the box the producing side stored (see
+             * the int-carrier-param bridge in the arg loop above), so the two ends
+             * of the crossing agree.  Excluded: a transparent int newtype, whose
+             * carrier and concrete forms are the same bare int64 -- derefing that
+             * would read through a value, not a pointer -- and a matched ABI spec,
+             * whose clone already returns the aggregate by value. */
+            if (g_sr1_sum_byvalue &&
+                fn_binding && fn_binding->type.kind == TY_FN &&
+                /* Only a MONOMORPHIC `:int` declaration takes this unbox.  A
+                 * TYVAR result erased to the carrier (vec-get's `: A`) reads the
+                 * same at this site, but its recovery already has owners -- the
+                 * seam-4 carrier-producer arg bridge and the poly-result unbox --
+                 * and a second deref on top of theirs reads a struct as a
+                 * pointer.  Same discriminator as the arg side: full_type is
+                 * non-NULL exactly for the polymorphic case. */
+                fn_binding->type.as.fn.result_full_type == NULL &&
+                emit_type_is_byvalue_sum(ctx, e->type) &&
+                !type_is_transparent_int_newtype(emit_resolve_type(ctx, e->type)) &&
+                !find_matched_abi_spec(ctx, e, fn_binding)) {
+                TypeKind rk = fn_binding->type.as.fn.result_kind;
+                /* Emitted signature first, declared kind as the fallback -- same
+                 * reason as the argument side: a `: int` return refined to the
+                 * ADT comes back as the aggregate already, and derefing it would
+                 * read through a value rather than a pointer. */
+                const char *rct = emit_sig_lookup_ret_ctype(fn_name);
+                bool ret_is_carrier_word =
+                    (rct && *rct)
+                        ? (strcmp(rct, "int64_t") == 0)
+                        : (rk == TY_INT || rk == TY_INT64 || rk == TY_UINT64 ||
+                           rk == TY_PTR_VOID);
+                if (ret_is_carrier_word) {
+                    char *ub = emit_agg_unbox(ctx, e->type, result);
+                    free(result);
+                    result = ub;
+                    /* The unbox retypes the expression, and the panic-hoist in
+                     * emit_value types its `__ps_N` temp from this note -- without
+                     * it the hoist falls back to reading the emitted text and
+                     * misreads the deref's own `*(T *)` as the cast-wrap form.
+                     * Same re-note the poly-carrier unbox site performs. */
+                    note_call_ret(ctx, emit_type_c_name(ctx, e->type));
+                }
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
             free(arg_strs);
             free(fn_name);
@@ -8142,10 +8763,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(base_tmp);
             }
             indent_buf(body, ctx->indent);
-            if (thunk_typedef) {
-                buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, thunk_typedef, thunk_sym);
-            } else {
-                buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+            /* Cast to whatever the struct's `__fn` field was DECLARED as, not
+             * to what this site would compute -- see the
+             * env_struct_fn_typedefs comment in emit_internal.h.  A `__byval`
+             * or `__spec__` construction site resolves a tyvar result to a
+             * concrete aggregate typedef that the generic site (which emitted
+             * the struct) resolved to the int64 carrier, and casting to the
+             * typedef there stores a function pointer through an `int64_t`
+             * field. */
+            {
+                const char *decl_typedef = emit_env_struct_fn_typedef(ctx, env_name);
+                if (decl_typedef) {
+                    buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, decl_typedef, thunk_sym);
+                } else {
+                    buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+                }
             }
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];
@@ -8457,11 +9089,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "RcControlBlock *%s = rc_upgrade(%s);\n", cb_tmp, inner);
             free(inner);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "struct { bool is_some; int64_t value; } *%s = NULL;\n", opt_tmp);
+            /* SR2b: the canonical Option layout is the tagged sum (tag 1 =
+             * Some); build it via the preamble helper so this site cannot
+             * drift from the layout again.  A failed upgrade stays the
+             * historical none-as-NULL, which tur_is_some still reads. */
+            buf_printf(body, "void *%s = NULL;\n", opt_tmp);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "if (%s) { %s = malloc(sizeof(*%s)); %s->is_some = true; "
-                             "%s->value = (int64_t)(intptr_t)%s; }\n",
-                       cb_tmp, opt_tmp, opt_tmp, opt_tmp, opt_tmp, cb_tmp);
+            buf_printf(body,
+                "if (%s) { %s = (void *)(intptr_t)tur_box_some((int64_t)(intptr_t)%s); }\n",
+                cb_tmp, opt_tmp, cb_tmp);
             free(cb_tmp);
             return opt_tmp;
         }
@@ -10811,6 +11447,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);
@@ -10897,6 +11534,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);
@@ -11077,14 +11715,42 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                      : e->as.match_.scrutinee->type.as.adt_.def;
             }
             char adt_c_name[256];
+            /* M7: the scrutinee's STATIC type is the generic `(ReF a)` inside a
+             * specialised instance-method body (`__inst_Functor_fmap_ReF__spec__
+             * tur_adt_ReF__bool_...`), whose parameter is nonetheless emitted as
+             * the concrete `tur_adt_ReF__int`.  The element binding that makes it
+             * concrete lives in ctx, not in the expression, so read the app off
+             * the RESOLVED type when the static one is not already a concrete
+             * monomorph.  Everything below -- the typedef name, the by-value
+             * decision, the inline-vs-deref field read -- keys off this one
+             * answer, so resolving it here is what keeps them in lockstep.
+             * Narrow on purpose, in TWO ways.  Resolution only ever UPGRADES a
+             * non-concrete app to a concrete one, so a scrutinee that was
+             * already concrete, or that is not an app at all, behaves exactly
+             * as before.  And the upgrade is taken only when the monomorph is
+             * BY VALUE: `(ExprF Expr)` and the other B4 recursive-carrier
+             * wrapper apps resolve concretely while the value in hand is still
+             * an int64 carrier word (`__inst_Functor_fmap_ExprF__spec__int64_t
+             * _int64_t_int64_t` takes `int64_t c`), and naming the monomorph
+             * typedef there lays the variant fields out inline -- so the
+             * carrier field reads below become `(int64_t)` casts of an
+             * aggregate.  The representation question is "is this by value",
+             * never "does this app have a name". */
+            Type scrut_ty = e->as.match_.scrutinee->type;
+            if (!(scrut_ty.kind == TY_APP && type_app_is_concrete_adt(&scrut_ty))) {
+                Type _rs = emit_resolve_type(ctx, scrut_ty);
+                if (_rs.kind == TY_APP && type_app_is_concrete_adt(&_rs) &&
+                    adt_app_is_byvalue_product(_rs))
+                    scrut_ty = _rs;
+            }
             /* TS4P3: Use the monomorphised struct name when the scrutinee is
              * a concrete ADT app (e.g. tur_adt_Maybe__float instead of tur_adt_Maybe).
              * nested-carrier-match: scrut_is_app_monomorph also gates the
              * inline-vs-deref field read below -- only a monomorph-app scrutinee
              * lays a non-wide by-value ADT field out INLINE; the base carrier /
              * GADT representation always stores it as an int64 box (deref). */
-            const char *inst_name = (e->as.match_.scrutinee->type.kind == TY_APP)
-                ? type_register_adt_app(e->as.match_.scrutinee->type) : NULL;
+            const char *inst_name = (scrut_ty.kind == TY_APP)
+                ? type_register_adt_app(scrut_ty) : NULL;
             bool scrut_is_app_monomorph = (inst_name != NULL);
             {
                 if (inst_name) {
@@ -11099,16 +11765,54 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool nil_result = (e->type.kind == TY_NIL);
             char *tmp = NULL;
             if (!nil_result) {
+                /* M7: the RESULT temp needs the same resolution the scrutinee
+                 * just got, for the same reason -- in a specialised
+                 * instance-method body the match's static result type is the
+                 * generic `(ReF b)` while every arm constructs the concrete
+                 * `ctor_*__bool` monomorph, so declaring the temp from the
+                 * static type spells `int64_t` and each arm's store is
+                 * "incompatible types when assigning to type 'int64_t'".
+                 * Same narrowing: resolution only upgrades a non-concrete app. */
+                Type res_ty = e->type;
+                if (!(res_ty.kind == TY_APP && type_app_is_concrete_adt(&res_ty))) {
+                    Type _rr = emit_resolve_type(ctx, res_ty);
+                    if (_rr.kind == TY_APP && type_app_is_concrete_adt(&_rr))
+                        res_ty = _rr;
+                    else if (!emit_hkt_spec_app_result(ctx, _rr, &res_ty) &&
+                             (e->type.kind == TY_TYVAR || e->type.kind == TY_FORALL) &&
+                             strcmp(type_c_name(_rr), "int64_t") != 0 &&
+                             !(_rr.kind == TY_ADT && _rr.as.adt_.def &&
+                               adt_is_byval_recursive_carrier_wrapper(_rr.as.adt_.def))) {
+                        /* SR2b: a match whose RESULT is the method tyvar itself
+                         * -- `ok-val`'s `:A` -- resolved by the active spec to
+                         * any type with a non-carrier C spelling: an aggregate
+                         * (`(tur_adt_Point){0}` arms), a double (`unwrap` over
+                         * `(Option float)` printed 2 for 2.5 through an int64
+                         * temp), a cstr / void* / typed fn-pointer (each arm's
+                         * `(default-of A)` spells the typed null).  The arms
+                         * already emit the concrete type, so the erased temp is
+                         * the mismatch.  Gated on the UNRESOLVED type being a
+                         * tyvar so a genuinely erased site keeps the carrier
+                         * temp, and excluding the B4 recursive-carrier wrapper
+                         * whose by-value form IS the carrier word. */
+                        res_ty = _rr;
+                    }
+                    /* else: still erased -- inside a by-value HKT
+                     * instance-method spec the match's result type is the bare
+                     * parametric base while the arms build the monomorph;
+                     * emit_hkt_spec_app_result above grounds that case. */
+                }
                 tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 /* Initialize to zero to silence -Wsometimes-uninitialized; exhaustiveness
                  * is guaranteed by the elaborator so the default branch is unreachable.
                  * CONV-S1/B3: a by-value ADT result is a C aggregate -- it cannot be
                  * scalar-initialised with `0` (invalid initializer), so use `{0}`. */
-                if (type_is_byvalue_adt_product(e->type))
-                    buf_printf(body, "%s %s = {0};\n", type_c_name(e->type), tmp);
+                if (type_is_byvalue_adt_product(res_ty) ||
+                    adt_app_is_byvalue_product(res_ty))
+                    buf_printf(body, "%s %s = {0};\n", type_c_name(res_ty), tmp);
                 else
-                    buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+                    buf_printf(body, "%s %s = 0;\n", type_c_name(res_ty), tmp);
             }
 
             /* Emit scrutinee */
@@ -11136,12 +11840,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * parametric (adt_is_byvalue_product is false for n_type_params!=0).
              * Widen the by-value decision to the app-aware predicate keyed on the
              * scrutinee's concrete type. */
-            Type scrut_ty = e->as.match_.scrutinee->type;
             /* seam 3: a :heap ADT scrutinee is a typed pointer, never a by-value
              * aggregate -- it falls to the carrier branch below (bind as a
              * pointer, read fields with `->`), exactly as a carrier ADT does. */
+            /* SR1: the by-value decision belongs to the SCRUTINEE's
+             * representation, not to the ADT its patterns name.  Those were the
+             * same question while a sum always rode the carrier, so this site
+             * could read the answer off `adt` alone.  They come apart on the
+             * `:int`-as-type-eraser shape (CLAUDE.md's "No Lazy `:int`
+             * Stand-Ins"): `stdlib/fix.tur` declares `(defn unroll [fix : int]
+             * ...)` and matches the result against `CountF` constructors, so the
+             * pattern's ADT is by-value while the value in hand is an int64
+             * carrier word.  Emitting `tur_adt_CountF __scrut = <int64>` is not a
+             * coercion, it is "invalid initializer".  When the scrutinee is
+             * statically a carrier word, keep the carrier path -- the producing
+             * side boxed into it (see the int-carrier-param bridge in the call
+             * emitter), so the deref below reads back exactly what was stored. */
+            Type rscrut_ty = emit_resolve_type(ctx, scrut_ty);
+            bool scrut_is_carrier_word =
+                rscrut_ty.kind == TY_INT || rscrut_ty.kind == TY_INT64 ||
+                rscrut_ty.kind == TY_UINT64 || rscrut_ty.kind == TY_PTR_VOID;
             bool adt_byval = (adt_is_byvalue_product(adt) ||
                               adt_app_is_byvalue_product(scrut_ty)) &&
+                             !scrut_is_carrier_word &&
                              !type_is_heap_adt(scrut_ty) &&
                              !(adt && adt->is_heap);
             /* Slice 3: a large by-value ADT scrutinee that is a pass-by-pointer
@@ -11187,7 +11908,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * constructor arm is entered unconditionally. */
                         buf_puts(body, "{\n");
                     } else {
-                        buf_printf(body, "if (__scrut->tag == %u) {\n", pat->ctor->tag);
+                        /* SR1: a by-value sum HAS a tag, and `__scrut` is then the
+                         * aggregate itself rather than a carrier pointer, so the
+                         * tag test reads with `.` -- the same accessor the field
+                         * binds below already use.  Before SR1 a tagged scrutinee
+                         * was always a pointer, so this site could hardcode `->`.
+                         * SR3 slice A: the CARRIER scrutinee can be NULL (the
+                         * null-None Option, and any historical none-as-NULL
+                         * producer) -- read it as tag 0, mirroring the switch
+                         * path's guard.  The by-value/pbp forms are an aggregate
+                         * or a param pointer and keep the direct read. */
+                        if (adt_byval && !adt_byval_pbp)
+                            buf_printf(body, "if (__scrut.tag == %u) {\n",
+                                       pat->ctor->tag);
+                        else if (adt_byval_pbp)
+                            buf_printf(body, "if (__scrut->tag == %u) {\n",
+                                       pat->ctor->tag);
+                        else
+                            buf_printf(body,
+                                "if ((__scrut ? __scrut->tag : 0) == %u) {\n",
+                                pat->ctor->tag);
                     }
                     ctx->indent += 4;
 
@@ -11295,6 +12035,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);
@@ -11328,7 +12069,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ctx->indent += 4;
 
                 indent_buf(body, ctx->indent);
-                if (adt_byval) {
+                if (adt_byval_pbp) {
+                    /* Slice 3: a pass-by-pointer scrutinee is ALREADY a
+                     * `const T *` -- binding a copy from it spells
+                     * `T __scrut_v = (w)`, an invalid initializer.  Bind the
+                     * pointer directly, exactly as the if-chain path does.
+                     * Reachable for a sum whose FIRST variant exceeds the pbp
+                     * threshold (adt_byval_pass_by_ptr reads ctors[0]). */
+                    buf_printf(body, "const %s *__scrut = (%s);\n",
+                               adt_c_name, scrut_val);
+                } else if (adt_byval) {
                     /* SR1: a by-value multi-variant sum still needs the tag
                      * test, but the value is an aggregate, not a carrier
                      * pointer -- casting it trips "aggregate value used where
@@ -11350,7 +12100,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(scrut_val);
 
                 indent_buf(body, ctx->indent);
-                buf_puts(body, "switch (__scrut->tag) {\n");
+                /* SR2b: a CARRIER scrutinee can be NULL -- the historical
+                 * none-as-NULL Option (`TUR_NONE`, and any pre-sum producer
+                 * that used 0 for the empty case).  Read it as tag 0, the
+                 * declaration-order first constructor (`None` for Option),
+                 * matching tur_is_some(0) == false; deref'ing crashed
+                 * inline-c-typed-result-option on `(some? (maybe-open -1))`.
+                 * The by-value / pbp branches bind the address of a local or
+                 * a checked param, so only the pointer-cast branch can see 0
+                 * -- the guard is harmless there and skipped elsewhere. */
+                if (adt_byval || adt_byval_pbp)
+                    buf_puts(body, "switch (__scrut->tag) {\n");
+                else
+                    buf_puts(body, "switch (__scrut ? __scrut->tag : 0) {\n");
 
                 bool has_default = false;
                 /* Phase G0: Track emitted constructor tags to skip redundant
@@ -11404,14 +12166,166 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
+                            /* SR2a: inside a per-instantiation clone the pattern
+                             * BINDING's own type is still the generic tyvar --
+                             * `(POK a int)` binds `v : a`, the int64 carrier --
+                             * while the scrutinee is the monomorph whose field is
+                             * `const char *`.  Binding the carrier there reads the
+                             * pointer as an integer and hands it straight back to
+                             * `ctor_POK__cstr`: "makes pointer from integer without
+                             * a cast", a warning cc will take and -Werror will not.
+                             * The scrutinee's own monomorph knows the field type;
+                             * take it from there.
+                             *
+                             * Narrow: only when the binding is the ERASED int64
+                             * carrier and the substituted field is something else,
+                             * so a binding that already has a real type is
+                             * untouched. */
+                            char _sub_ctype[256];
+                            /* SR2b: the same substitution applies on the CARRIER
+                             * path -- `(match r (Ok v) ...)` inside
+                             * `ok_val__spec__tur_adt_Point_...` reads a
+                             * `tur_adt_Result__Point__X *` scrutinee whose field
+                             * is typed by the monomorph, while the binder's own
+                             * type is still the erased tyvar.  The by-value
+                             * requirement below was an accident of where this
+                             * block was born (the seam), not a condition. */
+                            if (scrut_is_app_monomorph &&
+                                bi < pat->ctor->n_fields &&
+                                pat->ctor->fields[bi].full_type &&
+                                strcmp(ctype, "int64_t") == 0) {
+                                AdtDef *_sd = NULL;
+                                Type _sargs[16];
+                                uint8_t _sn = 0;
+                                if (type_extract_adt_app(&scrut_ty, &_sd, _sargs, &_sn) &&
+                                    _sd == pat->ctor->adt) {
+                                    Type _sf = substitute_adt_app_type_owned(
+                                        pat->ctor->fields[bi].full_type, _sd, _sargs);
+                                    const char *_sc = type_c_name(_sf);
+                                    if (_sc && strcmp(_sc, "int64_t") != 0) {
+                                        snprintf(_sub_ctype, sizeof _sub_ctype, "%s", _sc);
+                                        ctype = _sub_ctype;
+                                    }
+                                    free_struct_app_type(_sf);
+                                }
+                            } else if (!scrut_is_app_monomorph &&
+                                       strcmp(ctype, "int64_t") == 0 &&
+                                       (fb->type.kind == TY_TYVAR ||
+                                        fb->type.kind == TY_FORALL) &&
+                                       (emit_resolve_type(ctx, fb->type).kind == TY_FLOAT ||
+                                        emit_resolve_type(ctx, fb->type).kind == TY_FLOAT64)) {
+                                /* SR2b, the FLOAT leg: the base union slot holds
+                                 * the double's BITS (the monomorph ctor stored a
+                                 * real double at the same offset), so the binder
+                                 * must bit-REINTERPRET, never value-convert --
+                                 * `(double)bits` turns 41.25 into 4.6e18.  Emit
+                                 * the union read directly and skip the shared
+                                 * cast branches below. */
+                                char *bname = name_for_binding(ctx, fb);
+                                char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
+                                indent_buf(body, ctx->indent);
+                                buf_printf(body,
+                                    "double %s = ((union { double d; int64_t i; })"
+                                    "{ .i = (int64_t)__scrut->%s }).d;\n",
+                                    bname, mp);
+                                free(bname);
+                                free(mp);
+                                continue;
+                            } else if (!scrut_is_app_monomorph &&
+                                       strcmp(ctype, "int64_t") == 0 &&
+                                       (fb->type.kind == TY_TYVAR ||
+                                        fb->type.kind == TY_FORALL)) {
+                                /* SR2b, the BASE-carrier leg of the same fix:
+                                 * inside `ok_val__spec__tur_adt_Point_...` the
+                                 * scrutinee is the generic `tur_adt_Result *`
+                                 * (its param stayed the int64 carrier), so
+                                 * there is no monomorph to substitute against
+                                 * -- but the ACTIVE SPEC resolves the binder's
+                                 * tyvar (A = Point), and the base union stores
+                                 * a by-value aggregate payload as an int64 box
+                                 * that the B3 deref branch below reads back.
+                                 * Aggregates only: a resolved scalar/cstr/
+                                 * float payload keeps the erased int64 binder
+                                 * (a value-cast of float bits would convert,
+                                 * not reinterpret), which is today's working
+                                 * behaviour for those. */
+                                Type _fr = emit_resolve_type(ctx, fb->type);
+                                /* NOT a B4 recursive-carrier wrapper: `Expr`'s
+                                 * by-value form IS its carrier int64, so its
+                                 * binder stays the raw word (the reinterpret
+                                 * branch below owns it) -- naming the aggregate
+                                 * here turns that branch's cast into
+                                 * "conversion to non-scalar type".  A resolved
+                                 * CSTR payload takes the same substitution: the
+                                 * base slot holds the pointer word and the
+                                 * default branch's plain cast recovers it
+                                 * (value-preserving for a pointer, unlike the
+                                 * float case above). */
+                                if (!(_fr.kind == TY_ADT && _fr.as.adt_.def &&
+                                      adt_is_byval_recursive_carrier_wrapper(_fr.as.adt_.def))) {
+                                    const char *_fc = emit_type_c_name(ctx, _fr);
+                                    if (_fc && strcmp(_fc, "int64_t") != 0 &&
+                                        spec_abi_spells_ctype(ctx, _fc)) {
+                                        /* A NON-WIDE (<= 8 byte) TY_APP
+                                         * monomorph payload is stored INLINE in
+                                         * the monomorph's union slot (the ctor
+                                         * `ctor_Some__Q__int` assigns the
+                                         * aggregate, no box), so through the
+                                         * base layout's int64 slot the bits AT
+                                         * the slot are the aggregate: read by
+                                         * reinterpreting the slot's ADDRESS.
+                                         * Deref'ing the slot VALUE -- the wide
+                                         * path below -- chases the bits as a
+                                         * pointer and crashes
+                                         * (byvalue-option-over-parametric-
+                                         * monomorph, `(Option (Q int))`).  A
+                                         * plain TY_ADT payload (`Box`) is
+                                         * stored as a TYPED heap-box pointer
+                                         * whatever its size (adt_field_c_type),
+                                         * so it keeps the B3 deref below. */
+                                        if (_fr.kind == TY_APP &&
+                                            emit_type_is_byvalue_adt(ctx, fb->type) &&
+                                            !emit_type_is_wide_byval_adt(ctx, fb->type)) {
+                                            char *bname = name_for_binding(ctx, fb);
+                                            char *mp = adt_field_member_path(
+                                                pat->ctor->adt, pat->ctor, bi);
+                                            indent_buf(body, ctx->indent);
+                                            buf_printf(body,
+                                                "%s %s = *(%s *)&__scrut->%s;\n",
+                                                _fc, bname, _fc, mp);
+                                            free(bname);
+                                            free(mp);
+                                            continue;
+                                        }
+                                        snprintf(_sub_ctype, sizeof _sub_ctype, "%s", _fc);
+                                        ctype = _sub_ctype;
+                                    }
+                                }
+                            }
                             /* Use name_for_binding to get the canonical C name */
                             char *bname = name_for_binding(ctx, fb);
                             char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                             indent_buf(body, ctx->indent);
+                            /* SR1: a by-value SUM inlines its by-value aggregate
+                             * fields into the union slot, exactly as the typedef
+                             * emitter lays them out (adt_ctor_field_c_type keys
+                             * the same predicate off the owner's by-value status).
+                             * Bind the aggregate directly -- no carrier unbox, and
+                             * no cast, since a cast-to-aggregate is invalid C.
+                             * The if-chain path below/above already had this
+                             * branch; the switch path could not previously be
+                             * reached by a by-value owner, because "flows by
+                             * value" implied "has no tag". */
+                            bool inline_byval = adt_byval &&
+                                bi < pat->ctor->n_fields &&
+                                adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             /* CONV-S1/B3: a by-value ADT field is stored boxed
                              * (int64 heap pointer) in the carrier tagged union;
                              * unbox it by deref. */
-                            if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
+                            if (inline_byval) {
+                                buf_printf(body, "%s %s = __scrut->%s;\n",
+                                           ctype, bname, mp);
+                            } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
                                 (emit_type_is_wide_byval_adt(ctx, fb->type) &&
                                  strcmp(ctype, "int64_t") == 0)) {
                                 /* B4: read the int64 carrier raw (no deref).
@@ -11455,6 +12369,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * as a statement, leaving the result temp at its zero init. */
                     if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
+                        bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s = %s;\n", tmp, bv);
                         free(bv);
@@ -11558,6 +12473,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&cell,
                         "__tur_cons_of(((union { %s d; int64_t i; }){.d = (%s)}).i, %s)",
                         cty, head, tail);
+                } else if (g_sr1_sum_byvalue &&
+                           emit_type_is_byvalue_sum(
+                               ctx, e->as.cons_list_.items[i]->type)) {
+                    /* SR1: a by-value AGGREGATE head does not survive
+                     * `(int64_t)(intptr_t)` either -- a cast from a struct is not
+                     * a coercion, it is a hard C error ("aggregate value used
+                     * where an integer was expected").  Route it through the
+                     * escaping carrier bridge, which heap-promotes the value and
+                     * carries the pointer: the cons cell outlives the statement
+                     * that built it, so a stack spill would dangle.  This is the
+                     * same crossing a by-value ADT already makes into a carrier
+                     * ctor field slot.  Before SR1 only a single-variant product
+                     * could be by-value, and one never reached a variadic rest
+                     * slot in the suite; a by-value sum does. */
+                    char *boxed = emit_carrier_bridge_escaping(
+                        ctx, body, head, CK_CONCRETE, CK_CARRIER,
+                        emit_resolve_type(ctx, e->as.cons_list_.items[i]->type));
+                    head = boxed;
+                    buf_printf(&cell, "__tur_cons_of((int64_t)(intptr_t)(%s), %s)", head, tail);
                 } else {
                     buf_printf(&cell, "__tur_cons_of((int64_t)(intptr_t)(%s), %s)", head, tail);
                 }

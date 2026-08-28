@@ -12,7 +12,7 @@
 ;; borrow is materialized into `acc__agg`.  Native (a non-flat recursion)
 ;; SIGSEGVs deep; the trampoline runs flat at 200000.
 ;; step(acc, n) = n + describe(acc), describe(acc) = inner(acc), inner reads acc.
-(defn inner [r : (Result int int)] : int (if (.is-ok r) 1 0))
+(defn inner [r : (Result int int)] : int (if (ok? r) 1 0))
 (defn describe [r : (Result int int)] : int (inner r))
 
 (defn step [acc : (Result int int) n : int] : int

@@ -34,7 +34,7 @@
     (let [junk (clobber 4096 0)]
       (let [a (:: (vec-get vo 0) (Option int))
             b (:: (vec-get vo 1) (Option int))]
-        (println (if (.is-some a) (.value a) -1))    ;; wants 5
-        (println (if (.is-some b) (.value b) -1))    ;; wants 99
+        (println (if (some? a) (unwrap a) -1))    ;; wants 5
+        (println (if (some? b) (unwrap b) -1))    ;; wants 99
         (+ junk 0)))
     0))

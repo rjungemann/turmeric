@@ -666,14 +666,19 @@
             (mbind (apply-goal lg state)
               (fn [s : Subst] (apply-goal (:: (k s) (Goal int)) s)))))
       :Goal)))
-;;; fmap-goal-raw -- worker: map a `:fn` callback over each solution state.
+;;; fmap-goal-raw -- worker: map a callback over each solution state.
+;;;
+;;; The callback is typed `(fn [Subst] Subst)` rather than a bare `:fn`.  That
+;;; is not just hygiene: a bare `:fn` result is an erased carrier word, so the
+;;; body had to ascribe it back with `(:: (f s) :Subst)` -- a no-op cast while
+;;; Subst rides the int64 carrier, and a real representation change the moment
+;;; it does not (SR4).  Spelling the signature deletes the reinterpret.
 
-(defn fmap-goal-raw [g : (Goal int) f : fn] : (Goal int)
+(defn fmap-goal-raw [g : (Goal int) f : (fn [Subst] Subst)] : (Goal int)
   (let [lg g]
     (:: (fn [state : Subst]
           (let [_ lg]
-            (mbind (apply-goal lg state)
-              (fn [s : Subst] (mreturn (:: (f s) :Subst))))))
+            (mbind (apply-goal lg state) (fn [s : Subst] (mreturn (f s))))))
       :Goal)))
 ;;; Functor [Goal] -- map a function over each solution state.
 ;;;

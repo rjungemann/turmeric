@@ -53,6 +53,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
+| [spices-carry-pre-sum-option-result-layout](spices-carry-pre-sum-option-result-layout.md) | high | (spice repo) 46 files across 12 spices still speak the pre-SR2b Option/Result layout: 126 hand-rolled inline-C struct sites read silently wrong bytes (old `is_ok = true` reads as `tag == 1` = Err), 35 `.is-some`/`.value`/`.ok-val` reads are elaboration errors. Invisible to this repo's CI -- `requires.spices` fixtures auto-skip without the sibling checkout. Worked example for the migration: commit `5acef8b0` |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
@@ -925,12 +926,41 @@ turned up a defect in the instrument that would have justified it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md) | medium | every sum type mallocs on construction however small, and is never freed; ~85% of executed instructions on an allocation-heavy workload are inside `malloc`. Fixes priced: reclamation 2.6x, by-value 1.8x, both 18x. The slab allocator (2.1x measured in-compiler) is **shelved** -- it needs a whole-program escape pass to be safe at all, and reclamation measures better without one |
+| ~~vec-of-parametric-sum-monomorph-ice~~ | -- | **Resolved 2026-08-27 (SR2b)**: `adt_app_is_byvalue_product`'s field loop now admits a concrete-monomorph field (types.c), so the Vec registration and the binder agree. Archived to [docs/archive/vec-of-parametric-sum-monomorph-ice.md](../archive/vec-of-parametric-sum-monomorph-ice.md) |
+| [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md) | medium | SR2b made Option/Result real sums; on the default path every `(some x)`/`(ok x)`/`(none)` mallocs a tagged carrier box nothing frees (pre-sum these were non-allocating by-value records). Interim cost until byvalue graduation; callers that care free with `(option-free (:: o :int))` |
+| [duplicate-ctor-names-collide-in-emitted-c](duplicate-ctor-names-collide-in-emitted-c.md) | medium | two ADTs sharing a constructor name collide in the emitted C (`redefinition of 'ctor_Mk'`) -- the base ctor symbol lacks the ADT mangle. Pre-existing, but the trigger set grew with SR2b: an ADT naming a ctor `Some`/`None`/`Ok`/`Err` now always collides with the stdlib sums |
+| [ascribed-fn-param-call-head-name-mismatch](ascribed-fn-param-call-head-name-mismatch.md) | medium | `((:: f (fn [int] int)) v)` on a bare `:fn` param declares its hoisted call-head temp under the id-suffixed mangled name and calls it under the verbatim raw name -- `'__call_head_N' undeclared`, a clean build break on a documented spelling with no fixture. Scalar repro; unrelated to aggregates |
+| [c-name-accessors-share-static-buffers](c-name-accessors-share-static-buffers.md) | low | an accessor that spells a C type into a function-scoped `static` buffer is correct only while callers consume before asking again -- and emitters gather one name per field, then print. Two instances so far (`ret_ctype` interior pointer, `adt_field_c_type` mistyping a Result monomorph's ok arm as its err arm), both fixed; `ensure_static_fatbox` is still the shape, correct today only because it has exactly one caller. Fails as a silently wrong C type, not a crash |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker), each with its blocker and how to prove the workaround is no longer needed |
+
+`fat-dispatch-wide-byvalue-aggregate-argument` was resolved 2026-08-27 and
+moved to
+[docs/archive](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md):
+every fat boundary now speaks one convention (a wide by-value aggregate
+crosses as an int64 box pointer), spelled in one place and consulted by the
+typedef, the dispatches, the fatshims and the thunk emitters alike. Its
+resolution also records why SR4 (recursive sums by value) is green but OFF by
+default: measured 1.4x slower / 2.2x less memory on the logic and regex
+workloads -- a trade to make deliberately, behind TUR_SR4_RECURSIVE_BYVALUE=1.
+
+`multi-variant-adts-always-heap-allocate` was resolved 2026-08-26 for the
+NON-RECURSIVE sum population and moved to
+[docs/archive](../archive/multi-variant-adts-always-heap-allocate.md). SR1
+shipped on by default: such a sum flows by value as a tag+union aggregate, so
+it neither mallocs nor leaks (1005 allocations / 24,112 leaked bytes -> zero on
+the guarding fixture; 62.6 MB -> 1.2 MB peak RSS on a 2e6-construction loop).
+Two things to carry forward. **Recursive sums are unchanged** -- `Term`,
+`Subst`, `Stream` and 18 others still box and still leak, which means the
+callgrind numbers that made this report look urgent are unimproved; they are
+SR4's, blocked on `stdlib/logic.tur` ascribing carrier-erased results back to a
+sum type, not on codegen. And **the "do not start SR1 for performance" verdict
+was wrong for the reason the SR plan's own section 5 warns about**: it was
+priced against `logic.tur`, a workload built entirely from recursive types and
+therefore structurally blind to the change being judged.
 
 `dump-refine-json-under-reports-caps` was resolved 2026-08-26 and moved to
 [docs/archive](../archive/dump-refine-json-under-reports-caps.md). Its root

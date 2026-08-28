@@ -39,7 +39,7 @@
 
 (definstance Enc [Option]
   [(Enc A)]
-  (enc [x] : cstr (if (.is-some x) (enc (.value x)) "null")))
+  (enc [x] : cstr (if (some? x) (enc (unwrap x)) "null")))
 
 ;; element is itself a parametric container (Option A):
 (definstance Enc [Cons]

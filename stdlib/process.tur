@@ -245,9 +245,7 @@
   args[argc] = NULL;
   #define _RUN_RESULT(ok_flag, oval, eval) \
     do { \
-      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *_r = malloc(sizeof(*_r)); \
-      _r->is_ok = (ok_flag); _r->ok_val = (oval); _r->err_val = (eval); \
-      return (int64_t)(intptr_t)_r; \
+      return (ok_flag) ? tur_box_ok((oval)) : tur_box_err((eval)); \
     } while(0)
   pid_t pid = fork();
   if (pid < 0) { free(args); _RUN_RESULT(false, 0, (int64_t)(intptr_t)strdup("fork failed")); }
@@ -312,9 +310,7 @@
   free(cmd);
   #define _CAP_RESULT(ok_flag, oval, eval) \
     do { \
-      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *_r = malloc(sizeof(*_r)); \
-      _r->is_ok = (ok_flag); _r->ok_val = (oval); _r->err_val = (eval); \
-      return (int64_t)(intptr_t)_r; \
+      return (ok_flag) ? tur_box_ok((oval)) : tur_box_err((eval)); \
     } while(0)
   if (!fp) _CAP_RESULT(false, 0, (int64_t)(intptr_t)strdup("popen failed"));
   size_t cap = 4096, len = 0;

@@ -12,7 +12,7 @@
 ;; docs/archive/history/panic-in-value-if-branch.md -- not an error, and absent from the
 ;; warning-free emit-c snapshot.)
 (defn boom [] : int (panic "boom"))
-(defn describe [r : (Result int int)] : int (if (.is-ok r) 10 (boom)))
+(defn describe [r : (Result int int)] : int (if (ok? r) 10 (boom)))
 
 (defn step [acc : (Result int int) n : int] : int
   (if (= n 0)

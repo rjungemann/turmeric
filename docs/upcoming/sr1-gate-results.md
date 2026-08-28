@@ -10,6 +10,14 @@ The gate specified in [sum-representation-plan.md](sum-representation-plan.md)
 SR1: force one non-recursive sum by value behind a seam and measure, before
 writing any of it.
 
+> **Outcome (2026-08-26): SR1 was built from this list and is ON by default,
+> scoped to non-recursive sums.** The worklist below held up -- eight crossings,
+> one latent bug, one scope decision -- and the "33 fixtures still red" figure
+> was the right order of magnitude (34, on a 2706-green baseline). The two
+> places this document was wrong are marked inline. Full record: the
+> **Resolution** section of
+> [multi-variant-adts-always-heap-allocate](../archive/multi-variant-adts-always-heap-allocate.md).
+
 **Verdict: SR1 is feasible and bigger than the plan assumed -- but the cost is
 not where the plan put it.** The codegen crossings are tractable and cluster
 tightly. The real obstacle is that library source depends on sums being int64
@@ -127,12 +135,30 @@ and a week. The stdlib rewrite is the unknown, and it is the part worth scoping
 before committing -- `logic.tur` is the module that most depends on the carrier
 representation and also the one the allocation numbers came from.
 
-## Recommendation
+## Recommendation -- withdrawn, and what it got wrong
 
-Unchanged from SR0: **do not start SR1 for performance.** SR0(a) found real code
-barely constructs sums, and this gate adds that the one module which does
+~~Unchanged from SR0: **do not start SR1 for performance.**~~ SR0(a) found real
+code barely constructs sums, and this gate adds that the one module which does
 (`logic.tur`) is also the one that would need source changes to allow it.
 
-The seam stays in the tree, default off, as the instrument for the next person
-who asks. Flipping it on is one env var and the failure list above is the
-worklist.
+Both halves are true and neither supports the conclusion. `logic.tur`'s sums are
+all *recursive*, so it is not the module SR1 covers -- it is the module SR1
+excludes. Judging SR1 by the one workload structurally blind to it is the trap
+[sum-representation-plan.md](sum-representation-plan.md) section 5 names, and
+this document walked into it while quoting the plan.
+
+What SR1 is actually worth, measured after the fact: on a non-recursive sum it
+does not reduce allocation cost, it removes the allocation. 1005 allocations
+and 24,112 leaked bytes go to zero; a 2e6-construction loop drops from 62.6 MB
+peak RSS to 1.2 MB.
+
+**The seam is now the default** (`TUR_SR1_SUM_BYVALUE=0` opts out for
+bisection), and the failure list above was indeed the worklist -- all 34 build,
+and the suite is 2707 green.
+
+**One more correction to this document.** "Field-level boxing is not a
+prerequisite" is right, but the conclusion drawn from it -- that the SR1/SR4
+split needs revisiting -- did not survive contact. The split survived: SR1
+shipped scoped to non-recursive sums, because the recursive ones are gated on
+the `logic.tur` rewrite this document identified, not on layout. The rationale
+changed; the boundary did not.

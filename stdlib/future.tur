@@ -303,7 +303,7 @@
 ;;;   f -- Future (FutureCell) pointer
 ;;;
 ;;; Returns:
-;;;   A :ptr<void> to a Result { bool is_ok; int64_t ok_val; int64_t err_val; }.
+;;;   A :ptr<void> to a Result in the canonical tagged layout (tag 0 = Ok).
 ;;;
 ;;; Example:
 ;;;   (def result (future-get f))
@@ -318,20 +318,10 @@
   while (!fc->is_set)
       pthread_cond_wait(&fc->ready, &fc->lock);
 
-  /* Build a Result to return */
-  typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
-  Result *result = (Result *)malloc(sizeof(Result));
-  if (!result) { pthread_mutex_unlock(&fc->lock); fprintf(stderr, "future-get: oom\n"); abort(); }
-  result->is_ok = fc->is_ok;
-  if (fc->is_ok) {
-      result->ok_val = fc->value;
-      result->err_val = 0;
-  } else {
-      result->ok_val = 0;
-      result->err_val = fc->exn;
-  }
+  /* Build a Result to return (the canonical tagged layout: tag 0 = Ok). */
+  int64_t result = fc->is_ok ? tur_box_ok(fc->value) : tur_box_err(fc->exn);
   pthread_mutex_unlock(&fc->lock);
-  return (void *)result;
+  return (void *)(intptr_t)result;
   ```)
 ;; Free a future (and its associated promise - they share the same cell).
 ;;; future-free -- free a future and its shared FutureCell.

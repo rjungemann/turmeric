@@ -7,11 +7,144 @@ instructions** on a representative stdlib workload.
 (An earlier revision said "every sum type in the tree, including `Option` and
 `Result`". `Option` and `Result` are not sums -- see **Scope** below.)
 
-**Status:** OPEN. Diagnosed and priced, not fixed. The fix is planned in
+**Status: RESOLVED 2026-08-26 for the non-recursive sum population** -- SR1
+built and turned ON by default. Recursive sums are unchanged and still ride the
+carrier; they are SR4's population and what still blocks them is written up
+below. See **Resolution** immediately below for what shipped, what it
+measured, and what is left.
+
+The fix is planned in
 [docs/upcoming/sum-representation-plan.md](../upcoming/sum-representation-plan.md)
 (SR), which also records the interaction this report understates: by-value
 lowering removes the LEAK as well as the malloc for the types it covers, since
-a value that is never boxed has nothing to free.
+a value that is never boxed has nothing to free. That interaction is the one
+the resolution turned on -- both halves of this report closed together, with no
+ownership analysis, drop glue, or allocator work at all.
+
+## Resolution (2026-08-26) -- SR1, non-recursive sums, on by default
+
+`g_sr1_sum_byvalue` now defaults ON. A **non-recursive**, non-parametric,
+non-`:heap`, non-GADT multi-variant sum flows by value as a `tag + union`
+aggregate. The tagged-union layout is unchanged -- the tag word, the tag store
+in each constructor and the tag test in `match` are all exactly as they were.
+Only the ABI moved. `TUR_SR1_SUM_BYVALUE=0` restores the int64 carrier for
+bisecting a suspected representation bug; it is an escape hatch, not a mode.
+
+**Both causes close together, and neither needed the work this report expected.**
+Cause 1 (always boxed) goes away because the constructor returns the aggregate.
+Cause 2 (never freed) goes away as a *consequence*: a value that is never
+malloc'd has nothing to leak. No reclamation, no drop glue, no arena, no
+ownership analysis.
+
+**Measured.** `tests/fixtures/sr1-sum-byvalue` constructs a two-variant `:copy`
+sum 1000 times in a loop:
+
+| | allocations | leaked |
+|---|---:|---:|
+| `TUR_SR1_SUM_BYVALUE=0` (this report's subject) | 1005 | 24,112 B |
+| default (SR1 on) | 0 | 0 |
+
+A 2e6-construction loop over the same shape: **peak RSS 62.6 MB -> 1.2 MB**.
+Wall-clock is not quoted, and deliberately: with the allocation gone the loop
+becomes foldable, so the two binaries are not measuring the same amount of
+work. Memory is the honest number, and it is the half this report's own
+correction says matters ("a memory-footprint problem, not (at these scales) a
+time problem").
+
+**What is NOT fixed: recursive sums.** `Term`, `Subst`, `Stream`, `Regex` and
+the other 21 self-recursive sums still box on every construction and still
+leak. That is the workload this report measured, so **the callgrind numbers at
+the top of this report are unimproved.** They are SR4's population.
+
+> **Follow-up (2026-08-27):** SR4's codegen was subsequently unblocked (the
+> fat-dispatch ABI bug is
+> [fixed](fat-dispatch-wide-byvalue-aggregate-argument.md)), the full suite is
+> green with recursive sums by value behind `TUR_SR4_RECURSIVE_BYVALUE=1`, and
+> the flip was MEASURED and declined: on this report's own workload by-value
+> runs ~1.4x slower for ~2.2x less memory -- the copies cost more than the
+> mallocs saved. The default stays carrier pending reclamation; the decision
+> record is at the `is_self_recursive` test in types.c and the SR plan's SR4
+> section.
+
+The exclusion is not a layout limit. A recursive ADT field already rides the
+int64 carrier, so such a type has a finite inline size and lowers by value
+perfectly well -- the SR1 gate proved that, and every codegen crossing SR1
+fixed serves it too. What holds SR4 back is *library source*:
+`stdlib/logic.tur` ascribes carrier-erased polymorphic results back to a sum
+type (`(:: (f s) :Subst)`), a no-op cast while `Subst` rides the carrier and a
+hard `TUR-E0295` once it does not. That is a rewrite of the module the
+allocation numbers came from, not a predicate to widen, so SR4 should do it
+deliberately. `AdtDef.is_self_recursive` is the boundary, recorded at
+declaration time because a recursive field's `full_type` is deliberately NULL
+and nothing downstream can otherwise tell `(SBind :int :Term :Subst)` from
+three ints.
+
+**The slab decision stands and is now moot for this population.** Row E was
+shelved (below) because it addressed speed rather than footprint and needed a
+whole-program escape pass. SR1 addresses footprint directly, for free, on the
+types it covers.
+
+**What the ordering advice above got wrong.** This report and the SR plan both
+concluded "do not start SR1 for performance" -- SR0(a) found real code barely
+constructs sums, and SR1 was priced at 1.41x against `logic.tur`, a workload
+built entirely from *recursive* types and therefore structurally blind to it.
+That reasoning was sound about `logic.tur` and wrong about the change: measured
+on a non-recursive sum, which is what SR1 actually covers, it is not a constant
+factor on allocation cost -- it removes the allocation. The plan's own section 5
+flags this exact trap ("measuring the easy change against a workload that
+cannot see it") and the recommendation still fell into it.
+
+**Cost, for calibration against the gate's estimate.** The gate predicted "five
+predicate families and a week" for the codegen half. The real shape was eight
+crossings, one latent bug, and one scope decision:
+
+- `match`'s switch path could not bind an inline by-value aggregate field.
+- The constructor-argument emitter read `ctors[0]` for the field being stored,
+  which is the wrong arm once a by-value owner can be multi-variant.
+- `match`'s if-chain tag test hardcoded `->`; a by-value sum is not a pointer.
+- Typedef ordering: an inline by-value field is a real forward dependency,
+  which source order never had to satisfy while every ADT field was an int64.
+- Four carrier crossings for the `:int`-as-type-eraser shape `stdlib/fix.tur`
+  is built on (box into an `:int` param, deref off an `:int` return, deref a
+  carrier arg into a refined aggregate param, box a by-value head into a
+  variadic cons cell).
+- The CPS backend had its own carrier-only match lowering.
+- The if-merge bridge consulted a side table that records locals, so a by-value
+  aggregate *parameter* was bridged as though it were a carrier.
+- `adt_field_c_type` handed every caller an interior pointer into ONE static
+  buffer, so a constructor with two pointer-boxed fields mistyped all but the
+  last: `ctor_Result__Rational__ArithError(bool, ArithError*, ArithError*)`.
+  Latent until a `Result` monomorph could have by-value ADTs in both arms.
+
+Two lessons worth keeping. **Every one of these bridges had to be narrowed to
+by-value SUMS, not by-value ADTs.** Keyed on the broader predicate they also
+fired on single-variant products -- which have ridden the by-value ABI since B3
+and already have a more specific rule for each crossing, often one that knows
+whether the value escapes into a heap container -- and the blunter bridge
+layered on top double-boxed them, breaking 27 vec/map/inline-C fixtures with no
+sum in them at all. And **a cycle in the inline-by-value field graph is a
+silent miscompile, not a build error**: `adt_is_byvalue_product_d` walks that
+graph under a depth budget, so on a cycle it answers the same question
+differently depending on where the walk entered, and the typedef emitter enters
+at a different point than a field-store site. `adt_graph_reaches` declines such
+a type outright.
+
+**Fallout in example code, and what it says.** Two programs broke, both for the
+same reason: they erase a sum into an `:int` slot. `examples/datalog/*` stores
+a `Value` in a raw `int64_t[4]` built in inline-C, and declared its constructor
+wrappers `: int` while returning `Value`. They now declare those ADTs `:heap`
+-- a typed pointer, which is one word (so the storage still works) and is what
+the example actually means. This is the `:int` stand-in CLAUDE.md rules out,
+and a representation change is exactly the event that collects the bill for it.
+
+**Guarded by** `tests/fixtures/sr1-sum-byvalue` (a `requires.leak-check`
+fixture: it fails with 24,112 bytes leaked under `TUR_SR1_SUM_BYVALUE=0`), plus
+the `expected.c` snapshot pinning the by-value constructor shape.
+
+**Suites at resolution:** `run.sh` 2707 passed / 0 failed; `run-turi.sh`
+1861/0; `run-leak-check.sh` 54/0; `check-examples.sh` 26/0; flags, fmt, cli,
+build-project, build-shared, hamt, repr-decision-ratchet, cc-warn-ratchet and
+stdlib-checks all green.
 
 ## What was measured
 
@@ -146,7 +279,7 @@ curve -- the only part of the solver's allocation that grows with obligation
 count is VC construction, which the compiler retains on purpose, while the
 resettable theory state is flat at ~267 KB whether a file has 25 obligations or
 400. Numbers and method in
-[../archive/history/per-entry-arena-gate.md](../archive/history/per-entry-arena-gate.md).
+[../archive/history/per-entry-arena-gate.md](history/per-entry-arena-gate.md).
 That result is about the compiler's own arena and says nothing about row G,
 which is a different mechanism in the emitted program.
 
@@ -167,7 +300,7 @@ Three things follow, and the first corrects this report's original advice:
 
    **It is now blocked harder than when this was written.** The `rc/of` leak it
    was coupled to has been
-   [fixed](../archive/rc-of-adt-leaks-the-payload.md), which means `rc/of` now
+   [fixed](rc-of-adt-leaks-the-payload.md), which means `rc/of` now
    FREES its ADT payload -- so a slab-allocated box handed to an `rc` reaches
    `free()`. Confirmed, not theorised: ASan reports `attempting free on address
    which was not malloc()-ed`.
@@ -176,7 +309,7 @@ Three things follow, and the first corrects this report's original advice:
    predicate fixes this. The slab would need a whole-program pass marking every
    ADT def used as an `rc/of` payload and excluding those. The other half of the
    objection did resolve --
-   [leak checking now exists](../archive/compiled-fixtures-are-not-leak-checked.md) via
+   [leak checking now exists](compiled-fixtures-are-not-leak-checked.md) via
    `tests/run-leak-check.sh`, so a bad free is catchable.
 
    **The slab is now SHELVED** -- see the decision record below. Row E is no
@@ -251,7 +384,7 @@ constructs sums at all -- 20 `defdata` across 727 spice files against 244
 2.1x was measured on, is exercised by nothing but a synthetic benchmark.
 `examples/minikanren`, the one program that ought to exercise it, constructs
 nothing and does not import the module
-([report](minikanren-example-implements-no-minikanren.md)).
+([report](../reported/minikanren-example-implements-no-minikanren.md)).
 
 ### What stays, and what to do instead
 

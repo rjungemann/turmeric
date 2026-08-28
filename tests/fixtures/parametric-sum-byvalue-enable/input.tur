@@ -1,0 +1,28 @@
+;; parametric-sum-byvalue-enable: the EXPERIMENTS[] row for SR2a, exercised
+;; through the ordinary suite via the per-fixture `flags` file -- so every
+;; default `bash tests/run.sh` compiles at least one parametric sum by value
+;; through the USER-FACING enable channel, not just the TUR_SR2_APP_SUM_BYVALUE
+;; env seam the sr2-seam harness drives.  If the row is renamed, retired, or
+;; stops reaching sr2_app_sum_byvalue, this fixture fails loudly.
+;;
+;; The shape is deliberately the whole SR2a gauntlet in miniature: direct
+;; construction and match (both variants), the sum as a by-value argument, and
+;; a Vec of the monomorph (the vec-of ICE's shape).  Values are asserted, not
+;; just the build -- the failure class this family ships hides behind casts cc
+;; cannot see through.
+
+(defdata Opt2 :copy [a] (Nah) (Yep a))
+
+(defn get-or [o : (Opt2 int) d : int] : int
+  (match o
+    (Yep v) v
+    (Nah)   d))
+
+(defn main [] : int
+  (println (get-or (Yep 7) -1))              ; 7    direct, by-value arg
+  (println (get-or (Nah) -1))                ; -1   bare nullary ctor arg
+  (let [v (vec-of (Yep 8) (:: (Nah) (Opt2 int)) (Yep 21))]
+    (println (get-or (vec-get v 0) -1))      ; 8
+    (println (get-or (vec-get v 1) -1))      ; -1
+    (println (get-or (vec-get v 2) -1)))     ; 21
+  0)

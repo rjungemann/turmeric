@@ -19,7 +19,7 @@
 (defn f [] : int
   (let [v (perform (Ask))]
     (let [o (some v)]
-      (if (.is-some o) (.value o) 0))))
+      (if (some? o) (unwrap o) 0))))
 
 (defn run [] : int
   (handle (f) (Ask [] k) (resume k 42)))
