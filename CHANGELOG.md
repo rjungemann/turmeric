@@ -2,9 +2,23 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.39.0] -- 2026-08-27
 
 ### Added
+
+- **Offline documentation, in the browser and out (OD1-OD5).** The guides and
+  API pages are rendered once and wrapped twice: the site keeps its chrome, and
+  a chrome-free *docs pack* feeds an in-app docs browser in Try Turmeric, so
+  reading a guide no longer navigates away from your editor buffer, console
+  history, or WASM session. The pack is precached unconditionally on install --
+  no toggle, no first-run prompt -- with `#doc=guides/...` deep links, one
+  search box over pages and symbols, "Load into editor" on every runnable code
+  block, and a remembered scroll position per page. Outside the browser,
+  `tur doc <symbol>` answers from the stdlib docstring table rather than just
+  the builtin list, and `tur docs [--open|--serve]` locates the rendered
+  documentation (`$TUR_DOCS_DIR`, then `<prefix>/share/doc/turmeric`, then
+  `<repo>/docs/html`); `--serve` is a loopback-only, GET-only static server for
+  the browsers that refuse `file://` navigation.
 
 - **`--enable=parametric-sum-byvalue` (beta).** Parametric sum monomorphs
   (`(Option int)`, `(Result float cstr)`, ...) flow by value with no per-ctor
@@ -86,8 +100,62 @@ All notable changes to Turmeric are documented here.
   built, linked, ran, exited 0 and printed nothing. Both examples and all 24 of
   the tutorial's listings now use `main`.
 
+### Removed
+
+- **Twelve graduated `--enable=` compatibility shims retired.** A `GRADUATED[]`
+  entry is a migration window, not a permanent alias: a name ages out one minor
+  line after graduation and goes back to being the hard `TUR-E0310` an unknown
+  name gets. Five backend names went first (`cps-effects`, `cps-tramp-resume`,
+  `cps-async`, `owning-cloneable-capture`, `closure-drop-glue`) -- no source
+  syntax to adopt, so nobody had reason to name one in a build. Then the seven
+  that gated source syntax and had each had a full minor line: `refined`,
+  `cycle-gc`, `jit`, `sealed-opaque`, `global-state`, `write-frames`,
+  `checked-reads`. `#lang turmeric refined` is `TUR-E0330` again -- a semantic
+  layer *is* its experiment, so the two shims retire together. `jit-ffi`
+  graduated at 0.38.0, so its window opens now and it is the sole survivor.
+  **If a `build.tur` or `experiments.tur` still names a retired flag, drop the
+  name** -- the feature it gated needs no enable at all.
+
 ### Fixed
 
+- **Statement position deleted wrapped expressions -- a high-severity
+  miscompile.** `emit_stmt` treats four pure *wrappers* (`EX_REINTERPRET`,
+  `EX_CAST`, `EX_ASCRIBE`, `EX_POLY_WRAP`) as pure in statement position and
+  emitted nothing for them. The wrapper is pure; the call inside it is not, so a
+  discarded parametric call -- whose result rides the int64 carrier and is
+  therefore wrapped by elaboration to restore its instantiation type -- vanished
+  along with its effects.
+- **The aarch64 HFA ABI is correct in the JIT.** AAPCS64 passes a struct or
+  array of 1-4 same-typed FP members in `v0..v7`, one per register; MIR's
+  aarch64 back end had no HFA concept and routed every aggregate through the
+  integer argument registers. Self-consistent inside one c2mir compilation and
+  wrong the instant c2mir code met natively compiled code. The MIR pin moves to
+  the upstream fix, and both interim refusals it forced are dropped. The
+  compiled `tur jit` path, which had no check at all, miscalled an ordinary
+  `extern-c` with a record parameter; it now refuses (`TUR-E0711`) where the fix
+  does not reach.
+- **One convention for wide by-value aggregates at every fat boundary.** A
+  lifted thunk and its dispatch site could disagree about how a >8-byte
+  by-value aggregate parameter crosses a fat-closure boundary: a hard `cc` error
+  through a `^fat` sink, a **silent wrong answer** through the untyped `:fn`
+  carrier, and a SIGSEGV through a typed fn-field, whose cast is exactly what
+  hid the disagreement from the C compiler.
+- **`tur fmt` silently deleted comments inside bracket vectors.** Every `;` /
+  `;;` / `;;;` comment inside a `defstruct` field vector, a `defn`/`fn`
+  parameter vector, or a `let`/`loop` binding vector was dropped in place, exit
+  0, no diagnostic. The non-idempotence (`tur fmt` then `tur fmt --check`
+  exiting 1 on the file `fmt` just wrote) was the downstream symptom.
+- **`(fn name [...])` points at `letrec` instead of a bracket error.** The
+  Scheme/Racket/CL spelling of a self-recursive lambda was rejected with
+  "parameter list must be a vector", caret on the name, with a well-formed
+  vector sitting one token later -- a message that invited the reading that
+  Turmeric has no recursive lambdas. It has two, and the diagnostic now names
+  both.
+- **Two modules could silently share one API page.** `just docs` wrote 147 pages
+  for 148 modules: the filename-derived fallback name keys on the *basename*, so
+  `stdlib/capability.tur` and `stdlib/test/capability.tur` both rendered to
+  `tur-capability.html` -- the shipped page held the test mocks and the real
+  module had none, while the index still showed both cards.
 - **`vec-of` over a parametric sum monomorph no longer ICEs.**
   `(vec-of (Yep 8) ...)` over a two-variant sum died at the let binder on the
   default path (the Vec registration and the binder disagreed about the
@@ -110,6 +178,8 @@ All notable changes to Turmeric are documented here.
 
 ### Docs
 
+- **Eight dead guide cross-links fixed, and `--strict-links` armed** so the next
+  one fails the docs build instead of shipping a 404 to turmeric-lang.com.
 - **The logic guide no longer tells you to hand-write an interleaving `mplus`.**
   `st-append` is the interleaving one now, and the section explains why the
   hand-written version it used to recommend could never have worked: it swapped
