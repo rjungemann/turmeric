@@ -147,16 +147,76 @@ means either a checked `tur_opt_value` variant or a statement-form bridge.
 
 ## Measurements
 
-Corpus 2712 fixtures (`bash tests/run.sh`), Debug build:
-
-| run | result |
-|---|---|
-| default (experiment off) | 2712 passed, 0 failed |
-| `--enable=option-niche` | 2712 passed, 0 failed |
+Corpus (`bash tests/run.sh`), Debug build, green both ways at every step of
+the phase (2712/0 at landing through 2718/0 after the crossing fixes and the
+graduation-probe fixtures).
 
 `(Option String)` verified end to end on `httpd-req-string-opt`: no
 `tur_adt_Option__String` typedef emitted, identity `Some`, null `None`, expected
 output.
+
+**Representation cost, measured 2026-08-28** (SR-family method: 2e6-iteration
+loops, wall + ru_maxrss, 3 runs, -O2, shared String payload so only the Option
+representation is in the loop):
+
+| workload | default (16B by-value) | niche (8B pointer) | delta |
+|---|---|---|---|
+| direct positions (construct + `some?` + branch) | 11-14 ms | 2-3 ms | **~5x faster** |
+| 2e6 `(Option String)` vec elements | 0.080 s / 79.8 MB | 0.071 s / 79.8 MB | **parity** |
+
+The direct-position number carries a caveat -- at -O2 a one-word value inlines
+and registers where a 16-byte aggregate does not, so a synthetic loop
+amplifies the gap -- but the direction is real and free.  The container row is
+the finding: **the 16->8 headline does NOT apply to container elements as
+implemented.** Both representations materialize a heap carrier box at the
+erased `vec-push!` boundary (the niche must, or the erased Eq-dictionary
+crossing from the first gate comes back), so a `(Vec (Option String))` costs
+identical memory either way.  The niche's win is confined to direct positions
+-- locals, params, returns, match, struct fields -- which is where the census
+population (`env`, `httpd-string`, `args`, `re`, `docstrings`) actually lives,
+but those are request-scoped flows, not hot loops.
+
+## The graduation call -- assessed 2026-08-28: HOLD as prototype
+
+Everything a graduation needs is either done or measured, and the measurement
+says there is no urgency to flip:
+
+**Done.** All known crossings bridged and pinned; eligibility declared
+(`:non-null`) or compiler-warranted; the declaration enforced at three doors
+-- TUR-E0303 at elaboration for the provable forge, the niche `Some` ctor for
+computed/inline-C construction, and `tur_opt_value_checked` at the
+carrier->niche read for a `tur_some_ptr(0)` box (the residual this section
+used to carry; closed, pinned by
+`tests/fixtures/option-niche-carrier-some-null-aborts`).
+
+**What holds it:**
+
+1. **Defect discovery has not gone quiet.** Five silent-wrong-answer crossings
+   were found and fixed in this representation's first two days -- the last
+   two by an audit, not by the suite.  Nothing suggests the next probe finds
+   zero.  The soak instrument is `tests/run-option-niche-seam.sh` (the SR4
+   harness pattern: a canary that fails loudly if the flag stops biting, plus
+   the eligible population run under the flag); "no new crossing defects over
+   a release cycle" is now a checkable claim, and it should be checked before
+   the flip.
+2. **Default-on is a semantic break, not just a representation change.** On
+   today's default a carrier `Some(NULL)` is a legal, distinct value
+   (`tur_some_ptr(0)`; `some?` true).  Under the niche it is an abort at the
+   construction or crossing door.  That is the `:non-null` declaration being
+   enforced -- but code that never opted in would start aborting, which wants
+   a release-notes entry and a deliberate decision, not a default flipped in
+   passing.
+3. **The measurement removes the urgency.** Parity at container elements and
+   a direct-position win that is real but synthetic-loop-amplified is not the
+   SR2a shape (3.6x + 71x RSS on real workloads); it is closer to the SR4
+   shape, which was measured and deliberately NOT defaulted.
+
+**The flip becomes right when:** the seam harness has run quiet across a
+release cycle (0.41), the `Some(NULL)` break has a release-notes entry, and
+-- ideally -- end-to-end monomorphization shrinks the erased boundary so
+container elements stop boxing under EITHER representation, at which point the
+niche's 8-byte word is what lands in the slot and the container row stops
+being parity.  `expires_at` 0.44.0 leaves room for exactly that sequence.
 
 ## What is left
 

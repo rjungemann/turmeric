@@ -4614,7 +4614,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         } else {
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                        ntmp, src_str);
-            buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value(%s) : (%s)0)",
+            /* The CHECKED read: a carrier box can hold Some(NULL)
+             * (tur_some_ptr(0)), and the unchecked tur_opt_value would hand
+             * the niche its 0 payload -- silently turning a value `some?`
+             * calls true into `(none)`.  Same declaration the niche Some ctor
+             * enforces, at the other door. */
+            buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value_checked(%s) : (%s)0)",
                        ntmp, cname, ntmp, cname);
         }
         free(ntmp);

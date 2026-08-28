@@ -40,6 +40,14 @@ Binding first works -- `(let [o (mk-c 1)] (vec-of o))` -- because the
 let-binding position carries the carrier->concrete bridge; only the direct
 element position misses it.
 
+**Second shape, same class (found 2026-08-28 during the niche graduation
+probes):** an if whose arms are both inline-C producers fails the same way at
+the merge temp -- `(let [o (if flag (mk-c 1) (mk-c 0))] ...)` and
+`(show-opt (if flag (mk-c 1) (mk-c 0)))` are both cc
+`aggregate value used where an integer was expected` on the default path.
+Under `--enable=option-niche` both shapes work (the merge routes through the
+recorded-spelling bridges).
+
 ## Root cause
 
 The `vec-of` lowering stores elements through the by-value/boxed element path
