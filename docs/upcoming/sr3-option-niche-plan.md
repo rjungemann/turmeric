@@ -124,7 +124,10 @@ merely misses the optimisation, where a denylist that missed an entry would
 make `(some x)` and `(none)` the same value. And `:heap`-ness is provably not
 the condition -- `Cons` is `:heap` and ineligible (its nil IS 0).
 
-**A declaration is a claim, not a proof, so it is also enforced at runtime.**
+**A declaration is a claim, not a proof, so it is enforced twice.** A
+violation the elaborator can PROVE -- the literal 0 ascribed in, through any
+nesting of relabels -- is TUR-E0303 at compile time and never reaches the
+runtime check. Everything else falls through to the runtime half:
 Inline-C and the coercing `::` can both smuggle a 0 into a `:non-null` handle
 (`String` is not `:sealed`, and sealing it would break its own module's
 internal coercions). The niche `Some` ctor therefore checks its payload and
@@ -166,11 +169,18 @@ output.
    [inline-c-carrier-producer-byval-container-element](../reported/inline-c-carrier-producer-byval-container-element.md)
    (a loud compile error, not a wrong answer; the niche path already handles
    the shape, which is the fix template).
-2. **Static enforcement of `:non-null`**, upgrading the runtime abort to a
-   compile-time check where possible -- e.g. flag `(:: <literal 0> T)` into a
-   non-null opaque as an error, or lean on `:sealed` to bound who can coerce at
-   all. The runtime check stays regardless (inline-C is beyond any static
-   check), but a violation the elaborator can see should not wait for runtime.
+2. ~~Static enforcement of `:non-null`~~ -- **closed 2026-08-28.** A literal 0
+   ascribed into a `:non-null` opaque is now **TUR-E0303** at elaboration
+   (`ascribe_check_non_null_zero`, elab_types.c, beside the sealed check --
+   both are "may this coercion be EXPRESSED" questions). The literal is peeled
+   through nested ascriptions/reinterprets, so `(:: 0 :String)` and
+   `(:: (:: 0 :ptr<void>) String)` are both caught; a COMPUTED zero is not
+   provable and deliberately still compiles -- that, and inline-C, is what the
+   runtime Some-ctor abort remains for, and
+   `tests/fixtures/option-niche-null-payload-aborts` now smuggles its null
+   through a `(zero)` call to pin exactly that split. The literal form is
+   pinned by `tests/fixtures/errors/ascribe-zero-into-non-null-opaque`, and
+   `tur explain TUR-E0303` carries the full rationale.
 3. **`Cons` eligibility** -- item (2) of the original SR3 recommendation. It
    costs the inline-C walk convention that depends on nil being 0, which is a
    real price; nothing here changes that calculus.
