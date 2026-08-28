@@ -261,3 +261,107 @@ uint32_t builtin_collect_with_name(const Symbol *name,
     }
     return n;
 }
+
+/* -------------------------------------------------------------------------
+ * Name-keyed description (try-turmeric-navigation-and-minimap-plan, M5)
+ *
+ * The language server builds its symbol index out of Bindings, and a compiler
+ * builtin has none -- so `println`, `+`, `=` and `not` hovered to nothing and
+ * went to no definition, which are the names a first-time visitor types most.
+ * No client-side documentation table can close that: doc-names.json is
+ * generated from stdlib `;;;` docstrings, and a builtin has no `defn` to hang
+ * one on. This table is the only thing that knows.
+ *
+ * Keyed by string rather than by interned Symbol on purpose. builtin_lookup
+ * and builtin_first_with_name take a Symbol because their callers are inside
+ * the elaborator and already hold one; the LSP holds a word it scraped out of
+ * a buffer, and interning it would mean handing this module a SymbolTable it
+ * otherwise has no reason to see.
+ * --------------------------------------------------------------------- */
+
+/* type_name renders TY_UNKNOWN as a placeholder, which reads as a compiler
+ * failure. In a builtin row TY_UNKNOWN is a real and different statement --
+ * "this row accepts any argument type" -- so say that instead. */
+static const char *builtin_type_label(Type t) {
+    if (t.kind == TY_UNKNOWN) return "any";
+    const char *n = type_name(t);
+    return n ? n : "any";
+}
+
+/* Render one row as "(name : (fn [T T ...] : R))".
+ * Returns the number of bytes written, or 0 if it would not fit. */
+static size_t builtin_render_row(const BuiltinSpec *s, char *dst, size_t cap) {
+    char args[128];
+    size_t used = 0;
+    int    shown = s->min_arity > 0 ? s->min_arity : 0;
+    /* Cap the spelled-out arguments: a variadic fold declares min 2 and no
+     * maximum, and printing one type per accepted argument is neither
+     * possible nor useful. */
+    if (shown > 4) shown = 4;
+    const char *ty = builtin_type_label(s->arg_type);
+    args[0] = '\0';
+    for (int i = 0; i < shown && used + 1 < sizeof(args); i++) {
+        int n = snprintf(args + used, sizeof(args) - used, "%s%s",
+                         i ? " " : "", ty);
+        if (n < 0 || (size_t)n >= sizeof(args) - used) break;
+        used += (size_t)n;
+    }
+    if (s->max_arity < 0 && used + 5 < sizeof(args)) {
+        memcpy(args + used, " ...", 5);   /* includes the NUL */
+    }
+
+    int n = snprintf(dst, cap, "(%s : (fn [%s] : %s))",
+                     s->name, args, builtin_type_label(s->result_type));
+    if (n < 0 || (size_t)n >= cap) return 0;
+    return (size_t)n;
+}
+
+int builtin_describe(const char *name, char *out, size_t cap) {
+    if (!name || !*name || !out || cap == 0) return 0;
+    out[0] = '\0';
+
+    /* Enough rows to show that `println` and `=` are overloaded without
+     * turning a hover into a wall. Past this the count is reported instead. */
+    enum { MAX_ROWS = 6 };
+    char   rows[MAX_ROWS][192];
+    int    n_rows = 0;
+    int    n_total = 0;
+
+    for (size_t i = 0; i < TABLE_LEN; i++) {
+        const BuiltinSpec *s = &table_[i];
+        if (strcmp(s->name, name) != 0) continue;
+        n_total++;
+
+        char line[192];
+        if (builtin_render_row(s, line, sizeof(line)) == 0) continue;
+        /* The table lists int8/int16/int32 (and the unsigned widths) as
+         * separate rows that render identically wherever the argument and
+         * result types are spelled the same way; showing the same line six
+         * times says nothing. */
+        int dup = 0;
+        for (int r = 0; r < n_rows; r++) {
+            if (strcmp(rows[r], line) == 0) { dup = 1; break; }
+        }
+        if (dup) continue;
+        if (n_rows < MAX_ROWS) {
+            memcpy(rows[n_rows], line, strlen(line) + 1);
+            n_rows++;
+        }
+    }
+    if (n_total == 0) return 0;
+
+    size_t used = 0;
+    for (int r = 0; r < n_rows; r++) {
+        int n = snprintf(out + used, cap - used, "%s%s", r ? "\n" : "", rows[r]);
+        if (n < 0 || (size_t)n >= cap - used) break;
+        used += (size_t)n;
+    }
+    if (n_rows < n_total && used + 1 < cap) {
+        int extra = n_total - n_rows;
+        int n = snprintf(out + used, cap - used,
+                         "\n... and %d more overload%s",
+                         extra, extra == 1 ? "" : "s");
+        if (n > 0 && (size_t)n < cap - used) used += (size_t)n;
+    }
+    return n_total;
+}

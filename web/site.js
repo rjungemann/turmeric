@@ -156,6 +156,12 @@ class SiteFooter extends HTMLElement {
             <a href="/docs/html/guides/">Guides</a>
             <a href="/docs/html/api/">API Docs</a>
             <a href="https://spices.turmeric-lang.com">Spices</a>
+            <!-- Same-project subdomain, so the same plain href as Spices
+                 above: no target, no rel. Sibling labels here are bare noun
+                 phrases, which is why this is "C Interpreter" and not "Try
+                 our C Interpreter" -- the verb reads as noise in a link
+                 column. It is spelled out in prose in the /try footer. -->
+            <a href="https://c.turmeric-lang.com">C Interpreter</a>
           </div>
           <div class="footer-col">
             <div class="footer-col-title">Community</div>
@@ -191,6 +197,10 @@ class SiteSidebar extends HTMLElement {
         <li><a href="/docs/html/guides/">Guides</a></li>
         <li><a href="/docs/html/api/">API Docs</a></li>
         <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+        <!-- Kept in step with the footer's Ecosystem column above: two lists
+             that name the same thing must name the same members, or the site
+             disagrees with itself about what the ecosystem contains. -->
+        <li><a href="https://c.turmeric-lang.com">C Interpreter</a></li>
       </ul>
       <h3>Community</h3>
       <ul>

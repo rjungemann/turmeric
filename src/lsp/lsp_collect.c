@@ -13,7 +13,7 @@ static int       *count_    = NULL;
 
 static void collect_items(const Expr **items, uint32_t n);
 
-static void collect_binding(const Binding *b) {
+static void collect_binding(const Binding *b, LspSymKind kind) {
     if (!b || !b->name || !b->is_global) return;
     /* Names the elaborator minted -- lifted lambdas (`__fn_774`) and instance
      * methods (`__inst_Eq_eq_qu_int`) -- are not part of the program a person
@@ -28,6 +28,7 @@ static void collect_binding(const Binding *b) {
     if (*count_ >= cap_) return;
     LspSymbol *sym = &out_[(*count_)++];
     memset(sym, 0, sizeof(*sym));
+    sym->kind = kind;
     size_t nlen = strlen(b->name->name);
     if (nlen >= sizeof(sym->name)) nlen = sizeof(sym->name) - 1;
     memcpy(sym->name, b->name->name, nlen);
@@ -48,22 +49,36 @@ static void collect_binding(const Binding *b) {
     }
 }
 
+/* Record kind, for an ADT binding.
+ *
+ * `defstruct` lowers to a `defdata` before it gets here, so the surface form
+ * is no longer recoverable -- but the shape it lowered to is, and that is the
+ * distinction a reader wants anyway: one constructor is a record ("type" with
+ * fields), several are a sum ("type" with variants). A GADT is always a sum. */
+static LspSymKind adt_kind(const AdtDef *def) {
+    if (!def) return LSP_KIND_STRUCT;
+    if (def->is_gadt) return LSP_KIND_ENUM;
+    return def->n_ctors == 1 ? LSP_KIND_STRUCT : LSP_KIND_ENUM;
+}
+
 static void collect_items(const Expr **items, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) {
         const Expr *item = items[i];
         if (!item) continue;
         switch (item->kind) {
             case EX_FN_DEF:
-                collect_binding(item->as.fn_def_.fn ? item->as.fn_def_.fn->binding : NULL);
+                collect_binding(item->as.fn_def_.fn ? item->as.fn_def_.fn->binding : NULL,
+                                LSP_KIND_FUNCTION);
                 break;
             case EX_DEF:
-                collect_binding(item->as.def_.binding);
+                collect_binding(item->as.def_.binding, LSP_KIND_VALUE);
                 break;
             case EX_DEFDATA:
-                collect_binding(item->as.defdata_.binding);
+                collect_binding(item->as.defdata_.binding,
+                                adt_kind(item->as.defdata_.def));
                 break;
             case EX_DEFGADT:
-                collect_binding(item->as.defgadt_.binding);
+                collect_binding(item->as.defgadt_.binding, LSP_KIND_ENUM);
                 break;
             case EX_DEFMODULE:
                 if (item->as.defmodule_.mod)

@@ -479,6 +479,22 @@ body.split-dragging * {
     pointer-events: none;
 }
 
+/* Read-only stdlib buffers opened by go-to-definition
+   (try-turmeric-navigation-and-minimap-plan M4). The padlock says the tab
+   will not accept typing; the italic label says it is not one of the user's
+   own files. Both are visible before a keystroke is wasted on it. */
+.tab-lock {
+    margin-right: 6px;
+    font-size: 9px;
+    line-height: 1;
+    opacity: 0.75;
+    pointer-events: none;
+    flex-shrink: 0;
+}
+.tab-button.read-only .tab-label {
+    font-style: italic;
+}
+
 .tab-close {
     margin-left: 8px;
     width: 14px;
@@ -1089,6 +1105,13 @@ body.split-dragging * {
  * Buttons
  * ========================================================================== */
 
+/* `display: inline-flex` here is a class rule and beats the user agent's
+   `[hidden] { display: none }`, so setting the attribute alone does not hide a
+   .btn -- the same trap .lsp-status[hidden] already carries a note about. The
+   Back-from-definition button is hidden that way (renderJumpBack), and without
+   this it sat in the toolbar from page load. */
+.btn[hidden] { display: none; }
+
 .btn {
     display: inline-flex;
     align-items: center;
@@ -1563,9 +1586,15 @@ body.split-dragging * {
     }
 }
 
-/* The overflow popover is a mobile-only affordance; on desktop the
-   buttons themselves are present in the tab bar. */
-.more-wrap { display: none; position: relative; }
+/* The overflow popover started out mobile-only, on the reasoning that on
+   desktop the buttons themselves are present in the tab bar. Two rows have
+   since landed in it that have no button of their own -- "Force update", and
+   the minimap toggle (try-turmeric-navigation-and-minimap-plan M1) -- so
+   hiding it on desktop makes those unreachable on exactly the widths where
+   the minimap is on. It stays visible at every width; what it *contains*
+   still varies, because the duplicated commands only matter once the
+   @media rule below has hidden their buttons. */
+.more-wrap { display: inline-flex; position: relative; }
 .examples-wrap { position: relative; display: inline-flex; }
 .more-menu {
     position: fixed;
@@ -1599,6 +1628,79 @@ body.split-dragging * {
     letter-spacing: 0.5px;
     color: var(--text-dim);
     padding: 6px 12px 2px;
+}
+
+/* Symbols outline (try-turmeric-navigation-and-minimap-plan M2): the same
+   .more-menu popover shell as Examples and Language, with a scrolling list of
+   rows filled on open. Deliberately not a docked pane -- the playground is
+   already a three-way split plus a docs overlay. */
+.symbols-wrap { position: relative; display: inline-flex; }
+.symbols-menu { min-width: 260px; max-width: 380px; }
+.symbols-list {
+    display: flex;
+    flex-direction: column;
+    /* Tall enough to be an outline, short enough that the popover never runs
+       off the bottom of a phone. Rows are 28px. */
+    max-height: min(50vh, 360px);
+    overflow-y: auto;
+}
+.symbol-item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.symbol-item:hover, .symbol-item:focus {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+    outline: none;
+}
+.symbol-item-name {
+    font-family: var(--font-mono, monospace);
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.symbol-item-kind {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+/* Where the caret is. A left rule rather than a background wash so it still
+   reads against the hover state the pointer is sitting on. */
+.symbol-item.is-current {
+    box-shadow: inset 2px 0 0 var(--gold);
+}
+.symbol-item.is-current .symbol-item-name { color: var(--gold-bright); }
+.symbols-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 6px 12px;
+    font-style: italic;
+}
+.symbols-filter {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 4px 4px;
+    margin-top: 4px;
+}
+.symbols-filter-key {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
 }
 
 /* Language picker (try-turmeric-lang-toggle-plan): a dialect radio group +
@@ -1678,9 +1780,14 @@ body.split-dragging * {
     .editor-actions > #download-btn,
     .editor-actions > #open-btn,
     .editor-actions > .lang-wrap,
+    .editor-actions > .symbols-wrap,
     .editor-actions > .examples-wrap { display: none; }
-    .more-wrap { display: inline-flex; }
 }
+
+/* A checkbox row in the popover reports state in its label ("Show minimap" /
+   "Hide minimap"), so there is no tick glyph to align. The marker is there for
+   assistive tech via aria-checked; the visual is the verb. */
+.more-item[role="menuitemcheckbox"] { display: block; }
 
 /* Monaco's on-screen-keyboard widget overlaps the editor surface on
    touch devices; the system soft keyboard already handles input. */
