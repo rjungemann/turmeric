@@ -7,6 +7,7 @@
 #include "lsp_util.h"
 
 #include "buf.h"
+#include "builtins.h"     /* builtin_describe() -- hover on `println`, `+`, ... */
 #include "diag.h"
 #include "fmt.h"          /* fmt_format_buffer() for textDocument/formatting */
 #include "platform_fs.h"  /* mkstemps() on Windows */
@@ -703,6 +704,10 @@ static void on_initialize(const char *id_raw, size_t id_len,
           "\"hoverProvider\":true,"
           "\"definitionProvider\":true,"
           "\"documentSymbolProvider\":true,"
+          /* Occurrence highlight. The client's own fallback is a text match,
+           * which matches inside strings and comments; this one is scanned
+           * with the reader's regions skipped (lsp_scan_occurrences). */
+          "\"documentHighlightProvider\":true,"
           "\"workspaceSymbolProvider\":true,"
           "\"documentFormattingProvider\":true,"
           "\"signatureHelpProvider\":{"
@@ -852,6 +857,38 @@ static void on_hover(const char *id_raw, size_t id_len,
 
     const LspSymbol *sym = find_symbol(doc, name);
     if (!sym) {
+        /* Not in the index. That is not the same as "not a thing": the index
+         * is built from Bindings, and a compiler builtin has none -- so
+         * `println`, `+`, `=` and `not` all land here, which are the names a
+         * newcomer types first. The operator table is the only place that
+         * knows their signatures; ask it before giving up. */
+        char desc[512];
+        if (builtin_describe(name, desc, sizeof(desc)) > 0) {
+            Buf b;
+            buf_init(&b);
+            buf_puts(&b, "{\"contents\":{\"kind\":");
+            buf_puts(&b, hover_markdown_ ? "\"markdown\"" : "\"plaintext\"");
+            buf_puts(&b, ",\"value\":");
+            Buf md;
+            buf_init(&md);
+            if (hover_markdown_) buf_puts(&md, "```\n");
+            buf_puts(&md, desc);
+            if (hover_markdown_) buf_puts(&md, "\n```");
+            /* Say where this came from. A builtin has no source file and no
+             * docstring, and a hover that looked like every other one would
+             * imply a definition the user could go to. */
+            buf_puts(&md, hover_markdown_
+                ? "\n\n_built-in operator_"
+                : "\n\n(built-in operator)");
+            buf_putc(&md, '\0');
+            json_str(&b, md.data);
+            buf_free(&md);
+            buf_puts(&b, "}}");
+            buf_putc(&b, '\0');
+            send_response(sink, id_raw, id_len, b.data);
+            buf_free(&b);
+            return;
+        }
         send_response(sink, id_raw, id_len, "{\"contents\":\"\"}");
         return;
     }
@@ -956,11 +993,112 @@ static void on_definition(const char *id_raw, size_t id_len,
     buf_free(&result);
 }
 
-/* Infer LSP SymbolKind from type_str.  Functions get kind 12, everything
- * else gets kind 13 (Variable).  A ;;; `defstruct` / `defmacro` distinction
- * is not preserved in LspSymbol today, so this is a best-effort mapping. */
+/* LSP SymbolKind for a symbol, from the kind the collector recorded.
+ *
+ * The type_str test below is the pre-kind mapping, kept as the fallback for
+ * any LspSymbol that reached here without one -- a stale cache entry, or a
+ * future collection path that forgets to pass a kind. It can only ever answer
+ * function-or-not, which is why the kind field exists. */
 static int lsp_symbol_kind(const LspSymbol *sym) {
+    switch (sym->kind) {
+        case LSP_KIND_FUNCTION: return 12;  /* Function */
+        case LSP_KIND_VALUE:    return 13;  /* Variable */
+        case LSP_KIND_STRUCT:   return 23;  /* Struct   */
+        case LSP_KIND_ENUM:     return 10;  /* Enum     */
+        case LSP_KIND_UNKNOWN:  break;
+    }
     return (strncmp(sym->type_str, "(fn", 3) == 0) ? 12 : 13;
+}
+
+/* -------------------------------------------------------------------------
+ * textDocument/documentHighlight
+ * (try-turmeric-navigation-and-minimap-plan, M5)
+ *
+ * Without this the client falls back to Monaco's word-based selection
+ * highlight, which is textual: it matches inside strings and comments, and it
+ * cannot tell `total` from the `total` in `subtotal`. That was survivable
+ * while the answer only appeared under the cursor. With the minimap on it is
+ * painted down the whole file, so a wrong answer becomes a visible wrong
+ * answer -- which is why this landed in the same plan as the strip.
+ * --------------------------------------------------------------------- */
+
+typedef struct {
+    Buf *out;
+    int  emitted;
+    int  def_line;   /* 0-based line of the definition, or -1 */
+    int  def_col;    /* 0-based byte column of the definition */
+} HighlightCtx;
+
+static void highlight_emit(int line0, int col0, int len, void *user) {
+    HighlightCtx *ctx = (HighlightCtx *)user;
+    /* The definition gets Write (3), every use gets Text (1). A client styles
+     * the two differently, and "which one of these is the definition" is the
+     * question a reader scanning a column of marks actually has. Read (2) is
+     * not used: telling a read from a write needs the elaborated tree, and
+     * claiming the distinction from a text scan would be a guess. */
+    int kind = (line0 == ctx->def_line && col0 == ctx->def_col) ? 3 : 1;
+    if (ctx->emitted > 0) buf_putc(ctx->out, ',');
+    buf_printf(ctx->out,
+        "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+                   "\"end\":{\"line\":%d,\"character\":%d}},\"kind\":%d}",
+        line0, col0, line0, col0 + len, kind);
+    ctx->emitted++;
+}
+
+static void on_document_highlight(const char *id_raw, size_t id_len,
+                                  const char *params, LspSink *sink) {
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) { send_response(sink, id_raw, id_len, "null"); return; }
+
+    char uri[1024];
+    if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        send_response(sink, id_raw, id_len, "null");
+        return;
+    }
+
+    size_t pos_len;
+    const char *pos = lsp_json_raw(params, "position", &pos_len);
+    if (!pos) { send_response(sink, id_raw, id_len, "null"); return; }
+
+    int line_0 = (int)lsp_json_int(pos, "line");
+    int char_0 = (int)lsp_json_int(pos, "character");
+
+    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
+    if (!doc || !doc->text) { send_response(sink, id_raw, id_len, "null"); return; }
+
+    char name[128];
+    if (!lsp_word_at_pos(doc->text, doc->text_len,
+                         line_0 + 1, char_0 + 1, name, sizeof(name))) {
+        /* Not on a word. `null` rather than `[]`: the spec's "no result",
+         * which lets the client keep whatever it was already showing instead
+         * of clearing it as the caret crosses a space. */
+        send_response(sink, id_raw, id_len, "null");
+        return;
+    }
+
+    HighlightCtx ctx;
+    Buf out;
+    buf_init(&out);
+    buf_putc(&out, '[');
+    ctx.out      = &out;
+    ctx.emitted  = 0;
+    ctx.def_line = -1;
+    ctx.def_col  = -1;
+
+    const LspSymbol *sym = find_symbol(doc, name);
+    if (sym && sym->file_path[0] && doc->path &&
+        strcmp(sym->file_path, doc->path) == 0) {
+        ctx.def_line = sym->line > 0 ? sym->line - 1 : 0;
+        ctx.def_col  = sym->col_start > 0 ? sym->col_start - 1 : 0;
+    }
+
+    lsp_scan_occurrences(doc->text, doc->text_len, name, highlight_emit, &ctx);
+
+    buf_putc(&out, ']');
+    buf_putc(&out, '\0');
+    send_response(sink, id_raw, id_len, out.data);
+    buf_free(&out);
 }
 
 /* -------------------------------------------------------------------------
@@ -1278,6 +1416,35 @@ static void on_signature_help(const char *id_raw, size_t id_len,
     }
 
     const LspSymbol *sym = find_symbol(doc, callee);
+
+    /* Same builtin fallback as on_hover: `(println ` and `(+ ` are the calls
+     * being typed when signature help is most wanted, and neither has a
+     * Binding to find. A synthetic LspSymbol keeps the rendering below on one
+     * path -- signature_params() reads type_str, so the first rendered
+     * overload has to be a type_str for the parameter labels to come out. */
+    LspSymbol builtin_sym;
+    if (!sym) {
+        char desc[512];
+        if (builtin_describe(callee, desc, sizeof(desc)) > 0) {
+            memset(&builtin_sym, 0, sizeof(builtin_sym));
+            snprintf(builtin_sym.name, sizeof(builtin_sym.name), "%s", callee);
+            /* desc's first line is "(name : (fn [...] : R))". Lift the type
+             * out from after " : " up to the closing paren. */
+            char *open = strstr(desc, " : ");
+            char *nl   = strchr(desc, '\n');
+            if (nl) *nl = '\0';
+            size_t dlen = strlen(desc);
+            if (open && dlen > 0 && desc[dlen - 1] == ')') {
+                desc[dlen - 1] = '\0';
+                snprintf(builtin_sym.type_str, sizeof(builtin_sym.type_str),
+                         "%s", open + 3);
+            }
+            snprintf(builtin_sym.doc, sizeof(builtin_sym.doc),
+                     "built-in operator");
+            builtin_sym.kind = LSP_KIND_FUNCTION;
+            sym = &builtin_sym;
+        }
+    }
     if (!sym) { send_response(sink, id_raw, id_len, "null"); return; }
 
     Buf plabels;
@@ -1362,9 +1529,22 @@ static int ci_starts_with(const char *name, const char *prefix, size_t plen) {
  * that distinction matters. */
 #define LSP_COMPLETION_MAX 200
 
+/* LSP CompletionItemKind -- a different enum from SymbolKind, for the same
+ * distinctions. A type completes as Struct/Enum so the menu shows a type icon
+ * beside `Point`, which is what tells a reader it is not a function to call. */
+static int lsp_completion_kind(const LspSymbol *sym) {
+    switch (sym->kind) {
+        case LSP_KIND_FUNCTION: return 3;   /* Function */
+        case LSP_KIND_VALUE:    return 6;   /* Variable */
+        case LSP_KIND_STRUCT:   return 22;  /* Struct   */
+        case LSP_KIND_ENUM:     return 13;  /* Enum     */
+        case LSP_KIND_UNKNOWN:  break;
+    }
+    return (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+}
+
 static void emit_completion_item(Buf *result, const LspSymbol *sym, int *emitted) {
-    /* kind: 3 = Function (type starts with "(fn"), 6 = Variable */
-    int kind = (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+    int kind = lsp_completion_kind(sym);
 
     if (*emitted > 0) buf_putc(result, ',');
     buf_puts(result, "{\"label\":");
@@ -1599,6 +1779,7 @@ bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
     } else if (strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/definition") == 0 ||
                strcmp(method, "textDocument/documentSymbol") == 0 ||
+               strcmp(method, "textDocument/documentHighlight") == 0 ||
                strcmp(method, "workspace/symbol") == 0 ||
                strcmp(method, "textDocument/signatureHelp") == 0 ||
                strcmp(method, "textDocument/completion") == 0) {
@@ -1624,6 +1805,8 @@ bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
             on_definition(id_raw, id_len, params_raw, sink);
         } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
             on_document_symbol(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/documentHighlight") == 0) {
+            on_document_highlight(id_raw, id_len, params_raw, sink);
         } else if (strcmp(method, "workspace/symbol") == 0) {
             on_workspace_symbol(id_raw, id_len, params_raw, sink);
         } else if (strcmp(method, "textDocument/signatureHelp") == 0) {

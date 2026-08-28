@@ -1,6 +1,10 @@
 # Try Turmeric: minimap, outline, and navigable definitions
 
-> **Status:** Proposed
+> **Status:** Executed (2026-08-28) -- M0-M5 and F1 landed, and verified in CI
+> on rjungemann/turmeric#787. One item cannot be closed here: the C-interpreter
+> host is behind an egress policy that denies `*.turmeric-lang.com`. See
+> [§10 Execution record](#10-execution-record-2026-08-28), including §10.5 on
+> two spec suites that were passing by not running.
 > **Type:** Web playground / Monaco / `src/lsp`
 > **Related:** [`try-turmeric-lsp-plan.md`](../archive/try-turmeric-lsp-plan.md)
 > (executed 2026-07-29),
@@ -243,6 +247,103 @@ Exit criteria: four recorded answers. If (1) and (2) both come back rich, M3
 collapses to nothing and M4 shrinks; that is a good outcome and the spike is
 what reveals it.
 
+### 4.1 Results (2026-08-28)
+
+Measured against the **real `tur lsp`** driven over stdio from a scripted
+session, not against the deployed page. That is the same server the WASM
+bundle hosts -- `src/web/wasm_lsp.c` differs only in where the stdlib is
+mounted, and it resolves that through `TUR_STDLIB_DIR`
+(`src/web/wasm_lsp.c:71-81`), so every answer below carries over except the
+literal stdlib path, noted where it matters. Buffer used:
+
+```turmeric
+(defn twice [x : int] : int (* x 2))
+(defstruct Point [x : int y : int])
+(def eight 8)
+(def p (pair 1 2))
+(println (twice 21))
+```
+
+**1. Does hover answer on a stdlib name? Split, and §2.2 had the seam in the
+wrong place.**
+
+| Hover on | Answer |
+|---|---|
+| `pair` (stdlib module global) | ``` ```\n(pair : (fn [tyvar tyvar] : (type-app ? ?)))\n``` ``` |
+| `twice` (buffer-local) | ``` ```\n(twice : (fn [int] : int))\n``` ``` |
+| `println` | `{"contents":""}` |
+
+The collector **does** walk imported modules' globals -- everything defined in
+a `.tur` file under `stdlib/` lands in the document's index and hovers
+correctly. The hole is one layer down: **compiler builtins have no `Binding`
+at all**, so `collect_binding` never sees them. `println` is a row in
+`src/compiler/builtins.c:120-133` (one per argument type), not a `defn`.
+`+`, `-`, `=`, `not`, `mod` and the rest of `builtins.c` are the same.
+
+This matters more than the original framing, because `doc-names.json` is
+generated from stdlib `;;;` docstrings and therefore **does not carry
+`println` either**. The M3 fallback as designed cannot close this hole:
+
+- M3 (client, docs table) covers documented names the index misses -- spice
+  symbols, and any buffer whose analysis failed hard enough to leave the
+  stdlib cache empty. Worth shipping, and it ships with no rebuild.
+- The builtin hole needs the **server**, which already owns the only table
+  that has the answer. Added to M5 as §5.5's third item.
+
+**2. Does go-to-definition return a stdlib Location? Yes, a real one.**
+
+```
+definition on `pair`    -> {"uri":"file:///home/user/turmeric/stdlib/pair.tur",
+                            "range":{"start":{"line":27,"character":6}, ...}}
+definition on `twice`   -> {"uri":"file:///project/main.tur", ...}
+definition on `println` -> null            (same builtin hole as (1))
+```
+
+Under WASM the same symbol resolves to `file:///stdlib/pair.tur`, because
+`--embed-file .../stdlib@/stdlib` (`src/CMakeLists.txt:1550`) mounts the tree
+at `/stdlib` and `wasm_lsp.c` defaults `TUR_STDLIB_DIR` to it.
+
+**M4 is full-shape, not the shrunken version §9 hedged for.** There is a real
+file at a real path with a real range, and the read-only tab has something to
+put in it.
+
+**3. Does `documentSymbol` return anything, and what kinds?** Four entries for
+the buffer above, and §2.4's binary-kind problem is exactly as described:
+
+| Name | Defined by | Kind returned |
+|---|---|---|
+| `twice` | `defn` | 12 (Function) |
+| `Point` | `defstruct` | **13 (Variable)** |
+| `eight` | `def` | 13 (Variable) |
+| `main` | implicit top-level wrapper | 12 (Function) |
+
+A `defstruct` and a `def` are indistinguishable in the list, which is most of
+what M2's kind column is for. M5's kind field is what fixes it.
+
+Note the fourth row: the implicit `main` the elaborator wraps top-level forms
+in is a real entry in the index, with a range covering the last top-level
+form. It is not synthesized in the `is_synthesized` sense, so `collect_binding`
+keeps it. The outline should not hide it -- it *is* where those forms run --
+but M2 sorts by position so it lands where the code is.
+
+**4. Minimap cost.** Not measured in a browser -- this container has no
+`emcc`, so `web/public/turmeric.{js,wasm}` cannot be regenerated here and the
+playground cannot be driven end to end. What is checkable was checked:
+`monaco-editor`'s minimap is part of the `editor.api` entry the page already
+imports (§2.4), so enabling it adds no bytes, and Monaco renders it off the
+typing path on its own scheduler. The M1 code adds nothing to the input path
+either -- the width gate runs from `applySplit` and a `ResizeObserver`, never
+from `onDidChangeModelContent`. Re-check on a real bundle before the release
+cut §6 requires anyway.
+
+**Consequences for the phase list.**
+
+- M3 stays, with its coverage stated honestly (documented names the index
+  misses), and stops being described as the fix for `println`.
+- M4 keeps its full shape.
+- M5 grows a third item: a compiler-builtin fallback in the server, which is
+  the actual fix for the measured hole and the highest-value item here.
+
 ---
 
 ## 5. Design notes
@@ -434,6 +535,21 @@ Both items are in `src/` and are worth doing for Trowel as much as for the web.
   (`symbols.js:737-745`), one layer up. Worse (it cannot tell a shadowed local
   from a global) but strictly better than the textual default.
 
+- **Compiler-builtin hover** (added by M0; see §4.1). `find_symbol`
+  (`src/lsp/lsp.c:126`) searches an index built from `Binding`s, and a
+  compiler builtin has none -- so `println`, `+`, `=`, `not` and every other
+  row of `src/compiler/builtins.c` hover to `{"contents":""}` and
+  go-to-definition to `null`. These are the names a first-time visitor types
+  most, and no client-side table can cover them: `doc-names.json` is generated
+  from stdlib `;;;` docstrings and a builtin has no `defn` to hang one on.
+
+  The table that does have the answer is `builtins.c`'s own. Add a
+  name-keyed reader beside `builtin_first_with_name` that renders the
+  overload set as one signature line per row, and have `on_hover` consult it
+  after `find_symbol` misses. Signature help gets the same fallback off the
+  same reader. Go-to-definition stays `null`: a builtin has no source
+  location, and inventing one would be worse than answering nothing.
+
 ---
 
 ## 6. Deployment note -- read before shipping M4 or M5
@@ -549,3 +665,187 @@ Per the repo rule: any `bash tests/run.sh` invocation for M5 runs with a
   cheap to test; a spec for each is listed in §8.
 - **Stale service worker after M4/M5.** §6. The mitigation is a release cut, not
   a code change.
+
+---
+
+## 10. Execution record (2026-08-28)
+
+Every phase landed. What follows is the delta between the plan as written and
+the plan as built, plus the two things this container could not check.
+
+### 10.1 What each phase became
+
+| Phase | Landed as |
+|---|---|
+| **M0** | §4.1. Measured against the real `tur lsp` over stdio, not the page. |
+| **M1** | `minimap: { enabled, renderCharacters: false, showSlider, size, maxColumn }`, `overviewRulerLanes: 3`, a `minimapColors` block resolved out of CSS custom properties (`cssHex`/`withAlpha`, refusing anything Monaco's `Color.fromHex` would paint red), a width gate on measured editor width, and a persisted More-menu toggle that outranks the gate. |
+| **M2** | A Symbols toolbar button opening a `.more-menu`-shelled popover, filled on open from `lspClient.documentSymbols()`, sorted by position, kind-labelled, caret-tracking, with four distinct states. Monaco's own quick-outline is reachable from a footer row in the same popover -- M2a's action, made discoverable rather than shipped as a second button. |
+| **M3** | `lookupDoc` on the adapter; `provideHover` falls back to it and marks the result `_from the stdlib docs_`. |
+| **M4** | `turi_wasm_read_file`, a `read-file` worker message, `onOpenExternal` + `onBeforeNavigate` on the adapter, `openReadOnlyTab`, a padlocked read-only tab excluded from `buildProjectEntries` and `persistTabs`, F12, Ctrl/Cmd+Alt+- and a Back button. |
+| **M5** | `LspSymbol.kind`, `textDocument/documentHighlight`, and the compiler-builtin fallback M0 turned up. |
+| **F1** | Both footers and the sidebar. |
+
+### 10.2 Departures from the plan, and why
+
+- **§5.4 recommended option (2), `turi_wasm_read_file`, over exporting `FS`.**
+  Built as recommended. It refuses anything that is not a `.tur` file under
+  the stdlib root, checks the separator after the prefix (so `/stdlibx/...`
+  is not "inside" `/stdlib`), and rejects any `..` segment. Its refusals are
+  all one signal -- `NULL` -- because the page's response to "not allowed",
+  "not there" and "could not read" is identical, and distinguishing them
+  would only report which paths exist. Seven refusal cases are asserted in
+  `tests/lsp/wasm_backend_test.c`.
+
+- **Read-only tabs are excluded from the LSP document set**, which §5.4 did
+  not say. `getTabs` filters them. Opening `/stdlib/list.tur` as
+  `file:///project/list.tur` would have the server analyse the stdlib as if
+  the user had pasted it into their project, and publish diagnostics against
+  code nobody in the playground can fix. The cost is that hover and the
+  outline are inert inside a stdlib buffer; the outline says so in its own
+  sentence rather than claiming the file defines nothing.
+
+- **The jump-back stack pushes from inside the definition provider**
+  (`onBeforeNavigate`), not from the F12 keybinding §5.4 suggested. The
+  provider is the one place every route to a definition passes through, so
+  Cmd+click and the context menu push too -- a keybinding-side push would
+  have covered F12 only.
+
+- **The More menu is now visible at every width.** It was mobile-only, on the
+  reasoning that its rows duplicate desktop buttons. Two rows no longer do:
+  "Force update", which predates this work, and the minimap toggle -- which
+  would otherwise have been unreachable on exactly the widths where the
+  minimap is on.
+
+- **A `wordPattern` was added to the language configuration.** Monaco's
+  default breaks on `-`, `?`, `!` and `/`, so `nil-value` was three words --
+  wrong for double-click selection, for the range a completion replaces, and
+  for the name M3 looks up. It is now the same character class as the
+  server's `is_ident_char`.
+
+- **M5 grew a third item**, per §4.1: `builtin_describe` in
+  `src/compiler/builtins.c`, consulted by `on_hover` and `on_signature_help`
+  after `find_symbol` misses. `println` and `*` now hover with their overload
+  set, marked `built-in operator`. Definition on a builtin stays `null` --
+  there is no source location, and inventing one would send the editor
+  somewhere.
+
+- **`documentHighlight` scans the text, not the index.** §5.5 said "off the
+  same index `on_definition` reads", but that index holds definition spans
+  only; occurrences are not in it. `lsp_scan_occurrences` walks the buffer
+  skipping line comments, string literals, nesting `#| |#` blocks, and
+  inline-C fences -- the last because a C identifier that happens to spell a
+  Turmeric one is a different language's variable. The definition is reported
+  as Write, every use as Text.
+
+### 10.3 Verified here
+
+C side:
+
+- `bash tests/run.sh` -- **2712 passed, 0 failed**, run with the required
+  12-minute timeout.
+- `tur_lsp_session_unit`: 63 passed, 0 failed (8 new tests), leak detection on.
+- `tur_lsp_wasm_backend_unit`: 35 passed, 0 failed (3 new tests), leak
+  detection on.
+- The four M0 answers, re-measured after M5: `println` and `*` now hover with
+  their overload sets, `Point` reports SymbolKind 23 against `eight`'s 13, and
+  `documentHighlight` on `twice` returns two ranges out of four textual
+  occurrences.
+
+Browser side, with one caveat below:
+
+- `footer.spec.js` -- 4 passed.
+- `minimap.spec.js` -- 4 of 5 passed; the fifth runs code and needs the eval
+  worker.
+- `mobile.minimap.spec.js` -- 3 passed.
+- `lsp.spec.js`, the two new navigation describes -- 12 passed.
+- `lsp.spec.js`, the pre-existing scripted-adapter describe -- 7 passed, so
+  the hover and definition providers still behave after being rewritten.
+- Regression checks on the specs this touched indirectly:
+  `lang-picker.spec.js` (7), `mobile.tabs.spec.js` +
+  `mobile.tabs-migration.spec.js` (9). All passed.
+
+And then for real, in CI on #787, against a bundle the job builds with `emcc`:
+the desktop suite went from 51 tests to 87 once these specs were named in it
+(see §10.5), with the same single pre-existing failure in both runs
+(`smoke.spec.js` "Force update", a `Cannot redefine property: reload` that
+newer Chromium rejects). **All 36 added tests passed**, including the
+`LSP integration — providers` describe, which until then had skipped itself on
+every run because the committed wasm had no LSP exports.
+
+**The caveat, which applied locally.** `web/public/turmeric.{js,wasm}` and
+`web/public/doc-names.json` are gitignored build outputs, absent from a fresh
+clone, and this container has no `emcc` to regenerate them -- so every spec
+that waits on `#wasm-status-text` reaching "Ready" would hang. The runs above
+used a scratch config that pins Playwright to the container's own Chromium and
+swaps that wait for `window._turiEditor`. Nothing else was changed, and the
+scripted-server describes never touch the eval worker at all. The scratch
+config and the derived spec copies were deleted; only the real specs are
+committed.
+
+Three defects were found this way and fixed, all of which would have shipped:
+
+- **The Back button was never hidden.** `.btn { display: inline-flex }` is a
+  class rule and beats the user agent's `[hidden] { display: none }`, so
+  `renderJumpBack()` set the attribute to no effect and the button sat in the
+  toolbar from page load. `web/styles.css` already carried a note about this
+  exact trap for `.lsp-status`; it now carries `.btn[hidden]` too.
+- **Opening Symbols from the ⋯ menu opened and closed it in one event.** The
+  forwarded click kept bubbling to the document-level outside-click closer,
+  whose target -- the ⋯ row -- is outside the popover it had just opened. The
+  ⋯ delegate now stops propagation, which is the same fix the "Language..."
+  row already carried.
+- **The hover fallback had no table to read.** `fetchDocNames()` ran only
+  after a successful WASM boot, so M3 was inert for the whole window where it
+  is most wanted and permanently inert when that boot failed. It is now also
+  kicked when the language server starts.
+
+### 10.4 Not verified, and why
+
+- **`mobile.minimap.spec.js` has not actually run anywhere.** Locally it was
+  driven on Chromium at a phone viewport, because this container ships no
+  WebKit. In CI it did not run either -- see §10.5. The width gate it asserts
+  is engine-independent, so the local run is meaningful, but it is not the
+  same thing as the spec passing on the engine its project names.
+- **`https://c.turmeric-lang.com` was not fetched** (§7.5). This container's
+  egress proxy denies CONNECT to `turmeric-lang.com` and every subdomain of
+  it, including `spices.turmeric-lang.com`, which the footer already links --
+  so the denial says nothing about whether the host serves. Someone with
+  network access should load it before this reaches the marketing pages: a
+  404 in the footer of every page is worse than no link.
+
+### 10.5 Two specs that were passing by not running
+
+Both found by reading the CI logs on #787 rather than trusting the job's
+green, and both the same defect one level up from the one
+`docs-offline.spec.js` already carries a note about.
+
+- **The desktop step runs a hardcoded list of spec paths.** Playwright only
+  picks up what is named there, so `minimap.spec.js`, `footer.spec.js` and
+  `lsp.spec.js` -- the last of which had never been on it at all -- went
+  green by never being invoked. Named now; the list went from 51 tests to 87.
+
+- **The mobile project is WebKit, and only Chromium was installed.** All 32
+  mobile tests died at `browserType.launch: Executable doesn't exist at
+  .../webkit-*/pw_run.sh` before any test body ran, and the step's
+  `continue-on-error` hid it. That is the whole mobile suite -- tabs, project
+  load and download, the split handle, the PWA manifest, mobile LSP --
+  asserting nothing, for as long as the runner image has shipped without it.
+  A non-blocking `playwright install webkit` step now precedes it: the job's
+  gate is `deploy-gate.spec.js` on Chromium, and a WebKit download that fails
+  on some runner must leave the mobile suite as unrun as it is today rather
+  than redden a job that was going to pass.
+
+One pre-existing desktop failure is left alone, deliberately:
+`smoke.spec.js` "Force update clears caches and reloads" throws
+`TypeError: Cannot redefine property: reload` from its own `page.evaluate`,
+before it reaches any application code. Newer Chromium makes
+`window.location.reload` non-configurable. It fails identically on the head
+before this work and is unrelated to it, so it belongs in its own change.
+
+### 10.6 Before shipping
+
+§6 stands and now applies: M4 and M5 change `src/`, so
+`web/public/turmeric.{js,wasm}` must be regenerated and a release cut, or a
+returning visitor is served the stale module from the service worker's
+cache-first precache and sees none of it. M1, M2, M3 and F1 are
+JS/HTML/CSS-only and ride the normal asset hash.

@@ -56,4 +56,27 @@ int lsp_enclosing_call(const char *text, size_t text_len,
  * Writes into dest[0..dest_cap-1].  Returns dest. */
 char *lsp_path_to_uri(const char *path, char *dest, size_t dest_cap);
 
+/* Reported once per occurrence.  `line0` is 0-based; `col0` is a *byte*
+ * offset into that line, matching the utf-8 positionEncoding the server
+ * negotiates.  `len` is the match length in bytes. */
+typedef void (*LspOccurrenceFn)(int line0, int col0, int len, void *user);
+
+/* Every whole-identifier occurrence of `name` in `text`, skipping the places
+ * where a name is not a use of that name.
+ *
+ * The skipping is the entire value of this over a regular expression, and it
+ * is the line c2mp draws too (vite-wasm/src/symbols.js:721): `total` inside
+ * `subtotal`, inside a comment, or inside a string literal is not a use of
+ * `total`, and a pattern match over the source cannot tell.  Four regions are
+ * skipped: `;` line comments, `"..."` string literals (backslash-escaped),
+ * `#| ... |#` block comments (nesting), and ```` ```c ... ``` ```` inline-C
+ * bodies -- the last because a C identifier that happens to spell a Turmeric
+ * one is a different language's variable.
+ *
+ * Word boundaries use the same identifier character class as
+ * lsp_word_at_pos, so a highlight lands on exactly what a hover would. */
+void lsp_scan_occurrences(const char *text, size_t text_len,
+                          const char *name,
+                          LspOccurrenceFn fn, void *user);
+
 #endif

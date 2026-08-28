@@ -53,6 +53,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
+| [webkit-sw-controlled-reload-fails-wasm-init](webkit-sw-controlled-reload-fails-wasm-init.md) | medium | Try Turmeric shows "Failed to load WASM" on a WebKit *reload*, once the service worker controls the page and the wasm assets come from the Cache API instead of the network. Not the SharedArrayBuffer path (main.js:1178, not :1168). First load is fine, so it hits returning visitors, and the "Please refresh the page" advice cannot work. Root cause not established; unconfirmed on real iOS Safari, which is what decides the severity |
 | [type-fuzz-src-red-on-clang-21](type-fuzz-src-red-on-clang-21.md) | medium | `tur_type_fuzz_src` reports 15/40 BUG on Apple clang 21 and passes in CI on both ubuntu-latest and macos-latest (older clang). All 15 are Result shapes (`res`/`res_box`/`res_bind`). Identical case set on the v0.39.0 compiler, so it predates the SR2a graduation. Trap: a saved case does NOT reproduce when compiled by hand |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
@@ -60,18 +61,22 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
 
-`spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 and moved
-to [docs/archive](../archive/spices-carry-pre-sum-option-result-layout.md).
-Every spice is migrated (`turmeric-spices` #59): 131 inline-C sites in 47 files
-build and inspect through the emitted preamble helpers, 43 record-accessor
-reads became the stdlib accessors, and nothing in THIS repo had to change. The
-corruption was reproduced before it was fixed -- `assert-ok` on a genuine
-`(ok 7)` printed "expected ok, got err", because the retired layout's
-`is_ok = true` byte reads back as `tag == 1`, which is Err. Measured across
-every spice suite that runs without external C deps: 102 failing test files ->
-75, zero regressions. That migration is what unblocked the
-`parametric-sum-byvalue` graduation, whose soak existed to avoid fixing the
-ABI before its heaviest client existed.
+`spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 in
+`rjungemann/turmeric-spices` ("migrate every spice off the pre-sum
+Option/Result layout", merged as #59) and moved to
+[docs/archive](../archive/spices-carry-pre-sum-option-result-layout.md). All
+46 files across 12 spices were migrated -- the 126 hand-rolled inline-C struct
+sites and the 35 `.is-some`/`.value`/`.ok-val` reads alike; see the Resolution
+section at the bottom of the archived report. The corruption was reproduced
+before it was fixed: `assert-ok` on a genuine `(ok 7)` printed "expected ok,
+got err", because the retired layout's `is_ok = true` byte reads back as
+`tag == 1`, which is Err. Measured across every spice suite that runs without
+external C deps, 102 failing test files -> 75, zero regressions. That
+migration is what unblocked the `parametric-sum-byvalue` graduation, whose
+soak existed to avoid fixing the ABI before its heaviest client existed.
+The hole that made this expensive to find is still open, and is not this
+row's to close: `requires.spices` fixtures auto-skip without the sibling
+checkout, so nothing in this repo's CI could have caught any of it.
 
 `args-api-int-erased-handles` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/args-api-int-erased-handles.md). `ArgSpec` /

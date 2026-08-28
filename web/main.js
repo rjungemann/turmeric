@@ -106,6 +106,9 @@ const STORAGE_KEYS = {
     // Multi-tab keys (Phase 1 of try-turmeric-multi-tab-and-projects-plan).
     tabs:      'tur.try.tabs.v1',
     activeTab: 'tur.try.activeTab.v1',
+    // Minimap: true / false when the user has chosen, absent when they have
+    // not. The absence is load-bearing -- see minimapPreference() (M1).
+    minimap:   'tur.try.minimap.v1',
 };
 
 // Multi-tab editor state. Each tab carries its persisted record plus a
@@ -212,12 +215,22 @@ function tabsSnapshot() {
         cursor: t.cursor || { lineNumber: 1, column: 1 },
         scrollTop: t.scrollTop || 0,
         createdAt: t.createdAt,
+        // Read-only stdlib buffers opened by go-to-definition (M4). Carried on
+        // the snapshot so the test surface can see them; every *storage* path
+        // filters them back out, and each of those filters is written at its
+        // own call site rather than hidden here, because "which tabs count"
+        // has a different answer for a zip than for a reload.
+        readOnly: !!t.readOnly,
+        sourceUri: t.sourceUri || undefined,
     }));
 }
 
+// A stdlib buffer is not part of the user's workspace: they did not create it,
+// they cannot edit it, and restoring it on reload would present a file they
+// never opened deliberately as one of their own.
 const persistTabs = debounce(() => {
     if (tabsHydrating) return;
-    safeWrite(STORAGE_KEYS.tabs, tabsSnapshot());
+    safeWrite(STORAGE_KEYS.tabs, tabsSnapshot().filter(t => !t.readOnly));
 }, 250);
 
 function persistActiveId() {
@@ -268,6 +281,11 @@ function switchTab(id) {
     captureActiveTabState();
     activeId = id;
     editor.setModel(ensureModel(next));
+    // Read-only is a property of the tab, not of the editor, so it is applied
+    // on every switch rather than once. Missing this in one direction is the
+    // bug that lets someone type into the stdlib; missing it in the other
+    // locks them out of their own file.
+    applyReadOnlyState(next);
     try {
         if (next.cursor) editor.setPosition(next.cursor);
         if (typeof next.scrollTop === 'number') editor.setScrollTop(next.scrollTop);
@@ -310,6 +328,7 @@ function closeTab(id) {
         const neighbor = tabs[idx] || tabs[idx - 1] || tabs[0];
         activeId = neighbor.id;
         editor.setModel(ensureModel(neighbor));
+        applyReadOnlyState(neighbor);
         try {
             if (neighbor.cursor) editor.setPosition(neighbor.cursor);
             if (typeof neighbor.scrollTop === 'number') editor.setScrollTop(neighbor.scrollTop);
@@ -352,6 +371,120 @@ function renameTab(id, rawName) {
     // A rename changes the document uri, so the server has to be told: the
     // client closes the old one and opens the new.
     notifyTabsChanged();
+}
+
+// ============================================================================
+// Read-only buffers + jump-back (try-turmeric-navigation-and-minimap-plan, M4)
+// ============================================================================
+
+/** Put the editor in or out of read-only for the tab it is showing. */
+function applyReadOnlyState(tab) {
+    if (!editor) return;
+    try {
+        editor.updateOptions({ readOnly: !!(tab && tab.readOnly) });
+    } catch { /* editor disposed mid-switch */ }
+}
+
+/** `file:///stdlib/list.tur` -> `list.tur`; used for the tab label. */
+function basenameFromUri(uri) {
+    const path = String(uri || '').replace(/^file:\/\//, '');
+    const last = path.split('/').filter(Boolean).pop();
+    return last || 'source.tur';
+}
+
+/**
+ * Open a definition that lives outside the workspace -- in practice, a stdlib
+ * source file the WASM bundle carries at /stdlib.
+ *
+ * Returns the tab (so the caller can convert a range against its model), or
+ * null when there is nothing to show: no server, no reader export in this
+ * bundle, or a path the export refuses. Null is the pre-M4 behaviour, which is
+ * the right thing to degrade to.
+ *
+ * Opening the same file twice focuses the tab that is already there rather
+ * than stacking copies of list.tur across a reading session.
+ */
+async function openReadOnlyTab(uri) {
+    if (!lspClient || !lspClient.isAvailable()) return null;
+
+    const existing = tabs.find(t => t.readOnly && t.sourceUri === uri);
+    if (existing) { ensureModel(existing); return existing; }
+
+    const path = String(uri || '').replace(/^file:\/\//, '');
+    let text = null;
+    try {
+        text = await lspClient.readFile(path);
+    } catch {
+        return null;
+    }
+    if (typeof text !== 'string') return null;
+
+    // Not createTab(): that activates, persists, and tells the server about a
+    // new document. None of the three is wanted here -- the caller navigates
+    // through onNavigate, storage excludes read-only tabs by design, and the
+    // server already knows this file as its own source. Announcing it a second
+    // time under a file:///project/ uri would have it analysed as if the user
+    // had pasted the stdlib into their project.
+    const tab = {
+        id: genTabId(),
+        name: basenameFromUri(uri),
+        content: text,
+        cursor: { lineNumber: 1, column: 1 },
+        scrollTop: 0,
+        createdAt: Date.now(),
+        readOnly: true,
+        sourceUri: uri,
+        _model: null,
+    };
+    tabs.push(tab);
+    ensureModel(tab);
+    renderTabs();
+    return tab;
+}
+
+// Where a jump came from, so it can be undone. Monaco standalone registers
+// `editor.action.revealDefinition` but ships no navigation history service --
+// that is a VS Code workbench feature -- so this is ours.
+const JUMP_STACK_MAX = 20;
+let jumpStack = [];
+
+function pushJumpOrigin(tabId, position) {
+    if (!tabId || !position) return;
+    const top = jumpStack[jumpStack.length - 1];
+    // Two definition requests from the same spot are one origin, not two.
+    if (top && top.tabId === tabId &&
+        top.position.lineNumber === position.lineNumber &&
+        top.position.column === position.column) {
+        return;
+    }
+    jumpStack.push({ tabId, position });
+    if (jumpStack.length > JUMP_STACK_MAX) jumpStack.shift();
+    renderJumpBack();
+}
+
+/** Pop back to the most recent origin whose tab still exists. */
+function jumpBack() {
+    while (jumpStack.length > 0) {
+        const entry = jumpStack.pop();
+        const tab = findTab(entry.tabId);
+        // A closed tab is not an error, it is just not somewhere to go back
+        // to. Keep popping rather than making the user press it twice.
+        if (!tab) continue;
+        switchTab(tab.id);
+        try {
+            editor.revealPositionInCenterIfOutsideViewport(entry.position);
+            editor.setPosition(entry.position);
+            editor.focus();
+        } catch {}
+        break;
+    }
+    renderJumpBack();
+}
+
+/** Show the Back button only while there is somewhere to go back to. */
+function renderJumpBack() {
+    const btn = document.getElementById('jump-back-btn');
+    if (btn) btn.hidden = jumpStack.length === 0;
 }
 
 // ============================================================================
@@ -419,11 +552,27 @@ function setLspStatus(state) {
 function startLspClient() {
     if (lspClient) return lspClient.start();
 
+    // The hover fallback reads doc-names.json, which otherwise only arrives
+    // after a successful WASM boot -- so it was absent for the whole window
+    // where it is most wanted, and permanently absent when that boot failed.
+    // Idempotent and not awaited: a hover that arrives first simply misses,
+    // which is the same as having no fallback, which is where we started.
+    fetchDocNames();
+
     lspClient = createLspClient({
         monaco,
         languageId: 'turmeric',
-        getTabs: () => tabs,
+        // Read-only stdlib buffers are deliberately not part of the document
+        // set (M4). They are reference material the user cannot edit, and
+        // announcing one under a file:///project/ uri would have the server
+        // analyse the stdlib as if it had been pasted into the project --
+        // publishing diagnostics against code nobody here can fix.
+        getTabs: () => tabs.filter(t => !t.readOnly),
         onStatus: setLspStatus,
+        // Hover fallback (M3). Same table the docs pane searches, already
+        // fetched by the WASM boot -- no new asset, and no fetch on the hover
+        // path: an unloaded table is an empty array, which is a miss.
+        lookupDoc: (name) => (docNames || []).find(d => d.name === name) || null,
         onNavigate: (tab, range) => {
             // Monaco's standalone editor cannot switch models on its own, so a
             // definition in another tab is a tab switch we perform.
@@ -436,6 +585,15 @@ function startLspClient() {
                 });
             } catch {}
         },
+        // A definition in the stdlib (M4).
+        onOpenExternal: (uri) => openReadOnlyTab(uri),
+        // Record where a jump starts. Fired from inside the definition
+        // provider, so F12, Cmd+click and the context menu all push -- there
+        // is no keybinding here that could miss one of them.
+        onBeforeNavigate: (model, position) => {
+            const origin = tabs.find(t => t._model === model);
+            if (origin) pushJumpOrigin(origin.id, position);
+        },
     });
 
     // Test surface: lets a spec await the server instead of sleeping on it.
@@ -447,6 +605,8 @@ function startLspClient() {
         sync: () => notifyTabsChanged(),
         // Monaco is a module-scoped import, not a global, so a spec has no
         // other way to read the markers the adapter set.
+        highlights: () => lspClient.documentHighlights(
+            editor.getModel(), editor.getPosition()),
         markers: () => monaco.editor.getModelMarkers({ owner: 'turmeric' })
             .map(m => ({
                 message: m.message,
@@ -470,9 +630,22 @@ function renderTabs() {
     const canClose = tabs.length > 1;
     for (const tab of tabs) {
         const btn = document.createElement('button');
-        btn.className = 'tab-button' + (tab.id === activeId ? ' active' : '');
+        btn.className = 'tab-button' + (tab.id === activeId ? ' active' : '')
+                                     + (tab.readOnly ? ' read-only' : '');
         btn.dataset.tabId = tab.id;
-        btn.title = tab.name;
+        btn.title = tab.readOnly
+            ? `${tab.name} (read-only, from the standard library)`
+            : tab.name;
+        if (tab.readOnly) {
+            // A padlock, so a tab that will not accept typing says so before
+            // the user tries. Read-only is otherwise invisible until a
+            // keystroke does nothing, which reads as a broken editor.
+            const lock = document.createElement('span');
+            lock.className = 'tab-lock';
+            lock.textContent = '\u{1F512}';
+            lock.setAttribute('aria-hidden', 'true');
+            btn.appendChild(lock);
+        }
         const label = document.createElement('span');
         label.className = 'tab-label';
         label.textContent = tab.name;
@@ -499,6 +672,9 @@ function renderTabs() {
         });
         btn.addEventListener('dblclick', (e) => {
             e.preventDefault();
+            // A stdlib buffer's name is its identity, not a label: it is how
+            // the tab is matched on a second jump to the same file.
+            if (tab.readOnly) return;
             beginRename(tab.id, btn, label);
         });
         setupTabDrag(btn, tab);
@@ -1397,6 +1573,32 @@ function resetWasm() {
 // ============================================================================
 
 /**
+ * Read a CSS custom property and return it only if Monaco can parse it.
+ *
+ * Monaco runs theme colors through Color.fromHex(), which returns opaque RED
+ * on any parse failure -- so an `rgba()` or a `var()` chain that did not
+ * resolve does not degrade, it repaints the strip bright red. Anything that is
+ * not a literal #RGB / #RRGGBB / #RRGGBBAA is refused here and the caller's
+ * fallback is used instead, which is the same color the stylesheet declares.
+ */
+function cssHex(varName, fallback) {
+    try {
+        const raw = getComputedStyle(document.documentElement)
+            .getPropertyValue(varName).trim();
+        if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(raw)) return raw;
+    } catch {
+        /* no document, or a browser that refuses computed styles here */
+    }
+    return fallback;
+}
+
+/** Replace (or append) the alpha byte of a #RRGGBB / #RRGGBBAA color. */
+function withAlpha(hex, alphaByte) {
+    const base = /^#[0-9a-f]{8}$/i.test(hex) ? hex.slice(0, 7) : hex;
+    return /^#[0-9a-f]{6}$/i.test(base) ? base + alphaByte : base;
+}
+
+/**
  * Configure Monaco Editor for Turmeric
  */
 function configureMonaco() {
@@ -1470,6 +1672,17 @@ function configureMonaco() {
             { open: '"', close: '"' },
         ],
         comments: { lineComment: ';' },
+        // Monaco's default word pattern is C-shaped: it breaks on `-`, `?`,
+        // `!`, `/` and the comparison characters, so `nil-value` is three
+        // words and `vec-push!` is four. That is wrong everywhere it is used
+        // here -- double-click selection, occurrence highlight, the range a
+        // completion replaces, and the name the hover fallback looks up.
+        //
+        // This is exactly the character class the server's own tokenizer
+        // accepts (is_ident_char, src/lsp/lsp_util.c:6). Keeping the two in
+        // step is what makes a client-side word and a server-side word the
+        // same word.
+        wordPattern: /[A-Za-z0-9\-?!*/><+=_]+/g,
     });
 
     // Rainbow-bracket palette, mirrored from trowel's turmeric-dark theme
@@ -1485,6 +1698,56 @@ function configureMonaco() {
         'editorBracketHighlight.foreground5':               '#8AB0E8', // blue
         'editorBracketHighlight.foreground6':               '#C4A0E8', // purple
         'editorBracketHighlight.unexpectedBracket.foreground': '#FF5C57', // error red
+    };
+
+    // Minimap + overview ruler (try-turmeric-navigation-and-minimap-plan M1).
+    //
+    // Colors are resolved out of the stylesheet rather than written here as
+    // literals. The strip sits directly against the editor canvas and paints
+    // marks in the same semantic colors the console and the status dots use;
+    // a hardcoded hex would silently stop matching the first time one of those
+    // tokens moves. c2mp reaches into CSS custom properties for the same
+    // reason (minimap.js:204-209).
+    //
+    // Monaco parses these with Color.fromHex() and falls back to opaque RED on
+    // any parse failure, so cssHex() refuses anything that is not #RGB /
+    // #RRGGBB / #RRGGBBAA and hands back the literal fallback instead. A theme
+    // token that fails to resolve must look like the old theme, never like an
+    // error.
+    const minimapColors = {
+        // Canvas: the strip is part of the editor, not a panel beside it.
+        'minimap.background':                   cssHex('--bg-base', '#0C0A08'),
+        'minimapSlider.background':             withAlpha(cssHex('--text-dim', '#453F39'), '59'),
+        'minimapSlider.hoverBackground':        withAlpha(cssHex('--text-sec', '#88796C'), '59'),
+        'minimapSlider.activeBackground':       withAlpha(cssHex('--text-sec', '#88796C'), '8C'),
+
+        // Marks inside the strip. Diagnostics keep full opacity -- they are
+        // the reason to look at it; selection and find are washes, because a
+        // mark you cannot see past is a mark that hides the shape of the file.
+        // c2mp's rule (minimap.js §"marks as washes"), same conclusion.
+        'minimap.errorHighlight':               cssHex('--error-color', '#D9735A'),
+        'minimap.warningHighlight':             cssHex('--warning-color', '#EFA030'),
+        'minimap.findMatchHighlight':           withAlpha(cssHex('--gold', '#D48B1C'), '99'),
+        'minimap.selectionHighlight':           withAlpha(cssHex('--text-dim', '#453F39'), '80'),
+        'minimap.selectionOccurrenceHighlight': withAlpha(cssHex('--text-sec', '#88796C'), '66'),
+        'minimapGutter.addedBackground':        withAlpha(cssHex('--success-color', '#A8C98A'), 'B3'),
+        'minimapGutter.modifiedBackground':     withAlpha(cssHex('--gold', '#D48B1C'), 'B3'),
+        'minimapGutter.deletedBackground':      withAlpha(cssHex('--error-color', '#D9735A'), 'B3'),
+
+        // The outboard ruler. This is the affordance c2mp builds by hand
+        // (minimap.js RULER_W): a diagnostic gets a tick here because it must
+        // stay findable when the minimap is scrolled past it; an occurrence
+        // does not, because there can be fifty of them and they are noise at
+        // this width.
+        'editorOverviewRuler.background':       cssHex('--bg-base', '#0C0A08'),
+        'editorOverviewRuler.border':           '#00000000',
+        'editorOverviewRuler.errorForeground':  cssHex('--error-color', '#D9735A'),
+        'editorOverviewRuler.warningForeground': cssHex('--warning-color', '#EFA030'),
+        'editorOverviewRuler.infoForeground':   cssHex('--info-color', '#7AC4B8'),
+        'editorOverviewRuler.findMatchForeground': withAlpha(cssHex('--gold', '#D48B1C'), 'CC'),
+        'editorOverviewRuler.selectionHighlightForeground':
+            withAlpha(cssHex('--text-sec', '#88796C'), '80'),
+        'editorOverviewRuler.bracketMatchForeground': '#00000000',
     };
 
     // Define theme
@@ -1515,7 +1778,16 @@ function configureMonaco() {
             'editor.inactiveSelectionBackground': '#0366D61A',
             'editorIndentGuide.background': '#e1e4e8',
             'editorIndentGuide.activeBackground': '#959da5',
-            ...rainbowBrackets
+            ...rainbowBrackets,
+            // The light theme is not currently selectable (setTheme below
+            // pins turmeric-dark), but a half-themed minimap is exactly the
+            // kind of thing that ships the day someone makes it selectable.
+            ...minimapColors,
+            'minimap.background':             '#ffffff',
+            'editorOverviewRuler.background': '#ffffff',
+            'minimapSlider.background':       '#959da54D',
+            'minimapSlider.hoverBackground':  '#959da580',
+            'minimapSlider.activeBackground': '#959da5A6',
         }
     });
 
@@ -1597,7 +1869,10 @@ function configureMonaco() {
             'focusBorder':                          '#D48B1C66',
 
             // Rainbow brackets — depth-colored, matching the trowel editor
-            ...rainbowBrackets
+            ...rainbowBrackets,
+
+            // Minimap + overview ruler, resolved from the stylesheet above
+            ...minimapColors
         }
     });
 
@@ -1623,7 +1898,19 @@ async function initEditor() {
         insertSpaces: true,
         detectIndentation: false,
         minimap: {
-            enabled: false
+            // Resolved for real by applyMinimapPreference() below, once the
+            // editor exists and its width can be measured. Starting false and
+            // turning it on is the cheap direction: an editor that renders the
+            // strip and then yanks it away on the first layout pass flickers.
+            enabled: false,
+            // Blocks, not glyphs. c2mp reached the same conclusion the hard
+            // way (minimap.js:8-13): no browser hints glyphs at 2px, so
+            // rendered characters are platform-dependent mush. Blocks are
+            // legible and cheap.
+            renderCharacters: false,
+            showSlider: 'mouseover',
+            size: 'proportional',
+            maxColumn: 80,
         },
         scrollbar: {
             vertical: 'auto',
@@ -1667,7 +1954,12 @@ async function initEditor() {
         multiCursorPaste: 'full',
         occurrencesHighlight: true,
         overviewRulerBorder: false,
-        overviewRulerLanes: 0,
+        // Three lanes is what puts error and warning ticks in the right-hand
+        // strip -- the affordance c2mp builds by hand (minimap.js RULER_W).
+        // Unlike the minimap this is not width-gated: it is a few pixels wide
+        // at any pane size, and a diagnostic you can find by looking is worth
+        // those pixels on a phone too.
+        overviewRulerLanes: 3,
         quickSuggestions: {
             other: true,
             comments: false,
@@ -1737,6 +2029,20 @@ async function initEditor() {
         parseBytes: (bytes) => {
             const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
             return parseProjectZip(u8);
+        },
+    };
+
+    // Navigation test surface (M4): read-only buffers and the jump-back stack.
+    window._turiNav = {
+        readOnlyTabs: () => tabs.filter(t => t.readOnly)
+            .map(t => ({ id: t.id, name: t.name, sourceUri: t.sourceUri })),
+        stackDepth: () => jumpStack.length,
+        back: () => jumpBack(),
+        // Editor-level truth, not the tab record: what a spec cares about is
+        // whether typing would do anything.
+        isReadOnly: () => {
+            try { return !!editor.getOption(monaco.editor.EditorOption.readOnly); }
+            catch { return false; }
         },
     };
 
@@ -1836,6 +2142,20 @@ async function initEditor() {
     editor.addCommand(
         monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
         () => formatCode()
+    );
+
+    // F12 -> go to definition. Cmd/Ctrl+click already works through the
+    // provider; F12 is the binding people reach for without a mouse, and
+    // Monaco standalone does not bind it by default.
+    editor.addCommand(monaco.KeyCode.F12, () => {
+        try { editor.getAction('editor.action.revealDefinition')?.run(); } catch {}
+    });
+
+    // Ctrl/Cmd+Alt+- -> back to where the last jump started. Monaco standalone
+    // has no navigation history service, so this drives our own stack.
+    editor.addCommand(
+        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Minus,
+        () => jumpBack()
     );
 
     // Register as Monaco document formatter so "Format Document" also works
@@ -2117,7 +2437,10 @@ function slugifyTabName(raw, used) {
 // browser download.
 function buildProjectEntries() {
     captureActiveTabState();
-    const snapshot = tabsSnapshot();
+    // Read-only stdlib buffers are not the user's files. A downloaded project
+    // zip that carried copies of list.tur would build differently from the
+    // workspace it came from -- the real stdlib is already on the path.
+    const snapshot = tabsSnapshot().filter(t => !t.readOnly);
     const used = new Set();
     const files = snapshot.map(t => {
         const fileName = slugifyTabName(t.name, used);
@@ -2327,9 +2650,15 @@ function applyProjectLoad(parsed) {
     }
     tabs = parsed.tabs;
     activeId = parsed.activeId;
+    // Every origin the stack held belonged to the workspace that just went
+    // away. jumpBack() would skip them one by one; clearing says so up front,
+    // and takes the Back button down with it.
+    jumpStack = [];
+    renderJumpBack();
     const active = currentTab();
     if (active && editor) {
         editor.setModel(ensureModel(active));
+        applyReadOnlyState(active);
         try {
             if (active.cursor) editor.setPosition(active.cursor);
             if (typeof active.scrollTop === 'number') editor.setScrollTop(active.scrollTop);
@@ -2516,6 +2845,10 @@ function initEventListeners() {
         }
     });
 
+    // Back-from-definition button (M4). Hidden until the stack is non-empty.
+    document.getElementById('jump-back-btn')?.addEventListener('click', jumpBack);
+    renderJumpBack();
+
     // Format button
     document.getElementById('format-btn')?.addEventListener('click', formatCode);
     
@@ -2581,6 +2914,9 @@ function initEventListeners() {
         });
     }
 
+    // Symbols dropdown (the outline)
+    initSymbolsMenu();
+
     // Language picker (dialect radio group + layer checkboxes)
     initLangPicker();
 
@@ -2609,6 +2945,9 @@ function initEventListeners() {
             if (solveItem && solveBtn) {
                 solveItem.hidden = solveBtn.style.display === 'none';
             }
+            // The minimap row's label *is* its state, so it has to be right
+            // before the menu is painted, not after the click that changes it.
+            syncMinimapMenuItem();
             moreMenu.hidden = false;
             moreBtn.setAttribute('aria-expanded', 'true');
             // Anchor below the button. position:fixed so the menu escapes
@@ -2624,6 +2963,15 @@ function initEventListeners() {
         moreMenu.addEventListener('click', (e) => {
             const item = e.target.closest('.more-item');
             if (!item) return;
+            // Stop here rather than letting the click reach document. Some
+            // rows forward to a button that opens another popover (Symbols),
+            // and the other popovers close themselves on any document click
+            // whose target is outside them -- which this one is. Without this,
+            // opening Symbols from the ⋯ menu opened and closed it in the same
+            // event. Nothing else needs the click at document level: the only
+            // listeners there close menus, and closeMenu() below does that
+            // for this one.
+            e.stopPropagation();
             const cmd = item.dataset.cmd;
             const example = item.dataset.example;
             const action = item.dataset.action;
@@ -2633,6 +2981,8 @@ function initEventListeners() {
                 loadExample(example);
             } else if (action === 'force-update') {
                 forceUpdatePWA();
+            } else if (action === 'toggle-minimap') {
+                toggleMinimap();
             }
             closeMenu();
         });
@@ -2672,6 +3022,10 @@ function initEventListeners() {
 
     // Draggable editor/console split (horizontal on desktop, vertical on mobile)
     initSplitHandle();
+
+    // Minimap width gate + user toggle (M1). After initSplitHandle(), which
+    // restores the persisted split and therefore the editor's real width.
+    initMinimap();
 
     // PWA install affordances
     initInstallAffordances();
@@ -2748,6 +3102,370 @@ function initHScrollDragRow(el) {
 }
 
 // ============================================================================
+// Symbols outline (try-turmeric-navigation-and-minimap-plan, M2)
+//
+// Monaco standalone has no outline pane and no breadcrumbs -- those are VS
+// Code workbench features -- so the documentSymbol provider the adapter
+// registers has answered correctly since it landed with nothing reading it.
+// This is the surface.
+//
+// Two ways in, and they are not redundant. Ctrl/Cmd+Shift+O runs Monaco's own
+// quick-outline, which is a filterable palette and is already registered
+// (`editor.all.js` pulls standaloneGotoSymbolQuickAccess in); the button opens
+// this popover, which is a list you can look at without typing. The button is
+// also the only one of the two that is discoverable.
+// ============================================================================
+
+// What to call each SymbolKind out loud. c2mp's KIND_LABEL (symbols.js:752)
+// is the phrasing being copied: what you would say about the entry, not the
+// LSP enum name. Kinds the server does not currently emit are listed anyway,
+// because M5 widens the mapping and a missing row here would silently render
+// as the bare enum name.
+const SYMBOL_KIND_LABELS = {
+    Function:  'function',
+    Method:    'function',
+    Constructor: 'constructor',
+    Variable:  'value',
+    Constant:  'constant',
+    Struct:    'type',
+    Class:     'type',
+    Enum:      'type',
+    Interface: 'class',
+    Object:    'instance',
+    Operator:  'macro',
+    Module:    'module',
+    Namespace: 'module',
+    Field:     'field',
+    Property:  'field',
+    EnumMember: 'variant',
+    TypeParameter: 'type param',
+};
+
+function symbolKindLabel(kindName) {
+    return SYMBOL_KIND_LABELS[kindName] || (kindName || '').toLowerCase();
+}
+
+/**
+ * Which entry contains the caret.
+ *
+ * Ported from c2mp (symbols.js:775-795), rule and reasoning intact: the name
+ * wins when the caret is actually on one, otherwise the smallest containing
+ * range wins. Someone editing the middle of a function is not sitting on its
+ * name, and "where am I" is the entire point of the marker -- a rule that only
+ * matched names would go blank the moment you started typing.
+ *
+ * Returns an index into `symbols`, or -1.
+ */
+function currentSymbolIndex(symbols, position) {
+    if (!position) return -1;
+    const within = (r) => {
+        if (position.lineNumber < r.startLineNumber) return false;
+        if (position.lineNumber > r.endLineNumber) return false;
+        if (position.lineNumber === r.startLineNumber &&
+            position.column < r.startColumn) return false;
+        if (position.lineNumber === r.endLineNumber &&
+            position.column > r.endColumn) return false;
+        return true;
+    };
+    for (let i = 0; i < symbols.length; i++) {
+        if (within(symbols[i].selectionRange || symbols[i].range)) return i;
+    }
+    let best = -1;
+    let bestSpan = Infinity;
+    for (let i = 0; i < symbols.length; i++) {
+        const r = symbols[i].range;
+        if (!within(r)) continue;
+        const span = (r.endLineNumber - r.startLineNumber) * 100000 +
+                     (r.endColumn - r.startColumn);
+        if (span < bestSpan) { bestSpan = span; best = i; }
+    }
+    return best;
+}
+
+/** Move the caret to a symbol, with the same two calls onNavigate makes. */
+function jumpToSymbol(sym) {
+    if (!editor || !sym) return;
+    const r = sym.selectionRange || sym.range;
+    try {
+        editor.revealRangeInCenterIfOutsideViewport(r);
+        editor.setPosition({ lineNumber: r.startLineNumber, column: r.startColumn });
+        editor.focus();
+    } catch { /* model swapped underneath; nothing to navigate to */ }
+}
+
+/** Paint the list. `state` is 'ok' | 'empty' | 'unavailable' | 'loading'. */
+function renderSymbolsMenu(list, symbols, state) {
+    list.innerHTML = '';
+    if (state !== 'ok') {
+        const msg = document.createElement('div');
+        msg.className = 'symbols-empty';
+        // Three distinct sentences on purpose. An empty outline shown because
+        // analysis is down would say "this file defines nothing", which is a
+        // claim about the user's code made from a fact about our worker.
+        msg.textContent =
+            state === 'loading'      ? 'Reading symbols...' :
+            state === 'unavailable'  ? 'Analysis is unavailable.' :
+            state === 'read-only'    ? 'No outline for a stdlib buffer.' :
+                                       'Nothing defined yet';
+        list.appendChild(msg);
+        return;
+    }
+
+    const current = currentSymbolIndex(symbols, editor && editor.getPosition());
+    symbols.forEach((sym, i) => {
+        const row = document.createElement('button');
+        row.className = 'symbol-item' + (i === current ? ' is-current' : '');
+        row.setAttribute('role', 'menuitem');
+        if (i === current) row.setAttribute('aria-current', 'true');
+        const name = document.createElement('span');
+        name.className = 'symbol-item-name';
+        name.textContent = sym.name;
+        const kind = document.createElement('span');
+        kind.className = 'symbol-item-kind';
+        kind.textContent = symbolKindLabel(sym.kindName);
+        row.appendChild(name);
+        row.appendChild(kind);
+        row.addEventListener('click', () => {
+            jumpToSymbol(sym);
+            closeSymbolsMenu();
+        });
+        list.appendChild(row);
+    });
+}
+
+let closeSymbolsMenu = () => {};
+
+function initSymbolsMenu() {
+    const btn = document.getElementById('symbols-btn');
+    const menu = document.getElementById('symbols-menu');
+    const list = document.getElementById('symbols-list');
+    if (!btn || !menu || !list) return;
+
+    // Same reparent/anchor/outside-click pattern as Examples and the ⋯ menu.
+    if (menu.parentElement !== document.body) document.body.appendChild(menu);
+
+    const close = () => {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+    };
+    closeSymbolsMenu = close;
+
+    const anchor = () => {
+        // Below 600px the toolbar collapses and #symbols-btn is display:none,
+        // so its rect is all zeros and the popover would land in the corner.
+        // Anchor to whichever button the user actually pressed -- the ⋯ menu
+        // forwards to this one via .click().
+        const more = document.getElementById('more-btn');
+        const el = btn.getBoundingClientRect().width > 0 ? btn : (more || btn);
+        const r = el.getBoundingClientRect();
+        menu.style.top = `${r.bottom + 4}px`;
+        menu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
+    };
+
+    const open = async () => {
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        anchor();
+
+        // Filled on open, never kept in sync. c2mp's reason (main.js:427)
+        // holds exactly: the buffer changes on every keystroke and this list
+        // is read once in a while.
+        if (!lspClient || !lspClient.isAvailable()) {
+            renderSymbolsMenu(list, [], 'unavailable');
+            return;
+        }
+        // A stdlib buffer is not an open document as far as the server is
+        // concerned (see getTabs in startLspClient), so documentSymbol would
+        // come back empty -- and "Nothing defined yet" about list.tur is a
+        // false statement, not a degraded one.
+        const active = currentTab();
+        if (active && active.readOnly) {
+            renderSymbolsMenu(list, [], 'read-only');
+            return;
+        }
+        renderSymbolsMenu(list, [], 'loading');
+        let symbols = [];
+        try {
+            symbols = await lspClient.documentSymbols(editor.getModel()) || [];
+        } catch {
+            renderSymbolsMenu(list, [], 'unavailable');
+            return;
+        }
+        if (menu.hidden) return;   // closed while the request was in flight
+        // Position order, not collection order: an outline that does not match
+        // the file it describes is harder to use than no outline.
+        symbols.sort((a, b) =>
+            (a.range.startLineNumber - b.range.startLineNumber) ||
+            (a.range.startColumn - b.range.startColumn));
+        renderSymbolsMenu(list, symbols, symbols.length ? 'ok' : 'empty');
+    };
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu.hidden) open(); else close();
+    });
+
+    // Hand off to Monaco's filterable palette. The action has been in the
+    // bundle since the page started importing the full `editor.api` entry;
+    // nothing ever pointed at it. If a future Monaco drops it, the row goes
+    // away rather than becoming a button that does nothing.
+    const filterRow = document.getElementById('symbols-filter');
+    if (filterRow) {
+        const action = () => (editor ? editor.getAction('editor.action.quickOutline') : null);
+        if (!action()) {
+            filterRow.remove();
+        } else {
+            filterRow.addEventListener('click', (e) => {
+                e.stopPropagation();
+                close();
+                try {
+                    editor.focus();
+                    action().run();
+                } catch { /* palette unavailable; the list above still works */ }
+            });
+        }
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) {
+            close();
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !menu.hidden) close();
+    });
+
+    // Test surface: a spec should read the rendered rows, but asserting on the
+    // caret rule wants the rule's own answer rather than a DOM scrape.
+    window._turiOutline = {
+        open: () => open(),
+        close: () => close(),
+        rows: () => Array.from(list.querySelectorAll('.symbol-item')).map(el => ({
+            name: el.querySelector('.symbol-item-name')?.textContent || '',
+            kind: el.querySelector('.symbol-item-kind')?.textContent || '',
+            current: el.classList.contains('is-current'),
+        })),
+        state: () => (list.querySelector('.symbols-empty')?.textContent || 'ok'),
+    };
+}
+
+// ============================================================================
+// Minimap (try-turmeric-navigation-and-minimap-plan, M1)
+//
+// Two inputs decide whether the strip is showing: an explicit user choice,
+// and how wide the editor actually is. The user's choice wins outright; the
+// width gate only speaks when they have not made one.
+//
+// The gate is on *measured editor width*, not a media query, because the
+// split handle can make the editor 300px wide on a 1920px desktop -- and a
+// minimap on a 300px editor is a fifth of the code column showing three
+// characters of shape.
+// ============================================================================
+
+// Below this many pixels of editor width the strip costs more column than it
+// pays back. Roughly: 80 columns of Iosevka at 13px plus the gutter is around
+// 600px, so this is "the code no longer fits comfortably beside it".
+const MINIMAP_MIN_WIDTH = 600;
+
+/** The user's explicit choice, or null when they have never made one. */
+function minimapPreference() {
+    const stored = safeRead(STORAGE_KEYS.minimap);
+    return typeof stored === 'boolean' ? stored : null;
+}
+
+/** What the strip should be doing right now, given preference and width. */
+function minimapShouldBeOn() {
+    const pref = minimapPreference();
+    if (pref !== null) return pref;
+    if (!editor) return false;
+    let width = 0;
+    try {
+        width = editor.getLayoutInfo().width;
+    } catch {
+        return false;
+    }
+    // A layout that has not happened yet reports 0. Treat that as "not narrow"
+    // rather than "narrow": the next layout pass re-runs this, and starting
+    // wide-then-narrowing is less jarring than the reverse.
+    return width === 0 || width >= MINIMAP_MIN_WIDTH;
+}
+
+/**
+ * Push the current decision into the editor.
+ *
+ * Everything this touches is wrapped: the failure contract from c2mp
+ * (minimap.js:342) is that a decoration which fails removes itself rather
+ * than degrading the editor. Monaco's minimap is a supported component and is
+ * not expected to throw, but the gate, the toggle, and the theme extension are
+ * ours -- and if any of them throws, the playground must keep working.
+ */
+function applyMinimapPreference() {
+    if (!editor) return;
+    try {
+        editor.updateOptions({ minimap: { enabled: minimapShouldBeOn() } });
+    } catch (err) {
+        console.warn('Try Turmeric: minimap update failed', err);
+    }
+    syncMinimapMenuItem();
+}
+
+/** Reflect the current state in the More menu's toggle row. */
+function syncMinimapMenuItem() {
+    const item = document.querySelector('[data-action="toggle-minimap"]');
+    if (!item) return;
+    let on = false;
+    try {
+        on = !!editor && !!editor.getOption(monaco.editor.EditorOption.minimap).enabled;
+    } catch {
+        on = minimapShouldBeOn();
+    }
+    item.setAttribute('aria-checked', on ? 'true' : 'false');
+    item.textContent = on ? 'Hide minimap' : 'Show minimap';
+}
+
+/** Flip the strip and remember the choice, which from now on beats the gate. */
+function toggleMinimap() {
+    if (!editor) return;
+    let on = false;
+    try {
+        on = !!editor.getOption(monaco.editor.EditorOption.minimap).enabled;
+    } catch {
+        on = minimapShouldBeOn();
+    }
+    safeWrite(STORAGE_KEYS.minimap, !on);
+    applyMinimapPreference();
+}
+
+function initMinimap() {
+    applyMinimapPreference();
+    // Re-evaluate wherever the editor can change width. The split handle calls
+    // applyMinimapPreference() from applySplit(); this covers the window and
+    // anything else that resizes the pane (the docs overlay, the on-screen
+    // keyboard, a rotated phone).
+    if (typeof ResizeObserver !== 'undefined') {
+        const host = document.getElementById('editor');
+        if (host) {
+            try {
+                new ResizeObserver(() => applyMinimapPreference()).observe(host);
+            } catch { /* older engine; the resize listener below still fires */ }
+        }
+    }
+    window.addEventListener('resize', () => applyMinimapPreference());
+
+    // Test surface: a spec should assert what the editor is actually doing,
+    // not re-derive it from localStorage.
+    window._turiMinimap = {
+        enabled: () => {
+            try {
+                return !!editor.getOption(monaco.editor.EditorOption.minimap).enabled;
+            } catch { return false; }
+        },
+        preference: () => minimapPreference(),
+        toggle: () => toggleMinimap(),
+    };
+}
+
+// ============================================================================
 // Draggable Split Handle (editor / console)
 // ============================================================================
 
@@ -2765,7 +3483,14 @@ function applySplit(fraction, vertical) {
     const f = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, fraction));
     container.style.setProperty(vertical ? '--split-v' : '--split-h', String(f));
     if (editor) {
-        requestAnimationFrame(() => { try { editor.layout(); } catch {} });
+        requestAnimationFrame(() => {
+            try { editor.layout(); } catch {}
+            // The split is the one thing that can make the editor narrow on a
+            // desktop, so the width gate is re-evaluated from here as well as
+            // from the ResizeObserver -- layout() is synchronous, the observer
+            // is not, and a gate that lags a drag by a frame reads as a bug.
+            applyMinimapPreference();
+        });
     }
 }
 
