@@ -2505,6 +2505,30 @@ static const char *cmake_target_basename(const char *target) {
     return (sep && sep[1]) ? sep + 1 : target;
 }
 
+/* Resolve a :cmake-deps `:path` to a directory, given the project being built.
+ *
+ * Two forms coexist in one manifest array, which is the whole reason this
+ * helper exists. A dep declared by the project being built carries `:path` as
+ * written -- relative to that manifest. A dep collected **transitively** from a
+ * workspace sibling has already been absolutized against its origin dir by
+ * append_cmake_dep_with_conflict_check, because the sibling's relative path is
+ * meaningless from here.
+ *
+ * Prefixing the absolute form produces `<project_dir>//abs/path`, or
+ * `.//abs/path` when project_dir is "." (the `tur fetch` path). CMake reads
+ * both as relative and `add_subdirectory` fails with "given source ... which is
+ * not an existing directory", so no dependency builds at all. The `:spices`
+ * transitive walk already makes exactly this leading-'/' test; the
+ * `:cmake-deps` side did not. */
+static void cmake_dep_path_dir(const PkgCmakeDep *d, const char *project_dir,
+                               char *out, size_t cap) {
+    const char *p = d->path ? d->path : "";
+    if (p[0] == '/')
+        snprintf(out, cap, "%s", p);
+    else
+        snprintf(out, cap, "%s/%s", project_dir, p);
+}
+
 /* Emit the CMake that computes _spice_<name>_inc / _spice_<name>_bld from a
  * FetchContent-built dependency's SOURCE_DIR / BINARY_DIR. Shared by the
  * plain (fetch-only) deps and the fetch fallback branch of :prefer-system
@@ -2624,6 +2648,30 @@ static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
             fprintf(f,
                 "%s\\\"$<$<NOT:$<STREQUAL:$<TARGET_PROPERTY:%s,TYPE>,"
                 "INTERFACE_LIBRARY>>:$<TARGET_FILE:%s>>\\\"",
+                first ? "" : ", ", t, t);
+            first = false;
+        }
+    }
+    /* A shared target's artifact carries an @rpath/SONAME install name, and
+     * nothing else on the link line supplies a runtime search path -- so the
+     * link succeeds and the program dies at startup with
+     * "Library not loaded: @rpath/libz.1.dylib". Emit an rpath for the
+     * directory the artifact lives in, guarded on TYPE the same way
+     * $<TARGET_FILE:...> is above.
+     *
+     * This is a *build-tree* rpath: it makes the binary runnable where it was
+     * built, which is what `tur run` and the test suites need. It is not
+     * relocatable, so a binary shipped elsewhere still needs its dependency
+     * installed or bundled. Static targets are unaffected (the guard yields
+     * an empty element, which the consumer skips). */
+    if (!d->has_link_libs) {
+        for (int j = 0; j < d->n_targets; j++) {
+            const char *t = use_full_targets
+                                ? d->targets[j]
+                                : cmake_target_basename(d->targets[j]);
+            fprintf(f,
+                "%s\\\"$<$<STREQUAL:$<TARGET_PROPERTY:%s,TYPE>,"
+                "SHARED_LIBRARY>:-Wl,-rpath,$<TARGET_FILE_DIR:%s>>\\\"",
                 first ? "" : ", ", t, t);
             first = false;
         }
@@ -3158,7 +3206,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
         if (d->path) {
             /* Local path dep -- use add_subdirectory with absolute path */
             char abs_path[4096];
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", project_dir, d->path);
+            cmake_dep_path_dir(d, project_dir, abs_path, sizeof(abs_path));
             char build_subdir[4096];
             snprintf(build_subdir, sizeof(build_subdir),
                      "${CMAKE_BINARY_DIR}/_local/%s-build", d->name);
@@ -3232,7 +3280,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
         if (d->path) {
             /* Local path dep: derive paths from the path field */
             char abs_path[4096];
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", project_dir, d->path);
+            cmake_dep_path_dir(d, project_dir, abs_path, sizeof(abs_path));
             fprintf(f, "set(_spice_%s_inc \"%s/include\")\n",
                     d->name, abs_path);
             fprintf(f, "if(NOT EXISTS \"${_spice_%s_inc}\")\n", d->name);
