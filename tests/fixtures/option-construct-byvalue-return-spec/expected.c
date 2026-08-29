@@ -4147,6 +4147,12 @@ static union { void *__a; int64_t __b;
     __tur_fatbox_1 = { .__a = (void *)__tur_fatbox_keep };
 typedef bool (*tur_thunk_bool_int64_t_t)(void *, int64_t);
 typedef bool (*tur_thunk_bool_double_t)(void *, double);
+static void __tur_any_drop(tur_tagged_t __v) {
+    switch (TUR_GETTAG(__v)) {
+        default: return;
+    }
+}
+static void (*__tur_any_drop_keep)(tur_tagged_t) __attribute__((unused)) = __tur_any_drop;
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);

@@ -740,9 +740,11 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
         uint32_t nc = ctx->cap_any_type_names ? ctx->cap_any_type_names * 2 : 8;
         char **nn = (char **)realloc(ctx->any_type_names, nc * sizeof(char *));
         char **ns = (char **)realloc(ctx->any_type_shown, nc * sizeof(char *));
-        if (!nn || !ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+        bool  *nb = (bool  *)realloc(ctx->any_type_boxed, nc * sizeof(bool));
+        if (!nn || !ns || !nb) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->any_type_names = nn;
         ctx->any_type_shown = ns;
+        ctx->any_type_boxed = nb;
         ctx->cap_any_type_names = nc;
     }
     char *kdup = strdup(key);
@@ -750,12 +752,48 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     if (!kdup || !sdup) { fprintf(stderr, "tur: oom\n"); abort(); }
     ctx->any_type_names[ctx->n_any_type_names] = kdup;
     ctx->any_type_shown[ctx->n_any_type_names] = sdup;
+    /* any-struct-box-leak-per-widen: record whether the widen site heap-boxes
+     * this payload.  Decided by the SAME predicate the inject uses
+     * (emit_type_is_byvalue_adt), so "the drop frees it" and "the widen
+     * allocated it" cannot disagree -- a heap-ADT handle rides the value word
+     * and must never be freed here. */
+    ctx->any_type_boxed[ctx->n_any_type_names] = emit_type_is_byvalue_adt(ctx, r);
     ctx->n_any_type_names++;
     return (int64_t)(TUR_ANY_ID_BASE + ctx->n_any_type_names - 1);
 }
 
 void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
     if (!out) return;
+    /* any-struct-box-leak-per-widen: the drop side.  `__tur_any_drop` is the
+     * ONLY place an `any` payload box is released, and it releases one exactly
+     * when the widen allocated one -- the boxed flag interned by
+     * emit_any_type_id, from the same predicate the widen itself uses.  A
+     * primitive payload and a heap-ADT handle ride the tag's value word and own
+     * nothing, so both fall through untouched.
+     *
+     * Emitted BEFORE the nothing-to-name early return below, and
+     * unconditionally: a drop SITE exists whenever a scope owns an `any`, which
+     * does not require any struct/ADT payload to have been interned.  A program
+     * that widens only a primitive (`any-box-cstr` widens a cstr) interns no ids
+     * at all, took that early return, and emitted a call to a function that was
+     * never defined -- an undefined-reference link failure.  With no boxed ids
+     * the switch degenerates to `default: return;`, which is exactly right. */
+    buf_puts(out, "static void __tur_any_drop(tur_tagged_t __v) {\n");
+    buf_puts(out, "    switch (TUR_GETTAG(__v)) {\n");
+    if (ctx) {
+        bool any_boxed = false;
+        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+            if (!ctx->any_type_boxed[i]) continue;
+            any_boxed = true;
+            buf_printf(out, "        case %d:\n", (int)(TUR_ANY_ID_BASE + i));
+        }
+        if (any_boxed)
+            buf_puts(out, "            free((void *)(intptr_t)TUR_UNTAG(__v));\n"
+                          "            return;\n");
+    }
+    buf_puts(out, "        default: return;\n    }\n}\n");
+    buf_puts(out, "static void (*__tur_any_drop_keep)(tur_tagged_t) "
+                  "__attribute__((unused)) = __tur_any_drop;\n");
     if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to name */
     buf_puts(out, "static const char *__tur_any_name_ext(int64_t tag) {\n");
     if (ctx && ctx->n_any_type_names) {
@@ -768,6 +806,7 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
         buf_puts(out, "    }\n");
     }
     buf_puts(out, "    (void)tag;\n    return \"unknown\";\n}\n");
+
     /* Installed from __tur_static_init (the KEYS band runs before any user
      * code), so the preamble's __tur_any_type_name can reach it. */
     buf_puts(out, "static void __tur_any_names_init(void) {\n");
@@ -14255,6 +14294,7 @@ int emit_program(Buf *out, const Expr *program) {
     }
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
+    free(ctx.any_type_boxed);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
@@ -15671,6 +15711,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     }
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
+    free(ctx.any_type_boxed);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);

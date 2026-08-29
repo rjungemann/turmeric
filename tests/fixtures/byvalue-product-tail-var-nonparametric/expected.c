@@ -4110,6 +4110,12 @@ static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1
 }
 typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+static void __tur_any_drop(tur_tagged_t __v) {
+    switch (TUR_GETTAG(__v)) {
+        default: return;
+    }
+}
+static void (*__tur_any_drop_keep)(tur_tagged_t) __attribute__((unused)) = __tur_any_drop;
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);

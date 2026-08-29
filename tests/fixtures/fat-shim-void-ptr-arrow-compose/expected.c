@@ -4092,6 +4092,12 @@ typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 typedef double (*tur_thunk_double_double_t)(void *, double);
 typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef void * (*tur_thunk_void___void___t)(void *, void *);
+static void __tur_any_drop(tur_tagged_t __v) {
+    switch (TUR_GETTAG(__v)) {
+        default: return;
+    }
+}
+static void (*__tur_any_drop_keep)(tur_tagged_t) __attribute__((unused)) = __tur_any_drop;
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);

@@ -4,27 +4,58 @@
 documented as accepted in the union/intersection guide. Found in the
 2026-08-20 docs audit.
 
-**Narrowed 2026-08-29, and this is the reported repro.** A widen in CALL
-ARGUMENT position no longer allocates when the callee provably neither retains
-the `any` nor suspends: the payload copy goes in the caller's frame, so there
-is no allocation to own. The repro below -- a loop passing a by-value struct to
-an `[x : any]` parameter -- is leak-clean under LeakSanitizer now, pinned by
-`tests/fixtures/any-widen-frame-box` (`requires.leak-check`, 2000 turns x 3
-widens). What remains is every widen that is *not* such an argument:
+**Narrowed 2026-08-29 in two passes.** The reported repro is fixed and the
+residue now has a working user-level answer, so what is left is one specific
+gap rather than "widening leaks".
 
-| Shape | Still heap-boxed? | Why |
+**Pass 1 -- the widen does not allocate in argument position.** When the callee
+provably neither retains the `any` nor suspends, the payload copy goes in the
+caller's frame, so there is nothing to own. The repro below -- a loop passing a
+by-value struct to an `[x : any]` parameter -- is leak-clean under
+LeakSanitizer, pinned by `tests/fixtures/any-widen-frame-box`
+(`requires.leak-check`, 2000 turns x 3 widens).
+
+**Pass 2 -- an owned `any` local is dropped at scope exit.** Pass 1 cannot help
+where the `any` outlives the expression that built it: a value RETURNED as
+`any`, or handed back by a callee that boxed it, since a caller-frame copy
+would dangle. Those land in a local, and a local is where ownership can be
+settled -- if the name does not escape, the body is its last use and the box
+dies with the scope. Pinned by `tests/fixtures/any-widen-local-drop`
+(`requires.leak-check`).
+
+Together those mean **binding an `any` to a local is now a real fix**, not just
+a style preference: a leaking temporary stops leaking when it is given a name
+in a scope that owns it.
+
+| Shape | Leaks? | Why |
 |---|---|---|
-| argument to a non-retaining, effect-free direct call | no | the fix |
-| return position (`: any` result) | yes | necessarily -- a caller-frame temp would dangle the moment the frame returns |
-| callee whose result type can carry the payload out | yes | it may keep it |
-| callee with an inline-C body | yes | C can stash the pointer where no AST walk sees it |
-| callee that can perform an effect | yes | it may suspend, and resumption must not reach into a frame the trampoline has left. Exercised end-to-end since [perform-in-fn-with-any-param-has-no-cps-lowering](../archive/perform-in-fn-with-any-param-has-no-cps-lowering.md) landed -- the shape compiles now, and `any-widen-retaining-callee` asserts the box stays |
-| indirect call | yes | no body to inspect |
+| widen as an argument to a non-retaining, effect-free direct call | no | pass 1 -- never allocated |
+| `any` bound to a non-escaping local | no | pass 2 -- dropped at scope exit |
+| `any` **temporary** never bound to a local -- `(reads (ret-any i))` | **yes** | no owner and no drop point; see below |
+| `any` local in a scope with an early exit (a tail-recursive loop body, a `return`) | **yes** | the scope-exit collection declines when an early exit could skip the free -- conservative, and a leak rather than a UAF |
+| callee that retains, has an inline-C body, may suspend, or is called indirectly | n/a | those keep the heap box by design; `tests/fixtures/any-widen-retaining-callee` pins them, including the effectful case, which became testable when [perform-in-fn-with-any-param-has-no-cps-lowering](../archive/perform-in-fn-with-any-param-has-no-cps-lowering.md) landed |
 
-`tests/fixtures/any-widen-retaining-callee` pins the declining shapes -- those
-still leak, which is why it carries no leak-check marker. Getting the condition
-wrong turns a leak into a dangling pointer, so the shapes that must decline are
-worth as much coverage as the one that must accept.
+Getting either condition wrong turns a leak into a dangling pointer, so the
+shapes that must decline are worth as much coverage as the ones that must
+accept -- which is what `any-widen-retaining-callee` is for.
+
+## What is actually left
+
+One thing: **an `any` temporary that never becomes a local.** `(reads (ret-any i))`
+in a loop still leaks a box per turn; `(let [a (ret-any i)] (reads a))` in its
+own function does not.
+
+Closing it needs a drop emitted immediately after the consuming call, and that
+is where it stops being a patch. The two existing mechanisms both hang off a
+place where ownership is already expressed -- an argument position, a let
+binding. A temporary has neither: `emit_value` hands back a string expression
+that may sit anywhere inside a larger one, so there is no statement boundary to
+put a drop after, and the boundary that *does* exist (the panic-check
+A-normalization) only appears for panic-capable calls. Hoisting the temporary
+into a let instead runs into the second row of the table above.
+
+So the remaining work is a real drop-obligation pass over `any` values, not
+another special case. Until then the workaround is exact and cheap: bind it.
 
 ## Repro
 

@@ -334,6 +334,12 @@ typedef struct EmitCtx {
      * "struct". */
     char    **any_type_names;   /* identity key: type_name(), per monomorph */
     char    **any_type_shown;   /* what type-of reports for that id */
+    /* any-struct-box-leak-per-widen: is the payload behind this id HEAP-BOXED
+     * at the widen site (a by-value aggregate) rather than carried in the tag's
+     * value word?  Only a boxed one has anything to free, and the tag is the
+     * only thing a drop site knows -- an `any` local is typed `any`, not by its
+     * payload.  Interned alongside the id so the two cannot drift. */
+    bool     *any_type_boxed;
     uint32_t  n_any_type_names;
     uint32_t  cap_any_type_names;
     /* poly-to-fat-typed-shim-plan: per-signature typed poly-to-fat shim tracking.
@@ -969,6 +975,10 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
  * for a primitive, an interned per-monomorph id for a struct/ADT. */
 int64_t emit_any_type_id(EmitCtx *ctx, Type t);
+/* any-struct-box-leak-per-widen: the predicate the `any` widen uses to decide
+ * whether a payload is heap-boxed.  Exported so emit_any_type_id can intern the
+ * same answer for the drop side -- one predicate, not two that can drift. */
+bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t);
 /* Emit the per-program name table `__tur_any_name_ext` for the ids allocated
  * above.  Always emitted (a stub when none were), since the preamble
  * forward-declares it. */

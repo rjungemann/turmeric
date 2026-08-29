@@ -917,7 +917,7 @@ static bool call_spec_result_byvalue_app(EmitCtx *ctx, const Expr *e, Type *out)
  * and unboxed (deref) on the way out -- the byval<->carrier field crossing.  ADT
  * fields are always stored as int64 in the tagged-union typedef, so a by-value
  * child is never stored inline; the box/unbox bridge is mandatory at the seam. */
-static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
+bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     Type r = emit_resolve_type(ctx, t);
     if (r.kind == TY_ADT && r.as.adt_.def)
         /* seam 3: a :heap ADT is a typed POINTER, not a by-value aggregate, so it
@@ -2301,6 +2301,50 @@ static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* any-struct-box-leak-per-widen (the residue): decide whether let-binding `idx`
+ * holds an `any` whose payload box this scope owns and may drop at scope exit.
+ *
+ * The frame-box rule upstream removes the allocation for a widen in ARGUMENT
+ * position.  It cannot help where the `any` outlives the expression that built
+ * it -- a value RETURNED as `any`, or one handed back by a callee that boxed it
+ * -- because a caller-frame copy would dangle.  Those land in a local, and a
+ * local is where ownership can be settled: if the name does not escape, the
+ * body is its last use and the box dies with the scope.
+ *
+ * Sound iff both:
+ *   - the initializer PRODUCES the value here (a call result, or a widen this
+ *     scope performed) rather than aliasing someone else's -- a bare variable
+ *     is deliberately excluded, exactly as catch_thunk_owns_fat_box excludes
+ *     one, since `(let [b a] ...)` must not free the box `a` still holds; and
+ *   - the bound name does not escape the scope, by the same walk (and the same
+ *     reader-confinement relaxation) the caught-box free uses.
+ *
+ * `__tur_any_drop` then frees only a payload the widen actually boxed, so a
+ * primitive or heap-ADT payload is untouched.  Like its siblings this only ever
+ * GREENLIGHTS a free: a false negative keeps the status-quo leak. */
+static bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
+    const Expr *init = e->as.let_.bindings[idx].init;
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    if (!init || !b) return false;
+    if (emit_resolve_type(ctx, b->type).kind != TY_ANY) return false;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init) return false;
+    /* Owned-here shapes only.  A frame-boxed widen is a STACK address -- freeing
+     * it would be far worse than the leak this closes. */
+    bool owned_here =
+        (init->kind == EX_UNION_INJECT && !init->as.union_inject_.frame_box)
+        || (init->kind == EX_CALL);
+    if (!owned_here) return false;
+    if (catch_box_binding_escapes(e->as.let_.body, b) &&
+        !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
+        return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (catch_box_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+    }
+    return true;
+}
+
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -2332,6 +2376,9 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* catch-unwind-thunk-closure-leak (Part 2): C names of let-bound,
      * non-escaping caught Result boxes to tur_result_box_free at scope exit. */
     char **box_free_names = NULL;
+    /* any-struct-box-leak-per-widen: `any` locals whose payload box dies here. */
+    char **any_free_names = NULL;
+    uint32_t n_any_free = 0;
     uint32_t n_box_free = 0;
     /* local-struct-drop (fn-field): C names + struct C types of let-bound owning
      * by-value struct locals the elaborator flagged `drops_fn_fields` -- their
@@ -2351,6 +2398,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 box_free_names = (char **)realloc(box_free_names,
                                                   (n_box_free + 1) * sizeof(char *));
                 box_free_names[n_box_free++] =
+                    name_for_binding(ctx, e->as.let_.bindings[i].binding);
+            } else if (let_binding_any_freeable(ctx, e, i)) {
+                any_free_names = (char **)realloc(any_free_names,
+                                                  (n_any_free + 1) * sizeof(char *));
+                any_free_names[n_any_free++] =
                     name_for_binding(ctx, e->as.let_.bindings[i].binding);
             } else {
                 const Binding *sb = e->as.let_.bindings[i].binding;
@@ -2722,6 +2774,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(box_free_names[i]);
     }
     free(box_free_names);
+
+    /* any-struct-box-leak-per-widen: release the payload box of each
+     * non-escaping `any` local now that the body -- its last use -- is emitted. */
+    for (uint32_t i = 0; i < n_any_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tur_any_drop(%s);\n", any_free_names[i]);
+        free(any_free_names[i]);
+    }
+    free(any_free_names);
 
     /* local-struct-drop (fn-field): free the boxed fn-field handles of flagged
      * non-escaping by-value struct locals now that the body (their last use) has

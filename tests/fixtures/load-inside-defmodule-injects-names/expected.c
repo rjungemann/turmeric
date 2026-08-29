@@ -4094,6 +4094,12 @@ typedef double (*tur_thunk_double_double_t)(void *, double);
 static double __tur_fatshim_double_double(void *__e, double a0) {
     return ((double (*)(double))(intptr_t)((int64_t *)__e)[1])(a0);
 }
+static void __tur_any_drop(tur_tagged_t __v) {
+    switch (TUR_GETTAG(__v)) {
+        default: return;
+    }
+}
+static void (*__tur_any_drop_keep)(tur_tagged_t) __attribute__((unused)) = __tur_any_drop;
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
