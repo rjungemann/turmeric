@@ -1,0 +1,38 @@
+;; any-widen-retaining-callee -- the negative half of any-widen-frame-box.
+;;
+;; Putting the widened payload in the caller's frame is only safe when the
+;; callee provably cannot keep it past the call.  Each condition below, on its
+;; own, must send the widen back to the heap box: getting this wrong turns a
+;; leak (harmless) into a dangling pointer (not), so the three shapes that must
+;; DECLINE are worth pinning as tightly as the shape that must accept.
+;;
+;; These still leak one box per widen -- that is the status quo the open report
+;; docs/reported/any-struct-box-leak-per-widen.md continues to cover, which is
+;; why this fixture carries no requires.leak-check marker.  It asserts only that
+;; the values are right, i.e. that nothing was freed or framed out from under a
+;; callee that keeps it.
+
+(defstruct Pt [x : int y : int])
+
+;; DECLINES: the result type is `any`, so the payload can leave through it.
+(defn keep-it [v : any] : any v)
+
+;; DECLINES: an inline-C body can stash the pointer where no AST walk sees it.
+(defn c-body [v : any] : int
+  ```c
+  (void)v; return 7; ```)
+
+;; ACCEPTS: reads only, int result.  Present so the fixture would notice if the
+;; whole optimization silently stopped firing rather than just declining here.
+(defn reads [v : any] : int
+  (if (is? v Pt) 1 0))
+
+(defn main [] : int
+  (println (reads (make-struct Pt 1 2)))                  ;; 1
+  ;; The retained value must survive the call that returned it.
+  (let [kept (keep-it (make-struct Pt 3 4))]
+    (println (if (is? kept Pt) 1 0))                      ;; 1
+    (let [p (cast kept Pt)]
+      (println (+ (.x p) (.y p)))))                       ;; 7
+  (println (c-body (make-struct Pt 7 8)))                 ;; 7
+  0)

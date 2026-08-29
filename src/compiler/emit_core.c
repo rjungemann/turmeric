@@ -835,6 +835,22 @@ bool expr_subtree_has_inline_c(const Expr *e) {
             return false;
         case EX_ASCRIBE: return expr_subtree_has_inline_c(e->as.ascribe_.inner);
         case EX_CAST:    return expr_subtree_has_inline_c(e->as.cast_.expr);
+        /* any-struct-box-leak-per-widen: the `any` readers carry no inline-C of
+         * their own -- each lowers to emitter-generated tag arithmetic or a
+         * deref -- so only their operand needs walking.  Left to the
+         * conservative `default` they reported "may hide inline-C" for every
+         * body that so much as looks at an `any`, which silently switched off
+         * the whole nonretain inference below (this one and the catch-box
+         * confinement that has always shared it) for those bodies. */
+        case EX_ANY_TYPE_OF: return expr_subtree_has_inline_c(e->as.any_type_of_.value);
+        case EX_ANY_IS:      return expr_subtree_has_inline_c(e->as.any_is_.value);
+        case EX_ANY_CAST:    return expr_subtree_has_inline_c(e->as.any_cast_.value);
+        /* A field READ is likewise inline-C-free in itself (a field WRITE is a
+         * different node and keeps the conservative default), and it is common
+         * enough that leaving it unmodelled switched the inference off for most
+         * bodies that touch a struct at all.  The `default` below stays
+         * conservative for everything still unlisted. */
+        case EX_GET_FIELD:   return expr_subtree_has_inline_c(e->as.get_field_.struct_expr);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
@@ -1348,6 +1364,25 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             return e->as.var.binding != b || confined;
         case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
         case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
+        /* any-struct-box-leak-per-widen: the three `any` readers.  Each consumes
+         * the tagged value and yields something that cannot alias the payload
+         * box, so `b` appearing directly underneath one is a READ, not
+         * retention -- which is why the operand is checked confined regardless
+         * of this expression's own position:
+         *   type-of -- reads the tag; the cstr it returns is a static name from
+         *              __tur_any_type_name, never a pointer into the payload.
+         *   is?     -- reads the tag; returns bool.
+         *   cast    -- unboxes.  For the boxed by-value payload this rule exists
+         *              for, that is a DEREF: the result is a copy, so it does
+         *              not alias the box.  A carrier payload was never boxed, so
+         *              there is nothing this decision could free out from under
+         *              it either way. */
+        case EX_ANY_TYPE_OF:
+            return box_uses_confined(e->as.any_type_of_.value, b, /*confined=*/true);
+        case EX_ANY_IS:
+            return box_uses_confined(e->as.any_is_.value, b, /*confined=*/true);
+        case EX_ANY_CAST:
+            return box_uses_confined(e->as.any_cast_.value, b, /*confined=*/true);
         case EX_IF:
             return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
                    box_uses_confined(e->as.if_.then_, b, confined) &&

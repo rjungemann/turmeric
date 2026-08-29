@@ -46,7 +46,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen |
+| [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen. **Narrowed 2026-08-29:** the reported repro (call-argument position, non-retaining effect-free callee) now keeps the payload in the caller's frame and allocates nothing; return position, retaining/inline-C/indirect callees still box |
 | [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
 | [guestbook-example-has-no-import-graph](guestbook-example-has-no-import-graph.md) | medium | the guestbook's 7 files are one problem: nothing loads them (its CMake `DEPENDS` is not an import), plus stale `extern-c`/`unit`/`Serializable` syntax, plus a dependency on the unimplemented serializable-continuation surface |
 | [perform-inside-loop-has-no-lowering](perform-inside-loop-has-no-lowering.md) | medium | a `perform` reachable from a `while` body has no CPS lowering -- and the diagnostic prescribes a hoist that does not escape it. Blocks every event-loop-shaped effect, `examples/snake` included |
@@ -59,6 +59,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
+| [perform-in-fn-with-any-param-has-no-cps-lowering](perform-in-fn-with-any-param-has-no-cps-lowering.md) | low | a function with an `any` parameter leaves the CPS backend's supported subset, so `perform` in it has no lowering -- and the diagnostic prescribes hoisting into a helper when the function already *is* one |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
 
 `spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 in

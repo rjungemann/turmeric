@@ -1501,6 +1501,13 @@ struct Expr {
         struct {
             int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
             struct Expr *value;   /* the value being injected */
+            /* any-struct-box-leak-per-widen: this widen is a call ARGUMENT whose
+             * callee provably neither retains the `any` nor suspends, so the
+             * by-value payload can live in a caller-frame temporary instead of a
+             * malloc'd box nothing ever frees.  Set by elab at the call site
+             * (which is the only place that knows the callee); the emitter
+             * consults it only on the by-value-ADT branch, the one that boxes. */
+            bool        frame_box;
         } union_inject_;
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */

@@ -4588,10 +4588,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * name; EX_ANY_CAST unboxes via the same predicate on the target. */
                 const char *cn = emit_type_c_name(ctx,
                     emit_resolve_type(ctx, e->as.union_inject_.value->type));
-                buf_printf(&out,
-                    "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
-                    "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
-                    cn, cn, cn, inner, (long long)tag);
+                if (e->as.union_inject_.frame_box) {
+                    /* any-struct-box-leak-per-widen: elab proved this widen is a
+                     * call argument the callee neither retains nor outlives (it
+                     * cannot suspend), so the payload copy goes in THIS frame.
+                     * No malloc, hence nothing to own -- which is the whole
+                     * defect: the heap form below has no drop point anywhere,
+                     * so a loop over it grows RSS without bound.
+                     *
+                     * A plain block-scope local, not a compound literal inside
+                     * the statement-expression: a compound literal there dies
+                     * with the statement-expression, and the pointer would be
+                     * dangling before the call it was built for. */
+                    char *slot = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = (%s);\n", cn, slot, inner);
+                    buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)&%s)",
+                               (long long)tag, slot);
+                    free(slot);
+                } else {
+                    buf_printf(&out,
+                        "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
+                        "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
+                        cn, cn, cn, inner, (long long)tag);
+                }
             } else {
                 buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                            (long long)tag, inner);

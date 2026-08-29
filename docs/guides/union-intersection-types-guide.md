@@ -318,11 +318,23 @@ By-value structs are heap-boxed on widening (a `malloc`'d copy) and unboxed by
 dereference on `cast`; ADTs and `cstr` are pointer-carried and ride the carrier
 directly; floats are stored by their bit pattern so no precision is lost.
 
-> **Note:** the struct heap-box is owned by the `any` value's (untracked)
-> lifetime, so the `malloc`'d copy is not freed -- widening a struct to `any`
-> leaks one allocation per widen. This is acceptable for the gradual-typing
-> use cases `any` targets; if you need a struct in `any` on a hot path, prefer
-> a pointer/ADT payload, which is carrier-resident and allocation-free.
+> **Note:** widening a struct **as a call argument** does not allocate at all.
+> When the callee's `any` parameter is inferred not to retain the payload and
+> the callee cannot suspend (empty effect row), the copy lives in the *caller's*
+> frame, so there is nothing to own and nothing to leak. This covers the common
+> shape -- passing a struct to an `[x : any]` parameter, including in a loop.
+>
+> Every other widen still heap-boxes, and that box is owned by the `any` value's
+> (untracked) lifetime, so it is not freed -- one leaked allocation per widen.
+> That is the case when the value is **returned** as `any` (a caller-frame copy
+> would dangle), when the callee's result type could carry the payload back out,
+> when the callee's body is inline-C, or when the call is indirect. It stays
+> acceptable for the gradual-typing use cases `any` targets; if you need a
+> struct in `any` on a hot path outside argument position, prefer a pointer/ADT
+> payload, which is carrier-resident and allocation-free.
+>
+> Tracked in `docs/reported/any-struct-box-leak-per-widen.md`; the argument case
+> is pinned leak-clean by `tests/fixtures/any-widen-frame-box`.
 
 ---
 

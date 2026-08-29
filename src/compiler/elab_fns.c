@@ -8371,8 +8371,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                _pb->type.kind == TY_FN;
             if (_is_fnparam && !closure_binding_escapes(body, _pb))
                 b->nonretain_param_mask |= (1u << _pi);
+            /* any-struct-box-leak-per-widen: an `any` parameter joins the same
+             * inference, and means the same thing -- "this body does not retain
+             * a pointer this parameter carries".  A tur_tagged_t whose payload
+             * is a heap-boxed by-value struct carries exactly such a pointer, so
+             * the caller may keep that payload in its own frame rather than
+             * mallocing a box nothing frees.  Reusing this mask rather than
+             * adding a parallel one keeps a single answer to a single question. */
             bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
-                                  _pb->type.kind == TY_PTR_VOID;
+                                  _pb->type.kind == TY_PTR_VOID ||
+                                  _pb->type.kind == TY_ANY;
             if (_is_ptr_scalar) {
                 TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
                                                        : TY_UNKNOWN;

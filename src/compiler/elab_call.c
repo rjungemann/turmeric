@@ -5397,6 +5397,39 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         if (!arg_ok && expected_arg_kind == TY_ANY) {
             arg_ok = true;
             args[i] = elab_coerce_to_any(e, args[i]);
+            /* any-struct-box-leak-per-widen: a by-value payload widened here is
+             * heap-copied by the emitter, and nothing owns that copy -- one
+             * malloc leaked per widen, which a loop turns into linear growth.
+             * When the callee provably cannot keep the payload past this call,
+             * the copy belongs in the CALLER's frame instead, and then there is
+             * no allocation to own.  Three conditions, each of which only ever
+             * declines:
+             *
+             *   direct callee   -- given: elab_call_fn_inner is the
+             *                      statically-known-callee path, so an indirect
+             *                      call (no body to inspect) never arrives here;
+             *   non-retaining   -- the inferred mask (elab_fns.c) says the body
+             *                      does not keep a pointer this parameter
+             *                      carries, and its result cannot carry one out.
+             *                      Cleared for any body containing inline-C,
+             *                      which could stash the pointer where no AST
+             *                      walk can see it;
+             *   effect-free     -- a callee that can PERFORM may suspend, and
+             *                      its resumption must not reach back into a
+             *                      caller frame that the trampoline has left.
+             *                      A declared row variable reads as non-empty
+             *                      and is refused, so this is conservative.
+             *
+             * Same soundness posture as the closure-env and catch-box frees this
+             * inference already serves: it only ever greenlights, and every
+             * unmodelled shape keeps the status-quo allocation. */
+            if (args[i] && args[i]->kind == EX_UNION_INJECT &&
+                fn_binding && i < 32 &&
+                (fn_binding->nonretain_ptr_param_mask & (1u << i)) &&
+                fn_binding->type.kind == TY_FN &&
+                effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
+                args[i]->as.union_inject_.frame_box = true;
+            }
         }
 
         /* LT2: When both expected and actual argument types are function types,
