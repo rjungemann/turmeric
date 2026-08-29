@@ -57,13 +57,28 @@ extern char    **g_hoisted_includes;
 extern uint32_t  g_n_hoisted_includes;
 extern uint32_t  g_cap_hoisted_includes;
 
+/* Marker appended to a hoisted `#include` whose author wrote a
+ * `tur:optional` comment on the line -- a header that is EXPECTED to be
+ * absent on some target (a per-platform alternative such as <direct.h> on
+ * POSIX).  Such an include skips silently; every other missing angle header
+ * announces itself.  See tur_emit_hoisted_include. */
+#define TUR_HOIST_OPTIONAL_TAG " /* tur:optional */"
+
 /* Append `n` bytes of `line` (the full `#include ...` directive without a
  * trailing newline) to the deduped global set. */
 void   tur_hoist_include_add(const char *line, size_t n);
 
+/* As tur_hoist_include_add, but records whether the author marked the include
+ * `tur:optional`.  Dedup is by the directive itself, and an optional marking
+ * from any site wins (one deliberate per-platform use makes the header
+ * optional everywhere in the TU). */
+void   tur_hoist_include_add_ex(const char *line, size_t n, bool optional);
+
 /* Emit one hoisted `#include` line; angle (system) headers are wrapped in
  * `#if __has_include(...)` so a platform-missing header is skipped rather than
- * hard-failing the build.  Quoted (project) headers are emitted bare. */
+ * hard-failing the build.  An unmarked header that is missing emits a
+ * `#pragma message` naming it, so the skip is never silent.  Quoted (project)
+ * headers are emitted bare. */
 void   tur_emit_hoisted_include(Buf *out, const char *line);
 
 /* Scan `body` (length `len`) for leading blank/comment/`#include` lines,

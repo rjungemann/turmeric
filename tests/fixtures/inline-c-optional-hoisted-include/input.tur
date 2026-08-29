@@ -1,0 +1,36 @@
+;; inline-c-optional-hoisted-include -- a hoisted angle include marked
+;; `tur:optional` is skipped silently when absent, and the program still
+;; builds and runs.
+;;
+;; Leading `#include <...>` lines in an inline-C block are hoisted to file
+;; scope, where they have no `#ifdef` around them, so they are wrapped in
+;; `#if __has_include(...)` to stay portable.  stdlib depends on that skip
+;; deliberately: fs/mkdir writes `#include <direct.h>` bare at the top of the
+;; body -- outside the `#ifdef _WIN32` that uses it -- precisely so the hoister
+;; lifts it and the wrap drops it on POSIX.  This fixture is that shape.
+;;
+;; The skip used to be silent for EVERY header, which made "your -I is wrong"
+;; indistinguishable from "this header is deliberately absent here": a header
+;; the author actually needed produced no mention of the header at all, just
+;; implicit declarations or a link error thousands of lines away.  An unmarked
+;; missing header now names itself in the `#else` (snapshot-covered by
+;; tests/fixtures/inline-c-result-builder/expected.c); a marked one stays
+;; silent, which is what this fixture pins.
+;;
+;; Regression for docs/archive/hoisted-includes-wrapped-in-has-include.md
+(defmodule probe/optinc
+  (export probe)
+
+  (defn probe [] : int
+    ```c
+    #include <tur_deliberately_absent_fixture_header.h>  /* tur:optional -- never present; the #ifdef below takes the fallback */
+    #ifdef TUR_FIXTURE_ABSENT_HEADER_PRESENT
+    return tur_absent_fixture_header_value();
+    #else
+    return 7;
+    #endif
+    ```))
+
+(defn main [] : int
+  (println (probe))
+  0)

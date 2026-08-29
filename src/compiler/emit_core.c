@@ -3271,52 +3271,115 @@ extern char    **g_hoisted_includes;
 extern uint32_t  g_n_hoisted_includes;
 extern uint32_t  g_cap_hoisted_includes;
 
+/* Does the stored hoisted-include entry carry the `tur:optional` marking? */
+static bool hoisted_entry_is_optional(const char *e) {
+    size_t el = strlen(e), tl = sizeof(TUR_HOIST_OPTIONAL_TAG) - 1;
+    return el >= tl && memcmp(e + el - tl, TUR_HOIST_OPTIONAL_TAG, tl) == 0;
+}
+
+/* Length of the directive itself, with any `tur:optional` marking removed.
+ * This is the dedup key, so a header written bare at one site and marked at
+ * another is one entry, not two. */
+static size_t hoisted_entry_key_len(const char *e) {
+    size_t el = strlen(e);
+    return hoisted_entry_is_optional(e) ? el - (sizeof(TUR_HOIST_OPTIONAL_TAG) - 1)
+                                        : el;
+}
+
 /* Emit one hoisted `#include` line, making system (angle-bracket) headers
- * fail-soft across platforms.
+ * fail-soft across platforms -- but never silently.
  *
- * A hoisted `#include <X>` loses its surrounding `#ifdef` (the hoister only
- * consumes bare leading directives, see tur_hoist_top_includes_scan), so a
- * header that exists on one platform but not another -- <sys/wait.h> and
- * <fnmatch.h> on Windows are the ones that bite -- would hard-fail the build on
- * the platform that lacks it. Wrapping angle includes in __has_include skips a
- * missing system header instead. This keeps the emitted C portable, which is
- * the WIN1 contract.
+ * A hoisted `#include <X>` sits at file scope with no `#ifdef` around it, so a
+ * header that exists on one platform but not another would hard-fail the build
+ * on the platform that lacks it. Wrapping angle includes in __has_include skips
+ * a missing system header instead. This keeps the emitted C portable, which is
+ * the WIN1 contract, and stdlib depends on it deliberately: fs/mkdir, term and
+ * image each write a per-platform header (<direct.h>, <io.h>, <windows.h>,
+ * <mach-o/dyld.h>) as a bare LEADING include precisely so the hoister lifts it
+ * and this wrap drops it on the platforms that lack it.
+ *
+ * hoisted-includes-wrapped-in-has-include: the skip used to be silent, which
+ * made "your -I is wrong" indistinguishable from "this header is deliberately
+ * absent here". A missing header the author actually needed produced no
+ * mention of the header at all -- just implicit declarations, or a link error,
+ * thousands of lines away (spices/raygui pointed -I at the repo root instead of
+ * src/ and read as a pile of FFI binding bugs). So an unmarked angle header
+ * that is not found now announces itself by name in the `#else`. It stays a
+ * `#pragma message` rather than an `#error`: the tolerant path is load-bearing
+ * (12 of the 18 hoisted headers in-tree are platform-conditional), and the
+ * emitted C is compiled with -Wall and never -Werror, so this can name the
+ * problem without ever being the thing that breaks a build.
+ *
+ * A deliberate per-platform alternative opts out with a `tur:optional` comment
+ * on the include line, which is what the stdlib sites above carry.
  *
  * Quoted `#include "X"` is left bare: those are project/vendored headers where
  * "missing" is a genuine error and should stay a loud "no such file", not a
  * silent skip. __has_include is defined by every toolchain that compiles this
- * code (GCC 5+, Clang, MSVC 2017+, Emscripten). */
+ * code (GCC 5+, Clang, MSVC 2017+, Emscripten); so is `#pragma message`. */
 void tur_emit_hoisted_include(Buf *out, const char *line) {
+    bool optional = hoisted_entry_is_optional(line);
+    size_t key = hoisted_entry_key_len(line);
     const char *p = line;
     while (*p == ' ' || *p == '\t') p++;
-    /* An angle include has '<' after "#include"; a quoted one has '"'. */
-    const char *lt = strchr(p, '<');
-    const char *qt = strchr(p, '"');
+    /* An angle include has '<' after "#include"; a quoted one has '"'.  Only
+     * look inside the directive itself, never into the `tur:optional` marking. */
+    const char *end = line + key;
+    const char *lt = (const char *)memchr(p, '<', (size_t)(end - p));
+    const char *qt = (const char *)memchr(p, '"', (size_t)(end - p));
     int is_angle = (lt != NULL && (qt == NULL || lt < qt));
     if (is_angle) {
-        const char *gt = strchr(lt, '>');
+        const char *gt = (const char *)memchr(lt, '>', (size_t)(end - lt));
         if (gt) {
             buf_puts(out, "#if __has_include(");
             /* the exact <...> spec */
             for (const char *c = lt; c <= gt; c++) buf_putc(out, *c);
             buf_puts(out, ")\n");
-            buf_puts(out, line);
-            buf_puts(out, "\n#endif\n");
+            for (const char *c = line; c < end; c++) buf_putc(out, *c);
+            buf_puts(out, "\n#else\n");
+            if (optional) {
+                buf_puts(out, "/* tur: optional per-platform header; skipped when absent */\n");
+            } else {
+                buf_puts(out, "#pragma message(\"tur: inline-C requested ");
+                for (const char *c = lt; c <= gt; c++) buf_putc(out, *c);
+                buf_puts(out, ", not found on the include path -- code needing it "
+                              "will fail to compile or link; add -I, or mark the "
+                              "include tur:optional if it is a deliberate "
+                              "per-platform alternative\")\n");
+            }
+            buf_puts(out, "#endif\n");
             return;
         }
     }
-    buf_puts(out, line);
+    for (const char *c = line; c < end; c++) buf_putc(out, *c);
     buf_puts(out, "\n");
 }
 
 void tur_hoist_include_add(const char *line, size_t n) {
+    tur_hoist_include_add_ex(line, n, false);
+}
+
+void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
     /* Trim trailing whitespace/CR. */
     while (n > 0 && (line[n-1] == ' ' || line[n-1] == '\t' || line[n-1] == '\r'))
         n--;
     if (n == 0) return;
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
-        const char *e = g_hoisted_includes[i];
-        if (strlen(e) == n && memcmp(e, line, n) == 0) return; /* dup */
+        char *e = g_hoisted_includes[i];
+        if (hoisted_entry_key_len(e) != n || memcmp(e, line, n) != 0) continue;
+        /* Same directive.  If this site marks it optional and the stored entry
+         * is bare, upgrade the entry: one deliberate per-platform use is enough
+         * to make the header's absence expected for the whole TU. */
+        if (optional && !hoisted_entry_is_optional(e)) {
+            size_t tl = sizeof(TUR_HOIST_OPTIONAL_TAG) - 1;
+            char *up = (char *)malloc(n + tl + 1);
+            if (!up) { fprintf(stderr, "tur: oom\n"); abort(); }
+            memcpy(up, line, n);
+            memcpy(up + n, TUR_HOIST_OPTIONAL_TAG, tl + 1);
+            free(e);
+            g_hoisted_includes[i] = up;
+        }
+        return; /* dup */
     }
     if (g_n_hoisted_includes == g_cap_hoisted_includes) {
         uint32_t cap = g_cap_hoisted_includes ? g_cap_hoisted_includes * 2 : 8;
@@ -3325,11 +3388,28 @@ void tur_hoist_include_add(const char *line, size_t n) {
         g_hoisted_includes = nh;
         g_cap_hoisted_includes = cap;
     }
-    char *copy = (char *)malloc(n + 1);
+    size_t tl = optional ? sizeof(TUR_HOIST_OPTIONAL_TAG) - 1 : 0;
+    char *copy = (char *)malloc(n + tl + 1);
     if (!copy) { fprintf(stderr, "tur: oom\n"); abort(); }
     memcpy(copy, line, n);
-    copy[n] = '\0';
+    if (optional) memcpy(copy + n, TUR_HOIST_OPTIONAL_TAG, tl);
+    copy[n + tl] = '\0';
     g_hoisted_includes[g_n_hoisted_includes++] = copy;
+}
+
+/* Does the remainder of an `#include` line (everything past the closing
+ * delimiter) carry a `tur:optional` marking?  Written as a comment, e.g.
+ *   #include <direct.h>  / * tur:optional * /
+ * It marks a header whose absence is EXPECTED on some target -- a deliberate
+ * per-platform alternative -- so the __has_include skip stays silent instead
+ * of announcing itself.  See tur_emit_hoisted_include. */
+static bool hoist_rest_marks_optional(const char *p, size_t n) {
+    static const char needle[] = "tur:optional";
+    size_t nl = sizeof needle - 1;
+    if (n < nl) return false;
+    for (size_t i = 0; i + nl <= n; i++)
+        if (memcmp(p + i, needle, nl) == 0) return true;
+    return false;
 }
 
 /* Returns the count of bytes consumed at the start of `body` (the prefix
@@ -3370,8 +3450,12 @@ size_t tur_hoist_top_includes_scan(const char *body, size_t len) {
                 size_t end = j + 1;
                 while (end < line_len && L[end] != close) end++;
                 if (end < line_len && L[end] == close) {
-                    /* OK; record `#include <...>` (from k to end+1). */
-                    tur_hoist_include_add(L + k, (end + 1) - k);
+                    /* OK; record `#include <...>` (from k to end+1).  Anything
+                     * after the closing delimiter is a trailing comment; it is
+                     * not stored, but a `tur:optional` marking in it is. */
+                    bool opt = hoist_rest_marks_optional(L + end + 1,
+                                                         line_len - (end + 1));
+                    tur_hoist_include_add_ex(L + k, (end + 1) - k, opt);
                     last_consumed = consumed_to;
                     continue;
                 }
