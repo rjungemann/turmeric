@@ -28,7 +28,7 @@
 // still correct -- and note that until 2026-08-26 the plugin looked in
 // dist/sw.js, which the Cloudflare plugin does not write, so this literal was
 // the *only* thing keeping the version right.
-const CACHE_VERSION = 'tur-try-v1-0.40.0';
+const CACHE_VERSION = 'tur-try-v1-0.41.0';
 const PRECACHE = `${CACHE_VERSION}-precache`;
 const RUNTIME  = `${CACHE_VERSION}-runtime`;
 

@@ -2,7 +2,22 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.41.0] -- 2026-08-28
+
+### Added
+
+- **Three structural diagnostics for shapes that previously compiled into
+  nothing.** `TUR-E0711` rejects a non-definition form at `defmodule` top level
+  (it was silently never evaluated); `TUR-E0713` rejects a definition in tail
+  position of a function body (there is nothing to return); `TUR-E0712` bounds
+  the emitter's expression walk so a pathologically nested expression reports
+  instead of running the C stack out. See `docs/guides/syntax-guide.md`.
+
+- **`:non-null` is declarable on a `defopaque`,** replacing the option-niche
+  allowlist's hand-maintained opaque rows. Ascribing the literal `0` into such a
+  type is now `TUR-E0303` at elaboration rather than an abort at the niche `Some`
+  constructor at runtime; a *computed* zero is not provable there and still falls
+  through to the runtime check. `tur explain TUR-E0303` carries the rationale.
 
 ### Changed
 
@@ -39,6 +54,22 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`:cmake-deps` link lines are resolved by CMake instead of guessed
+  downstream.** `INTERFACE_LINK_LIBRARIES` is now walked recursively inside the
+  generated `CMakeLists.txt`, where `if(TARGET ...)` can tell a library name
+  (`m` -> `-lm`) from a CMake target name (raylib lists `glfw`) -- identical
+  shape, opposite handling, and the C-side guess emitted a `-lglfw` that does
+  not exist. An Apple framework arrives as an absolute path to the `.framework`
+  *directory* and is now respelled `-framework <name>` rather than passed as a
+  link input, which `ld` rejects with `file cannot be mmap()ed, errno=22`.
+  Alongside: the walk is scoped to the declared `:spices` closure instead of
+  every workspace member (building `spices/opengl` configured 15 unrelated
+  native deps, and a single one that could not configure aborted the whole
+  build); a transitive `:path` dep is no longer absolutized and then
+  re-prefixed; a shared-library dep gets its `-rpath`; `:path` resolves against
+  `cmake/`; and CMake 4's policy floor is passed through. A raylib spice now
+  builds and runs on macOS with no `cmake-deps/` shim.
+
 - **An inline-C body that builds an `(Option T)` produced the wrong value under
   the niche.** `tur_some_ptr` returns the carrier -- a pointer to a tagged box --
   and a niche consumer read that word as the payload, so
@@ -46,6 +77,20 @@ All notable changes to Turmeric are documented here.
   not a crash. The let-binding and call-argument crossings now bridge through
   `emit_carrier_bridge` like every other. Only reachable with
   `--enable=option-niche`.
+
+- **`: nil` forward declarations no longer collapse to the `int` placeholder.**
+  A statement-position call to a `: nil` function the elaborator had not yet
+  reached was emitted as `__auto_type __ps_N = <void call>;`, which `cc` rejects
+  with "variable has incomplete type 'void'" and no `.tur` attribution. `: void`
+  was immune, and moving the callee above the caller made it disappear. The root
+  cause was in the elaborator: the reader parses a bare `nil` in type position
+  as `F_NIL`, not `F_SYM`, so the forward-declaration pre-passes did not match it.
+
+- **A module-level `def` of an opaque-typed value emits its global.**
+
+- **Two diagnostics now name what they could not find:** a hoisted inline-C
+  `#include` that does not resolve names the header, and `tur` says so when
+  `TUR_STDLIB_DIR` overrides the stdlib sitting beside the binary.
 
 ## [0.40.0] -- 2026-08-28
 

@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.40.0` -- parametric sum monomorphs flow by value by default now that SR2a has graduated, and Try Turmeric gained a minimap, a Symbols outline, and go-to-definition into the stdlib.
+**Latest release:** `v0.41.0` -- `:cmake-deps` link lines are resolved by CMake rather than guessed downstream, so a raylib spice builds and runs on macOS with no shim, and a pointer `defopaque` c-names as `void *` (breaking for out-of-tree inline-C).
 
 ## What
 
