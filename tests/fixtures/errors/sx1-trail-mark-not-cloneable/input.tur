@@ -1,0 +1,28 @@
+;; SX1 (solver-extension-plan 3.5): a trail handle cannot enter a MULTI-SHOT
+;; continuation, and the type checker is what stops it.
+;;
+;; 3.5's sharp edge is re-entry: invoke a captured `k` twice and the second
+;; invocation resumes a computation whose trail levels were already undone.
+;; The generational mark makes that a detected error at run time -- but the
+;; typed surface does not even get there. `Mark` is a defopaque with no `Clone`
+;; instance, and `cloneable-shift` requires `Clone` on every captured binding,
+;; so a cloneable continuation closing over a mark is TUR-E0014 at compile time.
+;;
+;; This is the PRIMARY defense; the runtime generation check (pinned by
+;; sx1-trail-basics' t-stale-mark) is the backstop for paths that launder a mark
+;; through a plain int or through inline-C. Adding a Clone instance to Mark
+;; would silently remove this guard, which is why it is pinned here.
+
+(defn twice [k] : int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)
+     (tur_cloneable_cont_resume k 20)))
+
+(defn undo? [m : Mark] : int (if (bt-undo-to! m) 1 0))
+
+(defn main [] : int
+  (let [c (bt-cell-new 0)
+        m (bt-mark)]
+    (bt-set! c 7)
+    (println (cloneable-reset (+ (cloneable-shift twice 0) (undo? m))))
+    (bt-cell-free c)
+    0))

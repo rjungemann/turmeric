@@ -2,7 +2,6 @@
 
 #include "diag.h"
 #include "reader.h"
-#include "runtime/experiments.h"
 #include "runtime/globals.h"
 
 #include <stdio.h>
@@ -47,32 +46,26 @@ static const char *const autoload_files_[] = {
     "schema.tur",
     "sym.tur",
     "unique.tur",
+    /* SX1: backtrackable state.  Was gated behind the `backtrackable-state`
+     * experiment until it graduated 2026-08-29; an ordinary list member now. */
+    "trail.tur",
     NULL
 };
 
-/* SX1 (solver-extension-plan): stdlib/trail.tur is auto-loaded ONLY when the
- * `backtrackable-state` experiment is on.
+/* SX1 (solver-extension-plan) GRADUATED 2026-08-29.  stdlib/trail.tur used to
+ * be spliced in here only when the `backtrackable-state` experiment was on --
+ * gating the autoload rather than a call site, so that with the experiment off
+ * the module was simply absent and `bt-set!` was an unknown function like any
+ * other.  The experiment is gone and trail.tur is an ordinary member of
+ * `autoload_files_` above, so this is now a plain accessor.
  *
- * This is where the gate belongs for an experimental stdlib module.  Gating a
- * call site would mean the names exist and then refuse to work; gating the
- * autoload means that with the experiment off the module is simply not there,
- * and `bt-set!` is an unknown function like any other -- which is the honest
- * report.  With it on, the lifecycle warning fires once per compile, from the
- * one place that knows the feature was actually pulled in.
- *
- * The copy is rebuilt per call rather than cached: `tur repl` and the test
- * harnesses flip experiment bits between compiles in one process, and a cached
- * list would serve the first compile's answer to the second. */
+ * Kept as a function rather than collapsed into the array because both front
+ * ends (the CLI and src/web/wasm_lsp.c) go through it, and because
+ * tur_stdlib_prepend_forms reads the list through this accessor -- reading the
+ * raw array there once made the single-file path disagree with project mode
+ * about what was in scope. */
 const char *const *tur_stdlib_autoload_files(void) {
-    if (!g_opt_backtrackable_state) return autoload_files_;
-
-    static const char *gated_[sizeof(autoload_files_) / sizeof(autoload_files_[0]) + 1];
-    size_t n = 0;
-    for (; autoload_files_[n]; n++) gated_[n] = autoload_files_[n];
-    gated_[n++] = "trail.tur";
-    gated_[n]   = NULL;
-    experiment_warn_if_used("backtrackable-state");
-    return gated_;
+    return autoload_files_;
 }
 
 static const char *basename_of(const char *path) {
@@ -130,6 +123,11 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
         }
     }
 
+    /* SX1: recomputed per call, never accumulated.  The REPL and the harnesses
+     * run several compiles in one process, and a sticky flag would let a compile
+     * that loaded trail.tur license the guard in one that did not. */
+    g_trail_autoloaded = false;
+
     uint32_t total = 0;
     Form **all = NULL;
     for (int i = 0; files[i] != NULL; i++) {
@@ -146,6 +144,11 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
         size_t stdlib_len = 0;
         if (read_file_quiet(path_buf, &stdlib_src, &stdlib_len) != 0)
             continue;
+
+        /* Set only after the read SUCCEEDS: a missing stdlib/trail.tur is
+         * skipped silently above, and its autolink marker would be missing from
+         * the output too, so the guard must not be emitted for it either. */
+        if (strcmp(files[i], "trail.tur") == 0) g_trail_autoloaded = true;
 
         char *src_copy = (char *)arena_alloc(arena, stdlib_len);
         memcpy(src_copy, stdlib_src, stdlib_len);

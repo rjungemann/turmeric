@@ -25,12 +25,13 @@
 ;;; printing) before returning.  Returning a BtCell handle from a search and
 ;;; reading it later yields the restored (pre-search) value by design.
 ;;;
-;;; This module references bt-scope / bt-set! and therefore requires the
-;;; `backtrackable-state` experiment (--enable=backtrackable-state), which
-;;; autoloads stdlib/trail.tur.  It deliberately lives NEXT TO backtrack.tur
-;;; rather than inside it: the list monad is usable without the experiment,
-;;; and folding this in would break every existing `(load
-;;; "stdlib/backtrack.tur")` under the default configuration.
+;;; This module references bt-scope / bt-set! from stdlib/trail.tur, which is
+;;; autoloaded unconditionally since `backtrackable-state` graduated 2026-08-29.
+;;; It still lives NEXT TO backtrack.tur rather than inside it, now as a plain
+;;; separation of concerns: the two are different search strategies with
+;;; different cost profiles (the list monad enumerates faster at small N; this
+;;; driver scales further and reifies out of live cells), and backtrack.tur is
+;;; usable without pulling the trail into the picture.
 ;;
 ;; Since: SX2
 

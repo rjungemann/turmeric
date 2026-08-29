@@ -1,0 +1,26 @@
+;; SX1 (solver-extension-plan 3.5): serializing a continuation inside an open
+;; trail scope is REFUSED, not silently allowed.
+;;
+;; A serialized continuation carries control. The trailed writes made under the
+;; scope are not in it, and the undo information that would put them back is
+;; process-local -- so the blob would deserialize into a world where those
+;; writes either never happened or can never be unwound. Both are silent wrong
+;; answers, which is why this aborts with a diagnostic naming the scope.
+;;
+;; Refusing is the SX1 answer; serializing the live trail segment alongside the
+;; continuation is the declined alternative (3.5, DECIDED 2026-08-29).
+
+;; round-trip the captured continuation through bytes, then resume it.
+(defn rt5 [k] : int
+  (tur_serial_cont_resume
+    (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
+
+(defn main [] : int
+  (let [c (bt-cell-new 0)
+        m (bt-mark)]
+    ;; one trailed write outstanding, so the diagnostic has a depth to report
+    (bt-set! c 42)
+    ;; the serialize inside rt5 happens at trail level 1 -- refused
+    (println (serial-reset (+ 1 (serial-shift rt5 0))))
+    (bt-undo-to! m)
+    0))

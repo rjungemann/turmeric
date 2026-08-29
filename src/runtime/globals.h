@@ -258,10 +258,9 @@ extern bool g_dump_cps_mono;
 /* g_opt_cps_effects RETIRED 2026-07-12 -- the `cps-effects` experiment graduated
  * and `handle-shallow` is now unconditionally accepted (see experiments.c). */
 
-/* SX1 (solver-extension-plan): the `backtrackable-state` experiment.  Gates
- * `(import trail)` -- the trail primitive's semantics are in flux on
- * purpose (the multi-shot re-entry question in plan 3.5 is open), which is
- * exactly the case the experiment gate exists for. */
+/* g_opt_backtrackable_state RETIRED 2026-08-29 -- the `backtrackable-state`
+ * experiment graduated and stdlib/trail.tur is autoloaded unconditionally
+ * (see experiments.c and stdlib_autoload.c). */
 /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
  * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
  * not a shipping default.  SHELVED 2026-08-25 -- kept reproducible, not
@@ -283,7 +282,13 @@ extern bool g_adt_slab;
  * sums are unaffected either way; they are SR4's population and still ride the
  * carrier (see AdtDef.is_self_recursive for why, and what blocks them). */
 extern bool g_sr1_sum_byvalue;
-extern bool g_opt_backtrackable_state;
+/* SX1: set by tur_stdlib_prepend_forms when stdlib/trail.tur was actually read
+ * into THIS compile.  Not the same question as "is the trail available": the
+ * autoload can be suppressed (--no-auto-stdlib), and the emitted serial prelude
+ * must only reference `tur_trail_level` when trail.tur's autolink marker is
+ * also in the output pulling src/runtime/trail.c into the link.  Emitting the
+ * guard off any looser signal is an undefined symbol at cc time. */
+extern bool g_trail_autoloaded;
 /* SR3 slice B (--enable=option-niche, docs/upcoming/sr3-option-niche-plan.md):
  * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that
  * pointer -- 16 bytes down to 8, `(none)` as NULL, no tag word anywhere.

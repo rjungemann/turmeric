@@ -2,6 +2,48 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **`backtrackable-state` graduated -- `stdlib/trail.tur` is always available.**
+  The trail (mark/undo cells with per-cell, per-write and per-level opt-out) no
+  longer needs `--enable=backtrackable-state`; the experiment row is deleted and
+  the module is an ordinary autoload. What held it at `prototype` was one open
+  question -- plan 3.5's multi-shot re-entry -- now decided: **the checked error
+  is permanent and snapshotting the live trail segment on capture is declined.**
+  The SX0 curve settled the cost half (a snapshot is at best at parity with
+  replaying the writes at 5.0 ns each, and is paid at *every* capture rather than
+  only on the branch taken), and the semantics half went the same way (a
+  symmetric snapshot restores the learned clause away, which is the one thing a
+  backjump must keep). Writing the fixtures turned up a stronger guard than
+  either: `Mark`, `BtCell` and `GCell` have no `Clone` instance, so a multi-shot
+  `cloneable-shift` **cannot capture a trail handle at all** -- `TUR-E0014` at
+  compile time, now pinned so it cannot regress.
+
+  Consequences worth knowing: the trail is unavailable under `--interpret` (it
+  has no turi natives -- filed, and carved out of the interpreter preload), and
+  because trail.tur now prepends to every compile, 148 codegen snapshots moved.
+
+### Added
+
+- **Serializing a continuation inside an open `bt-scope` is refused.** Both the
+  host codec and the emitted `tur_serial_cont_serialize` now report the trail
+  depth and the count of outstanding trailed writes instead of producing a blob.
+  A serialized continuation carries control; the undo information that would put
+  the scope's writes back is process-local and does not travel with it, so such a
+  blob would deserialize into a world where those writes either never happened or
+  can never be unwound.
+
+### Fixed
+
+- **`bt-level` and `bt-depth` read an unspecified upper half.** Both C functions
+  return `uint32_t` while `stdlib/trail.tur` declared them `:int` (`int64_t`), so
+  the result's high 32 bits were whatever the callee left in the register -- a
+  level could in principle read as 4294967297. Found while writing the serialize
+  guard. Both now go through `tur_trail_level_i64` / `tur_trail_depth_i64`,
+  matching how a mark is already packed across that boundary.
+
 ## [0.41.0] -- 2026-08-28
 
 ### Added

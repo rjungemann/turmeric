@@ -17,14 +17,22 @@
 ;;; signature of anything that touches the cell rather than a flag someone
 ;;; forgets to pass.
 ;;;
-;;; EXPERIMENTAL -- behind `--enable=backtrackable-state`. The open question is
-;;; multi-shot re-entry: a captured continuation restores control, not state, so
+;;; RE-ENTRY. A captured continuation restores control, not state, so
 ;;; re-entering one lands in a computation whose trail levels are already gone.
-;;; Today that is a detected error (marks carry a generation); whether
-;;; `call/cc*` should instead snapshot the live trail segment is unmeasured.
-;;; See docs/upcoming/solver-extension-plan.md sections 3.2-3.5.
+;;; A mark carries a generation, so `bt-undo-to!` on such a mark returns false
+;;; rather than unwinding whichever level now sits at that index. The typed
+;;; surface mostly prevents the situation outright: `Mark`, `BtCell` and `GCell`
+;;; have no `Clone` instance, so a multi-shot `cloneable-shift` cannot capture
+;;; one. The generation check is the backstop for a mark laundered through an
+;;; `:int` or through inline-C.
 ;;;
-;;; Since: SX1
+;;; Serializing a continuation inside an open scope is refused -- the undo
+;;; information is process-local and does not travel with the blob.
+;;;
+;;; See docs/guides/backtrackable-state-guide.md, and
+;;; docs/upcoming/solver-extension-plan.md sections 3.2-3.5.
+;;;
+;;; Since: SX1 (graduated from `--enable=backtrackable-state` 2026-08-29)
 ;; Backtrackable state (solver-extension-plan SX1).
 
 ;;; Mark -- an opaque handle to a trail level.
@@ -38,9 +46,13 @@
 
 (extern-c tur_trail_commit_to_packed [p :int] :bool)
 
-(extern-c tur_trail_level [] :int)
+;;; The int64 width shims, not the uint32_t `tur_trail_level` / `tur_trail_depth`
+;;; themselves: a `:int` extern-c declares an int64_t return, and calling a
+;;; uint32_t function through that prototype leaves the result's upper half
+;;; unspecified. See trail.h.
+(extern-c tur_trail_level_i64 [] :int)
 
-(extern-c tur_trail_depth [] :int)
+(extern-c tur_trail_depth_i64 [] :int)
 
 (extern-c tur_trail_pause [] :void)
 
@@ -186,7 +198,7 @@
 ;;;   (bt-set! c 42)  ; => true
 ;;;
 ;;; Since: SX1
-(defn bt-set! [c : BtCell v : int] : bool
+(defn bt-set! [c : BtCell v : int] #fx{Bt} : bool
   ```c
   return tur_bt_cell_set((void *)(intptr_t)c, v);
   ```)
@@ -253,7 +265,7 @@
 ;;;   (g-set! g 7)
 ;;;
 ;;; Since: SX1
-(defn g-set! [g : GCell v : int] : void
+(defn g-set! [g : GCell v : int] #fx{Bt} : void
   ```c
   /* Pause across the write: one cell representation, one set of
      semantics, and the opt-out is the TYPE that reaches it. */
@@ -271,7 +283,7 @@
 ;;;   (let [m (bt-mark)] (bt-set! c 1) (bt-undo-to! m))
 ;;;
 ;;; Since: SX1
-(defn bt-mark [] : Mark
+(defn bt-mark [] #fx{Bt} : Mark
   ```c
   return tur_trail_mark_packed();
   ```)
@@ -292,7 +304,7 @@
 ;;;   (bt-undo-to! m)  ; => true
 ;;;
 ;;; Since: SX1
-(defn bt-undo-to! [m : Mark] : bool
+(defn bt-undo-to! [m : Mark] #fx{Bt} : bool
   ```c
   return tur_trail_undo_to_packed(m);
   ```)
@@ -312,7 +324,7 @@
 ;;;   (bt-commit-to! m)  ; => true
 ;;;
 ;;; Since: SX1
-(defn bt-commit-to! [m : Mark] : bool
+(defn bt-commit-to! [m : Mark] #fx{Bt} : bool
   ```c
   return tur_trail_commit_to_packed(m);
   ```)
@@ -328,7 +340,7 @@
 ;;; Since: SX1
 (defn bt-level [] : int
   ```c
-  return tur_trail_level();
+  return tur_trail_level_i64();
   ```)
 
 ;;; bt-depth -- how many entries are on the trail right now.
@@ -345,7 +357,7 @@
 ;;; Since: SX1
 (defn bt-depth [] : int
   ```c
-  return tur_trail_depth();
+  return tur_trail_depth_i64();
   ```)
 
 ;;; untrailed-begin -- suspend trailing until the matching untrailed-end.
@@ -357,7 +369,7 @@
 ;;;   (untrailed-begin) (bt-set! counter 1) (untrailed-end)
 ;;;
 ;;; Since: SX1
-(defn untrailed-begin [] : void
+(defn untrailed-begin [] #fx{Bt} : void
   ```c
   tur_trail_pause();
   ```)
@@ -368,7 +380,7 @@
 ;;;   (untrailed-end)
 ;;;
 ;;; Since: SX1
-(defn untrailed-end [] : void
+(defn untrailed-end [] #fx{Bt} : void
   ```c
   tur_trail_resume();
   ```)
@@ -448,7 +460,7 @@
 ;;;   (trail-reset!)
 ;;;
 ;;; Since: SX1
-(defn trail-reset! [] : void
+(defn trail-reset! [] #fx{Bt} : void
   ```c
   tur_trail_reset();
   ```)
