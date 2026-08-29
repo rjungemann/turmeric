@@ -192,11 +192,10 @@ CE0's stated validation is "zero behavior change (full suite untouched)".
 - **Store half: DONE.** `bash tests/run.sh` against the store-tracer build:
   `summary: 2718 passed, 0 failed`, no FAIL lines, no binary-changed warning.
   That is the number CE0's validation line names.
-- **Read half: IN PROGRESS at the time of this commit** -- 0 FAIL lines so far,
-  no summary line yet. Not yet evidence, and not claimed as such; the result
-  belongs in a follow-up commit here. The read tracer's translation unit does
-  compile clean under the project's own flags (`-Wall -Wextra -Werror
-  -pedantic`) and the full build links.
+- **Read half: DONE.** `bash tests/run.sh` against the store+read tracer
+  build: `summary: 2718 passed, 0 failed`, exit 0, no FAIL lines. Identical to
+  the store-half run, which is the point -- both tracers are inert without
+  `--emit-abi-trace`.
 
 Nothing in the census numbers above depends on either suite run: they come
 from the `--emit-abi-trace` sweep, which is the instrumented path by
