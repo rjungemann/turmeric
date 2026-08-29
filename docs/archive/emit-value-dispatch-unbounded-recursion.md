@@ -202,6 +202,15 @@ diagnostic and does not double as a stack-size canary, exactly as this report
 asked. `tur check` is covered by the same fixture, since `check` runs the
 emitter.
 
+It carries `requires.compiled`, so `tests/run-turi.sh` skips it. The bound is
+on the EMITTER's walk, so `tur --interpret` -- which never runs the emitter --
+evaluates the same expression to completion with no diagnostic and exit 0.
+That is a real compiled/interpreted divergence, and an intentional one of the
+same shape as TUR-E0710's (`errors/cloneable-context-over-frame-limit`): the
+tree-walking interpreter has no such limit, so there is no coverage to lose.
+Worth knowing if direction (2) below is ever taken -- a worklist would remove
+the compiled-side bound and with it this divergence.
+
 ### Guide
 
 `docs/guides/test-suite-portability-guide.md` gains section 7c, "ASan inflates
