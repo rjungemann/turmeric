@@ -1,0 +1,1 @@
+any-struct-box-leak-per-widen: an owned `any` temporary must be dropped after the call that consumes it.

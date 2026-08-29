@@ -567,6 +567,13 @@ struct Binding {
      * exit (the make-scaler shape).  False for non-fns and any fn that returns a
      * shared/owning-capture/param closure. */
     bool                returns_fresh_closure;
+    /* any-struct-box-leak-per-widen (the temporary case): every call to this
+     * function produces a FRESH `any` -- its body's tail is a widen, so the
+     * payload box is minted per call and aliases nothing the callee keeps.
+     * That is what lets a caller drop the box after consuming it.  Inferred
+     * exactly like returns_fresh_closure, and for the same reason: ownership of
+     * a returned value cannot be read off the call site alone. */
+    bool                returns_fresh_any;
     /* Existential `open` dispatch: when this binding names the `v` of
      * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
      * points at the packed scrutinee's TY_EXISTS type (carrying the constraint
@@ -1171,6 +1178,15 @@ struct Expr {
     ExprKind kind;
     Type     type;
     Span     span;
+    /* any-struct-box-leak-per-widen (the temporary case): this expression
+     * PRODUCES an `any` whose payload box nothing else owns, and it flows into
+     * a call parameter that provably neither retains it nor suspends -- so the
+     * box dies as soon as that call returns.  Stamped by elab at the call site
+     * (the only place that knows the callee); emit_value hoists such a value
+     * into a temp and the enclosing call emission drops it once the call has
+     * been materialized.  Outside the union because the argument can be any
+     * node kind. */
+    bool     any_drop_after;
     union {
         bool         b;
         int64_t      i;

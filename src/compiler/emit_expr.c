@@ -3972,6 +3972,44 @@ void emit_expr_depth_reset(void) {
     g_emit_depth_exceeded = false;
 }
 
+
+/* any-struct-box-leak-per-widen (the temporary case): the pending-drop stack.
+ * `emit_value` records a mark before dispatching a node and drains back to it
+ * after the node's call has been materialized, so an inner call never drops an
+ * outer call's argument (or vice versa). */
+static void any_pending_push(EmitCtx *ctx, const char *name) {
+    if (ctx->n_any_pending >= ctx->cap_any_pending) {
+        uint32_t nc = ctx->cap_any_pending ? ctx->cap_any_pending * 2 : 8;
+        char **nn = (char **)realloc(ctx->any_pending, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_pending = nn;
+        ctx->cap_any_pending = nc;
+    }
+    ctx->any_pending[ctx->n_any_pending++] = strdup(name);
+}
+
+/* Hoist a non-call `any` value into a named temp so the enclosing call has
+ * something to drop, and register it. */
+static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v);
+
+static void any_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
+    while (ctx->n_any_pending > mark) {
+        char *nm = ctx->any_pending[--ctx->n_any_pending];
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tur_any_drop(%s);\n", nm);
+        free(nm);
+    }
+}
+
+static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v) {
+    char *slot = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_tagged_t %s = (%s);\n", slot, v);
+    any_pending_push(ctx, slot);
+    free(v);
+    return slot;
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -3997,6 +4035,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         return strdup("0");
     }
     g_emit_expr_depth++;
+    /* Mark before the children run: everything they push belongs to THIS node. */
+    uint32_t any_mark = ctx->n_any_pending;
     char *v = emit_value_dispatch(ctx, body, e);
     g_emit_expr_depth--;
     /* S1/findings 16: capture-and-clear the builder's ret-type note
@@ -4005,11 +4045,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char ret_note[sizeof ctx->call_ret_note];
     memcpy(ret_note, ctx->call_ret_note, sizeof ret_note);
     ctx->call_ret_note[0] = '\0';
-    if (e->kind != EX_CALL) return v;
+    if (e->kind != EX_CALL) {
+        if (e->any_drop_after) v = emit_any_drop_arm(ctx, body, v);
+        return v;
+    }
     /* unit/void and never/diverging calls emit as C `void`, so there is no
      * value to bind into an __auto_type temp; their panic signal is handled at
      * statement position (EX_PANIC / EX_PANIC_WITH). */
-    if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) return v;
+    if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) {
+        /* No value to bind, so the call has not been materialized here; leave any
+         * pending drops to an enclosing call rather than emitting them before the
+         * call they belong to has run. */
+        return v;
+    }
     /* Hoist the call into a temp so a tur_panicking check can follow it.  Use
      * __auto_type (GNU C, supported by the gcc/clang the backend targets) so
      * the temp takes the call's EXACT emitted C representation -- carrier int64
@@ -4231,6 +4279,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (!recorded && rcty && strcmp(rcty, "int64_t") == 0 && !v_is_ctor)
             emit_localvar_record_ctype(tmp, "int64_t");
     }
+    /* any-struct-box-leak-per-widen (the temporary case): the call is now a
+     * statement -- `__ps_N = f(...)` followed by its panic check -- so every
+     * owned `any` its arguments contributed has been consumed and can be
+     * released.  This is the statement boundary the temporary case needed; it
+     * exists only here, which is why the drop hangs off the panic-signal hoist
+     * rather than off the call emission proper.  A void/never call returns
+     * above without materializing, and deliberately leaves its pending entries
+     * to an enclosing call instead of dropping them early. */
+    any_pending_drain(ctx, body, any_mark);
+    /* And if THIS call is itself an owned `any` argument, its temp is what the
+     * enclosing call will drop.  Pushed after the drain so it belongs to the
+     * PARENT's mark, not this node's. */
+    if (e->any_drop_after) any_pending_push(ctx, tmp);
     return strdup(tmp);
 }
 

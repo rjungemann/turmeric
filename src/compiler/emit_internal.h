@@ -340,6 +340,14 @@ typedef struct EmitCtx {
      * only thing a drop site knows -- an `any` local is typed `any`, not by its
      * payload.  Interned alongside the id so the two cannot drift. */
     bool     *any_type_boxed;
+    /* any-struct-box-leak-per-widen (the temporary case): C temp names holding
+     * owned `any` values whose payload box must be dropped once the call
+     * consuming them has been materialized.  Pushed when the argument is
+     * emitted, drained by the enclosing call's emission -- the mark/drain pair
+     * in emit_value keeps nested calls from stealing each other's entries. */
+    char    **any_pending;
+    uint32_t  n_any_pending;
+    uint32_t  cap_any_pending;
     uint32_t  n_any_type_names;
     uint32_t  cap_any_type_names;
     /* poly-to-fat-typed-shim-plan: per-signature typed poly-to-fat shim tracking.

@@ -4,58 +4,70 @@
 documented as accepted in the union/intersection guide. Found in the
 2026-08-20 docs audit.
 
-**Narrowed 2026-08-29 in two passes.** The reported repro is fixed and the
-residue now has a working user-level answer, so what is left is one specific
-gap rather than "widening leaks".
+**Narrowed 2026-08-29 in three passes.** All three places an `any` payload box
+can be owned now own it. What is left is two shapes that need real
+inter-procedural / all-exits ownership, described precisely below rather than
+as "widening leaks".
 
-**Pass 1 -- the widen does not allocate in argument position.** When the callee
-provably neither retains the `any` nor suspends, the payload copy goes in the
-caller's frame, so there is nothing to own. The repro below -- a loop passing a
-by-value struct to an `[x : any]` parameter -- is leak-clean under
-LeakSanitizer, pinned by `tests/fixtures/any-widen-frame-box`
-(`requires.leak-check`, 2000 turns x 3 widens).
+**Pass 1 -- argument position does not allocate.** When the callee provably
+neither retains the `any` nor suspends, the payload copy goes in the caller's
+frame, so there is nothing to own. The reported repro -- a loop passing a
+by-value struct to an `[x : any]` parameter -- is leak-clean, pinned by
+`tests/fixtures/any-widen-frame-box`.
 
 **Pass 2 -- an owned `any` local is dropped at scope exit.** Pass 1 cannot help
-where the `any` outlives the expression that built it: a value RETURNED as
-`any`, or handed back by a callee that boxed it, since a caller-frame copy
-would dangle. Those land in a local, and a local is where ownership can be
-settled -- if the name does not escape, the body is its last use and the box
-dies with the scope. Pinned by `tests/fixtures/any-widen-local-drop`
-(`requires.leak-check`).
+where the `any` outlives the expression that built it (a value RETURNED as
+`any`): a caller-frame copy would dangle. Such a value lands in a local, and a
+local is where ownership can be settled -- if the name does not escape, the body
+is its last use. Pinned by `tests/fixtures/any-widen-local-drop`.
 
-Together those mean **binding an `any` to a local is now a real fix**, not just
-a style preference: a leaking temporary stops leaking when it is given a name
-in a scope that owns it.
+**Pass 3 -- an owned `any` temporary is dropped after the call that consumes
+it.** The case with no ownership written down anywhere: `(reads (ret-any i))`
+binds nothing. Two facts settle it, and both are needed. Callee-side,
+`returns_fresh_any` says the producer's body tail is a widen, so every call
+mints a box that aliases nothing -- "the argument is a call returning `any`" is
+NOT enough, because a function handing back an `any` it was *given* returns an
+alias, and dropping that frees a box its other holder still uses. Caller-side,
+the consuming parameter is non-retaining and effect-free, so the box is dead
+the moment that call returns. Pinned by `tests/fixtures/any-widen-temp-drop`,
+which also carries the alias shape that must NOT be dropped.
+
+The drop hangs off the panic-signal hoist, which is the only place a call is
+guaranteed to have been materialized into a statement (`__ps_N = f(...)`
+followed by its check). That is the statement boundary an earlier pass of this
+report recorded as missing; it exists, just not where the call is assembled.
 
 | Shape | Leaks? | Why |
 |---|---|---|
 | widen as an argument to a non-retaining, effect-free direct call | no | pass 1 -- never allocated |
 | `any` bound to a non-escaping local | no | pass 2 -- dropped at scope exit |
-| `any` **temporary** never bound to a local -- `(reads (ret-any i))` | **yes** | no owner and no drop point; see below |
-| `any` local in a scope with an early exit (a tail-recursive loop body, a `return`) | **yes** | the scope-exit collection declines when an early exit could skip the free -- conservative, and a leak rather than a UAF |
+| `any` temporary from a `returns_fresh_any` producer, consumed by a non-retaining effect-free call | no | pass 3 -- dropped after the call |
+| `any` local in a scope with an early exit (a tail-recursive loop body, a `return`) | **yes** | the scope-exit collection declines when an early exit could skip the free. Conservative and a leak, never a UAF -- the same limitation the closure-env and catch-box frees have, since all three are trailing frees rather than drops on every exit |
+| `any` returned by a callee that hands back one it was GIVEN -- `(reads (alias tmp))` | **yes** | `returns_fresh_any` is a callee-side fact and cannot see that THIS caller's argument was itself a temporary. Distinguishing them is ownership flow through the callee |
 | callee that retains, has an inline-C body, may suspend, or is called indirectly | n/a | those keep the heap box by design; `tests/fixtures/any-widen-retaining-callee` pins them, including the effectful case, which became testable when [perform-in-fn-with-any-param-has-no-cps-lowering](../archive/perform-in-fn-with-any-param-has-no-cps-lowering.md) landed |
 
-Getting either condition wrong turns a leak into a dangling pointer, so the
-shapes that must decline are worth as much coverage as the ones that must
-accept -- which is what `any-widen-retaining-callee` is for.
+Getting any of these conditions wrong turns a leak into a dangling pointer, so
+the shapes that must decline carry as much coverage as the ones that must
+accept -- `any-widen-retaining-callee` and the `alias` case in
+`any-widen-temp-drop`.
 
 ## What is actually left
 
-One thing: **an `any` temporary that never becomes a local.** `(reads (ret-any i))`
-in a loop still leaks a box per turn; `(let [a (ret-any i)] (reads a))` in its
-own function does not.
+Two shapes, both needing more than a local rule:
 
-Closing it needs a drop emitted immediately after the consuming call, and that
-is where it stops being a patch. The two existing mechanisms both hang off a
-place where ownership is already expressed -- an argument position, a let
-binding. A temporary has neither: `emit_value` hands back a string expression
-that may sit anywhere inside a larger one, so there is no statement boundary to
-put a drop after, and the boundary that *does* exist (the panic-check
-A-normalization) only appears for panic-capable calls. Hoisting the temporary
-into a let instead runs into the second row of the table above.
+1. **A local in a scope with an early exit.** The free is emitted after the
+   body; a `return` or a TCO'd tail call jumps past it. Fixing it means
+   dropping on every exit edge, which is a drop-obligation pass -- and it would
+   fix the closure-env and catch-box frees in the same stroke, since they share
+   the limitation.
+2. **An alias returned by a callee.** `(reads (alias tmp))` leaks because
+   nothing can tell, at the call site, whether the `any` a callee returned was
+   freshly minted or handed through. That is ownership flow across a call
+   boundary -- an effect/ownership annotation on the result, or an
+   interprocedural pass.
 
-So the remaining work is a real drop-obligation pass over `any` values, not
-another special case. Until then the workaround is exact and cheap: bind it.
+Neither is a special case waiting to be written; both are the same missing
+piece, which is why this stays open rather than being archived.
 
 ## Repro
 
@@ -99,8 +111,17 @@ teaching for it to fire at all:
   yields something that cannot alias the payload box (a tag, a bool, or -- for
   the boxed by-value payload this rule exists for -- a deref copy).
 
-The remaining directions still stand for the residue in the table above; return
-position in particular cannot be solved this way and wants real ownership.
+Passes 2 and 3 then took the two positions the frame box cannot reach -- a
+value returned as `any` (owned by the local it lands in) and one never bound at
+all (owned by the expression that consumes it) -- both through
+`__tur_any_drop`, whose per-id boxed flag is interned by `emit_any_type_id`
+from the same predicate the widen uses, so "the drop frees it" and "the widen
+allocated it" cannot drift.
+
+What the original directions were reaching for is still the answer to the two
+rows left in the table above: a genuine drop-obligation pass. The difference is
+that it is now needed only for an early-exit edge and for ownership flow across
+a call, not for the ordinary cases.
 
 ## Guides to update when fixed
 

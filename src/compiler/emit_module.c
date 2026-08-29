@@ -14295,6 +14295,11 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
     free(ctx.any_type_boxed);
+    /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
+     * as they drain; anything still here belongs to a node whose enclosing call
+     * never materialized (a void-returning consumer), so free the names too. */
+    for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
+    free(ctx.any_pending);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
@@ -15712,6 +15717,11 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
     free(ctx.any_type_boxed);
+    /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
+     * as they drain; anything still here belongs to a node whose enclosing call
+     * never materialized (a void-returning consumer), so free the names too. */
+    for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
+    free(ctx.any_pending);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);

@@ -318,23 +318,29 @@ By-value structs are heap-boxed on widening (a `malloc`'d copy) and unboxed by
 dereference on `cast`; ADTs and `cstr` are pointer-carried and ride the carrier
 directly; floats are stored by their bit pattern so no precision is lost.
 
-> **Note:** widening a struct **as a call argument** does not allocate at all.
-> When the callee's `any` parameter is inferred not to retain the payload and
-> the callee cannot suspend (empty effect row), the copy lives in the *caller's*
-> frame, so there is nothing to own and nothing to leak. This covers the common
-> shape -- passing a struct to an `[x : any]` parameter, including in a loop.
+> **Note:** widening a struct to `any` no longer leaks in the ordinary cases.
+> Three places can own the payload box, and each now does:
 >
-> Every other widen still heap-boxes, and that box is owned by the `any` value's
-> (untracked) lifetime, so it is not freed -- one leaked allocation per widen.
-> That is the case when the value is **returned** as `any` (a caller-frame copy
-> would dangle), when the callee's result type could carry the payload back out,
-> when the callee's body is inline-C, or when the call is indirect. It stays
-> acceptable for the gradual-typing use cases `any` targets; if you need a
-> struct in `any` on a hot path outside argument position, prefer a pointer/ADT
-> payload, which is carrier-resident and allocation-free.
+> - **As a call argument**, when the callee neither retains the value nor can
+>   suspend, there is no allocation at all -- the copy lives in the caller's
+>   frame.
+> - **Bound to a local** that does not escape, the box is released at scope
+>   exit.
+> - **As a temporary** -- never named -- produced by a function whose body ends
+>   in a widen and consumed by a non-retaining, effect-free call, the box is
+>   released once that call returns.
 >
-> Tracked in `docs/reported/any-struct-box-leak-per-widen.md`; the argument case
-> is pinned leak-clean by `tests/fixtures/any-widen-frame-box`.
+> Two shapes still leak one allocation per widen: a local in a scope with an
+> early exit (a `return` or a tail-recursive loop body jumps past the trailing
+> free), and an `any` a callee handed back after being *given* it, where the
+> call site cannot tell a fresh box from an alias. Both want a real
+> drop-obligation pass; see
+> `docs/reported/any-struct-box-leak-per-widen.md`. If you need a struct in
+> `any` on a hot path in one of those shapes, prefer a pointer/ADT payload,
+> which is carrier-resident and allocation-free.
+>
+> Pinned leak-clean by `tests/fixtures/any-widen-frame-box`,
+> `any-widen-local-drop`, and `any-widen-temp-drop`.
 
 ---
 

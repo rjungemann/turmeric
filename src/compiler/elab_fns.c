@@ -8432,6 +8432,22 @@ Expr *elab_defn(Elab *e, const Form *call) {
             b->returns_fresh_closure = _ok;
         }
     }
+    /* any-struct-box-leak-per-widen: the `any` twin of the above.  A function
+     * whose body's tail is a WIDEN mints a fresh payload box on every call, so
+     * the value it hands back is the caller's to drop.  A function that returns
+     * an `any` it received (or read out of somewhere) does NOT qualify -- that
+     * box is aliased, and dropping it would free memory the other holder still
+     * uses.  Peeling let/ascribe mirrors the closure case: Turmeric lets are not
+     * memoised, so the wrapper does not make the widen any less fresh. */
+    b->returns_fresh_any = false;
+    {
+        const Expr *_fa = body;
+        while (_fa && (_fa->kind == EX_LET || _fa->kind == EX_ASCRIBE))
+            _fa = (_fa->kind == EX_ASCRIBE) ? _fa->as.ascribe_.inner
+                                            : _fa->as.let_.body;
+        if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY)
+            b->returns_fresh_any = true;
+    }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
     /* let-bound-sf-loses-outer-arg-type: record whether the return *value* is

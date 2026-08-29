@@ -5432,6 +5432,32 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             }
         }
 
+        /* any-struct-box-leak-per-widen (the temporary case): the argument was
+         * ALREADY an `any` -- no widen here to frame-box -- but it is a fresh
+         * one this expression owns and nothing else does: the result of a call
+         * whose body's tail is a widen (returns_fresh_any).  Its payload box has
+         * no owner anywhere, so without this it leaks once per evaluation.
+         *
+         * The same two conditions as the frame-box rule make it safe to drop as
+         * soon as the consuming call returns -- the callee does not keep it, and
+         * cannot suspend between receiving it and returning.  What is NOT enough
+         * is "the argument is a call returning any": a callee that hands back an
+         * `any` it was GIVEN (`(defn keep-it [v : any] : any v)`) returns an
+         * alias, and dropping that would free a box its other holder still uses.
+         * returns_fresh_any is exactly the distinction, and it is why this needs
+         * a callee-side fact rather than a call-site shape. */
+        if (expected_arg_kind == TY_ANY && args[i] && i < 32 && fn_binding
+            && (fn_binding->nonretain_ptr_param_mask & (1u << i))
+            && fn_binding->type.kind == TY_FN
+            && effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
+            const Expr *src = args[i];
+            while (src && src->kind == EX_ASCRIBE) src = src->as.ascribe_.inner;
+            if (src && src->kind == EX_CALL && src->as.call_.fn_binding
+                && src->as.call_.fn_binding->returns_fresh_any
+                && src->type.kind == TY_ANY)
+                args[i]->any_drop_after = true;
+        }
+
         /* LT2: When both expected and actual argument types are function types,
          * verify that their arg_linear flags match.  This catches attempts to
          * pass a (-> T R) function where (-> ^linear T R) is required (or vice

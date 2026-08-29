@@ -1,0 +1,47 @@
+;; any-widen-temp-drop -- an owned `any` TEMPORARY, never bound to a local, is
+;; dropped once the call consuming it returns.
+;;
+;; This is the third and last of the three `any` box owners.  The other two hang
+;; off a place where ownership is already written down -- an argument position
+;; (any-widen-frame-box: never allocate) and a let binding (any-widen-local-drop:
+;; drop at scope exit).  A temporary has neither, and `(reads (ret-any i))` in a
+;; loop leaked one 16-byte box per turn because of it.
+;;
+;; Two facts make the drop safe, and both are needed:
+;;
+;;   the CALLEE-side one -- `ret-any`'s body is a widen, so every call mints a
+;;   fresh box (returns_fresh_any).  "The argument is a call returning any" is
+;;   NOT enough: a function that hands back an `any` it was given returns an
+;;   ALIAS, and dropping that frees a box its other holder still uses.  `alias`
+;;   below is exactly that shape, and must keep its box.
+;;
+;;   the CALLER-side one -- `reads` neither retains the value (its int result
+;;   cannot carry the payload out) nor can suspend, so the box is dead the
+;;   moment it returns.
+
+(defstruct Pt [x : int y : int])
+
+;; Non-retaining, effect-free consumer.
+(defn reads [v : any] : int
+  (if (is? v Pt) 1 0))
+
+;; FRESH: the body's tail is a widen, so each call owns a new box.
+(defn ret-any [i : int] : any (make-struct Pt i 2))
+
+;; NOT fresh: hands back the `any` it was given.  A caller must not drop this.
+(defn alias [v : any] : any v)
+
+(defn loop-n [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    ;; The temporary never gets a name -- it is built, consumed, and dropped.
+    (loop-n (+ i 1) n (+ acc (reads (ret-any i))))))
+
+(defn main [] : int
+  (println (loop-n 0 2000 0))            ;; 2000
+  ;; The alias shape still has to compute the right answer; it keeps its box
+  ;; (that residue is tracked in the open report), so this is one allocation,
+  ;; not a loop -- the leak-check gate below would otherwise fail on it.
+  (let [a (ret-any 7)]
+    (println (reads (alias a))))         ;; 1
+  0)
