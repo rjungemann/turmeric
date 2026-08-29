@@ -54,7 +54,7 @@ diverge in one place. A bare `nil` in type position parses as a nil *literal*,
 not a symbol, and two forward-declaration pre-passes only unwrapped the symbol
 shape, so a `: nil` callee that had not been elaborated yet was forward-typed
 `int` and its call sites broke in the emitted C. Fixed 2026-08-29; see
-[docs/archive/forward-referenced-nil-call-bound-to-auto-type.md](../archive/forward-referenced-nil-call-bound-to-auto-type.md).
+[docs/archive/forward-referenced-nil-call-bound-to-auto-type.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/forward-referenced-nil-call-bound-to-auto-type.md).
 
 ---
 

@@ -324,7 +324,7 @@ Three things follow, and the first two are the traps:
    `src/compiler/emit_expr.c` is set to 40 for exactly this reason -- under the
    worst sanitized threshold above, and 2x over the deepest nesting that occurs
    anywhere in the tree (20). See TUR-E0712 and
-   [docs/archive/emit-value-dispatch-unbounded-recursion.md](../archive/emit-value-dispatch-unbounded-recursion.md).
+   [docs/archive/emit-value-dispatch-unbounded-recursion.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md).
 
 A regression fixture for a depth limit should sit **between** the bound and the
 stack cliff, so it asserts the diagnostic rather than doubling as a stack-size
