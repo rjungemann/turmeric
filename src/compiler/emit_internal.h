@@ -86,6 +86,14 @@ void   tur_emit_hoisted_include(Buf *out, const char *line);
  * consumed at the start of `body`. The caller should `memmove` to drop the
  * consumed prefix. */
 size_t tur_hoist_top_includes_scan(const char *body, size_t len);
+/* emit-value-dispatch-unbounded-recursion: the emitter's expression walk is
+ * plain structural recursion and is bounded by a depth counter kept in
+ * emit_expr.c.  Reset at the start of each program; if the bound was hit, a
+ * TUR-E0712 has been reported and emit_program must fail rather than hand back
+ * a TU whose over-deep expressions were replaced by `0`. */
+void emit_expr_depth_reset(void);
+bool emit_expr_depth_exceeded(void);
+
 /* AR8: Variadic rest parameters - track if any variadic defn is compiled */
 extern bool g_has_variadics;
 /* prelude-macros (Defect B / F3): set when the user-callable `cons` runtime

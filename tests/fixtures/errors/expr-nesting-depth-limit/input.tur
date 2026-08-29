@@ -1,0 +1,18 @@
+;; expr-nesting-depth-limit -- an over-deep expression gets TUR-E0712, not a
+;; SIGSEGV.
+;;
+;; The emitter's expression walk (emit_value -> emit_value_dispatch ->
+;; emit_builtin -> ...) is plain structural recursion and used to have no depth
+;; bound, so a deeply nested expression exhausted the C stack.  On the
+;; DOCUMENTED bootstrap build -- Debug + ASan, which inflates the frame ~40x --
+;; that took only 47 levels on macOS and 60-80 on Linux, which is reachable
+;; from macro expansion or a fold written as nested binary operations.  `tur
+;; check` runs the emitter too, so the LSP path crashed identically.
+;;
+;; 60 levels is chosen to clear the bound (40) while staying far under the
+;; stack cliff: this fixture must assert the DIAGNOSTIC, not "did not crash",
+;; and must not become a stack-size canary in CI.
+;;
+;; Regression for docs/archive/emit-value-dispatch-unbounded-recursion.md
+(defn main [] : int
+  (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ 1 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1))

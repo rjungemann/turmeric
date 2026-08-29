@@ -12485,6 +12485,7 @@ int emit_program(Buf *out, const Expr *program) {
         return -1;
     }
     emit_mark_byval_fn_field_closures(program);
+    emit_expr_depth_reset();   /* expression-walk depth bound (TUR-E0712) */
     /* gcc14-int-conversion / S1: start this program's ground-truth side tables
      * fresh, ahead of every recording site (ADT ctors land in `early_file`
      * before the forward-declaration pass runs). */

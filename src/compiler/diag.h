@@ -229,6 +229,15 @@ typedef enum DiagCode {
      * module-level side-effect position today, so this is rejected rather than
      * emitted; `defer` is the one non-definition form that is legal here. */
     TUR_E0711_MODULE_TOPLEVEL_EXPR,
+    /* emit-value-dispatch-unbounded-recursion: the emitter's expression walk
+     * (emit_value -> emit_value_dispatch -> emit_builtin -> ...) is plain
+     * structural recursion, so a deeply nested expression exhausted the C
+     * stack -- a SIGSEGV with no source attribution, and on the documented
+     * Debug+ASan bootstrap build it took only ~50 levels because ASan inflates
+     * the frame roughly 40x.  Bounded now, so an expression too deep to compile
+     * gets a diagnostic instead of a crash.  `tur check` runs the emitter too,
+     * so this covers the LSP path as well. */
+    TUR_E0712_EXPR_NESTING_TOO_DEEP,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

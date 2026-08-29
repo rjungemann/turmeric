@@ -228,6 +228,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0709_RETURN_TYPE_MISMATCH:             return "TUR-E0709";
         case TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE: return "TUR-E0710";
         case TUR_E0711_MODULE_TOPLEVEL_EXPR:             return "TUR-E0711";
+        case TUR_E0712_EXPR_NESTING_TOO_DEEP:            return "TUR-E0712";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -395,6 +396,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0709") == 0) return TUR_E0709_RETURN_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0710") == 0) return TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE;
     if (strcmp(s, "TUR-E0711") == 0) return TUR_E0711_MODULE_TOPLEVEL_EXPR;
+    if (strcmp(s, "TUR-E0712") == 0) return TUR_E0712_EXPR_NESTING_TOO_DEEP;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;

@@ -10,6 +10,10 @@ with thresholds measured on both a sanitized and an unsanitized build. Reported
 from Linux at `ulimit -S -s 2048` against `main`'s own sources; reproduces on
 macOS at the default limit.
 
+**Status: RESOLVED 2026-08-29** as TUR-E0712, taking fix direction (1) only.
+Direction (2) -- shrink the frame or move to a worklist -- is still open and
+still worth doing; see [Resolution](#resolution).
+
 ## Summary
 
 `emit_value` / `emit_value_dispatch` walk the expression tree by plain
@@ -140,3 +144,68 @@ the documented bootstrap build locally.
 
 - docs/guides/test-suite-portability-guide.md -- it covers ASan build traps
   already; a stack-size note belongs with them.
+
+---
+
+## Resolution
+
+Fixed 2026-08-29 as **TUR-E0712**, taking fix direction (1). This report needed
+no correcting -- the diagnosis, the measured thresholds, and the advice about
+the fixture all held up. Two things it left open are settled below.
+
+### The guard
+
+The counter lives in `emit_value` (`src/compiler/emit_expr.c`) rather than
+being threaded as a parameter. `emit_value` sits on every turn of the cycle
+this report traced -- `emit_value_dispatch` -> `emit_value` -> `emit_builtin`
+-> `emit_value_dispatch` -- so one counter there bounds the whole walk without
+touching `emit_value`'s many callers.
+
+On hitting the bound it reports once (every enclosing level would otherwise
+repeat the same message for the same expression) and returns `strdup("0")`, a
+valid C expression, so the rest of emission stays well-formed and the build
+fails on the diagnostic rather than on malformed output. No new plumbing was
+needed to fail the build: `emit_program` already ends with
+`return diag_had_error() ? 1 : 0;`.
+
+### Choosing the bound: 40
+
+This report gave the ceiling; the floor had to be measured. Both matter, and
+they only just fit:
+
+- **Ceiling** -- the bound must fire before the stack runs out on the
+  *documented* build. From the table above: 47 levels (macOS/clang + ASan, 8 MB)
+  and 60-80 (Linux/gcc + ASan, 8 MB, reproduced here). So it must clear 47.
+- **Floor** -- it must not reject real code. Instrumenting `emit_value` and
+  running every `.tur` in `stdlib/`, `tests/fixtures/` and `examples/` (3014
+  files) puts the deepest nesting **anywhere in the tree at 20**, in
+  `conv-defstruct-setmap-lowering`. Nothing else exceeds 17.
+
+40 clears the worst sanitized threshold and leaves 2x headroom over the deepest
+real expression. The suite confirms it: 2723 passed, 0 failed, nothing newly
+rejected.
+
+That the two bounds only just fit is the argument for direction (2).
+
+### Direction (2) is still open
+
+Not attempted here, as this report recommended. The frame is still ~170 KB
+under ASan / ~4 KB plain, and the bound is still a stack budget rather than a
+language limit. An explicit worklist would remove it entirely. Anyone picking
+that up can delete `EMIT_MAX_EXPR_DEPTH` and TUR-E0712 with it.
+
+### Regression
+
+`tests/fixtures/errors/expr-nesting-depth-limit/` -- 60 levels, which clears
+the bound (40) while staying far under the stack cliff, so it asserts the
+diagnostic and does not double as a stack-size canary, exactly as this report
+asked. `tur check` is covered by the same fixture, since `check` runs the
+emitter.
+
+### Guide
+
+`docs/guides/test-suite-portability-guide.md` gains section 7c, "ASan inflates
+the stack ~40x", next to the existing sanitizer traps: the measured table, the
+two traps it creates (a depth crash on a Debug build is not evidence of runaway
+recursion; raising `ulimit -s` only buys a linear factor), and the rule that a
+depth bound has to be calibrated against the sanitized build.
