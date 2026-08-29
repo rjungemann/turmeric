@@ -102,6 +102,7 @@
 #include "lsp/lsp.h"
 #include "lsp/lsp_sym.h"
 #include "lsp/lsp_collect.h"
+#include "lsp/lsp_scope.h"
 #include "stdlib_autoload.h"
 #include "lsp/lsp_docs.h"
 /* MCP server */
@@ -771,6 +772,10 @@ static int compile_to_c(const char *path, Buf *out_c,
     file.path = path;
     file.src = src_adj;
     file.len = len_adj;
+    /* How much of the file `src_adj` skipped -- the `#lang` line. Span
+     * offsets index src_adj; anything that seeks into the file on disk (the
+     * LSP's scope table) has to add this back. */
+    file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
     file.lang_layers = lang_layers;
@@ -834,6 +839,11 @@ static int compile_to_c(const char *path, Buf *out_c,
          * may have succeeded even when borrow-check reports errors. */
         if (lsp_collect_active() && ctx.prog)
             lsp_collect_program(ctx.prog);
+        /* Locals ride the same hook as globals, for the reason lsp_collect.h
+         * gives about there being exactly one walk: a second traversal is a
+         * second thing to keep in agreement with the elaborator. */
+        if (lsp_scope_active() && ctx.prog)
+            lsp_scope_program(ctx.prog);
         if (g_audit_spans) {
             /* Audit-only mode: never emit.  A clean audit is rc 0; remaining
              * holes surface as rc 3 (distinct from rc 1 = elaboration failure,
@@ -977,6 +987,10 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     file.path = path;
     file.src = src_adj;
     file.len = len_adj;
+    /* How much of the file `src_adj` skipped -- the `#lang` line. Span
+     * offsets index src_adj; anything that seeks into the file on disk (the
+     * LSP's scope table) has to add this back. */
+    file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
     file.lang_layers = lang_layers;
@@ -1080,6 +1094,10 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     file.path = path;
     file.src = src_adj;
     file.len = len_adj;
+    /* How much of the file `src_adj` skipped -- the `#lang` line. Span
+     * offsets index src_adj; anything that seeks into the file on disk (the
+     * LSP's scope table) has to add this back. */
+    file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
     file.lang_layers = lang_layers;
@@ -6673,6 +6691,7 @@ static int parse_check_read(const char *path, ReaderType forced, Buf *out) {
     file.path        = path;
     file.src         = rest;
     file.len         = rest_len;
+    file.head_offset = (size_t)(rest - src);
     file.file_id     = 0;
     file.reader_type = reader;
     diag_register_file(&file);
@@ -10524,6 +10543,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "lsp") == 0) {
         diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--rename-exports") == 0)
+                lsp_set_rename_exports(true);
+        }
         lsp_server_run(STDIN_FILENO, STDOUT_FILENO);
         return 0;
     }

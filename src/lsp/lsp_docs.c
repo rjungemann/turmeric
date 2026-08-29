@@ -218,6 +218,7 @@ void lsp_docs_free(void) {
         free(d->path);
         free(d->text);
         free(d->symbols);
+        free(d->bindings);
         free(d);
     }
     free(slots_);
@@ -252,6 +253,15 @@ void lsp_doc_free_symbols(LspDoc *doc) {
     /* ever_analyzed is deliberately NOT cleared: this is called to swap one
      * index for another, and the fact that an analysis once succeeded is a
      * property of the document, not of the array being replaced. */
+}
+
+void lsp_doc_free_bindings(LspDoc *doc) {
+    if (!doc) return;
+    free(doc->bindings);
+    doc->bindings           = NULL;
+    doc->binding_count      = 0;
+    doc->binding_cap        = 0;
+    doc->bindings_truncated = 0;
 }
 
 static LspDoc *make_doc(const char *uri, size_t uri_len,
@@ -318,6 +328,7 @@ void lsp_doc_close(const char *uri, size_t uri_len) {
     if (idx == (size_t)-1) return;
     LspDoc *d = slots_[idx].doc;
     lsp_doc_free_symbols(d);
+    lsp_doc_free_bindings(d);
     free(d->uri); free(d->path); free(d->text); free(d);
     slots_[idx].doc = NULL;
     count_--;

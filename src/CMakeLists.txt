@@ -287,6 +287,7 @@ set(TUR_CORE_SOURCES
     lsp/lsp_io.c
     lsp/lsp_sink.c
     lsp/lsp_collect.c
+    lsp/lsp_scope.c
     lsp/lsp_json.c
     lsp/lsp_docs.c
     lsp/lsp_util.c

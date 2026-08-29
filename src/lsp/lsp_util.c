@@ -223,6 +223,24 @@ int lsp_enclosing_call(const char *text, size_t text_len,
     return 1;
 }
 
+int lsp_ident_range_at(const char *text, size_t text_len, size_t off,
+                       size_t *start, size_t *end) {
+    if (!text || text_len == 0 || !start || !end) return 0;
+    if (off > text_len) off = text_len;
+    /* A caret just past the last character of a name still belongs to it. */
+    if ((off >= text_len || !is_ident_char(text[off])) &&
+        off > 0 && is_ident_char(text[off - 1]))
+        off--;
+    if (off >= text_len || !is_ident_char(text[off])) return 0;
+
+    size_t s = off, e = off;
+    while (s > 0 && is_ident_char(text[s - 1])) s--;
+    while (e < text_len && is_ident_char(text[e])) e++;
+    *start = s;
+    *end   = e;
+    return 1;
+}
+
 char *lsp_path_to_uri(const char *path, char *dest, size_t dest_cap) {
     if (!path || !dest || dest_cap < 8) return dest;
     size_t di = 0;
@@ -325,7 +343,7 @@ void lsp_scan_occurrences(const char *text, size_t text_len,
         while (i < text_len && is_ident_char(text[i])) i++;
         size_t len = i - start;
         if (len == nlen && memcmp(text + start, name, nlen) == 0) {
-            fn(line0, (int)(start - line_start), (int)nlen, user);
+            fn(start, line0, (int)(start - line_start), (int)nlen, user);
         }
     }
     #undef ADVANCE
