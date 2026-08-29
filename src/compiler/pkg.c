@@ -2640,61 +2640,136 @@ static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
     }
     fprintf(f, "],\\n\"\n");
 
-    /* link_flags -- artifact paths, then transitive requirements, then the
-     * dep's own verbatim escape hatch. */
-    fprintf(f, "  \"    \\\"link_flags\\\":   [");
-    bool first = true;
+    /* link_flags -- computed by the prelude into ${_tur_lf_json}. */
+    fprintf(f, "  \"    \\\"link_flags\\\":   [${_tur_lf_json}]\\n\"\n");
+}
+
+/* The constant CMake helper that turns one target's INTERFACE_LINK_LIBRARIES
+ * into link-line tokens. Emitted once per generated CMakeLists.
+ *
+ * This runs at *configure* time, where `if(TARGET ...)` and
+ * get_target_property are available -- which is the whole point. A generator
+ * expression can read the property but cannot iterate it, and the raw entries
+ * cannot be classified by string inspection downstream:
+ *
+ *   - a bare entry may be a library name (`m` -> -lm) or a CMake target name
+ *     (raylib's INTERFACE_LINK_LIBRARIES lists `glfw`). Identical shape,
+ *     opposite handling, and guessing "library" emits a `-lglfw` that does not
+ *     exist.
+ *   - a target may have no linkable artifact at all. raylib vendors glfw as an
+ *     OBJECT_LIBRARY whose objects are already inside libraylib.a, so the
+ *     correct action is to drop it -- and $<TARGET_FILE:...> on it is a hard
+ *     generate-time error ("Target glfw is not an executable or library").
+ *   - $<LINK_ONLY:...> survives one level of $<TARGET_PROPERTY:...> expansion
+ *     as literal text, so it has to be unwrapped here rather than downstream. */
+static void emit_link_iface_helper(FILE *f) {
+    fputs(
+    "# Resolve one target's INTERFACE_LINK_LIBRARIES into link-line tokens.\n"
+    "set(_TUR_LINKABLE STATIC_LIBRARY SHARED_LIBRARY MODULE_LIBRARY\n"
+    "                  UNKNOWN_LIBRARY EXECUTABLE)\n"
+    "# Recursive: a target with no artifact of its own still carries\n"
+    "# requirements. raylib vendors glfw as an OBJECT_LIBRARY -- its objects\n"
+    "# are already inside libraylib.a, so it contributes no -l, but the Cocoa\n"
+    "# and IOKit frameworks its macOS backend needs live on *its*\n"
+    "# INTERFACE_LINK_LIBRARIES and are reachable no other way. `_seen` guards\n"
+    "# against link cycles.\n"
+    "function(_tur_walk_iface tgt acc_var seen_var)\n"
+    "  set(_acc \"${${acc_var}}\")\n"
+    "  set(_seen \"${${seen_var}}\")\n"
+    "  if(NOT \"${tgt}\" IN_LIST _seen)\n"
+    "    list(APPEND _seen \"${tgt}\")\n"
+    "    if(TARGET \"${tgt}\")\n"
+    "      get_target_property(_ill \"${tgt}\" INTERFACE_LINK_LIBRARIES)\n"
+    "      if(_ill)\n"
+    "        foreach(_e IN LISTS _ill)\n"
+    "          string(REGEX REPLACE \"^\\\\$<LINK_ONLY:(.*)>$\" \"\\\\1\" _e \"${_e}\")\n"
+    "          if(NOT _e MATCHES \"^\\\\$<\")\n"
+    "            if(TARGET \"${_e}\")\n"
+    "              get_target_property(_ty \"${_e}\" TYPE)\n"
+    "              if(_ty IN_LIST _TUR_LINKABLE)\n"
+    "                list(APPEND _acc \"$<TARGET_FILE:${_e}>\")\n"
+    "                if(_ty STREQUAL SHARED_LIBRARY)\n"
+    "                  list(APPEND _acc \"-Wl,-rpath,$<TARGET_FILE_DIR:${_e}>\")\n"
+    "                endif()\n"
+    "              else()\n"
+    "                set(_a \"${_acc}\")\n"
+    "                set(_s \"${_seen}\")\n"
+    "                _tur_walk_iface(\"${_e}\" _a _s)\n"
+    "                set(_acc \"${_a}\")\n"
+    "                set(_seen \"${_s}\")\n"
+    "              endif()\n"
+    "            else()\n"
+    "              list(APPEND _acc \"${_e}\")\n"
+    "            endif()\n"
+    "          endif()\n"
+    "        endforeach()\n"
+    "      endif()\n"
+    "    endif()\n"
+    "  endif()\n"
+    "  set(${acc_var} \"${_acc}\" PARENT_SCOPE)\n"
+    "  set(${seen_var} \"${_seen}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n"
+    "function(_tur_resolve_link_iface tgt out_var)\n"
+    "  set(_acc \"\")\n"
+    "  set(_seen \"\")\n"
+    "  _tur_walk_iface(\"${tgt}\" _acc _seen)\n"
+    "  set(${out_var} \"${_acc}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n"
+    "# Append one target's own artifact (and an rpath if it is shared).\n"
+    "function(_tur_append_artifact tgt out_var)\n"
+    "  set(_out ${${out_var}})\n"
+    "  if(TARGET \"${tgt}\")\n"
+    "    get_target_property(_ty \"${tgt}\" TYPE)\n"
+    "    if(_ty IN_LIST _TUR_LINKABLE)\n"
+    "      list(APPEND _out \"$<TARGET_FILE:${tgt}>\")\n"
+    "      if(_ty STREQUAL SHARED_LIBRARY)\n"
+    "        list(APPEND _out \"-Wl,-rpath,$<TARGET_FILE_DIR:${tgt}>\")\n"
+    "      endif()\n"
+    "    endif()\n"
+    "  endif()\n"
+    "  set(${out_var} \"${_out}\" PARENT_SCOPE)\n"
+    "endfunction()\n\n", f);
+}
+
+/* Emit the CMake that computes ${_tur_lf_json} for one dep: the JSON body of
+ * its "link_flags" array. Must precede the string(APPEND _spice_manifest ...)
+ * block that references it, and must sit inside the same CMake `if` branch,
+ * because a :prefer-system dep's targets differ per branch. */
+static void emit_link_flags_prelude(FILE *f, const PkgCmakeDep *d,
+                                    bool use_full_targets) {
+    fprintf(f, "set(_tur_lf \"\")\n");
+    /* The dep's own artifacts, unless :link-libs took over the link. */
     if (!d->has_link_libs) {
         for (int j = 0; j < d->n_targets; j++) {
             const char *t = use_full_targets
                                 ? d->targets[j]
                                 : cmake_target_basename(d->targets[j]);
-            fprintf(f,
-                "%s\\\"$<$<NOT:$<STREQUAL:$<TARGET_PROPERTY:%s,TYPE>,"
-                "INTERFACE_LIBRARY>>:$<TARGET_FILE:%s>>\\\"",
-                first ? "" : ", ", t, t);
-            first = false;
+            fprintf(f, "_tur_append_artifact(\"%s\" _tur_lf)\n", t);
         }
     }
-    /* A shared target's artifact carries an @rpath/SONAME install name, and
-     * nothing else on the link line supplies a runtime search path -- so the
-     * link succeeds and the program dies at startup with
-     * "Library not loaded: @rpath/libz.1.dylib". Emit an rpath for the
-     * directory the artifact lives in, guarded on TYPE the same way
-     * $<TARGET_FILE:...> is above.
-     *
-     * This is a *build-tree* rpath: it makes the binary runnable where it was
-     * built, which is what `tur run` and the test suites need. It is not
-     * relocatable, so a binary shipped elsewhere still needs its dependency
-     * installed or bundled. Static targets are unaffected (the guard yields
-     * an empty element, which the consumer skips). */
-    if (!d->has_link_libs) {
-        for (int j = 0; j < d->n_targets; j++) {
-            const char *t = use_full_targets
-                                ? d->targets[j]
-                                : cmake_target_basename(d->targets[j]);
-            fprintf(f,
-                "%s\\\"$<$<STREQUAL:$<TARGET_PROPERTY:%s,TYPE>,"
-                "SHARED_LIBRARY>:-Wl,-rpath,$<TARGET_FILE_DIR:%s>>\\\"",
-                first ? "" : ", ", t, t);
-            first = false;
-        }
-    }
+    /* Transitive requirements -- where -framework Cocoa lives. */
     for (int j = 0; j < d->n_targets; j++) {
         const char *t = use_full_targets
                             ? d->targets[j]
                             : cmake_target_basename(d->targets[j]);
-        fprintf(f,
-            "%s\\\"$<JOIN:$<TARGET_PROPERTY:%s,"
-            "INTERFACE_LINK_LIBRARIES>,\\\", \\\">\\\"",
-            first ? "" : ", ", t);
-        first = false;
+        fprintf(f, "_tur_resolve_link_iface(\"%s\" _tur_ill)\n", t);
+        fprintf(f, "list(APPEND _tur_lf ${_tur_ill})\n");
     }
-    for (int j = 0; j < d->n_link_flags; j++) {
-        fprintf(f, "%s\\\"%s\\\"", first ? "" : ", ", d->link_flags[j]);
-        first = false;
-    }
-    fprintf(f, "]\\n\"\n");
+    /* The dep's verbatim escape hatch, last. */
+    for (int j = 0; j < d->n_link_flags; j++)
+        fprintf(f, "list(APPEND _tur_lf \"%s\")\n", d->link_flags[j]);
+    /* JSON-ify: "a", "b". Quotes are written into the manifest text, so they
+     * are escaped once here and land literal. */
+    fprintf(f,
+        "set(_tur_lf_json \"\")\n"
+        "foreach(_e IN LISTS _tur_lf)\n"
+        "  if(NOT _tur_lf_json STREQUAL \"\")\n"
+        "    string(APPEND _tur_lf_json \", \")\n"
+        "  endif()\n"
+        "  string(APPEND _tur_lf_json \"\\\"${_e}\\\"\")\n"
+        "endforeach()\n");
 }
 
 /* ================================================================== */
@@ -3233,6 +3308,8 @@ bool pkg_gen_cmake_deps(const char *project_dir,
     fprintf(f, "option(TUR_FETCH_FORCE_FETCH "
                "\"Bypass system find_package for :prefer-system deps\" OFF)\n\n");
 
+    emit_link_iface_helper(f);
+
     /* Declare and make available each dep */
     for (int i = 0; i < manifest->n_cmake_deps; i++) {
         const PkgCmakeDep *d = &manifest->cmake_deps[i];
@@ -3370,11 +3447,13 @@ bool pkg_gen_cmake_deps(const char *project_dir,
          * emitted under a runtime CMake `if`. */
         if (d->prefer_system) {
             fprintf(f, "if(_%s_resolved_via STREQUAL \"system\")\n", d->name);
+            emit_link_flags_prelude(f, d, /*use_full_targets=*/true);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/true);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/true);
             fprintf(f, ")\n");
             fprintf(f, "else()\n");
+            emit_link_flags_prelude(f, d, /*use_full_targets=*/false);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/false);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
@@ -3396,6 +3475,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
              * the heuristic misses libraries (e.g. yyjson) that publish their
              * public header from a non-standard subdir like ${SOURCE_DIR}/src.
              * Falls back to the heuristic when no :targets are declared. */
+            emit_link_flags_prelude(f, d, /*use_full_targets=*/false);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/d->n_targets > 0);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
@@ -3810,6 +3890,21 @@ static void append_link_flag_token(Buf *buf, const char *tok) {
     if (!tok || !tok[0]) return;
     if (strstr(tok, "$<")) return;          /* unevaluated genex */
     if (strstr(tok, "::")) return;          /* namespaced target name */
+    /* An Apple framework arrives from INTERFACE_LINK_LIBRARIES as an absolute
+     * path to the .framework *directory* (raylib reports OpenGL that way).
+     * That cannot be passed through as a link input -- ld rejects it with
+     * "file cannot be mmap()ed, errno=22", because a .framework is a directory
+     * and not an object. It has to be respelled as `-framework <name>`. */
+    size_t n = strlen(tok);
+    const char *sfx = ".framework";
+    size_t sn = strlen(sfx);
+    if (tok[0] == '/' && n > sn && strcmp(tok + n - sn, sfx) == 0) {
+        const char *slash = strrchr(tok, '/');
+        const char *base  = slash ? slash + 1 : tok;
+        buf_printf(buf, " -framework %.*s", (int)((n - sn) - (size_t)(base - tok)),
+                   base);
+        return;
+    }
     if (tok[0] == '-' || tok[0] == '/')
         buf_printf(buf, " %s", tok);        /* flag or absolute path */
     else
