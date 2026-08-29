@@ -1,5 +1,27 @@
 # `TUR_STDLIB_DIR` is validated for existence, not for matching this compiler
 
+**PARTIALLY FIXED 2026-08-28 -- fix direction (2) only; this report stays open
+for (1).** `resolve_stdlib_root` now emits a two-line notice when
+`$TUR_STDLIB_DIR` is accepted *and* a stdlib beside the binary exists *and* the
+two are different directories (`realpath`-compared, so a symlinked or
+trailing-slash spelling does not false-positive):
+
+```
+tur: TUR_STDLIB_DIR=<...>/turmeric/0.36.0/stdlib overrides the stdlib beside this binary (<...>/stdlib).
+tur: a stdlib from a different release will miscompile against this compiler; unset it if that was not deliberate.
+```
+
+That is the diagnosability half, and it is what would have collapsed the
+investigation behind `type-fuzz-src-red-on-clang-21` from hours to seconds.
+
+**The validation half is still missing**, which is what this report is about: a
+mismatched stdlib is still *accepted*, and the notice is a heuristic ("differs
+from the walk-up"), not a check that the stdlib matches this compiler. Someone
+who deliberately points at another tree gets a notice they do not need, and a
+compiler with no walk-up stdlib beside it (an odd install layout) still gets no
+signal at all. Closing it properly needs fix direction (1) below -- a version
+stamp -- which does not exist yet.
+
 **Severity: medium** -- not a miscompile in itself, but it routes a current
 compiler at an old release's stdlib and the failure surfaces far downstream as
 what looks exactly like a codegen bug. Found 2026-08-28 while resolving
