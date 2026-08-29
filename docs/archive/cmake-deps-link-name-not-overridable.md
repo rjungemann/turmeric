@@ -1,5 +1,14 @@
 # `:cmake-deps` derives the `-l` name from the target name, with no override
 
+**RESOLVED 2026-08-28.** Fixed in the suggested order, (1) then (3): a
+`:targets` dep now links by `$<TARGET_FILE:...>` artifact path instead of a
+name-derived `-l`, and `:link-libs` became per-dep manifest surface where
+`:link-libs []` means "link nothing" for the degenerate deps. (2) was skipped,
+as this report advised. Landed with
+[cmake-deps-cannot-express-framework](cmake-deps-cannot-express-framework.md).
+Paper trail:
+[history/cmake-deps-framework-and-link-name.md](history/cmake-deps-framework-and-link-name.md).
+
 **Severity: medium** (ergonomics/expressiveness hole, not a miscompile -- but it
 forces a hand-written CMake shim per dependency, and four of
 `turmeric-spices`'s real deps need one). Found 2026-08-28 getting

@@ -45,6 +45,20 @@ typedef struct PkgCmakeDep {
     char         *cmake_version;   /* optional minimum version for find_package */
     char        **targets;     /* CMake targets to link against */
     int           n_targets;
+    /* `:link-libs [...]` -- overrides the -l name(s) derived from :targets.
+     * The empty list is meaningful and distinct from an absent key: it says
+     * "this dep contributes include dirs only, link nothing", which is the
+     * only way to express a header-only dep (raygui) or a code generator that
+     * builds no library at all (glad). has_link_libs records key presence so
+     * [] can be told apart from absent. */
+    char        **link_libs;
+    int           n_link_libs;
+    bool          has_link_libs;
+    /* `:link-flags [...]` -- verbatim link-line tokens, appended with no
+     * prefix added. The escape hatch for anything the structured keys cannot
+     * describe (e.g. `-framework Cocoa`, `-Wl,...`). */
+    char        **link_flags;
+    int           n_link_flags;
     PkgCmakeOpt  *opts;
     int           n_opts;
 } PkgCmakeDep;
@@ -63,6 +77,13 @@ typedef struct PkgCmakeManifestEntry {
     int    n_link_dirs;
     char **link_libs;
     int    n_link_libs;
+    /* Verbatim link-line tokens -- no -I/-L/-l prefix is added. Carries the
+     * entries CMake reports in a target's INTERFACE_LINK_LIBRARIES (notably
+     * `-framework Cocoa` on macOS, which cannot be spelled as -l) and the
+     * $<TARGET_FILE:...> artifact paths. See
+     * pkg_cmake_manifest_append_cc_flags for how each token is classified. */
+    char **link_flags;
+    int    n_link_flags;
 } PkgCmakeManifestEntry;
 
 typedef struct PkgCmakeManifest {
@@ -118,6 +139,12 @@ typedef struct PkgManifest {
     int          n_c_flags;
     char       **link_libs;
     int          n_link_libs;
+    /* `:build-opts :link-flags [...]` -- verbatim link-line tokens for the
+     * project's own link (no -l prefix added). :link-libs cannot express a
+     * `-framework Cocoa`, and a project whose own inline-C needs one has no
+     * :cmake-deps entry to hang a per-dep :link-flags on. */
+    char       **link_flags;
+    int          n_link_flags;
     /* spices-c-sources-plan: auxiliary hand-written C sources vendored into
      * the spice (e.g. KissFFT, stb_image). Paths are stored as written in
      * build.tur (relative to the manifest dir) and compiled + linked into the

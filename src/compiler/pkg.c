@@ -329,6 +329,14 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         d->prefer_system  = form_bool_val(map_get_kw(val, "prefer-system"));
         d->cmake_version  = form_str_dup(map_get_kw(val, "cmake-version"));
         parse_str_vec(map_get_kw(val, "targets"), &d->targets, &d->n_targets);
+        /* :link-libs overrides the -l name derived from the target name; the
+         * empty list is a meaningful value ("link nothing"), so record key
+         * presence separately from the count. */
+        const Form *ll_f = map_get_kw(val, "link-libs");
+        d->has_link_libs = (ll_f != NULL);
+        parse_str_vec(ll_f, &d->link_libs, &d->n_link_libs);
+        parse_str_vec(map_get_kw(val, "link-flags"),
+                      &d->link_flags, &d->n_link_flags);
         const Form *opts_f = map_get_kw(val, "options");
         parse_cmake_opts(opts_f, &d->opts, &d->n_opts);
 
@@ -852,6 +860,8 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 const Form *if_ = map_get_kw(vf, "c-includes");
                 parse_str_vec(cf, &out->c_flags,   &out->n_c_flags);
                 parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
+                parse_str_vec(map_get_kw(vf, "link-flags"),
+                              &out->link_flags, &out->n_link_flags);
                 out->no_stdlib = form_bool_val(nf);
                 /* spices-c-sources-plan: validate vendored sources/includes
                  * against the manifest directory (the dir holding build.tur). */
@@ -1071,6 +1081,24 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
                 }
                 fprintf(f, "]");
             }
+            /* has_link_libs, not the count: `:link-libs []` is a value that
+             * has to survive the round trip. */
+            if (d->has_link_libs) {
+                fprintf(f, " :link-libs [");
+                for (int j = 0; j < d->n_link_libs; j++) {
+                    if (j) fprintf(f, " ");
+                    fprintf(f, "\"%s\"", d->link_libs[j]);
+                }
+                fprintf(f, "]");
+            }
+            if (d->n_link_flags > 0) {
+                fprintf(f, " :link-flags [");
+                for (int j = 0; j < d->n_link_flags; j++) {
+                    if (j) fprintf(f, " ");
+                    fprintf(f, "\"%s\"", d->link_flags[j]);
+                }
+                fprintf(f, "]");
+            }
             if (d->n_opts > 0) {
                 fprintf(f, " :options #{");
                 for (int j = 0; j < d->n_opts; j++) {
@@ -1085,8 +1113,8 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "  }\n");
     }
 
-    if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->no_stdlib ||
-        m->n_c_sources > 0 || m->n_c_includes > 0) {
+    if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->n_link_flags > 0 ||
+        m->no_stdlib || m->n_c_sources > 0 || m->n_c_includes > 0) {
         fprintf(f, "\n  :build-opts #{\n");
         if (m->n_c_flags > 0) {
             fprintf(f, "    :c-flags [");
@@ -1117,6 +1145,14 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
             for (int i = 0; i < m->n_link_libs; i++) {
                 if (i) fprintf(f, " ");
                 fprintf(f, "\"%s\"", m->link_libs[i]);
+            }
+            fprintf(f, "]\n");
+        }
+        if (m->n_link_flags > 0) {
+            fprintf(f, "    :link-flags [");
+            for (int i = 0; i < m->n_link_flags; i++) {
+                if (i) fprintf(f, " ");
+                fprintf(f, "\"%s\"", m->link_flags[i]);
             }
             fprintf(f, "]\n");
         }
@@ -1205,6 +1241,12 @@ void pkg_manifest_free(PkgManifest *m) {
         for (int j = 0; j < m->cmake_deps[i].n_targets; j++)
             free(m->cmake_deps[i].targets[j]);
         free(m->cmake_deps[i].targets);
+        for (int j = 0; j < m->cmake_deps[i].n_link_libs; j++)
+            free(m->cmake_deps[i].link_libs[j]);
+        free(m->cmake_deps[i].link_libs);
+        for (int j = 0; j < m->cmake_deps[i].n_link_flags; j++)
+            free(m->cmake_deps[i].link_flags[j]);
+        free(m->cmake_deps[i].link_flags);
         for (int j = 0; j < m->cmake_deps[i].n_opts; j++) {
             free(m->cmake_deps[i].opts[j].key);
             free(m->cmake_deps[i].opts[j].val);
@@ -1216,6 +1258,8 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->exports);
     for (int i = 0; i < m->n_c_flags;   i++) free(m->c_flags[i]);
     free(m->c_flags);
+    for (int i = 0; i < m->n_link_flags; i++) free(m->link_flags[i]);
+    free(m->link_flags);
     for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
     free(m->link_libs);
     for (int i = 0; i < m->n_c_sources;  i++) free(m->c_sources[i]);
@@ -2503,16 +2547,46 @@ static void emit_include_dirs_line(FILE *f, const PkgCmakeDep *d,
     }
 }
 
-/* Emit the JSON "link_dirs"/"link_libs" lines for one manifest entry.
- *   use_full_targets -- when true, $<TARGET_FILE_DIR:...> is keyed off the
- *     fully-qualified target name (e.g. "MbedTLS::mbedtls"), which is what a
- *     system find_package() imports. When false, the namespace-stripped
+/* Emit the JSON "link_dirs"/"link_libs"/"link_flags" lines for one manifest
+ * entry.
+ *   use_full_targets -- when true, the $<TARGET_*:...> genexprs are keyed off
+ *     the fully-qualified target name (e.g. "MbedTLS::mbedtls"), which is what
+ *     a system find_package() imports. When false, the namespace-stripped
  *     basename ("mbedtls") is used, which is what the FetchContent build
- *     exports. link_libs is always the basename (the -l name is identical
- *     either way). When :targets is empty, both branches fall back to the
- *     dep's BINARY_DIR var and the single cmake_dep_link_lib() name. */
+ *     exports. When :targets is empty, both branches fall back to the dep's
+ *     BINARY_DIR var and the single cmake_dep_link_lib() name.
+ *
+ * With :targets declared, the link line is asked of CMake rather than
+ * reconstructed from the target's *name*:
+ *
+ *   - the artifact is $<TARGET_FILE:t>, the exact file the target produces.
+ *     That resolves OUTPUT_NAME (glfw's target is `glfw`, its archive is
+ *     `libglfw3.a`), namespace aliasing (PostgreSQL::PostgreSQL -> libpq), and
+ *     static-vs-shared preference (zlib builds both `libz.a` and `libz.1.dylib`
+ *     into one directory, where a `-lz` resolves to the dylib and then fails at
+ *     load with "Library not loaded: @rpath/libz.1.dylib -- no LC_RPATH's
+ *     found"). A name-derived `-l` reaches none of the three.
+ *
+ *   - the transitive requirements are INTERFACE_LINK_LIBRARIES, which is where
+ *     `-framework Cocoa` / `-framework IOKit` live for the Objective-C macOS
+ *     backends of glfw and raylib. A framework cannot be spelled as `-l` at
+ *     all, so before this there was no link line that worked on macOS -- the
+ *     failure was `ld: symbol(s) not found for architecture arm64` with
+ *     `_objc_retain` missing, which reads as a toolchain problem rather than a
+ *     missing flag. This is the sibling property of the
+ *     INTERFACE_INCLUDE_DIRECTORIES that emit_include_dirs_line already reads.
+ *
+ * $<TARGET_FILE:...> is an error on an INTERFACE library (a header-only dep
+ * has no artifact), so it is wrapped in a TYPE guard. CMake does not evaluate
+ * the false arm of a $<cond:...>, so the guard is safe and yields an empty
+ * element, which the consumer skips.
+ *
+ * A dep's own `:link-libs` overrides all of that -- including `:link-libs []`,
+ * which links nothing (raygui is header-only; glad is a code generator that
+ * builds no library), the one thing no genexpr can express. */
 static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
                             const char *link_lib, bool use_full_targets) {
+    /* link_dirs */
     if (d->n_targets > 0) {
         fprintf(f, "  \"    \\\"link_dirs\\\":    [");
         for (int j = 0; j < d->n_targets; j++) {
@@ -2522,17 +2596,53 @@ static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
             fprintf(f, "%s\\\"$<TARGET_FILE_DIR:%s>\\\"", j ? ", " : "", t);
         }
         fprintf(f, "],\\n\"\n");
-        fprintf(f, "  \"    \\\"link_libs\\\":    [");
-        for (int j = 0; j < d->n_targets; j++) {
-            const char *bn = cmake_target_basename(d->targets[j]);
-            fprintf(f, "%s\\\"%s\\\"", j ? ", " : "", bn);
-        }
-        fprintf(f, "]\\n\"\n");
     } else {
         fprintf(f, "  \"    \\\"link_dirs\\\":    [\\\"${_spice_%s_bld}\\\"],\\n\"\n",
                 d->name);
-        fprintf(f, "  \"    \\\"link_libs\\\":    [\\\"%s\\\"]\\n\"\n", link_lib);
     }
+
+    /* link_libs -- the explicit override, else the derived name, else nothing
+     * (because :targets deps link by artifact path via link_flags below). */
+    fprintf(f, "  \"    \\\"link_libs\\\":    [");
+    if (d->has_link_libs) {
+        for (int j = 0; j < d->n_link_libs; j++)
+            fprintf(f, "%s\\\"%s\\\"", j ? ", " : "", d->link_libs[j]);
+    } else if (d->n_targets == 0) {
+        fprintf(f, "\\\"%s\\\"", link_lib);
+    }
+    fprintf(f, "],\\n\"\n");
+
+    /* link_flags -- artifact paths, then transitive requirements, then the
+     * dep's own verbatim escape hatch. */
+    fprintf(f, "  \"    \\\"link_flags\\\":   [");
+    bool first = true;
+    if (!d->has_link_libs) {
+        for (int j = 0; j < d->n_targets; j++) {
+            const char *t = use_full_targets
+                                ? d->targets[j]
+                                : cmake_target_basename(d->targets[j]);
+            fprintf(f,
+                "%s\\\"$<$<NOT:$<STREQUAL:$<TARGET_PROPERTY:%s,TYPE>,"
+                "INTERFACE_LIBRARY>>:$<TARGET_FILE:%s>>\\\"",
+                first ? "" : ", ", t, t);
+            first = false;
+        }
+    }
+    for (int j = 0; j < d->n_targets; j++) {
+        const char *t = use_full_targets
+                            ? d->targets[j]
+                            : cmake_target_basename(d->targets[j]);
+        fprintf(f,
+            "%s\\\"$<JOIN:$<TARGET_PROPERTY:%s,"
+            "INTERFACE_LINK_LIBRARIES>,\\\", \\\">\\\"",
+            first ? "" : ", ", t);
+        first = false;
+    }
+    for (int j = 0; j < d->n_link_flags; j++) {
+        fprintf(f, "%s\\\"%s\\\"", first ? "" : ", ", d->link_flags[j]);
+        first = false;
+    }
+    fprintf(f, "]\\n\"\n");
 }
 
 /* ================================================================== */
@@ -2559,6 +2669,21 @@ static bool deep_copy_cmake_dep(PkgCmakeDep *dst, const PkgCmakeDep *src) {
             dst->targets[i] = dup_cstr_or_null(src->targets[i]);
         dst->n_targets = src->n_targets;
     }
+    dst->has_link_libs = src->has_link_libs;
+    if (src->n_link_libs > 0) {
+        dst->link_libs = (char **)calloc((size_t)src->n_link_libs, sizeof(char *));
+        if (!dst->link_libs) return false;
+        for (int i = 0; i < src->n_link_libs; i++)
+            dst->link_libs[i] = dup_cstr_or_null(src->link_libs[i]);
+        dst->n_link_libs = src->n_link_libs;
+    }
+    if (src->n_link_flags > 0) {
+        dst->link_flags = (char **)calloc((size_t)src->n_link_flags, sizeof(char *));
+        if (!dst->link_flags) return false;
+        for (int i = 0; i < src->n_link_flags; i++)
+            dst->link_flags[i] = dup_cstr_or_null(src->link_flags[i]);
+        dst->n_link_flags = src->n_link_flags;
+    }
     if (src->n_opts > 0) {
         dst->opts = (PkgCmakeOpt *)calloc((size_t)src->n_opts, sizeof(PkgCmakeOpt));
         if (!dst->opts) return false;
@@ -2580,6 +2705,10 @@ static void free_one_cmake_dep(PkgCmakeDep *d) {
     free(d->cmake_version);
     for (int i = 0; i < d->n_targets; i++) free(d->targets[i]);
     free(d->targets);
+    for (int i = 0; i < d->n_link_libs; i++) free(d->link_libs[i]);
+    free(d->link_libs);
+    for (int i = 0; i < d->n_link_flags; i++) free(d->link_flags[i]);
+    free(d->link_flags);
     for (int i = 0; i < d->n_opts; i++) {
         free(d->opts[i].key);
         free(d->opts[i].val);
@@ -3493,6 +3622,8 @@ bool pkg_cmake_manifest_read(const char *path, PkgCmakeManifest *out) {
                 e->link_dirs = json_parse_str_arr(&p, &e->n_link_dirs);
             } else if (strcmp(key, "link_libs") == 0) {
                 e->link_libs = json_parse_str_arr(&p, &e->n_link_libs);
+            } else if (strcmp(key, "link_flags") == 0) {
+                e->link_flags = json_parse_str_arr(&p, &e->n_link_flags);
             } else {
                 /* skip unknown value */
                 p = json_skip_ws(p);
@@ -3527,9 +3658,46 @@ void pkg_cmake_manifest_free(PkgCmakeManifest *m) {
         free(e->link_dirs);
         for (int j = 0; j < e->n_link_libs; j++) free(e->link_libs[j]);
         free(e->link_libs);
+        for (int j = 0; j < e->n_link_flags; j++) free(e->link_flags[j]);
+        free(e->link_flags);
     }
     free(m->entries);
     memset(m, 0, sizeof(*m));
+}
+
+/* Classify one "link_flags" token and append it to the cc link line.
+ *
+ * The tokens come from a CMake target's INTERFACE_LINK_LIBRARIES (see
+ * emit_link_lines) and from a dep's `:link-flags`, so they arrive in whatever
+ * shape CMake records them rather than in a shape tur chose:
+ *
+ *   "-framework Cocoa"        a linker flag -- verbatim (this is the whole
+ *                             point: a framework cannot be spelled as -l)
+ *   "/abs/path/libfoo.a"      an artifact path (what $<TARGET_FILE:...>
+ *                             yields) -- verbatim, which is what picks a
+ *                             specific archive instead of letting -l prefer
+ *                             a sibling .dylib
+ *   "$<LINK_ONLY:Threads::Threads>"
+ *                             an *unevaluated* genex. file(GENERATE) expands
+ *                             $<TARGET_PROPERTY:...> one level and does not
+ *                             re-evaluate what comes back, so nested genexes
+ *                             survive into the JSON as literal text. Skipped.
+ *   "Foo::Bar"                a namespaced CMake target name. Only CMake can
+ *                             say what artifact that is, and by this point
+ *                             CMake is no longer in the loop. Skipped.
+ *   "m"                       a bare library name -- -lm.
+ *
+ * The two skips are not silent losses relative to the old behavior: before
+ * link_flags existed, INTERFACE_LINK_LIBRARIES was not read at all, so every
+ * one of these entries was dropped. */
+static void append_link_flag_token(Buf *buf, const char *tok) {
+    if (!tok || !tok[0]) return;
+    if (strstr(tok, "$<")) return;          /* unevaluated genex */
+    if (strstr(tok, "::")) return;          /* namespaced target name */
+    if (tok[0] == '-' || tok[0] == '/')
+        buf_printf(buf, " %s", tok);        /* flag or absolute path */
+    else
+        buf_printf(buf, " -l%s", tok);      /* bare library name */
 }
 
 void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
@@ -3547,6 +3715,10 @@ void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
             if (e->link_libs[j] && e->link_libs[j][0])
                 buf_printf(buf, " -l%s", e->link_libs[j]);
         }
+        /* After link_libs: a dep's own artifact must precede the transitive
+         * libraries it depends on for static archive resolution. */
+        for (int j = 0; j < e->n_link_flags; j++)
+            append_link_flag_token(buf, e->link_flags[j]);
     }
 }
 

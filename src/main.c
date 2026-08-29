@@ -1906,6 +1906,13 @@ static void collect_build_aux(const char *input, Buf *cmake_flags,
                     if (pm.link_libs[i] && pm.link_libs[i][0])
                         buf_printf(cmake_flags, " -l%s", pm.link_libs[i]);
                 }
+                /* :link-flags is the verbatim sibling of :link-libs -- no
+                 * prefix is added, which is the only way to spell a
+                 * `-framework Cocoa` (see the note on link_flags in pkg.h). */
+                for (int i = 0; i < pm.n_link_flags; i++) {
+                    if (pm.link_flags[i] && pm.link_flags[i][0])
+                        buf_printf(cmake_flags, " %s", pm.link_flags[i]);
+                }
             }
             pkg_manifest_free(&pm);
         }
