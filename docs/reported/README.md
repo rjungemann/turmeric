@@ -1267,6 +1267,14 @@ framing would miss cases:
 - `forward-referenced-nil-call-bound-to-auto-type` was filed as "`: nil` +
   self-recursion". Recursion is incidental: a plain forward reference with no
   recursion reproduces it, and `: void` is immune in both directions.
+  **RESOLVED 2026-08-29** --
+  [docs/archive/forward-referenced-nil-call-bound-to-auto-type.md](../archive/forward-referenced-nil-call-bound-to-auto-type.md).
+  The narrowing held and the root cause was still somewhere else: not the
+  emitter at all, but the reader parsing a bare `nil` in type position as
+  `F_NIL`, which two forward-declaration pre-passes did not unwrap, so `: nil`
+  forward-declared as the `TY_INT` placeholder. Worth reading before trusting
+  any other report's "Fix direction" section -- both of this one's pointed at
+  the wrong file.
 - `control-form-around-if-double-unboxes-carrier-arms` was filed as "`let`
   around `if`". `do` does it too, and it is specifically the **residue of the
   2026-08-21 fix** to `byvalue-product-tail-var-double-unboxed-nonparametric` --
@@ -1279,7 +1287,6 @@ framing would miss cases:
 | [defmodule-bare-toplevel-forms-silently-dropped](defmodule-bare-toplevel-forms-silently-dropped.md) | high | a bare form at `defmodule` top level is fully elaborated -- type errors inside it *are* reported -- then dropped from codegen with no warning. 109 `(describe ...)` blocks across 37 files in 12 spices never ran; 8 spices were passing CI vacuously, and turning them on immediately surfaced a real `c-dsl` bug its test had always asserted and never run |
 | [hoisted-includes-wrapped-in-has-include](hoisted-includes-wrapped-in-has-include.md) | high | user-written inline-C `#include`s are hoisted inside `#if __has_include`, so a missing header is silent and degrades to implicit declarations. `spices/raygui` had never linked at all; the failures read as FFI binding bugs, and 14 files of `emit-c` output capturing the broken elaboration got committed |
 | [module-level-def-with-linear-init-emits-no-global](module-level-def-with-linear-init-emits-no-global.md) | high | a module-level `def` whose init has a `:linear` type passes `tur check`, emits **no global**, and still emits the references -- `'g_1377' undeclared`. Non-linear control emits it fine. Blocks the process-lifetime-mutex shape (`ws-server`'s broadcast hub); workaround casts to `:int` and back, losing the type checker exactly where a mutex needs it |
-| [forward-referenced-nil-call-bound-to-auto-type](forward-referenced-nil-call-bound-to-auto-type.md) | medium | a statement-position call to a **forward-referenced** `: nil` function is bound to `__auto_type` -- `variable has incomplete type 'void'`. Not the same defect as the archived `let-binding-void-call-emits-invalid-c` (that was a user `let`; this temp is emitter-synthesized, and TUR-E0023 correctly does not fire) |
 | [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
 | [emit-value-dispatch-unbounded-recursion](emit-value-dispatch-unbounded-recursion.md) | high | `emit_value_dispatch`/`emit_value`/`emit_builtin` recurse over the expression tree with no depth bound. **The documented bootstrap build (Debug+ASan) SIGSEGVs on 47 levels of nesting**; unsanitized survives ~2000. `tur check` crashes identically (it runs the emitter), so the LSP path goes through it too. Three other passes already carry a depth guard; the emitter is the outlier |
 | [cmake-deps-cannot-express-framework](cmake-deps-cannot-express-framework.md) | high (blocker, macOS) | `-framework Cocoa` cannot be spelled at any layer -- the manifest JSON has no key (`pkg.c:3484`), `emit_link_lines` never emits one, and the sole consumer hardcodes `-I`/`-L`/`-l` (`pkg.c:3535`). Zero occurrences of "framework" under `src/`. `INTERFACE_LINK_LIBRARIES` holds the answer and is never read -- though the sibling property *is* read for include dirs, 20 lines away. Blocks raygui + opengl |

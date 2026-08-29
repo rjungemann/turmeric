@@ -20,7 +20,7 @@ name is required when the type is a symbol (not fused to a keyword):
 ;; Primitive types
 (defn add [a : int  b : int] : int ...)
 (defn ok? [r : ptr<void>]   : bool ...)
-(defn greet [s : cstr]      : unit ...)
+(defn greet [s : cstr]      : nil ...)
 
 ;; The old fused-keyword style is still accepted for primitives
 (defn add [a :int b :int] :int ...)
@@ -30,7 +30,7 @@ name is required when the type is a symbol (not fused to a keyword):
 ;; Primitive types
 defn add [a : int  b : int] : int ...
 defn ok? [r : ptr<void>]   : bool ...
-defn greet [s : cstr]      : unit ...
+defn greet [s : cstr]      : nil ...
 
 ;; The old fused-keyword style is still accepted for primitives
 defn add [a :int b :int] :int ...
@@ -38,6 +38,23 @@ defn add [a :int b :int] :int ...
 
 New code should prefer the spaced form (`: int`) because it composes cleanly
 with compound types.
+
+### `nil` and `void` are the same type
+
+A function that returns no value is annotated `: nil` or `: void`. These are
+two spellings of one type (`TY_NIL`, emitted as C `void`) and are
+interchangeable everywhere -- return position, parameter position, fused
+(`:nil`) or spaced (`: nil`). Prefer `: nil`; `: void` is kept for interop
+code that reads more naturally in C terms.
+
+There is no `unit` type -- `: unit` is an error.
+
+Note for anyone reading older code or bug reports: the two spellings used to
+diverge in one place. A bare `nil` in type position parses as a nil *literal*,
+not a symbol, and two forward-declaration pre-passes only unwrapped the symbol
+shape, so a `: nil` callee that had not been elaborated yet was forward-typed
+`int` and its call sites broke in the emitted C. Fixed 2026-08-29; see
+[docs/archive/forward-referenced-nil-call-bound-to-auto-type.md](../archive/forward-referenced-nil-call-bound-to-auto-type.md).
 
 ---
 

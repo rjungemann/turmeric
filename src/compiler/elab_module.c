@@ -66,8 +66,22 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
                 (ret_f->as.list.items[0]->tag == F_SYM ||
                  ret_f->as.list.items[0]->tag == F_KEYWORD)) {
                 ret_f = ret_f->as.list.items[0];
+            } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                       ret_f->as.list.items[0]->tag == F_NIL) {
+                /* forward-referenced-nil-call-bound-to-auto-type: the reader
+                 * parses a bare `nil` in type position as F_NIL, not F_SYM, so
+                 * the SYM/KEYWORD unwrap above never sees it and `: nil` fell
+                 * through to the TY_INT placeholder.  A sibling caller
+                 * elaborated BEFORE the callee then typed the call `int`, and
+                 * the statement-position emitter bound a void call into an
+                 * `__auto_type` temp ("variable has incomplete type 'void'").
+                 * `: void` was immune only because `void` is an ordinary
+                 * symbol.  The top-level pre-pass (elab_toplevel.c) has always
+                 * handled F_NIL here; this is the defmodule half. */
+                fwd_result_kind = TY_NIL;
+                ret_f = NULL;
             }
-            if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
+            if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
                 const char *kn = ret_f->as.sym->name;
                 if (strcmp(kn, "int") == 0) fwd_result_kind = TY_INT;
                 else if (strcmp(kn, "bool") == 0) fwd_result_kind = TY_BOOL;
@@ -77,7 +91,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
                       || strcmp(kn, "void") == 0) fwd_result_kind = TY_NIL;
                 else if (strcmp(kn, "ptr") == 0
                       || strcmp(kn, "ptr<void>") == 0) fwd_result_kind = TY_PTR_VOID;
-            } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
+            } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
                 /* Compound return type: peek at the head symbol */
                 Form *head_f = ret_f->as.list.items[0];
                 if (head_f->tag == F_SYM &&

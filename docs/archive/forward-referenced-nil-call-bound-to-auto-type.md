@@ -7,6 +7,10 @@ attribution; trivial workaround once understood). Found 2026-08-28 getting
 **Verified 2026-08-28** on a freshly built `v0.40.0` (macOS arm64 / Apple
 clang), along with the six-variant narrowing below.
 
+**Status: RESOLVED 2026-08-29.** Root cause was neither of the two shapes the
+fix direction below proposed -- it was not in the emitter at all. See
+[Resolution](#resolution) at the end.
+
 ## Summary
 
 A call in statement position to a `: nil` function that has **not yet been
@@ -101,7 +105,7 @@ indistinguishable here.
 ## Relationship to the archived `let`-binds-void report
 
 This is **not** a duplicate of
-[`let-binding-void-call-emits-invalid-c`](../archive/let-binding-void-call-emits-invalid-c.md)
+[`let-binding-void-call-emits-invalid-c`](let-binding-void-call-emits-invalid-c.md)
 (RESOLVED 2026-08-18), though the `cc` error text is identical.
 
 That report was about a *user-written* `let` binding a `:void` init, and its fix
@@ -151,3 +155,79 @@ instead of `: nil` also works and does not require inventing a return value.
 
 - docs/guides/type-annotations-guide.md -- if `: nil` and `: void` are meant to
   be interchangeable, say so; this bug is the only thing distinguishing them.
+
+---
+
+## Resolution
+
+Fixed 2026-08-29. The narrowing in this report was right about *what* triggers
+the bug (a forward reference, not recursion) and right that `: void` is immune,
+but both fix directions pointed at the emitter, and the emitter was innocent.
+
+### Actual root cause
+
+**The reader parses a bare `nil` in type position as `F_NIL`, not `F_SYM`.**
+That single fact explains every row of the table.
+
+Two pass-1 forward-declaration pre-passes unwrap a *spaced* `: T` annotation --
+an `F_TYPE_ANN` wrapping one form -- before matching the type name, and both
+gated that unwrap on the inner form being an `F_SYM` or `F_KEYWORD`:
+
+- `elab_forward_declare_defns` (`src/compiler/elab_module.c:65`) -- the
+  `defmodule` body and imported-module top level.
+- the letrec/`let` `fn`-literal peek (`src/compiler/elab_forms.c:2138`).
+
+So `: nil` never matched, fell through to the `TY_INT` **placeholder**, and the
+callee was forward-declared as returning `int`. A sibling caller elaborated
+before the callee then typed the call `int` -- and `emit_value`
+(`src/compiler/emit_expr.c:3892`) skips the `__ps_N` hoist by testing
+`e->type.kind == TY_NIL`, which was now false. The emitter did exactly what it
+was told; it was told the wrong type.
+
+Everything else follows:
+
+- **`: void` is immune** -- `void` is an ordinary symbol, so it survives the
+  `F_SYM` unwrap and hits the name ladder normally. Nothing to do with `nil`
+  lowering "running late"; the two spellings simply took different reader
+  shapes.
+- **Callee-before-caller compiles** -- real elaboration resolves the true
+  return type, and the placeholder is never consulted.
+- **Recursion is incidental** -- it is just a guaranteed way to make a call site
+  precede its callee's definition, exactly as the narrowing said.
+- **Top level was already fine** -- the third pre-pass
+  (`elab_toplevel.c:1297`) has always had an explicit `F_NIL` arm. This bug was
+  the `defmodule` and letrec halves never getting it. Confirmed by repro: the
+  same two functions compile at file scope and fail inside `(defmodule ...)`.
+
+This is the same defect as
+[recursion-return-type-widens-to-int-inside-defmodule](history/recursion-return-type-widens-to-int-inside-defmodule.md),
+one form-tag over: that one added the `F_SYM`/`F_KEYWORD` unwrap to
+`elab_module.c` so a spaced `: ptr<void>` stopped collapsing to `int`, and
+`F_NIL` was the case it did not know to cover.
+
+### The fix
+
+Add the `F_NIL` arm to both pre-passes, mirroring `elab_toplevel.c`:
+`fwd_result_kind = TY_NIL`, then `ret_f = NULL` and a `ret_f &&` guard on the
+following branches. Both halves are load-bearing -- reverting the `elab_forms.c`
+half alone still fails the letrec row with the original `__auto_type` error.
+
+No emitter change was needed, and the `__auto_type` fallback was left alone:
+with the type recorded correctly it is never reached for a void call.
+Hardening it as a backstop (fix direction 2) remains available, but is no
+longer load-bearing and would have masked this cause rather than removing it.
+
+### Regression
+
+`tests/fixtures/nil-return-forward-ref-in-defmodule/` covers all four rows in
+one program -- the **non-recursive** forward reference first, as this report
+asked, plus self-recursion, mutual recursion, and the letrec `fn` literal. Each
+row fails on the pre-fix compiler. Suite: 2719 passed, 0 failed.
+
+### Guide
+
+`docs/guides/type-annotations-guide.md` now states that `nil` and `void` are one
+type in all four spellings (`: nil`, `:nil`, `: void`, `:void`). While
+verifying, its "Basic annotations" example turned out to use `: unit`, which is
+not a type at all (`unsupported return type keyword 'unit'`); corrected to
+`: nil`.
