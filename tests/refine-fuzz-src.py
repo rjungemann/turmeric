@@ -803,6 +803,11 @@ def run_gate(tur, path, refined):
     """
     cmd = [tur, "run", path]
     env = dict(os.environ)
+    # See the note in tests/type-fuzz-src.py: a shimmed `python3` (mise, asdf)
+    # can re-export another install's TUR_STDLIB_DIR inside this process, which
+    # silently compiles the tree's compiler against a foreign stdlib. Strip it
+    # so the compiler under test uses the stdlib beside it.
+    env.pop("TUR_STDLIB_DIR", None)
     env["TUR_REFINE_STATS"] = "1"
     if not refined:
         env["TUR_REFINE_NO_DISCHARGE"] = "1"
