@@ -1,5 +1,34 @@
 # `tur_type_fuzz_src` is red on Apple clang 21, green in CI
 
+**RESOLVED 2026-08-28. NOT A COMPILER BUG, and not about clang 21 at all.**
+
+The harness inherited `TUR_STDLIB_DIR=~/.local/share/mise/installs/turmeric/0.36.0/stdlib`
+and compiled the tree's compiler against a **v0.36.0 stdlib**. That release
+spells the type as `(defstruct Result [A B] (is-ok :bool) (ok-val A) (err-val B))`
+-- a flat struct -- which is exactly where `no member named 'is_ok' in
+'tur_result_box_t'` comes from, and why all 15 failures were Result shapes.
+
+The variable is injected by **mise's `python3` shim**, so it exists only inside
+the harness process: the invoking shell does not have it, which is precisely
+why "a saved case does not reproduce by hand" (the trap this report flagged as
+the thing to chase first -- correctly). It also explains why the finding was
+identical on the v0.39.0 compiler and under `TUR_SR2_APP_SUM_BYVALUE=0`: the
+compiler half was never the variable.
+
+Fixed by stripping `TUR_STDLIB_DIR` from the subprocess environment in
+`tests/type-fuzz-src.py` and `tests/refine-fuzz-src.py`. It has to be done at
+spawn time, not with `unset` in the shell wrapper -- the shim re-injects it
+inside the process. `bash tests/run-type-fuzz-src.sh` now reports 40/40 ok.
+
+Fix direction 3 ("pin the CI toolchain forward, or add a clang-21 leg") is
+**withdrawn**: CI was green because CI has no mise, not because of its clang.
+
+Paper trail:
+[history/type-fuzz-src-stale-tur-stdlib-dir.md](history/type-fuzz-src-stale-tur-stdlib-dir.md).
+The compiler-side gap this exposed -- `resolve_stdlib_root` accepts a
+stale-but-intact stdlib because it only probes for a readable `macros.tur` --
+is filed separately as `stdlib-dir-guard-accepts-mismatched-stdlib`.
+
 **Severity: medium (a suite that CI cannot see is failing; every finding is a
 Result-shape miscompile).** Filed 2026-08-28 while cutting v0.40.0.
 

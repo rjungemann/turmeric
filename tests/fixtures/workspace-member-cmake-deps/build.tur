@@ -1,11 +1,13 @@
-;;; workspace-transitive-native-deps-plan regression: a workspace whose
-;;; two members do NOT list each other in :spices.  Sibling members'
-;;; modules are importable purely via the workspace :members resolution
-;;; (see auto_append_spice_includes in src/main.c), so a sibling's
-;;; :cmake-deps must participate in the build too.  Here both members
-;;; declare the same-named :cmake-deps with different :ref; building
-;;; member-b must still see member-a's contribution (seeded from
-;;; :members) and emit the "conflicting :cmake-deps" diagnostic.
+;;; Probe for whether workspace :members are seeded into the :cmake-deps
+;;; walk.  The two members do NOT list each other in :spices, and both
+;;; declare the same-named :cmake-deps with a different :ref -- so seeding
+;;; member-a while building member-b would fire the "conflicting
+;;; :cmake-deps" diagnostic, and not seeding it stays quiet.
+;;;
+;;; Seeding is OFF by default (see pkg_workspace_wide_cmake_deps): seeding
+;;; every member means building one spice configures every member's native
+;;; deps.  TUR_CMAKE_DEPS_WORKSPACE_WIDE=1 restores it.  Both directions are
+;;; asserted by tests/run-transitive-cmake-deps.sh.
 (defpackage workspace-member-cmake-deps
   :name    "workspace-member-cmake-deps"
   :version "0.1.0"

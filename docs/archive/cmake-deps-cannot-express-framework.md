@@ -1,5 +1,14 @@
 # `:cmake-deps` cannot express `-framework`, so no Cocoa-backed dep links on macOS
 
+**RESOLVED 2026-08-28.** Fixed by fix direction (2) -- the manifest gained a
+`link_flags` array sourced from each `:targets` target's
+`INTERFACE_LINK_LIBRARIES`, so `-framework Cocoa` / `-framework IOKit` reach the
+link line with no user action -- plus (1), a `:link-flags` passthrough on both
+the dep and `:build-opts` as the escape hatch. Landed in the same pass as
+[cmake-deps-link-name-not-overridable](cmake-deps-link-name-not-overridable.md),
+as this report asked. Paper trail:
+[history/cmake-deps-framework-and-link-name.md](history/cmake-deps-framework-and-link-name.md).
+
 **Severity: high (blocker, macOS only)** -- not a miscompile; a hole in what the
 dependency manifest can express, with no workaround short of bypassing `tur`'s
 link line entirely. Found 2026-08-28 getting `turmeric-spices` CI green.

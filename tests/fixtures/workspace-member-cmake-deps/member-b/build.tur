@@ -1,7 +1,7 @@
-;;; member-b deliberately omits any :spices entry for member-a -- it
-;;; relies on the workspace :members resolution to reach member-a.  The
-;;; transitive resolver must still seed member-a's :cmake-deps from the
-;;; enclosing workspace's :members list.
+;;; member-b deliberately omits any :spices entry for member-a, so member-a
+;;; is reachable only through the workspace :members list.  By default its
+;;; :cmake-deps must NOT be pulled in; a spice that wants a sibling's native
+;;; dep declares that sibling in :spices.
 (defpackage member-b
   :name    "member-b"
   :version "0.1.0"

@@ -45,6 +45,20 @@ typedef struct PkgCmakeDep {
     char         *cmake_version;   /* optional minimum version for find_package */
     char        **targets;     /* CMake targets to link against */
     int           n_targets;
+    /* `:link-libs [...]` -- overrides the -l name(s) derived from :targets.
+     * The empty list is meaningful and distinct from an absent key: it says
+     * "this dep contributes include dirs only, link nothing", which is the
+     * only way to express a header-only dep (raygui) or a code generator that
+     * builds no library at all (glad). has_link_libs records key presence so
+     * [] can be told apart from absent. */
+    char        **link_libs;
+    int           n_link_libs;
+    bool          has_link_libs;
+    /* `:link-flags [...]` -- verbatim link-line tokens, appended with no
+     * prefix added. The escape hatch for anything the structured keys cannot
+     * describe (e.g. `-framework Cocoa`, `-Wl,...`). */
+    char        **link_flags;
+    int           n_link_flags;
     PkgCmakeOpt  *opts;
     int           n_opts;
 } PkgCmakeDep;
@@ -63,6 +77,13 @@ typedef struct PkgCmakeManifestEntry {
     int    n_link_dirs;
     char **link_libs;
     int    n_link_libs;
+    /* Verbatim link-line tokens -- no -I/-L/-l prefix is added. Carries the
+     * entries CMake reports in a target's INTERFACE_LINK_LIBRARIES (notably
+     * `-framework Cocoa` on macOS, which cannot be spelled as -l) and the
+     * $<TARGET_FILE:...> artifact paths. See
+     * pkg_cmake_manifest_append_cc_flags for how each token is classified. */
+    char **link_flags;
+    int    n_link_flags;
 } PkgCmakeManifestEntry;
 
 typedef struct PkgCmakeManifest {
@@ -118,6 +139,12 @@ typedef struct PkgManifest {
     int          n_c_flags;
     char       **link_libs;
     int          n_link_libs;
+    /* `:build-opts :link-flags [...]` -- verbatim link-line tokens for the
+     * project's own link (no -l prefix added). :link-libs cannot express a
+     * `-framework Cocoa`, and a project whose own inline-C needs one has no
+     * :cmake-deps entry to hang a per-dep :link-flags on. */
+    char       **link_flags;
+    int          n_link_flags;
     /* spices-c-sources-plan: auxiliary hand-written C sources vendored into
      * the spice (e.g. KissFFT, stb_image). Paths are stored as written in
      * build.tur (relative to the manifest dir) and compiled + linked into the
@@ -418,6 +445,34 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        bool               include_workspace_siblings,
                                        PkgCmakeDep      **out_deps,
                                        int               *out_n);
+
+/* Whether the cmake-deps walk should seed every workspace sibling rather than
+ * only the manifest's declared `:spices` closure.
+ *
+ * False by default, which is what all three callers (`tur fetch`, `tur run`,
+ * `tur build`) now use. Seeding siblings means building ONE spice configures
+ * the native dependencies of EVERY member of the workspace: in
+ * `turmeric-spices` that turned `spices/opengl` -- which needs glfw and glad
+ * -- into a 15-dependency configure pulling in mbedtls, sqlite3, libpq,
+ * rtaudio and the rest. It is wasteful, and it is fatal rather than merely
+ * slow, two ways:
+ *
+ *   - one dependency that cannot configure on this machine aborts the whole
+ *     configure, so nothing builds and every test in the spice fails; and
+ *   - unrelated members collide in the single shared CMake target namespace
+ *     (`opengl` fetches glfw while `raygui` pulls raylib, which vendors its
+ *     own glfw: "add_library cannot create target glfw").
+ *
+ * The rule it implemented -- a sibling's modules are importable without an
+ * explicit `:spices` entry, so its native deps must build too -- is about the
+ * *include path*, and does not need every sibling's libraries. Downstream
+ * evidence agrees: every spice that genuinely needs a sibling's native lib
+ * declares that sibling in its own `:spices`, and the declared walk alone
+ * resolves them.
+ *
+ * `TUR_CMAKE_DEPS_WORKSPACE_WIDE=1` restores the old behavior for a project
+ * that does rely on the implicit rule. */
+bool pkg_workspace_wide_cmake_deps(void);
 
 /* Free an array allocated by pkg_collect_transitive_cmake_deps. */
 void pkg_cmake_deps_free(PkgCmakeDep *deps, int n);

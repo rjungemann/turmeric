@@ -333,9 +333,18 @@ When `tur build` runs it:
 1. Generates `cmake/CMakeLists.txt` from the `:cmake-deps` block (via the
    automatic `tur fetch`).
 2. Invokes CMake to fetch and compile the C library.
-3. Reads `cmake/spice-deps-manifest.json` for include dirs, lib dirs, and
-   link libs.
+3. Reads `cmake/spice-deps-manifest.json` for include dirs, lib dirs, link
+   libs, and link flags.
 4. Passes those flags to `cc` automatically.
+
+Step 3's link flags are what make a Cocoa- or Objective-C-backed library (glfw,
+raylib) link on macOS: they carry the `-framework Cocoa` / `-framework IOKit`
+entries CMake records on the target, which cannot be spelled as `-l`. They also
+carry the dep's artifact by full path, so a target whose name differs from its
+library's (glfw's target `glfw` builds `libglfw3.a`) resolves correctly. Both
+are derived automatically from `:targets`; see
+[`:link-libs` and `:link-flags` overrides](developing-spices-guide.md#link-libs-and-link-flags-overrides)
+for when you need to override them.
 
 Declare the C symbols you need in Turmeric with `extern-c` (no header
 include is needed for the declarations themselves; an inline-C body that

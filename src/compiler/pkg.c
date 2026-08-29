@@ -329,6 +329,14 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         d->prefer_system  = form_bool_val(map_get_kw(val, "prefer-system"));
         d->cmake_version  = form_str_dup(map_get_kw(val, "cmake-version"));
         parse_str_vec(map_get_kw(val, "targets"), &d->targets, &d->n_targets);
+        /* :link-libs overrides the -l name derived from the target name; the
+         * empty list is a meaningful value ("link nothing"), so record key
+         * presence separately from the count. */
+        const Form *ll_f = map_get_kw(val, "link-libs");
+        d->has_link_libs = (ll_f != NULL);
+        parse_str_vec(ll_f, &d->link_libs, &d->n_link_libs);
+        parse_str_vec(map_get_kw(val, "link-flags"),
+                      &d->link_flags, &d->n_link_flags);
         const Form *opts_f = map_get_kw(val, "options");
         parse_cmake_opts(opts_f, &d->opts, &d->n_opts);
 
@@ -852,6 +860,8 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 const Form *if_ = map_get_kw(vf, "c-includes");
                 parse_str_vec(cf, &out->c_flags,   &out->n_c_flags);
                 parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
+                parse_str_vec(map_get_kw(vf, "link-flags"),
+                              &out->link_flags, &out->n_link_flags);
                 out->no_stdlib = form_bool_val(nf);
                 /* spices-c-sources-plan: validate vendored sources/includes
                  * against the manifest directory (the dir holding build.tur). */
@@ -1071,6 +1081,24 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
                 }
                 fprintf(f, "]");
             }
+            /* has_link_libs, not the count: `:link-libs []` is a value that
+             * has to survive the round trip. */
+            if (d->has_link_libs) {
+                fprintf(f, " :link-libs [");
+                for (int j = 0; j < d->n_link_libs; j++) {
+                    if (j) fprintf(f, " ");
+                    fprintf(f, "\"%s\"", d->link_libs[j]);
+                }
+                fprintf(f, "]");
+            }
+            if (d->n_link_flags > 0) {
+                fprintf(f, " :link-flags [");
+                for (int j = 0; j < d->n_link_flags; j++) {
+                    if (j) fprintf(f, " ");
+                    fprintf(f, "\"%s\"", d->link_flags[j]);
+                }
+                fprintf(f, "]");
+            }
             if (d->n_opts > 0) {
                 fprintf(f, " :options #{");
                 for (int j = 0; j < d->n_opts; j++) {
@@ -1085,8 +1113,8 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "  }\n");
     }
 
-    if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->no_stdlib ||
-        m->n_c_sources > 0 || m->n_c_includes > 0) {
+    if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->n_link_flags > 0 ||
+        m->no_stdlib || m->n_c_sources > 0 || m->n_c_includes > 0) {
         fprintf(f, "\n  :build-opts #{\n");
         if (m->n_c_flags > 0) {
             fprintf(f, "    :c-flags [");
@@ -1117,6 +1145,14 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
             for (int i = 0; i < m->n_link_libs; i++) {
                 if (i) fprintf(f, " ");
                 fprintf(f, "\"%s\"", m->link_libs[i]);
+            }
+            fprintf(f, "]\n");
+        }
+        if (m->n_link_flags > 0) {
+            fprintf(f, "    :link-flags [");
+            for (int i = 0; i < m->n_link_flags; i++) {
+                if (i) fprintf(f, " ");
+                fprintf(f, "\"%s\"", m->link_flags[i]);
             }
             fprintf(f, "]\n");
         }
@@ -1205,6 +1241,12 @@ void pkg_manifest_free(PkgManifest *m) {
         for (int j = 0; j < m->cmake_deps[i].n_targets; j++)
             free(m->cmake_deps[i].targets[j]);
         free(m->cmake_deps[i].targets);
+        for (int j = 0; j < m->cmake_deps[i].n_link_libs; j++)
+            free(m->cmake_deps[i].link_libs[j]);
+        free(m->cmake_deps[i].link_libs);
+        for (int j = 0; j < m->cmake_deps[i].n_link_flags; j++)
+            free(m->cmake_deps[i].link_flags[j]);
+        free(m->cmake_deps[i].link_flags);
         for (int j = 0; j < m->cmake_deps[i].n_opts; j++) {
             free(m->cmake_deps[i].opts[j].key);
             free(m->cmake_deps[i].opts[j].val);
@@ -1216,6 +1258,8 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->exports);
     for (int i = 0; i < m->n_c_flags;   i++) free(m->c_flags[i]);
     free(m->c_flags);
+    for (int i = 0; i < m->n_link_flags; i++) free(m->link_flags[i]);
+    free(m->link_flags);
     for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
     free(m->link_libs);
     for (int i = 0; i < m->n_c_sources;  i++) free(m->c_sources[i]);
@@ -2461,6 +2505,34 @@ static const char *cmake_target_basename(const char *target) {
     return (sep && sep[1]) ? sep + 1 : target;
 }
 
+/* Resolve a :cmake-deps `:path` to a directory, given the project being built.
+ *
+ * Two forms coexist in one manifest array, which is the whole reason this
+ * helper exists. A dep declared by the project being built carries `:path` as
+ * written -- relative to that manifest. A dep collected **transitively** from a
+ * workspace sibling has already been absolutized against its origin dir by
+ * append_cmake_dep_with_conflict_check, because the sibling's relative path is
+ * meaningless from here.
+ *
+ * Prefixing the absolute form produces `<project_dir>//abs/path`, or
+ * `.//abs/path` when project_dir is "." (the `tur fetch` path). CMake reads
+ * both as relative and `add_subdirectory` fails with "given source ... which is
+ * not an existing directory", so no dependency builds at all. The `:spices`
+ * transitive walk already makes exactly this leading-'/' test; the
+ * `:cmake-deps` side did not. */
+static void cmake_dep_path_dir(const PkgCmakeDep *d, const char *project_dir,
+                               char *out, size_t cap) {
+    const char *p = d->path ? d->path : "";
+    if (p[0] == '/')
+        snprintf(out, cap, "%s", p);
+    else
+        /* Fallback only. append_cmake_dep_with_conflict_check absolutizes
+         * every :path dep it collects, so in practice the branch above is the
+         * one that runs; this covers a dep that reached here without passing
+         * through the collector. */
+        snprintf(out, cap, "%s/cmake/%s", project_dir, p);
+}
+
 /* Emit the CMake that computes _spice_<name>_inc / _spice_<name>_bld from a
  * FetchContent-built dependency's SOURCE_DIR / BINARY_DIR. Shared by the
  * plain (fetch-only) deps and the fetch fallback branch of :prefer-system
@@ -2503,16 +2575,46 @@ static void emit_include_dirs_line(FILE *f, const PkgCmakeDep *d,
     }
 }
 
-/* Emit the JSON "link_dirs"/"link_libs" lines for one manifest entry.
- *   use_full_targets -- when true, $<TARGET_FILE_DIR:...> is keyed off the
- *     fully-qualified target name (e.g. "MbedTLS::mbedtls"), which is what a
- *     system find_package() imports. When false, the namespace-stripped
+/* Emit the JSON "link_dirs"/"link_libs"/"link_flags" lines for one manifest
+ * entry.
+ *   use_full_targets -- when true, the $<TARGET_*:...> genexprs are keyed off
+ *     the fully-qualified target name (e.g. "MbedTLS::mbedtls"), which is what
+ *     a system find_package() imports. When false, the namespace-stripped
  *     basename ("mbedtls") is used, which is what the FetchContent build
- *     exports. link_libs is always the basename (the -l name is identical
- *     either way). When :targets is empty, both branches fall back to the
- *     dep's BINARY_DIR var and the single cmake_dep_link_lib() name. */
+ *     exports. When :targets is empty, both branches fall back to the dep's
+ *     BINARY_DIR var and the single cmake_dep_link_lib() name.
+ *
+ * With :targets declared, the link line is asked of CMake rather than
+ * reconstructed from the target's *name*:
+ *
+ *   - the artifact is $<TARGET_FILE:t>, the exact file the target produces.
+ *     That resolves OUTPUT_NAME (glfw's target is `glfw`, its archive is
+ *     `libglfw3.a`), namespace aliasing (PostgreSQL::PostgreSQL -> libpq), and
+ *     static-vs-shared preference (zlib builds both `libz.a` and `libz.1.dylib`
+ *     into one directory, where a `-lz` resolves to the dylib and then fails at
+ *     load with "Library not loaded: @rpath/libz.1.dylib -- no LC_RPATH's
+ *     found"). A name-derived `-l` reaches none of the three.
+ *
+ *   - the transitive requirements are INTERFACE_LINK_LIBRARIES, which is where
+ *     `-framework Cocoa` / `-framework IOKit` live for the Objective-C macOS
+ *     backends of glfw and raylib. A framework cannot be spelled as `-l` at
+ *     all, so before this there was no link line that worked on macOS -- the
+ *     failure was `ld: symbol(s) not found for architecture arm64` with
+ *     `_objc_retain` missing, which reads as a toolchain problem rather than a
+ *     missing flag. This is the sibling property of the
+ *     INTERFACE_INCLUDE_DIRECTORIES that emit_include_dirs_line already reads.
+ *
+ * $<TARGET_FILE:...> is an error on an INTERFACE library (a header-only dep
+ * has no artifact), so it is wrapped in a TYPE guard. CMake does not evaluate
+ * the false arm of a $<cond:...>, so the guard is safe and yields an empty
+ * element, which the consumer skips.
+ *
+ * A dep's own `:link-libs` overrides all of that -- including `:link-libs []`,
+ * which links nothing (raygui is header-only; glad is a code generator that
+ * builds no library), the one thing no genexpr can express. */
 static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
                             const char *link_lib, bool use_full_targets) {
+    /* link_dirs */
     if (d->n_targets > 0) {
         fprintf(f, "  \"    \\\"link_dirs\\\":    [");
         for (int j = 0; j < d->n_targets; j++) {
@@ -2522,17 +2624,152 @@ static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
             fprintf(f, "%s\\\"$<TARGET_FILE_DIR:%s>\\\"", j ? ", " : "", t);
         }
         fprintf(f, "],\\n\"\n");
-        fprintf(f, "  \"    \\\"link_libs\\\":    [");
-        for (int j = 0; j < d->n_targets; j++) {
-            const char *bn = cmake_target_basename(d->targets[j]);
-            fprintf(f, "%s\\\"%s\\\"", j ? ", " : "", bn);
-        }
-        fprintf(f, "]\\n\"\n");
     } else {
         fprintf(f, "  \"    \\\"link_dirs\\\":    [\\\"${_spice_%s_bld}\\\"],\\n\"\n",
                 d->name);
-        fprintf(f, "  \"    \\\"link_libs\\\":    [\\\"%s\\\"]\\n\"\n", link_lib);
     }
+
+    /* link_libs -- the explicit override, else the derived name, else nothing
+     * (because :targets deps link by artifact path via link_flags below). */
+    fprintf(f, "  \"    \\\"link_libs\\\":    [");
+    if (d->has_link_libs) {
+        for (int j = 0; j < d->n_link_libs; j++)
+            fprintf(f, "%s\\\"%s\\\"", j ? ", " : "", d->link_libs[j]);
+    } else if (d->n_targets == 0) {
+        fprintf(f, "\\\"%s\\\"", link_lib);
+    }
+    fprintf(f, "],\\n\"\n");
+
+    /* link_flags -- computed by the prelude into ${_tur_lf_json}. */
+    fprintf(f, "  \"    \\\"link_flags\\\":   [${_tur_lf_json}]\\n\"\n");
+}
+
+/* The constant CMake helper that turns one target's INTERFACE_LINK_LIBRARIES
+ * into link-line tokens. Emitted once per generated CMakeLists.
+ *
+ * This runs at *configure* time, where `if(TARGET ...)` and
+ * get_target_property are available -- which is the whole point. A generator
+ * expression can read the property but cannot iterate it, and the raw entries
+ * cannot be classified by string inspection downstream:
+ *
+ *   - a bare entry may be a library name (`m` -> -lm) or a CMake target name
+ *     (raylib's INTERFACE_LINK_LIBRARIES lists `glfw`). Identical shape,
+ *     opposite handling, and guessing "library" emits a `-lglfw` that does not
+ *     exist.
+ *   - a target may have no linkable artifact at all. raylib vendors glfw as an
+ *     OBJECT_LIBRARY whose objects are already inside libraylib.a, so the
+ *     correct action is to drop it -- and $<TARGET_FILE:...> on it is a hard
+ *     generate-time error ("Target glfw is not an executable or library").
+ *   - $<LINK_ONLY:...> survives one level of $<TARGET_PROPERTY:...> expansion
+ *     as literal text, so it has to be unwrapped here rather than downstream. */
+static void emit_link_iface_helper(FILE *f) {
+    fputs(
+    "# Resolve one target's INTERFACE_LINK_LIBRARIES into link-line tokens.\n"
+    "set(_TUR_LINKABLE STATIC_LIBRARY SHARED_LIBRARY MODULE_LIBRARY\n"
+    "                  UNKNOWN_LIBRARY EXECUTABLE)\n"
+    "# Recursive: a target with no artifact of its own still carries\n"
+    "# requirements. raylib vendors glfw as an OBJECT_LIBRARY -- its objects\n"
+    "# are already inside libraylib.a, so it contributes no -l, but the Cocoa\n"
+    "# and IOKit frameworks its macOS backend needs live on *its*\n"
+    "# INTERFACE_LINK_LIBRARIES and are reachable no other way. `_seen` guards\n"
+    "# against link cycles.\n"
+    "function(_tur_walk_iface tgt acc_var seen_var)\n"
+    "  set(_acc \"${${acc_var}}\")\n"
+    "  set(_seen \"${${seen_var}}\")\n"
+    "  if(NOT \"${tgt}\" IN_LIST _seen)\n"
+    "    list(APPEND _seen \"${tgt}\")\n"
+    "    if(TARGET \"${tgt}\")\n"
+    "      get_target_property(_ill \"${tgt}\" INTERFACE_LINK_LIBRARIES)\n"
+    "      if(_ill)\n"
+    "        foreach(_e IN LISTS _ill)\n"
+    "          string(REGEX REPLACE \"^\\\\$<LINK_ONLY:(.*)>$\" \"\\\\1\" _e \"${_e}\")\n"
+    "          if(NOT _e MATCHES \"^\\\\$<\")\n"
+    "            if(TARGET \"${_e}\")\n"
+    "              get_target_property(_ty \"${_e}\" TYPE)\n"
+    "              if(_ty IN_LIST _TUR_LINKABLE)\n"
+    "                list(APPEND _acc \"$<TARGET_FILE:${_e}>\")\n"
+    "                if(_ty STREQUAL SHARED_LIBRARY)\n"
+    "                  list(APPEND _acc \"-Wl,-rpath,$<TARGET_FILE_DIR:${_e}>\")\n"
+    "                endif()\n"
+    "              else()\n"
+    "                set(_a \"${_acc}\")\n"
+    "                set(_s \"${_seen}\")\n"
+    "                _tur_walk_iface(\"${_e}\" _a _s)\n"
+    "                set(_acc \"${_a}\")\n"
+    "                set(_seen \"${_s}\")\n"
+    "              endif()\n"
+    "            else()\n"
+    "              list(APPEND _acc \"${_e}\")\n"
+    "            endif()\n"
+    "          endif()\n"
+    "        endforeach()\n"
+    "      endif()\n"
+    "    endif()\n"
+    "  endif()\n"
+    "  set(${acc_var} \"${_acc}\" PARENT_SCOPE)\n"
+    "  set(${seen_var} \"${_seen}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n"
+    "function(_tur_resolve_link_iface tgt out_var)\n"
+    "  set(_acc \"\")\n"
+    "  set(_seen \"\")\n"
+    "  _tur_walk_iface(\"${tgt}\" _acc _seen)\n"
+    "  set(${out_var} \"${_acc}\" PARENT_SCOPE)\n"
+    "endfunction()\n"
+    "\n"
+    "# Append one target's own artifact (and an rpath if it is shared).\n"
+    "function(_tur_append_artifact tgt out_var)\n"
+    "  set(_out ${${out_var}})\n"
+    "  if(TARGET \"${tgt}\")\n"
+    "    get_target_property(_ty \"${tgt}\" TYPE)\n"
+    "    if(_ty IN_LIST _TUR_LINKABLE)\n"
+    "      list(APPEND _out \"$<TARGET_FILE:${tgt}>\")\n"
+    "      if(_ty STREQUAL SHARED_LIBRARY)\n"
+    "        list(APPEND _out \"-Wl,-rpath,$<TARGET_FILE_DIR:${tgt}>\")\n"
+    "      endif()\n"
+    "    endif()\n"
+    "  endif()\n"
+    "  set(${out_var} \"${_out}\" PARENT_SCOPE)\n"
+    "endfunction()\n\n", f);
+}
+
+/* Emit the CMake that computes ${_tur_lf_json} for one dep: the JSON body of
+ * its "link_flags" array. Must precede the string(APPEND _spice_manifest ...)
+ * block that references it, and must sit inside the same CMake `if` branch,
+ * because a :prefer-system dep's targets differ per branch. */
+static void emit_link_flags_prelude(FILE *f, const PkgCmakeDep *d,
+                                    bool use_full_targets) {
+    fprintf(f, "set(_tur_lf \"\")\n");
+    /* The dep's own artifacts, unless :link-libs took over the link. */
+    if (!d->has_link_libs) {
+        for (int j = 0; j < d->n_targets; j++) {
+            const char *t = use_full_targets
+                                ? d->targets[j]
+                                : cmake_target_basename(d->targets[j]);
+            fprintf(f, "_tur_append_artifact(\"%s\" _tur_lf)\n", t);
+        }
+    }
+    /* Transitive requirements -- where -framework Cocoa lives. */
+    for (int j = 0; j < d->n_targets; j++) {
+        const char *t = use_full_targets
+                            ? d->targets[j]
+                            : cmake_target_basename(d->targets[j]);
+        fprintf(f, "_tur_resolve_link_iface(\"%s\" _tur_ill)\n", t);
+        fprintf(f, "list(APPEND _tur_lf ${_tur_ill})\n");
+    }
+    /* The dep's verbatim escape hatch, last. */
+    for (int j = 0; j < d->n_link_flags; j++)
+        fprintf(f, "list(APPEND _tur_lf \"%s\")\n", d->link_flags[j]);
+    /* JSON-ify: "a", "b". Quotes are written into the manifest text, so they
+     * are escaped once here and land literal. */
+    fprintf(f,
+        "set(_tur_lf_json \"\")\n"
+        "foreach(_e IN LISTS _tur_lf)\n"
+        "  if(NOT _tur_lf_json STREQUAL \"\")\n"
+        "    string(APPEND _tur_lf_json \", \")\n"
+        "  endif()\n"
+        "  string(APPEND _tur_lf_json \"\\\"${_e}\\\"\")\n"
+        "endforeach()\n");
 }
 
 /* ================================================================== */
@@ -2559,6 +2796,21 @@ static bool deep_copy_cmake_dep(PkgCmakeDep *dst, const PkgCmakeDep *src) {
             dst->targets[i] = dup_cstr_or_null(src->targets[i]);
         dst->n_targets = src->n_targets;
     }
+    dst->has_link_libs = src->has_link_libs;
+    if (src->n_link_libs > 0) {
+        dst->link_libs = (char **)calloc((size_t)src->n_link_libs, sizeof(char *));
+        if (!dst->link_libs) return false;
+        for (int i = 0; i < src->n_link_libs; i++)
+            dst->link_libs[i] = dup_cstr_or_null(src->link_libs[i]);
+        dst->n_link_libs = src->n_link_libs;
+    }
+    if (src->n_link_flags > 0) {
+        dst->link_flags = (char **)calloc((size_t)src->n_link_flags, sizeof(char *));
+        if (!dst->link_flags) return false;
+        for (int i = 0; i < src->n_link_flags; i++)
+            dst->link_flags[i] = dup_cstr_or_null(src->link_flags[i]);
+        dst->n_link_flags = src->n_link_flags;
+    }
     if (src->n_opts > 0) {
         dst->opts = (PkgCmakeOpt *)calloc((size_t)src->n_opts, sizeof(PkgCmakeOpt));
         if (!dst->opts) return false;
@@ -2580,12 +2832,21 @@ static void free_one_cmake_dep(PkgCmakeDep *d) {
     free(d->cmake_version);
     for (int i = 0; i < d->n_targets; i++) free(d->targets[i]);
     free(d->targets);
+    for (int i = 0; i < d->n_link_libs; i++) free(d->link_libs[i]);
+    free(d->link_libs);
+    for (int i = 0; i < d->n_link_flags; i++) free(d->link_flags[i]);
+    free(d->link_flags);
     for (int i = 0; i < d->n_opts; i++) {
         free(d->opts[i].key);
         free(d->opts[i].val);
     }
     free(d->opts);
     memset(d, 0, sizeof(*d));
+}
+
+bool pkg_workspace_wide_cmake_deps(void) {
+    const char *e = getenv("TUR_CMAKE_DEPS_WORKSPACE_WIDE");
+    return e && *e && strcmp(e, "0") != 0;
 }
 
 void pkg_cmake_deps_free(PkgCmakeDep *deps, int n) {
@@ -2695,16 +2956,46 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
         /* parallel origins[] array grows in the caller */
     }
     if (!deep_copy_cmake_dep(&(*out_deps)[*out_n], dep)) return false;
-    /* Absolutize :path-form deps relative to their origin dir so the
-     * downstream generator's `<project_dir>/<path>` join still resolves
-     * correctly when the dep came from a sibling. */
+    /* Absolutize :path-form deps so a sibling's relative path still resolves
+     * from here.
+     *
+     * The base is `<origin_dir>/cmake`, NOT `origin_dir`. The generated
+     * CMakeLists lives in `<spice>/cmake/`, so a relative add_subdirectory
+     * argument resolves from there, and every spice writes its `:path`
+     * accordingly -- `"../cmake-deps/raygui"` means
+     * `<spice>/cmake/../cmake-deps/raygui`, i.e. `<spice>/cmake-deps/raygui`.
+     * Joining against `origin_dir` instead lands one directory too high
+     * (`spices/cmake-deps/raygui`), which does not exist.
+     *
+     * The result is always absolute, which is what lets cmake_dep_path_dir
+     * stay a pure passthrough: `origin_dir` is itself relative under
+     * `tur fetch` (it is "."), so joining alone would leave a relative path
+     * that the emitter would then join against project_dir a second time,
+     * inserting `cmake/` twice. realpath() settles both the absoluteness and
+     * the `..` normalization; if the directory does not exist there is
+     * nothing to resolve, so the unnormalized join is kept and CMake reports
+     * it verbatim, which is the more useful error. */
     if ((*out_deps)[*out_n].path && (*out_deps)[*out_n].path[0] != '/'
         && origin_dir) {
-        char abs[4096];
-        snprintf(abs, sizeof(abs), "%s/%s",
-                 origin_dir, (*out_deps)[*out_n].path);
+        char joined[4096];
+        char cwd[4096];
+        if (origin_dir[0] == '/') {
+            snprintf(joined, sizeof(joined), "%s/cmake/%s",
+                     origin_dir, (*out_deps)[*out_n].path);
+        } else if (getcwd(cwd, sizeof(cwd))) {
+            /* origin_dir is "." under `tur fetch`, which is relative to the
+             * process cwd -- anchor it there rather than leaving a relative
+             * result the emitter would join a second time. */
+            snprintf(joined, sizeof(joined), "%s/%s/cmake/%s",
+                     cwd, origin_dir, (*out_deps)[*out_n].path);
+        } else {
+            snprintf(joined, sizeof(joined), "%s/cmake/%s",
+                     origin_dir, (*out_deps)[*out_n].path);
+        }
+        char resolved[4096];
+        const char *final = realpath(joined, resolved) ? resolved : joined;
         free((*out_deps)[*out_n].path);
-        (*out_deps)[*out_n].path = tur_strdup(abs);
+        (*out_deps)[*out_n].path = tur_strdup(final);
     }
     (*out_n)++;
     return true;
@@ -3022,6 +3313,8 @@ bool pkg_gen_cmake_deps(const char *project_dir,
     fprintf(f, "option(TUR_FETCH_FORCE_FETCH "
                "\"Bypass system find_package for :prefer-system deps\" OFF)\n\n");
 
+    emit_link_iface_helper(f);
+
     /* Declare and make available each dep */
     for (int i = 0; i < manifest->n_cmake_deps; i++) {
         const PkgCmakeDep *d = &manifest->cmake_deps[i];
@@ -3029,7 +3322,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
         if (d->path) {
             /* Local path dep -- use add_subdirectory with absolute path */
             char abs_path[4096];
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", project_dir, d->path);
+            cmake_dep_path_dir(d, project_dir, abs_path, sizeof(abs_path));
             char build_subdir[4096];
             snprintf(build_subdir, sizeof(build_subdir),
                      "${CMAKE_BINARY_DIR}/_local/%s-build", d->name);
@@ -3103,7 +3396,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
         if (d->path) {
             /* Local path dep: derive paths from the path field */
             char abs_path[4096];
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", project_dir, d->path);
+            cmake_dep_path_dir(d, project_dir, abs_path, sizeof(abs_path));
             fprintf(f, "set(_spice_%s_inc \"%s/include\")\n",
                     d->name, abs_path);
             fprintf(f, "if(NOT EXISTS \"${_spice_%s_inc}\")\n", d->name);
@@ -3159,11 +3452,13 @@ bool pkg_gen_cmake_deps(const char *project_dir,
          * emitted under a runtime CMake `if`. */
         if (d->prefer_system) {
             fprintf(f, "if(_%s_resolved_via STREQUAL \"system\")\n", d->name);
+            emit_link_flags_prelude(f, d, /*use_full_targets=*/true);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/true);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/true);
             fprintf(f, ")\n");
             fprintf(f, "else()\n");
+            emit_link_flags_prelude(f, d, /*use_full_targets=*/false);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/false);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
@@ -3185,6 +3480,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
              * the heuristic misses libraries (e.g. yyjson) that publish their
              * public header from a non-standard subdir like ${SOURCE_DIR}/src.
              * Falls back to the heuristic when no :targets are declared. */
+            emit_link_flags_prelude(f, d, /*use_full_targets=*/false);
             fprintf(f, "string(APPEND _spice_manifest\n");
             emit_include_dirs_line(f, d, /*from_targets=*/d->n_targets > 0);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
@@ -3209,6 +3505,26 @@ bool pkg_gen_cmake_deps(const char *project_dir,
 /* ================================================================== */
 /* cmake build invocation                                              */
 /* ================================================================== */
+
+/* Major version of the `cmake` on PATH, or 0 if it cannot be determined.
+ * Probed once and cached -- pkg_cmake_build can run several times per
+ * invocation (fetch, then build). */
+static int cmake_major_version(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    cached = 0;
+    FILE *p = popen("cmake --version 2>/dev/null", "r");
+    if (p) {
+        char line[256];
+        if (fgets(line, sizeof(line), p)) {
+            /* "cmake version 4.3.3" */
+            const char *v = strstr(line, "version ");
+            if (v) cached = atoi(v + strlen("version "));
+        }
+        pclose(p);
+    }
+    return cached;
+}
 
 bool pkg_cmake_build(const char *project_dir,
                      const PkgManifest *manifest,
@@ -3236,6 +3552,20 @@ bool pkg_cmake_build(const char *project_dir,
         buf_printf(&cmd, "emcmake cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
     else
         buf_printf(&cmd, "cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
+    /* CMake 4 removed compatibility with `cmake_minimum_required` floors below
+     * 3.5, so a dependency that has not raised its floor (hiredis, and plenty
+     * of other stable C libraries) aborts the whole configure and *nothing*
+     * builds -- including the deps that were fine. The spice author does not
+     * control that floor, so failing here punishes the wrong person.
+     *
+     * Pass the escape hatch CMake itself recommends in that error, which is
+     * also what turmeric's own bootstrap already does. Only on CMake >= 4: on
+     * 3.x the variable goes unused and CMake reports it under
+     * "Manually-specified variables were not used by the project", which is
+     * noise on every single configure. TUR_CMAKE_NO_POLICY_MIN=1 opts out for
+     * a project that wants the strict floor enforced. */
+    if (!wasm && cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
+        buf_printf(&cmd, " -DCMAKE_POLICY_VERSION_MINIMUM=3.5");
     /* SF3: honor `tur fetch --refetch` (sets TUR_FETCH_FORCE_FETCH) by
      * disabling the system find_package short-circuit. */
     if (getenv("TUR_FETCH_FORCE_FETCH"))
@@ -3493,6 +3823,8 @@ bool pkg_cmake_manifest_read(const char *path, PkgCmakeManifest *out) {
                 e->link_dirs = json_parse_str_arr(&p, &e->n_link_dirs);
             } else if (strcmp(key, "link_libs") == 0) {
                 e->link_libs = json_parse_str_arr(&p, &e->n_link_libs);
+            } else if (strcmp(key, "link_flags") == 0) {
+                e->link_flags = json_parse_str_arr(&p, &e->n_link_flags);
             } else {
                 /* skip unknown value */
                 p = json_skip_ws(p);
@@ -3527,9 +3859,61 @@ void pkg_cmake_manifest_free(PkgCmakeManifest *m) {
         free(e->link_dirs);
         for (int j = 0; j < e->n_link_libs; j++) free(e->link_libs[j]);
         free(e->link_libs);
+        for (int j = 0; j < e->n_link_flags; j++) free(e->link_flags[j]);
+        free(e->link_flags);
     }
     free(m->entries);
     memset(m, 0, sizeof(*m));
+}
+
+/* Classify one "link_flags" token and append it to the cc link line.
+ *
+ * The tokens come from a CMake target's INTERFACE_LINK_LIBRARIES (see
+ * emit_link_lines) and from a dep's `:link-flags`, so they arrive in whatever
+ * shape CMake records them rather than in a shape tur chose:
+ *
+ *   "-framework Cocoa"        a linker flag -- verbatim (this is the whole
+ *                             point: a framework cannot be spelled as -l)
+ *   "/abs/path/libfoo.a"      an artifact path (what $<TARGET_FILE:...>
+ *                             yields) -- verbatim, which is what picks a
+ *                             specific archive instead of letting -l prefer
+ *                             a sibling .dylib
+ *   "$<LINK_ONLY:Threads::Threads>"
+ *                             an *unevaluated* genex. file(GENERATE) expands
+ *                             $<TARGET_PROPERTY:...> one level and does not
+ *                             re-evaluate what comes back, so nested genexes
+ *                             survive into the JSON as literal text. Skipped.
+ *   "Foo::Bar"                a namespaced CMake target name. Only CMake can
+ *                             say what artifact that is, and by this point
+ *                             CMake is no longer in the loop. Skipped.
+ *   "m"                       a bare library name -- -lm.
+ *
+ * The two skips are not silent losses relative to the old behavior: before
+ * link_flags existed, INTERFACE_LINK_LIBRARIES was not read at all, so every
+ * one of these entries was dropped. */
+static void append_link_flag_token(Buf *buf, const char *tok) {
+    if (!tok || !tok[0]) return;
+    if (strstr(tok, "$<")) return;          /* unevaluated genex */
+    if (strstr(tok, "::")) return;          /* namespaced target name */
+    /* An Apple framework arrives from INTERFACE_LINK_LIBRARIES as an absolute
+     * path to the .framework *directory* (raylib reports OpenGL that way).
+     * That cannot be passed through as a link input -- ld rejects it with
+     * "file cannot be mmap()ed, errno=22", because a .framework is a directory
+     * and not an object. It has to be respelled as `-framework <name>`. */
+    size_t n = strlen(tok);
+    const char *sfx = ".framework";
+    size_t sn = strlen(sfx);
+    if (tok[0] == '/' && n > sn && strcmp(tok + n - sn, sfx) == 0) {
+        const char *slash = strrchr(tok, '/');
+        const char *base  = slash ? slash + 1 : tok;
+        buf_printf(buf, " -framework %.*s", (int)((n - sn) - (size_t)(base - tok)),
+                   base);
+        return;
+    }
+    if (tok[0] == '-' || tok[0] == '/')
+        buf_printf(buf, " %s", tok);        /* flag or absolute path */
+    else
+        buf_printf(buf, " -l%s", tok);      /* bare library name */
 }
 
 void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
@@ -3547,6 +3931,10 @@ void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
             if (e->link_libs[j] && e->link_libs[j][0])
                 buf_printf(buf, " -l%s", e->link_libs[j]);
         }
+        /* After link_libs: a dep's own artifact must precede the transitive
+         * libraries it depends on for static archive resolution. */
+        for (int j = 0; j < e->n_link_flags; j++)
+            append_link_flag_token(buf, e->link_flags[j]);
     }
 }
 
@@ -4809,12 +5197,13 @@ int cmd_pkg_fetch(int argc, char **argv) {
 
     /* cmake deps: generate cmake/CMakeLists.txt, then configure+build.
      * transitive-cmake-deps-plan: union the enclosing manifest's :cmake-deps
-     * with any declared transitively by workspace siblings (and their own
-     * :spices) so `tur fetch` mirrors `tur run`'s view of the dep set. */
+     * with any declared transitively through its :spices closure, so
+     * `tur fetch` mirrors `tur run`'s view of the dep set. Both use the
+     * declared closure -- see pkg_workspace_wide_cmake_deps(). */
     PkgCmakeDep *fetch_deps   = NULL;
     int          n_fetch_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(".", &m,
-                                           /*include_workspace_siblings=*/true,
+                                           pkg_workspace_wide_cmake_deps(),
                                            &fetch_deps, &n_fetch_deps)) {
         fprintf(stderr,
                 "spice: transitive cmake-deps resolution failed\n");

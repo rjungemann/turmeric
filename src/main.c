@@ -260,6 +260,49 @@ static int   g_stdlib_root_state = 0;  /* 0=unresolved, 1=found, 2=not-found */
  * and the legacy fallback was not desired.  The current implementation
  * always returns non-NULL: in the worst case it returns the literal
  * "stdlib" so callers can still attempt the open. */
+/* Locate the stdlib that ships beside this binary -- the walk-up half of
+ * resolve_stdlib_root, factored out so the TUR_STDLIB_DIR branch can compare
+ * against it. Returns true and fills `out` on success. */
+static bool find_stdlib_beside_exe(char *out, size_t cap) {
+    char exe[4096];
+    if (get_exe_path(exe, sizeof(exe)) != 0) return false;
+    char dir[4096];
+    dir_of_path(exe, dir, sizeof(dir));
+
+    /* Walk up to 8 levels looking for `<dir>/stdlib/macros.tur`.
+     * macros.tur is the anchor: it's the first file every preload
+     * loop touches, so if it's missing nothing else will resolve. */
+    char probe[4096];
+    for (int depth = 0; depth < 8; depth++) {
+        int n = snprintf(probe, sizeof(probe), "%s/stdlib/macros.tur", dir);
+        if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
+            int rn = snprintf(out, cap, "%s/stdlib", dir);
+            if (rn > 0 && (size_t)rn < cap) return true;
+        }
+        /* Try installed prefix layout: `<dir>/share/turmeric/stdlib`. */
+        n = snprintf(probe, sizeof(probe),
+                     "%s/share/turmeric/stdlib/macros.tur", dir);
+        if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
+            int rn = snprintf(out, cap, "%s/share/turmeric/stdlib", dir);
+            if (rn > 0 && (size_t)rn < cap) return true;
+        }
+        /* Step up one level. */
+        char *slash = strrchr(dir, '/');
+        if (!slash || slash == dir) break;
+        *slash = '\0';
+    }
+    return false;
+}
+
+/* True when two directory paths denote the same directory. realpath() first
+ * so a symlinked or trailing-slash spelling of the same dir does not read as
+ * a mismatch; plain compare when either cannot be resolved. */
+static bool same_dir(const char *a, const char *b) {
+    char ra[4096], rb[4096];
+    if (realpath(a, ra) && realpath(b, rb)) return strcmp(ra, rb) == 0;
+    return strcmp(a, b) == 0;
+}
+
 static const char *resolve_stdlib_root(void) {
     if (g_stdlib_root_state != 0) {
         return g_stdlib_root[0] ? g_stdlib_root : "stdlib";
@@ -287,6 +330,28 @@ static const char *resolve_stdlib_root(void) {
             char probe[4096];
             int pn = snprintf(probe, sizeof(probe), "%s/macros.tur", env);
             if (pn > 0 && (size_t)pn < sizeof(probe) && access(probe, R_OK) == 0) {
+                /* The probe above proves the directory *is* a stdlib. It does
+                 * not prove it is THIS compiler's stdlib, and a stdlib from
+                 * another release is the more common stale case -- a version
+                 * manager keeps every install on disk. The mismatch surfaces
+                 * far downstream as e.g. "no member named 'is_ok' in
+                 * 'tur_result_box_t'", which names neither the stdlib nor the
+                 * variable and reads as a codegen bug. Say so here instead.
+                 *
+                 * Only when a stdlib beside this binary exists and differs:
+                 * with no walk-up result there is nothing to disagree with
+                 * (the wasm/LSP embedder sets the variable deliberately and
+                 * has no exe path), so that case stays silent. */
+                char beside[4096];
+                if (find_stdlib_beside_exe(beside, sizeof(beside))
+                    && !same_dir(env, beside)) {
+                    fprintf(stderr,
+                        "tur: TUR_STDLIB_DIR=%s overrides the stdlib beside "
+                        "this binary (%s).\n"
+                        "tur: a stdlib from a different release will "
+                        "miscompile against this compiler; unset it if that "
+                        "was not deliberate.\n", env, beside);
+                }
                 memcpy(g_stdlib_root, env, n + 1);
                 g_stdlib_root_state = 1;
                 return g_stdlib_root;
@@ -302,48 +367,14 @@ static const char *resolve_stdlib_root(void) {
         }
     }
 
-    char exe[4096];
-    if (get_exe_path(exe, sizeof(exe)) == 0) {
-        char dir[4096];
-        dir_of_path(exe, dir, sizeof(dir));
-
-        /* Walk up to 8 levels looking for `<dir>/stdlib/macros.tur`.
-         * macros.tur is the anchor: it's the first file every preload
-         * loop touches, so if it's missing nothing else will resolve. */
-        char probe[4096];
-        for (int depth = 0; depth < 8; depth++) {
-            int n = snprintf(probe, sizeof(probe), "%s/stdlib/macros.tur", dir);
-            if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
-                int rn = snprintf(g_stdlib_root, sizeof(g_stdlib_root),
-                                  "%s/stdlib", dir);
-                if (rn > 0 && (size_t)rn < sizeof(g_stdlib_root)) {
-                    g_stdlib_root_state = 1;
-                    /* Propagate to TUR_STDLIB_DIR so the elaborator
-                     * (elab_toplevel.c) sees the same value without
-                     * needing its own copy of this resolver.  Use
-                     * overwrite=0 so an explicit user override wins;
-                     * we already returned above if env was set. */
-                    setenv("TUR_STDLIB_DIR", g_stdlib_root, 0);
-                    return g_stdlib_root;
-                }
-            }
-            /* Try installed prefix layout: `<dir>/share/turmeric/stdlib`. */
-            n = snprintf(probe, sizeof(probe),
-                         "%s/share/turmeric/stdlib/macros.tur", dir);
-            if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
-                int rn = snprintf(g_stdlib_root, sizeof(g_stdlib_root),
-                                  "%s/share/turmeric/stdlib", dir);
-                if (rn > 0 && (size_t)rn < sizeof(g_stdlib_root)) {
-                    g_stdlib_root_state = 1;
-                    setenv("TUR_STDLIB_DIR", g_stdlib_root, 0);
-                    return g_stdlib_root;
-                }
-            }
-            /* Step up one level. */
-            char *slash = strrchr(dir, '/');
-            if (!slash || slash == dir) break;
-            *slash = '\0';
-        }
+    if (find_stdlib_beside_exe(g_stdlib_root, sizeof(g_stdlib_root))) {
+        g_stdlib_root_state = 1;
+        /* Propagate to TUR_STDLIB_DIR so the elaborator (elab_toplevel.c)
+         * sees the same value without needing its own copy of this
+         * resolver.  Use overwrite=0 so an explicit user override wins;
+         * we already returned above if env was set. */
+        setenv("TUR_STDLIB_DIR", g_stdlib_root, 0);
+        return g_stdlib_root;
     }
 
     /* Legacy fallback: literal "stdlib" relative to cwd.  Preserved so
@@ -1905,6 +1936,13 @@ static void collect_build_aux(const char *input, Buf *cmake_flags,
                 for (int i = 0; i < pm.n_link_libs; i++) {
                     if (pm.link_libs[i] && pm.link_libs[i][0])
                         buf_printf(cmake_flags, " -l%s", pm.link_libs[i]);
+                }
+                /* :link-flags is the verbatim sibling of :link-libs -- no
+                 * prefix is added, which is the only way to spell a
+                 * `-framework Cocoa` (see the note on link_flags in pkg.h). */
+                for (int i = 0; i < pm.n_link_flags; i++) {
+                    if (pm.link_flags[i] && pm.link_flags[i][0])
+                        buf_printf(cmake_flags, " %s", pm.link_flags[i]);
                 }
             }
             pkg_manifest_free(&pm);
@@ -4545,13 +4583,13 @@ static int cmd_run(int argc, char **argv) {
     }
 
     /* CMake dependency handling: generate and build if cmake-deps present.
-     * Walk the enclosing manifest's :spices block transitively so a
-     * workspace sibling's :cmake-deps participate in this TU's build --
+     * Walk the enclosing manifest's :spices block transitively so a declared
+     * dependency's :cmake-deps participate in this TU's build --
      * see docs/archive/history/transitive-cmake-deps-plan.md. */
     PkgCmakeDep *closure_deps = NULL;
     int          n_closure_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(root, &m,
-                                           /*include_workspace_siblings=*/true,
+                                           pkg_workspace_wide_cmake_deps(),
                                            &closure_deps, &n_closure_deps)) {
         fprintf(stderr, "tur run: transitive cmake-deps resolution failed\n");
         pkg_lock_free(&lock);
