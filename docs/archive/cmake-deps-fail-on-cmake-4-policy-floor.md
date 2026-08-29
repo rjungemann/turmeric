@@ -1,5 +1,10 @@
 # A `:cmake-deps` dep with an old `cmake_minimum_required` fails on CMake 4.x
 
+**RESOLVED 2026-08-28.** `pkg_cmake_build` passes
+`-DCMAKE_POLICY_VERSION_MINIMUM=3.5` when the host CMake is >= 4 (fix
+direction (1)), gated so CMake 3.x does not report an unused cache variable
+on every configure. `TUR_CMAKE_NO_POLICY_MIN=1` opts out.
+
 **Severity: medium** -- any dependency whose upstream `CMakeLists.txt` declares
 `cmake_minimum_required(VERSION <3.5)` aborts the whole configure, so no dep in
 that project builds. Found 2026-08-28 on CMake 4.3.3 while building

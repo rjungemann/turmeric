@@ -1,5 +1,15 @@
 # A `:cmake-deps` target that is a shared library links with no `-rpath`
 
+**RESOLVED 2026-08-28.** `emit_link_flags_prelude` now emits
+`-Wl,-rpath,$<TARGET_FILE_DIR:t>` for any target whose CMake TYPE is
+`SHARED_LIBRARY`, both for a declared `:targets` entry and for one reached
+through `INTERFACE_LINK_LIBRARIES`. A build-tree rpath, as fix direction (1)
+described: it makes the binary runnable where it was built and is not
+relocatable. Verified -- a zlib dep naming both the static and shared targets
+now links and runs where it previously died at load; a static-only dep emits
+zero rpath tokens. Paper trail:
+[history/cmake-deps-framework-and-link-name.md](history/cmake-deps-framework-and-link-name.md).
+
 **Severity: medium** -- the binary links successfully and then fails at load.
 Found 2026-08-28 while testing the `$<TARGET_FILE:...>` change that resolved
 [cmake-deps-link-name-not-overridable](../archive/cmake-deps-link-name-not-overridable.md).

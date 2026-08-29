@@ -1,5 +1,13 @@
 # A `:path` cmake-dep reached transitively is absolutized, then re-prefixed
 
+**RESOLVED 2026-08-28.** The emitter no longer prefixes an already-absolute
+`:path` (new `cmake_dep_path_dir`, making the same leading-'/' test the
+`:spices` walk already made), and the collector now always produces an
+absolute path so the two cannot disagree. The base-directory defect this
+was masking is
+[cmake-dep-path-base-dir-inconsistent](cmake-dep-path-base-dir-inconsistent.md),
+fixed in the same pass.
+
 **Severity: medium (blocker for the spices that use it)** -- the generated
 `cmake/CMakeLists.txt` contains an `add_subdirectory` with a `./` glued onto an
 absolute path, so CMake configure fails and no dependency builds. Found

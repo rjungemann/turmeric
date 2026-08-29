@@ -632,13 +632,33 @@ both are evaluated when `cmake/spice-deps-manifest.json` is generated:
   what makes the Objective-C macOS backends of glfw and raylib link at all: a
   framework cannot be spelled as `-l`.
 
-A `link_flags` token is passed through verbatim when it is a flag (`-framework
-Cocoa`, `-Wl,...`) or an absolute path, and becomes `-l<name>` when it is a
-bare library name. Two shapes are skipped, because nothing outside CMake can
-resolve them: a namespaced target name (`Foo::Bar`), and an unevaluated nested
-generator expression (`$<LINK_ONLY:Threads::Threads>` -- `file(GENERATE)`
-expands `$<TARGET_PROPERTY:...>` one level and does not re-evaluate the
-result, so nested genexes survive into the JSON as literal text).
+The `INTERFACE_LINK_LIBRARIES` walk happens **in CMake, at configure time**,
+because its entries cannot be classified afterwards. A bare entry may be a
+library name (`m`) or a target name (raylib's property lists `glfw`) -- the
+same shape, opposite handling -- and only `if(TARGET ...)` can tell them apart.
+The walk:
+
+- unwraps `$<LINK_ONLY:...>` and skips any other generator expression;
+- for an entry that is a target with a linkable artifact, takes
+  `$<TARGET_FILE:...>` (plus an rpath if it is shared);
+- for an entry that is a target *without* one -- an `OBJECT_LIBRARY` or
+  `INTERFACE_LIBRARY` -- **recurses into its requirements** rather than
+  dropping it. raylib vendors glfw as an `OBJECT_LIBRARY`: its objects are
+  already inside `libraylib.a`, so it contributes no library to link, but the
+  Cocoa and IOKit frameworks its macOS backend needs are reachable no other
+  way;
+- passes anything else through as written.
+
+Those tokens then become cc flags: a flag (`-framework Cocoa`, `-Wl,...`) or an
+absolute path goes through verbatim, and a bare name becomes `-l<name>`. One
+translation is applied -- an Apple framework arrives as an absolute path to the
+`.framework` *directory*, which cannot be passed as a link input (`ld: file
+cannot be mmap()ed`), so it is respelled `-framework <name>`.
+
+A shared-library dependency also gets `-Wl,-rpath` pointing at its build
+directory, which makes the binary runnable where it was built. That rpath is
+not relocatable: a binary copied elsewhere still needs its shared dependency
+installed or bundled.
 
 ### `:link-libs` and `:link-flags` overrides
 

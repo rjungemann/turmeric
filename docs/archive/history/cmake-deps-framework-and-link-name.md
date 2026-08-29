@@ -125,3 +125,32 @@ currently blocked by a **separate pre-existing bug** --
 [transitive-path-cmake-dep-absolutized-then-reprefixed](../../reported/transitive-path-cmake-dep-absolutized-then-reprefixed.md)
 -- which makes `spices/opengl` fail CMake configure on both this compiler and
 `423f6546`.
+
+## Follow-on fixes, same day
+
+Testing this against real spices rather than fixtures uncovered four more
+defects, each masked by the previous one. All are fixed and archived:
+
+- [transitive-path-cmake-dep-absolutized-then-reprefixed](../transitive-path-cmake-dep-absolutized-then-reprefixed.md)
+  and [cmake-dep-path-base-dir-inconsistent](../cmake-dep-path-base-dir-inconsistent.md)
+  -- a `:path` cmake-dep was doubled, and then resolved against the wrong base.
+- [cmake-deps-fail-on-cmake-4-policy-floor](../cmake-deps-fail-on-cmake-4-policy-floor.md)
+  -- one dep with an old `cmake_minimum_required` aborted every configure.
+- [cmake-dep-shared-target-links-without-rpath](../cmake-dep-shared-target-links-without-rpath.md)
+  -- shared deps linked clean and died at load.
+
+And it corrected two mistakes in the original `link_flags` work, both of which
+only a raylib-shaped dependency exposes: a bare `INTERFACE_LINK_LIBRARIES`
+entry that is a *target name* was being turned into a `-l` (reintroducing the
+exact bug this pass set out to fix), and an Apple framework's absolute
+`.framework` path is not a valid link input and must be respelled
+`-framework <name>`. The property walk now runs in CMake at configure time,
+where `if(TARGET ...)` can make the distinction, and recurses through
+non-linkable targets so a vendored `OBJECT_LIBRARY`'s framework requirements
+are not lost.
+
+**A raylib spice now builds and runs on macOS with no `cmake-deps/` shim** --
+one of the two spices the framework report listed as blocked. The remaining
+blocker for `spices/opengl` is
+[transitive-cmake-deps-collide-on-duplicate-targets](../../reported/transitive-cmake-deps-collide-on-duplicate-targets.md),
+which is structural and still open.

@@ -1,5 +1,14 @@
 # A `:cmake-deps` `:path` resolves against a different base in each code path
 
+**RESOLVED 2026-08-28.** `:path` is now resolved against `<spice>/cmake/`
+everywhere -- the directory the generated CMakeLists actually sits in, which
+is what every spice already writes its `:path` against. The collector joins
+against `<origin_dir>/cmake` and anchors the relative case with `getcwd` so
+the result is always absolute; `tur fetch` and `tur build <dir>` therefore
+agree. `spices/opengl` now emits three correct `add_subdirectory` lines.
+The fixture gap this report names is still open -- no fixture covers a
+workspace sibling declaring a `:path` cmake-dep.
+
 **Severity: medium** -- a `:path` that is correct for the spice that declares
 it resolves one directory too high when the same dep is reached transitively,
 so `add_subdirectory` points at a directory that does not exist. Found
