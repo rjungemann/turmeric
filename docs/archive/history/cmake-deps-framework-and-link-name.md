@@ -18,18 +18,25 @@ manipulation; it now asks CMake what the target actually is.
 link-line tokens, no prefix added. This is the representation the framework
 report found missing at all three layers (schema, emitter, consumer).
 
-**`emit_link_lines` (`src/compiler/pkg.c`) sources it from two generator
-expressions**, per `:targets` entry:
+**`emit_link_flags_prelude` (`src/compiler/pkg.c`) sources it from the target
+itself**, per `:targets` entry:
 
 - `$<TARGET_FILE:tgt>` -- the exact artifact, replacing the name-derived
-  `-L<dir> -l<basename>`. Wrapped in a `TYPE != INTERFACE_LIBRARY` guard,
-  because `$<TARGET_FILE:...>` is an error on a header-only target. CMake does
-  not evaluate the false arm of a `$<cond:...>`, so the guard yields an empty
-  element rather than a configure failure -- verified directly, not assumed.
-- `$<TARGET_PROPERTY:tgt,INTERFACE_LINK_LIBRARIES>` -- the transitive
-  requirements, joined with the same `$<JOIN:...>` idiom
-  `emit_include_dirs_line` already used for the sibling
-  `INTERFACE_INCLUDE_DIRECTORIES` property.
+  `-L<dir> -l<basename>`. Taken only when the target's `TYPE` is one that has
+  an artifact; an `INTERFACE_LIBRARY` or `OBJECT_LIBRARY` has none and
+  `$<TARGET_FILE:...>` on it is a hard error.
+- the target's `INTERFACE_LINK_LIBRARIES` -- the transitive requirements,
+  walked at CMake **configure** time.
+
+> The first cut of this used two generator expressions and classified the
+> results in C. That is recorded here because it does not work and the reason
+> is not obvious: a genexpr can *read* `INTERFACE_LINK_LIBRARIES` but cannot
+> *iterate* it, and its entries cannot be told apart afterwards -- a bare entry
+> is either a library name (`m`) or a target name (raylib's property lists
+> `glfw`), identical in shape and opposite in handling. Guessing "library"
+> re-emits the `-lglfw` this whole pass exists to eliminate. Only
+> `if(TARGET ...)` can decide, so the walk has to run where CMake still is.
+> See "Follow-on fixes" below.
 
 **`pkg_cmake_manifest_append_cc_flags` classifies each token** instead of
 hardcoding `-I`/`-L`/`-l`: a flag (`-framework Cocoa`) or absolute path passes
@@ -76,22 +83,20 @@ Override behavior, each verified from a clean project:
 - `:link-flags ["-framework Cocoa" "-framework IOKit"]` -- appended verbatim
   after the derived tokens.
 
-## What is still dropped, and why that is not a regression
+## What is still dropped
 
-Two `INTERFACE_LINK_LIBRARIES` shapes are skipped by the consumer:
+`$<LINK_ONLY:...>` is unwrapped by the configure-time walk and its contents
+resolved normally. Any *other* generator expression appearing as an
+`INTERFACE_LINK_LIBRARIES` entry is skipped -- it cannot be evaluated at
+configure time, and nothing has needed one yet. `:link-flags` is the escape
+hatch if something does.
 
-- **`$<LINK_ONLY:Threads::Threads>`** -- an *unevaluated* nested genex.
-  `file(GENERATE)` expands `$<TARGET_PROPERTY:...>` one level and does not
-  re-evaluate what comes back, so nested genexes arrive in the JSON as literal
-  text. (This was measured, not inferred; it is also why the emitted JSON is
-  safe to read as data.)
-- **`Foo::Bar`** -- a namespaced target name. Only CMake can say what artifact
-  that is, and by consumption time CMake is out of the loop.
-
-Neither is a loss relative to the old behavior: before `link_flags` existed,
-`INTERFACE_LINK_LIBRARIES` was not read at all, so *every* entry was dropped.
-Resolving them properly would mean a second CMake round-trip; `:link-flags` is
-the escape hatch until something needs it.
+A namespaced entry that names a real target is now resolved to its artifact
+like any other; one that names no target (`Threads::Threads`, when the Threads
+package was found by a subproject and is not a target in our scope) falls
+through as text and is skipped by the consumer's `::` rule. That last case is
+a genuine remaining gap, and a narrow one: it costs `-lpthread`, which is in
+libc on both platforms turmeric builds on.
 
 ## Suites
 
@@ -120,11 +125,15 @@ workaround with real work:
   side. Candidate for `:c-sources`, which is a redesign rather than a deletion.
 
 Tracked in the spices repo at `docs/cmake-link-line-shim-followup.md`
-(branch `claude/cmake-link-line-followup`). Validating any of it locally is
-currently blocked by a **separate pre-existing bug** --
-[transitive-path-cmake-dep-absolutized-then-reprefixed](../../reported/transitive-path-cmake-dep-absolutized-then-reprefixed.md)
--- which makes `spices/opengl` fail CMake configure on both this compiler and
-`423f6546`.
+(branch `claude/cmake-link-line-followup`, PR #61).
+
+That audit is now partly superseded by the follow-on fixes below: a
+raylib-backed spice builds and runs on macOS with **no shim at all**, so the
+`raygui` entry's reasoning needs revisiting -- what remains there is the
+implementation TU, not anything about frameworks. `spices/opengl` still does
+not configure, but for a new and structural reason
+([transitive-cmake-deps-collide-on-duplicate-targets](../../reported/transitive-cmake-deps-collide-on-duplicate-targets.md)),
+not the `:path` bug that blocked it when the audit was written.
 
 ## Follow-on fixes, same day
 
