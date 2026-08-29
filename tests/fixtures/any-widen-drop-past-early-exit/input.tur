@@ -1,0 +1,58 @@
+;; any-widen-drop-past-early-exit -- an `any` local in a scope whose end is never
+;; reached still releases its payload box.
+;;
+;; The scope-exit drop (any-widen-local-drop) is a TRAILING free: emitted after
+;; the let body.  A `return`, or a tail call the emitter turns into
+;; `goto __tur_tailcall`, jumps straight past it -- so the shape below, which is
+;; how an accumulator loop is normally written, leaked one box per turn even
+;; though the local plainly dies each iteration.
+;;
+;; When the binding is used EXACTLY ONCE, in an UNCONDITIONAL position, and that
+;; use is an argument a callee neither retains nor outlives, the drop does not
+;; need the scope at all: the box is dead the moment that call returns, and
+;; every path through the body reaches that point before it can exit.  So the
+;; drop moves to the use, and the binding is flagged so the scope-exit rule
+;; skips it -- both firing would free the box twice, which is what the
+;; leak-check gate on this fixture is really guarding (ASan aborts on a double
+;; free, not just on a leak).
+;;
+;; "Unconditional" is load-bearing: a use inside an `if` arm runs on one path
+;; and not the other, so moving the drop there would leak on the path that
+;; skips it -- with the scope-exit rule already suppressed.  The search
+;; therefore descends into an `if`'s condition but not its arms.
+
+(defstruct Pt [x : int y : int])
+
+(defn reads [v : any] : int
+  (if (is? v Pt) 1 0))
+
+(defn ret-any [i : int] : any (make-struct Pt i 2))
+
+;; The let body is a TAIL CALL -- lowered to a back-edge goto, so nothing
+;; emitted after the body ever runs.
+(defn tail-loop [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (let [a (ret-any i)]
+      (tail-loop (+ i 1) n (+ acc (reads a))))))
+
+;; The let body ends in an explicit `return`, the other way past a trailing free.
+(defn early-return [i : int] : int
+  (let [a (ret-any i)]
+    (return (reads a))))
+
+;; And the ordinary case, whose scope end IS reachable: the drop still happens
+;; exactly once, now at the use rather than at scope exit.
+(defn plain [i : int] : int
+  (let [a (ret-any i)]
+    (reads a)))
+
+(defn drive [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (drive (+ i 1) n (+ acc (+ (early-return i) (plain i))))))
+
+(defn main [] : int
+  (println (tail-loop 0 2000 0))    ;; 2000
+  (println (drive 0 2000 0))        ;; 4000 -- 1 + 1 a turn
+  0)

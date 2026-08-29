@@ -13,6 +13,12 @@ bool expr_subtree_has_inline_c(const Expr *e);
 /* catch-box-reader-confinement-whitelist: the box-confinement walk, likewise
  * defined emit-side, reused here to infer per-param non-retention for
  * pointer-carrying scalars when a defn is elaborated. */
+/* any-struct-box-leak-per-widen: the escape walk with the tail return excluded,
+ * defined emit-side; reused here to check that a passthrough function does not
+ * ALSO retain the argument it returns. */
+bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                      const Expr *ignore);
+
 bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
 
@@ -8447,6 +8453,33 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                             : _fa->as.let_.body;
         if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY)
             b->returns_fresh_any = true;
+    }
+    /* any-struct-box-leak-per-widen: the passthrough twin.  A body whose tail is
+     * a bare parameter forwards that argument, so the caller's ownership of the
+     * value survives the call -- `(reads (alias tmp))` may drop `tmp`'s box
+     * after `reads`, exactly as `(reads tmp)` could.
+     *
+     * "Returns the parameter" is not enough on its own: a body that ALSO stores
+     * it (`(do (set! g v) v)`) hands back a value the callee kept, and dropping
+     * it would free memory the global still points at.  The tail use is what
+     * makes it a return rather than an escape, so it is excluded from the walk
+     * and everything else must come back clean. */
+    b->returns_any_param_idx = -1;
+    {
+        const Expr *_pa = body;
+        while (_pa && (_pa->kind == EX_LET || _pa->kind == EX_ASCRIBE))
+            _pa = (_pa->kind == EX_ASCRIBE) ? _pa->as.ascribe_.inner
+                                            : _pa->as.let_.body;
+        if (_pa && _pa->kind == EX_VAR && _pa->as.var.binding &&
+            _pa->type.kind == TY_ANY) {
+            for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+                if (params[_pi] != _pa->as.var.binding) continue;
+                if (!expr_subtree_has_inline_c(body) &&
+                    !catch_box_binding_escapes_except(body, params[_pi], _pa))
+                    b->returns_any_param_idx = (int)_pi;
+                break;
+            }
+        }
     }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);

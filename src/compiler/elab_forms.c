@@ -359,6 +359,104 @@ static const Type *let_use_site_app_type(Elab *e, const Form *f,
     return NULL;
 }
 
+/* any-struct-box-leak-per-widen (the early-exit case): move an `any` binding's
+ * drop from scope exit to its single consuming call.
+ *
+ * The scope-exit drop is a TRAILING free -- emitted after the body -- so a
+ * `return` or a TCO'd tail call in that body jumps straight past it and the box
+ * leaks.  (The closure-env and catch-box frees have the same shape and the same
+ * hole; this does not fix those.)  But when the binding is used EXACTLY ONCE,
+ * and that use is an argument a callee neither retains nor outlives, the drop
+ * does not need the scope at all: the box is dead the moment that call returns,
+ * which is a point every path through the body reaches before it can exit.
+ *
+ * `catch_box_binding_escapes_except` does the counting.  Excluding the one use
+ * we found, the binding must not appear anywhere else -- so "exactly once" is
+ * established by the same conservative walk that decides escape, not by a
+ * separate occurrence counter that could disagree with it.
+ *
+ * The binding is then flagged so the scope-exit rule skips it; both firing
+ * would free the box twice. */
+bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                      const Expr *ignore);
+
+static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b);
+
+static void any_let_move_drop_to_use(Expr *let_e) {
+    if (!let_e || !let_e->as.let_.bindings) return;
+    for (uint32_t i = 0; i < let_e->as.let_.n; i++) {
+        LetBinding *lb = &let_e->as.let_.bindings[i];
+        if (!lb->binding || !lb->init) continue;
+        if (lb->binding->type.kind != TY_ANY) continue;
+        if (!any_expr_is_owned_temp(lb->init, 8)) continue;
+        const Expr *use = any_find_sole_drop_use(let_e->as.let_.body, lb->binding);
+        if (!use) continue;
+        if (catch_box_binding_escapes_except(let_e->as.let_.body, lb->binding, use))
+            continue;
+        /* A sibling binding's initializer could also reach it. */
+        bool other = false;
+        for (uint32_t j = 0; j < let_e->as.let_.n && !other; j++)
+            if (j != i && catch_box_binding_escapes_except(
+                              let_e->as.let_.bindings[j].init, lb->binding, NULL))
+                other = true;
+        if (other) continue;
+        ((Expr *)use)->any_drop_after = true;
+        lb->binding->any_dropped_at_use = true;
+    }
+}
+
+/* The first argument position holding a bare reference to `b` whose parameter is
+ * droppable -- non-retaining and effect-free, the same pair every other `any`
+ * drop rule uses. */
+static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b) {
+    if (!e) return NULL;
+    const Expr *r = NULL;
+    switch (e->kind) {
+        case EX_CALL: {
+            const Binding *fb = e->as.call_.fn_binding;
+            if (fb && !e->as.call_.fn_expr && fb->type.kind == TY_FN
+                && effect_row_is_empty(fb->type.as.fn.effect_row)) {
+                for (uint32_t i = 0; i < e->as.call_.n_args && i < 32; i++) {
+                    const Expr *a = e->as.call_.args[i];
+                    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                    /* Return the ASCRIBE-PEELED node: it is what the escape
+                     * walk encounters, so it is what `ignore` must match, and
+                     * it is what emit_value's hook fires on. */
+                    if (a && a->kind == EX_VAR && a->as.var.binding == b
+                        && (fb->nonretain_ptr_param_mask & (1u << i)))
+                        return a;
+                }
+            }
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if ((r = any_find_sole_drop_use(e->as.call_.args[i], b))) return r;
+            return any_find_sole_drop_use(e->as.call_.fn_expr, b);
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if ((r = any_find_sole_drop_use(e->as.builtin.args[i], b))) return r;
+            return NULL;
+        case EX_IF:
+            /* Only the CONDITION is unconditional.  A use inside an arm runs on
+             * one path and not the other, so moving the drop there would leak on
+             * the path that skips it -- and the scope-exit rule has already been
+             * suppressed by then.  The drop has to dominate every exit, which is
+             * what restricting the search to unconditional positions buys. */
+            return any_find_sole_drop_use(e->as.if_.cond, b);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if ((r = any_find_sole_drop_use(e->as.do_.items[i], b))) return r;
+            return NULL;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if ((r = any_find_sole_drop_use(e->as.let_.bindings[i].init, b))) return r;
+            return any_find_sole_drop_use(e->as.let_.body, b);
+        case EX_ASCRIBE: return any_find_sole_drop_use(e->as.ascribe_.inner, b);
+        case EX_RETURN:  return any_find_sole_drop_use(e->as.return_.value, b);
+        default: return NULL;
+    }
+}
+
 Expr *elab_let(Elab *e, const Form *call) {
     /* (let [b1 i1 b2 i2 ...] body...)
      * Named-let: (let name [p1 v1 ...] body...) -- desugar to letrec */
@@ -1863,6 +1961,7 @@ Expr *elab_let(Elab *e, const Form *call) {
     out->as.let_.bindings = bcopy;
     out->as.let_.n = n_binds;
     out->as.let_.body = body;
+    any_let_move_drop_to_use(out);
     return out;
 }
 

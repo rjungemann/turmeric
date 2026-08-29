@@ -4,70 +4,86 @@
 documented as accepted in the union/intersection guide. Found in the
 2026-08-20 docs audit.
 
-**Narrowed 2026-08-29 in three passes.** All three places an `any` payload box
-can be owned now own it. What is left is two shapes that need real
-inter-procedural / all-exits ownership, described precisely below rather than
-as "widening leaks".
+**Narrowed 2026-08-29 in four passes.** Every place an `any` payload box can be
+owned now owns it, and the ordinary shapes are leak-clean. What is left is one
+shape, described precisely below.
 
 **Pass 1 -- argument position does not allocate.** When the callee provably
 neither retains the `any` nor suspends, the payload copy goes in the caller's
-frame, so there is nothing to own. The reported repro -- a loop passing a
-by-value struct to an `[x : any]` parameter -- is leak-clean, pinned by
-`tests/fixtures/any-widen-frame-box`.
+frame. The reported repro -- a loop passing a by-value struct to an `[x : any]`
+parameter -- is pinned by `tests/fixtures/any-widen-frame-box`.
 
 **Pass 2 -- an owned `any` local is dropped at scope exit.** Pass 1 cannot help
 where the `any` outlives the expression that built it (a value RETURNED as
-`any`): a caller-frame copy would dangle. Such a value lands in a local, and a
-local is where ownership can be settled -- if the name does not escape, the body
-is its last use. Pinned by `tests/fixtures/any-widen-local-drop`.
+`any`): a caller-frame copy would dangle. Such a value lands in a local, and if
+the name does not escape, the body is its last use.
+`tests/fixtures/any-widen-local-drop`.
 
 **Pass 3 -- an owned `any` temporary is dropped after the call that consumes
-it.** The case with no ownership written down anywhere: `(reads (ret-any i))`
-binds nothing. Two facts settle it, and both are needed. Callee-side,
-`returns_fresh_any` says the producer's body tail is a widen, so every call
-mints a box that aliases nothing -- "the argument is a call returning `any`" is
-NOT enough, because a function handing back an `any` it was *given* returns an
-alias, and dropping that frees a box its other holder still uses. Caller-side,
-the consuming parameter is non-retaining and effect-free, so the box is dead
-the moment that call returns. Pinned by `tests/fixtures/any-widen-temp-drop`,
-which also carries the alias shape that must NOT be dropped.
+it.** `(reads (ret-any i))` binds nothing. Two facts settle it. Callee-side,
+`returns_fresh_any` (the body's tail is a widen, so each call mints a box) or
+`returns_any_param_idx` (a pure passthrough forwards its argument's ownership,
+and does not otherwise retain it -- checked with the escape walk minus the tail
+return). Caller-side, the consuming parameter is non-retaining and effect-free.
+`tests/fixtures/any-widen-temp-drop`, which carries both a temporary through a
+passthrough (dropped) and a let-bound local through the same passthrough (not
+dropped -- the binding owns it).
 
-The drop hangs off the panic-signal hoist, which is the only place a call is
-guaranteed to have been materialized into a statement (`__ps_N = f(...)`
-followed by its check). That is the statement boundary an earlier pass of this
-report recorded as missing; it exists, just not where the call is assembled.
+**Pass 4 -- the drop moves off scope exit when the scope's end is
+unreachable.** Passes 2's free is a TRAILING one, so a `return` or a TCO'd tail
+call jumps past it -- and a tail-recursive accumulator loop is how such a loop
+is normally written. When the binding is used exactly once, in an
+*unconditional* position, and that use is a droppable argument, the drop moves
+there: every path reaches it before the scope can exit, and the binding is
+flagged so the scope-exit rule skips it (both would free the box twice).
+`tests/fixtures/any-widen-drop-past-early-exit`.
+
+"Unconditional" is the load-bearing word. A use inside an `if` arm runs on one
+path and not the other, so moving the drop there would leak on the path that
+skips it, with the scope-exit rule already suppressed. The search descends into
+an `if`'s condition but not its arms.
 
 | Shape | Leaks? | Why |
 |---|---|---|
 | widen as an argument to a non-retaining, effect-free direct call | no | pass 1 -- never allocated |
-| `any` bound to a non-escaping local | no | pass 2 -- dropped at scope exit |
-| `any` temporary from a `returns_fresh_any` producer, consumed by a non-retaining effect-free call | no | pass 3 -- dropped after the call |
-| `any` local in a scope with an early exit (a tail-recursive loop body, a `return`) | **yes** | the scope-exit collection declines when an early exit could skip the free. Conservative and a leak, never a UAF -- the same limitation the closure-env and catch-box frees have, since all three are trailing frees rather than drops on every exit |
-| `any` returned by a callee that hands back one it was GIVEN -- `(reads (alias tmp))` | **yes** | `returns_fresh_any` is a callee-side fact and cannot see that THIS caller's argument was itself a temporary. Distinguishing them is ownership flow through the callee |
-| callee that retains, has an inline-C body, may suspend, or is called indirectly | n/a | those keep the heap box by design; `tests/fixtures/any-widen-retaining-callee` pins them, including the effectful case, which became testable when [perform-in-fn-with-any-param-has-no-cps-lowering](../archive/perform-in-fn-with-any-param-has-no-cps-lowering.md) landed |
+| `any` bound to a non-escaping local | no | pass 2 |
+| `any` temporary from a fresh producer or a pure passthrough, consumed by a non-retaining effect-free call | no | pass 3 |
+| `any` local whose sole unconditional use is such a call, in a scope with an early exit | no | pass 4 |
+| `any` local narrowed by `is?` and then used only through the narrowed copy | **yes** | see below |
+| callee that retains, has an inline-C body, may suspend, or is called indirectly | n/a | those keep the heap box by design; `any-widen-retaining-callee` pins them |
 
-Getting any of these conditions wrong turns a leak into a dangling pointer, so
-the shapes that must decline carry as much coverage as the ones that must
-accept -- `any-widen-retaining-callee` and the `alias` case in
-`any-widen-temp-drop`.
+Getting any of these conditions wrong turns a leak into a dangling pointer or a
+double free, so the shapes that must decline carry as much coverage as the ones
+that must accept -- and every accepting fixture runs under LeakSanitizer, which
+aborts on a double free as readily as it reports a leak.
 
 ## What is actually left
 
-Two shapes, both needing more than a local rule:
+One shape: an `any` local that `is?` **flow-narrows**, after which only the
+narrowed copy is used.
 
-1. **A local in a scope with an early exit.** The free is emitted after the
-   body; a `return` or a TCO'd tail call jumps past it. Fixing it means
-   dropping on every exit edge, which is a drop-obligation pass -- and it would
-   fix the closure-env and catch-box frees in the same stroke, since they share
-   the limitation.
-2. **An alias returned by a callee.** `(reads (alias tmp))` leaks because
-   nothing can tell, at the call site, whether the `any` a callee returned was
-   freshly minted or handed through. That is ownership flow across a call
-   boundary -- an effect/ownership annotation on the result, or an
-   interprocedural pass.
+```turmeric
+(let [a (ret-any i)]
+  (if (is? a Pt)
+    (reads a)      ;; `a` here is the NARROWED Pt, re-widened -- not the box
+    0))
+```
 
-Neither is a special case waiting to be written; both are the same missing
-piece, which is why this stays open rather than being archived.
+The narrowing rebinds `a` to a `Pt` inside the arm, so the original `any` is
+genuinely dead at the `is?` and the AST use in the arm does not refer to it.
+Neither rule fires: pass 4 finds no use of the `any` binding, and pass 2's
+trailing free is skipped whenever the arm exits early. The box would want
+dropping at the narrowing point, which is a liveness question rather than the
+syntactic ownership ones the four passes answer.
+
+Related and separate, found while testing this: an `any`-typed **global**'s
+initializer is never widened -- `(def ^mut g : any 5)` emits
+`tur_tagged_t = long int` and fails to compile, for a struct payload too. That
+is a missing `elab_coerce_to_any` at `def` position, not a leak; it also means
+there is currently no way to retain an `any` past a call at all (a global
+cannot hold one, and `vec-push!` takes the int64 carrier a two-word
+`tur_tagged_t` does not fit), which is why the "callee retains" guards above
+are in place but cannot be exercised.
 
 ## Repro
 

@@ -977,6 +977,26 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
             case EX_VAR:
                 if (cur->as.var.binding == b) { escapes = true; goto esc_done; }
                 break;
+            /* any-struct-box-leak-per-widen: `(type-of b)` and `(is? b T)` READ
+             * the tag and yield something that cannot alias the payload -- a
+             * bool, or a static name out of the runtime's table.  A bare `b`
+             * directly underneath one is therefore not an escape, exactly as a
+             * bare `b` under the ok?/err? accessors above is not.  A NESTED use
+             * (`(is? (f b) T)`) is still walked and still escapes.
+             *
+             * EX_ANY_CAST is deliberately NOT here: it hands back the payload,
+             * which for a pointer payload is the value itself, so a cast result
+             * can alias `b` and the conservative default is the right answer. */
+            case EX_ANY_TYPE_OF:
+            case EX_ANY_IS: {
+                const Expr *op = (cur->kind == EX_ANY_TYPE_OF)
+                                     ? cur->as.any_type_of_.value
+                                     : cur->as.any_is_.value;
+                while (op && op->kind == EX_ASCRIBE) op = op->as.ascribe_.inner;
+                if (!(op && op->kind == EX_VAR && op->as.var.binding == b))
+                    ESC_PUSH(op);
+                break;
+            }
             /* A direct call `(b ...)` is the one allowed, non-escaping use of
              * `b`: the callee is carried in fn_binding (not an EX_VAR child), so
              * it is simply not pushed here.  An indirect call whose callee slot

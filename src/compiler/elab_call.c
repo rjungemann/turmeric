@@ -4280,6 +4280,34 @@ static bool arg_form_is_ctor_call_of(Elab *e, const Form *f, const Type *app) {
 }
 
 /* Phase 2: Elaborate a function call (f a b c) */
+/* any-struct-box-leak-per-widen: does `x` evaluate to an `any` whose payload box
+ * THIS expression owns -- nothing else holds it, so the consumer may drop it?
+ *
+ * Two base cases and one step.  A widen performed here mints the box (a
+ * frame-boxed one is excluded: that payload is a stack address).  A call to a
+ * returns_fresh_any producer mints one per call.  And a call to a passthrough
+ * (returns_any_param_idx) forwards its argument without keeping it, so the
+ * question moves to that argument -- which is what makes `(alias tmp)` owned
+ * when `tmp` was, and NOT owned when the caller was handed it.
+ *
+ * Depth-bounded rather than recursive-without-limit: the chain is a syntactic
+ * one through named callees, so a handful of links is generous, and a bound
+ * removes any question about a pathological program.  Running out of depth
+ * answers "not owned", which only ever declines a drop. */
+bool any_expr_is_owned_temp(const Expr *x, int depth) {
+    if (!x || depth <= 0) return false;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->type.kind != TY_ANY) return false;
+    if (x->kind == EX_UNION_INJECT) return !x->as.union_inject_.frame_box;
+    if (x->kind != EX_CALL || !x->as.call_.fn_binding) return false;
+    const Binding *fb = x->as.call_.fn_binding;
+    if (fb->returns_fresh_any) return true;
+    int pi = fb->returns_any_param_idx;
+    if (pi >= 0 && (uint32_t)pi < x->as.call_.n_args && x->as.call_.args)
+        return any_expr_is_owned_temp(x->as.call_.args[pi], depth - 1);
+    return false;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -5450,11 +5478,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             && (fn_binding->nonretain_ptr_param_mask & (1u << i))
             && fn_binding->type.kind == TY_FN
             && effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
-            const Expr *src = args[i];
-            while (src && src->kind == EX_ASCRIBE) src = src->as.ascribe_.inner;
-            if (src && src->kind == EX_CALL && src->as.call_.fn_binding
-                && src->as.call_.fn_binding->returns_fresh_any
-                && src->type.kind == TY_ANY)
+            if (any_expr_is_owned_temp(args[i], 8))
                 args[i]->any_drop_after = true;
         }
 

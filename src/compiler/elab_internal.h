@@ -1780,4 +1780,9 @@ Expr *elab_session_choose_left(Elab *e, const Form *call);
 Expr *elab_session_choose_right(Elab *e, const Form *call);
 Expr *elab_session_recv_timeout(Elab *e, const Form *call);
 
+
+/* any-struct-box-leak-per-widen: does this expression evaluate to an `any` whose
+ * payload box the evaluating expression owns?  See elab_call.c. */
+bool any_expr_is_owned_temp(const Expr *x, int depth);
+
 #endif

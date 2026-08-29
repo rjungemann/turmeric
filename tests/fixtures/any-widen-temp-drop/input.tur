@@ -11,9 +11,12 @@
 ;;
 ;;   the CALLEE-side one -- `ret-any`'s body is a widen, so every call mints a
 ;;   fresh box (returns_fresh_any).  "The argument is a call returning any" is
-;;   NOT enough: a function that hands back an `any` it was given returns an
-;;   ALIAS, and dropping that frees a box its other holder still uses.  `alias`
-;;   below is exactly that shape, and must keep its box.
+;;   NOT enough on its own: a function that hands back an `any` it was GIVEN
+;;   returns an alias, and whether that may be dropped depends on who owned the
+;;   argument.  `alias` is exactly that shape, and the two calls to it below go
+;;   opposite ways: through a temporary it forwards ownership and the box is
+;;   dropped; through the let-bound `a` it does not, because the binding owns
+;;   that box and releases it at scope exit.
 ;;
 ;;   the CALLER-side one -- `reads` neither retains the value (its int result
 ;;   cannot carry the payload out) nor can suspend, so the box is dead the
@@ -28,7 +31,13 @@
 ;; FRESH: the body's tail is a widen, so each call owns a new box.
 (defn ret-any [i : int] : any (make-struct Pt i 2))
 
-;; NOT fresh: hands back the `any` it was given.  A caller must not drop this.
+;; NOT fresh, but a pure PASSTHROUGH: it forwards its argument and retains
+;; nothing (returns_any_param_idx), so ownership of the result is ownership of
+;; the argument.  A passthrough that also STORED the argument would have to
+;; decline -- that guard is in place but cannot be exercised here, because there
+;; is currently no way to retain an `any` past a call at all: an `any`-typed
+;; global's initializer is never widened, and `vec-push!` takes the int64
+;; carrier, which a two-word tur_tagged_t does not fit.
 (defn alias [v : any] : any v)
 
 (defn loop-n [i : int n : int acc : int] : int
@@ -37,11 +46,18 @@
     ;; The temporary never gets a name -- it is built, consumed, and dropped.
     (loop-n (+ i 1) n (+ acc (reads (ret-any i))))))
 
+(defn drive-alias [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    ;; Through a passthrough, still a temporary nobody else holds: dropped.
+    (drive-alias (+ i 1) n (+ acc (reads (alias (ret-any i)))))))
+
 (defn main [] : int
   (println (loop-n 0 2000 0))            ;; 2000
-  ;; The alias shape still has to compute the right answer; it keeps its box
-  ;; (that residue is tracked in the open report), so this is one allocation,
-  ;; not a loop -- the leak-check gate below would otherwise fail on it.
+  (println (drive-alias 0 2000 0))       ;; 2000
+  ;; Through the SAME passthrough, but the argument is a let-bound local the
+  ;; binding owns -- so this call site must NOT drop, and the scope-exit drop
+  ;; releases it exactly once.  A double free here would abort under ASan.
   (let [a (ret-any 7)]
     (println (reads (alias a))))         ;; 1
   0)

@@ -574,6 +574,24 @@ struct Binding {
      * exactly like returns_fresh_closure, and for the same reason: ownership of
      * a returned value cannot be read off the call site alone. */
     bool                returns_fresh_any;
+    /* any-struct-box-leak-per-widen (the passthrough case): this function's
+     * body is exactly `param[returns_any_param_idx]` -- it hands its argument
+     * straight back, and does not otherwise retain it.  So the OWNERSHIP of the
+     * value it returns is the ownership of that argument: a caller that passed
+     * a temporary it owned still owns the result.  -1 when the function is not
+     * that shape.  Distinct from returns_fresh_any, which says the value was
+     * minted here; this says it was forwarded. */
+    int                 returns_any_param_idx;
+    /* any-struct-box-leak-per-widen: this `any` binding's payload box is dropped
+     * at its single consuming CALL, not at its scope's exit -- so the scope-exit
+     * rule must skip it or the box would be freed twice.  Set when the drop was
+     * moved to the use because the scope's end is not reachable from the body
+     * (a tail call, a `return`), which is exactly where a trailing free is
+     * jumped past.  On the Binding rather than the LetBinding because
+     * binding_new zeroes, while LetBinding arrays are built field-by-field at
+     * half a dozen sites -- one missed initializer there is an uninitialized
+     * read, which is how UBSan found the first draft of this. */
+    bool                any_dropped_at_use;
     /* Existential `open` dispatch: when this binding names the `v` of
      * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
      * points at the packed scrutinee's TY_EXISTS type (carrying the constraint

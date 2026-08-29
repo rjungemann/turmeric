@@ -319,28 +319,29 @@ dereference on `cast`; ADTs and `cstr` are pointer-carried and ride the carrier
 directly; floats are stored by their bit pattern so no precision is lost.
 
 > **Note:** widening a struct to `any` no longer leaks in the ordinary cases.
-> Three places can own the payload box, and each now does:
+> Every place the payload box can be owned now owns it:
 >
 > - **As a call argument**, when the callee neither retains the value nor can
 >   suspend, there is no allocation at all -- the copy lives in the caller's
 >   frame.
 > - **Bound to a local** that does not escape, the box is released at scope
->   exit.
+>   exit; and when the scope's end is unreachable (a `return`, or a
+>   tail-recursive loop body), the release moves to the local's sole
+>   unconditional use instead.
 > - **As a temporary** -- never named -- produced by a function whose body ends
->   in a widen and consumed by a non-retaining, effect-free call, the box is
->   released once that call returns.
+>   in a widen, or forwarded through a pure passthrough, and consumed by a
+>   non-retaining, effect-free call.
 >
-> Two shapes still leak one allocation per widen: a local in a scope with an
-> early exit (a `return` or a tail-recursive loop body jumps past the trailing
-> free), and an `any` a callee handed back after being *given* it, where the
-> call site cannot tell a fresh box from an alias. Both want a real
-> drop-obligation pass; see
+> One shape still leaks: a local that `is?` flow-narrows, after which only the
+> narrowed copy is used -- the original `any` is dead at the narrowing, which is
+> a liveness question rather than an ownership one. See
 > `docs/reported/any-struct-box-leak-per-widen.md`. If you need a struct in
-> `any` on a hot path in one of those shapes, prefer a pointer/ADT payload,
-> which is carrier-resident and allocation-free.
+> `any` on a hot path in that shape, prefer a pointer/ADT payload, which is
+> carrier-resident and allocation-free.
 >
 > Pinned leak-clean by `tests/fixtures/any-widen-frame-box`,
-> `any-widen-local-drop`, and `any-widen-temp-drop`.
+> `any-widen-local-drop`, `any-widen-temp-drop`, and
+> `any-widen-drop-past-early-exit`.
 
 ---
 

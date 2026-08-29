@@ -2326,6 +2326,10 @@ static bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) 
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!init || !b) return false;
+    /* any-struct-box-leak-per-widen: elab moved this binding's drop to its
+     * single consuming call, which every path reaches before the scope can
+     * exit.  Dropping again here would free the box twice. */
+    if (b->any_dropped_at_use) return false;
     if (emit_resolve_type(ctx, b->type).kind != TY_ANY) return false;
     while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
     if (!init) return false;
