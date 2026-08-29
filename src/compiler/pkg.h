@@ -446,6 +446,34 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        PkgCmakeDep      **out_deps,
                                        int               *out_n);
 
+/* Whether the cmake-deps walk should seed every workspace sibling rather than
+ * only the manifest's declared `:spices` closure.
+ *
+ * False by default, which is what all three callers (`tur fetch`, `tur run`,
+ * `tur build`) now use. Seeding siblings means building ONE spice configures
+ * the native dependencies of EVERY member of the workspace: in
+ * `turmeric-spices` that turned `spices/opengl` -- which needs glfw and glad
+ * -- into a 15-dependency configure pulling in mbedtls, sqlite3, libpq,
+ * rtaudio and the rest. It is wasteful, and it is fatal rather than merely
+ * slow, two ways:
+ *
+ *   - one dependency that cannot configure on this machine aborts the whole
+ *     configure, so nothing builds and every test in the spice fails; and
+ *   - unrelated members collide in the single shared CMake target namespace
+ *     (`opengl` fetches glfw while `raygui` pulls raylib, which vendors its
+ *     own glfw: "add_library cannot create target glfw").
+ *
+ * The rule it implemented -- a sibling's modules are importable without an
+ * explicit `:spices` entry, so its native deps must build too -- is about the
+ * *include path*, and does not need every sibling's libraries. Downstream
+ * evidence agrees: every spice that genuinely needs a sibling's native lib
+ * declares that sibling in its own `:spices`, and the declared walk alone
+ * resolves them.
+ *
+ * `TUR_CMAKE_DEPS_WORKSPACE_WIDE=1` restores the old behavior for a project
+ * that does rely on the implicit rule. */
+bool pkg_workspace_wide_cmake_deps(void);
+
 /* Free an array allocated by pkg_collect_transitive_cmake_deps. */
 void pkg_cmake_deps_free(PkgCmakeDep *deps, int n);
 

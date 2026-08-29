@@ -4583,13 +4583,13 @@ static int cmd_run(int argc, char **argv) {
     }
 
     /* CMake dependency handling: generate and build if cmake-deps present.
-     * Walk the enclosing manifest's :spices block transitively so a
-     * workspace sibling's :cmake-deps participate in this TU's build --
+     * Walk the enclosing manifest's :spices block transitively so a declared
+     * dependency's :cmake-deps participate in this TU's build --
      * see docs/archive/history/transitive-cmake-deps-plan.md. */
     PkgCmakeDep *closure_deps = NULL;
     int          n_closure_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(root, &m,
-                                           /*include_workspace_siblings=*/true,
+                                           pkg_workspace_wide_cmake_deps(),
                                            &closure_deps, &n_closure_deps)) {
         fprintf(stderr, "tur run: transitive cmake-deps resolution failed\n");
         pkg_lock_free(&lock);

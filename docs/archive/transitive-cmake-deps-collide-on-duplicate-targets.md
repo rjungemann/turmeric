@@ -1,5 +1,33 @@
 # Transitive `:cmake-deps` are merged into one CMake project, so two siblings providing the same target collide
 
+**RESOLVED 2026-08-28 via fix direction (1).** The `:cmake-deps` walk no longer
+seeds every workspace member; all three callers (`tur fetch`, `tur run`,
+`tur build`) now use the manifest's declared `:spices` closure.
+`TUR_CMAKE_DEPS_WORKSPACE_WIDE=1` restores the old behavior.
+
+The collision was a symptom. The measured cost of seeding was that building
+`spices/opengl` -- which needs glfw and glad -- configured **15** unrelated
+native dependencies (mbedtls, sqlite3, libpq, rtaudio, hiredis, ...). It is now
+1. `spices/opengl` fetches, configures, builds `libglfw.a` + `libglad.a`, and
+`tur build .` succeeds, on macOS, for the first time.
+
+This reverts the "seed all members" decision from
+[workspace-transitive-native-deps-plan](history/workspace-transitive-native-deps-plan.md),
+which rated itself "Low / quality-of-life. Not a correctness bug" and chose all
+members over only-declared on consistency grounds with the include-path
+resolver. The include path is cheap to over-share; native builds are not. Three
+independent findings had already converged on the same conclusion:
+`tur build .` opted out in
+[tur-build-cmake-deps-workspace-overreach](history/tur-build-cmake-deps-workspace-overreach.md)
+(2026-06-23), the spices CI hides the workspace root during `tur fetch` to work
+around it, and that CI comment records the evidence that the declared closure
+suffices -- "every spice that genuinely needs a sibling's native lib declares
+that sibling in its own :spices ... verified: ecs-raylib still gets raylib,
+plot still gets plutovg, httpd still gets yyjson+mbedtls."
+
+Fix direction (3) -- re-reporting a collision with the two spices named -- was
+not implemented and is no longer reachable by this route.
+
 **Severity: medium** -- `add_library cannot create target "glfw" because
 another target with the same name already exists`. The configure aborts and no
 dependency builds. Found 2026-08-28 building `spices/opengl` after the `:path`

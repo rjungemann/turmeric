@@ -2844,6 +2844,11 @@ static void free_one_cmake_dep(PkgCmakeDep *d) {
     memset(d, 0, sizeof(*d));
 }
 
+bool pkg_workspace_wide_cmake_deps(void) {
+    const char *e = getenv("TUR_CMAKE_DEPS_WORKSPACE_WIDE");
+    return e && *e && strcmp(e, "0") != 0;
+}
+
 void pkg_cmake_deps_free(PkgCmakeDep *deps, int n) {
     if (!deps) return;
     for (int i = 0; i < n; i++) free_one_cmake_dep(&deps[i]);
@@ -5192,12 +5197,13 @@ int cmd_pkg_fetch(int argc, char **argv) {
 
     /* cmake deps: generate cmake/CMakeLists.txt, then configure+build.
      * transitive-cmake-deps-plan: union the enclosing manifest's :cmake-deps
-     * with any declared transitively by workspace siblings (and their own
-     * :spices) so `tur fetch` mirrors `tur run`'s view of the dep set. */
+     * with any declared transitively through its :spices closure, so
+     * `tur fetch` mirrors `tur run`'s view of the dep set. Both use the
+     * declared closure -- see pkg_workspace_wide_cmake_deps(). */
     PkgCmakeDep *fetch_deps   = NULL;
     int          n_fetch_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(".", &m,
-                                           /*include_workspace_siblings=*/true,
+                                           pkg_workspace_wide_cmake_deps(),
                                            &fetch_deps, &n_fetch_deps)) {
         fprintf(stderr,
                 "spice: transitive cmake-deps resolution failed\n");
