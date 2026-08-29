@@ -140,7 +140,12 @@ Nothing that worked before changes.
   56 skipped; `run-sr4-seam` green, including `fat-dispatch-wide-byval-arg` and
   `fat-dispatch-parametric-monomorph-return` -- the two prior bugs in this seam.
 
-Not addressed, and not part of this report: `EX_POLY_TO_FAT` selects
-`__tur_poly_to_fat<N>` by arity the same way. A poly-carrier value is erased to
-int64 by construction, so there is no known miscompile there, but the
-shim-selection shape is the same one that hid this.
+Left open at the time, and since chased: `EX_POLY_TO_FAT` selects
+`__tur_poly_to_fat<N>` by arity the same way. The guess recorded here was that
+a poly-carrier value is erased to int64 by construction, so there was no known
+miscompile -- true of the carrier, false of the sink. A `^fat` sink with a
+declared concrete signature routes through `ensure_typed_poly_to_fat`, which
+spelled a wide by-value aggregate parameter differently from both the call site
+and the poly wrapper: a hard build failure past 16 bytes, and UB that returned
+right answers below it. Written up and fixed in
+[poly-to-fat-wide-byval-arg](poly-to-fat-wide-byval-arg.md).

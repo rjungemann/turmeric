@@ -1489,9 +1489,17 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
     /* All-int64_t carrier signatures are likewise served by the preamble shim
      * (its int64_t (*)(void *, int64_t...) ABI equals the typed-thunk cast), so
      * emit nothing new and keep int64/pointer poly boxes churn-free. */
+    /* poly-to-fat-wide-byval-arg: compare on the SLOT spelling, not the type's
+     * own C name.  A wide by-value aggregate occupies an int64 slot here (it
+     * crosses as a heap-box pointer), so `(fn [(Tuple2 int int)] int)` really
+     * is an all-int64 signature and the preamble shim already serves it --
+     * better than the typed shim did, which used to declare the aggregate by
+     * value and survive only because the caller's pointer happened to sit in
+     * the register the struct's first eightbyte was read from. */
     bool all_int64 = strcmp(type_c_name(result_type), "int64_t") == 0;
     for (uint32_t i = 0; all_int64 && i < n_args; i++) {
-        if (strcmp(type_c_name(arg_types[i]), "int64_t") != 0) all_int64 = false;
+        if (strcmp(thunk_param_slot_c_name(arg_types[i]), "int64_t") != 0)
+            all_int64 = false;
     }
     if (all_int64) return NULL;
 
@@ -1520,18 +1528,32 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
      * The carrier erases the signature to int64_t (*)(void *, int64_t...); this
      * shim re-types it back to the true R (*)(void *, A0..An) so the sink's
      * typed-thunk cast at slot 0 matches the actual ABI and every argument is
-     * forwarded. */
+     * forwarded.
+     *
+     * poly-to-fat-wide-byval-arg: each PARAMETER is spelled with
+     * thunk_param_slot_c_name, the same routine the sink's typed-thunk typedef
+     * uses, so the two agree by construction -- a wide by-value aggregate is an
+     * int64 heap-box pointer on both sides.  It is also what slot 1 wants: the
+     * poly wrapper (make_poly_wrapper) declares such a parameter as the int64
+     * carrier and does its own deref.  So unlike the bare-fn typed fatshim,
+     * this shim never bridges an argument -- it forwards the slot word as-is.
+     * Spelling the aggregate by value here instead put the caller's pointer and
+     * the callee's read in different registers (and, for a float-field
+     * aggregate, different register CLASSES); it survived only because the shim
+     * happened not to clobber the register the pointer arrived in. */
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     const char *rc = type_c_name(result_type);
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
     buf_printf(target, "static %s %s(void *__e", rc, name);
     for (uint32_t i = 0; i < n_args; i++) {
-        buf_printf(target, ", %s a%u", type_c_name(arg_types[i]), (unsigned)i);
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(arg_types[i]),
+                   (unsigned)i);
     }
     buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
     if (has_ret) buf_puts(target, "return ");
     buf_printf(target, "((%s (*)(void *", rc);
-    for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", %s", type_c_name(arg_types[i]));
+    for (uint32_t i = 0; i < n_args; i++)
+        buf_printf(target, ", %s", thunk_param_slot_c_name(arg_types[i]));
     buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
     for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", a%u", (unsigned)i);
     buf_puts(target, ");\n}\n");

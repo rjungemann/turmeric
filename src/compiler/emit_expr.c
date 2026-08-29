@@ -7641,10 +7641,45 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * the Path A deref-back must NOT fire. */
                     !(ctx->current_abi_specialization &&
                       ctx->current_abi_specialization->is_vl_wide_mono)) {
-                    char *ub = emit_agg_unbox(ctx,
-                        *fn_binding->type.as.fn.arg_full_types[i], raw);
-                    free(raw);
-                    raw = ub;
+                    /* poly-to-fat-pbp-aggregate-param: "deref it back to the
+                     * aggregate" is right only when the callee takes that
+                     * aggregate BY VALUE.  Past the 16-byte threshold the
+                     * callee takes `const T *` instead, and the carrier word
+                     * already IS a pointer to the aggregate -- so the word
+                     * wants RETYPING, not dereferencing.  Deref'ing produced
+                     * `(const T *)(intptr_t)(*(T *)(intptr_t)(x))`, an
+                     * aggregate value handed to a pointer slot, which cc
+                     * rejects outright ("aggregate value used where an integer
+                     * was expected").  The by-value SUM site below already
+                     * draws exactly this fork; this is the same fork for the
+                     * poly-wrapper's inner call.
+                     *
+                     * The wide-byval pbp arg site further down may retype the
+                     * word again, so the emitted C can carry `(const T *)`
+                     * twice.  That is deliberate rather than tidied away: a
+                     * pointer-to-pointer cast is idempotent, so applying it
+                     * here is correct whether or not the later site fires,
+                     * whereas leaving the word bare would depend on that site
+                     * firing for every shape. */
+                    Type pt = emit_resolve_type(
+                        ctx, *fn_binding->type.as.fn.arg_full_types[i]);
+                    bool pbp = (pt.kind == TY_ADT && pt.as.adt_.def)
+                                   ? adt_byval_pass_by_ptr(pt.as.adt_.def)
+                                   : adt_app_byval_pass_by_ptr(pt);
+                    if (pbp) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "((const %s *)(intptr_t)(%s))",
+                                   emit_type_c_name(ctx, pt), raw);
+                        buf_putc(&c, '\0');
+                        free(raw);
+                        raw = strdup(c.data);
+                        buf_free(&c);
+                    } else {
+                        char *ub = emit_agg_unbox(ctx,
+                            *fn_binding->type.as.fn.arg_full_types[i], raw);
+                        free(raw);
+                        raw = ub;
+                    }
                 }
                 /* vec-push-heap-struct-element-not-carrier-cast: the symmetric
                  * direction of the ACB bridge below.  When the callee param is a
