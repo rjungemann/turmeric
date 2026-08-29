@@ -4114,6 +4114,191 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     return strdup(tmp);
 }
 
+/* ==========================================================================
+ * CE0 -- container element-form census
+ * (docs/upcoming/container-element-form-plan.md, phase CE0.)
+ *
+ * TRACE ONLY.  This function decides nothing and changes no codegen; it
+ * prints one line per container ELEMENT STORE under --emit-abi-trace so a
+ * corpus sweep can count the shapes CE1/CE2 would have to be sound over:
+ *
+ *   repr-trace elem-store class=<1|2|3> form=<word|box> niche=<yes|no>
+ *              elem=<type> cont=<type> fn=<callee>
+ *
+ * The three classes are the plan's soundness invariant ("the slot convention
+ * must be decidable at EVERY site that touches the slot"):
+ *
+ *   class=1  concrete -- the receiver names the element monomorph here.
+ *   class=2  spec     -- inside a Path A / SR2a spec clone, so the element
+ *                        tyvar is concrete at this site.
+ *   class=3  erased   -- the element type is STILL a tyvar/unknown after
+ *                        resolution: the convention is NOT decidable here.
+ *                        A word-store here against a box-store at a concrete
+ *                        site would put two conventions in one vec.
+ *
+ * CE0's gate is the class-3 count reachable with a niche-eligible element.
+ * `niche=` is only ever `yes` under --enable=option-niche (adt_app_is_niche_
+ * option is false with the experiment off), which is also why this census
+ * must be swept with the flag ON to mean anything.
+ *
+ * The container-store discriminator is deliberately the SAME one the
+ * escaping-bridge sites below already use -- "a sibling argument is a heap
+ * container" -- so the census counts the sites CE2 would actually change,
+ * not a differently-drawn set.  A hand-rolled vec behind an `:int` handle
+ * (stdlib/seq/consume.tur's seq-out-vec-push!) has no heap-container
+ * sibling and is correctly NOT counted: it is not a `(Vec A)` and CE is
+ * scoped to Vec.
+ * ========================================================================*/
+static void ce0_trace_elem_store(EmitCtx *ctx, const Expr *e, uint32_t i,
+                                 const Binding *fn_binding) {
+    if (!g_emit_abi_trace || !e || e->kind != EX_CALL) return;
+    if (i >= e->as.call_.n_args) return;
+    if (!fn_binding || fn_binding->type.kind != TY_FN) return;
+    Type **decl = fn_binding->type.as.fn.arg_full_types;
+    if (!decl) return;
+    uint32_t arity = fn_binding->type.as.fn.arity;
+    if (i >= arity) return;
+
+    /* Which argument is the ELEMENT is a property of the CALLEE'S DECLARED
+     * signature, not of this call site: `vec-push! [A] [v : (Vec A) val : A]`
+     * declares its element slot as the same tyvar the receiver is applied to.
+     * Comparing declared types is what keeps `vec-get [A] [v : (Vec A)
+     * i : int]` out of the census -- resolving first would make `i : int` and
+     * the element of a `(Vec int)` indistinguishable, which is how the first
+     * cut of this census counted every index argument as a store. */
+    uint32_t cont_param = UINT32_MAX;
+    const char *elem_tv = NULL;
+    const char *cont_name = "?";
+    for (uint32_t j = 0; j < arity; j++) {
+        if (j == i || !decl[j]) continue;
+        AdtDef *cdef = NULL;
+        Type cargs[16];
+        uint8_t cn = 0;
+        Type cj = *decl[j];
+        if (!type_extract_adt_app(&cj, &cdef, cargs, &cn) || !cdef || !cdef->name)
+            continue;
+        if (cn == 0) continue;
+        /* The element is the LAST type argument: `(Vec A)` -> A,
+         * `(Map K V)` -> V.  A Map key store is a separate shape; CE is
+         * Vec-scoped (CE4 defers Map/Set), so the container head name rides
+         * the trace line and the analysis filters on it. */
+        Type ce = cargs[cn - 1];
+        if (ce.kind != TY_TYVAR || !ce.as.tyvar_.name) continue;
+        cont_param = j;
+        elem_tv = ce.as.tyvar_.name;
+        cont_name = cdef->name;
+        break;
+    }
+    if (cont_param == UINT32_MAX || !elem_tv) return;
+
+    /* ...and THIS argument must be declared as that same element tyvar. */
+    if (decl[i]->kind != TY_TYVAR || !decl[i]->as.tyvar_.name) return;
+    if (strcmp(decl[i]->as.tyvar_.name, elem_tv) != 0) return;
+
+    /* Classification uses the RESOLVED receiver at this call site. */
+    if (!e->as.call_.args[cont_param]) return;
+    Type cont = emit_resolve_type(ctx, e->as.call_.args[cont_param]->type);
+    Type elem;
+    if (cont.kind == TY_APP && cont.as.app.arg)
+        elem = emit_resolve_type(ctx, *cont.as.app.arg);
+    else if (e->as.call_.args[i])
+        elem = emit_resolve_type(ctx, e->as.call_.args[i]->type);
+    else
+        return;
+
+    /* Class 3 is the residue: still erased AFTER resolution.  Inside a spec
+     * clone emit_resolve_type has already substituted the concrete element,
+     * which is exactly what makes a spec site decidable (class 2). */
+    int cls;
+    if (elem.kind == TY_TYVAR || elem.kind == TY_UNKNOWN || elem.kind == TY_EXISTS)
+        cls = 3;
+    else
+        cls = ctx->current_abi_specialization ? 2 : 1;
+
+    bool niche = adt_app_is_niche_option(elem);
+    /* CE_WORD / CE_BOX, as the plan defines them: only a boxed aggregate is
+     * CE_BOX; everything else already stores its one-word form today. */
+    const char *form =
+        (repr_of(&elem, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG) ? "box"
+                                                                    : "word";
+    const char *fname = (fn_binding && fn_binding->name && fn_binding->name->name)
+                            ? fn_binding->name->name : "?";
+
+    fprintf(stderr,
+            "repr-trace elem-store class=%d form=%s niche=%s cont=%s elem=%s "
+            "fn=%s\n",
+            cls, form, niche ? "yes" : "no", cont_name, type_name(elem),
+            fname);
+}
+
+/* CE0, read half.  The exact mirror of ce0_trace_elem_store: a container
+ * element READ is a call whose DECLARED RESULT is the element tyvar of a
+ * declared container parameter -- `vec-get [A] [v : (Vec A) i : int] : A`,
+ * `vec-pop! [A] [v : (Vec A)] : A`, `vec-get-byval [A] ... : A`.  Keying on
+ * the declared signature (not the resolved result) is what keeps
+ * `vec-len [A] [v : (Vec A)] : int` out of the census, for the same reason
+ * the store half does it: at a `(Vec int)` call site a resolved `:int` result
+ * and a resolved `:int` element are indistinguishable.
+ *
+ * Emitted as `repr-trace elem-read` with the same class/form/niche columns,
+ * so a sweep can check the two halves agree per element monomorph -- which is
+ * the property CE2 has to preserve when it lands store and read in one
+ * commit.  Trace only. */
+static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
+                                const Binding *fn_binding) {
+    if (!g_emit_abi_trace || !e || e->kind != EX_CALL) return;
+    if (!fn_binding || fn_binding->type.kind != TY_FN) return;
+    Type **decl = fn_binding->type.as.fn.arg_full_types;
+    Type *res = fn_binding->type.as.fn.result_full_type;
+    if (!decl || !res) return;
+    if (res->kind != TY_TYVAR || !res->as.tyvar_.name) return;
+    uint32_t arity = fn_binding->type.as.fn.arity;
+
+    uint32_t cont_param = UINT32_MAX;
+    const char *cont_name = "?";
+    for (uint32_t j = 0; j < arity && cont_param == UINT32_MAX; j++) {
+        if (!decl[j]) continue;
+        AdtDef *cdef = NULL;
+        Type cargs[16];
+        uint8_t cn = 0;
+        Type cj = *decl[j];
+        if (!type_extract_adt_app(&cj, &cdef, cargs, &cn) || !cdef || !cdef->name)
+            continue;
+        if (cn == 0) continue;
+        Type ce = cargs[cn - 1];
+        if (ce.kind != TY_TYVAR || !ce.as.tyvar_.name) continue;
+        /* The result must be the SAME tyvar the receiver is applied to. */
+        if (strcmp(ce.as.tyvar_.name, res->as.tyvar_.name) != 0) continue;
+        cont_param = j;
+        cont_name = cdef->name;
+    }
+    if (cont_param == UINT32_MAX) return;
+    if (cont_param >= e->as.call_.n_args || !e->as.call_.args[cont_param]) return;
+
+    Type cont = emit_resolve_type(ctx, e->as.call_.args[cont_param]->type);
+    if (cont.kind != TY_APP || !cont.as.app.arg) return;
+    Type elem = emit_resolve_type(ctx, *cont.as.app.arg);
+
+    int cls;
+    if (elem.kind == TY_TYVAR || elem.kind == TY_UNKNOWN || elem.kind == TY_EXISTS)
+        cls = 3;
+    else
+        cls = ctx->current_abi_specialization ? 2 : 1;
+
+    bool niche = adt_app_is_niche_option(elem);
+    const char *form =
+        (repr_of(&elem, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG) ? "box"
+                                                                    : "word";
+    const char *fname = (fn_binding->name && fn_binding->name->name)
+                            ? fn_binding->name->name : "?";
+
+    fprintf(stderr,
+            "repr-trace elem-read class=%d form=%s niche=%s cont=%s elem=%s "
+            "fn=%s\n",
+            cls, form, niche ? "yes" : "no", cont_name, type_name(elem),
+            fname);
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
@@ -7028,8 +7213,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             FnDef *reresolved_callee = emit_reresolve_method_fndef(ctx, e);
             char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+            /* CE0 census, read half: once per call, not per argument. */
+            ce0_trace_elem_read(ctx, e, fn_binding);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *arg_expr = e->as.call_.args[i];
+                /* CE0 census (trace only, no behavior change). */
+                ce0_trace_elem_store(ctx, e, i, fn_binding);
                 /* M5 residual-straddle (docs/artifacts/m5-residual-straddle-
                  * retirement.md): the strip below historically erased
                  * EX_ASCRIBE wrappers before emit_value so the call could

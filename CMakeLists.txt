@@ -230,6 +230,25 @@ add_test(
   COMMAND bash tests/run-sr4-seam.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# option-niche seam-rot gate, the same argument as tur_sr4_seam above.
+# `--enable=option-niche` (PROTOTYPE, docs/upcoming/sr3-option-niche-plan.md)
+# carries an eligible `(Option P)` as its bare payload pointer, and it is OFF
+# by default -- so `bash tests/run.sh` only reaches the niche through the three
+# fixtures carrying a `flags` file, and compiles the default representation for
+# the whole rest of the eligible population.  The experiment is soaking toward
+# a graduation call whose standing claim is "no new silent-wrong-answer
+# crossings over the window"; five such crossings were found in its first two
+# days, so that claim needs something re-running the population, not a mood.
+# Unregistered, this harness exists but never runs, and the soak measures
+# nothing.  Like the SR4 harness it leads with a canary that asserts the flag
+# actually bites (ctor_Some__String is the niche identity and no tagged
+# Option__String typedef is minted), so a rename cannot quietly demote it to a
+# second run of the default path.
+add_test(
+  NAME tur_option_niche_seam
+  COMMAND bash tests/run-option-niche-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # tur_sr2_seam RETIRED 2026-08-27, with tests/run-sr2-seam.sh.  The harness
 # existed because TUR_SR2_APP_SUM_BYVALUE was OFF by default, so nothing else in
 # CI compiled a parametric sum by value and the gate document's worklist claim
