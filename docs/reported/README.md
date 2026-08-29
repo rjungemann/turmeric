@@ -1230,6 +1230,62 @@ settled state (wait out `aria-busy`, then take one reading) -- and note that
 toggling `display` preserves `scrollTop`, so a close/reopen appears to keep
 your place for a moment even with no restore code at all.
 
+## Found getting `turmeric-spices` CI green (filed 2026-08-28)
+
+Ten findings from bringing the sibling `turmeric-spices` checkout's CI to green
+([turmeric-spices#60](https://github.com/rjungemann/turmeric-spices/pull/60),
+merged). Reported against `tur v0.40.0` / turmeric `5c9d533` on Linux
+x86_64/gcc; **every repro was independently re-verified 2026-08-28** against a
+freshly built `v0.40.0` on macOS arm64 / Apple clang, so all seven defects are
+cross-platform and none is a stale-binary artifact.
+
+The first three produce **no diagnostic at all**. The next three fail in `cc`,
+with messages that point nowhere near the cause. The seventh is a SIGSEGV.
+
+**Where the remaining red lives.** That PR took Linux from 20 failing spices to
+0. macOS went from 32 to 11-15, and every one still red is red on `main` too --
+pre-existing, not a regression. Its
+[status comment](https://github.com/rjungemann/turmeric-spices/pull/60#issuecomment-)
+sorts them into four classes; **two are blocked on `turmeric`, and are the last
+three rows of this table**:
+
+| Class | Spices | Owner |
+| --- | --- | --- |
+| Frameworks not expressible in the manifest | `raygui`, `opengl` | **compiler** -- `cmake-deps-cannot-express-framework` |
+| `ld: library 'mbedtls' not found`, cause not established | `tls`, `http`, `httpd`, `ws-client`, `ws-server`, `tourist-ws` | diagnosability blocked by `spices-ci-fetch-failure-downgraded-to-warning` |
+| `dyld: @rpath/libz.1.dylib` -- static/shared preference | `zlib` | **compiler** -- folded into `cmake-deps-link-name-not-overridable` |
+| Genuine platform behavior differences (kqueue vs inotify, etc.) | `tourist`, `watch`, `wav`, `plot`, part of `tourist-session` | spice repo |
+
+The mbedTLS class is six jobs presenting the *identical* misleading error, and
+the reason it is still undiagnosed is the CI row below -- which is worth reading
+before anyone spends a CI round-trip on it.
+
+Two rows carry a **root cause that differs from how they were originally
+reported** -- the narrowing is in the report, and a fix keyed on the original
+framing would miss cases:
+
+- `forward-referenced-nil-call-bound-to-auto-type` was filed as "`: nil` +
+  self-recursion". Recursion is incidental: a plain forward reference with no
+  recursion reproduces it, and `: void` is immune in both directions.
+- `control-form-around-if-double-unboxes-carrier-arms` was filed as "`let`
+  around `if`". `do` does it too, and it is specifically the **residue of the
+  2026-08-21 fix** to `byvalue-product-tail-var-double-unboxed-nonparametric` --
+  that fix guarded both `emit_if` arms and not the do/let companion 900 lines
+  earlier. Root cause pinned to `emit_expr.c:2106`.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [nested-defn-accepted-outer-returns-zero](nested-defn-accepted-outer-returns-zero.md) | **critical** | a `defn` nested in a `defn` (the shape a missing close paren produces) is accepted silently, and the outer function emits `return 0;` discarding the value it just computed. Runs, exits 0, wrong answer. Cost `spices/watch` three tree-mode assertions failing for months with nothing to point at |
+| [defmodule-bare-toplevel-forms-silently-dropped](defmodule-bare-toplevel-forms-silently-dropped.md) | high | a bare form at `defmodule` top level is fully elaborated -- type errors inside it *are* reported -- then dropped from codegen with no warning. 109 `(describe ...)` blocks across 37 files in 12 spices never ran; 8 spices were passing CI vacuously, and turning them on immediately surfaced a real `c-dsl` bug its test had always asserted and never run |
+| [hoisted-includes-wrapped-in-has-include](hoisted-includes-wrapped-in-has-include.md) | high | user-written inline-C `#include`s are hoisted inside `#if __has_include`, so a missing header is silent and degrades to implicit declarations. `spices/raygui` had never linked at all; the failures read as FFI binding bugs, and 14 files of `emit-c` output capturing the broken elaboration got committed |
+| [module-level-def-with-linear-init-emits-no-global](module-level-def-with-linear-init-emits-no-global.md) | high | a module-level `def` whose init has a `:linear` type passes `tur check`, emits **no global**, and still emits the references -- `'g_1377' undeclared`. Non-linear control emits it fine. Blocks the process-lifetime-mutex shape (`ws-server`'s broadcast hub); workaround casts to `:int` and back, losing the type checker exactly where a mutex needs it |
+| [forward-referenced-nil-call-bound-to-auto-type](forward-referenced-nil-call-bound-to-auto-type.md) | medium | a statement-position call to a **forward-referenced** `: nil` function is bound to `__auto_type` -- `variable has incomplete type 'void'`. Not the same defect as the archived `let-binding-void-call-emits-invalid-c` (that was a user `let`; this temp is emitter-synthesized, and TUR-E0023 correctly does not fire) |
+| [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
+| [emit-value-dispatch-unbounded-recursion](emit-value-dispatch-unbounded-recursion.md) | high | `emit_value_dispatch`/`emit_value`/`emit_builtin` recurse over the expression tree with no depth bound. **The documented bootstrap build (Debug+ASan) SIGSEGVs on 47 levels of nesting**; unsanitized survives ~2000. `tur check` crashes identically (it runs the emitter), so the LSP path goes through it too. Three other passes already carry a depth guard; the emitter is the outlier |
+| [cmake-deps-cannot-express-framework](cmake-deps-cannot-express-framework.md) | high (blocker, macOS) | `-framework Cocoa` cannot be spelled at any layer -- the manifest JSON has no key (`pkg.c:3484`), `emit_link_lines` never emits one, and the sole consumer hardcodes `-I`/`-L`/`-l` (`pkg.c:3535`). Zero occurrences of "framework" under `src/`. `INTERFACE_LINK_LIBRARIES` holds the answer and is never read -- though the sibling property *is* read for include dirs, 20 lines away. Blocks raygui + opengl |
+| [cmake-deps-link-name-not-overridable](cmake-deps-link-name-not-overridable.md) | medium | not a defect: `:cmake-deps` derives the `-l` name from the target basename with no override, so raygui/glfw/glad/libpq/**zlib** each need a hand-written shim. Prefer `$<TARGET_FILE:...>` (link by artifact path) over `$<TARGET_FILE_BASE_NAME:...>` -- only the former fixes zlib, whose dir holds both `libz.a` and `libz.1.dylib` and whose `-lz` picks the wrong one |
+| [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
+
 ## Windows port
 
 Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in

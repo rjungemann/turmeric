@@ -3,6 +3,7 @@
 build/
 build2/
 build-asan/
+build-nosan/
 build-debug/
 build-jit/
 build-jit-asan/
