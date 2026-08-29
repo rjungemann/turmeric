@@ -1,16 +1,20 @@
 ; The variadic rest collector must store a float head's IEEE-754 bit pattern
 ; in the int64 cons-cell head slot, not a truncating (int64_t) value cast.
-; Read back via a concrete (:: <carrier> :float) ascription (which bit-
-; reinterprets correctly) to prove 1.5 survives collection without truncation.
+; Read back with `bits->float`, which is what reading a float out of an :int
+; carrier slot spells now, to prove 1.5 survives collection without truncation.
+; It used to be `(:: <carrier> :float)`; that spelling is refused as ambiguous
+; (docs/archive/ascribe-int-to-float-expression-ambiguity.md) because the same
+; text on a genuine integer means the NUMBER, not its bits.
 ;
 ; Regression for the EX_CONS_LIST float-head truncation surfaced in
 ; docs/archive/history/end-to-end-monomorphization-plan-2.md Phase 1.1.
 
 (load "stdlib/list-typed.tur")
+(load "stdlib/bits.tur")
 
 (defn main [] : int
   (let [c (list->carrier (list-of 1.5 2.5 3.5))]
-    (println (:: (list-head c) :float))                       ; 1.5
-    (println (:: (list-head (list-tail c)) :float))           ; 2.5
-    (println (:: (list-head (list-tail (list-tail c))) :float))) ; 3.5
+    (println (bits->float (list-head c)))                       ; 1.5
+    (println (bits->float (list-head (list-tail c))))           ; 2.5
+    (println (bits->float (list-head (list-tail (list-tail c)))))) ; 3.5
   0)

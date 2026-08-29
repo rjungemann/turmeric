@@ -1,23 +1,35 @@
-;; TS3.3: (:: expr type) across same-size scalar kinds inserts a bit-reinterpret
-;; rather than a value cast.  This is the boundary used when a typed scalar
-;; flows through the legacy int64 carrier and back.
+;; TS3.3: the boundary a typed scalar crosses when it flows through the legacy
+;; int64 carrier and back.
+;;
+;; This used to be spelled with `::` on both halves, because `::` across
+;; same-size scalar kinds inserted a bit-reinterpret.  For an int kind and a
+;; float kind that spelling is now refused as ambiguous -- the same text on a
+;; genuine integer means the NUMBER, and nothing in the static types separates
+;; the two readings (docs/archive/ascribe-int-to-float-expression-ambiguity.md).
+;; The bit-level halves say so explicitly with `float->bits` / `bits->float`.
+;;
+;; `::` between kinds that are NOT an int/float pair is untouched: the bool
+;; round-trip below still goes through it.
+
+(load "stdlib/bits.tur")
 
 (defn carrier-id [x : int] : int x)
 
 (defn main [] : int
   ;; float -> carrier -> float round-trip preserves the bit pattern
   (let [f 1.5
-        thru (carrier-id (:: f int))
-        back (:: thru float)]
+        thru (carrier-id (float->bits f))
+        back (bits->float thru)]
     (println back))
-  ;; bool -> carrier -> bool
+  ;; bool -> carrier -> bool: not an int/float pair, so `::` still carries it
   (let [b true
         thru (carrier-id (:: b int))
         back (:: thru bool)]
     (println back))
-  ;; i32 <-> f32 round-trip (same 4-byte width)
-  (let [n (:: 42 i32)
-        as-f (:: n f32)
-        back (:: as-f i32)]
+  ;; A float32 through the same carrier.  The bits pair is f64/i64, so the
+  ;; round-trip is spelled at that width and read back as a float.
+  (let [n 2.25
+        thru (carrier-id (float->bits n))
+        back (bits->float thru)]
     (println back))
   0)

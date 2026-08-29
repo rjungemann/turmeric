@@ -2,9 +2,11 @@
 
 **Severity: medium** -- silently wrong arithmetic, no diagnostic. Found
 incidentally while writing an F4 fixture for jit-ffi-c2mir-plan.
-**Status: RESOLVED for literals.** The expression case is split out to
-docs/reported/ascribe-int-to-float-expression-ambiguity.md -- see "Scope"
-below, which is the substantive part of this write-up.
+**Status: RESOLVED.** Literals convert (this report). The expression case
+was split out to ascribe-int-to-float-expression-ambiguity.md and is now
+resolved too: the ambiguous spelling is refused outright, and the two
+meanings got distinct names. See "Scope" below, which is the substantive
+part of this write-up.
 
 ## Repro
 
@@ -69,10 +71,18 @@ fixtures, all of them that carrier path:
 `ascribe-bool-to-numeric-prints`.
 
 So the original report's second repro -- the `Mixed` struct-field case --
-still returns 0.25 rather than 3.25. That half needs a decision about which
-meaning keeps the `::` spelling, which is a design change rather than a fix;
-it is filed with the three options in
-docs/reported/ascribe-int-to-float-expression-ambiguity.md.
+still returned 0.25 rather than 3.25 after this fix. That half needed a
+decision about which meaning keeps the `::` spelling, which is a design
+change rather than a fix; it was filed with the options in
+ascribe-int-to-float-expression-ambiguity.md.
+
+**It has since been decided: neither.** An int/float `::` on a non-literal
+is now a hard error naming both replacements -- `int->float` / `float->int`
+(stdlib/math.tur) convert, `float->bits` / `bits->float` (stdlib/bits.tur)
+reinterpret. Whichever reading had won the spelling, the other one's
+existing code would have kept compiling and started returning silently
+wrong answers, so neither got it. The four carrier fixtures measured below
+were migrated to the bits pair.
 
 ## A shipped fixture asserted the old behavior
 

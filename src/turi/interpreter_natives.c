@@ -2549,6 +2549,27 @@ static TuriValue native_float_to_int(TuriEnv *env, TuriValue *a, uint32_t n, voi
     double v = (n > 0) ? a[0].as_float : 0.0;
     return turi_int((int64_t)v);
 }
+/* float->bits / bits->float: stdlib/bits.tur's IEEE-754 reinterprets.
+ *
+ * These are the interpreter's exact counterparts, not approximations.  The
+ * divergence documented for `::` came from the ascription having to GUESS
+ * whether a TURI_INT was a genuine integer or a carrier holding float bits;
+ * here the author has said which, so the tagged model can answer precisely:
+ * hand back the other tag over the same 64 bits.  A carrier round-trip
+ * (`float->bits` -> :int slot -> `bits->float`) therefore agrees with the
+ * compiled path, and so does observing the bit pattern itself. */
+static TuriValue native_float_to_bits(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    union { double d; int64_t i; } u;
+    u.d = (n > 0) ? a[0].as_float : 0.0;
+    return turi_int(u.i);
+}
+static TuriValue native_bits_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    union { double d; int64_t i; } u;
+    u.i = (n > 0) ? a[0].as_int : 0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = u.d; return rv;
+}
 /* sqrt / floor: math.tur's libm wrappers (inline-C the tree-walker cannot run). */
 static TuriValue native_math_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3143,6 +3164,8 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
     turi_env_register_native(env, "float->int",        native_float_to_int,    NULL);
+    turi_env_register_native(env, "float->bits",       native_float_to_bits,   NULL);
+    turi_env_register_native(env, "bits->float",       native_bits_to_float,   NULL);
     turi_env_register_native(env, "sqrt",              native_math_sqrt,       NULL);
     turi_env_register_native(env, "floor",             native_math_floor,      NULL);
     turi_env_register_native(env, "exp",               native_math_exp,        NULL);
