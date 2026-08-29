@@ -46,7 +46,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) | medium | widening a by-value struct to `any` mallocs a box with no drop glue -- one leak per widen. **Narrowed 2026-08-29:** the reported repro (call-argument position, non-retaining effect-free callee) now keeps the payload in the caller's frame and allocates nothing; return position, retaining/inline-C/indirect callees still box |
 | [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
 | [guestbook-example-has-no-import-graph](guestbook-example-has-no-import-graph.md) | medium | the guestbook's 7 files are one problem: nothing loads them (its CMake `DEPENDS` is not an import), plus stale `extern-c`/`unit`/`Serializable` syntax, plus a dependency on the unimplemented serializable-continuation surface |
 | [perform-inside-loop-has-no-lowering](perform-inside-loop-has-no-lowering.md) | medium | a `perform` reachable from a `while` body has no CPS lowering -- and the diagnostic prescribes a hoist that does not escape it. Blocks every event-loop-shaped effect, `examples/snake` included |

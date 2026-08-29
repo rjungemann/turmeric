@@ -14300,6 +14300,8 @@ int emit_program(Buf *out, const Expr *program) {
      * never materialized (a void-returning consumer), so free the names too. */
     for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
     free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
+    free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
@@ -15722,6 +15724,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * never materialized (a void-returning consumer), so free the names too. */
     for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
     free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
+    free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);

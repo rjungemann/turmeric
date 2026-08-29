@@ -377,8 +377,8 @@ static const Type *let_use_site_app_type(Elab *e, const Form *f,
  *
  * The binding is then flagged so the scope-exit rule skips it; both firing
  * would free the box twice. */
-bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
-                                      const Expr *ignore);
+bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                    const Expr *ignore);
 
 static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b);
 
@@ -391,12 +391,12 @@ static void any_let_move_drop_to_use(Expr *let_e) {
         if (!any_expr_is_owned_temp(lb->init, 8)) continue;
         const Expr *use = any_find_sole_drop_use(let_e->as.let_.body, lb->binding);
         if (!use) continue;
-        if (catch_box_binding_escapes_except(let_e->as.let_.body, lb->binding, use))
+        if (any_box_binding_escapes_except(let_e->as.let_.body, lb->binding, use))
             continue;
         /* A sibling binding's initializer could also reach it. */
         bool other = false;
         for (uint32_t j = 0; j < let_e->as.let_.n && !other; j++)
-            if (j != i && catch_box_binding_escapes_except(
+            if (j != i && any_box_binding_escapes_except(
                               let_e->as.let_.bindings[j].init, lb->binding, NULL))
                 other = true;
         if (other) continue;

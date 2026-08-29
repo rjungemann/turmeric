@@ -2322,7 +2322,7 @@ static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
  * `__tur_any_drop` then frees only a payload the widen actually boxed, so a
  * primitive or heap-ADT payload is untouched.  Like its siblings this only ever
  * GREENLIGHTS a free: a false negative keeps the status-quo leak. */
-static bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
+bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!init || !b) return false;
@@ -2339,12 +2339,12 @@ static bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) 
         (init->kind == EX_UNION_INJECT && !init->as.union_inject_.frame_box)
         || (init->kind == EX_CALL);
     if (!owned_here) return false;
-    if (catch_box_binding_escapes(e->as.let_.body, b) &&
+    if (any_box_binding_escapes(e->as.let_.body, b) &&
         !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
         return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++) {
         if (j == idx) continue;
-        if (catch_box_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+        if (any_box_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
     }
     return true;
 }
@@ -2391,6 +2391,19 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **fnfld_names = NULL;
     char **fnfld_types = NULL;
     uint32_t n_fnfld = 0;
+    /* any-struct-box-leak-per-widen: collected UNGUARDED, unlike its neighbours.
+     * They are trailing-only frees, so a body with an early exit gets none and
+     * leaks -- the status quo this rule is closing.  An `any` drop is also
+     * emitted at each early exit (see emit_any_scope_drops), so collecting it
+     * here is what makes those sites have something to fire. */
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        if (let_binding_any_freeable(ctx, e, i)) {
+            any_free_names = (char **)realloc(any_free_names,
+                                              (n_any_free + 1) * sizeof(char *));
+            any_free_names[n_any_free++] =
+                name_for_binding(ctx, e->as.let_.bindings[i].binding);
+        }
+    }
     if (!body_has_return_or_throw) {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
@@ -2402,11 +2415,6 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 box_free_names = (char **)realloc(box_free_names,
                                                   (n_box_free + 1) * sizeof(char *));
                 box_free_names[n_box_free++] =
-                    name_for_binding(ctx, e->as.let_.bindings[i].binding);
-            } else if (let_binding_any_freeable(ctx, e, i)) {
-                any_free_names = (char **)realloc(any_free_names,
-                                                  (n_any_free + 1) * sizeof(char *));
-                any_free_names[n_any_free++] =
                     name_for_binding(ctx, e->as.let_.bindings[i].binding);
             } else {
                 const Binding *sb = e->as.let_.bindings[i].binding;
@@ -2712,6 +2720,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(iv);
     }
 
+    /* In scope for the body: an early exit inside it drops these first. */
+    uint32_t any_scope_mark = ctx->n_any_scope_drops;
+    for (uint32_t i = 0; i < n_any_free; i++)
+        any_scope_drops_push(ctx, any_free_names[i]);
+
     if (body_has_return_or_throw) {
         /* Body contains return/throw but may still produce a value on the
          * non-diverging path (e.g. the `?` operator: an if whose then-branch
@@ -2735,12 +2748,22 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             emit_stmt(ctx, body, e->as.let_.body);
         }
+        any_scope_drops_pop(ctx, any_scope_mark);
+        /* The FALL-THROUGH path out of a body that also returns somewhere still
+         * needs the drop; the returning paths took emit_any_scope_drops. */
+        for (uint32_t i = 0; i < n_any_free; i++) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "__tur_any_drop(%s);\n", any_free_names[i]);
+            free(any_free_names[i]);
+        }
+        free(any_free_names);
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);
         buf_puts(body, "}\n");
         return tmp;
     }
+    any_scope_drops_pop(ctx, any_scope_mark);
     
     if (nil_result) {
         emit_stmt(ctx, body, e->as.let_.body);
@@ -4012,6 +4035,34 @@ static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v) {
     any_pending_push(ctx, slot);
     free(v);
     return slot;
+}
+
+
+/* any-struct-box-leak-per-widen: push/pop and fire for the enclosing-scope drop
+ * list.  `emit_any_scope_drops` is called at every EARLY exit (a `return`, a
+ * tail-call back-edge); the normal fall-through path uses the trailing drops
+ * emit_let_value already emits. */
+void any_scope_drops_push(EmitCtx *ctx, const char *name) {
+    if (ctx->n_any_scope_drops >= ctx->cap_any_scope_drops) {
+        uint32_t nc = ctx->cap_any_scope_drops ? ctx->cap_any_scope_drops * 2 : 8;
+        char **nn = (char **)realloc(ctx->any_scope_drops, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_scope_drops = nn;
+        ctx->cap_any_scope_drops = nc;
+    }
+    ctx->any_scope_drops[ctx->n_any_scope_drops++] = strdup(name);
+}
+
+void any_scope_drops_pop(EmitCtx *ctx, uint32_t mark) {
+    while (ctx->n_any_scope_drops > mark)
+        free(ctx->any_scope_drops[--ctx->n_any_scope_drops]);
+}
+
+void emit_any_scope_drops(EmitCtx *ctx, Buf *body) {
+    for (uint32_t i = ctx->n_any_scope_drops; i-- > 0; ) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tur_any_drop(%s);\n", ctx->any_scope_drops[i]);
+    }
 }
 
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {

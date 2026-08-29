@@ -945,9 +945,26 @@ bool result_err_arm_is_freeable_scalar(const Type *t) {
  * arm could dangle an extracted payload and stays an escape; a scalar err arm
  * copies out a plain word that never aliases the payload, so freeing the box is
  * sound.  With the flag off this is exactly the fat-closure-env analysis. */
+static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
+                                   bool allow_box_accessors,
+                                   const Expr *ignore, bool allow_any_cast);
+
 static bool binding_escapes_impl(const Expr *e, const Binding *b,
                                  bool allow_box_accessors,
                                  const Expr *ignore) {
+    return binding_escapes_impl_x(e, b, allow_box_accessors, ignore, false);
+}
+
+/* any-struct-box-leak-per-widen: `allow_any_cast` additionally treats
+ * `(cast b T)` on a bare `b` as a non-escape.  Sound for THIS decision and only
+ * this one: the box is freed only when the tag says a widen heap-boxed the
+ * payload, and for such a payload the cast emits `*(T *)TUR_UNTAG(v)` -- a copy,
+ * which cannot alias the box.  For any other payload the drop is a no-op, so
+ * whether the cast result aliases is irrelevant.  The flag is off for the
+ * closure-env and catch-box callers, where a cast result can matter. */
+static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
+                                   bool allow_box_accessors,
+                                   const Expr *ignore, bool allow_any_cast) {
     if (!e || !b) return true;
     size_t cap = 256;
     const Expr **stack = (const Expr **)malloc(cap * sizeof(const Expr *));
@@ -987,6 +1004,16 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
              * EX_ANY_CAST is deliberately NOT here: it hands back the payload,
              * which for a pointer payload is the value itself, so a cast result
              * can alias `b` and the conservative default is the right answer. */
+            case EX_ANY_CAST:
+                if (allow_any_cast) {
+                    const Expr *cop = cur->as.any_cast_.value;
+                    while (cop && cop->kind == EX_ASCRIBE) cop = cop->as.ascribe_.inner;
+                    if (cop && cop->kind == EX_VAR && cop->as.var.binding == b)
+                        break;   /* a copy out of the box, not an escape of it */
+                    ESC_PUSH(cur->as.any_cast_.value);
+                    break;
+                }
+                escapes = true; goto esc_done;
             case EX_ANY_TYPE_OF:
             case EX_ANY_IS: {
                 const Expr *op = (cur->kind == EX_ANY_TYPE_OF)
@@ -1330,6 +1357,19 @@ bool catch_box_binding_escapes(const Expr *e, const Binding *b) {
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, ignore);
+}
+
+/* any-struct-box-leak-per-widen: the two walks above, with `(cast b T)` on a
+ * bare `b` admitted as a read.  Used only by the `any` drop rules. */
+bool any_box_binding_escapes(const Expr *e, const Binding *b) {
+    return binding_escapes_impl_x(e, b, /*allow_box_accessors=*/true, NULL,
+                                  /*allow_any_cast=*/true);
+}
+
+bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                    const Expr *ignore) {
+    return binding_escapes_impl_x(e, b, /*allow_box_accessors=*/true, ignore,
+                                  /*allow_any_cast=*/true);
 }
 
 /* catch-unwind-panic-payload-leaks (Leak 2): runtime sinks that CONSUME their

@@ -249,6 +249,11 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         free(tmps[i]);
     }
     free(tmps);
+    /* any-struct-box-leak-per-widen: the back-edge re-enters the function, so
+     * every trailing free between here and the loop head is skipped.  Drop the
+     * enclosing scopes' `any` locals now -- after the argument temporaries
+     * above, which is where a use of one would have been read. */
+    emit_any_scope_drops(ctx, body);
     indent_buf(body, ctx->indent);
     buf_puts(body, "goto __tur_tailcall;\n");
 }
@@ -659,7 +664,21 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                     free(bn);
                     free(iv);
                 }
+                /* any-struct-box-leak-per-widen: this arm emits a tail-position
+                 * `let` INLINE rather than through emit_let_value, so the `any`
+                 * drop bookkeeping that lives there has to be repeated.  No
+                 * trailing drop is emitted: emit_tail always ends in a `return`
+                 * or a back-edge `goto`, and both of those fire the scope list
+                 * themselves -- anything after would be dead code. */
+                uint32_t any_mark = ctx->n_any_scope_drops;
+                for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                    if (!let_binding_any_freeable(ctx, e, i)) continue;
+                    char *nm = name_for_binding(ctx, e->as.let_.bindings[i].binding);
+                    any_scope_drops_push(ctx, nm);
+                    free(nm);
+                }
                 emit_tail(ctx, body, fn_e, fd, e->as.let_.body, result_kind, is_main);
+                any_scope_drops_pop(ctx, any_mark);
                 ctx->indent -= 4;
                 indent_buf(body, ctx->indent);
                 buf_puts(body, "}\n");

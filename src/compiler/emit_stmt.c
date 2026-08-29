@@ -867,7 +867,37 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "tur_frame_fire_chain(&%s);\n", ctx->frame_var);
             }
 
-            /* Emit the return statement */
+            /* Emit the return statement.
+             *
+             * any-struct-box-leak-per-widen: an `any` local owned by an
+             * enclosing scope is released here, because the trailing free at
+             * that scope's end is about to be jumped past.  The drop must come
+             * AFTER the return value is computed -- `(return (reads a))` reads
+             * the box -- so the value is hoisted to a temp first when there is
+             * anything to drop.  Zero drops keeps the emitted form byte-identical
+             * to before. */
+            if (ctx->n_any_scope_drops > 0 && e->as.return_.value) {
+                char *val = emit_value(ctx, body, e->as.return_.value);
+                char *rv = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                /* Name the type rather than reach for __auto_type: this frame's
+                 * C return type is exactly what the temp holds, and c2mir does
+                 * not take __auto_type -- a JIT run silently falls back to cc
+                 * for the whole fixture when it appears.  __auto_type stays as
+                 * the last resort for the shapes that do not record a return
+                 * ctype, matching the panic-signal hoist next door. */
+                buf_printf(body, "%s %s = (%s);\n",
+                           ctx->current_fn_ret_ctype ? ctx->current_fn_ret_ctype
+                                                     : "__auto_type",
+                           rv, val);
+                free(val);
+                emit_any_scope_drops(ctx, body);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "return %s;\n", rv);
+                free(rv);
+                return;
+            }
+            if (ctx->n_any_scope_drops > 0) emit_any_scope_drops(ctx, body);
             indent_buf(body, ctx->indent);
             if (e->as.return_.value) {
                 char *val = emit_value(ctx, body, e->as.return_.value);
