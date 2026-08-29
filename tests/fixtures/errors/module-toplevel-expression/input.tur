@@ -1,0 +1,24 @@
+;; module-toplevel-expression -- a non-definition form as a direct child of
+;; (defmodule ...) is rejected (TUR-E0711), not silently dropped.
+;;
+;; The emitter works off the definitions each body form registers globally and
+;; never reads the module body list, so a bare expression here used to be fully
+;; elaborated -- type errors inside it reported normally -- and then discarded
+;; with no diagnostic.  Every signal said "live code" except the one that
+;; mattered: 109 (describe ...) blocks across 12 spices never ran, and 8 spices
+;; passed CI vacuously because a suite that registers zero tests exits 0.
+;;
+;; Regression for docs/archive/defmodule-bare-toplevel-forms-silently-dropped.md
+(defmodule dt
+  (export shout)
+
+  (defn shout [] : int
+    ```c
+    printf("SIDE EFFECT RAN\n");
+    return 1;
+    ```)
+
+  ;; Never evaluated -- this is the form under test.
+  (shout)
+
+  (defn main [] : int 0))

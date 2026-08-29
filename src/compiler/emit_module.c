@@ -12171,9 +12171,25 @@ void emit_rt_split_source(Buf *out) {
  * was recognised by def_.struct_def (an opaque StructDef); now that opaque defs
  * are AdtDefs the EX_DEF carries no struct_def, so the global-emission sites
  * would mistake it for a runtime global and emit a bogus `static int64_t
- * Name_N;`.  This predicate restores the skip without StructDef. */
+ * Name_N;`.  This predicate restores the skip without StructDef.
+ *
+ * module-level-def-with-linear-init-emits-no-global: the `init == NULL` test is
+ * what makes this a TYPE-declaration predicate rather than an opaque-TYPED-
+ * value one.  Without it, `(def g (mutex-new))` -- an ordinary global whose
+ * value merely HAS an opaque type -- matched too, so every site below skipped
+ * its storage while the use-site emitter, which has no such guard, went on
+ * referencing `g_N`: `error: 'g_1377' undeclared`.  elab_defopaque sets
+ * `init = NULL` explicitly (elab_structs.c), and a real `def` always has an
+ * initializer, so the two are cleanly separable.
+ *
+ * The report that found this framed it as a linearity question -- Mutex is
+ * `(defopaque Mutex :ptr<void> :linear)` -- and asked whether a linear value
+ * may live in a module-level binding.  That was a red herring: linearity is not
+ * consulted anywhere here, and a plain non-linear `(defopaque Handle :int)`
+ * global failed identically. */
 static bool def_is_opaque_type_decl(const Expr *e) {
     return e && e->kind == EX_DEF &&
+           e->as.def_.init == NULL &&
            e->as.def_.binding &&
            e->as.def_.binding->type.kind == TY_ADT &&
            e->as.def_.binding->type.as.adt_.def &&
@@ -12485,6 +12501,7 @@ int emit_program(Buf *out, const Expr *program) {
         return -1;
     }
     emit_mark_byval_fn_field_closures(program);
+    emit_expr_depth_reset();   /* expression-walk depth bound (TUR-E0712) */
     /* gcc14-int-conversion / S1: start this program's ground-truth side tables
      * fresh, ahead of every recording site (ADT ctors land in `early_file`
      * before the forward-declaration pass runs). */

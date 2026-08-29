@@ -8,6 +8,10 @@ against `tur v0.40.0` / turmeric `5c9d533`.
 clang). Both halves confirmed: the drop, and the fact that the dropped form is
 still fully type-checked.
 
+**Status: RESOLVED 2026-08-29** as TUR-E0711, taking option (1) below. See
+[Resolution](#resolution) at the end -- including the two allowlist entries
+that would have made a naive reject wrong.
+
 ## Summary
 
 A non-definition form that is a direct child of `defmodule` is elaborated --
@@ -125,3 +129,99 @@ open a new compiled/interpreted divergence.
   `defmodule`.
 - docs/guides/developing-spices-guide.md -- the test-suite section, if the
   "zero tests registered is a pass" harness behavior is fixed alongside.
+
+---
+
+## Resolution
+
+Fixed 2026-08-29 as **TUR-E0711**, taking option (1) -- reject. This report's
+analysis needed no correcting; the only things it could not know were where the
+drop actually happens and what the allowlist has to contain.
+
+### Where the drop was
+
+Not in a fall-through arm of the `defmodule` walker. The walker elaborates
+every body form and keeps the resulting `Expr` in `mod->body` -- but **the
+emitter never reads `mod->body` at all.** It works off the definitions each
+form registered globally as a side effect of elaborating (`FnDef` and friends),
+which is why `dt__shout` is emitted and called from nowhere, and why the
+diagnostics land normally: elaboration is the only pass that ever looks at the
+form. There was no `else` to turn into a diagnostic; the check is new code.
+
+### The allowlist -- two entries that are not definitions
+
+The report was right to warn that a bare `else` would be wrong. Dumping the
+head symbol of every `defmodule` direct child across `stdlib/`,
+`tests/fixtures/` and `examples/` (3014 files) found two non-definition forms
+that are legal, in use, and covered by existing fixtures:
+
+- **A bare ` ```c ` block** supplies file-scope C declarations --
+  `tests/fixtures/inline-c-file-scope-per-decl-dedup`, `stdlib/time.tur`.
+- **`defer` at module top level** is a real feature: it runs at process exit,
+  pinned by `tests/fixtures/module-defer-basic` (prints `hello` then
+  `goodbye`).
+
+`import` / `export` / `export-from` never reach the body loop -- a header scan
+consumes them and `break`s at the first other form, which is what defines
+`body_start`.
+
+### Testing the elaborated Expr, not the head symbol
+
+The check runs on the elaborated expression, and that choice is load-bearing:
+
+```turmeric
+(defmacro make-adder [name n]
+  `(defn ,name [x : int] : int (+ x ,n)))
+
+(make-adder add5 5)     ;; head is neither `defn` nor a `def*` name
+```
+
+A head-symbol allowlist rejects this. Going through elaboration also keeps the
+allow-set small, because the registering forms have already collapsed by then:
+`defmacro`, `defclass` and `deftype` all return `EX_NIL_LIT` once their
+definition is recorded. The measured set is `EX_NIL_LIT`, `EX_DEF`,
+`EX_FN_DEF`, `EX_DEFDATA`, `EX_DEFECT`, `EX_EXTERN_C`, `EX_INLINE_C`,
+`EX_DEFER`, plus `EX_TYPECLASS_DEF` / `EX_INSTANCE_DEF` which are definitions
+by construction. Everything else is rejected.
+
+`EX_NIL_LIT` admits a bare `nil`, which is inert either way.
+
+### Verification
+
+A sweep of all 3014 `.tur` files in the tree produces **zero** TUR-E0711 hits,
+so the allowlist is complete for everything in-repo. Suite: 2722 passed, 0
+failed. The interpreter agrees (it shares the elaborator), so the divergence
+this report asked about does not open --
+`tur --interpret` emits the identical diagnostic.
+
+### Regression
+
+- `tests/fixtures/errors/module-toplevel-expression/` -- the reject.
+- `tests/fixtures/module-toplevel-definition-forms/` -- the allow-set in one
+  module, including the macro-expands-to-`defn` case. This is the half a later
+  tightening would break silently, so it is pinned explicitly.
+
+### Residual
+
+When the dropped form *also* fails to elaborate, only its own error is
+reported (elaboration returns NULL before the position check can run), so the
+`dt2` case in this report still shows just the TUR-E0001. The author fixes the
+type error and gets TUR-E0711 on the next round rather than both at once. Left
+as is: telling a form that failed to elaborate "this would have been dropped"
+requires guessing whether it was meant to be a definition, and a macro whose
+expansion had a type error would get a wrong note. The expensive half -- silent
+loss of *correct* code -- is fully closed.
+
+### Not done
+
+The report's second, independent finding stands untouched: a test harness that
+registers zero tests reports `# All 0 tests passed. / 1..0` and exits 0, which
+is indistinguishable from a passing suite. That is what let this sit for as
+long as it did, and it is a spice-repo/harness change, not a compiler one.
+
+### Guide
+
+`docs/guides/syntax-guide.md` gains "What may appear inside a `defmodule`" --
+the full legal table, the two deliberate non-definition entries, and the note
+that the rule applies after macro expansion. The
+`developing-spices-guide` test-suite change is left with the harness fix above.

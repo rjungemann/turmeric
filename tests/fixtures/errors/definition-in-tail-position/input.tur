@@ -1,0 +1,36 @@
+;; definition-in-tail-position -- a function body whose LAST form is a
+;; definition is rejected (TUR-E0713) instead of silently returning 0.
+;;
+;; The missing close paren below is the real-world cause: `other` parses as a
+;; nested definition inside `outer`'s body, `outer` is left with no tail value,
+;; and codegen fell back to `return 0;` -- discarding the value it had just
+;; computed into a live temp.  The program ran, exited 0, and returned the
+;; wrong answer with no diagnostic at any stage.  `spices/watch` lost three
+;; tree-mode assertions to this for months with nothing to point at.
+;;
+;; Note what is NOT wrong here: the nesting.  A `defn` inside a function body
+;; is a real feature (Phase B3 -- it lifts to file scope and stays callable by
+;; name, see tests/fixtures/nested-fn-basic), and `nd__other` was emitted
+;; correctly all along.  Only TAIL position is the defect, and only when the
+;; function owes its caller a value.  The companion fixture
+;; tests/fixtures/nested-defn-in-tail-and-non-tail pins the half that must
+;; keep working.
+;;
+;; Regression for docs/archive/nested-defn-accepted-outer-returns-zero.md
+(defmodule nd
+  (export outer)
+
+  (defn helper [] : int
+    ```c
+    return 42;
+    ```)
+
+  ;; One paren short: `other` becomes a nested definition in `outer`'s body,
+  ;; and lands in tail position.
+  (defn outer [] : int
+    (let [x (helper)]
+      x)
+
+  (defn other [] : int 7))
+
+  (defn main [] : int (outer)))

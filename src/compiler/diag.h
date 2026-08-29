@@ -220,6 +220,33 @@ typedef enum DiagCode {
      * identity), so `(+ (compute) (cloneable-shift ...))` printed a wrong number.
      * Rejected at codegen instead, mirroring the serial TUR-E0706 fix. */
     TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+    /* defmodule-bare-toplevel-forms-silently-dropped: a non-definition form as
+     * a direct child of (defmodule ...).  The emitter works off the globally
+     * registered definitions and never reads the module body list, so such a
+     * form was fully elaborated -- type errors inside it reported normally --
+     * and then dropped with no diagnostic.  109 (describe ...) blocks across 12
+     * spices never ran, and 8 of them passed CI vacuously.  There is no
+     * module-level side-effect position today, so this is rejected rather than
+     * emitted; `defer` is the one non-definition form that is legal here. */
+    TUR_E0711_MODULE_TOPLEVEL_EXPR,
+    /* emit-value-dispatch-unbounded-recursion: the emitter's expression walk
+     * (emit_value -> emit_value_dispatch -> emit_builtin -> ...) is plain
+     * structural recursion, so a deeply nested expression exhausted the C
+     * stack -- a SIGSEGV with no source attribution, and on the documented
+     * Debug+ASan bootstrap build it took only ~50 levels because ASan inflates
+     * the frame roughly 40x.  Bounded now, so an expression too deep to compile
+     * gets a diagnostic instead of a crash.  `tur check` runs the emitter too,
+     * so this covers the LSP path as well. */
+    TUR_E0712_EXPR_NESTING_TOO_DEEP,
+    /* nested-defn-accepted-outer-returns-zero: a function body whose LAST form
+     * is a definition.  Nested `defn` is a real feature (Phase B3 -- it lifts to
+     * file scope and is callable by name), so the definition is not the problem;
+     * being in TAIL position is.  A definition yields no value, and codegen fell
+     * back to `return 0;` for the enclosing function -- it ran, exited 0, and
+     * returned the wrong answer with no diagnostic at any stage.  In practice
+     * the cause is always a missing close paren, which makes the following
+     * definitions parse as nested ones. */
+    TUR_E0713_DEFINITION_IN_TAIL_POSITION,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

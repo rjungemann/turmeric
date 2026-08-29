@@ -7434,6 +7434,74 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* nested-defn-accepted-outer-returns-zero: a body whose LAST form is a
+     * definition leaves the function with no tail value, and codegen falls back
+     * to `return 0;` -- it runs, exits 0, and returns the wrong answer with no
+     * diagnostic anywhere.  In practice the cause is always a missing close
+     * paren, which makes the following definitions parse as nested ones.
+     *
+     * A nested definition is NOT itself the problem: `defn` inside a function
+     * body is a real feature (Phase B3 -- it lifts to file scope and is
+     * callable by name, see tests/fixtures/nested-fn-basic), and the report
+     * that found this proposed rejecting definitions in expression position,
+     * which would have deleted that feature.  Only TAIL position is wrong, and
+     * only when the function owes its caller a value. */
+    if (body && return_kind != TY_NIL && return_kind != TY_NEVER) {
+        const Expr *tail = body;
+        if (tail->kind == EX_DO && tail->as.do_.n > 0)
+            tail = tail->as.do_.items[tail->as.do_.n - 1];
+        /* Kinds a definition collapses to.  defmacro/defclass/deftype reduce to
+         * EX_NIL_LIT once registered and so are indistinguishable here from a
+         * legitimate `nil` tail -- the source-form test below catches those. */
+        bool tail_is_def = tail && (tail->kind == EX_FN_DEF   ||
+                                    tail->kind == EX_DEF      ||
+                                    tail->kind == EX_DEFDATA  ||
+                                    tail->kind == EX_DEFECT   ||
+                                    tail->kind == EX_EXTERN_C ||
+                                    tail->kind == EX_TYPECLASS_DEF ||
+                                    tail->kind == EX_INSTANCE_DEF);
+        const char *tail_head = NULL;
+        if (n_body > 0) {
+            const Form *tf = call->as.list.items[body_start + n_body - 1];
+            if (tf && tf->tag == F_LIST && tf->as.list.len > 0 &&
+                tf->as.list.items[0]->tag == F_SYM) {
+                /* EXACT names, never a "def" prefix test: an ordinary call to a
+                 * user function whose name merely starts with "def" -- e.g.
+                 * `(defined-later 5)` in tests/fixtures/refine-call-site -- is a
+                 * perfectly good tail expression. */
+                static const char *const def_heads[] = {
+                    "def", "defn", "defmacro", "defmacro*", "defstruct",
+                    "defopaque", "defdata", "defgadt", "defclass", "definstance",
+                    "defkind", "defrec", "deftype", "defalias", "defdynamic",
+                    "defeffect", "defprotocol", "extern-c",
+                };
+                const char *hn = tf->as.list.items[0]->as.sym->name;
+                for (size_t k = 0; k < sizeof def_heads / sizeof def_heads[0]; k++) {
+                    if (strcmp(hn, def_heads[k]) == 0) {
+                        tail_is_def = true;
+                        tail_head = hn;
+                        break;
+                    }
+                }
+            }
+        }
+        if (tail_is_def) {
+            Span sp = tail ? tail->span : call->span;
+            diag_emit_with_code(DIAG_ERROR, sp,
+                                TUR_E0713_DEFINITION_IN_TAIL_POSITION,
+                                "function '%s' ends its body with a definition%s%s%s, "
+                                "so it has no value to return",
+                                name_f->as.sym->name,
+                                tail_head ? " (" : "", tail_head ? tail_head : "",
+                                tail_head ? ")" : "");
+            diag_emit(DIAG_NOTE, sp,
+                      "check for a missing close paren on the enclosing "
+                      "(defn %s ...) -- that is what makes the definitions "
+                      "after it parse as nested ones.  A nested definition is "
+                      "otherwise fine; it just cannot be the last form",
+                      name_f->as.sym->name);
+        }
+    }
     e->expected_type = prev_body_expected;
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;

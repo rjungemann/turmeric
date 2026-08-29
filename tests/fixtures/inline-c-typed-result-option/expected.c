@@ -3680,6 +3680,8 @@ static void tur_role_close(void *role_ptr) {
 /* ==== tur: end of fixed runtime preamble ==== */
 #if __has_include(<stdlib.h>)
 #include <stdlib.h>
+#else
+#pragma message("tur: inline-C requested <stdlib.h>, not found on the include path -- code needing it will fail to compile or link; add -I, or mark the include tur:optional if it is a deliberate per-platform alternative")
 #endif
 typedef struct tur_adt_Map {
     void * hamt;

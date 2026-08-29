@@ -1269,6 +1269,58 @@ framing would miss cases:
 - `forward-referenced-nil-call-bound-to-auto-type` was filed as "`: nil` +
   self-recursion". Recursion is incidental: a plain forward reference with no
   recursion reproduces it, and `: void` is immune in both directions.
+  **RESOLVED 2026-08-29** --
+  [docs/archive/forward-referenced-nil-call-bound-to-auto-type.md](../archive/forward-referenced-nil-call-bound-to-auto-type.md).
+  The narrowing held and the root cause was still somewhere else: not the
+  emitter at all, but the reader parsing a bare `nil` in type position as
+  `F_NIL`, which two forward-declaration pre-passes did not unwrap, so `: nil`
+  forward-declared as the `TY_INT` placeholder. Worth reading before trusting
+  any other report's "Fix direction" section -- both of this one's pointed at
+  the wrong file.
+- `nested-defn-accepted-outer-returns-zero` **RESOLVED 2026-08-29** as
+  TUR-E0713 --
+  [docs/archive/nested-defn-accepted-outer-returns-zero.md](../archive/nested-defn-accepted-outer-returns-zero.md).
+  Two of the three stacked failures it diagnosed are not failures: a definition
+  in expression position is a shipped feature (Phase B3 nested defn, with four
+  fixtures relying on it), so its recommended fix would have deleted it. Only
+  TAIL position is the defect. Its failure (3), the `return 0;` codegen
+  backstop, is still unaudited. Chasing why it was silent turned up
+  `nil-tail-not-checked-against-declared-return`, filed below.
+- `module-level-def-with-linear-init-emits-no-global` **RESOLVED 2026-08-29** --
+  [docs/archive/module-level-def-with-linear-init-emits-no-global.md](../archive/module-level-def-with-linear-init-emits-no-global.md).
+  Its title is a misnomer and its central question does not arise: linearity is
+  never consulted on the failing path. The control varied two axes at once
+  (`:linear` opaque vs `vec-new`) and credited the difference to linearity; a
+  plain non-linear `defopaque` global fails identically. Root cause was
+  `def_is_opaque_type_decl` matching any `def` whose value merely HAS an opaque
+  type, rather than the type declaration itself. A one-conjunct fix
+  (`init == NULL`). Unblocks row 5 of `workarounds-to-remove`.
+- `emit-value-dispatch-unbounded-recursion` **RESOLVED 2026-08-29** as
+  TUR-E0712 --
+  [docs/archive/emit-value-dispatch-unbounded-recursion.md](../archive/emit-value-dispatch-unbounded-recursion.md).
+  Fix direction (1) (the depth guard) only; (2), shrinking the frame or moving
+  to a worklist, is still open. The bound is 40: it must clear the worst
+  sanitized crash threshold (47) and clear the deepest nesting that actually
+  occurs in-tree (20, measured across 3014 files). Those two only just fit,
+  which is the argument for (2).
+- `defmodule-bare-toplevel-forms-silently-dropped` **RESOLVED 2026-08-29** as
+  TUR-E0711 --
+  [docs/archive/defmodule-bare-toplevel-forms-silently-dropped.md](../archive/defmodule-bare-toplevel-forms-silently-dropped.md).
+  The drop was not a fall-through arm to turn into a diagnostic: the emitter
+  never reads the module body list at all, so the check is new code, and it
+  tests the ELABORATED expression rather than the head symbol (a macro
+  expanding to a `defn` has an arbitrary head). Two non-definition forms are
+  legal here and would have been broken by a bare `else`: a bare inline-C
+  block, and module-level `defer`. Its second finding -- a suite registering
+  zero tests exits 0 -- is a harness change and stays open.
+- `hoisted-includes-wrapped-in-has-include` **RESOLVED 2026-08-29** --
+  [docs/archive/hoisted-includes-wrapped-in-has-include.md](../archive/hoisted-includes-wrapped-in-has-include.md).
+  Its symptom analysis was right and **both** its fix directions would have
+  broken the build: the `__has_include` wrap is load-bearing and deliberately
+  used -- `stdlib/fs.tur`, `term.tur` and `image.tur` each write a per-platform
+  header bare, outside its `#ifdef`, to be hoisted and then skipped. 12 of the
+  18 hoisted headers in-tree are platform-conditional. Fixed by making the
+  tolerance opt-in (`/* tur:optional */`) and the default name the header.
 - `control-form-around-if-double-unboxes-carrier-arms` was filed as "`let`
   around `if`". `do` does it too, and it is specifically the **residue of the
   2026-08-21 fix** to `byvalue-product-tail-var-double-unboxed-nonparametric` --
@@ -1277,13 +1329,8 @@ framing would miss cases:
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [nested-defn-accepted-outer-returns-zero](nested-defn-accepted-outer-returns-zero.md) | **critical** | a `defn` nested in a `defn` (the shape a missing close paren produces) is accepted silently, and the outer function emits `return 0;` discarding the value it just computed. Runs, exits 0, wrong answer. Cost `spices/watch` three tree-mode assertions failing for months with nothing to point at |
-| [defmodule-bare-toplevel-forms-silently-dropped](defmodule-bare-toplevel-forms-silently-dropped.md) | high | a bare form at `defmodule` top level is fully elaborated -- type errors inside it *are* reported -- then dropped from codegen with no warning. 109 `(describe ...)` blocks across 37 files in 12 spices never ran; 8 spices were passing CI vacuously, and turning them on immediately surfaced a real `c-dsl` bug its test had always asserted and never run |
-| [hoisted-includes-wrapped-in-has-include](hoisted-includes-wrapped-in-has-include.md) | high | user-written inline-C `#include`s are hoisted inside `#if __has_include`, so a missing header is silent and degrades to implicit declarations. `spices/raygui` had never linked at all; the failures read as FFI binding bugs, and 14 files of `emit-c` output capturing the broken elaboration got committed |
-| [module-level-def-with-linear-init-emits-no-global](module-level-def-with-linear-init-emits-no-global.md) | high | a module-level `def` whose init has a `:linear` type passes `tur check`, emits **no global**, and still emits the references -- `'g_1377' undeclared`. Non-linear control emits it fine. Blocks the process-lifetime-mutex shape (`ws-server`'s broadcast hub); workaround casts to `:int` and back, losing the type checker exactly where a mutex needs it |
-| [forward-referenced-nil-call-bound-to-auto-type](forward-referenced-nil-call-bound-to-auto-type.md) | medium | a statement-position call to a **forward-referenced** `: nil` function is bound to `__auto_type` -- `variable has incomplete type 'void'`. Not the same defect as the archived `let-binding-void-call-emits-invalid-c` (that was a user `let`; this temp is emitter-synthesized, and TUR-E0023 correctly does not fire) |
+| [nil-tail-not-checked-against-declared-return](nil-tail-not-checked-against-declared-return.md) | medium | the body-tail return-type check (TUR-E0707/E0709) fires for a `cstr`, `float` or `bool` tail and **not** for a `nil` one, so `(defn f [] : int nil)` is accepted and returns 0. Filed 2026-08-29 while fixing `nested-defn-accepted-outer-returns-zero`, which is one instance of it -- definitions collapse to nil-ish, which is why that defect had no diagnostic at all. Fixing this subsumes TUR-E0713's job, though that should survive as the specific diagnostic since a bare type mismatch cannot name the missing paren |
 | [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
-| [emit-value-dispatch-unbounded-recursion](emit-value-dispatch-unbounded-recursion.md) | high | `emit_value_dispatch`/`emit_value`/`emit_builtin` recurse over the expression tree with no depth bound. **The documented bootstrap build (Debug+ASan) SIGSEGVs on 47 levels of nesting**; unsanitized survives ~2000. `tur check` crashes identically (it runs the emitter), so the LSP path goes through it too. Three other passes already carry a depth guard; the emitter is the outlier |
 | [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
 
 ## Windows port

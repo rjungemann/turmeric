@@ -47,8 +47,8 @@
 (defn image/build-stamp [] : int
   ```c
   #include <stdint.h>
-  #include <windows.h>
-  #include <mach-o/dyld.h>
+  #include <windows.h>  /* tur:optional -- Windows only */
+  #include <mach-o/dyld.h>  /* tur:optional -- macOS only */
   /* The two platform headers above are emitted as bare LEADING includes so the
    * codegen top-include hoister lifts them to file scope (each wrapped in
    * __has_include, so a platform that lacks one skips it).  They MUST NOT move

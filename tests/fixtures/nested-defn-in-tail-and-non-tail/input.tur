@@ -1,0 +1,37 @@
+;; nested-defn-in-tail-and-non-tail -- the half of TUR-E0713 that must keep
+;; working.
+;;
+;; A `defn` inside a function body is a real feature (Phase B3): it lifts to
+;; file scope and stays callable by name from the enclosing function.  The
+;; report behind TUR-E0713 proposed rejecting "a definition in expression
+;; position" outright, which would have deleted this.  Only TAIL position is
+;; the defect -- there the function is left with no value and codegen emitted
+;; `return 0;`.
+;;
+;; So: a nested definition anywhere but last is fine, and a definition IS
+;; allowed last when the function owes no value (`: nil`).  Both are pinned
+;; here; errors/definition-in-tail-position pins the reject.
+;;
+;; Regression for docs/archive/nested-defn-accepted-outer-returns-zero.md
+(defn uses-nested [] : int
+  (defn inner [x : int] : int (+ x 1))
+  (defn double [x : int] : int (* x 2))
+  (double (inner 5)))
+
+;; A definition may sit last when nothing is owed to the caller.
+(defn nil-tail [] : nil
+  (println "side effect")
+  (defn unused-helper [] : int 99))
+
+;; A call to a function whose NAME merely starts with "def" is an ordinary
+;; tail expression, not a definition -- the check must match keywords exactly.
+(defn defined-later [] : int 7)
+
+(defn calls-def-prefixed [] : int
+  (defined-later))
+
+(defn main [] : int
+  (println (uses-nested))
+  (nil-tail)
+  (println (calls-def-prefixed))
+  0)

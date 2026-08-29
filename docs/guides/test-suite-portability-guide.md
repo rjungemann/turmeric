@@ -292,6 +292,46 @@ Two rules fall out:
 
 ---
 
+## 7c. ASan inflates the stack ~40x -- deep nesting dies before it computes
+
+The Debug build's `-fsanitize=address` costs stack as well as heap, and by a
+much larger factor than people expect. Measured on the emitter's expression
+walk: **~170 KB of stack per recursion level under ASan, versus ~4 KB
+without** -- so the sanitized build reaches a `stack-overflow` at roughly 1/40th
+the depth of an unsanitized one.
+
+Concretely, before the depth bound went in, `tur emit-c` on a nested
+expression died at:
+
+| Build | Stack limit | Crashes at |
+| --- | --- | --- |
+| Debug + ASan (**the documented bootstrap build**) | 8 MB (default) | 47 (macOS/clang), 60-80 (Linux/gcc) |
+| Debug + ASan | 32 MB | 150-200 |
+| `-DTUR_DEBUG_SANITIZE=OFF` | 8 MB (default) | 2000-5000 |
+
+Three things follow, and the first two are the traps:
+
+1. **A depth-related crash on a Debug build is not evidence of a runaway
+   recursion.** It may be an entirely bounded walk that an unsanitized build
+   completes without noticing. Re-run with `-DTUR_DEBUG_SANITIZE=OFF` before
+   concluding anything about termination.
+2. **Raising the stack limit only buys a linear factor.** `ulimit -s
+   unlimited` (which `turmeric-spices` CI uses) moves the cliff; it does not
+   remove it, and it does nothing for a developer running the documented
+   bootstrap build locally.
+3. **A depth bound must be calibrated against the sanitized build**, not the
+   fast one, or it never fires where it is needed. `EMIT_MAX_EXPR_DEPTH` in
+   `src/compiler/emit_expr.c` is set to 40 for exactly this reason -- under the
+   worst sanitized threshold above, and 2x over the deepest nesting that occurs
+   anywhere in the tree (20). See TUR-E0712 and
+   [docs/archive/emit-value-dispatch-unbounded-recursion.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md).
+
+A regression fixture for a depth limit should sit **between** the bound and the
+stack cliff, so it asserts the diagnostic rather than doubling as a stack-size
+canary that fails whenever CI's limit changes.
+
+---
+
 ## 7a. Leak checking -- what is covered and what is not
 
 The single most misread thing about this suite. `CLAUDE.md` says

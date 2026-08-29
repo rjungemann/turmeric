@@ -51,6 +51,23 @@ defn copy-file [src dst : cstr] : unit
 annotation is present. You must explicitly `(drop! r)` or consume the ref --
 it will not be silently freed.
 
+**A linear value may be bound at module level.** Linearity constrains how many
+times a value is *used*, not where it may live, so a top-level `def` holding
+one is fine:
+
+```turmeric
+(def hub-mutex (mutex-new))   ; Mutex is (defopaque Mutex :ptr<void> :linear)
+```
+
+The initializer produces the value once, at static-init, and it lives for the
+process -- one production, one lifetime. This is the intended spelling for a
+process-lifetime mutex, connection pool, or shared registry; see
+[mutable-globals-guide](mutable-globals-guide.md#any-type-may-be-bound-at-module-level).
+
+(Older code sometimes casts such a global through `:int` and back at each
+borrow. That worked around a codegen bug, not a linearity rule, and the bug was
+fixed 2026-08-29.)
+
 ### `^affine` -- use at most once
 
 Use `^affine` when a value may be discarded but must not be aliased. This is

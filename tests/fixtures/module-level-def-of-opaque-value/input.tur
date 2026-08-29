@@ -1,0 +1,53 @@
+;; module-level-def-of-opaque-value -- a module-level `def` whose VALUE has an
+;; opaque type still gets its global emitted.
+;;
+;; `def_is_opaque_type_decl` (emit_module.c) exists to skip the EX_DEF that a
+;; `(defopaque ...)` TYPE DECLARATION elaborates to -- that one names a type,
+;; not a runtime value, and has no storage.  It tested only "binding's type is
+;; an opaque ADT", which also matches an ordinary global whose value merely HAS
+;; that type.  All seven skip sites then dropped the storage while the use-site
+;; emitter, which has no such guard, went on referencing it:
+;;
+;;   error: 'g_1377' undeclared (first use in this function)
+;;
+;; `tur check` passed in both directions, so the two passes disagreed silently
+;; until cc.  The fix is the `init == NULL` half of the predicate: a type
+;; declaration has no initializer, a real `def` always does.
+;;
+;; The report that found this framed it as a linearity question (it was hit via
+;; `(def hub-mutex (mutex-new))`, and Mutex is `:linear`).  Linearity is not
+;; consulted anywhere on this path -- the plain non-linear `Handle` below fails
+;; identically without the fix -- so both flavours are pinned here.
+;;
+;; Regression for docs/archive/module-level-def-with-linear-init-emits-no-global.md
+(defopaque Handle :int)
+(defopaque Token :ptr<void> :linear)
+
+(defn make-handle [] : Handle
+  ```c
+  return 42;
+  ```)
+
+(defn handle-val [h : Handle] : int
+  ```c
+  return (int64_t)h;
+  ```)
+
+(defn make-token [] : Token
+  ```c
+  return (void *)(intptr_t)7;
+  ```)
+
+(defn token-val [t : Token] : int
+  ```c
+  return (int64_t)(intptr_t)t;
+  ```)
+
+;; Both are module-level globals whose initializer produces an opaque value.
+(def g (make-handle))
+(def tok (make-token))
+
+(defn main [] : int
+  (println (handle-val g))
+  (println (token-val tok))
+  0)

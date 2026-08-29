@@ -3873,12 +3873,71 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
  * zero of the current function's return type.  void/never calls carry
  * no usable value and are checked where they appear as statements
  * (EX_PANIC / EX_PANIC_WITH). */
+/* emit-value-dispatch-unbounded-recursion: depth of the emitter's expression
+ * walk.  emit_value sits on every turn of the recursion cycle
+ * (emit_value_dispatch -> emit_value -> emit_builtin -> emit_value_dispatch),
+ * so counting here bounds the whole walk without threading a parameter through
+ * emit_value's many callers.
+ *
+ * The bound is a stack budget, not a language limit, and 40 is where two
+ * measurements meet:
+ *
+ *   Ceiling -- it must fire before the stack runs out on the DOCUMENTED
+ *   bootstrap build.  Debug+ASan is what CLAUDE.md tells you to build,
+ *   TUR_DEBUG_SANITIZE defaults ON everywhere, and ASan inflates these frames
+ *   roughly 40x (~170 KB per level vs ~4 KB plain).  At an 8 MB default stack
+ *   that build died at 47 levels on macOS/clang and between 60 and 80 on
+ *   Linux/gcc, so the bound has to clear the worst of those.  An unsanitized
+ *   build tolerates thousands and is not the constraint.
+ *
+ *   Floor -- it must not reject real code.  The deepest emit_value nesting
+ *   anywhere in stdlib/, tests/fixtures/ and examples/ (3014 files) is 20, in
+ *   conv-defstruct-setmap-lowering.  40 leaves 2x headroom over that.
+ *
+ * The two only just fit, which is the argument for eventually replacing the
+ * native recursion with an explicit worklist and dropping the bound entirely.
+ * Until then: nesting this deep is reachable from macro expansion, generated
+ * code, a long `cond` chain, or a fold written as nested binary operations, so
+ * the diagnostic says how to get out of it. */
+#define EMIT_MAX_EXPR_DEPTH 40
+
+static int g_emit_expr_depth;
+static bool g_emit_depth_exceeded;
+
+/* Reset per program; also cleared once a limit diagnostic has been emitted so
+ * one over-deep expression does not report at every enclosing level. */
+void emit_expr_depth_reset(void) {
+    g_emit_expr_depth = 0;
+    g_emit_depth_exceeded = false;
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
     for (uint8_t i = 0; i < ctx->n_sub_holes; i++)
         if (ctx->sub_holes[i] == e) return strdup(ctx->sub_names[i]);
+    if (g_emit_expr_depth >= EMIT_MAX_EXPR_DEPTH) {
+        /* Report once, then unwind quietly: every enclosing level would
+         * otherwise repeat the same message for the same expression. */
+        if (!g_emit_depth_exceeded) {
+            g_emit_depth_exceeded = true;
+            diag_emit_with_code(DIAG_ERROR, e->span,
+                                TUR_E0712_EXPR_NESTING_TOO_DEEP,
+                                "expression nesting exceeds the emitter's depth "
+                                "limit (%d)", EMIT_MAX_EXPR_DEPTH);
+            diag_emit(DIAG_NOTE, e->span,
+                      "split the expression into helper functions or `let` "
+                      "bindings; if a macro generated it, have the macro emit a "
+                      "flatter form (a fold written as nested binary operations "
+                      "is the usual source)");
+        }
+        /* A valid C expression, so the rest of emission stays well-formed --
+         * the build fails on the diagnostic, not on malformed output. */
+        return strdup("0");
+    }
+    g_emit_expr_depth++;
     char *v = emit_value_dispatch(ctx, body, e);
+    g_emit_expr_depth--;
     /* S1/findings 16: capture-and-clear the builder's ret-type note
      * UNCONDITIONALLY, so a note set by a void/never call (whose hoist below
      * is skipped) can never leak onto a later, unrelated call. */

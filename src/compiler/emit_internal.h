@@ -57,13 +57,28 @@ extern char    **g_hoisted_includes;
 extern uint32_t  g_n_hoisted_includes;
 extern uint32_t  g_cap_hoisted_includes;
 
+/* Marker appended to a hoisted `#include` whose author wrote a
+ * `tur:optional` comment on the line -- a header that is EXPECTED to be
+ * absent on some target (a per-platform alternative such as <direct.h> on
+ * POSIX).  Such an include skips silently; every other missing angle header
+ * announces itself.  See tur_emit_hoisted_include. */
+#define TUR_HOIST_OPTIONAL_TAG " /* tur:optional */"
+
 /* Append `n` bytes of `line` (the full `#include ...` directive without a
  * trailing newline) to the deduped global set. */
 void   tur_hoist_include_add(const char *line, size_t n);
 
+/* As tur_hoist_include_add, but records whether the author marked the include
+ * `tur:optional`.  Dedup is by the directive itself, and an optional marking
+ * from any site wins (one deliberate per-platform use makes the header
+ * optional everywhere in the TU). */
+void   tur_hoist_include_add_ex(const char *line, size_t n, bool optional);
+
 /* Emit one hoisted `#include` line; angle (system) headers are wrapped in
  * `#if __has_include(...)` so a platform-missing header is skipped rather than
- * hard-failing the build.  Quoted (project) headers are emitted bare. */
+ * hard-failing the build.  An unmarked header that is missing emits a
+ * `#pragma message` naming it, so the skip is never silent.  Quoted (project)
+ * headers are emitted bare. */
 void   tur_emit_hoisted_include(Buf *out, const char *line);
 
 /* Scan `body` (length `len`) for leading blank/comment/`#include` lines,
@@ -71,6 +86,14 @@ void   tur_emit_hoisted_include(Buf *out, const char *line);
  * consumed at the start of `body`. The caller should `memmove` to drop the
  * consumed prefix. */
 size_t tur_hoist_top_includes_scan(const char *body, size_t len);
+/* emit-value-dispatch-unbounded-recursion: the emitter's expression walk is
+ * plain structural recursion and is bounded by a depth counter kept in
+ * emit_expr.c.  Reset at the start of each program; if the bound was hit, a
+ * TUR-E0712 has been reported and emit_program must fail rather than hand back
+ * a TU whose over-deep expressions were replaced by `0`. */
+void emit_expr_depth_reset(void);
+bool emit_expr_depth_exceeded(void);
+
 /* AR8: Variadic rest parameters - track if any variadic defn is compiled */
 extern bool g_has_variadics;
 /* prelude-macros (Defect B / F3): set when the user-callable `cons` runtime

@@ -2139,8 +2139,17 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                             (ret_f->as.list.items[0]->tag == F_SYM ||
                              ret_f->as.list.items[0]->tag == F_KEYWORD)) {
                             ret_f = ret_f->as.list.items[0];
+                        } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                                   ret_f->as.list.items[0]->tag == F_NIL) {
+                            /* forward-referenced-nil-call-bound-to-auto-type: a
+                             * bare `nil` in type position reads as F_NIL, so the
+                             * unwrap above misses it and `: nil` collapsed to the
+                             * TY_INT placeholder.  Same gap as the defmodule
+                             * pre-pass (elab_module.c). */
+                            ret_kind = TY_NIL;
+                            ret_f = NULL;
                         }
-                        if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
+                        if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
                             const char *rn = ret_f->as.sym->name;
                             uint32_t   rl = ret_f->as.sym->len;
                             if      (rl == 3 && memcmp(rn, "int",  3) == 0) ret_kind = TY_INT;

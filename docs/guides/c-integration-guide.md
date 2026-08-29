@@ -331,6 +331,61 @@ Hoisting runs on the `tur build` path only. `tur emit-c` leaves the markers wher
 they sit, so an `emit-c` dump (or a fixture snapshot) is not the place to check
 what the compiled TU actually looks like.
 
+**Leading `#include` lines are hoisted automatically:**
+
+You rarely need a `__tur_include__` marker for a plain header. An inline-C body's
+*leading* directives -- blank lines, `//` comments, `#include <...>` /
+`#include "..."`, and object-like `#define`s -- are lifted to file scope on their
+own. This exists because a function-scope `#include` is swallowed by the header's
+own include guard in the *second* function that needs it, leaving an implicit
+declaration behind.
+
+The scan is deliberately conservative: it stops at the first line that is not one
+of those, so an `#include` sitting after real C code, or inside an `#ifdef`, is
+left exactly where you wrote it.
+
+```c
+#include <sys/stat.h>     /* hoisted -- leading directive        */
+#ifdef _WIN32
+  #include <shlwapi.h>    /* NOT hoisted -- the scan stopped at the #ifdef */
+#endif
+```
+
+**What happens when a hoisted header is not found:**
+
+A hoisted `#include <X>` lands at file scope with no `#ifdef` around it, so an
+angle include is wrapped in `#if __has_include(<X>)` to keep the emitted C
+portable across targets. When the header *is* missing, the wrap does not rescue
+the build -- the body that needed it is still compiled -- it only decides how the
+failure reads. So:
+
+- **Unmarked** (the default): the `#else` emits a `#pragma message` naming the
+  header. You get `tur: inline-C requested <raygui.h>, not found on the include
+  path` at the top of the cc output, ahead of the implicit-declaration and
+  link errors it causes. Fix the `-I`.
+- **Marked `tur:optional`**: skipped silently. Use this *only* for a header whose
+  absence is expected on some target -- a per-platform alternative whose users
+  are behind an `#ifdef`:
+
+  ```c
+  #include <direct.h>  /* tur:optional -- Windows only */
+  #ifdef _WIN32
+    return _mkdir(path);
+  #else
+    return mkdir(path, 0755);
+  #endif
+  ```
+
+  This is the `stdlib/fs.tur`, `stdlib/term.tur` and `stdlib/image.tur` shape:
+  the platform header goes at the top, bare, *outside* the `#ifdef` that uses it,
+  so the hoister lifts it (avoiding the include-guard problem above) and the wrap
+  drops it everywhere else. Any site marking a header optional makes it optional
+  for the whole TU.
+
+Quoted `#include "X"` is never wrapped. Those are project or vendored headers
+where missing is a genuine error, and cc's own `No such file or directory` is
+already the right diagnostic.
+
 **Declare a prototype for anything you call:**
 
 An unprototyped call in inline C is not a style nit, it is wrong code, and it is

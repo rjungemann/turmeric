@@ -108,7 +108,7 @@
   ```c
   #include <termios.h>
   #include <unistd.h>
-  #include <io.h>
+  #include <io.h>  /* tur:optional -- Windows only; POSIX takes the termios branch below */
   /* Windows has no termios.  The console analogue is GetConsoleMode /
    * SetConsoleMode on the underlying HANDLE: clearing ENABLE_LINE_INPUT stops
    * the line-discipline buffering, ENABLE_ECHO_INPUT stops the echo, and
