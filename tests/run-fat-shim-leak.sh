@@ -57,11 +57,18 @@ fi
 
 # Compile with ASan/UBSan.  LeakSanitizer ships with ASan on Linux; on macOS it
 # is unsupported and ASan aborts at startup, so probe and skip cleanly.
+#
+# src/runtime/trail.c is in the list even though this fixture never touches the
+# trail -- stdlib/trail.tur is auto-loaded into every program, so the emitted C
+# carries its inline-C bodies and their calls into tur_bt_cell_*.  GCC at -O0
+# emits those unused statics and the link needs the definitions; Apple clang
+# drops them, so macOS cannot catch a regression here.  Same note as
+# tests/run-closure-env-leak.sh.
 if ! "$CC" -g -O0 -fno-strict-aliasing -fsanitize=address,undefined \
         -Isrc/runtime -o "$BIN" "$C_OUT" \
         src/runtime/hamt.c src/runtime/runtime.c src/runtime/rc.c \
         src/runtime/gc.c src/runtime/rc_free_queue.c src/runtime/tur_string.c \
-        src/runtime/symbols.c -lpthread 2>"$WORK/cc.err"; then
+        src/runtime/symbols.c src/runtime/trail.c -lpthread 2>"$WORK/cc.err"; then
     echo "FAIL fat-shim-leak -- C compile failed"
     sed 's/^/    /' "$WORK/cc.err"
     exit 1

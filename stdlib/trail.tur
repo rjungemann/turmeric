@@ -198,7 +198,9 @@
 ;;;   (bt-set! c 42)  ; => true
 ;;;
 ;;; Since: SX1
-(defn bt-set! [c : BtCell v : int] #fx{Bt} : bool
+(defn bt-set! [c : BtCell v : int]
+  #fx{Bt}
+  : bool
   ```c
   return tur_bt_cell_set((void *)(intptr_t)c, v);
   ```)
@@ -265,7 +267,9 @@
 ;;;   (g-set! g 7)
 ;;;
 ;;; Since: SX1
-(defn g-set! [g : GCell v : int] #fx{Bt} : void
+(defn g-set! [g : GCell v : int]
+  #fx{Bt}
+  : void
   ```c
   /* Pause across the write: one cell representation, one set of
      semantics, and the opt-out is the TYPE that reaches it. */
@@ -283,7 +287,9 @@
 ;;;   (let [m (bt-mark)] (bt-set! c 1) (bt-undo-to! m))
 ;;;
 ;;; Since: SX1
-(defn bt-mark [] #fx{Bt} : Mark
+(defn bt-mark []
+  #fx{Bt}
+  : Mark
   ```c
   return tur_trail_mark_packed();
   ```)
@@ -304,7 +310,9 @@
 ;;;   (bt-undo-to! m)  ; => true
 ;;;
 ;;; Since: SX1
-(defn bt-undo-to! [m : Mark] #fx{Bt} : bool
+(defn bt-undo-to! [m : Mark]
+  #fx{Bt}
+  : bool
   ```c
   return tur_trail_undo_to_packed(m);
   ```)
@@ -324,7 +332,9 @@
 ;;;   (bt-commit-to! m)  ; => true
 ;;;
 ;;; Since: SX1
-(defn bt-commit-to! [m : Mark] #fx{Bt} : bool
+(defn bt-commit-to! [m : Mark]
+  #fx{Bt}
+  : bool
   ```c
   return tur_trail_commit_to_packed(m);
   ```)
@@ -369,7 +379,9 @@
 ;;;   (untrailed-begin) (bt-set! counter 1) (untrailed-end)
 ;;;
 ;;; Since: SX1
-(defn untrailed-begin [] #fx{Bt} : void
+(defn untrailed-begin []
+  #fx{Bt}
+  : void
   ```c
   tur_trail_pause();
   ```)
@@ -380,7 +392,9 @@
 ;;;   (untrailed-end)
 ;;;
 ;;; Since: SX1
-(defn untrailed-end [] #fx{Bt} : void
+(defn untrailed-end []
+  #fx{Bt}
+  : void
   ```c
   tur_trail_resume();
   ```)
@@ -460,7 +474,9 @@
 ;;;   (trail-reset!)
 ;;;
 ;;; Since: SX1
-(defn trail-reset! [] #fx{Bt} : void
+(defn trail-reset! []
+  #fx{Bt}
+  : void
   ```c
   tur_trail_reset();
   ```)
