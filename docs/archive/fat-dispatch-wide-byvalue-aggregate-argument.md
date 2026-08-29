@@ -79,10 +79,13 @@ stays carrier; `TUR_SR4_RECURSIVE_BYVALUE=1` is the seam that reproduces all
 of the above, and the decision record lives at the `is_self_recursive` test
 in `adt_sr1_sum_candidate` (types.c).
 
-One find along the way is filed separately:
-[ascribed-fn-param-call-head-name-mismatch](../reported/ascribed-fn-param-call-head-name-mismatch.md)
--- the `((:: f (fn [P] int)) v)` spelling breaks on a decl/use naming
-divergence that predates all of this and hits scalars too.
+One find along the way was filed separately and is now also resolved:
+[ascribed-fn-param-call-head-name-mismatch](ascribed-fn-param-call-head-name-mismatch.md)
+-- the `((:: f (fn [P] int)) v)` spelling broke on a decl/use naming
+divergence that predates all of this and hits scalars too. With that fixed,
+`tests/fixtures/ascribed-fn-param-call-head` carries the same wide by-value
+aggregate through that spelling, so the crossing this write-up had to dodge is
+covered rather than avoided.
 
 ## Repro 1 -- default path, hard error
 

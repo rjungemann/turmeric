@@ -1,0 +1,59 @@
+;; ascribed-fn-param-call-head-name-mismatch: calling an ascribed `:fn` param --
+;; `((:: f (fn [...] ...)) args)` -- hoists the callable head into a synthetic
+;; `__call_head_N` binding, and the two ends of its emission used to name it by
+;; different rules:
+;;
+;;   declaration  name_for_binding      -> _un_uncall_unhead_unN_M  (mangle + id)
+;;   use          emit_call_name        -> __call_head_N            (verbatim)
+;;                  -> raw_name_for_binding
+;;
+;; Same binding, two C identifiers: a hard cc error, "'__call_head_N'
+;; undeclared".  The temp is TY_PTR_VOID + is_poly_fn, so it misses every
+;; raw-returning branch in name_for_binding (parameter, inline-C-named local,
+;; non-boxed TY_FN) and falls through to the id-suffixed mangler, while the use
+;; site went straight to raw_name_for_binding.
+;;
+;; A callee that is a LOCAL binding names a C local, not a linker symbol, so it
+;; is now spelled by the same function that declared it.  Globals keep the raw
+;; symbol -- a top-level defn's C name IS the function symbol.
+;;
+;; The fix deliberately does NOT make the declaration spell `__call_head_N`
+;; verbatim instead: that class also holds macro-template names with no gensym
+;; counter (`__v` / `__vw` from stdlib/vec.tur's `vec-of`), whose distinctness
+;; comes from exactly the `_<id>` suffix that would be dropped.
+;;
+;; This asserts VALUES, not just that it builds -- the closure has to reach its
+;; captured `lb`, so a head that dispatched to the wrong thing would print a
+;; wrong number rather than fail to compile.
+
+(defdata P :copy (P [a : int b : int c : int]))
+
+(defn sum-p [p : P] : int (match p (P a b c) (+ a (+ b c))))
+
+;; Scalar through the untyped `:fn` carrier -- the report's repro.
+(defn apply-un [f : fn v : int] : int
+  ((:: f (fn [int] int)) v))
+
+(defn mk-un [bump : int] : ptr<void>
+  (let [lb bump]
+    (:: (fn [x : int] (+ lb x)) :ptr<void>)))
+
+;; A WIDE by-value aggregate through the same spelling: the crossing
+;; fat-dispatch-wide-byval-arg could not spell because of this bug.
+(defn apply-p [f : fn v : P] : int
+  ((:: f (fn [P] int)) v))
+
+(defn mk-p [bump : int] : ptr<void>
+  (let [lb bump]
+    (:: (fn [p : P] (+ lb (sum-p p))) :ptr<void>)))
+
+;; Two call-head temps in ONE function: their names must stay distinct.
+(defn apply-twice [f : fn a : int b : int] : int
+  (+ ((:: f (fn [int] int)) a)
+     ((:: f (fn [int] int)) b)))
+
+(defn main [] : int
+  (println (apply-un (mk-un 100) 6))          ; 106  scalar, capturing closure
+  (println (apply-p (mk-p 100) (P 1 2 3)))    ; 106  wide by-value aggregate
+  (println (apply-twice (mk-un 10) 1 2))      ; 23   11 + 12, two heads one fn
+  0)

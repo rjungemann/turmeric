@@ -3008,6 +3008,35 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
         char *captured = capture_env_access(ctx, b);
         if (captured) return captured;
     }
+    /* ascribed-fn-param-call-head-name-mismatch: a callee that is a LOCAL
+     * binding names a C local variable, not a linker symbol, so it must be
+     * spelled by the same rule that DECLARED it -- name_for_binding -- or the
+     * two ends disagree and cc rejects the undeclared one.
+     *
+     * raw_name_for_binding is right for a global: a top-level defn's C name IS
+     * the function symbol, un-suffixed. For a local it is right only by
+     * coincidence, when name_for_binding happens to delegate to it too (a
+     * parameter, an inline-C-named local, a non-boxed TY_FN). A synthetic
+     * call-head temp that is none of those falls through name_for_binding to
+     * the id-suffixed mangler, and the mismatch is a hard build break: the
+     * `__call_head_N` hoisted for `((:: f (fn [int] int)) v)` -- TY_PTR_VOID +
+     * is_poly_fn -- was declared `_un_uncall_unhead_unN_M` and used as
+     * `__call_head_N`.
+     *
+     * Routing locals through name_for_binding closes that by construction,
+     * present and future, and changes no name that already agreed: for every
+     * local shape where name_for_binding delegates to raw_name_for_binding it
+     * returns the identical string. Globals keep the raw symbol.
+     *
+     * Deliberately NOT fixed by making the declaration spell `__call_head_N`
+     * verbatim: the "__-prefixed pure C identifier" class also contains
+     * macro-template names that carry no gensym counter (`__v` / `__vw` from
+     * stdlib/vec.tur's `vec-of`), whose distinctness today comes precisely from
+     * the `_<id>` suffix. Dropping it for the whole class would let two nested
+     * expansions collide in one C scope. */
+    if (b && !b->is_global) {
+        return name_for_binding(ctx, b);
+    }
     return raw_name_for_binding(b);
 }
 
