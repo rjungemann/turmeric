@@ -220,6 +220,15 @@ typedef enum DiagCode {
      * identity), so `(+ (compute) (cloneable-shift ...))` printed a wrong number.
      * Rejected at codegen instead, mirroring the serial TUR-E0706 fix. */
     TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+    /* defmodule-bare-toplevel-forms-silently-dropped: a non-definition form as
+     * a direct child of (defmodule ...).  The emitter works off the globally
+     * registered definitions and never reads the module body list, so such a
+     * form was fully elaborated -- type errors inside it reported normally --
+     * and then dropped with no diagnostic.  109 (describe ...) blocks across 12
+     * spices never ran, and 8 of them passed CI vacuously.  There is no
+     * module-level side-effect position today, so this is rejected rather than
+     * emitted; `defer` is the one non-definition form that is legal here. */
+    TUR_E0711_MODULE_TOPLEVEL_EXPR,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

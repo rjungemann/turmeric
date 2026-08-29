@@ -668,6 +668,53 @@ A short list of pitfalls newcomers hit:
    dispatches to the form, never to your definition. See
    [Reserved names](#reserved-names) below -- the compiler flags this as
    `TUR-W0042` at the definition.
+8. **An expression at `defmodule` top level.** There is no module-level
+   side-effect position; see
+   [What may appear inside a `defmodule`](#what-may-appear-inside-a-defmodule).
+
+### What may appear inside a `defmodule`
+
+A `(defmodule ...)` body is a list of **definitions**, not statements. A
+non-definition form as a direct child is rejected with `TUR-E0711`:
+
+```turmeric
+(defmodule dt
+  (defn shout [] : int (println "hi") 1)
+  (shout)                     ; error [TUR-E0711] -- never evaluated
+  (defn main [] : int 0))
+```
+
+There is no module-level side-effect position, so put the call in `main` (or a
+function `main` calls). This was silent until 2026-08-29: the form was fully
+elaborated -- type errors inside it reported like live code -- and then dropped
+from codegen, which cost 12 spices their entire test suites without a single
+warning.
+
+Legal as a direct child:
+
+| Form | Note |
+| --- | --- |
+| `defn` `defmacro` `defmacro*` | |
+| `defstruct` `defdata` `defopaque` `deftype` `defalias` | |
+| `defclass` `definstance` `defeffect` | |
+| `def` | a module-level global; its initializer *does* run |
+| `extern-c` | |
+| `import` `export` `export-from` | must come first, before any definition |
+| a bare ` ```c ` block | supplies file-scope C declarations |
+| `defer` | runs at process exit, not at module load |
+
+The last two look like expressions and are deliberate. `defer` is the only
+non-definition form that executes.
+
+The rule is applied to the form *after* macro expansion, so a macro that
+expands to a definition is fine wherever the definition would be:
+
+```turmeric
+(defmacro make-adder [name n]
+  `(defn ,name [x : int] : int (+ x ,n)))
+
+(make-adder add5 5)           ; OK -- expands to a defn
+```
 
 ### Reserved names
 

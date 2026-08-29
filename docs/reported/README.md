@@ -1275,6 +1275,16 @@ framing would miss cases:
   forward-declared as the `TY_INT` placeholder. Worth reading before trusting
   any other report's "Fix direction" section -- both of this one's pointed at
   the wrong file.
+- `defmodule-bare-toplevel-forms-silently-dropped` **RESOLVED 2026-08-29** as
+  TUR-E0711 --
+  [docs/archive/defmodule-bare-toplevel-forms-silently-dropped.md](../archive/defmodule-bare-toplevel-forms-silently-dropped.md).
+  The drop was not a fall-through arm to turn into a diagnostic: the emitter
+  never reads the module body list at all, so the check is new code, and it
+  tests the ELABORATED expression rather than the head symbol (a macro
+  expanding to a `defn` has an arbitrary head). Two non-definition forms are
+  legal here and would have been broken by a bare `else`: a bare inline-C
+  block, and module-level `defer`. Its second finding -- a suite registering
+  zero tests exits 0 -- is a harness change and stays open.
 - `hoisted-includes-wrapped-in-has-include` **RESOLVED 2026-08-29** --
   [docs/archive/hoisted-includes-wrapped-in-has-include.md](../archive/hoisted-includes-wrapped-in-has-include.md).
   Its symptom analysis was right and **both** its fix directions would have
@@ -1292,7 +1302,6 @@ framing would miss cases:
 | Report | Severity | One line |
 | --- | --- | --- |
 | [nested-defn-accepted-outer-returns-zero](nested-defn-accepted-outer-returns-zero.md) | **critical** | a `defn` nested in a `defn` (the shape a missing close paren produces) is accepted silently, and the outer function emits `return 0;` discarding the value it just computed. Runs, exits 0, wrong answer. Cost `spices/watch` three tree-mode assertions failing for months with nothing to point at |
-| [defmodule-bare-toplevel-forms-silently-dropped](defmodule-bare-toplevel-forms-silently-dropped.md) | high | a bare form at `defmodule` top level is fully elaborated -- type errors inside it *are* reported -- then dropped from codegen with no warning. 109 `(describe ...)` blocks across 37 files in 12 spices never ran; 8 spices were passing CI vacuously, and turning them on immediately surfaced a real `c-dsl` bug its test had always asserted and never run |
 | [module-level-def-with-linear-init-emits-no-global](module-level-def-with-linear-init-emits-no-global.md) | high | a module-level `def` whose init has a `:linear` type passes `tur check`, emits **no global**, and still emits the references -- `'g_1377' undeclared`. Non-linear control emits it fine. Blocks the process-lifetime-mutex shape (`ws-server`'s broadcast hub); workaround casts to `:int` and back, losing the type checker exactly where a mutex needs it |
 | [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
 | [emit-value-dispatch-unbounded-recursion](emit-value-dispatch-unbounded-recursion.md) | high | `emit_value_dispatch`/`emit_value`/`emit_builtin` recurse over the expression tree with no depth bound. **The documented bootstrap build (Debug+ASan) SIGSEGVs on 47 levels of nesting**; unsanitized survives ~2000. `tur check` crashes identically (it runs the emitter), so the LSP path goes through it too. Three other passes already carry a depth guard; the emitter is the outlier |

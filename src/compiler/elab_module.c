@@ -117,6 +117,52 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
     }
 }
 
+/* defmodule-bare-toplevel-forms-silently-dropped: may this elaborated form
+ * stand as a direct child of `(defmodule ...)`?
+ *
+ * The emitter never reads `mod->body` -- it works off the definitions each
+ * form registered globally as a side effect of elaborating -- so anything
+ * here that is NOT a definition is elaborated, diagnosed like live code, and
+ * then silently discarded.  That was the worst of the three available
+ * behaviours: rejecting would be fine, emitting would be fine, but
+ * type-checking a form *as if* it were live and then deleting it means every
+ * signal the compiler gives says "live code" except the one that matters.
+ *
+ * The test is on the ELABORATED expression, not the source form's head
+ * symbol, and that is load-bearing: a user macro that expands to a `defn` has
+ * an arbitrary head, so a head-symbol allowlist would reject it.  Going
+ * through elaboration also means the allow-set is small, because the
+ * registering forms have already collapsed -- `defmacro`, `defclass` and
+ * `deftype` all return EX_NIL_LIT once their definition is recorded.
+ *
+ * The set below is the one measured across stdlib/, tests/fixtures/ and
+ * examples/, plus EX_TYPECLASS_DEF / EX_INSTANCE_DEF which are definitions by
+ * construction.  Two entries look like expressions and are deliberate:
+ *
+ *   EX_INLINE_C -- a bare ```c block at module top level supplies file-scope
+ *                  C declarations (tests/fixtures/inline-c-file-scope-*).
+ *   EX_DEFER    -- module-level `defer` is a real feature: it runs at process
+ *                  exit (tests/fixtures/module-defer-basic).
+ *
+ * EX_NIL_LIT admits a bare `nil`, which is inert either way. */
+static bool module_body_form_is_definition(const Expr *be) {
+    switch (be->kind) {
+        case EX_NIL_LIT:        /* defmacro / defmacro* / defclass / deftype */
+        case EX_DEF:            /* def / defopaque */
+        case EX_FN_DEF:         /* defn */
+        case EX_DEFDATA:        /* defdata / defstruct */
+        case EX_DEFECT:         /* defeffect */
+        case EX_EXTERN_C:       /* extern-c */
+        case EX_TYPECLASS_DEF:  /* defclass (when it keeps its own kind) */
+        case EX_INSTANCE_DEF:   /* definstance */
+        case EX_INLINE_C:       /* bare ```c block -- file-scope C decls */
+        case EX_DEFER:          /* module-level defer -- runs at exit */
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Phase M0: Module system */
 
 /* Validate that a module name only contains [a-zA-Z0-9_\-/] */
@@ -1166,6 +1212,20 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
         if (!be) {
             body_had_error = true;
             continue;  /* keep going to surface more diagnostics */
+        }
+        if (!module_body_form_is_definition(be)) {
+            diag_emit_with_code(DIAG_ERROR, call->as.list.items[j]->span,
+                                TUR_E0711_MODULE_TOPLEVEL_EXPR,
+                                "expression at (defmodule %s ...) top level is "
+                                "never evaluated",
+                                mod->name->name);
+            diag_emit(DIAG_NOTE, call->as.list.items[j]->span,
+                      "only definitions run here -- there is no module-level "
+                      "side-effect position.  Move this into a function "
+                      "(main, or one main calls); for a test suite, call the "
+                      "block from the module's entry point");
+            body_had_error = true;
+            continue;
         }
         body[actual_n_body++] = be;
     }
