@@ -101,9 +101,27 @@ the escape hatch until something needs it.
 
 ## Follow-on
 
-The five spices the link-name report names (`raygui`, `glfw`, `glad`, `libpq`,
-`zlib`) each carry a hand-written `cmake-deps/` shim that exists only to work
-around this. Those shims are now removable in
-[`turmeric-spices`](https://github.com/rjungemann/turmeric-spices), and the
-`raygui`/`opengl` macOS CI jobs the framework report blocked should be retried.
-That is spice-repo work and was not done here.
+`turmeric-spices` carries three hand-written `cmake-deps/` shims (`opengl`,
+`postgres`, `raygui`). **None is wholly obsolete** -- an earlier draft of this
+note said they were "now removable", which overstated it. Each shim mixes
+workaround with real work:
+
+- `postgres` exists because "tur derives the -l name from the target basename,
+  so `PostgreSQL::PostgreSQL` became `-lPostgreSQL` but the file is libpq.so"
+  (its own comment). The re-export target that fixes that is now unnecessary.
+  The Homebrew keg-only `PostgreSQL_ROOT` probe it also does is still needed.
+- `opengl` exists for two reasons; only one is fixed. glfw's `OUTPUT_NAME`/
+  directory mismatch is handled now, so its
+  `set_target_properties(glfw PROPERTIES OUTPUT_NAME glfw)` -- a target rename
+  whose only purpose was to satisfy the old `-l` derivation -- can go. glad is
+  a Python *generator* that builds no library, so that half of the shim stays.
+- `raygui` is header-only *with an implementation TU* (`raygui_impl.c`); something
+  has to compile it. `:link-libs []` expresses the link side, not the compile
+  side. Candidate for `:c-sources`, which is a redesign rather than a deletion.
+
+Tracked in the spices repo at `docs/cmake-link-line-shim-followup.md`
+(branch `claude/cmake-link-line-followup`). Validating any of it locally is
+currently blocked by a **separate pre-existing bug** --
+[transitive-path-cmake-dep-absolutized-then-reprefixed](../../reported/transitive-path-cmake-dep-absolutized-then-reprefixed.md)
+-- which makes `spices/opengl` fail CMake configure on both this compiler and
+`423f6546`.
